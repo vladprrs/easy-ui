@@ -10,6 +10,10 @@ export default defineConfig({
     // Workspace reverse proxy exposes the dev server under *.coder hostnames.
     allowedHosts: [".coder"],
     proxy: {
+      "/api": {
+        target: "http://127.0.0.1:8787",
+        changeOrigin: true,
+      },
       "/storybook": {
         target: "http://localhost:6006",
         changeOrigin: true,

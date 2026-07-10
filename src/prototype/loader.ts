@@ -1,22 +1,28 @@
 import { prototypeDocSchema } from "./schema";
-import { validatePrototype } from "./validate";
+import { getPrototypeDraft, getPrototypeVersion, listPrototypes, type PrototypeDraft, type PrototypeSummary, type PrototypeVersion } from "../api/client";
 import type { LoadedPrototype } from "./types";
 
-const modules = import.meta.glob("/prototypes/*.json", { eager: true, import: "default" }) as Record<string, unknown>;
+export class InvalidPrototypeResponseError extends Error {
+  readonly issues: unknown[];
+  constructor(issues: unknown[]) {
+    super("API returned an invalid prototype document");
+    this.name = "InvalidPrototypeResponseError";
+    this.issues = issues;
+  }
+}
 
-export const prototypes: LoadedPrototype[] = Object.entries(modules).flatMap(([filename, value]) => {
-  const parsed = prototypeDocSchema.safeParse(value);
+function validateDoc<T extends PrototypeDraft | PrototypeVersion>(response: T): T {
+  const parsed = prototypeDocSchema.safeParse(response.doc);
   if (!parsed.success) {
-    if (import.meta.env.DEV) console.error(`[prototype] ${filename}: invalid document`, parsed.error.issues);
-    return [];
+    throw new InvalidPrototypeResponseError(parsed.error.issues);
   }
-  const result = validatePrototype(parsed.data);
-  if (result.errors.length) {
-    if (import.meta.env.DEV) console.error(`[prototype] ${filename}: semantic validation failed`, result.errors);
-    return [];
-  }
-  if (import.meta.env.DEV && result.warnings.length) console.warn(`[prototype] ${filename}: warnings`, result.warnings);
-  return [parsed.data];
-});
+  return { ...response, doc: parsed.data };
+}
 
-export const prototypesById = new Map(prototypes.map((prototype) => [prototype.id, prototype]));
+export const loadPrototypeList = (signal?: AbortSignal): Promise<PrototypeSummary[]> => listPrototypes(signal);
+export const loadPrototypeDraft = async (id: string, signal?: AbortSignal): Promise<PrototypeDraft> => validateDoc(await getPrototypeDraft(id, signal));
+export const loadPrototypeVersion = async (id: string, version: number, signal?: AbortSignal): Promise<PrototypeVersion> => validateDoc(await getPrototypeVersion(id, version, signal));
+
+// TODO(T5): удалить после перевода PlayerShell на async-гейт
+/** @deprecated Temporary compatibility bridge for synchronous player consumers. */
+export const prototypesById = new Map<string, LoadedPrototype>();

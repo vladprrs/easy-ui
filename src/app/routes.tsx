@@ -17,6 +17,10 @@ export function AppRoutes() {
           <Route index element={null} />
           <Route path="s/:screenId" element={<ScreenView />} />
         </Route>
+        <Route path="p/:protoId/v/:version" element={<PlayerShell />}>
+          <Route index element={null} />
+          <Route path="s/:screenId" element={<ScreenView />} />
+        </Route>
         <Route path="*" element={<main className="p-8"><h1 className="text-2xl font-bold">Page not found</h1><Link className="underline" to="/">Back to gallery</Link></main>} />
       </Route>
     </Routes>
