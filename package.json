@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "build": "vite build && storybook build -o dist/storybook",
     "build:app": "vite build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
