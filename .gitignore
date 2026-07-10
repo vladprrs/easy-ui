@@ -31,3 +31,7 @@ Thumbs.db
 .claude-config/
 .codex-home/
 .claude/settings.local.json
+
+# Stateful Bun server data
+data/
+.e2e-data/

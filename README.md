@@ -6,7 +6,12 @@ stateful player, and embeds the component catalog from Storybook in the Library 
 
 ## Quick start
 
-Requires Node.js 24 or newer.
+Requires Node.js 24 or newer. Server commands also require Bun 1.3.14 installed at
+`~/.bun/bin`; ensure it precedes other Bun installations in `PATH`:
+
+```sh
+export PATH="$HOME/.bun/bin:$PATH"
+```
 
 ```sh
 npm ci
@@ -33,6 +38,10 @@ and author checklist are in [docs/prototype-format.md](docs/prototype-format.md)
 | --- | --- |
 | `npm run dev` | Start the Vite development app |
 | `npm run storybook` | Start the live component catalog |
+| `npm run server:dev` | Start the Bun API server on 127.0.0.1:8787 |
+| `npm run server:test` | Run Bun server tests |
+| `npm run server:typecheck` | Type-check the server without Vite globals |
+| `npm run serve` | Serve `dist/` and the API with Bun on 127.0.0.1:4173 |
 | `npm test` | Run unit and component tests |
 | `npm run validate:prototypes` | Validate every prototype JSON file |
 | `npm run build` | Build the app and static Storybook into `dist/` |
