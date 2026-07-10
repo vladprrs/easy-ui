@@ -9,7 +9,11 @@ export default tseslint.config(
   reactHooks.configs.flat.recommended,
   {
     files: ["**/*.{ts,tsx}"],
-    languageOptions: { parserOptions: { projectService: true } },
+    languageOptions: {
+      parserOptions: {
+        projectService: { allowDefaultProject: ["scripts/*.ts"] },
+      },
+    },
   },
   {
     files: ["scripts/*.mjs"],

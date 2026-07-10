@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "hello-world",
+  "name": "Hello World",
+  "description": "A minimal two-screen prototype.",
+  "device": "mobile",
+  "startScreen": "welcome",
+  "state": { "name": "Ada" },
+  "screens": [
+    {
+      "id": "welcome",
+      "name": "Welcome",
+      "spec": {
+        "root": "card",
+        "elements": {
+          "card": { "type": "Card", "props": { "title": "Welcome" }, "children": ["name", "greeting", "next"] },
+          "name": { "type": "Input", "props": { "label": "Name", "name": "name", "value": { "$bindState": "/name" } } },
+          "greeting": { "type": "Text", "props": { "text": { "$template": "Hello, ${/name}!" } } },
+          "next": { "type": "Button", "props": { "label": "Details" }, "on": { "press": { "action": "navigate", "params": { "screenId": "details" } } } }
+        }
+      }
+    },
+    {
+      "id": "details",
+      "name": "Details",
+      "spec": {
+        "root": "card",
+        "elements": {
+          "card": { "type": "Card", "props": { "title": "Details" }, "children": ["copy", "back"] },
+          "copy": { "type": "Text", "props": { "text": "This is the second screen." } },
+          "back": { "type": "Button", "props": { "label": "Back" }, "on": { "press": { "action": "back", "params": {} } } }
+        }
+      }
+    }
+  ]
+}
