@@ -16,7 +16,10 @@
     "validate:prototypes": "tsx scripts/validate-prototypes.ts",
     "check:css": "node scripts/check-css.mjs",
     "storybook": "storybook dev -p 6006",
-    "build-storybook": "storybook build"
+    "build-storybook": "storybook build",
+    "preview": "vite preview",
+    "e2e": "playwright test",
+    "verify": "npm run typecheck && npm run lint && npm run test -- --run && npm run validate:prototypes && npm run build && npm run check:css && npx tsx scripts/check-storybook-drift.ts --index dist/storybook/index.json"
   },
   "dependencies": {
     "@json-render/core": "0.19.0",
