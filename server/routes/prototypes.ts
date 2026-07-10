@@ -5,6 +5,7 @@ import { prototypeDocSchema, type PrototypeDoc } from "../../src/prototype/schem
 import { validatePrototype } from "../../src/prototype/validate";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
 import { PrototypeRepo } from "../repos/prototypes";
+import { snapshotDefinitions } from "../validation";
 
 const bodyObject = z.record(z.string(),z.unknown());
 function objectBody(value:unknown): Record<string,unknown> { const p=bodyObject.safeParse(value); if(!p.success) throw new ApiError(400,"invalid_request","Request body must be an object"); return p.data; }
@@ -25,17 +26,17 @@ export function validatePrototypeForSave(doc:PrototypeDoc, definitions:Record<st
   return result.warnings;
 }
 
-export async function routePrototypes(request:Request,db:Database,segments:string[]):Promise<Response> {
+export async function routePrototypes(request:Request,db:Database,segments:string[],dataDir=process.env.DATA_DIR||"data"):Promise<Response> {
   const repo=new PrototypeRepo(db);
   if(segments.length===1) {
     if(request.method==="GET") return json(repo.list(),200,noStore);
-    if(request.method==="POST") { const b=objectBody(await readJson(request)); const doc=parseDoc(b.doc); const warnings=validatePrototypeForSave(doc); const result=repo.create(doc,message(b)); return json({...result,warnings},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(result.id)}`}); }
+    if(request.method==="POST") { const b=objectBody(await readJson(request)); const doc=parseDoc(b.doc); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions); const result=repo.create(doc,message(b),snapshot.pins); return json({...result,warnings},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(result.id)}`}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }
   const id=segments[1]!; const tail=segments.slice(2);
   if(!tail.length) {
     if(request.method==="GET") return json(repo.meta(id),200,noStore);
-    if(request.method==="PUT") { const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const warnings=validatePrototypeForSave(doc); return json({...repo.save(id,doc,base,message(b)),warnings},200,noStore); }
+    if(request.method==="PUT") { const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions); return json({...repo.save(id,doc,base,message(b),snapshot.pins),warnings},200,noStore); }
     if(request.method==="DELETE") { const b=objectBody(await readJson(request)); repo.delete(id,baseRev(b)); return new Response(null,{status:204,headers:noStore}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }

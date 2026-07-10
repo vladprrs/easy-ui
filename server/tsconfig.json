@@ -1,5 +1,6 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": { "types": ["bun"] },
-  "include": ["./**/*", "../src/prototype/schema.ts", "../src/prototype/types.ts", "../src/prototype/validate.ts", "../src/catalog/definitions.ts", "../src/catalog/actions.ts", "../src/catalog/hotspot.definition.ts", "../src/catalog/catalog.ts"]
+  "include": ["./**/*", "../src/prototype/schema.ts", "../src/prototype/types.ts", "../src/prototype/validate.ts", "../src/catalog/definitions.ts", "../src/catalog/actions.ts", "../src/catalog/hotspot.definition.ts", "../src/catalog/catalog.ts"],
+  "exclude": ["./fixtures"]
 }

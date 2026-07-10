@@ -1,7 +1,9 @@
 import type { Database } from "bun:sqlite";
 import type { PrototypeDoc } from "../../src/prototype/schema";
+import { componentDefinitions } from "../../src/catalog/definitions";
 import { builtinCatalogHash, emptyComponentManifestHash } from "../builtinHash";
 import { ApiError } from "../http";
+import type { ComponentPin } from "../validation";
 
 type Pin = { id: string; name: string; version: number; bundleUrl: string; bundleHash: string };
 type PrototypeRow = { id:string; name:string; description:string|null; device:string; screen_count:number; head_rev:number; created_at:string; updated_at:string };
@@ -39,20 +41,29 @@ export class PrototypeRepo {
       (prototype_id,rev,doc,builtin_catalog_hash,message,created_at) VALUES (?,?,?,?,?,?)`)
       .run(id,rev,JSON.stringify(doc),builtinCatalogHash,message,createdAt);
   }
-  create(doc: PrototypeDoc, message?: string): {id:string;rev:1} {
+  private insertPins(id:string,rev:number,pins:ComponentPin[]):void {
+    for(const pin of pins) {
+      const alive=this.db.query("SELECT 1 ok FROM components WHERE id=? AND deleted_at IS NULL").get(pin.id);
+      if(!alive) throw new ApiError(409,"component_changed","A component was deleted while saving");
+      this.db.query("INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version) VALUES (?,?,?,?)").run(id,rev,pin.id,pin.version);
+    }
+  }
+  create(doc: PrototypeDoc, message?: string,pins:ComponentPin[]=[]): {id:string;rev:1} {
     return this.db.transaction(() => {
       if (this.db.query("SELECT 1 ok FROM prototypes WHERE id=?").get(doc.id)) throw new ApiError(409,"already_exists","Prototype already exists");
       const at=now();
       this.db.query(`INSERT INTO prototypes (id,name,description,device,screen_count,head_rev,created_at,updated_at)
         VALUES (?,?,?,?,?,1,?,?)`).run(doc.id,doc.name,doc.description??null,doc.device,doc.screens.length,at,at);
       this.insertRevision(doc.id,1,doc,message??null,at);
+      this.insertPins(doc.id,1,pins);
       return {id:doc.id,rev:1 as const};
     })();
   }
-  save(id:string, doc:PrototypeDoc, baseRev:number, message?:string): {rev:number} {
+  save(id:string, doc:PrototypeDoc, baseRev:number, message?:string,pins:ComponentPin[]=[]): {rev:number} {
     return this.db.transaction(() => {
       const head=this.cas(id,baseRev); const rev=head.head_rev+1; const at=now();
       this.insertRevision(id,rev,doc,message??null,at);
+      this.insertPins(id,rev,pins);
       this.db.query(`UPDATE prototypes SET name=?,description=?,device=?,screen_count=?,head_rev=?,updated_at=? WHERE id=?`)
         .run(doc.name,doc.description??null,doc.device,doc.screens.length,rev,at,id);
       return {rev};
@@ -75,6 +86,10 @@ export class PrototypeRepo {
   publish(id:string,baseRev:number,message?:string): {version:number;rev:number} {
     return this.db.transaction(() => {
       const head=this.cas(id,baseRev);
+      const doc=JSON.parse((this.db.query("SELECT doc FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,head.head_rev) as {doc:string}).doc) as PrototypeDoc;
+      const customTypes=new Set(doc.screens.flatMap(s=>Object.values(s.spec.elements).map(e=>e.type)));
+      const pinned=new Set((this.db.query(`SELECT c.name FROM prototype_revision_components p JOIN components c ON c.id=p.component_id WHERE p.prototype_id=? AND p.rev=?`).all(id,head.head_rev) as {name:string}[]).map(x=>x.name));
+      for(const type of customTypes) if(!Object.hasOwn(componentDefinitions,type)&&!pinned.has(type)) throw new ApiError(422,"validation_failed","Prototype references an unpublished custom component",{issues:[{path:["screens"],message:`Unpublished custom component: ${type}`}]});
       const duplicate=this.db.query("SELECT version FROM prototype_publishes WHERE prototype_id=? AND rev=?").get(id,head.head_rev) as {version:number}|null;
       if (duplicate) throw new ApiError(409,"already_published","This revision is already published",{currentRev:head.head_rev,currentVersion:duplicate.version});
       const latest=this.db.query("SELECT MAX(version) version FROM prototype_publishes WHERE prototype_id=?").get(id) as {version:number|null};
