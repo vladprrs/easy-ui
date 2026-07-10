@@ -1,8 +1,8 @@
-import { shadcnComponentDefinitions } from "@json-render/shadcn";
+import { shadcnComponentDefinitions } from "@json-render/shadcn/catalog";
 import { z } from "zod";
-import { hotspotDefinition } from "./hotspot";
+import { hotspotDefinition } from "./hotspot.definition";
 
-type Definition = {
+export type ComponentDefinition = {
   props: z.ZodType;
   slots?: string[];
   events?: string[];
@@ -38,7 +38,7 @@ function normalizeSchema(schema: z.ZodType): z.ZodType {
   return schema.clone();
 }
 
-export function normalizeDefinitions<T extends Record<string, Definition>>(definitions: T): T {
+export function normalizeDefinitions<T extends Record<string, ComponentDefinition>>(definitions: T): T {
   return Object.fromEntries(
     Object.entries(definitions).map(([name, definition]) => [
       name,

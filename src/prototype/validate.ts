@@ -1,5 +1,5 @@
 import { validateSpec, type Spec } from "@json-render/core";
-import { componentDefinitions } from "../catalog/definitions";
+import { componentDefinitions, type ComponentDefinition } from "../catalog/definitions";
 import { prototypeActionSchemas } from "../catalog/actions";
 import type { PrototypeDoc } from "./schema";
 import type { PrototypeValidationResult, ValidationIssue } from "./types";
@@ -92,7 +92,11 @@ function validateProps(schema: { safeParse: (value: unknown) => { success: boole
   }
 }
 
-export function validatePrototype(doc: PrototypeDoc): PrototypeValidationResult {
+export function validatePrototype(
+  doc: PrototypeDoc,
+  options?: { definitions?: Record<string, ComponentDefinition> },
+): PrototypeValidationResult {
+  const definitions: Record<string, ComponentDefinition> = options?.definitions ?? componentDefinitions;
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
   const screenIds = new Set(doc.screens.map((screen) => screen.id));
   const navigation = new Map<string, Set<string>>();
@@ -105,7 +109,7 @@ export function validatePrototype(doc: PrototypeDoc): PrototypeValidationResult 
     const parents = new Map<string, number>();
     for (const [key, element] of Object.entries(elements)) {
       const ep = [...base, "elements", key];
-      const definition = componentDefinitions[element.type as keyof typeof componentDefinitions];
+      const definition = definitions[element.type];
       if (!definition) { issue(errors, [...ep, "type"], `unknown component type: ${element.type}`); continue; }
       validateProps(definition.props, element.props, [...ep, "props"], errors, warnings, doc.state);
       if (element.visible !== undefined) checkCondition(element.visible, [...ep, "visible"], errors, warnings, doc.state);

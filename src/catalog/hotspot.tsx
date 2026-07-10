@@ -1,17 +1,8 @@
 import type { BaseComponentProps } from "@json-render/react";
 import { z } from "zod";
+import { hotspotDefinition } from "./hotspot.definition";
 
-export const hotspotDefinition = {
-  props: z.strictObject({
-    x: z.number(),
-    y: z.number(),
-    width: z.number().positive(),
-    height: z.number().positive(),
-    ariaLabel: z.string().min(1),
-  }),
-  events: ["press"],
-  description: "Transparent, keyboard-accessible absolute-positioned action area.",
-};
+export { hotspotDefinition } from "./hotspot.definition";
 
 type HotspotProps = z.output<typeof hotspotDefinition.props>;
 

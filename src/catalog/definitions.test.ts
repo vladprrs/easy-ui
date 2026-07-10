@@ -1,4 +1,4 @@
-import { shadcnComponentDefinitions } from "@json-render/shadcn";
+import { shadcnComponentDefinitions } from "@json-render/shadcn/catalog";
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
 import { normalizeDefinitions } from "./definitions";
@@ -40,5 +40,12 @@ describe("normalizeDefinitions", () => {
     expect(shadcnComponentDefinitions.Card.props).toBe(originalProps);
     expect(originalProps.safeParse({}).success).toBe(before);
     expect(before).toBe(false);
+  });
+
+  it("normalizes custom definitions with the builtin rules", () => {
+    const custom = normalizeDefinitions({
+      RatingStars: { description: "rating", props: z.strictObject({ label: z.string().nullable() }) },
+    });
+    expect(custom.RatingStars.props.safeParse({}).success).toBe(true);
   });
 });

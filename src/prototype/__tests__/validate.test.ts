@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import helloDocument from "../../../prototypes/hello-world.json";
 import { prototypeDocSchema } from "../schema";
 import { validatePrototype } from "../validate";
@@ -38,6 +39,51 @@ describe("prototype v1 validation", () => {
   it("rejects Hotspot without canvas", () => { const d=clone(); d.screens[0].spec.elements.next={type:"Hotspot",props:{x:0,y:0,width:10,height:10,ariaLabel:"Next"}}; expectInvalid(d,/requires a screen canvas/); });
   it("rejects Hotspot outside canvas", () => { const d=clone(); d.screens[0].canvas={width:100,height:100}; d.screens[0].spec.elements.next={type:"Hotspot",props:{x:95,y:0,width:10,height:10,ariaLabel:"Next"}}; expectInvalid(d,/outside canvas bounds/); });
   it("rejects an unknown $cond operator", () => { const d=clone(); d.screens[0].spec.elements.greeting.props.text={$cond:{if:{$state:"/name",contains:"A"},then:"yes",else:"no"}}; expectInvalid(d,/unknown condition operator/); });
+});
+
+describe("custom component definitions", () => {
+  const definition = {
+    description: "A star rating input.",
+    props: z.strictObject({ value: z.number().int().min(1).max(5) }),
+    events: ["change"],
+  };
+  const document = prototypeDocSchema.parse({
+    version: 1,
+    id: "custom-rating",
+    name: "Custom rating",
+    device: "desktop",
+    startScreen: "main",
+    state: {},
+    screens: [{
+      id: "main",
+      name: "Main",
+      spec: {
+        root: "rating",
+        elements: {
+          rating: {
+            type: "RatingStars",
+            props: { value: 4 },
+            on: { change: { action: "setState", params: { statePath: "/rating", value: 5 } } },
+          },
+        },
+      },
+    }],
+  });
+
+  it("accepts a custom type only when its definition is supplied", () => {
+    expect(validatePrototype(document, { definitions: { RatingStars: definition } }).errors).toEqual([]);
+    expect(validatePrototype(document).errors.map((entry) => entry.message)).toContain("unknown component type: RatingStars");
+  });
+
+  it("validates custom props and events", () => {
+    const invalidProps = structuredClone(document);
+    invalidProps.screens[0]!.spec.elements.rating!.props.value = 6;
+    expect(validatePrototype(invalidProps, { definitions: { RatingStars: definition } }).errors.some((entry) => entry.path.endsWith("/props/value"))).toBe(true);
+
+    const invalidEvent = structuredClone(document);
+    invalidEvent.screens[0]!.spec.elements.rating!.on = { press: { action: "back", params: {} } };
+    expect(validatePrototype(invalidEvent, { definitions: { RatingStars: definition } }).errors.map((entry) => entry.message)).toContain("unknown event for RatingStars: press");
+  });
 });
 
 describe("repository prototypes", () => {
