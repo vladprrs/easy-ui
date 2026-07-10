@@ -1,0 +1,18 @@
+import js from "@eslint/js";
+import reactHooks from "eslint-plugin-react-hooks";
+import tseslint from "typescript-eslint";
+
+export default tseslint.config(
+  { ignores: ["dist", "node_modules", ".claude-config", ".codex-home"] },
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  reactHooks.configs.flat.recommended,
+  {
+    files: ["**/*.{ts,tsx}"],
+    languageOptions: { parserOptions: { projectService: true } },
+  },
+  {
+    files: ["scripts/*.mjs"],
+    languageOptions: { globals: { console: "readonly" } },
+  },
+);
