@@ -1,6 +1,6 @@
 # Серверный API easy-ui: создание и версионирование прототипов и кастомных компонентов (Bun)
 
-**Версия плана: v2.** Раунд 1 ревью (Codex gpt-5.6-sol, max): 26 находок, 4 blocker — все блокеры устранены в v2, триаж в §12.
+**Версия плана: v3.** Раунд 1 ревью (Codex gpt-5.6-sol, max): 26 находок, 4 blocker → v2. Раунд 2: 14 находок, 2 blocker (version-aware навигация; staging→active активация publish) — устранены в v3, триаж в §12–13.
 
 ## Context
 
@@ -33,17 +33,20 @@ Auth нет (решение пользователя). Техническая г
 | БД | `bun:sqlite`, один файл `data/easy-ui.db`, WAL, миграции по `PRAGMA user_version`; `data/` в .gitignore |
 | Пин зависимостей прототипа | На **каждом save**: резолв `element.type` → последняя published версия кастома, запись в `prototype_revision_components`. Ревизия полностью воспроизводима; новый publish компонента влияет на прототип только при следующем save. Publish прототипа = присвоение имени уже зафиксированной ревизии |
 | Использование кастома | Только published-версии (драфт-ревизии компонентов не резолвятся) |
-| Read-models прототипа | `GET /:id/draft` (head + пины его ревизии) и `GET /:id/versions/:v` (иммутабельный снапшот). Маршруты плеера: `/p/:id/s/:screen` = draft, `/p/:id/v/:version/s/:screen` = published |
-| Валидация save прототипа | `prototypeDocSchema` + `validatePrototype(doc, {definitions: builtin ∪ published customs})` → 422; warnings возвращаются и при успехе |
+| Read-models прототипа | `GET /:id/draft` (head + пины его ревизии) и `GET /:id/versions/:v` (иммутабельный снапшот). Маршруты плеера: `/p/:id/s/:screen` = draft, `/p/:id/v/:version/s/:screen` = published. **`navigation.tsx` получает version-aware построение путей**: `routeBase` в `PlayerNavigationProvider` (или общий `buildPlayerPath()`) — меняется только конструирование URL, семантика sessionNonce/stale/flowDepth не трогается; тест: published bootstrap → navigate → restart → back не теряют `/v/:version` |
+| Активация publish компонента | `component_publishes.status: staging → active \| failed`. Транзакция 1 создаёт **невидимый** staging-publish (CAS по head + `deleted_at IS NULL`); затем in-process импорт ревизии; транзакция 2 переводит в active (или failed при ошибке импорта). Манифест, резолв пинов и bundle-роуты видят **только active** |
+| Валидация save прототипа | Линеаризация пинов: до валидации фиксируется точный набор `(componentId, version)` из active-publishes; `validatePrototype(doc, {definitions: builtin ∪ именно эти версии})`; транзакция вставляет **этот же** набор (без повторного резолва latest), проверяя только `deleted_at IS NULL`. Конкурентный тест save ∥ publish. Warnings возвращаются и при успехе |
 | Дефиниции кастомов | Сервер: save-чек драфта в сабпроцессе (таймаут ~10s); для валидации прототипов in-process импорт **published**-ревизий из `data/modules/<id>/<rev>-<sha256_8>.tsx` (атомарная запись, никогда не перезаписывается). Клиент: схема из самого загруженного модуля |
 | React singleton + shim ABI | Хост кладёт shared в `globalThis.__easyUiShared`; сервер генерирует ESM-шимы со **статически перечисленными** named exports: `/api/shims/v1/{react,react-dom,react-jsx-runtime,zod,json-render-react}.js`. `hostAbiVersion: 1` пишется в publish компонента. Bundle → шимы через пост-процессинг (см. пайплайн) |
 | Компиляция при publish | Двухфазно: (1) вне транзакции — контракт-чеки + `Bun.build` (NODE_ENV=production, `splitting:false`, external = точный allowlist) + пост-процессинг + верификация; (2) короткая sync-транзакция с CAS-перепроверкой head → insert publish. `db.transaction()` — синхронный API, async внутри не живёт |
 | Артефакты | Ровно один JS-output; relative/dynamic/CSS/asset-импорты и любые bare-импорты вне allowlist → 422. После пост-процессинга повторный скан: неизвестный bare-импорт → reject |
 | Стили v1 | `styleContractVersion: 1`: CSS-переменные темы, inline-стили, utility-классы, уже попавшие в CSS приложения (shadcn-набор через `@source`). Произвольные новые Tailwind-классы не гарантированы; CSS-импорты отклоняются. v2 — per-version компиляция CSS |
-| Конкурентность | `baseRev` **обязателен** для PUT/restore/publish/delete обоих ресурсов; проверка в той же транзакции; 409 несёт `currentRev`/`currentVersion` |
+| Конкурентность | `baseRev` **обязателен** для PUT/restore/publish/delete обоих ресурсов; проверка в той же транзакции; 409 несёт `currentRev`/`currentVersion?`. Publish дополнительно сериализуется `UNIQUE(…_id, rev)` на publish-таблицах (одна именованная версия на ревизию); все component-мутации проверяют `deleted_at IS NULL` в транзакции |
 | Удаление | Компоненты: soft delete (`deleted_at`), revisions/publishes живут вечно, FK RESTRICT из пинов прототипов; `name` иммутабелен. Прототипы: hard delete с каскадом |
-| Ошибки API | Единый envelope `{error:{code,message,issues?,warnings?,currentRev?}}`; 422 = code `validation_failed` с `issues`; 405/413/415 обрабатываются; лимиты: doc ≤ 1 MB, source ≤ 256 KB; `Location` на 201 |
-| Кэширование | draft/списки: `no-store`; versions/bundle/shims: `public, max-age=31536000, immutable` |
+| Ошибки API | Единый envelope `{error:{code,message,issues?,warnings?,currentRev?,currentVersion?}}`; 422 = code `validation_failed` с `issues`; 405/413/415 обрабатываются; лимиты: doc ≤ 1 MB, source ≤ 256 KB; `Location` на 201; правило: path-id всегда == doc.id |
+| Кэширование | Immutable (`public, max-age=31536000, immutable`) — **только** конкретные `/versions/:v`, `bundle.js` и шимы `/shims/v1/*`. Все списки, метаданные, draft и `/catalog/manifest` — `no-store` |
+| Идентичность рантайма | На каждой prototype-ревизии сохраняется `builtin_catalog_hash` (hash отсортированных builtin-дефиниций + actions + Hotspot) — v1 информационно (read-models возвращают, клиент может предупредить о дрейфе); enforcement — v2. DTO draft/version несут `componentManifestHash` = hash отсортированных `(id, version, bundleHash)` |
+| Список прототипов | Денормализованные поля списка (`name`, `description`, `device`, `screenCount`) обновляются из doc **в той же транзакции**, что и ревизия — единственное правило их согласованности |
 | Seed | Ledger-таблица `seed_log(file_id, seeded_at)`: сидируется однажды, удаление не воскрешает; весь набор валидируется до транзакции, вставка атомарна. После bootstrap единственный source of truth — БД |
 | Prod | `bun server/main.ts` с `SERVE_DIST=dist` (localhost) — SPA + fallback + `/api`; заменяет `vite preview` в e2e |
 | Порты | vite :5173, storybook :6006, API dev :8787 (127.0.0.1), prod/preview :4173 (127.0.0.1); vite dev proxy `/api → 127.0.0.1:8787` |
@@ -59,7 +62,8 @@ CREATE TABLE prototypes (
 
 CREATE TABLE prototype_revisions (
   prototype_id TEXT NOT NULL REFERENCES prototypes(id) ON DELETE CASCADE,
-  rev INTEGER NOT NULL, doc TEXT NOT NULL, message TEXT, author TEXT,
+  rev INTEGER NOT NULL, doc TEXT NOT NULL,
+  builtin_catalog_hash TEXT NOT NULL, message TEXT, author TEXT,
   created_at TEXT NOT NULL, PRIMARY KEY (prototype_id, rev));
 
 CREATE TABLE prototype_revision_components (      -- пины на каждый save
@@ -74,6 +78,7 @@ CREATE TABLE prototype_publishes (
   prototype_id TEXT NOT NULL REFERENCES prototypes(id) ON DELETE CASCADE,
   version INTEGER NOT NULL, rev INTEGER NOT NULL, message TEXT, published_at TEXT NOT NULL,
   PRIMARY KEY (prototype_id, version),
+  UNIQUE (prototype_id, rev),
   FOREIGN KEY (prototype_id, rev) REFERENCES prototype_revisions(prototype_id, rev));
 
 CREATE TABLE components (
@@ -89,10 +94,13 @@ CREATE TABLE component_revisions (
 CREATE TABLE component_publishes (
   component_id TEXT NOT NULL REFERENCES components(id),
   version INTEGER NOT NULL, rev INTEGER NOT NULL,
-  compiled_js TEXT NOT NULL, definition_meta TEXT NOT NULL, -- {events,slots,description,propsJsonSchema?}
-  source_hash TEXT NOT NULL, bundle_hash TEXT NOT NULL, host_abi_version INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'staging',  -- staging | active | failed; видимы только active
+  compiled_js TEXT NOT NULL, definition_meta TEXT NOT NULL, -- {events,slots,description,example?,propsJsonSchema?}
+  source_hash TEXT NOT NULL, bundle_hash TEXT NOT NULL,     -- bundle_hash считается ПОСЛЕ rewrite
+  host_abi_version INTEGER NOT NULL,
   message TEXT, published_at TEXT NOT NULL,
   PRIMARY KEY (component_id, version),
+  UNIQUE (component_id, rev),
   FOREIGN KEY (component_id, rev) REFERENCES component_revisions(component_id, rev));
 
 CREATE TABLE seed_log (file_id TEXT PRIMARY KEY, seeded_at TEXT NOT NULL);
@@ -108,14 +116,15 @@ CREATE TABLE seed_log (file_id TEXT PRIMARY KEY, seeded_at TEXT NOT NULL);
 | GET /prototypes | → `[{id,name,description,device,screenCount,headRev,latestVersion\|null,updatedAt}]` |
 | POST /prototypes `{doc,message?}` | → 201 `{id,rev:1,warnings}` + Location |
 | GET /prototypes/:id | → метаданные `{id,name,headRev,latestVersion,versions:[…],updatedAt}` |
-| GET /prototypes/:id/draft | → `{doc, rev, components:[{id,name,version,bundleUrl}]}` (пины ревизии head) |
+| GET /prototypes/:id/draft | → `{doc, rev, builtinCatalogHash, componentManifestHash, components:[{id,name,version,bundleUrl,bundleHash}]}` (пины ревизии head) |
 | PUT /prototypes/:id `{doc,message?,baseRev}` | → `{rev,warnings}`; 409 `{currentRev}` |
 | DELETE /prototypes/:id `{baseRev}` | → 204 |
 | GET /prototypes/:id/revisions?limit&before | → `[{rev,message,createdAt}]` |
 | GET /prototypes/:id/revisions/:rev | → `{rev,doc,components,message,createdAt}` |
 | POST /prototypes/:id/restore `{rev,baseRev}` | → `{rev}` (копия doc + пинов) |
 | POST /prototypes/:id/publish `{message?,baseRev}` | → 201 `{version,rev}` |
-| GET /prototypes/:id/versions[/:v] | → снапшоты `{version,rev,doc,components,publishedAt}` (immutable cache) |
+| GET /prototypes/:id/versions | → `[{version,rev,publishedAt}]` (`no-store`) |
+| GET /prototypes/:id/versions/:v | → `{version,rev,doc,builtinCatalogHash,componentManifestHash,components,publishedAt}` (immutable cache) |
 
 **Компоненты** — симметрично (`source` вместо `doc`; `POST {id,name,source,message?}`, name `^[A-Z][A-Za-z0-9]*$`, уникален против builtin и таблицы) плюс:
 - `POST /components/:id/publish {message?,baseRev}` → 201 `{version, hostAbiVersion}`;
@@ -124,16 +133,19 @@ CREATE TABLE seed_log (file_id TEXT PRIMARY KEY, seeded_at TEXT NOT NULL);
 
 **Служебные**: `GET /catalog/manifest` (published кастомы без deleted: метаданные + bundleUrl + hostAbiVersion) · `GET /shims/v1/:name.js` · `GET /health` (ready только после миграций и seed).
 
-**Контракт компонента.** Save (драфт): (1) `Bun.Transpiler` — синтаксис; (2) сабпроцесс-импорт с таймаутом — top-level исполнение изолировано; (3) контракт экспортов: named `definition` `{props: z.ZodType, events?: string[], slots?: string[], description: string}` (metadata — строгий zod-чек) + default — **plain function component** (без memo/forwardRef в v1). Publish дополнительно: `tsc --noEmit` над сгенерированной обёрткой с `satisfies CustomComponentModule<…>`; компиляция+пост-процессинг+скан импортов; render-smoke через `react-dom/server` c `definition.example`-props (нет example → warning, не блок); затем in-process импорт опубликованной ревизии. Разрешённые импорты: ровно allowlist шимов (`react`, `react/jsx-runtime`, `react-dom`, `zod`, `@json-render/react` — типы).
+**Контракт компонента.** Save (драфт): (1) `Bun.Transpiler` — синтаксис; (2) сабпроцесс-импорт с таймаутом — top-level исполнение изолировано; (3) контракт экспортов: named `definition` `{props: z.ZodType, events?: string[], slots?: string[], description: string, example?: Record<string, unknown>}` (metadata — строгий zod-чек; `example` при наличии валидируется через `definition.props`) + default — **plain function component** (без memo/forwardRef в v1). Publish дополнительно: `tsc --noEmit` над сгенерированной обёрткой с `satisfies CustomComponentModule<…>`; компиляция+пост-процессинг+скан импортов; render-smoke — **advisory**: в том же timeout-сабпроцессе `react-dom/server.renderToString` с `example`-props (нет `example` или SSR-небезопасный компонент → warning, не блок — v1-компоненты не обязаны быть SSR-safe); затем staging→active активация (см. пайплайн). Разрешённые импорты: ровно allowlist шимов (`react`, `react/jsx-runtime`, `react-dom`, `zod`, `@json-render/react` — типы).
+
+**Сабпроцесс-контракт (`extract-subprocess`)**: результат — через временный JSON-файл (atomic rename), не stdout (авторский `console.log` не ломает протокол); строгая zod-схема результата + лимит размера; таймаут: TERM → grace → KILL process-group, ожидание exit, очистка temp; запуск с отключённым auto-install и минимальным env.
 
 ## Пайплайн бандла (publish компонента)
 
-1. `NODE_ENV=production` форсится для сборки; `Bun.build({entrypoints:[материализованный tsx], format:"esm", target:"browser", splitting:false, minify:true, sourcemap:"inline", external:[allowlist]})`; >1 output → reject.
-2. **Пост-процессинг**: лексинг импортов выходного ESM (`es-module-lexer` из node_modules vite; фолбэк — узкий парс import-стейтментов), замена только specifier-токенов по таблице `react→/api/shims/v1/react.js` и т.д.; `react/jsx-dev-runtime` в output → reject (не должен появляться при production).
-3. Повторный скан: любой оставшийся bare-импорт → reject 422.
-4. Golden-тест на bun 1.3.14: фикстурный компонент → снапшот пост-процессенного бандла (устойчивость к минору формата).
+1. Контракт-чеки (§выше) + `NODE_ENV=production`; `Bun.build({entrypoints:[материализованный tsx], format:"esm", target:"browser", splitting:false, minify:true, sourcemap:"none", external:[allowlist]})`; >1 output → reject. (`sourcemap:"none"` в v1 — rewrite меняет длины спецификаторов и делает inline-map ложной; position-aware map — v2.)
+2. **Пост-процессинг**: лексинг импортов выходного ESM через `es-module-lexer` — **прямая exact runtime-зависимость** (не транзитивная от vite); ошибка лексера → fail closed (reject), никакого фолбэк-парсера. Замена только specifier-токенов по таблице ABI; `react/jsx-dev-runtime` в output → reject.
+3. Финальный скан: каждый импорт обязан быть **точно** из множества `/api/shims/v1/{react,react-dom,react-jsx-runtime,zod,json-render-react}.js` — всё прочее → reject 422. `bundle_hash` — от финального (переписанного) текста.
+4. **Активация (закрытие blocker №2 раунда 2)**: транзакция 1 — CAS по head/`deleted_at` → insert publish со `status='staging'` (невидим для манифеста/пинов/bundle-роутов); in-process импорт ревизии; транзакция 2 — `staging→active` (ошибка импорта → `failed`, компилят остаётся для диагностики). Рестарт сервера: висящие `staging` помечаются `failed`.
+5. Golden-тест на bun 1.3.14: фикстурный компонент → снапшот пост-процессенного бандла.
 
-Шимы: генерируются на старте сервером — импорт пакета, перечисление `Object.keys(mod)`, эмит статического ESM `const m = globalThis.__easyUiShared["react"]; export const useState = m.useState; …`.
+Шимы: **checked-in манифест экспортов ABI v1** (`server/shims/abi-v1.ts`: отсортированный allowlist named exports на каждый пакет + отдельная обработка `default`, все имена — валидные идентификаторы). На старте сервер сверяет манифест с реальными `Object.keys(mod)` установленных пакетов: расхождение → warning в лог (не падение), эмит строго по манифесту. Изменение манифеста/семантики = `/api/shims/v2/`. Browser-тест (e2e) импортирует каждый шим после инициализации shared object.
 
 ## Изменения по файлам
 
@@ -151,11 +163,11 @@ CREATE TABLE seed_log (file_id TEXT PRIMARY KEY, seeded_at TEXT NOT NULL);
 - `src/prototype/loader.ts` — `loadPrototypeList()`, `loadPrototypeDraft(id)`, `loadPrototypeVersion(id, v)`; защитный `safeParse` ответов.
 - `src/gallery/GalleryPage.tsx` — loading/error/ready; ссылки на draft и (при наличии) latest published.
 - `src/app/routes.tsx` — новый маршрут `/p/:protoId/v/:version/s/:screenId`.
-- `src/player/PlayerShell.tsx` (**единоличный владелец — задача 5**) — гейт: загрузка `{doc, components}` → `loadCustomComponents` → только потом монтирование `LoadedPlayer` с key `${id}:${rev|v}:${sessionNonce}`; ошибка загрузки пинованного компонента = **экранная ошибка с диагностикой** (component/version), не тихая деградация. `navigation.tsx`/sessionNonce-механика не трогается.
+- `src/player/PlayerShell.tsx` + `src/player/navigation.tsx` (**единоличный владелец обоих — задача 5**) — гейт: загрузка `{doc, components}` → `loadCustomComponents` → только потом монтирование `LoadedPlayer` с key `${id}:${rev|v}:${sessionNonce}`; ошибка загрузки пинованного компонента = **экранная ошибка с диагностикой** (component/version). `navigation.tsx`: version-aware построение путей (`routeBase`/`buildPlayerPath()` — bootstrap-replace, navigate, restart строят URL внутри `/p/:id/v/:version/...` при published-входе); **семантика sessionNonce/stale-гейта/flowDepth не меняется**, существующие тесты navigation остаются зелёными.
 - `src/customComponents/shared.ts` (`globalThis.__easyUiShared`), `src/customComponents/loader.ts` — `import(/* @vite-ignore */ bundleUrl)`, только same-origin `/api/...`, проверка MIME и контракта экспортов; кэш по bundleUrl.
 - `vite.config.ts` — proxy `/api → http://127.0.0.1:8787`.
 
-**Инфраструктура:** `package.json` — `server:dev`/`server:test`/`server:typecheck`/`serve` (+preflight bun), verify дополнить; `@types/bun` exact (npm); `.bun-version`; `.gitignore` += `data/`, `.e2e-data/`. `playwright.config.ts`: dev API `DATA_DIR=.e2e-data/dev` (очистка перед run), preview `DATA_DIR=.e2e-data/preview` + build-precondition, `reuseExistingServer: !CI`, health-url. `CLAUDE.md`: команды, bun-политика. `docs/server-api.md`: DTO, error envelope, контракт компонента, styleContractVersion 1, граница доверия.
+**Инфраструктура:** `package.json` — `server:dev`/`server:test`/`server:typecheck`/`serve` (+preflight bun), verify дополнить; deps: `es-module-lexer` exact (**runtime**); devDeps: `@types/bun` exact. Сервер требует полный `npm install` (dev-deps: typescript для publish-тайпчека) — документируется; это workspace-инструмент, не деплоймент. `.bun-version`; `.gitignore` += `data/`, `.e2e-data/`. `playwright.config.ts`: **`reuseExistingServer: false` для обоих stateful-серверов**, выделенные e2e-порты (не 8787/4173), `DATA_DIR=.e2e-data/{dev,preview}` с очисткой перед run, build-precondition для preview, URL строго `127.0.0.1` (не `localhost` — IPv6). `CLAUDE.md`: команды, bun-политика. `docs/server-api.md`: DTO, error envelope, контракт компонента, styleContractVersion 1, граница доверия, требование полного npm install.
 
 ## Смежный план (flow-persist) — аддендум
 
@@ -172,11 +184,11 @@ CREATE TABLE seed_log (file_id TEXT PRIMARY KEY, seeded_at TEXT NOT NULL);
 ## Задачи (Codex --fresh --write --effort medium; волны 1 → 2 → (3 ∥ 4) → 5 → 6)
 
 1. **Shared-граф + параметризация валидатора.** Файлы: раздел «Рефакторинг» + тесты. Done: `npm run verify` зелёный; юнит `validatePrototype(doc,{definitions})` с кастомной дефиницией; smoke №1: builtin-цепочка definitions→validate без react в графе; smoke №2 (отдельный): импорт фикстурного кастомного TSX под bun с production deps.
-2. **Bun-сервер: ядро, БД, API прототипов, seed, статика.** Файлы: `server/` (кроме components/*), package.json, .gitignore, `.bun-version`. Done: `bun test server` зелёный; сценарий: seed (ledger; повторный старт не воскрешает удалённое) → save (422 битый doc; 409 без/с неверным baseRev с currentRev) → revisions (pagination) → restore → publish → versions; static-тесты traversal/encoding/`/api/unknown`; сервер слушает 127.0.0.1.
-3. **Пайплайн компонентов.** Файлы: `server/components/*`, `routes/{components,shims}.ts`, `validation.ts`, фикстуры. Done: все битые фикстуры → 422 с диагностикой, сервер жив (включая таймаут сабпроцесса на `while(true)`); bundle.js после пост-процессинга импортирует только `/api/shims/v1/...` (golden-тест); save прототипа с кастомом валидируется против published-дефиниции, пины пишутся в `prototype_revision_components`; повторный publish компонента не меняет существующие ревизии прототипов.
-4. **Клиентский data-layer.** Файлы: `src/api/*`, `src/prototype/loader.ts`, `src/gallery/GalleryPage.tsx`(+test), `src/app/routes.tsx`, `vite.config.ts`. **PlayerShell не трогать.** Done: test+typecheck зелёные; generation-token покрыт тестом (поздний старый ответ отбрасывается); grep: синхронный `prototypes` не используется.
-5. **Плеер: async-гейт + кастомный рантайм.** Файлы: `src/player/PlayerShell.tsx`(+test), `src/customComponents/*`(+test). Done: draft и `/v/:version` маршруты работают; key включает rev/version; ошибка пинованного бандла → экранная диагностика; прототип с published RatingStars (useState) рендерится, эмитит событие; оба старых PlayerShell-теста зелёные.
-6. **Топология, e2e, доки.** Файлы: `playwright.config.ts`, `e2e/dev/api.spec.ts`, `e2e/dev/custom-component.spec.ts`, preview на bun, `package.json` (verify), `CLAUDE.md`, `docs/server-api.md`. Done: `npm run verify` + `npm run e2e` зелёные (изолированные DATA_DIR, очистка); runtime-прогон `/verify`.
+2. **Bun-сервер: ядро, БД, API прототипов, seed, статика.** Файлы: `server/` (кроме components/*), package.json, .gitignore, `.bun-version`. Done: `bun test server` зелёный; сценарий: seed (ledger; повторный старт не воскрешает удалённое) → save (422 битый doc; 409 без/с неверным baseRev с currentRev; денормализация списка в той же транзакции) → revisions (pagination) → restore → publish (UNIQUE(prototype_id,rev): повторный publish той же ревизии → 409) → versions (список `no-store`, `/versions/:v` immutable); static-тесты traversal/encoding/`/api/unknown`; сервер слушает 127.0.0.1; `builtin_catalog_hash` пишется и отдаётся.
+3. **Пайплайн компонентов.** Файлы: `server/components/*`, `server/shims/abi-v1.ts`, `routes/{components,shims}.ts`, `validation.ts`, фикстуры. Done: все битые фикстуры → 422 с диагностикой, сервер жив (включая таймаут сабпроцесса на `while(true)` и `console.log`-загрязнение — результат через temp-файл); bundle.js после пост-процессинга содержит **только** `/api/shims/v1/...`-импорты (golden-тест, bundle_hash от финального текста); **staging→active**: между транзакциями манифест не видит компонент, failed-импорт → status failed, рестарт добивает висящие staging; линеаризация пинов покрыта конкурентным тестом save ∥ publish; повторный publish компонента не меняет существующие ревизии прототипов; `example` валидируется через props, render-smoke advisory в сабпроцессе.
+4. **Клиентский data-layer.** Файлы: `src/api/*`, `src/prototype/loader.ts`, `src/gallery/GalleryPage.tsx`(+test), `src/app/routes.tsx`, `vite.config.ts`. **PlayerShell и navigation.tsx не трогать.** Done: test+typecheck зелёные; generation-token покрыт тестом (поздний старый ответ отбрасывается); grep: синхронный `prototypes` не используется.
+5. **Плеер: async-гейт, version-aware навигация, кастомный рантайм.** Файлы: `src/player/PlayerShell.tsx`(+test), `src/player/navigation.tsx`(+tests), `src/customComponents/*`(+test). Done: draft и `/v/:version` маршруты работают; **published bootstrap → navigate → restart → back сохраняют `/v/:version`** (новые тесты navigation); все существующие navigation/PlayerShell-тесты зелёные без ослабления; key включает rev/version + componentManifestHash; ошибка пинованного бандла → экранная диагностика; прототип с published RatingStars (useState) рендерится, эмитит событие.
+6. **Топология, e2e, доки.** Файлы: `playwright.config.ts`, `e2e/dev/api.spec.ts`, `e2e/dev/custom-component.spec.ts`, preview на bun, `package.json` (verify), `CLAUDE.md`, `docs/server-api.md`. Done: `npm run verify` + `npm run e2e` зелёные; `reuseExistingServer:false`, выделенные порты, изолированные DATA_DIR с очисткой, URL по 127.0.0.1; e2e-шаг: импорт каждого шима `/api/shims/v1/*` в браузере после инициализации shared; runtime-прогон `/verify`.
 
 ## Верификация (финальная)
 
@@ -193,3 +205,10 @@ CREATE TABLE seed_log (file_id TEXT PRIMARY KEY, seeded_at TEXT NOT NULL);
 - №17–18 (смежный flow-persist план) — приняты как аддендум к его файлу; исполняется после этого плана.
 
 **Отклонено**: только части №1 и №10, зафиксированные выше, с обоснованиями.
+
+## 13. Триаж ревью (раунд 2: 14 находок, 2 blocker; вердикт — «после двух блокеров архитектурных возражений нет»)
+
+**Blocker №1 (version-aware навигация)** — принят: `navigation.tsx` входит во владение задачи 5, `routeBase`/`buildPlayerPath()`, семантика nonce/stale/flowDepth неизменна, тесты published-цикла.
+**Blocker №2 (атомарная активация publish)** — принят: `status staging|active|failed`, двухтранзакционная активация, видимость только active, добивание staging на рестарте.
+**Приняты (major/minor)**: №3 линеаризация пинов (фиксация набора до валидации, без повторного резолва в транзакции, конкурентный тест); №4 `UNIQUE(…_id, rev)` на publish-таблицах + проверка `deleted_at` во всех component-транзакциях; №5 checked-in ABI-манифест шимов + сверка на старте + browser-тест; №6 `es-module-lexer` — прямая exact runtime-зависимость, fail closed без фолбэка, `sourcemap:"none"` в v1, `bundle_hash` после rewrite, скан на точное множество shim-URL; №7 `example?` в контракте (валидация через props), render-smoke advisory в timeout-сабпроцессе, SSR-safety не требуется; №8 immutable-кэш только на `/versions/:v`+bundle+shims, списки/манифест `no-store`; №9 `builtin_catalog_hash` на ревизии (v1 информационно, enforcement — v2); №10 `es-module-lexer` в runtime deps, typescript остаётся devDep с документированным требованием полного npm install (workspace-инструмент); №11 сабпроцесс-IPC через temp-файл + строгая схема + TERM→KILL process-group; №12 `reuseExistingServer:false`, выделенные e2e-порты, 127.0.0.1 в URL; №13 `componentManifestHash` (+`builtinCatalogHash`) в DTO draft/version — сортированный канонический hash считает сервер; №14 правило денормализации списка в той же транзакции, path-id == doc.id, `currentVersion?` в envelope.
+**Отклонений в раунде 2 нет** (в №9 enforcement отложен в v2 осознанно — информационная выдача принята).
