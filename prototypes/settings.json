@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "id": "settings",
+  "name": "Настройки",
+  "description": "Настройки интерфейса и справочная информация.",
+  "device": "desktop",
+  "startScreen": "preferences",
+  "state": { "prefs": { "dark": false } },
+  "screens": [
+    {
+      "id": "preferences",
+      "name": "Предпочтения",
+      "spec": {
+        "root": "preferences-card",
+        "elements": {
+          "preferences-card": { "type": "Card", "props": { "title": "Настройки", "description": "Персонализируйте интерфейс.", "maxWidth": "lg" }, "children": ["settings-tabs", "dark-mode", "dark-hint", "open-about", "help-link"] },
+          "settings-tabs": { "type": "Tabs", "props": { "tabs": [{ "label": "Интерфейс", "value": "appearance" }, { "label": "Аккаунт", "value": "account" }], "defaultValue": "appearance" } },
+          "dark-mode": { "type": "Switch", "props": { "label": "Тёмная тема", "name": "dark", "checked": { "$bindState": "/prefs/dark" } } },
+          "dark-hint": { "type": "Text", "props": { "text": "Тёмная тема включена", "variant": "muted" }, "visible": { "$state": "/prefs/dark" } },
+          "open-about": { "type": "Button", "props": { "label": "О приложении", "variant": "secondary" }, "on": { "press": [{ "action": "setState", "params": { "statePath": "/about-open", "value": true } }, { "action": "navigate", "params": { "screenId": "about" } }] } },
+          "help-link": { "type": "Link", "props": { "label": "Центр помощи", "href": "https://example.com/help" }, "on": { "press": { "action": "openUrl", "params": { "url": "https://example.com/help" }, "preventDefault": true } } }
+        }
+      }
+    },
+    {
+      "id": "about",
+      "name": "О приложении",
+      "spec": {
+        "root": "about-stack",
+        "elements": {
+          "about-stack": { "type": "Stack", "props": { "direction": "vertical", "gap": "md" }, "children": ["about-dialog", "privacy-button", "about-back"] },
+          "about-dialog": { "type": "Dialog", "props": { "title": "Easy UI", "description": "Прототип настроек, версия 1.", "openPath": "/about-open" } },
+          "privacy-button": { "type": "Button", "props": { "label": "Конфиденциальность", "variant": "secondary" }, "on": { "press": { "action": "navigate", "params": { "screenId": "privacy" } } } },
+          "about-back": { "type": "Button", "props": { "label": "Назад" }, "on": { "press": { "action": "back", "params": {} } } }
+        }
+      }
+    },
+    {
+      "id": "privacy",
+      "name": "Конфиденциальность",
+      "spec": {
+        "root": "privacy-card",
+        "elements": {
+          "privacy-card": { "type": "Card", "props": { "title": "Конфиденциальность", "description": "Управление данными доступно в личном кабинете.", "maxWidth": "lg" }, "children": ["privacy-link", "privacy-back"] },
+          "privacy-link": { "type": "Link", "props": { "label": "Политика конфиденциальности", "href": "https://example.com/privacy" }, "on": { "press": { "action": "openUrl", "params": { "url": "https://example.com/privacy" }, "preventDefault": true } } },
+          "privacy-back": { "type": "Button", "props": { "label": "Назад" }, "on": { "press": { "action": "back", "params": {} } } }
+        }
+      }
+    }
+  ]
+}

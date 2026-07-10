@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "id": "checkout",
+  "name": "Мобильное оформление заказа",
+  "description": "Путь от каталога до успешной оплаты.",
+  "device": "mobile",
+  "startScreen": "catalog",
+  "state": {
+    "cart": { "count": 0 },
+    "form": { "name": "", "city": "Москва", "delivery": "Курьер" }
+  },
+  "screens": [
+    {
+      "id": "catalog",
+      "name": "Каталог",
+      "canvas": { "width": 390, "height": 844 },
+      "spec": {
+        "root": "catalog-stack",
+        "elements": {
+          "catalog-stack": { "type": "Stack", "props": { "direction": "vertical", "gap": "md" }, "children": ["catalog-title", "product-card"] },
+          "catalog-title": { "type": "Text", "props": { "text": "Новинки", "variant": "lead" } },
+          "product-card": { "type": "Card", "props": { "title": "Лёгкие кроссовки", "description": "7 990 ₽", "maxWidth": "full" }, "children": ["product-image", "product-badge", "product-hotspot"] },
+          "product-image": { "type": "Image", "props": { "src": "/images/sneakers.jpg", "alt": "Белые лёгкие кроссовки", "width": 358, "height": 260 } },
+          "product-badge": { "type": "Badge", "props": { "text": "Хит", "variant": "secondary" } },
+          "product-hotspot": { "type": "Hotspot", "props": { "x": 16, "y": 90, "width": 358, "height": 260, "ariaLabel": "Открыть карточку кроссовок" }, "on": { "press": { "action": "navigate", "params": { "screenId": "product" } } } }
+        }
+      }
+    },
+    {
+      "id": "product",
+      "name": "Товар",
+      "spec": {
+        "root": "product-card",
+        "elements": {
+          "product-card": { "type": "Card", "props": { "title": "Лёгкие кроссовки", "description": "Дышащий верх и мягкая подошва для прогулок каждый день.", "maxWidth": "full" }, "children": ["product-photo", "product-price", "add-to-cart"] },
+          "product-photo": { "type": "Image", "props": { "src": "/images/sneakers.jpg", "alt": "Белые лёгкие кроссовки", "width": 358, "height": 300 } },
+          "product-price": { "type": "Text", "props": { "text": "7 990 ₽", "variant": "lead" } },
+          "add-to-cart": { "type": "Button", "props": { "label": "В корзину", "variant": "primary" }, "on": { "press": [{ "action": "setState", "params": { "statePath": "/cart/count", "value": 1 } }, { "action": "navigate", "params": { "screenId": "cart" } }] } }
+        }
+      }
+    },
+    {
+      "id": "cart",
+      "name": "Корзина",
+      "spec": {
+        "root": "cart-card",
+        "elements": {
+          "cart-card": { "type": "Card", "props": { "title": "Корзина", "maxWidth": "full" }, "children": ["cart-count", "cart-empty", "cart-item", "cart-total", "checkout-button"] },
+          "cart-count": { "type": "Badge", "props": { "text": { "$state": "/cart/count" }, "variant": "secondary" } },
+          "cart-empty": { "type": "Text", "props": { "text": "Корзина пуста", "variant": "muted" }, "visible": { "$state": "/cart/count", "eq": 0 } },
+          "cart-item": { "type": "Text", "props": { "text": "Лёгкие кроссовки × 1" }, "visible": { "$state": "/cart/count", "gt": 0 } },
+          "cart-total": { "type": "Text", "props": { "text": { "$template": "Итого: 7 990 ₽ · товаров: ${/cart/count}" }, "variant": "lead" } },
+          "checkout-button": { "type": "Button", "props": { "label": "Оформить", "variant": "primary" }, "on": { "press": { "action": "navigate", "params": { "screenId": "checkout-form" } } } }
+        }
+      }
+    },
+    {
+      "id": "checkout-form",
+      "name": "Оформление",
+      "spec": {
+        "root": "form-card",
+        "elements": {
+          "form-card": { "type": "Card", "props": { "title": "Данные заказа", "maxWidth": "full" }, "children": ["customer-name", "customer-city", "delivery-method", "pay-button"] },
+          "customer-name": { "type": "Input", "props": { "label": "Имя", "name": "name", "type": "text", "placeholder": "Как к вам обращаться", "value": { "$bindState": "/form/name" } } },
+          "customer-city": { "type": "Select", "props": { "label": "Город", "name": "city", "options": ["Москва", "Санкт-Петербург", "Казань"], "value": { "$bindState": "/form/city" } } },
+          "delivery-method": { "type": "Radio", "props": { "label": "Доставка", "name": "delivery", "options": ["Курьер", "Самовывоз"], "value": { "$bindState": "/form/delivery" } } },
+          "pay-button": { "type": "Button", "props": { "label": "Оплатить", "variant": "primary" }, "on": { "press": { "action": "navigate", "params": { "screenId": "success" } } } }
+        }
+      }
+    },
+    {
+      "id": "success",
+      "name": "Успех",
+      "spec": {
+        "root": "success-card",
+        "elements": {
+          "success-card": { "type": "Card", "props": { "title": "Заказ оплачен", "description": "Спасибо! Мы уже готовим покупку.", "centered": true }, "children": ["restart-button"] },
+          "restart-button": { "type": "Button", "props": { "label": "Начать заново", "variant": "primary" }, "on": { "press": { "action": "restart", "params": {} } } }
+        }
+      }
+    }
+  ]
+}
