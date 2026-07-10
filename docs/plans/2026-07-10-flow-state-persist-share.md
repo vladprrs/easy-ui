@@ -1,5 +1,11 @@
 # Persist/deep-link стейта плеера (share-ссылка + авто-персист) — без своего StateStore
 
+> **Аддендум 2026-07-10** (из adversarial-ревью серверного плана `2026-07-10-server-api-versioning.md`; этот план исполняется **после** серверного, перед исполнением пересмотреть с учётом нового async-PlayerShell):
+> 1. Persist-ключ и `baseline` должны включать ревизию/версию прототипа (после серверного плана doc приходит с `rev`/`version`) + hash манифеста кастомных компонентов — иначе снапшот от старой ревизии подхватится новой с тем же initial state.
+> 2. Share-ссылка на опубликованный прототип пинует `version` в пути (`/p/:id/v/:version/...`), а не только screen+state.
+> 3. Reserved-path guard: экспортировать из `validate.ts` общий predicate `isReservedStatePointer(pointer)` вместо массива JSON Pointer'ов — sanitizer сравнивает top-level ключи (`currentScreen`), а массив хранит пойнтеры (`/currentScreen`), прямое сравнение ничего не запретит.
+> 4. Эффект «cancel + очистка storage по смене sessionNonce» обязан пропускать первый mount, иначе сотрёт только что загруженный persisted state.
+
 ## Context
 
 Обсуждение «нужен ли нам StateStore» → вывод: **нет**. Стейт данных полностью делегирован `@json-render/react` (uncontrolled `JSONUIProvider` + сброс через `key`-remount), библиотека уже экспортирует `StateStore`/`createStateStore` как pluggable-шов на будущее. Реальная потребность пользователя — **persist/deep-link стейта**: (1) share-ссылка «текущий экран + заполненный стейт», (2) авто-персист сессии через reload. Обе решаются без controlled store: захват через `onStateChange` + `useStateStore().getSnapshot()`, восстановление через уже существующую точку `initialState` в `PlayerShell.tsx:35`.
