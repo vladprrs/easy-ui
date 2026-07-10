@@ -4,10 +4,12 @@
 
 Просмотрщик кликабельных прототипов поверх json-render + Storybook: многоэкранные флоу из живых shadcn-компонентов, навигация через actions, общий стейт флоу. Источник истины — каталог/registry в `src/catalog/`; Storybook — витрина. Роадмап: редактор прототипов, конструктор экранов, AI-генерация.
 
-- План MVP и контракты: `docs/plans/2026-07-10-prototype-viewer-mvp.md` (v3), формат прототипов: `docs/prototype-format.md` (строгий allowlist v1).
+- План MVP и контракты: `docs/plans/2026-07-10-prototype-viewer-mvp.md` (v3), формат прототипов: `docs/prototype-format.md` (строгий allowlist v1), Bun API: `docs/server-api.md`.
 - Ключевые зоны: `src/catalog/` (definitions/actions/runtime/fixtures), `src/prototype/` (schema/validate/loader), `src/player/` (navigation с sessionNonce, stale-гейт), `src/gallery|library/`, `prototypes/*.json`.
-- Команды: `npm run dev` (:5173) · `npm run storybook` (:6006) · `npm run verify` (полный агрегат) · `npm run e2e` (Playwright dev+preview) · `npm run validate:prototypes` · `npm run build` (SPA + dist/storybook).
-- Версии пинованы: `@json-render/*` exact 0.19.0 (обновлять только связкой), Storybook exact 10.4.6, React ^19.2.7, zod 4, Tailwind 4. Пакетный менеджер — **npm** (pnpm нет), Node ≥24.
+- Команды: `npm run dev` (:5173, proxy `/api` → 127.0.0.1:8787) · `npm run server:dev` (:8787) · `npm run serve` (:4173, API + статика из `dist`) · `npm run storybook` (:6006) · `npm run verify` (полный агрегат) · `npm run e2e` (vite+API dev и Bun preview) · `npm run validate:prototypes` · `npm run build` (SPA + dist/storybook).
+- Версии пинованы: `@json-render/*` exact 0.19.0 (обновлять только связкой), Storybook exact 10.4.6, React ^19.2.7, zod 4, Tailwind 4. Зависимости устанавливает только **npm** (pnpm и `bun install` не использовать), Node ≥24. Bun 1.3.14 пинован в `.bun-version` и используется только как runtime для `server/`; рабочий бинарник — `~/.bun/bin/bun`, битый npm-шим `/usr/local/bin/bun` не использовать, поэтому `~/.bun/bin` должен идти первым в `PATH`.
+- Stateful e2e-серверы никогда не переиспользуются: API dev работает с `.e2e-data/dev` на 127.0.0.1:8787, Bun preview — с `.e2e-data/preview` на 127.0.0.1:4173; каталоги очищаются командами `webServer` перед запуском. Vite и Storybook остаются на `localhost`, поскольку vite в контейнере слушает IPv6 localhost.
+- `DATA_DIR` обязан находиться внутри корня проекта: материализованные TSX-модули разрешают `react`, `zod` и остальные зависимости из корневого `node_modules`. Сервер — workspace-инструмент и требует полный `npm install`, включая devDependencies для publish typecheck.
 - Окружение: code-server **игнорирует флаги портов** — реальный порт брать из лога сервера; reverse-proxy хосты `*.coder` разрешены в `vite.config.ts` (`server`/`preview.allowedHosts`) и `.storybook/main.ts` (`core.allowedHosts` — у Storybook своя проверка хоста).
 - Рецепт runtime-верификации: `.claude/skills/verify/SKILL.md`.
 
