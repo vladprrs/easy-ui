@@ -19,7 +19,8 @@ async function child(sourcePath:string,resultPath:string,smoke:boolean) {
     const warnings:string[]=[];
     if(smoke) {
       if(!metadata.example) warnings.push("Render smoke skipped: definition.example is not provided");
-      else try { const React=await import("react"); const {renderToString}=await import("react-dom/server"); renderToString(React.createElement(mod.default,metadata.example)); } catch(error) { warnings.push(`Render smoke failed: ${error instanceof Error?error.message:String(error)}`); }
+      // Registry calls components with BaseComponentProps ({props, emit, on}), so smoke must match that convention.
+      else try { const React=await import("react"); const {renderToString}=await import("react-dom/server"); renderToString(React.createElement(mod.default,{props:metadata.example,emit:()=>{},on:()=>({emit:()=>{},shouldPreventDefault:false,bound:false})})); } catch(error) { warnings.push(`Render smoke failed: ${error instanceof Error?error.message:String(error)}`); }
     }
     result={ok:true,meta:definitionMeta(metadata),warnings};
   } catch(error) { result={ok:false,warnings:[],error:error instanceof Error?error.message:String(error)}; }

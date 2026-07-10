@@ -27,7 +27,11 @@ export function isPlayerLocationState(value: unknown): value is PlayerLocationSt
   return typeof state.sessionNonce === "string" && Number.isInteger(state.flowDepth) && Number(state.flowDepth) >= 0;
 }
 
-export function PlayerNavigationProvider({ startScreen, children }: { startScreen: string; children: ReactNode }) {
+export function buildPlayerPath(routeBase: string, screenId: string) {
+  return `${routeBase}/s/${encodeURIComponent(screenId)}`;
+}
+
+export function PlayerNavigationProvider({ startScreen, routeBase, children }: { startScreen: string; routeBase: string; children: ReactNode }) {
   const routerNavigate = useNavigate();
   const location = useLocation();
   const { protoId, screenId } = useParams();
@@ -40,18 +44,18 @@ export function PlayerNavigationProvider({ startScreen, children }: { startScree
   useEffect(() => {
     if (!protoId || (!isBootstrap && !isStale)) return;
     const target = isStale ? startScreen : (screenId ?? startScreen);
-    routerNavigate(`/p/${protoId}/s/${target}`, {
+    routerNavigate(buildPlayerPath(routeBase, target), {
       replace: true,
       state: { sessionNonce, flowDepth: 0 } satisfies PlayerLocationState,
     });
-  }, [isBootstrap, isStale, protoId, routerNavigate, screenId, sessionNonce, startScreen]);
+  }, [isBootstrap, isStale, protoId, routeBase, routerNavigate, screenId, sessionNonce, startScreen]);
 
   const navigate = useCallback((target: string) => {
     if (!protoId || target === screenId || isBootstrap || isStale) return;
-    routerNavigate(`/p/${protoId}/s/${target}`, {
+    routerNavigate(buildPlayerPath(routeBase, target), {
       state: { sessionNonce, flowDepth: (state?.flowDepth ?? 0) + 1 } satisfies PlayerLocationState,
     });
-  }, [isBootstrap, isStale, protoId, routerNavigate, screenId, sessionNonce, state?.flowDepth]);
+  }, [isBootstrap, isStale, protoId, routeBase, routerNavigate, screenId, sessionNonce, state?.flowDepth]);
 
   const back = useCallback(() => {
     if (isBootstrap || isStale || (state?.flowDepth ?? 0) === 0) return;
@@ -62,11 +66,11 @@ export function PlayerNavigationProvider({ startScreen, children }: { startScree
     if (!protoId) return;
     const nonce = newNonce();
     setSessionNonce(nonce);
-    routerNavigate(`/p/${protoId}/s/${startScreen}`, {
+    routerNavigate(buildPlayerPath(routeBase, startScreen), {
       replace: true,
       state: { sessionNonce: nonce, flowDepth: 0 } satisfies PlayerLocationState,
     });
-  }, [protoId, routerNavigate, startScreen]);
+  }, [protoId, routeBase, routerNavigate, startScreen]);
 
   const value = useMemo<PlayerNavigation>(() => ({
     sessionNonce,

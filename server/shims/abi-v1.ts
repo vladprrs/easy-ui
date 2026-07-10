@@ -9,7 +9,12 @@ export const ABI_V1 = {
 export function emitShim(name:ShimName):string {
   const item=ABI_V1[name];
   const lines=["const m = globalThis.__easyUiShared["+JSON.stringify(item.sharedKey)+"];" as string];
-  for(const key of item.named) lines.push("export const "+key+" = m["+JSON.stringify(key)+"];");
+  // Aliased exports: names like `catch`/`enum`/`function` are valid IdentifierNames
+  // (legal after `as`) but reserved words cannot be `const` bindings.
+  item.named.forEach((key,index)=>{
+    lines.push("const __b"+index+" = m["+JSON.stringify(key)+"];");
+    lines.push("export { __b"+index+" as "+key+" };");
+  });
   if(item.hasDefault) lines.push("export default m.default ?? m;");
   return lines.join("\n")+"\n";
 }
