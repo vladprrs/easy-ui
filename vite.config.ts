@@ -7,6 +7,8 @@ export default defineConfig({
   build: { manifest: true },
   appType: "spa",
   server: {
+    // Workspace reverse proxy exposes the dev server under *.coder hostnames.
+    allowedHosts: [".coder"],
     proxy: {
       "/storybook": {
         target: "http://localhost:6006",
@@ -18,7 +20,7 @@ export default defineConfig({
   },
   // Do not inherit the development Storybook proxy in `vite preview`:
   // production serves the built files from dist/storybook on the same origin.
-  preview: { proxy: {} },
+  preview: { proxy: {}, allowedHosts: [".coder"] },
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
