@@ -1,9 +1,11 @@
 import { shadcnSystem } from "./shadcn";
+import { wireframeSystem } from "./wireframe";
 
 export const DEFAULT_DESIGN_SYSTEM_ID = "shadcn";
 
 export const designSystems = {
   shadcn: shadcnSystem,
+  wireframe: wireframeSystem,
 } as const;
 
 export function getDesignSystem(id: string) {
