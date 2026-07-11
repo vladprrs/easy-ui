@@ -33,6 +33,7 @@ export const prototypeDocSchema = z.strictObject({
   id: slugSchema,
   name: z.string().min(1),
   description: z.string().optional(),
+  designSystem: slugSchema.default("shadcn"),
   device: z.enum(["mobile", "tablet", "desktop"]).default("desktop"),
   startScreen: slugSchema,
   state: z.record(z.string(), z.unknown()),

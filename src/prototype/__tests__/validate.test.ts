@@ -19,6 +19,17 @@ function expectInvalid(raw: unknown, pattern: RegExp) { expect(messages(raw).joi
 describe("prototype v1 validation", () => {
   it("accepts hello-world", () => expect(messages(hello)).toEqual([]));
 
+  it("defaults designSystem to shadcn", () => {
+    expect(prototypeDocSchema.parse(hello).designSystem).toBe("shadcn");
+  });
+
+  it("reports an unknown design system", () => {
+    const d = clone();
+    d.designSystem = "unknown-system";
+    const result = validatePrototype(prototypeDocSchema.parse(d));
+    expect(result.errors).toEqual([{ path: "/designSystem", message: "unknown design system: unknown-system" }]);
+  });
+
   it("rejects a children cycle", () => { const d=clone(); d.screens[0].spec.elements.next.children=["card"]; expectInvalid(d,/cycle/); });
   it("rejects an element with a second parent", () => { const d=clone(); d.screens[0].spec.elements.greeting.children=["next"]; expectInvalid(d,/more than one parent/); });
   it("rejects an unknown type", () => { const d=clone(); d.screens[0].spec.elements.next.type="Mystery"; expectInvalid(d,/unknown component type/); });
@@ -42,6 +53,62 @@ describe("prototype v1 validation", () => {
   it("rejects a non-numeric ordering operand", () => { const d=clone(); d.screens[0].spec.elements.greeting.props.text={$cond:{if:{$state:"/name",gt:"10"},then:"yes",else:"no"}}; expectInvalid(d,/gt operand must be a number/); });
   it("rejects a directive as the entire props object", () => { const d=clone(); d.screens[0].spec.elements.greeting.props={$cond:{if:true,then:{text:"yes"},else:{text:"no"}}}; expectInvalid(d,/directive cannot be the entire props object/); });
   it("rejects an extra key in $cond", () => { const d=clone(); d.screens[0].spec.elements.greeting.props.text={$cond:{if:true,then:"yes",else:"no",extra:1}}; expectInvalid(d,/\$cond must be \{if, then, else\}/); });
+});
+
+describe("atomic design nesting", () => {
+  const definition = (atomicLevel?: "atom" | "molecule" | "organism", layoutNeutral = false) => ({
+    description: "Test component",
+    props: z.strictObject({}),
+    ...(atomicLevel ? { atomicLevel } : {}),
+    ...(layoutNeutral ? { layoutNeutral: true } : {}),
+  });
+  const definitions = {
+    Button: definition("atom"),
+    Card: definition("organism"),
+    Stack: definition("atom", true),
+    Grid: definition("atom", true),
+    UnknownLevel: definition(),
+  };
+  const document = (elements: Record<string, { type: string; props: Record<string, unknown>; children?: string[] }>, root = "root") => prototypeDocSchema.parse({
+    version: 1, id: "atomic-test", name: "Atomic test", startScreen: "main", state: {},
+    screens: [{ id: "main", name: "Main", spec: { root, elements } }],
+  });
+  const atomicWarnings = (doc: ReturnType<typeof document>) => validatePrototype(doc, { definitions }).warnings.filter((entry) => entry.message.startsWith("atomic-design:"));
+
+  it("warns when an organism is nested in an atom", () => {
+    const warnings = atomicWarnings(document({ root: { type: "Button", props: {}, children: ["card"] }, card: { type: "Card", props: {} } }));
+    expect(warnings).toEqual([{ path: "/screens/0/spec/elements/card", message: "atomic-design: Card (organism) should not be nested inside a atom" }]);
+  });
+
+  it("keeps multiple layout-neutral ancestors transparent", () => {
+    const warnings = atomicWarnings(document({
+      root: { type: "Button", props: {}, children: ["stack"] }, stack: { type: "Stack", props: {}, children: ["grid"] },
+      grid: { type: "Grid", props: {}, children: ["card"] }, card: { type: "Card", props: {} },
+    }));
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("does not warn through a layout-neutral element inside an organism", () => {
+    expect(atomicWarnings(document({ root: { type: "Card", props: {}, children: ["stack"] }, stack: { type: "Stack", props: {}, children: ["card"] }, card: { type: "Card", props: {} } }))).toEqual([]);
+  });
+
+  it("allows equal levels", () => {
+    expect(atomicWarnings(document({ root: { type: "Card", props: {}, children: ["card"] }, card: { type: "Card", props: {} } }))).toEqual([]);
+  });
+
+  it("keeps components without a level transparent", () => {
+    expect(atomicWarnings(document({ root: { type: "Button", props: {}, children: ["middle"] }, middle: { type: "UnknownLevel", props: {}, children: ["card"] }, card: { type: "Card", props: {} } }))).toHaveLength(1);
+  });
+
+  it("remains cycle-safe when orphan elements exist", () => {
+    const doc = document({
+      root: { type: "Button", props: {}, children: ["card"] }, card: { type: "Card", props: {}, children: ["root"] },
+      orphan: { type: "Card", props: {} },
+    });
+    const result = validatePrototype(doc, { definitions });
+    expect(result.errors.some((entry) => entry.message.includes("cycle"))).toBe(true);
+    expect(result.warnings.some((entry) => entry.path.endsWith("/card") && entry.message.startsWith("atomic-design:"))).toBe(true);
+  });
 });
 
 describe("custom component definitions", () => {

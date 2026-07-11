@@ -1,6 +1,8 @@
 import { validateSpec, type Spec } from "@json-render/core";
-import { componentDefinitions, type ComponentDefinition } from "../catalog/definitions";
+import type { ComponentDefinition } from "../catalog/definitions";
 import { prototypeActionSchemas } from "../catalog/actions";
+import { atomicRank, type AtomicLevel } from "../designSystems/types";
+import { getDesignSystem } from "../designSystems";
 import type { PrototypeDoc } from "./schema";
 import type { PrototypeValidationResult, ValidationIssue } from "./types";
 
@@ -99,8 +101,16 @@ export function validatePrototype(
   doc: PrototypeDoc,
   options?: { definitions?: Record<string, ComponentDefinition> },
 ): PrototypeValidationResult {
-  const definitions: Record<string, ComponentDefinition> = options?.definitions ?? componentDefinitions;
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
+  let definitions = options?.definitions;
+  if (!definitions) {
+    try {
+      definitions = getDesignSystem(doc.designSystem).definitions;
+    } catch {
+      issue(errors, ["designSystem"], `unknown design system: ${doc.designSystem}`);
+      return { errors, warnings };
+    }
+  }
   const screenIds = new Set(doc.screens.map((screen) => screen.id));
   const navigation = new Map<string, Set<string>>();
   for (const [screenIndex, screen] of doc.screens.entries()) {
@@ -157,7 +167,22 @@ export function validatePrototype(
     }
     for (const [child, count] of parents) if (count > 1) issue(errors, [...base,"elements",child], "element has more than one parent");
     const visiting = new Set<string>(), visited = new Set<string>();
-    const dfs = (key: string, depth: number) => { if (depth > 50) issue(errors, [...base,"elements",key], "tree depth exceeds 50"); if (visiting.has(key)) { issue(errors, [...base,"elements",key], "children cycle detected"); return; } if (visited.has(key)) return; visiting.add(key); for (const child of elements[key]?.children ?? []) dfs(child, depth + 1); visiting.delete(key); visited.add(key); };
+    const dfs = (key: string, depth: number, ancestorLevel?: AtomicLevel) => {
+      if (depth > 50) issue(errors, [...base,"elements",key], "tree depth exceeds 50");
+      if (visiting.has(key)) { issue(errors, [...base,"elements",key], "children cycle detected"); return; }
+      if (visited.has(key)) return;
+      visiting.add(key);
+      const element = elements[key];
+      const definition = element ? definitions[element.type] : undefined;
+      const level = definition?.atomicLevel;
+      if (element && level && !definition.layoutNeutral && ancestorLevel && atomicRank[level] > atomicRank[ancestorLevel]) {
+        issue(warnings, [...base, "elements", key], `atomic-design: ${element.type} (${level}) should not be nested inside a ${ancestorLevel}`);
+      }
+      const nextAncestor = level && !definition?.layoutNeutral ? level : ancestorLevel;
+      for (const child of element?.children ?? []) dfs(child, depth + 1, nextAncestor);
+      visiting.delete(key);
+      visited.add(key);
+    };
     dfs(screen.spec.root, 1);
   }
   const reachableScreens = new Set<string>();
