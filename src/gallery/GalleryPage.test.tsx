@@ -1,10 +1,10 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listPrototypes } from "../api/client";
+import { listDesignSystems, listPrototypes } from "../api/client";
 import { GalleryPage } from "./GalleryPage";
 
-vi.mock("../api/client", () => ({ listPrototypes: vi.fn() }));
+vi.mock("../api/client", () => ({ listDesignSystems: vi.fn(), listPrototypes: vi.fn() }));
 
 const summary = {
   id: "hello-world", name: "Hello World", description: "A minimal two-screen prototype.", device: "mobile" as const,
@@ -24,7 +24,14 @@ function renderGallery() {
 }
 
 describe("GalleryPage", () => {
-  beforeEach(() => vi.mocked(listPrototypes).mockReset());
+  beforeEach(() => {
+    vi.mocked(listPrototypes).mockReset();
+    vi.mocked(listDesignSystems).mockReset();
+    vi.mocked(listDesignSystems).mockResolvedValue({ designSystems: [
+      { id: "shadcn", name: "Shadcn", description: "", builtinCatalogHash: "one", components: [] },
+      { id: "wireframe", name: "Wireframe", description: "", builtinCatalogHash: "two", components: [] },
+    ] });
+  });
 
   it("shows loading, then renders draft and published links from summaries", async () => {
     const request = deferred<(typeof summary)[]>();
@@ -35,7 +42,9 @@ describe("GalleryPage", () => {
     expect(screen.getByRole("heading", { name: "Hello World" })).toBeTruthy();
     expect(screen.getByText("Mobile")).toBeTruthy();
     expect(screen.getByText("2")).toBeTruthy();
-    expect(screen.getByRole("link", { name: /Hello World/ }).getAttribute("href")).toBe("/p/hello-world");
+    const draftLink = screen.getByRole("link", { name: /Hello World/ });
+    expect(within(draftLink).getByText("Shadcn")).toBeTruthy();
+    expect(draftLink.getAttribute("href")).toBe("/p/hello-world");
     expect(screen.getByRole("link", { name: "Published v2" }).getAttribute("href")).toBe("/p/hello-world/v/2");
   });
 
@@ -46,5 +55,25 @@ describe("GalleryPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("No prototypes found.")).toBeTruthy();
     expect(listPrototypes).toHaveBeenCalledTimes(2);
+  });
+
+  it("filters by registered and legacy design systems and shows readable badges", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([
+      summary,
+      { ...summary, id: "wire", name: "Wire flow", designSystem: "wireframe" },
+      { ...summary, id: "legacy", name: "Legacy flow", designSystem: "classic" },
+    ]);
+    renderGallery();
+
+    expect(await screen.findByRole("button", { name: "Wireframe" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "classic" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Hello World" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Wireframe" }));
+    expect(screen.getByRole("heading", { name: "Wire flow" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Hello World" })).toBeNull();
+    expect(within(screen.getByRole("link", { name: /Wire flow/ })).getByText("Wireframe")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "classic" }));
+    expect(screen.getByRole("heading", { name: "Legacy flow" })).toBeTruthy();
+    expect(within(screen.getByRole("link", { name: /Legacy flow/ })).getByText("classic")).toBeTruthy();
   });
 });

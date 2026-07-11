@@ -9,6 +9,20 @@ export interface StorybookIndex {
   entries: Record<string, StorybookEntry>;
 }
 
+export interface ParsedStorybookTitle {
+  system: string;
+  level: string;
+  name: string;
+}
+
+export function parseStorybookTitle(entry: Pick<StorybookEntry, "title" | "name">): ParsedStorybookTitle {
+  const segments = entry.title.split("/").map((segment) => segment.trim());
+  if (segments.length === 3 && segments.every(Boolean)) {
+    return { system: segments[0], level: segments[1], name: segments[2] };
+  }
+  return { system: segments[0] || "Other", level: "Other", name: entry.name || segments.at(-1) || "Untitled" };
+}
+
 function parseEntry(value: unknown): StorybookEntry | null {
   if (!value || typeof value !== "object") return null;
   const entry = value as Record<string, unknown>;
