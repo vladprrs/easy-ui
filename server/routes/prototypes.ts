@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Database } from "bun:sqlite";
-import { componentDefinitions, type ComponentDefinition } from "../../src/catalog/definitions";
+import type { ComponentDefinition } from "../../src/catalog/definitions";
+import { designSystems } from "../../src/designSystems";
 import { prototypeDocSchema, type PrototypeDoc } from "../../src/prototype/schema";
 import { validatePrototype } from "../../src/prototype/validate";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
@@ -20,8 +21,10 @@ function parseDoc(value:unknown,pathId?:string):PrototypeDoc {
 }
 
 // Task 3 can resolve exact custom-version pins and pass the merged definitions here.
-export function validatePrototypeForSave(doc:PrototypeDoc, definitions:Record<string,ComponentDefinition>=componentDefinitions) {
-  const result=validatePrototype(doc,{definitions});
+export function validatePrototypeForSave(doc:PrototypeDoc, definitions?:Record<string,ComponentDefinition>) {
+  const resolved=definitions??designSystems[doc.designSystem as keyof typeof designSystems]?.definitions;
+  if(!resolved) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["designSystem"],message:`unknown design system: ${doc.designSystem}`}]});
+  const result=validatePrototype(doc,{definitions:resolved});
   if(result.errors.length) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:result.errors,warnings:result.warnings});
   return result.warnings;
 }

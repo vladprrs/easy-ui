@@ -6,6 +6,7 @@ import { validatePrototypeForSave } from "./routes/prototypes";
 import { PrototypeRepo } from "./repos/prototypes";
 
 export async function seedPrototypes(db:Database,dir=resolve("prototypes")):Promise<void> {
+  // Seed documents may use builtins from their own design system; custom components are not supported in seeds.
   let files:string[]; try { files=(await readdir(dir)).filter(f=>f.endsWith(".json")).sort(); } catch(error) { console.warn("Seed directory unavailable",error); return; }
   for(const file of files) {
     const fileId=basename(file);

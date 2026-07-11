@@ -13,6 +13,20 @@ function start(handler:(r:Request)=>Response|Promise<Response>) { const server=B
 async function body(response:Response):Promise<unknown> { return await response.json(); }
 
 describe("prototype API",()=>{
+  test("seeds a wireframe document from a temporary catalog",async()=>{
+    const dir=await mkdtemp(resolve(tmpdir(),"easy-ui-seeds-")); dirs.push(dir);
+    const doc={version:1,id:"wire-seed",name:"Wire seed",designSystem:"wireframe",device:"desktop",startScreen:"home",state:{},screens:[{id:"home",name:"Home",spec:{root:"root",elements:{root:{type:"Box",props:{label:"Seeded"}}}}}]};
+    await writeFile(resolve(dir,"wire.json"),JSON.stringify(doc)); const db=openDatabase(":memory:"); await seedPrototypes(db,dir);
+    expect(db.query("SELECT design_system system FROM prototypes WHERE id='wire-seed'").get()).toEqual({system:"wireframe"}); db.close();
+  });
+
+  test("rejects component types outside the document design system",async()=>{
+    const db=openDatabase(":memory:"); const base=start(createHandler(db));
+    const doc={version:1,id:"bad-wire",name:"Bad wire",designSystem:"wireframe",device:"desktop",startScreen:"home",state:{},screens:[{id:"home",name:"Home",spec:{root:"root",elements:{root:{type:"Tabs",props:{}}}}}]};
+    const response=await fetch(`${base}/api/prototypes`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({doc})});
+    expect(response.status).toBe(422); expect(await body(response)).toMatchObject({error:{issues:[{message:"Unknown or unpublished component type in design system 'wireframe': Tabs"}]}}); db.close();
+  });
+
   test("covers seed, validation, CAS, revisions, restore, publish and delete ledger",async()=>{
     const dir=await mkdtemp(resolve(tmpdir(),"easy-ui-server-")); dirs.push(dir); const dbFile=resolve(dir,"easy.db");
     const db=openDatabase(dbFile); await seedPrototypes(db,resolve("prototypes"));
