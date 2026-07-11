@@ -1,5 +1,16 @@
 import { z } from "zod";
 
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  z.array(jsonValueSchema),
+  z.record(z.string(), jsonValueSchema),
+]));
+
 export const slugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "must be a slug");
 
 const actionSchema = z.strictObject({
@@ -24,6 +35,8 @@ const specSchema = z.strictObject({
 const screenSchema = z.strictObject({
   id: slugSchema,
   name: z.string().min(1),
+  note: z.string().trim().min(1).max(500).optional(),
+  stateOverrides: z.record(z.string(), jsonValueSchema).optional(),
   canvas: z.strictObject({ width: z.number().positive(), height: z.number().positive() }).optional(),
   spec: specSchema,
 });
@@ -36,7 +49,7 @@ export const prototypeDocSchema = z.strictObject({
   designSystem: slugSchema.default("shadcn"),
   device: z.enum(["mobile", "tablet", "desktop"]).default("desktop"),
   startScreen: slugSchema,
-  state: z.record(z.string(), z.unknown()),
+  state: z.record(z.string(), jsonValueSchema),
   screens: z.array(screenSchema).min(1),
 }).superRefine((doc, context) => {
   const ids = new Set<string>();

@@ -23,6 +23,17 @@ describe("prototype v1 validation", () => {
     expect(prototypeDocSchema.parse(hello).designSystem).toBe("shadcn");
   });
 
+  it("accepts screen notes and JSON state overrides", () => {
+    const d = clone();
+    d.screens[0].note = "  A useful caption  ";
+    d.screens[0].stateOverrides = { nested: { value: null }, items: [1, true, "x"] };
+    const parsed = prototypeDocSchema.parse(d);
+    expect(parsed.screens[0].note).toBe("A useful caption");
+  });
+
+  it.each(["", "   "])("rejects an empty note (%j)", (note) => { const d=clone(); d.screens[0].note=note; expectInvalid(d,/note/); });
+  it("keeps screens strict when optional fields are added", () => { const d=clone(); d.screens[0].surprise=true; expectInvalid(d,/Unrecognized key.*surprise/); });
+
   it("reports an unknown design system", () => {
     const d = clone();
     d.designSystem = "unknown-system";
@@ -53,6 +64,32 @@ describe("prototype v1 validation", () => {
   it("rejects a non-numeric ordering operand", () => { const d=clone(); d.screens[0].spec.elements.greeting.props.text={$cond:{if:{$state:"/name",gt:"10"},then:"yes",else:"no"}}; expectInvalid(d,/gt operand must be a number/); });
   it("rejects a directive as the entire props object", () => { const d=clone(); d.screens[0].spec.elements.greeting.props={$cond:{if:true,then:{text:"yes"},else:{text:"no"}}}; expectInvalid(d,/directive cannot be the entire props object/); });
   it("rejects an extra key in $cond", () => { const d=clone(); d.screens[0].spec.elements.greeting.props.text={$cond:{if:true,then:"yes",else:"no",extra:1}}; expectInvalid(d,/\$cond must be \{if, then, else\}/); });
+
+  it.each(["currentScreen", "navStack", "_viewer"])("rejects reserved override key %s", (key) => {
+    const d=clone(); d.screens[0].stateOverrides={ [key]: true }; expectInvalid(d,/state override key is reserved/);
+  });
+
+  it.each(["__proto__", "prototype", "constructor"])("rejects forbidden override key %s at any depth", (key) => {
+    const d=prototypeDocSchema.parse(clone()); d.screens[0]!.stateOverrides={ safe: [{ nested: Object.fromEntries([[key, true]]) }] } as never;
+    const result = validatePrototype(d);
+    expect(result.errors.map((entry) => entry.message).join("\n")).toMatch(/state override key is forbidden/);
+  });
+
+  it("rejects override object nesting beyond the limit", () => {
+    const d=clone(); let cursor: Record<string, unknown> = d.screens[0].stateOverrides={};
+    for (let i=0;i<33;i++) cursor = cursor.next={};
+    expectInvalid(d,/depth exceeds 32/);
+  });
+
+  it("checks screen state paths against effective state", () => {
+    const d=clone();
+    d.screens[0].stateOverrides={ overrideOnly: "visible" };
+    d.screens[0].spec.elements.greeting.props.text={ $state: "/overrideOnly" };
+    const parsed = prototypeDocSchema.parse(d);
+    const result = validatePrototype(parsed);
+    expect(result.errors).toEqual([]);
+    expect(result.warnings.some((entry) => entry.message.includes("state path"))).toBe(false);
+  });
 });
 
 describe("atomic design nesting", () => {

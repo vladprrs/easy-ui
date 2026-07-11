@@ -4,6 +4,7 @@ import { prototypeActionSchemas } from "../catalog/actions";
 import { atomicRank, type AtomicLevel } from "../designSystems/types";
 import { getDesignSystem } from "../designSystems";
 import type { PrototypeDoc } from "./schema";
+import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "./stateOverrides";
 import type { PrototypeValidationResult, ValidationIssue } from "./types";
 
 type Obj = Record<string, unknown>;
@@ -115,6 +116,25 @@ export function validatePrototype(
   const navigation = new Map<string, Set<string>>();
   for (const [screenIndex, screen] of doc.screens.entries()) {
     const base = ["screens", screenIndex, "spec"];
+    const overrideBase = ["screens", screenIndex, "stateOverrides"];
+    const reservedOverrideKeys = new Set(["currentScreen", "navStack", "_viewer"]);
+    const scanOverride = (value: unknown, path: (string | number)[], depth: number): void => {
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => scanOverride(item, [...path, index], depth + 1));
+        return;
+      }
+      if (!object(value)) return;
+      if (depth > STATE_OVERRIDE_DEPTH_LIMIT) issue(errors, path, `state override depth exceeds ${STATE_OVERRIDE_DEPTH_LIMIT}`);
+      for (const key of Object.keys(value)) {
+        if (FORBIDDEN_STATE_KEYS.has(key)) issue(errors, [...path, key], `state override key is forbidden: ${key}`);
+        scanOverride(value[key], [...path, key], depth + 1);
+      }
+    };
+    if (screen.stateOverrides) {
+      for (const key of Object.keys(screen.stateOverrides)) if (reservedOverrideKeys.has(key)) issue(errors, [...overrideBase, key], `state override key is reserved: ${key}`);
+      scanOverride(screen.stateOverrides, overrideBase, 0);
+    }
+    const effectiveState = mergeScreenState(doc.state, screen.stateOverrides);
     const structural = validateSpec(screen.spec as Spec, { checkOrphans: true });
     structural.issues.forEach((entry) => issue(errors, base, entry.message));
     const elements = screen.spec.elements;
@@ -125,8 +145,8 @@ export function validatePrototype(
       const definition = definitions[element.type];
       if (!definition) { issue(errors, [...ep, "type"], `unknown component type: ${element.type}`); continue; }
       if (isDynamic(element.props)) issue(errors, [...ep, "props"], "a directive cannot be the entire props object");
-      else validateProps(definition.props, element.props, [...ep, "props"], errors, warnings, doc.state);
-      if (element.visible !== undefined) checkCondition(element.visible, [...ep, "visible"], errors, warnings, doc.state);
+      else validateProps(definition.props, element.props, [...ep, "props"], errors, warnings, effectiveState);
+      if (element.visible !== undefined) checkCondition(element.visible, [...ep, "visible"], errors, warnings, effectiveState);
       for (const child of element.children ?? []) parents.set(child, (parents.get(child) ?? 0) + 1);
       if (element.type === "Hotspot") {
         if (!screen.canvas) issue(errors, ep, "Hotspot requires a screen canvas");
@@ -151,7 +171,7 @@ export function validatePrototype(
           const parsed = actionDef.params.safeParse(action.params ?? {});
           if (!parsed.success) parsed.error.issues.forEach((zIssue) => issue(errors, [...ap,"params",...zIssue.path.map(String)], zIssue.message));
           const statePath = action.params?.statePath;
-          if (["setState","pushState","removeState"].includes(action.action)) checkPointer(statePath, [...ap,"params","statePath"], errors, warnings, doc.state, false);
+          if (["setState","pushState","removeState"].includes(action.action)) checkPointer(statePath, [...ap,"params","statePath"], errors, warnings, effectiveState, false);
           if (action.action === "navigate" && typeof action.params?.screenId === "string") {
             if (!screenIds.has(action.params.screenId)) issue(errors, [...ap,"params","screenId"], "navigate target does not exist");
             else {
