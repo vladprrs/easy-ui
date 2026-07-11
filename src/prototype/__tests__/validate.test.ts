@@ -2,9 +2,54 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import helloDocument from "../../../prototypes/hello-world.json";
 import { prototypeDocSchema } from "../schema";
-import { validatePrototype } from "../validate";
+import { isDynamicValue, validateElementProps, validatePrototype } from "../validate";
 
 const hello: unknown = helloDocument;
+
+describe("element props validation", () => {
+  const definition = {
+    description: "Test component",
+    props: z.strictObject({ label: z.string().min(2) }),
+  };
+  const validate = (props: Record<string, unknown>, state: Record<string, unknown> = {}) => validateElementProps({
+    definition,
+    props,
+    state,
+    path: ["props"],
+  });
+
+  it("accepts valid props", () => {
+    expect(validate({ label: "Valid" })).toEqual({ errors: [], warnings: [] });
+  });
+
+  it("reports schema violations", () => {
+    expect(validate({ label: "x" }).errors).toEqual([
+      { path: "/props/label", message: "Too small: expected string to have >=2 characters" },
+    ]);
+  });
+
+  it("validates dynamic values against state paths", () => {
+    expect(validate({ label: { $state: "/profile/name" } }, { profile: { name: "Ada" } })).toEqual({ errors: [], warnings: [] });
+    expect(validate({ label: { $state: "/profile/missing" } }, { profile: { name: "Ada" } }).warnings).toEqual([
+      { path: "/props/label/$state", message: "state path is not present in document state" },
+    ]);
+    expect(validate({ label: { $bindState: "profile/name" } }).errors).toEqual([
+      { path: "/props/label/$bindState", message: "state path must be an absolute RFC 6901 JSON Pointer" },
+    ]);
+  });
+
+  it("preserves strict object validation", () => {
+    expect(validate({ label: "Valid", extra: true }).errors).toEqual([
+      { path: "/props", message: 'Unrecognized key: "extra"' },
+    ]);
+  });
+
+  it("identifies dynamic directives", () => {
+    expect(isDynamicValue({ $state: "/name" })).toBe(true);
+    expect(isDynamicValue({ label: "$state" })).toBe(false);
+    expect(isDynamicValue(null)).toBe(false);
+  });
+});
 
 // Mutation-heavy negative fixtures intentionally use a loose JSON shape.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

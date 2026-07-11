@@ -15,8 +15,8 @@ const pointerPattern = /^\/(?:[^~/]|~0|~1)*(?:\/(?:[^~/]|~0|~1)*)*$/;
 const object = (value: unknown): value is Obj => typeof value === "object" && value !== null && !Array.isArray(value);
 const pathString = (parts: (string | number)[]) => "/" + parts.map(String).join("/");
 const issue = (list: ValidationIssue[], path: (string | number)[], message: string): void => { list.push({ path: pathString(path), message }); };
-const isDynamic = (value: unknown) => object(value) && Object.keys(value).some((key) => key.startsWith("$"));
-const isStatic = (value: unknown): boolean => !isDynamic(value) && (!Array.isArray(value) ? !object(value) || Object.values(value).every(isStatic) : value.every(isStatic));
+export const isDynamicValue = (value: unknown): boolean => object(value) && Object.keys(value).some((key) => key.startsWith("$"));
+const isStatic = (value: unknown): boolean => !isDynamicValue(value) && (!Array.isArray(value) ? !object(value) || Object.values(value).every(isStatic) : value.every(isStatic));
 
 function stateAt(state: Obj, pointer: string): { exists: boolean; value: unknown } {
   if (pointer === "") return { exists: true, value: state };
@@ -59,7 +59,7 @@ function checkCondition(value: unknown, path: (string | number)[], errors: Valid
 }
 
 function checkDynamic(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj): boolean {
-  if (!isDynamic(value)) return false;
+  if (!isDynamicValue(value)) return false;
   if (!object(value)) return false;
   const keys = Object.keys(value);
   if (keys.length !== 1) { issue(errors, path, "dynamic value must contain exactly one v1 directive"); return true; }
@@ -78,10 +78,25 @@ function checkDynamic(value: unknown, path: (string | number)[], errors: Validat
   return true;
 }
 
-function validateProps(schema: { safeParse: (value: unknown) => { success: boolean; error?: { issues: { path: PropertyKey[]; message: string }[] } } }, props: Obj, base: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj) {
+export function validateElementProps({
+  definition,
+  props,
+  state,
+  path,
+}: {
+  definition: ComponentDefinition;
+  props: Obj;
+  state: Obj;
+  path: (string | number)[];
+}): PrototypeValidationResult {
+  const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
+  if (isDynamicValue(props)) {
+    issue(errors, path, "a directive cannot be the entire props object");
+    return { errors, warnings };
+  }
   const dynamicPaths = new Set<string>();
   const visit = (value: unknown, relative: (string | number)[]): unknown => {
-    if (checkDynamic(value, [...base, ...relative], errors, warnings, state)) {
+    if (checkDynamic(value, [...path, ...relative], errors, warnings, state)) {
       dynamicPaths.add(relative.join("/"));
       return undefined;
     }
@@ -90,12 +105,13 @@ function validateProps(schema: { safeParse: (value: unknown) => { success: boole
     return value;
   };
   const staticCopy = visit(props, []) as Obj;
-  const parsed = schema.safeParse(staticCopy);
+  const parsed = definition.props.safeParse(staticCopy);
   if (!parsed.success) for (const zIssue of parsed.error?.issues ?? []) {
     const zPath = zIssue.path.map(String).join("/");
     if ([...dynamicPaths].some((dynamicPath) => zPath === dynamicPath || zPath.startsWith(dynamicPath + "/"))) continue;
-    issue(errors, [...base, ...zIssue.path.map(String)], zIssue.message);
+    issue(errors, [...path, ...zIssue.path.map(String)], zIssue.message);
   }
+  return { errors, warnings };
 }
 
 export function validatePrototype(
@@ -144,14 +160,15 @@ export function validatePrototype(
       const ep = [...base, "elements", key];
       const definition = definitions[element.type];
       if (!definition) { issue(errors, [...ep, "type"], `unknown component type: ${element.type}`); continue; }
-      if (isDynamic(element.props)) issue(errors, [...ep, "props"], "a directive cannot be the entire props object");
-      else validateProps(definition.props, element.props, [...ep, "props"], errors, warnings, effectiveState);
+      const propIssues = validateElementProps({ definition, props: element.props, state: effectiveState, path: [...ep, "props"] });
+      errors.push(...propIssues.errors);
+      warnings.push(...propIssues.warnings);
       if (element.visible !== undefined) checkCondition(element.visible, [...ep, "visible"], errors, warnings, effectiveState);
       for (const child of element.children ?? []) parents.set(child, (parents.get(child) ?? 0) + 1);
       if (element.type === "Hotspot") {
         if (!screen.canvas) issue(errors, ep, "Hotspot requires a screen canvas");
         const p = element.props;
-        for (const name of ["x", "y", "width", "height"] as const) if (isDynamic(p[name])) issue(errors, [...ep, "props", name], "Hotspot coordinates must be static");
+        for (const name of ["x", "y", "width", "height"] as const) if (isDynamicValue(p[name])) issue(errors, [...ep, "props", name], "Hotspot coordinates must be static");
         if (screen.canvas && [p.x,p.y,p.width,p.height].every((v) => typeof v === "number") && ((p.x as number) < 0 || (p.y as number) < 0 || (p.x as number)+(p.width as number)>screen.canvas.width || (p.y as number)+(p.height as number)>screen.canvas.height)) issue(errors, [...ep, "props"], "Hotspot is outside canvas bounds");
       }
       if (element.type === "Image") checkUrl(element.props.src, [...ep,"props","src"], true, errors);
@@ -213,7 +230,7 @@ export function validatePrototype(
 }
 
 function checkUrl(value: unknown, path: (string | number)[], image: boolean, errors: ValidationIssue[]) {
-  if (typeof value !== "string" || isDynamic(value)) return issue(errors, path, "URL must be a static string");
+  if (typeof value !== "string" || isDynamicValue(value)) return issue(errors, path, "URL must be a static string");
   if (image && value.startsWith("/")) return;
   try { const url = new URL(value); if (url.protocol !== "http:" && url.protocol !== "https:") issue(errors, path, "URL must use http(s)"); }
   catch { issue(errors, path, image ? "Image URL must be http(s) or an absolute /path" : "URL must use http(s)"); }
