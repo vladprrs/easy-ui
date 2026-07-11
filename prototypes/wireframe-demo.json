@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "wireframe-demo",
+  "name": "Wireframe Preferences",
+  "description": "A three-step low-fidelity preferences flow.",
+  "designSystem": "wireframe",
+  "device": "mobile",
+  "startScreen": "profile",
+  "state": { "name": "", "theme": "system", "updates": true },
+  "screens": [
+    {
+      "id": "profile",
+      "name": "Profile",
+      "spec": {
+        "root": "card",
+        "elements": {
+          "card": { "type": "Card", "props": { "title": "Quick setup" }, "children": ["stack"] },
+          "stack": { "type": "Stack", "props": { "gap": "md" }, "children": ["heading", "intro", "name", "next"] },
+          "heading": { "type": "Heading", "props": { "text": "Your profile", "level": 2 } },
+          "intro": { "type": "Text", "props": { "text": "Tell us how to address you." } },
+          "name": { "type": "Input", "props": { "label": "Display name", "value": { "$bindState": "/name" }, "placeholder": "Ada" } },
+          "next": { "type": "Button", "props": { "label": "Choose preferences" }, "on": { "press": { "action": "navigate", "params": { "screenId": "preferences" } } } }
+        }
+      }
+    },
+    {
+      "id": "preferences",
+      "name": "Preferences",
+      "spec": {
+        "root": "card",
+        "elements": {
+          "card": { "type": "Card", "props": { "title": "Preferences" }, "children": ["stack"] },
+          "stack": { "type": "Stack", "props": { "gap": "md" }, "children": ["heading", "theme", "updates", "actions"] },
+          "heading": { "type": "Heading", "props": { "text": "Make it yours", "level": 2 } },
+          "theme": { "type": "Select", "props": { "label": "Theme", "value": { "$bindState": "/theme" }, "options": [{ "label": "System", "value": "system" }, { "label": "Light", "value": "light" }, { "label": "Dark", "value": "dark" }] } },
+          "updates": { "type": "Checkbox", "props": { "label": "Send product updates", "checked": { "$bindState": "/updates" } } },
+          "actions": { "type": "Grid", "props": { "columns": 2 }, "children": ["back", "review"] },
+          "back": { "type": "Button", "props": { "label": "Back" }, "on": { "press": { "action": "navigate", "params": { "screenId": "profile" } } } },
+          "review": { "type": "Button", "props": { "label": "Review" }, "on": { "press": { "action": "navigate", "params": { "screenId": "review" } } } }
+        }
+      }
+    },
+    {
+      "id": "review",
+      "name": "Review",
+      "spec": {
+        "root": "card",
+        "elements": {
+          "card": { "type": "Card", "props": { "title": "Ready to save" }, "children": ["stack"] },
+          "stack": { "type": "Stack", "props": { "gap": "md" }, "children": ["heading", "summary", "edit", "finish"] },
+          "heading": { "type": "Heading", "props": { "text": { "$template": "Thanks, ${/name}!" }, "level": 2 } },
+          "summary": { "type": "Text", "props": { "text": { "$template": "Theme: ${/theme}" } } },
+          "edit": { "type": "Button", "props": { "label": "Edit preferences" }, "on": { "press": { "action": "navigate", "params": { "screenId": "preferences" } } } },
+          "finish": { "type": "Button", "props": { "label": "Start over" }, "on": { "press": { "action": "navigate", "params": { "screenId": "profile" } } } }
+        }
+      }
+    }
+  ]
+}

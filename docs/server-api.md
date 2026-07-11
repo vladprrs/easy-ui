@@ -14,9 +14,9 @@
 
 | Метод и путь | Тело / ответ |
 |---|---|
-| `GET /prototypes` | `PrototypeListItem[]`: `{id,name,description?,device,screenCount,headRev,latestVersion:number|null,updatedAt}` |
+| `GET /prototypes` | `PrototypeListItem[]`: `{id,name,description?,device,designSystem,screenCount,headRev,latestVersion:number|null,updatedAt}` |
 | `POST /prototypes` | `{doc,message?}` → 201 `{id,rev,warnings}` и `Location` |
-| `GET /prototypes/:id` | `{id,name,headRev,latestVersion:number|null,versions:PrototypeVersion[],updatedAt}` |
+| `GET /prototypes/:id` | `{id,name,designSystem,headRev,latestVersion:number|null,versions:PrototypeVersion[],updatedAt}` |
 | `GET /prototypes/:id/draft` | `{doc,rev,builtinCatalogHash,componentManifestHash,components:ComponentPin[]}` |
 | `PUT /prototypes/:id` | `{doc,message?,baseRev}` → `{rev,warnings}`; `doc.id` обязан совпадать с `:id` |
 | `DELETE /prototypes/:id` | `{baseRev}` → 204; hard delete с каскадом ревизий |
@@ -27,17 +27,23 @@
 | `GET /prototypes/:id/versions` | `PrototypeVersion[]`: `{version,rev,publishedAt}` |
 | `GET /prototypes/:id/versions/:version` | `{version,rev,doc,builtinCatalogHash,componentManifestHash,components:ComponentPin[],publishedAt}`; immutable |
 
-`ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `componentManifestHash` — SHA-256 канонически отсортированных пинов; `builtinCatalogHash` идентифицирует встроенный каталог, использованный при сохранении ревизии.
+`ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её встроенный каталог. Дескриптор v1 включает имена, descriptions, events, slots и actions, но намеренно не включает `atomicLevel`: классификация может меняться без изменения render-совместимости. В MVP хеш диагностический — рантайм не сравнивает и не блокирует его mismatch; enforcement и таблицы совместимости оставлены на post-MVP.
+
+### Матрица `designSystem` в DTO прототипов
+
+Нормализованный `doc` — источник истины. Если ответ содержит `doc`, система находится только в `doc.designSystem` и не дублируется сверху: это draft, конкретная revision и опубликованная version. В list и meta, где документа нет, `designSystem` находится top-level и отражает текущий head. Ответы create, save и restore содержат только номер ревизии (и применимые warnings), поэтому отдельного поля системы в них нет. Старый документ без поля при чтении нормализуется в `designSystem: "shadcn"`.
 
 ## Endpoints компонентов
 
-Идентификатор — slug, имя — уникальное `^[A-Z][A-Za-z0-9]*$`, не конфликтующее со встроенным каталогом. Имя после создания неизменно. Удаление soft: компонент исчезает из списка/манифеста и не доступен новым сохранениям, но ранее опубликованные bundle и пины продолжают работать.
+Идентификатор — slug, имя — уникальное `^[A-Z][A-Za-z0-9]*$`, не конфликтующее со встроенным каталогом ни одной зарегистрированной системы. Имена компонентов глобально уникальны, а не уникальны в паре с системой: это ограничение MVP связано с pins, registry и `components.name UNIQUE`. Имя и `designSystem` после создания неизменны. Удаление soft: компонент исчезает из списка/манифеста и не доступен новым сохранениям, но ранее опубликованные bundle и пины продолжают работать.
+
+При добавлении builtin-системы коллизия любого её имени с существующим custom-компонентом является dev-time блокером. Startup-инвариант сравнивает объединение builtin-имён всех зарегистрированных систем со всей таблицей `components` и останавливает сервер с явной ошибкой; grandfathering устраняется вручную до регистрации системы. Композитный ключ `(designSystem, name)` отложен на post-MVP.
 
 | Метод и путь | Тело / ответ |
 |---|---|
-| `GET /components` | `{id,name,headRev,latestVersion:number|null,updatedAt}[]` |
-| `POST /components` | `{id,name,source,message?}` → 201 `{id,rev}` и `Location` |
-| `GET /components/:id` | `{id,name,headRev,versions:ComponentVersion[],updatedAt}` |
+| `GET /components` | `{id,name,designSystem,headRev,latestVersion:number|null,updatedAt}[]` |
+| `POST /components` | `{id,name,source,designSystem?,message?}` → 201 `{id,rev}` и `Location`; `designSystem` по умолчанию `shadcn` |
+| `GET /components/:id` | `{id,name,designSystem,headRev,versions:ComponentVersion[],updatedAt}` |
 | `PUT /components/:id` | `{source,message?,baseRev}` → `{rev}` |
 | `DELETE /components/:id` | `{baseRev}` → 204 |
 | `GET /components/:id/source` | Текущий `{rev,source,message:string|null,createdAt}` |
@@ -47,7 +53,7 @@
 | `POST /components/:id/restore` | `{rev,baseRev}` → `{rev}` |
 | `POST /components/:id/publish` | `{message?,baseRev}` → 201 `{version,hostAbiVersion,warnings}` и `Location` |
 | `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,publishedAt}` |
-| `GET /components/:id/versions/:version` | Active-версия: `{version,rev,source,events?,slots?,description,example?,propsJsonSchema?,bundleHash,hostAbiVersion,publishedAt}`; immutable |
+| `GET /components/:id/versions/:version` | Active-версия: `{version,rev,source,events,slots,description,example?,propsJsonSchema?,atomicLevel?,bundleHash,hostAbiVersion,publishedAt}`; immutable |
 | `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); immutable |
 
 ## Служебные endpoints
@@ -55,7 +61,8 @@
 | Метод и путь | Ответ |
 |---|---|
 | `GET /health` | `{status:"ready"}` после миграций, seed и ABI-проверки; до готовности 503 `starting` |
-| `GET /catalog/manifest` | `{components:[{id,name,version,bundleUrl,bundleHash,hostAbiVersion,events?,slots?,description,example?,propsJsonSchema?}]}` — только последняя active-версия каждого неудалённого компонента |
+| `GET /design-systems` | `{designSystems:[{id,name,description,builtinCatalogHash,components:[{name,atomicLevel,layoutNeutral,description,events,slots}]}]}` — реестр builtin-систем и их компоненты |
+| `GET /catalog/manifest` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,slots,description,example?,propsJsonSchema?,atomicLevel?}]}` — только последняя active-версия каждого неудалённого компонента; `designSystem` находится в каждой записи |
 | `GET /shims/v1/:name.js` | ESM-шим host ABI v1; immutable |
 
 ## Ошибки и ограничения HTTP
@@ -79,7 +86,7 @@
 
 ## Контракт кастомного компонента
 
-Модуль TSX экспортирует named `definition` и default plain function component. `definition.props` — Zod-схема; допустимы `events?: string[]`, `slots?: string[]`, обязательный `description: string` и `example?: Record<string, unknown>`. Если example задан, он обязан проходить props-схему. Default получает `BaseComponentProps` — объект `{props, emit}`. `memo` и `forwardRef` в ABI v1 не поддерживаются.
+Модуль TSX экспортирует named `definition` и default plain function component. `definition.props` — Zod-схема; допустимы `events?: string[]`, `slots?: string[]`, обязательный `description: string`, `example?: Record<string, unknown>` и `atomicLevel?: "atom" | "molecule" | "organism" | "template" | "page"`. `DefinitionMeta`, сохранённый для published-версии, содержит нормализованные `events`, `slots`, `description` и опциональные `example`, `propsJsonSchema`, `atomicLevel`; те же метаданные входят в manifest. Если example задан, он обязан проходить props-схему. У custom-компонента уровень опционален для ABI v1 backward compatibility, но publish без него возвращает warning `Atomic design level is not provided; component will be classified as Other` и Library классифицирует компонент как `Other`. Default получает `BaseComponentProps` — объект `{props, emit}`. `memo` и `forwardRef` в ABI v1 не поддерживаются.
 
 ```tsx
 import { useState } from "react";
@@ -92,6 +99,7 @@ export const definition = {
   slots: [],
   description: "An interactive five-star rating",
   example: { value: 3 },
+  atomicLevel: "atom",
 };
 
 type Props = z.output<typeof definition.props>;

@@ -4,9 +4,27 @@ Prototype files live in `prototypes/*.json`. A file is a self-contained flow; it
 
 ## Document and screens
 
-The root is a strict object with `version: 1`, slug `id`, human-readable `name`, optional `description`, `device` (`mobile`, `tablet`, or `desktop`, default `desktop`), slug `startScreen`, `state`, and a non-empty `screens` array. Screen IDs are unique slugs and `startScreen` must exist.
+The root is a strict object with `version: 1`, slug `id`, human-readable `name`, optional `description`, slug `designSystem` (default `"shadcn"`), `device` (`mobile`, `tablet`, or `desktop`, default `desktop`), slug `startScreen`, `state`, and a non-empty `screens` array. Screen IDs are unique slugs and `startScreen` must exist. Registered systems are defined by `src/designSystems/index.ts`; currently they are `shadcn` and `wireframe`. An unknown system is an error.
 
-Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, and `spec`. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, and optional `on`. Its type and props must match the normalized catalog definition. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
+Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, and `spec`. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, and optional `on`. Its type and props must match the normalized definition in the document's selected design system. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
+
+### Per-system component allowlist
+
+Component names are resolved only inside the selected system, plus published custom components assigned to that same system. Builtin allowlists are:
+
+- `shadcn`: `Accordion`, `Alert`, `Avatar`, `Badge`, `Button`, `ButtonGroup`, `Card`, `Carousel`, `Checkbox`, `Collapsible`, `Dialog`, `Drawer`, `DropdownMenu`, `Grid`, `Heading`, `Hotspot`, `Image`, `Input`, `Link`, `Pagination`, `Popover`, `Progress`, `Radio`, `Select`, `Separator`, `Skeleton`, `Slider`, `Spinner`, `Stack`, `Switch`, `Table`, `Tabs`, `Text`, `Textarea`, `Toggle`, `ToggleGroup`, `Tooltip`.
+- `wireframe`: `Box`, `Stack`, `Grid`, `Heading`, `Text`, `Image`, `Button`, `Input`, `Checkbox`, `Hotspot`, `Select`, `Card`.
+
+The wireframe atomic classification from `src/designSystems/wireframe/definitions.ts` is:
+
+- layout-neutral atoms: `Box`, `Stack`, `Grid`;
+- atoms: `Heading`, `Text`, `Image`, `Button`, `Input`, `Checkbox`, `Hotspot`;
+- molecule: `Select`;
+- organism: `Card`.
+
+### Atomic nesting warnings
+
+Atomic levels rank from smallest to largest as `atom < molecule < organism < template < page`. During a tree walk, a child produces a warning when `rank(child) > rank(ancestor)`, where `ancestor` is the nearest non-layout-neutral ancestor with a level. Thus a larger unit nested inside a smaller unit is suspicious; equal levels are allowed. Layout-neutral components are transparent and do not replace the current ancestor. Components without an atomic level are skipped in the same way. These diagnostics point to the concrete element path and are warnings only: they do not block validation, saving, or playback.
 
 `state` is the only initial-state source. JSON Pointer state paths are absolute RFC 6901 paths. `/currentScreen`, `/navStack`, and `/_viewer` are reserved. A `$state` path absent from initial state produces a warning.
 
@@ -51,6 +69,8 @@ There may be at most one terminal action per event, and it must be last. `naviga
 - `startScreen` and every `navigate` target exist; all intended screens are reachable.
 - Every element belongs to exactly one rooted tree and stays within size/depth limits.
 - Component props and events match the catalog; required props are present.
+- `designSystem` is registered and every component belongs to its per-system allowlist.
+- Atomic nesting warnings have been reviewed, even though they do not block validation.
 - Directives, conditions, actions, and params use only the closed v1 grammar.
 - State paths are valid, non-reserved JSON Pointers; bound initial values are in `state` where appropriate.
 - Terminal actions are unique and last; navigating links prevent their default browser action.
