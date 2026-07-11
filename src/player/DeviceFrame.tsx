@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { PrototypeDoc } from "../prototype/schema";
+import { pillGhostOnDark } from "../app/chrome";
 
 type Device = PrototypeDoc["device"];
 const sizes: Record<Exclude<Device, "desktop">, { width: number; height: number }> = {
@@ -29,15 +30,15 @@ export function DeviceFrame({ defaultDevice, canvas, children }: {
   const contentHeight = canvas?.height ?? frame?.height;
 
   return (
-    <section className="min-w-0 flex-1" aria-label="Prototype device preview">
-      <div className="mb-3 flex gap-2" role="group" aria-label="Device">
+    <section className="min-w-0 flex-1 overflow-auto p-6" aria-label="Prototype device preview" style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(132,78,220,0.18), transparent 70%)" }}>
+      <div className="mb-3 flex gap-2 font-eui-ui" role="group" aria-label="Device">
         {(["mobile", "tablet", "desktop"] as const).map((item) => (
-          <button key={item} type="button" aria-pressed={device === item} onClick={() => setDevice(item)} className="rounded border px-3 py-1 capitalize">
+          <button key={item} type="button" aria-pressed={device === item} onClick={() => setDevice(item)} className={`${pillGhostOnDark} px-3 py-1 capitalize aria-pressed:bg-white/15`}>
             {item}
           </button>
         ))}
       </div>
-      <div ref={hostRef} className="overflow-hidden rounded-xl border bg-background shadow-sm" style={{ width: frame?.width ?? "100%", maxWidth: "100%", minHeight: frame?.height }}>
+      <div ref={hostRef} className="overflow-hidden rounded-[28px] bg-background shadow-[0_20px_60px_rgba(2,2,5,0.35)]" style={{ width: frame?.width ?? "100%", maxWidth: "100%", minHeight: frame?.height }}>
         <div style={{ width: contentWidth ?? "100%", height: contentHeight, transform: `scale(${scale})`, transformOrigin: "top left" }}>
           {children}
         </div>

@@ -8,6 +8,7 @@ import { usePlayerNavigation } from "./navigation";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { splitCanvasSpec } from "./canvasSpec";
 import { CanvasLayers } from "./CanvasLayers";
+import { pillGhostOnDark } from "../app/chrome";
 
 export class ScreenErrorBoundary extends Component<{
   prototypeId: string;
@@ -22,11 +23,11 @@ export class ScreenErrorBoundary extends Component<{
   }
   render() {
     if (!this.state.error) return this.props.children;
-    return <section role="alert" className="rounded border border-destructive p-6">
-      <h1 className="text-xl font-bold">This screen could not be rendered</h1>
-      <p className="mt-2 font-mono text-sm">Prototype: {this.props.prototypeId} · Screen: {this.props.screenId}</p>
+    return <section role="alert" className="rounded-2xl bg-white/10 p-6 text-eui-orange">
+      <h1 className="font-eui-display text-xl font-bold">This screen could not be rendered</h1>
+      <p className="mt-2 font-mono text-sm text-eui-ondark-2">Prototype: {this.props.prototypeId} · Screen: {this.props.screenId}</p>
       <p className="mt-2 text-sm">{this.state.error.message}</p>
-      <button type="button" className="mt-4 rounded border px-4 py-2" onClick={this.props.restart}>Restart</button>
+      <button type="button" className={`${pillGhostOnDark} mt-4 font-eui-ui`} onClick={this.props.restart}>Restart</button>
     </section>;
   }
 }
@@ -34,6 +35,7 @@ export class ScreenErrorBoundary extends Component<{
 export function ScreenView() {
   const { doc, registry } = useOutletContext<PlayerOutletContext>();
   const { screenId } = useParams();
+  const { version } = useParams();
   const navigation = usePlayerNavigation();
   const screen = doc.screens.find((item) => item.id === screenId);
   const screenSpec = screen?.spec;
@@ -43,16 +45,28 @@ export function ScreenView() {
     const runtimeSpec = toRuntimeSpec(screenSpec);
     return screenCanvas ? splitCanvasSpec(runtimeSpec) : { content: runtimeSpec, hotspots: [] };
   }, [screenCanvas, screenSpec]);
-  if (!screen) return <main className="mx-auto max-w-xl p-8"><h1 className="text-2xl font-bold">Screen not found</h1><p className="mt-2">This screen does not exist in “{doc.name}”.</p><Link className="mt-4 inline-block underline" to="/">Back to gallery</Link></main>;
+  if (!screen) return <main className="flex h-full items-start justify-center bg-eui-graphite p-8 text-white"><section className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h1 className="font-eui-display text-2xl font-bold">Screen not found</h1><p className="mt-2 text-eui-ondark-2">This screen does not exist in “{doc.name}”.</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">Back to gallery</Link></section></main>;
 
   const rendered = screen.canvas
     ? <CanvasLayers canvas={screen.canvas} specs={specs!} registry={registry} />
     : <Renderer registry={registry} spec={specs!.content!} />;
 
-  return <main className="flex min-h-screen gap-6 p-6">
-    <ScreensSidebar doc={doc} currentScreen={screen.id} />
-    <DeviceFrame defaultDevice={doc.device} canvas={screen.canvas}>
-      <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>{rendered}</ScreenErrorBoundary>
-    </DeviceFrame>
+  return <main className="flex h-full min-h-0 flex-col bg-eui-graphite text-white">
+    <header className="flex items-center gap-4 border-b border-white/15 px-6 py-3 font-eui-ui">
+      <Link className="text-sm text-eui-ondark-2 hover:text-white" to="/">← Галерея</Link>
+      <h1 className="font-eui-display font-medium text-white">{doc.name}</h1>
+      {version === undefined ? null : <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-white">v{version}</span>}
+      <div className="ml-auto flex gap-2">
+        <button type="button" onClick={navigation.back} disabled={navigation.flowDepth === 0} className={`${pillGhostOnDark} disabled:opacity-50`}>Back</button>
+        <button type="button" onClick={navigation.restart} className={pillGhostOnDark}>Restart</button>
+        <Link className={pillGhostOnDark} to={`${version === undefined ? `/p/${doc.id}` : `/p/${doc.id}/v/${version}`}/cjm`}>CJM</Link>
+      </div>
+    </header>
+    <div className="flex min-h-0 flex-1">
+      <ScreensSidebar doc={doc} currentScreen={screen.id} />
+      <DeviceFrame defaultDevice={doc.device} canvas={screen.canvas}>
+        <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>{rendered}</ScreenErrorBoundary>
+      </DeviceFrame>
+    </div>
   </main>;
 }
