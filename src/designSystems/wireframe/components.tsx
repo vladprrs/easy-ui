@@ -1,4 +1,4 @@
-import type { BaseComponentProps } from "@json-render/react";
+import { useBoundProp, type BaseComponentProps } from "@json-render/react";
 import type { z } from "zod";
 import { Hotspot } from "../../catalog/hotspot";
 import type { wireframeSourceDefinitions } from "./definitions";
@@ -61,39 +61,42 @@ export function Button({ props, on }: BaseComponentProps<Props<"Button">>) {
   );
 }
 
-export function Input({ props, emit }: BaseComponentProps<Props<"Input">>) {
+export function Input({ props, bindings, emit }: BaseComponentProps<Props<"Input">>) {
+  const [value, setValue] = useBoundProp<string>(props.value, bindings?.value);
   return (
     <label className="flex flex-col gap-1 font-mono text-xs text-gray-600">
       {props.label}
       <input
         type="text"
-        defaultValue={props.value}
+        value={value ?? ""}
         placeholder={props.placeholder}
         disabled={props.disabled}
-        onChange={() => emit("change")}
+        onChange={(event) => { setValue(event.target.value); emit("change"); }}
         className="border border-dashed border-gray-500 bg-white px-3 py-2 text-sm text-gray-800 outline-none"
       />
     </label>
   );
 }
 
-export function Checkbox({ props, emit }: BaseComponentProps<Props<"Checkbox">>) {
+export function Checkbox({ props, bindings, emit }: BaseComponentProps<Props<"Checkbox">>) {
+  const [checked, setChecked] = useBoundProp<boolean>(props.checked, bindings?.checked);
   return (
     <label className="inline-flex items-center gap-2 font-mono text-sm text-gray-700">
-      <input type="checkbox" defaultChecked={props.checked} disabled={props.disabled} onChange={() => emit("change")} />
+      <input type="checkbox" checked={checked ?? false} disabled={props.disabled} onChange={(event) => { setChecked(event.target.checked); emit("change"); }} />
       {props.label}
     </label>
   );
 }
 
-export function Select({ props, emit }: BaseComponentProps<Props<"Select">>) {
+export function Select({ props, bindings, emit }: BaseComponentProps<Props<"Select">>) {
+  const [value, setValue] = useBoundProp<string>(props.value, bindings?.value);
   return (
     <label className="flex flex-col gap-1 font-mono text-xs text-gray-600">
       {props.label}
       <select
-        defaultValue={props.value}
+        value={value ?? ""}
         disabled={props.disabled}
-        onChange={() => emit("change")}
+        onChange={(event) => { setValue(event.target.value); emit("change"); }}
         className="border border-dashed border-gray-500 bg-white px-3 py-2 text-sm text-gray-800"
       >
         {props.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
