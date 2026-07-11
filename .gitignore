@@ -35,3 +35,6 @@ Thumbs.db
 # Stateful Bun server data
 data/
 .e2e-data/
+
+# local prod data snapshots
+.backups/
