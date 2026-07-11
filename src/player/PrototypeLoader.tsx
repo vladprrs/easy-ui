@@ -7,13 +7,15 @@ import { loadCustomComponents } from "../customComponents/loader";
 import { loadPrototypeDraft, loadPrototypeVersion } from "../prototype/loader";
 import { buildPrototypeRouteBase } from "./navigation";
 
+const loaderPlate = "mx-auto max-w-xl rounded-2xl bg-eui-lilac-100 p-6 text-center font-eui-ui text-eui-ink";
+
 export function MissingPrototype() {
-  return <main className="mx-auto max-w-xl p-8"><h1 className="text-2xl font-bold">Prototype not found</h1><p className="mt-2">This prototype does not exist.</p><Link className="mt-4 inline-block underline" to="/">Back to gallery</Link></main>;
+  return <main className={loaderPlate}><h1 className="text-2xl font-bold">Prototype not found</h1><p className="mt-2">This prototype does not exist.</p><Link className="mt-4 inline-block underline" to="/">Back to gallery</Link></main>;
 }
 
 export function LoadError({ error, retry }: { error: unknown; retry: () => void }) {
   const message = error instanceof Error ? error.message : String(error);
-  return <main className="mx-auto max-w-xl p-8" role="alert"><h1 className="text-2xl font-bold">Could not load prototype</h1><p className="mt-2 whitespace-pre-wrap">{message}</p><button className="mt-4 underline" onClick={retry}>Retry</button></main>;
+  return <main className={loaderPlate} role="alert"><h1 className="text-2xl font-bold">Could not load prototype</h1><p className="mt-2 whitespace-pre-wrap">{message}</p><button className="mt-4 underline" onClick={retry}>Retry</button></main>;
 }
 
 export interface PrototypeLoaderResult {
@@ -38,7 +40,7 @@ function LoadedPrototype({ loaded, routeBase, children }: {
     () => loaded.components.length ? loadCustomComponents(loaded.components) : Promise.resolve(undefined),
     [loaded.componentManifestHash],
   );
-  if (customState.status === "loading") return <div role="status" aria-label="Loading components" />;
+  if (customState.status === "loading") return <div className={loaderPlate} role="status" aria-label="Loading components">Загрузка прототипа…</div>;
   if (customState.status === "error") return <LoadError error={customState.error} retry={customState.reload} />;
   const revision = "version" in loaded ? `v${loaded.version}` : `r${loaded.rev}`;
   const runtimeKey = `${loaded.doc.id}:${revision}:${loaded.componentManifestHash}:${loaded.doc.designSystem}`;
@@ -53,7 +55,7 @@ export function PrototypeLoader({ protoId, version, children }: PrototypeLoaderP
     [protoId, version],
   );
   if (!protoId || (version !== undefined && (!Number.isInteger(version) || version < 1))) return <MissingPrototype />;
-  if (prototypeState.status === "loading") return <div role="status" aria-label="Loading prototype" />;
+  if (prototypeState.status === "loading") return <div className={loaderPlate} role="status" aria-label="Loading prototype">Загрузка прототипа…</div>;
   if (prototypeState.status === "error") {
     if (prototypeState.error instanceof ApiError && prototypeState.error.status === 404) return <MissingPrototype />;
     return <LoadError error={prototypeState.error} retry={prototypeState.reload} />;
