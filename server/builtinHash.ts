@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { componentDefinitions, type ComponentDefinition } from "../src/catalog/definitions";
+import type { ComponentDefinition } from "../src/catalog/definitions";
 import { prototypeActionSchemas } from "../src/catalog/actions";
+import { getDesignSystem } from "../src/designSystems";
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -10,12 +11,15 @@ function canonical(value: unknown): string {
 
 // The v1 descriptor deliberately excludes Zod internals. It includes sorted builtin
 // names and their stable human metadata (description/events/slots), plus action names.
-const descriptor = {
-  actions: Object.keys(prototypeActionSchemas).sort(),
-  definitions: (Object.entries(componentDefinitions) as [string,ComponentDefinition][]).sort(([a],[b]) => a.localeCompare(b)).map(([name, d]) => ({
-    name, description: d.description, events: [...(d.events ?? [])].sort(), slots: [...(d.slots ?? [])].sort(),
-  })),
-};
+export function builtinCatalogHashFor(systemId: string): string {
+  const descriptor = {
+    actions: Object.keys(prototypeActionSchemas).sort(),
+    definitions: (Object.entries(getDesignSystem(systemId).definitions) as [string,ComponentDefinition][]).sort(([a],[b]) => a.localeCompare(b)).map(([name, d]) => ({
+      name, description: d.description, events: [...(d.events ?? [])].sort(), slots: [...(d.slots ?? [])].sort(),
+    })),
+  };
+  return createHash("sha256").update(canonical(descriptor)).digest("hex");
+}
 
-export const builtinCatalogHash = createHash("sha256").update(canonical(descriptor)).digest("hex");
+export const builtinCatalogHash = builtinCatalogHashFor("shadcn");
 export const emptyComponentManifestHash = createHash("sha256").update(canonical([])).digest("hex");

@@ -1,13 +1,8 @@
 import type { Database } from "bun:sqlite";
+import { designSystems } from "../src/designSystems";
 
-const VERSION = 1;
-
-export function migrate(db: Database): void {
-  db.run("PRAGMA foreign_keys = ON");
-  db.run("PRAGMA journal_mode = WAL");
-  const current = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
-  if (current >= VERSION) return;
-  db.transaction(() => {
+const migrations = [
+  (db: Database) => {
     db.run(`CREATE TABLE prototypes (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
       device TEXT NOT NULL, screen_count INTEGER NOT NULL,
@@ -45,6 +40,32 @@ export function migrate(db: Database): void {
       PRIMARY KEY (prototype_id, version), UNIQUE (prototype_id, rev),
       FOREIGN KEY (prototype_id, rev) REFERENCES prototype_revisions(prototype_id, rev))`);
     db.run("CREATE TABLE seed_log (file_id TEXT PRIMARY KEY, seeded_at TEXT NOT NULL)");
-    db.run(`PRAGMA user_version = ${VERSION}`);
-  })();
+  },
+  (db: Database) => {
+    db.run("ALTER TABLE prototypes ADD COLUMN design_system TEXT NOT NULL DEFAULT 'shadcn'");
+    db.run("ALTER TABLE components ADD COLUMN design_system TEXT NOT NULL DEFAULT 'shadcn'");
+  },
+] as const;
+
+function assertBuiltinNamesDoNotCollide(db: Database): void {
+  const builtinNames = new Set(Object.values(designSystems).flatMap(system => Object.keys(system.definitions)));
+  const collisions = (db.query("SELECT name FROM components ORDER BY name").all() as { name: string }[])
+    .map(row => row.name)
+    .filter(name => builtinNames.has(name));
+  if (collisions.length) {
+    throw new Error(`Custom component names collide with registered builtin components: ${collisions.join(", ")}`);
+  }
+}
+
+export function migrate(db: Database): void {
+  db.run("PRAGMA foreign_keys = ON");
+  db.run("PRAGMA journal_mode = WAL");
+  const current = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+  if (current < migrations.length) {
+    db.transaction(() => {
+      for (let index = current; index < migrations.length; index += 1) migrations[index](db);
+      db.run(`PRAGMA user_version = ${migrations.length}`);
+    })();
+  }
+  assertBuiltinNamesDoNotCollide(db);
 }
