@@ -1,141 +1,172 @@
 # Применение дизайн-системы «Финтех» к app-шеллу easy-ui
 
-Дата: 2026-07-11 · Статус: draft → на ревью
-Источник дизайна: claude.ai/design проект `d0ce77d7-5be4-4403-8271-f32125e901e0` («easy-ui — CJM и UI»), реализованная статичная страница `public/design/cjm-ui/index.html` (закоммичена, b9acfe3) — она же эталон визуала.
+Дата: 2026-07-11 · Статус: v2 после раунда ревью №1 (триаж в §7)
+Источник дизайна: claude.ai/design проект `d0ce77d7-5be4-4403-8271-f32125e901e0` («easy-ui — CJM и UI»), реализованная статичная страница `public/design/cjm-ui/index.html` (b9acfe3) — эталон визуала.
 
 ## 1. Контекст и цель
 
-Дизайн-проект задаёт визуальный язык: лавандовая палитра (бренд `#844EDC`), плоские плашки с крупными радиусами (24–32px), pill-кнопки, шрифты Coil (заголовки) и YS Text (интерфейсный текст), тёмная графитовая сцена плеера. Сейчас app-шелл easy-ui стилизован дефолтными shadcn-токенами (oklch-нейтрали) и системным шрифтом.
+Дизайн-проект задаёт визуальный язык: лавандовая палитра (бренд `#844EDC`), плоские плашки с крупными радиусами (24–32px), pill-кнопки, шрифты Coil (заголовки) и YS Text (интерфейсный текст), тёмная графитовая сцена плеера. Сейчас app-шелл easy-ui стилизован дефолтными shadcn-токенами и системным шрифтом.
 
-**Цель:** привести хром приложения (Layout/nav, галерея, плеер, CJM-вид, редактор, библиотека) к дизайн-системе из макетов пяти экранов.
+**Цель:** привести хром приложения (Layout/nav, галерея, плеер, CJM-вид, редактор, библиотека, служебные страницы) к дизайн-системе из макетов.
 
 **Не-цели:**
-- Не менять рендеринг прототипов: дизайн-системы прототипов (`src/designSystems/shadcn`, `wireframe`) и их токены остаются как есть.
-- Не менять поведение/маршруты/логику — только представление.
-- Не строить библиотеку UI-примитивов «на вырост»; допускается минимальный локальный модуль классов (см. §4).
-- Не трогать Storybook-стори каталога.
+- Не менять рендеринг прототипов: дизайн-системы прототипов (`src/designSystems/*`) и их shadcn-токены остаются байт-в-байт.
+- Не менять поведение/маршруты/логику/aria — только представление.
+- Не строить UI-kit; минимальный локальный модуль классов (§2.4).
 
 ## 2. Ключевые архитектурные решения
 
-### 2.1 Изоляция токенов: новые цвета — в отдельном неймспейсе `eui-*`
+### 2.1 Инвариант: рендер прототипа не меняется
 
-Факт (из аудита кода): плеер (`ScreenView` → `@json-render/react` `<Renderer>`), CJM-тайлы (`CjmScreenTile`) и канвас редактора (`EditorCanvas`) рендерят прототип **инлайн в общем DOM** под общим `src/styles/index.css`. Изменение `--primary`/`--background` и т.п. перекрасит и превью прототипов.
+Плеер (`ScreenView` → `<Renderer>`), CJM-тайлы (`CjmScreenTile`), канвас редактора (`EditorCanvas`) и `/debug` (`SmokeSpec`) рендерят прототип **инлайн в общем DOM**; порталы shadcn (Dialog/Popover/…) уходят в `body`. Отсюда жёсткие запреты:
 
-Решение: существующие shadcn-переменные (`--primary`, `--background`, …) **не трогаем** — они обслуживают отрендеренные прототипы. Для хрома добавляем в `@theme` новые токены с префиксом (безопасно от коллизий с дефолтной палитрой Tailwind):
+- **Не менять** существующие shadcn-переменные (`--primary`, `--background`, `--radius`, …) ни в `:root`, ни в `.dark`.
+- **Не назначать** `font-family` на `body`, `:root`, `h1..h6`, `button`, `input` и не переопределять `--font-sans`. (Иначе меняются метрики: переносы и `scrollHeight` в масштабировании CJM-тайлов, `Range.getClientRects()` в hit-test редактора, контент порталов.)
+- **Не использовать** класс `.dark` и наследуемый `color-scheme: dark` над зоной, содержащей `<Renderer>`: `@custom-variant dark` в index.css перекрасит inline-прототип. Тёмный плеер строится только прямыми `eui-*` утилитами на элементах хрома.
+
+Инвариант проверяется автоматически (§5, пункт «invariant-spec»).
+
+### 2.2 Токены: примитивы + семантические роли в неймспейсе `eui-*`
+
+В `@theme` (Tailwind 4, index.css) добавляются токены с префиксом — коллизий с дефолтной палитрой и shadcn-переменными нет:
 
 ```css
 @theme {
+  /* primitives */
   --color-eui-ink: #020205;
   --color-eui-graphite: #2F3033;
-  --color-eui-lav: #F1EBF6;        /* фон-подложка */
-  --color-eui-lilac-100: #E8E8FF;  /* светлая плашка */
+  --color-eui-lav: #F1EBF6;
+  --color-eui-lilac-100: #E8E8FF;
   --color-eui-lilac-200: #E1CFFF;
   --color-eui-lilac-300: #D8D0E5;
   --color-eui-brand: #844EDC;
-  --color-eui-magenta: #C62CD0;    /* селекшн в редакторе */
-  --color-eui-orange: #FF9A00;     /* хотспоты/акценты */
+  --color-eui-magenta: #C62CD0;
+  --color-eui-orange: #FF9A00;
   --color-eui-slate-500: #4D5566;
   --color-eui-slate-400: #8F96A5;
-  --color-eui-ondark-2: #B8BAC0;   /* вторичный текст на графите */
-  --font-eui-display: "Coil", "YS Display", Georgia, serif;
+  --color-eui-ondark-2: #B8BAC0;
+  /* fonts */
+  --font-eui-display: "Coil", Georgia, serif;
   --font-eui-ui: "YS Text", system-ui, sans-serif;
 }
 ```
 
-Хром переводится с `bg-primary`/`text-muted-foreground` на `bg-eui-brand`/`text-eui-slate-500` и т.д. Хэрлайны — `border-eui-ink/10` (или `rgba(2,2,5,0.10)` через `/10`).
+Семантика задаётся не CSS-каскадом, а модулем `chrome.ts` (§2.4): роли (surface/text/border/focus) фиксируются в общих строках классов, а не размазываются по JSX. Полноценный слой семантических CSS-переменных не вводим — для одного приложения с шестью зонами это лишний уровень косвенности; примитивы + chrome.ts дают ту же дисциплину дешевле.
 
-### 2.2 Шрифты: подключаем глобально, применяем адресно
+### 2.3 Шрифты: файлы в `public/fonts/`, применение адресно
 
-`@font-face` для Coil (400 woff2, 500/700 otf) и YS Text (400/500/700 woff2) добавляются в `index.css`. Файлы переезжают из `public/design/cjm-ui/fonts/` в `public/fonts/` (единый источник); статичная страница `public/design/cjm-ui/index.html` переключается на абсолютные `/fonts/...` URL.
+- `@font-face` в index.css: Coil 400 (woff2) / 500 (otf) / 700 (otf); YS Text 400/500/700 (woff2); всё `font-display: swap`, кириллица покрыта обоими семействами (Coil — кириллический шрифт Brownfox; YS — Яндекс). Синтетических начертаний не допускаем: используем только веса, для которых есть файлы.
+- Файлы переезжают из `public/design/cjm-ui/fonts/` в `public/fonts/`; статичная страница переключается на `/fonts/...` — перенос, правка её URL и `@font-face` делаются **атомарно в одном коммите T0**. Хеширования у public-ассетов нет; `server/static.ts` не выставляет агрессивных cache-заголовков, поэтому stale-cache риска нет — версионирование имён не требуется.
+- Применение шрифтов — только через утилиты `font-eui-ui` / `font-eui-display` на app-owned контейнерах (header, aside, панели, main галереи/CJM/библиотеки, верхние бары плеера/редактора). Контейнеры, внутри которых рендерится прототип (`DeviceFrame` внутренность, `CjmFrame`, `EditorFrame`, SmokeSpec-рендер), шрифтовых утилит не получают.
+- Лицензия Coil: коммерческий шрифт Brownfox из дизайн-проекта пользователя, использование авторизовано им (файлы в репо с b9acfe3).
 
-Применение:
-- `body { font-family: var(--font-eui-ui) }` в `@layer base`. Следствие: shadcn-прототипы в превью унаследуют YS Text вместо системного стека. Это **осознанно**: макеты показывают контент прототипов в YS Text, а «применить дизайн-систему к проекту» включает типографику. Wireframe-система не затрагивается (у неё явный `font-mono`; юнит `src/catalog/runtime.test.ts:19` не ломается). Storybook-превью (`.storybook/preview.tsx` импортирует тот же index.css) станет консистентным автоматически.
-- Заголовки хрома — утилита `font-eui-display` + `font-medium` (Coil Medium — базовое начертание заголовков системы).
+### 2.4 Общие паттерны хрома — `src/app/chrome.ts`
 
-### 2.3 Общие паттерны хрома — один локальный модуль
+Экспортируемые константы строк классов (не компоненты): `pillPrimary`, `pillGhost`, `pillGhostOnDark`, `chip`, `chipActive`, `plate`, `card`, `kicker`, `kickerOnDark`, `inputBase`, `headingPage`, `headingBar`. Все зоны импортируют отсюда; правки ролей делаются в одном месте.
 
-Повторяющиеся строки утилит (pill-кнопка primary/ghost, чип, карточка-плашка, подпись-«kicker») выносятся в `src/app/chrome.ts` как экспортируемые константы строк классов (не компоненты — минимальная инвазивность):
+### 2.5 Контракт высоты Layout
 
-```ts
-export const pillPrimary = "rounded-full bg-eui-brand px-4 py-2 text-sm font-bold text-white ...";
-export const pillGhost   = "rounded-full border border-eui-ink/15 px-4 py-2 text-sm ...";
-export const chip        = "rounded-full bg-eui-lilac-100 px-3 py-1 text-xs font-medium";
-export const plate       = "rounded-3xl bg-eui-lav p-6";
-export const kicker      = "text-[11px] font-bold uppercase tracking-[0.08em] text-eui-slate-400";
-```
+`Layout.tsx` переходит на `min-h-dvh grid grid-rows-[auto_1fr]`, outlet-строка получает `min-h-0`. Страницы **перестают** считать собственный viewport: `h-screen`/`min-h-screen`/`calc(100vh-4rem)` в EditorView/LibraryPage/ScreenView/CjmView заменяются на `h-full`/`min-h-0`/flex-раскладку от родителя. Это снимает зависимость от высоты хедера (Coil-хедер может стать выше 4rem).
 
-Каждая зона импортирует их; дублирование утилит между зонами устраняется без рефакторинга JSX-структуры.
+## 3. Спецификация по экранам (эталон — макеты в `public/design/cjm-ui/index.html`)
 
-## 3. Спецификация по экранам (эталон — макеты)
-
-### 3.0 Layout / навигация (`src/app/Layout.tsx`)
-- Хедер: белый, нижний хэрлайн `border-eui-ink/10`; логотип «easy-ui» — Coil 700, 18px.
-- Пункты навигации: YS Text 14px; активный — `font-bold text-eui-brand` с подчёркивающей полосой 2px `border-b-2 border-eui-brand` (вместо underline).
-- Справа — круглый аватар-плейсхолдер 32px `bg-eui-lilac-200 text-eui-brand` с инициалами (статично «ВП» не хардкодить — берём первые буквы из ничего нет → просто убрать либо оставить декоративный кружок; решение: НЕ добавлять аватар, у приложения нет пользователей — отступление от макета фиксируем).
-- Пункт Debug остаётся, стилизуется как обычный пункт.
+### 3.0 Layout / навигация / служебные (`src/app/Layout.tsx`, `routes.tsx`)
+- Хедер: белый, нижний хэрлайн `border-eui-ink/10`; логотип «easy-ui» — `font-eui-display font-bold` 18px.
+- Навигация: `font-eui-ui` 14px; активный пункт `font-bold text-eui-brand border-b-2 border-eui-brand`. Debug — обычный пункт. Аватар из макета **не** добавляем (нет пользователей).
+- 404-роут (`routes.tsx`): заголовок `font-eui-display`, ссылка-pill назад в галерею.
+- Grid-контракт высоты (§2.5).
 
 ### 3.1 Галерея (`src/gallery/GalleryPage.tsx`)
-- Заголовок «Прототипы» — Coil 500, ~30px; подзаголовок YS Text `text-eui-slate-500`.
-- Фильтры систем: pill-чипы; активный `bg-eui-brand text-white`, неактивный `border-eui-ink/15`.
-- Карточка: `rounded-3xl bg-eui-lav p-6`, без тени и рамки (плоская плашка); превью-зона внутри `rounded-2xl bg-eui-lilac-100` (существующий контент карточки не менять по составу); чипы метаданных (`bg-eui-lilac-200` — система, `bg-white` — счётчик экранов/версия); действия — pill «Открыть» (primary, растянутая) + pill-ghost «CJM», «Редактор».
-- Сетка остаётся `sm:grid-cols-2 lg:grid-cols-3`.
+- Заголовок «Прототипы» `font-eui-display font-medium text-3xl`; подзаголовок `text-eui-slate-500`.
+- Фильтры: pill-чипы, активный `bg-eui-brand text-white`, неактивный `border-eui-ink/15`.
+- Карточка: `rounded-3xl bg-eui-lav p-6`, без рамки/тени; чипы метаданных `bg-eui-lilac-200` (система) и `bg-white` (экраны/версия); действия — pill-primary «Открыть» + pill-ghost «CJM», «Редактор». Состав контента карточки не менять.
+- Состояния: loading/error/empty/«ничего по фильтру» — стилизуются в этой же задаче (плашка `bg-eui-lav`, текст `text-eui-slate-500`, ошибка — `text-eui-magenta`).
 
 ### 3.2 Плеер (`src/player/ScreenView.tsx`, `ScreensSidebar.tsx`, `DeviceFrame.tsx`, `PlayerShell.tsx`)
-- Вся сцена тёмная: `bg-eui-graphite text-white`, разделители `border-white/15`.
-- Верхняя панель: «← Галерея», название прототипа (Coil 500 16px, белый), чип версии `bg-white/10`; справа pill-ghost «Заново», «CJM» (рамка `border-white/25`) и pill-primary «Поделиться» — если действия «Поделиться» нет в текущем UI, НЕ добавлять (отступление фиксируем), существующие действия перекрасить в эту стилистику.
-- Сайдбар экранов: заголовок-kicker «ЭКРАНЫ · N» (`text-eui-ondark-2`); активный пункт `rounded-xl bg-eui-brand/35 text-white`, номер `text-eui-lilac-200`; неактивные `text-eui-ondark-2`.
-- Зона устройства: по центру, фоновая подсветка `radial-gradient(... rgba(132,78,220,0.18) ...)`; сам DeviceFrame — белая «карточка» `rounded-[28px] shadow-[0_20px_60px_rgba(2,2,5,0.35)]`; переключатели устройств перекрасить под тёмную тему (pill-ghost на белой рамке).
-- Хотспот-подсветка кликабельных зон: акцент `--color-eui-orange` (если сейчас есть визуализация хотспотов в `CanvasLayers` — цвет обводки на orange; если нет — не добавлять новую механику).
-- Нижняя подсказка-бар (если есть текущий аналог) — стилизовать; новую не добавлять.
+- Тёмная сцена **только утилитами**: `bg-eui-graphite text-white`, разделители `border-white/15`. Без `.dark`, без `color-scheme` (§2.1).
+- Верхняя панель: «← Галерея», название `font-eui-display font-medium text-white`, чип версии `bg-white/10`; существующие действия («Заново», «CJM», …) — pill-ghost `border-white/25`; кнопку «Поделиться» из макета не добавляем.
+- Сайдбар: kicker «ЭКРАНЫ · N» `text-eui-ondark-2`; активный экран `rounded-xl bg-eui-brand/35 text-white`, номер `text-eui-lilac-200`; неактивные `text-eui-ondark-2`.
+- Зона устройства: `radial-gradient` подсветка rgba(132,78,220,0.18); host DeviceFrame — `rounded-[28px] shadow-[0_20px_60px_rgba(2,2,5,0.35)]`, фон host'а остаётся `bg-background` (это поверхность прототипа — не трогаем); переключатели устройств — pill-ghost на `border-white/25`.
+- Контраст (пары зафиксированы): white/graphite ≈ 12.6:1; `#B8BAC0`/graphite ≈ 7.3:1; white/`#844EDC` ≈ 4.6:1 (текст 700 ≥14px — ок); `#E1CFFF`/graphite ≈ 9.9:1; focus-ring на тёмном — `outline-white/80`. Ошибочные состояния на графите — `text-eui-orange` (≈7.9:1), не magenta.
+- Хотспот-обводка в `CanvasLayers` (общий файл — ownership T0.5): цвет на `--color-eui-orange`, если визуализация уже существует; новой механики не добавлять.
 
-### 3.3 CJM-вид (`src/cjm/CjmView.tsx`, `CjmScreenTile.tsx`)
-- Фон `bg-eui-lav`, всё в одной крупной плашке (страница и есть плашка — допустимо просто фон страницы).
-- Хедер: заголовок Coil 500 ~24px, подзаголовок YS Text `text-eui-slate-500`; действия — pill белая «Открыть плеер» и pill-primary (существующие действия, перекрасить).
-- Тайл: белая карточка `rounded-[20px] p-3 shadow-sm`, рендер экрана внутри `rounded-xl`; подпись: номер Coil `text-eui-brand` + название `font-bold`; заметка автора под тайлом `text-xs text-eui-slate-500`.
-- Стрелки-коннекторы: обводка `#844EDC`, толщина 2.5, скруглённые концы (заменить текущий цвет stroke в inline-SVG).
+### 3.3 CJM-вид (`src/cjm/CjmView.tsx`, `CjmShell.tsx`)
+- Фон страницы `bg-eui-lav`; хедер: заголовок `font-eui-display font-medium`, подзаголовок `text-eui-slate-500`; действия — pill белая + pill-primary (существующие).
+- Подпись тайла: номер `font-eui-display text-eui-brand` + название `font-bold`; заметка `text-xs text-eui-slate-500`. Сам тайл-фрейм (`CjmScreenTile`) — ownership T0.5.
+- Стрелки-коннекторы: stroke `#844EDC`, width 2.5, `stroke-linecap="round"`.
 
-### 3.4 Редактор (`src/editor/EditorView.tsx`, `EditorScreenStrip.tsx`, `InspectorPanel.tsx`, `ElementTree.tsx`, `propsForm/PropsForm.tsx`, `EditorCanvas.tsx`)
-- Светлая тема. Верхняя панель: название (Coil 500 16px), чип статуса `bg-eui-lilac-100 text-eui-slate-500` («черновик · сохранено»/dirty), справа pill-ghost «Предпросмотр» (если есть) и pill-primary «Опубликовать vN» (существующая кнопка сохранения).
-- Дерево элементов: kicker-заголовок; выбранный узел `rounded-lg bg-eui-lilac-100 font-bold`.
-- Канвас: подложка `bg-eui-lav`; **рамка выделения**: цвет на `--color-eui-magenta` (#C62CD0) с бейджем типа компонента как в макете — БЕЙДЖ не добавлять (новая механика), только цвет рамки. ВНИМАНИЕ: e2e `e2e/dev/editor.spec.ts:86` селектит `.border-primary` — при смене класса рамки обновить селектор в тесте (файл в ownership этой задачи).
-- Инспектор: kicker «ИНСПЕКТОР · <ТИП>»; инпуты `rounded-xl border-eui-ink/15`; переключатели variant — pill-чипы.
-- Лента экранов: pill-чипы (активный `bg-eui-brand text-white`), «+ Экран» — pill с dashed-рамкой, если такой элемент существует; не добавлять новый.
+### 3.4 Редактор (`src/editor/*`, `e2e/dev/editor.spec.ts`)
+- Светлая тема. Верхняя панель: название `font-eui-display font-medium`, чип статуса `bg-eui-lilac-100 text-eui-slate-500`, кнопка сохранения — pill-primary; ошибки валидации/409 — существующие блоки, перекрасить (`text-eui-magenta`, плашки `bg-eui-lilac-100`).
+- Дерево: kicker-заголовок; выбранный узел `rounded-lg bg-eui-lilac-100 font-bold`.
+- Канвас: подложка `bg-eui-lav`; рамка выделения — `border-eui-magenta`, и добавить `data-testid="editor-selection-frame"`; e2e-селектор `.border-primary` (editor.spec.ts:86) заменить на этот testid. Бейдж типа компонента не добавляем.
+- Перед геометрическими ассертами в editor.spec.ts добавить `await page.evaluate(() => document.fonts.ready)` — поздний reflow хедера от webфонтов не должен сдвигать canvas между измерениями.
+- Инспектор: kicker «ИНСПЕКТОР»; `inputBase` из chrome.ts (`rounded-xl border-eui-ink/15`); variant-переключатели — pill-чипы.
+- Лента экранов (`EditorScreenStrip`): подписи/чипы стилизуются здесь, но `CjmFrame` импортируется из cjm — его не трогать (T0.5).
 
 ### 3.5 Библиотека (`src/library/LibraryPage.tsx`)
-- Сайдбар: заголовок «Библиотека» Coil 500 20px; чипы систем pill (активный primary); группы уровней — kicker; активная стори `rounded-lg bg-eui-lilac-100 font-bold`.
-- Правая зона: заголовок стори `font-bold` + ссылка «Открыть в Storybook» (существующая, стилизовать `underline text-eui-slate-500`); iframe-контейнер `rounded-3xl border-eui-ink/10 bg-eui-lav` (фон внутри iframe не трогаем).
+- Сайдбар: «Библиотека» `font-eui-display font-medium text-xl`; чипы систем pill; группы — kicker; активная стори `rounded-lg bg-eui-lilac-100 font-bold`.
+- Правая зона: заголовок `font-bold`, ссылка «Открыть в Storybook» `underline text-eui-slate-500`; контейнер iframe `rounded-3xl border border-eui-ink/10` (внутрь iframe не лезем — Storybook preview импортирует общий index.css и остаётся неизменным, т.к. body-шрифт мы не меняем).
+- Состояния loading/unavailable — стилизовать.
+
+### 3.6 Служебное
+- `/debug` (`SmokeSpec`): только заголовок/обёртку страницы в стиль (`font-eui-display`), рендер-зону не трогать.
+- `PrototypeLoader` (общий для плеера/CJM/редактора; ownership T0.5): состояния loading/error/missing получают **нейтральное** оформление, читаемое и на светлом, и на графите: центрированная плашка `rounded-2xl bg-eui-lilac-100 text-eui-ink p-6` + для loading заменить невидимый пустой div на текст «Загрузка прототипа…». Никаких appearance-пропов не вводим — нейтральная плашка одинаково легитимна на обоих фонах.
 
 ## 4. Декомпозиция на Codex-задачи и file ownership
 
-| # | Задача | Файлы (ownership) | Блокирует |
-|---|---|---|---|
-| T0 | Фундамент: токены `eui-*` и `@font-face` в `src/styles/index.css`; перенос шрифтов в `public/fonts/`; правка URL в `public/design/cjm-ui/index.html`; рестайл `src/app/Layout.tsx`; создание `src/app/chrome.ts` | `src/styles/index.css`, `public/fonts/*`, `public/design/cjm-ui/index.html`, `src/app/Layout.tsx`, `src/app/chrome.ts` | T1–T5 |
-| T1 | Галерея | `src/gallery/GalleryPage.tsx` (+ его тест при падении) | — |
-| T2 | Плеер (тёмная сцена) | `src/player/ScreenView.tsx`, `ScreensSidebar.tsx`, `DeviceFrame.tsx`, `PlayerShell.tsx`, `CanvasLayers.tsx` (+ их тесты) | — |
-| T3 | CJM-вид | `src/cjm/CjmView.tsx`, `CjmScreenTile.tsx`, `CjmShell.tsx` (+ тесты) | — |
-| T4 | Редактор | `src/editor/*.tsx`, `src/editor/propsForm/*`, `e2e/dev/editor.spec.ts` (только селектор рамки) | — |
-| T5 | Библиотека | `src/library/LibraryPage.tsx` (+ тест) | — |
+Последовательность: **T0 → T0.5 → (T1‥T5 параллельно) → I (интеграция)**.
 
-T1–T5 параллелятся после T0 (непересекающиеся файлы). Каждой задаче в промпт: ссылка на этот план и §§, эталон `public/design/cjm-ui/index.html` (открыть и смотреть соответствующий мок), «только представление, не менять поведение/aria-имена/роли», «читай `.d.ts` в node_modules, не угадывай API», «не коммить».
+| # | Задача | Файлы (ownership) |
+|---|---|---|
+| T0 | Фундамент: `@theme` токены + `@font-face`; перенос шрифтов `public/design/cjm-ui/fonts/*` → `public/fonts/` с правкой URL статичной страницы (атомарно); `src/app/chrome.ts`; рестайл `Layout.tsx` + grid-контракт высоты; 404 в `routes.tsx`; `/debug` обёртка `SmokeSpec.tsx` | `src/styles/index.css`, `public/fonts/*`, `public/design/cjm-ui/index.html`, `src/app/Layout.tsx`, `src/app/routes.tsx`, `src/app/chrome.ts`, `src/smoke/SmokeSpec.tsx` |
+| T0.5 | Общие рендер-поверхности: `PrototypeLoader` (состояния, §3.6), `CanvasLayers` (хотспот-цвет), `CjmScreenTile`/`CjmFrame` (карточка тайла §3.3, без изменения scale-логики) | `src/player/PrototypeLoader.tsx`, `src/player/CanvasLayers.tsx`, `src/cjm/CjmScreenTile.tsx` (+ их тесты) |
+| T1 | Галерея + её состояния | `src/gallery/GalleryPage.tsx` (+ тест) |
+| T2 | Плеер (тёмная сцена) + screen-not-found/render-error состояния | `src/player/ScreenView.tsx`, `ScreensSidebar.tsx`, `DeviceFrame.tsx`, `PlayerShell.tsx` (+ тесты) |
+| T3 | CJM-вид (хедер/фон/подписи/стрелки) | `src/cjm/CjmView.tsx`, `CjmShell.tsx` (+ тесты) |
+| T4 | Редактор + селектор рамки и fonts.ready в e2e | `src/editor/**` (кроме импортов из cjm), `e2e/dev/editor.spec.ts` |
+| T5 | Библиотека + состояния | `src/library/LibraryPage.tsx` (+ тест) |
+| I | Invariant-spec (§5.3) + финальная верификация | `e2e/dev/restyle-invariant.spec.ts` (новый) |
 
-## 5. Done-критерии (проверяет оркестратор)
+Каждой задаче в промпт: этот план и её §§, эталон `public/design/cjm-ui/index.html`, запреты §2.1 дословно, «только представление, не менять поведение/aria/роли/testid (кроме оговорённых)», «читай `.d.ts` в node_modules», «не коммить».
 
-Общие для каждой задачи:
-1. `npm run verify` зелёный (юниты, типы, линт, validate:prototypes).
-2. aria-имена, роли и `data-testid` не изменены (кроме оговорённого селектора в T4).
-3. В зоне не осталось старых токен-утилит хрома (`bg-primary`, `text-muted-foreground`, `bg-card`, `bg-muted*`) — проверка грепом по файлам зоны; прототипный рендер-путь (`src/designSystems`, `src/catalog`) не тронут.
-4. Скриншот зоны визуально соответствует моку (оркестратор снимает Playwright'ом и сравнивает глазами с `public/design/cjm-ui/index.html`).
+## 5. Done-критерии и гейты
 
-Финально: `npm run e2e` (dev + preview) зелёный; runtime-прогон по `.claude/skills/verify/SKILL.md`.
+Пер-задача (проверяет оркестратор):
+1. `npm run verify` зелёный.
+2. aria/роли/testid без изменений (кроме T4-оговорки); греп по зоне: не осталось `bg-primary|text-primary-foreground|text-muted-foreground|bg-card|bg-muted` в файлах зоны; `src/designSystems/`, `src/catalog/` не тронуты (git diff пуст).
+3. Скриншот зоны (Playwright, 1440×900) визуально соответствует моку; спот-чек 390×844 без нецелевого горизонтального скролла.
+
+Интеграционный гейт (задача I + оркестратор):
+1. `npm run e2e` (dev + preview) зелёный.
+2. **Invariant-spec**: новый Playwright-тест открывает плеер, CJM, редактор и `/debug` с фикстурным прототипом и ассертит внутри отрендеренного shadcn-элемента: computed `font-family` начинается с системного стека (не Coil/YS), и `getComputedStyle(document.documentElement).getPropertyValue('--primary'|'--background'|'--radius')` равны базовым значениям (захардкоженным из текущего index.css). Для библиотеки — те же проверки внутри Storybook iframe.
+3. `document.fonts.check('16px Coil')` и `('14px "YS Text"')` истинны на галерее; `/design/cjm-ui/index.html` и оба семейства в `/fonts/` отвечают 200 в preview-режиме.
+4. Runtime-прогон по `.claude/skills/verify/SKILL.md` (галерея → флоу → библиотека) + скриншоты всех пяти зон.
+5. Контраст: соответствие парам из §3.2 — проверяется по зафиксированной таблице (расчётные коэффициенты в плане), без автоматических ассертов.
 
 ## 6. Риски и отступления от макета
 
-- **Лик токенов в прототипы** — закрыт неймспейсом `eui-*` (§2.1). Шрифт — осознанный глобальный (§2.2).
-- **Тёмный плеер и контраст**: role-based e2e не зависят от цветов; проверить визуально читаемость валидационных/ошибочных состояний плеера на графите.
-- **`.border-primary` в e2e** — ownership у T4 (§3.4).
-- Отступления: без аватара в хедере (§3.0), без кнопки «Поделиться» (§3.2), без бейджа типа у рамки выделения (§3.4), нижний хинт-бар плеера — только если уже существует (§3.2). Из макета НЕ переносятся моковые данные.
-- Coil — коммерческий шрифт (Brownfox), уже используется в дизайн-проекте пользователя; файлы уже в репозитории с b9acfe3.
+- Лик токенов/шрифтов в прототипы — закрыт запретами §2.1 и invariant-spec §5.
+- Webfont-reflow и геометрия e2e — `document.fonts.ready` в editor.spec (T4).
+- Высотный контракт — §2.5, правится в T0 + каждой зоной у себя.
+- Отступления: без аватара (§3.0), без «Поделиться» (§3.2), без бейджа выделения (§3.4), хинт-бар плеера — только если уже существует; моковые данные из макета не переносятся.
+- Coil — коммерческий (Brownfox), авторизован пользователем.
 
-## 7. Триаж ревью
+## 7. Триаж ревью (раунд 1, Codex gpt-5.6-sol, 2026-07-11)
 
-(заполняется после раунда Codex-ревью: принято/отклонено с обоснованием)
+| Находка | Severity | Решение |
+|---|---|---|
+| Глобальный body-шрифт ломает метрики прототипов/порталов/hit-test | blocker | **Принято.** §2.1/§2.3: body не трогаем, шрифты только адресно на app-owned контейнерах |
+| Тёмный плеер через `.dark` перекрасит прототип | blocker | **Принято** (план и не предлагал `.dark`, теперь запрет явный в §2.1 + запрет `color-scheme`) |
+| Верификация не доказывает инвариант прототипов | blocker | **Принято.** Новая задача I: invariant-spec на computed styles (§5.3) |
+| Токены: примитивы + семантические роли, не размазывать по JSX | major | **Принято частично.** Примитивы в @theme + роли централизованы в chrome.ts; отдельный слой семантических CSS-переменных отклонён как лишняя косвенность для одного приложения |
+| Ownership пересекается (PrototypeLoader, CjmFrame↔EditorScreenStrip, CanvasLayers) | major | **Принято.** Введена T0.5 «общие поверхности», зоны от них отрезаны |
+| PrototypeLoader: состояния и появление на светлом/тёмном | major | **Принято.** §3.6: нейтральная плашка + видимый loading; appearance-проп отклонён (не нужен для нейтрального решения) |
+| Не хватает /debug, 404, состояний зон | major | **Принято.** §3.0/3.1/3.2/3.5/3.6 + маршрутная матрица в §5 |
+| Высотный контракт Layout (100vh/4rem) | major | **Принято.** §2.5 grid-rows-[auto_1fr], зоны переходят на h-full/min-h-0 |
+| Storybook в границе риска | major | **Принято** — закрывается отказом от body-шрифта; отдельный Storybook-regression сверх invariant-spec (который проверяет iframe) отклонён |
+| Шрифты в src/assets с хешами; cache policy; атомарность | major | **Частично.** Атомарность переноса — принята (T0, один коммит). Перенос в src/assets отклонён: статичной странице нужны нехешированные public-URL, дублировать 350KB файлов ради хешей при сервере без cache-заголовков — неоправданно |
+| Контраст: конкретные пары | major | **Принято.** §3.2 таблица пар с коэффициентами; автоматические contrast-ассерты отклонены (фиксированная палитра, аудит по таблице) |
+| fonts.ready перед геометрией в editor e2e | major | **Принято.** §3.4 |
+| `.border-primary` → data-testid | minor | **Принято.** §3.4 `editor-selection-frame` |
+| Точные @font-face и лицензия | minor | **Принято.** §2.3 |
+| Gate: viewport-матрица 3 размеров | — | **Частично.** 1440 полный + 390 спот-чек; 834 отклонён (нет планшетных layout-веток в хроме) |
