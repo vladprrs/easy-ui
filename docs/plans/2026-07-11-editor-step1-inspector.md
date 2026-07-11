@@ -12,7 +12,7 @@
 - **Сохранение**: `savePrototype(id, doc, baseRev)` в `src/api/client.ts`; сервер валидирует двухступенчато (schema parse + `validatePrototype`) → 422 `{issues}`; CAS по ревизии → 409 `{currentRev}`.
 - **Переиспользуемое**: `PrototypeLoader` (render-prop: `{loaded: PrototypeDraft, custom, runtimeKey, routeBase}`; `custom.definitions` доступны клиенту — подтверждено), `CjmFrame`/`TileErrorBoundary` (`src/cjm/CjmScreenTile.tsx`), `createCjmRegistry`, `mergeScreenState`, `toRuntimeSpec`, `splitCanvasSpec`, canvas-рендер двух слоёв (`ScreenView.tsx:47-52`), no-op nav deps (паттерн `CjmView`).
 
-## Решения (зафиксированы с пользователем + ревизия 2)
+## Решения (зафиксированы с пользователем + ревизии 2–3)
 
 - Роут `/p/:protoId/edit`, **только черновик**. Оболочка `EditorShell` по образцу `CjmShell`.
 - Выделение: hit-test поверх канваса + дерево элементов в панели.
