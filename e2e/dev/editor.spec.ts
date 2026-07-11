@@ -71,6 +71,7 @@ test.describe("prototype editor", () => {
     await expect(selectedElement).toContainText(initialText);
 
     const renderedText = selectedElement.getByText(initialText, { exact: true });
+    await page.evaluate(() => document.fonts.ready);
     const elementBox = await renderedText.boundingBox();
     const overlayBox = await overlay.boundingBox();
     expect(elementBox).not.toBeNull();
@@ -83,7 +84,7 @@ test.describe("prototype editor", () => {
     await expect(textInput).toBeVisible();
     await expect(textInput).toHaveValue(initialText);
 
-    const selectionFrame = canvas.locator(".border-primary").last();
+    const selectionFrame = canvas.getByTestId("editor-selection-frame").last();
     await expect(selectionFrame).toBeVisible();
     const frameBox = await selectionFrame.boundingBox();
     expect(frameBox).not.toBeNull();

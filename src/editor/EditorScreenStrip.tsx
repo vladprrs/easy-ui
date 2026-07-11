@@ -1,5 +1,6 @@
 import { JSONUIProvider, Renderer, type ComponentRegistry, type JSONUIProviderProps } from "@json-render/react";
 import { useMemo } from "react";
+import { chip, chipActive } from "../app/chrome";
 import type { PrototypeDoc } from "../prototype/schema";
 import { mergeScreenState } from "../prototype/stateOverrides";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
@@ -26,12 +27,12 @@ function ScreenTile({ doc, screen, registry, handlers, runtimeKey, stateEpoch, s
     <div className="relative">
       <TileErrorBoundary key={key} prototypeId={doc.id} screenId={screen.id}>
         <JSONUIProvider key={key} registry={registry} handlers={handlers} initialState={initialState}>
-          <div inert>{spec ? <CjmFrame nativeWidth={screen.canvas?.width ?? DEVICE_WIDTH[doc.device]} nativeHeight={screen.canvas?.height} resetKey={key}><Renderer registry={registry} spec={spec} /></CjmFrame> : <div className="flex h-64 w-[280px] items-center justify-center rounded-lg border bg-background text-sm text-muted-foreground">Нет содержимого</div>}</div>
+          <div inert>{spec ? <CjmFrame nativeWidth={screen.canvas?.width ?? DEVICE_WIDTH[doc.device]} nativeHeight={screen.canvas?.height} resetKey={key}><Renderer registry={registry} spec={spec} /></CjmFrame> : <div className="flex h-64 w-[280px] items-center justify-center rounded-lg border border-eui-ink/10 bg-white text-sm text-eui-slate-500">Нет содержимого</div>}</div>
         </JSONUIProvider>
       </TileErrorBoundary>
       <button type="button" aria-label={`Выбрать экран «${screen.name}»`} aria-pressed={selected} onClick={onSelect} className="absolute inset-0 rounded-lg focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring aria-pressed:ring-4 aria-pressed:ring-primary" />
     </div>
-    <h2 className="mt-3 text-base font-semibold">{screen.name}</h2>
+    <h2 className={`${selected ? chipActive : `${chip} border-eui-ink/10 bg-white`} mt-3 font-eui-ui`}>{screen.name}</h2>
   </article>;
 }
 
@@ -40,7 +41,7 @@ export function EditorScreenStrip({ doc, registry, handlers, runtimeKey, stateEp
   stateEpoch: number; selectedScreenId: string; onSelect: (screenId: string) => void;
 }) {
   const staticRegistry = useMemo(() => createCjmRegistry(registry), [registry]);
-  return <ol className="flex items-start gap-6 overflow-x-auto border-b bg-muted/30 px-6 py-4" aria-label="Экраны прототипа">
+  return <ol className="flex items-start gap-6 overflow-x-auto border-b border-eui-ink/10 bg-white px-6 py-4" aria-label="Экраны прототипа">
     {doc.screens.map((screen) => <li className="shrink-0" key={screen.id}><ScreenTile doc={doc} screen={screen} registry={staticRegistry} handlers={handlers} runtimeKey={runtimeKey} stateEpoch={stateEpoch} selected={screen.id === selectedScreenId} onSelect={() => onSelect(screen.id)} /></li>)}
   </ol>;
 }

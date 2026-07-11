@@ -92,7 +92,7 @@ class EditorCanvasErrorBoundary extends Component<{ prototypeId: string; screenI
   }
   render() {
     if (!this.state.error) return this.props.children;
-    return <section role="alert" className="rounded border border-destructive p-6">
+    return <section role="alert" className="rounded-2xl bg-eui-lilac-100 p-6 text-eui-magenta">
       <h2 className="font-semibold">Экран не удалось отобразить</h2>
       <p className="mt-2 text-sm">{this.state.error.message}</p>
     </section>;
@@ -176,7 +176,7 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
   };
 
   const rendered = !hasRoot
-    ? <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">Нет содержимого</div>
+    ? <div className="flex h-64 items-center justify-center text-sm text-eui-slate-500">Нет содержимого</div>
     : screen.canvas && specs
       ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} />
       : <Renderer registry={registry} spec={spec} />;
@@ -189,7 +189,7 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
         viewportRef={viewportRef}
         previewRootRef={previewRootRef}
         overlay={<div className="absolute inset-0 z-40 cursor-default" data-testid="editor-hit-overlay" onClick={handleHitTest} />}
-        frames={<div className="pointer-events-none absolute inset-0 z-50" aria-hidden="true">{selectionRects.map((rect, index) => <div key={index} className="absolute border-2 border-primary" style={rect} />)}</div>}
+        frames={<div className="pointer-events-none absolute inset-0 z-50" aria-hidden="true">{selectionRects.map((rect, index) => <div key={index} data-testid="editor-selection-frame" className="absolute border-2 border-eui-magenta" style={rect} />)}</div>}
       >{rendered}</EditorFrame>
     </JSONUIProvider>
   </EditorCanvasErrorBoundary>;

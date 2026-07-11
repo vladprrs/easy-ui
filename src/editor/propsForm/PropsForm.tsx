@@ -1,4 +1,5 @@
 import { useMemo, useState, type KeyboardEvent } from "react";
+import { chip, chipActive, inputBase } from "../../app/chrome";
 import type { ComponentDefinition } from "../../catalog/definitions";
 import { jsonValueSchema } from "../../prototype/schema";
 import { isDynamicValue, validateElementProps } from "../../prototype/validate";
@@ -12,7 +13,7 @@ type PropsFormProps = {
   path?: (string | number)[];
 };
 
-const controlClass = "mt-1 w-full rounded-md border bg-background px-2 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+const controlClass = `${inputBase} mt-1 w-full bg-white text-eui-ink`;
 const pointerPart = (value: string) => value.replace(/~1/g, "/").replace(/~0/g, "~");
 
 function optionKey(value: SelectValue): string {
@@ -20,7 +21,7 @@ function optionKey(value: SelectValue): string {
 }
 
 function FieldLabel({ name, required, children }: { name: string; required: boolean; children: React.ReactNode }) {
-  return <label className="block text-sm font-medium">{name}{required ? <span aria-hidden="true"> *</span> : null}{children}</label>;
+  return <label className="block font-eui-ui text-xs text-eui-slate-500">{name}{required ? <span aria-hidden="true"> *</span> : null}{children}</label>;
 }
 
 export function PropsForm({ definition, values, effectiveState, onCommit, path = ["props"] }: PropsFormProps) {
@@ -69,17 +70,17 @@ export function PropsForm({ definition, values, effectiveState, onCommit, path =
     const setText = (next: string) => setDrafts((current) => ({ ...current, [field.name]: { baseline: value, text: next } }));
     const enter = (event: KeyboardEvent<HTMLInputElement>, next: () => void) => { if (event.key === "Enter") { event.preventDefault(); next(); event.currentTarget.blur(); } };
     return <div key={field.name}>
-      {kind === "switch" ? <label className="flex items-center justify-between gap-3 text-sm font-medium"><span>{field.name}{field.required ? " *" : ""}</span><input type="checkbox" role="switch" checked={value === true} onChange={(event) => commit(field.name, event.target.checked)} /></label>
+      {kind === "switch" ? <label className="flex items-center justify-between gap-3 font-eui-ui text-xs text-eui-slate-500"><span>{field.name}{field.required ? " *" : ""}</span><input type="checkbox" role="switch" checked={value === true} onChange={(event) => commit(field.name, event.target.checked)} /></label>
         : <FieldLabel name={field.name} required={field.required}>
-          {kind === "select" ? <select aria-label={field.name} className={controlClass} value={optionKey(value as SelectValue)} onChange={(event) => {
+          {kind === "select" ? <select aria-label={field.name} className={`${value === undefined ? chip : chipActive} mt-1 font-eui-ui`} value={optionKey(value as SelectValue)} onChange={(event) => {
             const option = field.control.kind === "select" ? field.control.options.find((item) => optionKey(item) === event.target.value) : undefined;
             commit(field.name, option);
           }}>{field.control.kind === "select" ? field.control.options.map((option) => <option key={optionKey(option)} value={optionKey(option)}>{String(option)}</option>) : null}</select> : null}
           {kind === "text" ? <input aria-label={field.name} className={controlClass} value={text} onChange={(event) => setText(event.target.value)} onBlur={() => commit(field.name, text)} onKeyDown={(event) => enter(event, () => commit(field.name, text))} /> : null}
           {kind === "number" ? <input aria-label={field.name} type="number" className={controlClass} value={text} onChange={(event) => setText(event.target.value)} onBlur={() => commit(field.name, Number(text))} onKeyDown={(event) => enter(event, () => commit(field.name, Number(text)))} /> : null}
-          {kind === "json" ? <><span className="mt-1 block text-xs font-normal text-muted-foreground">{dynamic ? "динамическое значение" : "JSON"}</span><textarea aria-label={field.name} className={`${controlClass} min-h-24 font-mono`} value={text} onChange={(event) => setText(event.target.value)} onBlur={() => commitJson(field.name, text)} /></> : null}
+          {kind === "json" ? <><span className="mt-1 block text-xs font-normal text-eui-slate-500">{dynamic ? "динамическое значение" : "JSON"}</span><textarea aria-label={field.name} className={`${controlClass} min-h-24 font-mono`} value={text} onChange={(event) => setText(event.target.value)} onBlur={() => commitJson(field.name, text)} /></> : null}
         </FieldLabel>}
-      {errors[field.name] ? <p role="alert" className="mt-1 text-xs text-destructive">{errors[field.name]}</p> : null}
+      {errors[field.name] ? <p role="alert" className="mt-1 text-xs text-eui-magenta">{errors[field.name]}</p> : null}
     </div>;
   })}</div>;
 }
@@ -96,5 +97,5 @@ function JsonWholeProps({ definition, values, effectiveState, path, onCommit }: 
     if (result.errors.length) { setError(result.errors.map((item) => item.message).join("; ")); return; }
     setError(""); onCommit(json.data);
   };
-  return <label className="block text-sm font-medium">Props (JSON)<textarea aria-label="Props (JSON)" className={`${controlClass} min-h-36 font-mono`} value={text} onChange={(event) => setText(event.target.value)} onBlur={commit} />{error ? <span role="alert" className="mt-1 block text-xs text-destructive">{error}</span> : null}</label>;
+  return <label className="block font-eui-ui text-xs text-eui-slate-500">Props (JSON)<textarea aria-label="Props (JSON)" className={`${controlClass} min-h-36 font-mono`} value={text} onChange={(event) => setText(event.target.value)} onBlur={commit} />{error ? <span role="alert" className="mt-1 block text-xs text-eui-magenta">{error}</span> : null}</label>;
 }
