@@ -26,75 +26,140 @@
     fixtures: Record<string, Record<string, unknown>>;
   }
   ```
-- `ComponentDefinition` получает **опциональные** `atomicLevel?: AtomicLevel` и `layoutNeutral?: boolean` (ноль поломок для пакета @json-render и уже опубликованных кастомных бандлов). `normalizeDefinitions` клонирует спредом — новые поля проходят сами.
+- `ComponentDefinition` получает **опциональные** `atomicLevel?: AtomicLevel` и `layoutNeutral?: boolean` (ноль поломок для пакета @json-render и уже опубликованных кастомных бандлов). Контракт: **у builtin-компонентов обеих систем уровень обязателен** (drift-тест), у кастомных — опционален (ABI v1 back-compat; публикация без уровня даёт warning; UI относит отсутствие уровня к «Other»).
 - **Уровни для shadcn** (пакет не редактируем) — проектная карта `src/designSystems/shadcn/atomicLevels.ts` + unit-тест на дрейф (каждое имя имеет уровень и наоборот). Раскладка 37 компонентов:
   - layout-neutral (atom + `layoutNeutral:true`): Stack, Grid
   - atom (18): Button, Link, Input, Textarea, Checkbox, Switch, Slider, Toggle, Heading, Text, Image, Avatar, Badge, Separator, Progress, Skeleton, Spinner, Hotspot
   - molecule (12): Select, Radio, DropdownMenu, ToggleGroup, ButtonGroup, Pagination, Tooltip, Popover, Alert, Collapsible, Accordion, Carousel
   - organism (5): Card, Tabs, Dialog, Drawer, Table
-- **Правило вложенности** (warning): DFS несёт уровень ближайшего не-layout-neutral предка; warning если `rank(level) > rank(ancestorLevel)`. Layout-neutral и компоненты без уровня прозрачны/пропускаются. Равные уровни разрешены (Card в Card — ок). Hotspot — atom, входит в каждую систему.
-- **Имена компонентов остаются глобально уникальными** (pins/registry/`components.name UNIQUE` ключуются по имени). Trade-off задокументировать; коллизия при создании кастомного проверяется против объединения builtin-имён всех систем.
+- **Правило вложенности** (warning): DFS несёт уровень ближайшего не-layout-neutral предка; warning если `rank(level) > rank(ancestorLevel)`. Layout-neutral и компоненты без уровня прозрачны/пропускаются. Равные уровни разрешены (Card в Card — ок). Hotspot — atom, входит в каждую систему. Warning указывает на конкретный element-путь.
+- **Модель хранения `designSystem`**: источник истины — **нормализованный doc ревизии**. Все чтения сохранённых доков на сервере идут через единый `parseStoredPrototypeDoc(json)` = `prototypeDocSchema.parse(JSON.parse(json))` — Zod-default дописывает `shadcn` старым докам на чтении (физическая миграция doc-JSON не делается). Колонка `prototypes.design_system` — **денормализация head** только для списка/фильтра галереи; обновляется в `create/save/restore`. Per-revision колонка не нужна: система ревизии всегда выводима из её doc; `builtin_catalog_hash` ревизии считается от системы её doc.
+- **Имена компонентов остаются глобально уникальными** (pins/registry/`components.name UNIQUE` ключуются по имени). Композитный ключ `(design_system, name)` — post-MVP. Политика эволюции: регистрация новой builtin-системы, чьё имя коллидирует с существующим кастомным компонентом, — dev-time блокер; серверный startup-инвариант сверяет union builtin-имён всех систем с таблицей `components` и падает с внятной ошибкой (grandfathering решается вручную при добавлении системы). Задокументировать в `docs/server-api.md`.
 - **Кастомные компоненты**: `designSystem` — свойство записи (`POST /api/components` принимает опционально, дефолт `shadcn`, колонка `components.design_system`); `atomicLevel` — опционально в `definition`-экспорте TSX.
-- **`builtinCatalogHash` становится per-system**, формула v1-дескриптора не меняется (name/description/events/slots + actions — `atomicLevel` в дескриптор НЕ входит) ⇒ хеш shadcn байт-в-байт прежний; серверный тест-ассерт на это.
+- **`builtinCatalogHash` становится per-system**, формула v1-дескриптора не меняется (name/description/events/slots + actions — `atomicLevel` в дескриптор НЕ входит, т.к. не влияет на рендер-совместимость; metadata/warnings могут меняться без смены хеша — задокументировать) ⇒ хеш shadcn байт-в-байт прежний; серверный тест-ассерт на это. **Семантика mismatch в MVP — как сегодня: хеш диагностический**, рантайм его не сверяет; фиксируем в docs как осознанное решение (enforcement/compat-таблицы — post-MVP). Тест: старая published-версия с прежним хешем читается и играется.
+
+## Checklist потребителей единого каталога (полный)
+
+| Место | Решение |
+|---|---|
+| `src/catalog/definitions.ts` | compat-шим = shadcn definitions |
+| `src/catalog/catalog.ts` (singleton `catalog`) | остаётся shadcn-compat; per-system каталоги мемоизируются в модулях систем |
+| `src/catalog/events.ts` (`componentEvents`) | остаётся shadcn-compat с комментарием; per-system деривация при необходимости |
+| `src/catalog/fixtures.ts` | compat-реэкспорт из `shadcnSystem` (владелец — фаза 1) |
+| `src/smoke/SmokeSpec.tsx` | явно shadcn-only (комментарий) |
+| `server/seed.ts` | system-aware через doc (фаза 4c) + тест |
+| `server/builtinHash.ts` | `builtinCatalogHashFor(systemId)` |
+| тестовые фабрики server/player, `src/catalog/fixtures.test.tsx`, `definitions.test.ts` | обновить/параметризовать |
+| `src/prototype/loader.ts` | уже парсит через `prototypeDocSchema` после API-read — default срабатывает, изменений не нужно (проверить тестом) |
 
 ## Фазы
 
 ### Фаза 1 — Фундамент: реестр систем + модуль shadcn
-- **Новые**: `src/catalog/normalize.ts` (вынести `ComponentDefinition`, `normalizeSchema`, `normalizeDefinitions` из `definitions.ts` — разрывает цикл импортов; делать первым), `src/designSystems/types.ts`, `src/designSystems/shadcn/atomicLevels.ts`, `src/designSystems/shadcn/index.ts` (`shadcnSystem`), `src/designSystems/index.ts` (`designSystems`, `DEFAULT_DESIGN_SYSTEM_ID`, `getDesignSystem`, `resolveDefinitions`).
-- **Правки**: `src/catalog/definitions.ts` → тонкий compat-шим (`componentDefinitions = shadcnSystem.definitions` + реэкспорты; все ~12 импортёров компилируются без изменений); `src/catalog/fixtures.ts` — fixtures деривятся из `shadcnSystem`.
+- **Новые**: `src/catalog/normalize.ts` (вынести `ComponentDefinition`, `normalizeSchema`, `normalizeDefinitions` — разрывает цикл типов; делать первым); `src/designSystems/types.ts`; `src/designSystems/fixtures.ts` — **чистый `createFixtures(definitions, overrides)`**; `src/designSystems/shadcn/atomicLevels.ts`; `src/designSystems/shadcn/overrides.ts` (перенос fixture-overrides из `src/catalog/fixtures.ts`); `src/designSystems/shadcn/index.ts` — собирает definitions + components + fixtures **внутри себя, без импорта compat-шимов** (разрыв runtime-цикла DesignSystem↔fixtures); `src/designSystems/index.ts` (`designSystems`, `DEFAULT_DESIGN_SYSTEM_ID`, `getDesignSystem`, `resolveDefinitions`).
+- **Правки**: `src/catalog/definitions.ts` и `src/catalog/fixtures.ts` → тонкие compat-реэкспорты из `shadcnSystem`; все ~12 импортёров компилируются без изменений.
+- **Тесты**: дрейф уровней (двусторонний); smoke-тест импорта `definitions` + `fixtures` + registry + обеих систем (ловля import-цикла).
 
 ### Фаза 2 — Wireframe-система (`src/designSystems/wireframe/`)
-- `components.tsx`: plain div + Tailwind (серая палитра, пунктирные рамки, без shadcn-импортов), конвенция вызова `({ props, emit, on })` как у кастомных (паттерн — `src/catalog/hotspot.tsx`). Набор: Box/Stack/Grid (layout-neutral, слот children), atoms: Heading, Text, Image (серый прямоугольник с крестом, без внешних URL), Button (`press`), Input (`change`), Checkbox (`change`) + переиспользованный Hotspot; molecule: Select (`change`); organism: Card (children, опц. титул).
-- `definitions.ts` (zod-схемы, у каждого `example` — из него генерятся fixtures/stories), `index.ts` (`wireframeSystem`).
-- Тесты: рендер каждого компонента из `example` через registry (зеркало `src/catalog/fixtures.test.tsx`).
+- `components.tsx`: plain div + Tailwind (серая палитра, пунктирные рамки, без shadcn-импортов), конвенция `({ props, emit, on })` (паттерн — `src/catalog/hotspot.tsx`). Набор: Box/Stack/Grid (layout-neutral, слот children); atoms: Heading, Text, Image (серый прямоугольник с крестом, без внешних URL), Button (`press`), Input (`change`), Checkbox (`change`) + переиспользованный Hotspot; molecule: Select (`change`); organism: Card (children, опц. титул).
+- `definitions.ts` (zod-схемы, у каждого `example`), `index.ts` (`wireframeSystem`).
+- Тесты: рендер каждого компонента из `example` через registry (зеркало `fixtures.test.tsx`).
 
-### Фаза 3 — Схема прототипа + валидация
-- `src/prototype/schema.ts`: `designSystem: slugSchema.default("shadcn")` в `prototypeDocSchema` (strictObject, version = 1; старые JSON парсятся, output всегда несёт поле).
-- `src/prototype/validate.ts`: дефолт definitions = `getDesignSystem(doc.designSystem).definitions`; unknown system → error по пути `/designSystem` и ранний выход. Warning вложенности — расширить существующий `dfs` (`validate.ts:160`) параметром `ancestorLevel`; текст: `atomic-design: <Type> (<level>) should not be nested inside a <ancestorLevel>`.
-- `scripts/validate-prototypes.ts` — без изменений; `prototypes/*.json` дефолтятся в shadcn.
-- Тесты: дефолт designSystem, unknown system, organism-in-atom warning, прозрачность layout-neutral, пропуск безуровневых типов.
+### Фаза 3 — Схема прототипа + валидация (клиент/shared)
+- `src/prototype/schema.ts`: `designSystem: slugSchema.default("shadcn")` в `prototypeDocSchema` (strictObject, version = 1).
+- `src/prototype/validate.ts`: дефолт definitions = `getDesignSystem(doc.designSystem).definitions`; unknown system → error по пути `/designSystem` (клиентский строковый формат путей) и ранний выход. Warning вложенности — расширить существующий `dfs` (`validate.ts:160`) параметром `ancestorLevel`; текст: `atomic-design: <Type> (<level>) should not be nested inside a <ancestorLevel>`; путь — конкретный element.
+- `scripts/validate-prototypes.ts` — без изменений.
+- Тесты: дефолт designSystem; unknown system; organism-in-atom; **несколько layout-neutral подряд** (organism в Stack в Grid в Button → warning; в Stack в Card → нет); равный уровень без warning; безуровневый тип между предком и потомком; atomic-обход совместно с cycle/orphan-структурами.
 
-### Фаза 4 — Сервер: БД, валидация, контракты, API
-- **Миграции** (`server/migrations.ts`): рефактор в пошаговый массив; v2: `ALTER TABLE prototypes ADD COLUMN design_system TEXT NOT NULL DEFAULT 'shadcn'` и то же для `components` (SQLite сам бэкфиллит). Тест апгрейда v1→v2.
-- **`server/builtinHash.ts`**: `builtinCatalogHashFor(systemId)` по прежней формуле от definitions системы; `builtinCatalogHash` остаётся = shadcn (тест на неизменность значения).
-- **Репо**: `prototypes.ts` — писать `design_system` из дока, `insertRevision` хранит `builtinCatalogHashFor(doc.designSystem)`, DTO (`list/meta/draft/version`) + `designSystem`; `publish()` перепроверяет типы против definitions системы строки, не глобальных. `components.ts` — `create(..., designSystem)`, DTO + `designSystem`.
-- **`server/validation.ts` `snapshotDefinitions`**: builtin = definitions системы дока (unknown system → 422 по пути `designSystem`); SQL-резолв кастомных получает `AND c.design_system = ?`; сообщение: `Unknown or unpublished component type in design system '<id>': <name>`.
-- **Контракт кастомных**: `server/components/types.ts` — `atomicLevel?` в `CustomComponentDefinition` и `DefinitionMeta`; `server/components/extract-subprocess.ts` — `atomicLevel: z.enum([...]).optional()` в **обеих** strictObject-схемах (child + `resultSchema.meta`; тесты с/без поля); `pipeline.ts` `definitionMeta()` пробрасывает. `server/routes/components.ts` POST: опц. `designSystem` (валидация против реестра, 422), коллизия имени против union builtin-имён всех систем; `catalogManifest()` + `designSystem` в записях.
-- `src/customComponents/loader.ts`: пропускать/копировать `atomicLevel`, если валидация шейпа вайтлистит поля.
-- **`GET /api/design-systems`** (новый `server/routes/designSystems.ts`, роут в `server/main.ts` до 404, no-store): `{designSystems:[{id,name,description,builtinCatalogHash,components:[{name,atomicLevel,layoutNeutral,description,events,slots}]}]}`.
-- Тесты: прототип `wireframe` с shadcn-only типом → 422; кастомный компонент wireframe не резолвится из shadcn-прототипа → 422; шейп design-systems; round-trip atomicLevel в манифест.
+### Фаза 4a — Сервер: миграция БД (additive)
+- `server/migrations.ts`: рефактор в пошаговый массив; v2: `ALTER TABLE prototypes ADD COLUMN design_system TEXT NOT NULL DEFAULT 'shadcn'`; `ALTER TABLE components ADD COLUMN design_system TEXT NOT NULL DEFAULT 'shadcn'`.
+- Тесты: апгрейд заполненной v1-базы → v2; старые кастомные компоненты получают `shadcn`.
+
+### Фаза 4b — Сервер: реестр/хеш/нормализация чтения
+- `server/builtinHash.ts`: `builtinCatalogHashFor(systemId)` (прежняя формула, от definitions системы); `builtinCatalogHash` = shadcn (тест на равенство дореформенному значению).
+- `server/repos/prototypes.ts`: единый `parseStoredPrototypeDoc()` вместо голых `JSON.parse` в `draft/revision/version/restore/publish` (repos:75, 89, 107, 110, 112). Тесты на v1-док без поля во всех пяти путях.
+- Серверный startup-инвариант: union builtin-имён всех систем vs `components` (см. «Ключевые решения»).
+
+### Фаза 4c — Сервер: save/restore/publish/seed прототипов
+- `create/save`: писать `prototypes.design_system` из doc; `insertRevision` хранит `builtinCatalogHashFor(doc.designSystem)` (repos:39–43).
+- `restore` (repos:72): нормализовать source doc (`parseStoredPrototypeDoc`), хеш и head-колонку — от **его** системы; проверить, что каждый копируемый pin принадлежит той же системе (JOIN `components.design_system`), иначе 422. Тест-сценарий: shadcn → wireframe → restore shadcn-ревизии.
+- `publish` (repos:86): типы классифицировать против definitions системы ревизии; **каждый pin** проверять JOIN-ом `components.design_system` = система ревизии.
+- `server/validation.ts` `snapshotDefinitions`: builtin = definitions системы дока (unknown system → `ApiError(422, "validation_failed", issues:[{path:["designSystem"],...}])` — Zod-style массив, серверный формат; исключение из `getDesignSystem` не должно утекать 500-й); SQL-резолв кастомных `AND c.design_system = ?`; сообщение `Unknown or unpublished component type in design system '<id>': <name>`.
+- `server/seed.ts`: после фазы 3 `validatePrototypeForSave` system-aware через doc; добавить серверный тест, что `wireframe-demo` **реально засеялся** (а не молча пропущен через `console.error`). Кастомные компоненты в seed не поддерживаются — зафиксировать комментарием.
+
+### Фаза 4d — Сервер: кастомные компоненты + манифест
+- `server/components/types.ts`: `atomicLevel?` в `CustomComponentDefinition` и `DefinitionMeta`.
+- `server/components/extract-subprocess.ts`: `atomicLevel: z.enum([...]).optional()` в **обеих** strictObject-схемах (child + `resultSchema.meta`); тесты с/без поля.
+- `pipeline.ts` `definitionMeta()` пробрасывает `atomicLevel`; публикация без уровня → warning в ответе publish.
+- `server/routes/components.ts` POST: опц. `designSystem` (валидация против реестра, 422 Zod-style), коллизия имени против union builtin-имён всех систем; `create(..., designSystem)`; DTO list/meta + `designSystem`; `catalogManifest()` + `designSystem`.
+- `src/customComponents/loader.ts`: пропускать/копировать `atomicLevel`.
+
+### Фаза 4e — Сервер: endpoint design-systems + DTO-матрица
+- **`GET /api/design-systems`** (`server/routes/designSystems.ts`, роут в `server/main.ts` до 404, no-store): `{designSystems:[{id,name,description,builtinCatalogHash,components:[{name,atomicLevel,layoutNeutral,description,events,slots}]}]}`.
+- **DTO-матрица** (правило: где в ответе есть нормализованный `doc` — система живёт в `doc.designSystem`, top-level поле не дублируется; top-level только там, где doc отсутствует):
+  | Endpoint | designSystem |
+  |---|---|
+  | `GET /prototypes` (list) | top-level (из колонки head) |
+  | `GET /prototypes/:id` (meta) | top-level (из колонки head) |
+  | draft / revision / version | внутри `doc` (после `parseStoredPrototypeDoc`) |
+  | create/save/restore responses | не добавляется (rev-only) |
+  | `GET /components` list/meta | top-level |
+  | manifest | top-level per entry |
+- `src/api/client.ts`: `designSystem` в `PrototypeSummary`/`PrototypeMeta`, component DTO; `DesignSystemSummary` + `listDesignSystems()`. Тест-инвариант: в list/meta top-level значение согласовано с doc head-ревизии.
+- Тесты: wireframe-прототип с shadcn-only типом → 422; кастомный wireframe-компонент не резолвится из shadcn-прототипа → 422; шейп design-systems; round-trip atomicLevel в манифест.
 
 ### Фаза 5 — Плеер
-- `src/catalog/runtime.ts`: `createPlayerRuntime(deps, custom?, designSystemId = "shadcn")` — builtins из `getDesignSystem(id)` (throw на unknown); fast-path без кастомных — мемоизированный `createCatalog(system.definitions)` per system.
-- `src/player/PlayerShell.tsx` (`LoadedPlayer`): передать `doc.designSystem`, добавить в deps `useMemo`.
+- `src/catalog/runtime.ts`: `createPlayerRuntime(deps, custom?, designSystemId = "shadcn")` — builtins из `getDesignSystem(id)` (unknown → throw; на сервере/валидаторе не возникает); fast-path — мемоизированный `createCatalog(system.definitions)` per system.
+- `src/player/PlayerShell.tsx` (`LoadedPlayer`): передать `doc.designSystem`, включить в deps `useMemo`/runtime-key.
 - `src/catalog/stories/story-utils.tsx`: `ElementStory`/`SpecStory` + опц. `system?: string`, ленивый `Map<string, runtime>`.
-- Тест: wireframe-runtime резолвит wireframe Button; unknown system бросает.
+- `src/smoke/SmokeSpec.tsx`: комментарий «shadcn-only».
+- Тесты: wireframe-runtime резолвит wireframe Button; unknown system бросает; старая published-версия (прежний hash) играется.
 
-### Фаза 6 — UI: фильтр галереи, переключатель библиотеки, API-клиент
-- `src/api/client.ts`: `designSystem` в `PrototypeSummary`/draft/version DTO; `DesignSystemSummary` + `listDesignSystems()`.
-- `src/gallery/GalleryPage.tsx`: ряд фильтр-чипов (`All | shadcn/ui | Wireframe`, из distinct значений ответа — будущие системы появляются сами) + бейдж системы на карточке.
-- `src/library/LibraryPage.tsx`: парсинг 3-сегментных тайтлов `System/Level/Name`; переключатель систем сверху (по первому сегменту); сайдбар группирует по второму (порядок: Layout, Atoms, Molecules, Organisms, Templates, Pages, Other); graceful fallback для 1–2-сегментных тайтлов → «Other».
-- Обновить тест-фикстуры `GalleryPage.test.tsx`, `LibraryPage.test.tsx`.
+### Фаза 6 — Storybook (атомарно с фикстурами; ДО фазы 7)
+- Конвенция тайтлов: `"<System>/<LevelPlural>/<Name>"` (`Shadcn/Atoms/Button`, layout-neutral → `Shadcn/Layout/Stack`), обзорные — `Shadcn/All Components`, `Wireframe/All Components`. Хелпер `titleFor(name)` из `shadcnAtomicLevels` (анти-дрейф).
+- Переименовать тайтлы в 10 файлах `src/catalog/stories/`; новые сторисы `src/designSystems/wireframe/stories/` (AllComponents + Button/Input/Select/Card через `ElementStory system="wireframe"`).
+- Пересчитать `expectedStoryIds` (id = kebab тайтла + `--default`) — тем же коммитом.
 
-### Фаза 7 — Storybook (атомарно с фикстурами!)
-- Конвенция тайтлов: `"<System>/<LevelPlural>/<Name>"` (`Shadcn/Atoms/Button`, `Shadcn/Organisms/Dialog`, layout-neutral → `Shadcn/Layout/Stack`), обзорные — `Shadcn/All Components`, `Wireframe/All Components`. Уровень в тайтле деривить хелпером `titleFor(name)` из `shadcnAtomicLevels` (анти-дрейф).
-- Переименовать тайтлы во всех 10 файлах `src/catalog/stories/`; новые сторисы `src/designSystems/wireframe/stories/` (AllComponents-галерея + Button/Input/Select/Card через `ElementStory system="wireframe"`).
-- Пересчитать `expectedStoryIds` в `src/catalog/fixtures.ts` (id = kebab тайтла + `--default`); `scripts/check-storybook-drift.ts` не меняется.
+### Фаза 7 — UI: фильтр галереи, переключатель библиотеки
+- `src/gallery/GalleryPage.tsx`: фильтр-чипы **из `listDesignSystems()`** (зарегистрированные системы видны и без прототипов; legacy/unknown значения из списка прототипов добавляются как чипы «как есть») + бейдж системы на карточке.
+- `src/library/LibraryPage.tsx`: парсинг 3-сегментных тайтлов `System/Level/Name`; переключатель систем (первый сегмент); сайдбар группирует по второму (Layout, Atoms, Molecules, Organisms, Templates, Pages, Other); 1–2-сегментные тайтлы → «Other».
+- Обновить `GalleryPage.test.tsx`, `LibraryPage.test.tsx`.
 
-### Фаза 8 — Доки + верификация
-- `docs/prototype-format.md` (поле `designSystem`, семантика atomic-warnings, per-system allowlist), `docs/server-api.md` (`GET /api/design-systems`, `designSystem` в DTO/create body, `atomicLevel` в `DefinitionMeta`/манифесте), `CLAUDE.md` (строка ключевых зон + `src/designSystems/`).
-- Демо-прототип `prototypes/wireframe-demo.json` (`designSystem:"wireframe"`) — галерея и e2e прогоняют вторую систему end-to-end.
+### Фаза 8 — Доки + демо + верификация
+- `docs/prototype-format.md`: поле `designSystem`, семантика atomic-warnings, per-system allowlist.
+- `docs/server-api.md`: `GET /api/design-systems`, DTO-матрица, `atomicLevel` в `DefinitionMeta`/манифесте, диагностическая семантика `builtinCatalogHash`, политика глобальной уникальности имён и эволюции систем.
+- `CLAUDE.md`: ключевые зоны + `src/designSystems/`.
+- `prototypes/wireframe-demo.json` (`designSystem:"wireframe"`).
 
 ## Последовательность и владение файлами
 
-1 → 2 → 3 → 4 → 5 → 6‖7 → 8. Фазы 1–3 — чистый клиент/shared, зелёные независимо; фаза 4 — единственная, трогающая БД. Фаза 7 — одним коммитом с обновлением `expectedStoryIds`.
+1 → 2 → 3 → 4a → 4b → 4c → 4d → 4e → 5 → 6 → 7 → 8. Каждая подфаза — отдельный коммит, зелёный сам по себе. `src/catalog/fixtures.ts` принадлежит фазе 1; `expectedStoryIds` — фазе 6.
+
+## Триаж ревью Codex (раунд 1, 2026-07-11)
+
+| # | Severity | Вердикт | Как учтено |
+|---|---|---|---|
+| 1 | blocker | принято | Модель хранения: источник истины — doc ревизии; `prototypes.design_system` — head-денормализация; см. «Ключевые решения» |
+| 2 | blocker | принято | `parseStoredPrototypeDoc()` во всех read/restore/publish путях (фаза 4b) |
+| 3 | blocker | принято | seed в фазе 4c + тест реального засева wireframe-demo |
+| 4 | blocker | принято | `createFixtures` + overrides в отдельных модулях, сборка внутри `shadcn/index.ts` (фаза 1) |
+| 5 | major | принято частично | Hash остаётся диагностическим в MVP (задокументировано); designSystem в runtime-key; тест старой версии. Enforcement — post-MVP |
+| 6 | major | принято | restore: нормализация, hash от системы source, head-обновление, проверка pins (фаза 4c) |
+| 7 | major | принято частично | Глобальная уникальность остаётся (MVP); startup-инвариант + dev-time политика коллизий; композитный ключ — post-MVP |
+| 8 | major | принято | DTO-матрица (фаза 4e), правило «doc — источник, top-level только без doc» |
+| 9 | major | принято | publish/restore проверяют систему каждого pin (фаза 4c) |
+| 10 | major | принято | Два формата путей зафиксированы: сервер — Zod-массивы, клиент — строки; unknown system → 422, не 500 |
+| 11 | major | принято | Полный checklist потребителей каталога (раздел выше) |
+| 12 | major | принято | Фаза 4 разбита на 4a–4e; Storybook (6) перед Library (7); владельцы файлов уточнены |
+| 13 | minor | принято | Контракт: builtin — обязателен, custom — optional + publish-warning + «Other» |
+| 14 | minor | принято | Расширенные DFS-тесты (фаза 3) |
+| 15 | minor | принято | Чипы галереи из `listDesignSystems()` |
 
 ## Риски
 
-- **Дрейф builtinCatalogHash**: `atomicLevel` не должен попасть в v1-дескриптор — тест-ассерт равенства shadcn-хеша дореформенной константе.
-- **Цикл импортов** definitions ↔ designSystems — решается выносом `normalize.ts` первым шагом.
-- **strictObject в extract-subprocess**: забытый `atomicLevel` в child-схеме → непрозрачный фейл публикации; покрыть тестами оба варианта.
-- **Churn story-id** ломает drift-check и тесты LibraryPage — фаза 7 атомарна.
+- **Дрейф builtinCatalogHash**: `atomicLevel` не в дескрипторе — тест равенства shadcn-хеша дореформенной константе.
+- **Циклы импортов**: типовой (normalize.ts) и runtime-цикл fixtures (createFixtures) — оба разорваны в фазе 1; smoke-тест импорта.
+- **strictObject в extract-subprocess**: покрыть тестами с/без `atomicLevel`.
+- **Churn story-id**: фаза 6 атомарна с `expectedStoryIds`.
 - Wireframe-компоненты обязаны использовать `emit`/`on` конвенцию `BaseComponentProps` (образец — `src/catalog/hotspot.tsx`).
 
 ## Верификация
@@ -103,4 +168,4 @@
 
 ## Процесс (workflow CLAUDE.md)
 
-После утверждения: сохранить план в `docs/plans/2026-07-11-design-systems-atomic.md`, закоммитить, прогнать адверсариальное ревью Codex gpt-5.6-sol (Stage 2, `--effort` config-level max), триаж находок в плане, затем исполнение волнами Codex `--write --effort medium` по зонам владения фаз с независимой верификацией done-критериев перед каждым коммитом.
+План прошёл раунд 1 адверсариального ревью Codex gpt-5.6-sol (триаж выше). Правки существенные → раунд 2 ревью (`--resume` того же треда). После отсутствия блокирующих возражений — исполнение волнами Codex `--write --effort medium` по подфазам с независимой верификацией done-критериев перед каждым коммитом.
