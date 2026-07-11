@@ -11,10 +11,10 @@ function canonical(value: unknown): string {
 
 // The v1 descriptor deliberately excludes Zod internals. It includes sorted builtin
 // names and their stable human metadata (description/events/slots), plus action names.
-export function builtinCatalogHashFor(systemId: string): string {
+export function builtinCatalogHashFor(systemId: string, definitions?:Record<string,ComponentDefinition>): string {
   const descriptor = {
     actions: Object.keys(prototypeActionSchemas).sort(),
-    definitions: (Object.entries(getDesignSystem(systemId).definitions) as [string,ComponentDefinition][]).sort(([a],[b]) => a.localeCompare(b)).map(([name, d]) => ({
+    definitions: (Object.entries(definitions??getDesignSystem(systemId).definitions) as [string,ComponentDefinition][]).sort(([a],[b]) => a.localeCompare(b)).map(([name, d]) => ({
       name, description: d.description, events: [...(d.events ?? [])].sort(), slots: [...(d.slots ?? [])].sort(),
     })),
   };

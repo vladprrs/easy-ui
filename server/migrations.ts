@@ -45,7 +45,39 @@ const migrations = [
     db.run("ALTER TABLE prototypes ADD COLUMN design_system TEXT NOT NULL DEFAULT 'shadcn'");
     db.run("ALTER TABLE components ADD COLUMN design_system TEXT NOT NULL DEFAULT 'shadcn'");
   },
+  (db: Database) => {
+    const now=new Date().toISOString();
+    db.run(`CREATE TABLE design_systems (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+      builtin_provider TEXT UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
+    const insert=db.query("INSERT INTO design_systems (id,name,description,builtin_provider,created_at,updated_at) VALUES (?,?,?,?,?,?)");
+    insert.run("shadcn","Shadcn","Accessible shadcn/ui components for polished product interfaces.","shadcn",now,now);
+    insert.run("wireframe","Wireframe","Schematic low-fidelity components for rapidly mapping interface structure.","wireframe",now,now);
+    insert.run("yandex-pay","Yandex Pay Design System","Production-like Yandex Pay WebView components for interactive prototypes.",null,now,now);
+    db.run("ALTER TABLE component_revisions ADD COLUMN design_system TEXT NOT NULL DEFAULT 'shadcn'");
+    db.run(`UPDATE component_revisions SET design_system=(SELECT c.design_system FROM components c WHERE c.id=component_id)`);
+  },
 ] as const;
+
+function assertRegistryIntegrity(db:Database):void {
+  for(const table of ["components","component_revisions","prototypes"] as const) {
+    const row=db.query(`SELECT design_system FROM ${table} WHERE design_system NOT IN (SELECT id FROM design_systems) LIMIT 1`).get() as {design_system:string}|null;
+    if(row) throw new Error(`Dangling design system reference in ${table}: ${row.design_system}`);
+  }
+  const component=db.query(`SELECT c.id,c.design_system head_system,r.design_system revision_system FROM components c
+    LEFT JOIN component_revisions r ON r.component_id=c.id AND r.rev=c.head_rev
+    WHERE r.component_id IS NULL OR c.design_system<>r.design_system LIMIT 1`).get() as {id:string;head_system:string;revision_system:string|null}|null;
+  if(component) throw new Error(`Component head design system mismatch: ${component.id}`);
+  const heads=db.query(`SELECT p.id,p.design_system,r.doc FROM prototypes p
+    LEFT JOIN prototype_revisions r ON r.prototype_id=p.id AND r.rev=p.head_rev`).all() as {id:string;design_system:string;doc:string|null}[];
+  for(const head of heads) {
+    let doc:unknown; try { doc=JSON.parse(head.doc??""); } catch { throw new Error(`Invalid prototype head document: ${head.id}`); }
+    const system=(doc&&typeof doc==="object"&&(doc as {designSystem?:unknown}).designSystem)??"shadcn";
+    if(system!==head.design_system) throw new Error(`Prototype head design system mismatch: ${head.id}`);
+  }
+  const providers=db.query("SELECT id,builtin_provider FROM design_systems WHERE builtin_provider IS NOT NULL").all() as {id:string;builtin_provider:string}[];
+  for(const row of providers) if(!(row.builtin_provider in designSystems)) throw new Error(`Unknown builtin provider for design system ${row.id}: ${row.builtin_provider}`);
+}
 
 function assertBuiltinNamesDoNotCollide(db: Database): void {
   const builtinNames = new Set(Object.values(designSystems).flatMap(system => Object.keys(system.definitions)));
@@ -67,5 +99,6 @@ export function migrate(db: Database): void {
       db.run(`PRAGMA user_version = ${migrations.length}`);
     })();
   }
+  assertRegistryIntegrity(db);
   assertBuiltinNamesDoNotCollide(db);
 }
