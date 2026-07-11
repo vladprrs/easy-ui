@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { ApiError, savePrototype, type PrototypeDraft } from "../api/client";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { createPlayerRuntime } from "../catalog/runtime";
-import { getDesignSystem } from "../designSystems";
+import { resolveBuiltinSystem } from "../designSystems";
 import { prototypeDocSchema } from "../prototype/schema";
 import { validatePrototype } from "../prototype/validate";
 import { pillGhost, pillPrimary } from "../app/chrome";
@@ -36,7 +36,7 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
   const [copyFallback, setCopyFallback] = useState(false);
   const fallbackRef = useRef<HTMLTextAreaElement>(null);
   const runtime = useMemo(() => createPlayerRuntime({ navigate() {}, back() {}, openUrl() {}, restart() {} }, custom, state.doc.designSystem), [custom, state.doc.designSystem]);
-  const definitions = useMemo(() => ({ ...getDesignSystem(state.doc.designSystem).definitions, ...custom?.definitions }), [custom, state.doc.designSystem]);
+  const definitions = useMemo(() => ({ ...resolveBuiltinSystem(state.doc.designSystem).definitions, ...custom?.definitions }), [custom, state.doc.designSystem]);
   const screen = state.doc.screens.find((item) => item.id === state.selection.screenId) ?? state.doc.screens[0]!;
 
   useEffect(() => {

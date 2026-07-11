@@ -19,8 +19,9 @@ describe("createPlayerRuntime custom manifest", () => {
     expect(rendered.props.className).toContain("font-mono");
   });
 
-  it("rejects an unknown design system", () => {
-    expect(() => createPlayerRuntime(deps, undefined, "missing")).toThrow("Unknown design system: missing");
+  it("falls back to an empty builtin catalog for a system without provider", () => {
+    const runtime = createPlayerRuntime(deps, undefined, "missing");
+    expect(runtime.registry).toBeDefined();
   });
 
   it("merges custom components over wireframe builtins", () => {

@@ -22,6 +22,8 @@ function parseDoc(value:unknown,pathId?:string):PrototypeDoc {
 
 // Task 3 can resolve exact custom-version pins and pass the merged definitions here.
 export function validatePrototypeForSave(doc:PrototypeDoc, definitions?:Record<string,ComponentDefinition>) {
+  // API saves always pass the registry-backed snapshot. This fallback is only for
+  // bundled seed documents, which support provider systems and no custom types.
   const resolved=definitions??designSystems[doc.designSystem as keyof typeof designSystems]?.definitions;
   if(!resolved) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["designSystem"],message:`unknown design system: ${doc.designSystem}`}]});
   const result=validatePrototype(doc,{definitions:resolved});

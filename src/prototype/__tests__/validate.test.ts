@@ -79,11 +79,12 @@ describe("prototype v1 validation", () => {
   it.each(["", "   "])("rejects an empty note (%j)", (note) => { const d=clone(); d.screens[0].note=note; expectInvalid(d,/note/); });
   it("keeps screens strict when optional fields are added", () => { const d=clone(); d.screens[0].surprise=true; expectInvalid(d,/Unrecognized key.*surprise/); });
 
-  it("reports an unknown design system", () => {
+  it("treats a system without provider as an empty builtin catalog", () => {
     const d = clone();
     d.designSystem = "unknown-system";
     const result = validatePrototype(prototypeDocSchema.parse(d));
-    expect(result.errors).toEqual([{ path: "/designSystem", message: "unknown design system: unknown-system" }]);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors.every((e) => /unknown component type/.test(e.message))).toBe(true);
   });
 
   it("rejects a children cycle", () => { const d=clone(); d.screens[0].spec.elements.next.children=["card"]; expectInvalid(d,/cycle/); });

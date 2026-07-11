@@ -2,7 +2,7 @@ import { defineRegistry, type Components } from "@json-render/react";
 import type { ComponentType } from "react";
 import { createCatalog } from "./catalog";
 import type { ComponentDefinition } from "./definitions";
-import { getDesignSystem } from "../designSystems";
+import { resolveBuiltinSystem } from "../designSystems";
 
 const builtinCatalogs = new Map<string, ReturnType<typeof createCatalog>>();
 
@@ -28,7 +28,7 @@ export interface CustomPlayerRuntime {
 }
 
 export function createPlayerRuntime(deps: PlayerRuntimeDeps, custom?: CustomPlayerRuntime, designSystemId = "shadcn") {
-  const system = getDesignSystem(designSystemId);
+  const system = resolveBuiltinSystem(designSystemId);
   const builtinComponents = system.components;
   const actions = {
     navigate: async (params: { screenId: string } | undefined) => deps.navigate(params!.screenId),

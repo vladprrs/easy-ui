@@ -2,7 +2,7 @@ import { validateSpec, type Spec } from "@json-render/core";
 import type { ComponentDefinition } from "../catalog/definitions";
 import { prototypeActionSchemas } from "../catalog/actions";
 import { atomicRank, type AtomicLevel } from "../designSystems/types";
-import { getDesignSystem } from "../designSystems";
+import { resolveBuiltinSystem } from "../designSystems";
 import type { PrototypeDoc } from "./schema";
 import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "./stateOverrides";
 import type { PrototypeValidationResult, ValidationIssue } from "./types";
@@ -120,14 +120,7 @@ export function validatePrototype(
 ): PrototypeValidationResult {
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
   let definitions = options?.definitions;
-  if (!definitions) {
-    try {
-      definitions = getDesignSystem(doc.designSystem).definitions;
-    } catch {
-      issue(errors, ["designSystem"], `unknown design system: ${doc.designSystem}`);
-      return { errors, warnings };
-    }
-  }
+  if (!definitions) definitions = resolveBuiltinSystem(doc.designSystem).definitions;
   const screenIds = new Set(doc.screens.map((screen) => screen.id));
   const navigation = new Map<string, Set<string>>();
   for (const [screenIndex, screen] of doc.screens.entries()) {
