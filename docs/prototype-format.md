@@ -12,14 +12,14 @@ Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, and `
 
 ## Dynamic values and conditions
 
-Props may be literals or exactly one of these strict directives:
+Props may be literals or exactly one of these strict directives. A directive may be the value of an individual prop (including a nested value), but may not replace the entire `props` object.
 
 - `{ "$state": "/path" }` reads state.
 - `{ "$bindState": "/path" }` creates a two-way component binding.
 - `{ "$template": "Hello ${/name}" }` interpolates paths into text.
 - `{ "$cond": { "if": condition, "then": literal, "else": literal } }` selects a value.
 
-A condition is boolean, a truthiness check `{ "$state": "/path" }`, or a state condition with at most one of `eq`, `neq`, `gt`, `gte`, `lt`, `lte` and optional `not: true`. Operands are static literals. Recursive composition uses `{ "$and": [conditions...] }` or `{ "$or": [conditions...] }`. No other directive or operator is accepted.
+A condition is boolean, a truthiness check `{ "$state": "/path" }`, or a state condition with at most one of `eq`, `neq`, `gt`, `gte`, `lt`, `lte` and optional `not: true`. Operands of `eq` and `neq` are static literals; operands of `gt`, `gte`, `lt`, and `lte` must be static numbers. Recursive composition uses `{ "$and": [conditions...] }` or `{ "$or": [conditions...] }`. No other directive or operator is accepted.
 
 `repeat`, `watch`, `$computed`, `$item`, `$index`, `$bindItem`, `confirm`, `onSuccess`, and `onError` are reserved and invalid in v1. Events carry no payload; editable values must be read through `$bindState`. Only bound values persist while navigating within a player session. Reload or deep-link entry creates fresh state from the document.
 

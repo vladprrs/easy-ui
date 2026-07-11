@@ -49,7 +49,10 @@ function checkCondition(value: unknown, path: (string | number)[], errors: Valid
   const comparisons = ["eq", "neq", "gt", "gte", "lt", "lte"].filter((key) => key in value);
   if (comparisons.length > 1) issue(errors, path, "condition may contain at most one comparison operator");
   if ("not" in value && value.not !== true) issue(errors, [...path, "not"], "not must be true");
-  comparisons.forEach((key) => { if (!isStatic(value[key])) issue(errors, [...path, key], "condition operand must be a static literal"); });
+  comparisons.forEach((key) => {
+    if (!isStatic(value[key])) issue(errors, [...path, key], "condition operand must be a static literal");
+    else if (["gt", "gte", "lt", "lte"].includes(key) && typeof value[key] !== "number") issue(errors, [...path, key], `${key} operand must be a number`);
+  });
 }
 
 function checkDynamic(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj): boolean {
@@ -111,7 +114,8 @@ export function validatePrototype(
       const ep = [...base, "elements", key];
       const definition = definitions[element.type];
       if (!definition) { issue(errors, [...ep, "type"], `unknown component type: ${element.type}`); continue; }
-      validateProps(definition.props, element.props, [...ep, "props"], errors, warnings, doc.state);
+      if (isDynamic(element.props)) issue(errors, [...ep, "props"], "a directive cannot be the entire props object");
+      else validateProps(definition.props, element.props, [...ep, "props"], errors, warnings, doc.state);
       if (element.visible !== undefined) checkCondition(element.visible, [...ep, "visible"], errors, warnings, doc.state);
       for (const child of element.children ?? []) parents.set(child, (parents.get(child) ?? 0) + 1);
       if (element.type === "Hotspot") {

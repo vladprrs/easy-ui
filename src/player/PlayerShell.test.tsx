@@ -18,6 +18,30 @@ function renderAt(path: string) {
   return router;
 }
 
+function conditionalDocument(canvas: boolean) {
+  return prototypeDocSchema.parse({
+    version: 1,
+    id: canvas ? "conditional-canvas" : "conditional-flow",
+    name: "Conditional flow",
+    device: "desktop",
+    startScreen: "main",
+    state: { enabled: false },
+    screens: [{
+      id: "main",
+      name: "Main",
+      ...(canvas ? { canvas: { width: 640, height: 480 } } : {}),
+      spec: {
+        root: "card",
+        elements: {
+          card: { type: "Card", props: { title: "Condition" }, children: ["copy", "toggle"] },
+          copy: { type: "Text", props: { text: { $cond: { if: { $state: "/enabled" }, then: "Enabled", else: "Disabled" } } } },
+          toggle: { type: "Button", props: { label: "Enable" }, on: { press: { action: "setState", params: { statePath: "/enabled", value: true } } } },
+        },
+      },
+    }],
+  });
+}
+
 describe("PlayerShell", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -70,5 +94,20 @@ describe("PlayerShell", () => {
     mocks.loadCustom.mockRejectedValue(new Error("Custom component RatingStars v3: broken contract"));
     renderAt("/p/hello-world/s/welcome");
     expect((await screen.findByRole("alert")).textContent).toContain("RatingStars v3: broken contract");
+  });
+
+  it.each([false, true])("renders and updates $cond without runtime errors (canvas: %s)", async (canvas) => {
+    const doc = conditionalDocument(canvas);
+    mocks.getDraft.mockResolvedValue(draft(doc));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    renderAt(`/p/${doc.id}/s/main`);
+
+    expect(await screen.findByText("Disabled")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Enable" }));
+    expect(await screen.findByText("Enabled")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });

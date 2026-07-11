@@ -1,11 +1,12 @@
 import type { Spec } from "@json-render/core";
 import { Renderer } from "@json-render/react";
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, type ErrorInfo, type ReactNode, useMemo } from "react";
 import { Link, useOutletContext, useParams } from "react-router";
 import type { PlayerOutletContext } from "./PlayerShell";
 import { DeviceFrame } from "./DeviceFrame";
 import { ScreensSidebar } from "./ScreensSidebar";
 import { usePlayerNavigation } from "./navigation";
+import { toRuntimeSpec } from "../prototype/runtimeSpec";
 
 export class ScreenErrorBoundary extends Component<{
   prototypeId: string;
@@ -44,15 +45,22 @@ export function ScreenView() {
   const { screenId } = useParams();
   const navigation = usePlayerNavigation();
   const screen = doc.screens.find((item) => item.id === screenId);
+  const screenSpec = screen?.spec;
+  const screenCanvas = screen?.canvas;
+  const specs = useMemo(() => {
+    if (!screenSpec) return null;
+    const runtimeSpec = toRuntimeSpec(screenSpec);
+    return screenCanvas ? splitCanvasSpec(runtimeSpec) : { content: runtimeSpec, hotspots: [] };
+  }, [screenCanvas, screenSpec]);
   if (!screen) return <main className="mx-auto max-w-xl p-8"><h1 className="text-2xl font-bold">Screen not found</h1><p className="mt-2">This screen does not exist in “{doc.name}”.</p><Link className="mt-4 inline-block underline" to="/">Back to gallery</Link></main>;
 
   const rendered = screen.canvas ? (() => {
-    const { content, hotspots } = splitCanvasSpec(screen.spec as Spec);
+    const { content, hotspots } = specs!;
     return <div className="relative" style={{ width: screen.canvas.width, height: screen.canvas.height }}>
       <div className="absolute inset-0">{content ? <Renderer registry={registry} spec={content} /> : null}</div>
       <div className="pointer-events-none absolute inset-0" aria-label="Hotspots">{hotspots.map((spec) => <div className="pointer-events-auto" key={spec.root}><Renderer registry={registry} spec={spec} /></div>)}</div>
     </div>;
-  })() : <Renderer registry={registry} spec={screen.spec as Spec} />;
+  })() : <Renderer registry={registry} spec={specs!.content!} />;
 
   return <main className="flex min-h-screen gap-6 p-6">
     <ScreensSidebar doc={doc} currentScreen={screen.id} />
