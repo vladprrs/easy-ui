@@ -42,8 +42,8 @@ describe("GalleryPage", () => {
     expect(screen.getByRole("heading", { name: "Hello World" })).toBeTruthy();
     expect(screen.getByText("Mobile")).toBeTruthy();
     expect(screen.getByText("2")).toBeTruthy();
-    const draftLink = screen.getByRole("link", { name: /Hello World/ });
-    expect(within(draftLink).getByText("Shadcn")).toBeTruthy();
+    const draftLink = screen.getByRole("link", { name: /Открыть «Hello World»/ });
+    expect(within(screen.getByRole("heading", { name: "Hello World" }).closest("li")!).getByText("Shadcn")).toBeTruthy();
     expect(draftLink.getAttribute("href")).toBe("/p/hello-world");
     expect(screen.getByRole("link", { name: "Published v2" }).getAttribute("href")).toBe("/p/hello-world/v/2");
     expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/hello-world/cjm");
@@ -73,9 +73,9 @@ describe("GalleryPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Wireframe" }));
     expect(screen.getByRole("heading", { name: "Wire flow" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Hello World" })).toBeNull();
-    expect(within(screen.getByRole("link", { name: /Wire flow/ })).getByText("Wireframe")).toBeTruthy();
+    expect(within(screen.getByRole("heading", { name: "Wire flow" }).closest("li")!).getByText("Wireframe")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "classic" }));
     expect(screen.getByRole("heading", { name: "Legacy flow" })).toBeTruthy();
-    expect(within(screen.getByRole("link", { name: /Legacy flow/ })).getByText("classic")).toBeTruthy();
+    expect(within(screen.getByRole("heading", { name: "Legacy flow" }).closest("li")!).getByText("classic")).toBeTruthy();
   });
 });
