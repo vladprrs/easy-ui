@@ -46,6 +46,8 @@ describe("GalleryPage", () => {
     expect(within(draftLink).getByText("Shadcn")).toBeTruthy();
     expect(draftLink.getAttribute("href")).toBe("/p/hello-world");
     expect(screen.getByRole("link", { name: "Published v2" }).getAttribute("href")).toBe("/p/hello-world/v/2");
+    expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/hello-world/cjm");
+    expect(screen.getByRole("link", { name: "CJM Published v2" }).getAttribute("href")).toBe("/p/hello-world/v/2/cjm");
   });
 
   it("shows an API error and retries", async () => {

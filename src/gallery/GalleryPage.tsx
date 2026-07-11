@@ -52,7 +52,13 @@ export function GalleryPage() {
             <div><dt className="text-muted-foreground">System</dt><dd className="mt-0.5 rounded-full bg-muted px-2 py-0.5 text-xs font-medium">{systemNames.get(prototype.designSystem ?? "shadcn") ?? prototype.designSystem ?? "shadcn"}</dd></div>
           </dl>
         </Link>
-        {prototype.latestVersion !== null ? <Link className="mt-4 inline-block rounded-full border px-2.5 py-1 text-xs font-medium hover:bg-muted" to={`/p/${prototype.id}/v/${prototype.latestVersion}`}>Published v{prototype.latestVersion}</Link> : null}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Link className="inline-block rounded-full border px-2.5 py-1 text-xs font-medium hover:bg-muted" to={`/p/${prototype.id}/cjm`}>CJM</Link>
+          {prototype.latestVersion !== null ? <>
+            <Link className="inline-block rounded-full border px-2.5 py-1 text-xs font-medium hover:bg-muted" to={`/p/${prototype.id}/v/${prototype.latestVersion}`}>Published v{prototype.latestVersion}</Link>
+            <Link className="inline-block rounded-full border px-2.5 py-1 text-xs font-medium hover:bg-muted" aria-label={`CJM Published v${prototype.latestVersion}`} to={`/p/${prototype.id}/v/${prototype.latestVersion}/cjm`}>CJM</Link>
+          </> : null}
+        </div>
       </li>)}
     </ul> : null}
     {!loading && !failed && !visiblePrototypes.length ? <p className="mt-8 rounded-lg border border-dashed p-6">{prototypes.status === "ready" && prototypes.data.length ? "No prototypes match this design system." : "No prototypes found."}</p> : null}
