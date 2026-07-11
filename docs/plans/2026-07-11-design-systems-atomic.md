@@ -57,12 +57,12 @@
 ### Фаза 1 — Фундамент: реестр систем + модуль shadcn
 - **Новые**: `src/catalog/normalize.ts` (вынести `ComponentDefinition`, `normalizeSchema`, `normalizeDefinitions` — разрывает цикл типов; делать первым); `src/designSystems/types.ts`; `src/designSystems/fixtures.ts` — **чистый `createFixtures(definitions, overrides)`**; `src/designSystems/shadcn/atomicLevels.ts`; `src/designSystems/shadcn/overrides.ts` (перенос fixture-overrides из `src/catalog/fixtures.ts`); `src/designSystems/shadcn/index.ts` — собирает definitions + components + fixtures **внутри себя, без импорта compat-шимов** (разрыв runtime-цикла DesignSystem↔fixtures); `src/designSystems/index.ts` (`designSystems`, `DEFAULT_DESIGN_SYSTEM_ID`, `getDesignSystem`, `resolveDefinitions`).
 - **Правки**: `src/catalog/definitions.ts` и `src/catalog/fixtures.ts` → тонкие compat-реэкспорты из `shadcnSystem`; все ~12 импортёров компилируются без изменений.
-- **Тесты**: дрейф уровней (двусторонний); smoke-тест импорта `definitions` + `fixtures` + registry + обеих систем (ловля import-цикла).
+- **Тесты**: дрейф уровней (двусторонний); smoke-тест импорта `definitions` + `fixtures` + registry + shadcn-системы (ловля import-цикла; проверка одновременного импорта обеих систем — в фазе 2).
 
 ### Фаза 2 — Wireframe-система (`src/designSystems/wireframe/`)
 - `components.tsx`: plain div + Tailwind (серая палитра, пунктирные рамки, без shadcn-импортов), конвенция `({ props, emit, on })` (паттерн — `src/catalog/hotspot.tsx`). Набор: Box/Stack/Grid (layout-neutral, слот children); atoms: Heading, Text, Image (серый прямоугольник с крестом, без внешних URL), Button (`press`), Input (`change`), Checkbox (`change`) + переиспользованный Hotspot; molecule: Select (`change`); organism: Card (children, опц. титул).
 - `definitions.ts` (zod-схемы, у каждого `example`), `index.ts` (`wireframeSystem`).
-- Тесты: рендер каждого компонента из `example` через registry (зеркало `fixtures.test.tsx`).
+- Тесты: рендер каждого компонента из `example` через registry (зеркало `fixtures.test.tsx`); smoke-тест одновременного импорта обеих систем.
 
 ### Фаза 3 — Схема прототипа + валидация (клиент/shared)
 - `src/prototype/schema.ts`: `designSystem: slugSchema.default("shadcn")` в `prototypeDocSchema` (strictObject, version = 1).
@@ -72,6 +72,7 @@
 
 ### Фаза 4a — Сервер: миграция БД (additive)
 - `server/migrations.ts`: рефактор в пошаговый массив; v2: `ALTER TABLE prototypes ADD COLUMN design_system TEXT NOT NULL DEFAULT 'shadcn'`; `ALTER TABLE components ADD COLUMN design_system TEXT NOT NULL DEFAULT 'shadcn'`.
+- **Совместимость positional insert**: `server/repos/components.ts:11` использует `INSERT INTO components VALUES (?,?,1,NULL,?,?)` — после добавления седьмой колонки сломается. В этой же фазе заменить на явный список колонок `INSERT INTO components (id,name,head_rev,deleted_at,created_at,updated_at) VALUES (?,?,1,NULL,?,?)` (design_system берёт DEFAULT); проверить остальные positional insert-ы обеих таблиц.
 - Тесты: апгрейд заполненной v1-базы → v2; старые кастомные компоненты получают `shadcn`.
 
 ### Фаза 4b — Сервер: реестр/хеш/нормализация чтения
@@ -84,7 +85,8 @@
 - `restore` (repos:72): нормализовать source doc (`parseStoredPrototypeDoc`), хеш и head-колонку — от **его** системы; проверить, что каждый копируемый pin принадлежит той же системе (JOIN `components.design_system`), иначе 422. Тест-сценарий: shadcn → wireframe → restore shadcn-ревизии.
 - `publish` (repos:86): типы классифицировать против definitions системы ревизии; **каждый pin** проверять JOIN-ом `components.design_system` = система ревизии.
 - `server/validation.ts` `snapshotDefinitions`: builtin = definitions системы дока (unknown system → `ApiError(422, "validation_failed", issues:[{path:["designSystem"],...}])` — Zod-style массив, серверный формат; исключение из `getDesignSystem` не должно утекать 500-й); SQL-резолв кастомных `AND c.design_system = ?`; сообщение `Unknown or unpublished component type in design system '<id>': <name>`.
-- `server/seed.ts`: после фазы 3 `validatePrototypeForSave` system-aware через doc; добавить серверный тест, что `wireframe-demo` **реально засеялся** (а не молча пропущен через `console.error`). Кастомные компоненты в seed не поддерживаются — зафиксировать комментарием.
+- `validatePrototypeForSave` (`server/routes/prototypes.ts:23`) сейчас задаёт `componentDefinitions` собственным default-параметром — фаза 3 его сама не исправит. Явно: убрать shadcn-default; при отсутствии переданных snapshot-definitions выбирать definitions по `doc.designSystem`; POST/PUT продолжают передавать merged snapshot definitions.
+- `server/seed.ts`: серверный тест, что wireframe-документ **реально засеялся** (а не молча пропущен через `console.error`) — через временный seed-каталог с wireframe-фикстурой (файл `prototypes/wireframe-demo.json` появляется только в фазе 8; там — отдельная проверка реального файла). Кастомные компоненты в seed не поддерживаются — зафиксировать комментарием.
 
 ### Фаза 4d — Сервер: кастомные компоненты + манифест
 - `server/components/types.ts`: `atomicLevel?` в `CustomComponentDefinition` и `DefinitionMeta`.
@@ -104,7 +106,7 @@
   | create/save/restore responses | не добавляется (rev-only) |
   | `GET /components` list/meta | top-level |
   | manifest | top-level per entry |
-- `src/api/client.ts`: `designSystem` в `PrototypeSummary`/`PrototypeMeta`, component DTO; `DesignSystemSummary` + `listDesignSystems()`. Тест-инвариант: в list/meta top-level значение согласовано с doc head-ревизии.
+- `src/api/client.ts`: `designSystem` в `PrototypeSummary`/`PrototypeMeta`, component DTO; `DesignSystemSummary` + `listDesignSystems()`. Тест-инвариант — интеграционный серверный: после create/save/restore сравнить `designSystem` из list/meta с `draft.doc.designSystem` (list/meta сами doc не содержат).
 - Тесты: wireframe-прототип с shadcn-only типом → 422; кастомный wireframe-компонент не резолвится из shadcn-прототипа → 422; шейп design-systems; round-trip atomicLevel в манифест.
 
 ### Фаза 5 — Плеер
@@ -154,6 +156,10 @@
 | 14 | minor | принято | Расширенные DFS-тесты (фаза 3) |
 | 15 | minor | принято | Чипы галереи из `listDesignSystems()` |
 
+## Триаж ревью Codex (раунд 2, 2026-07-11)
+
+Блокирующих возражений нет; план признан готовым после правок. Все 5 находок приняты и внесены: (1, major) positional insert `components` чинится в фазе 4a; (2, major) тест «обе системы» перенесён в фазу 2; (3, minor) seed-тест 4c — через временный каталог; (4, minor) `validatePrototypeForSave` — явный пункт в 4c; (5, minor) DTO-инвариант уточнён как интеграционный.
+
 ## Риски
 
 - **Дрейф builtinCatalogHash**: `atomicLevel` не в дескрипторе — тест равенства shadcn-хеша дореформенной константе.
@@ -168,4 +174,4 @@
 
 ## Процесс (workflow CLAUDE.md)
 
-План прошёл раунд 1 адверсариального ревью Codex gpt-5.6-sol (триаж выше). Правки существенные → раунд 2 ревью (`--resume` того же треда). После отсутствия блокирующих возражений — исполнение волнами Codex `--write --effort medium` по подфазам с независимой верификацией done-критериев перед каждым коммитом.
+План прошёл два раунда адверсариального ревью Codex gpt-5.6-sol (триаж выше); блокирующих возражений нет — **план одобрен к исполнению**. Исполнение волнами Codex `--write --effort medium` по подфазам с независимой верификацией done-критериев перед каждым коммитом.
