@@ -13,14 +13,16 @@
       "spec": {
         "root": "card",
         "elements": {
-          "card": { "type": "Card", "props": { "title": "Оцените нас" }, "children": ["stars", "thanks", "pending", "next"] },
+          "card": { "type": "Card", "props": { "title": "Оцените нас" }, "children": ["stars", "count", "next"] },
           "stars": {
             "type": "RatingStars",
             "props": { "value": 3, "label": "Рейтинг" },
             "on": { "press": { "action": "setState", "params": { "statePath": "/clicks", "value": 1 } } }
           },
-          "thanks": { "type": "Text", "props": { "text": "Спасибо за оценку!" }, "visible": { "$state": "/clicks" } },
-          "pending": { "type": "Text", "props": { "text": "Ещё не оценено" }, "visible": { "$state": "/clicks", "eq": 0 } },
+          "count": {
+            "type": "Text",
+            "props": { "text": { "$cond": { "if": { "$state": "/clicks" }, "then": "Спасибо за оценку!", "else": "Ещё не оценено" } } }
+          },
           "next": { "type": "Button", "props": { "label": "Дальше" }, "on": { "press": { "action": "navigate", "params": { "screenId": "done" } } } }
         }
       }

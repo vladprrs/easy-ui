@@ -88,7 +88,7 @@ node .claude/skills/author/driver.mjs shoot rating-demo
 
 ## Gotchas
 
-- **`$cond` в props сломан в плеере** (баг, актуален на 2026-07-11): формат v1 и валидатор принимают `{"$cond":{"if":...,"then":...,"else":...}}`, но плеер передаёт props в json-render без трансформации, а рантайм ждёт плоское `{$cond,$then,$else}` → в браузере `Objects are not valid as a React child (found: object with keys {$cond})`. Обход: два элемента с `visible`-условиями (`{"$state":"/path"}` / `{"$state":"/path","eq":0}`) — это работает, проверено.
+- **`$cond` в props работает** (баг с нерезолвящейся директивой исправлен 2026-07-11: плеер адаптирует doc-форму `{"$cond":{if,then,else}}` в рантаймную через `src/prototype/runtimeSpec.ts`). Альтернатива для показа/скрытия целых элементов — `visible`-условия (`{"$state":"/path"}` / `{"$state":"/path","eq":0}`). Операнды `gt/gte/lt/lte` — только числа; директива не может заменять весь объект `props`.
 - Файловые `prototypes/*.json` — только встроенный каталог; кастомные типы валидатор режет (`unknown component type`). Прототипы с кастомными компонентами живут только в БД через API.
 - Seed одноразовый по имени файла: правка засеянного JSON молча не применится. Итерации — через `driver.mjs prototype` или свежий `DATA_DIR`.
 - Все мутации требуют `baseRev` (409 при гонке) — драйвер берёт `headRev` сам; при ручном curl не забыть.
@@ -101,5 +101,5 @@ node .claude/skills/author/driver.mjs shoot rating-demo
 
 - `422 {"issues":[{"path":["source"],"message":"Type check failed: ..."}]}` на publish — читать вывод tsc в issue; save такие ошибки не ловит.
 - `FAIL <file>.json /screens/.../type: unknown component type: X` из validate:prototypes — кастомный тип в файловом прототипе; перенести прототип в API-путь.
-- `[json-render] Rendering error in <Text>: Objects are not valid as a React child ({$cond})` — см. первый пункт Gotchas.
+- `[json-render] Rendering error in <Text>: Objects are not valid as a React child ({$cond})` — не-каноническая форма `$cond` (адаптер переписывает только точное `{"$cond":{if,then,else}}`, остальное оставляет как есть); сверить форму с docs/prototype-format.md.
 - `curl` к :8787 отказывает (exit 7) — API-сервер не запущен либо занят другим портом; health-эндпоинт открыт даже под BASIC_AUTH.
