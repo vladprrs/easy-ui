@@ -5,6 +5,73 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@font-face {
+  font-family: "Coil";
+  src: url("/fonts/Coil-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Coil";
+  src: url("/fonts/Coil-Medium.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Coil";
+  src: url("/fonts/Coil-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "YS Text";
+  src: url("/fonts/YS-Text-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "YS Text";
+  src: url("/fonts/YS-Text-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "YS Text";
+  src: url("/fonts/YS-Text-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme {
+  /* primitives */
+  --color-eui-ink: #020205;
+  --color-eui-graphite: #2F3033;
+  --color-eui-lav: #F1EBF6;
+  --color-eui-lilac-100: #E8E8FF;
+  --color-eui-lilac-200: #E1CFFF;
+  --color-eui-lilac-300: #D8D0E5;
+  --color-eui-brand: #844EDC;
+  --color-eui-magenta: #C62CD0;
+  --color-eui-orange: #FF9A00;
+  --color-eui-slate-500: #4D5566;
+  --color-eui-slate-400: #8F96A5;
+  --color-eui-ondark-2: #B8BAC0;
+  /* fonts */
+  --font-eui-display: "Coil", Georgia, serif;
+  --font-eui-ui: "YS Text", system-ui, sans-serif;
+}
+
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

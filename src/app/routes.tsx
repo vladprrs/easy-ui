@@ -7,6 +7,7 @@ import { ScreenView } from "../player/ScreenView";
 import { Layout } from "./Layout";
 import { CjmShell } from "../cjm/CjmShell";
 import { EditorShell } from "../editor/EditorShell";
+import { pillPrimary } from "./chrome";
 
 export function AppRoutes() {
   return (
@@ -26,7 +27,7 @@ export function AppRoutes() {
         <Route path="p/:protoId/cjm" element={<CjmShell />} />
         <Route path="p/:protoId/edit" element={<EditorShell />} />
         <Route path="p/:protoId/v/:version/cjm" element={<CjmShell />} />
-        <Route path="*" element={<main className="p-8"><h1 className="text-2xl font-bold">Page not found</h1><Link className="underline" to="/">Back to gallery</Link></main>} />
+        <Route path="*" element={<main className="p-8"><h1 className="font-eui-display text-2xl font-medium">Page not found</h1><Link className={`${pillPrimary} mt-4`} to="/">Back to gallery</Link></main>} />
       </Route>
     </Routes>
   );

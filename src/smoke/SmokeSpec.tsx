@@ -98,10 +98,10 @@ export function SmokeSpec() {
   }), []);
 
   return (
-    <main className="mx-auto min-h-screen max-w-3xl p-8">
+    <main className="mx-auto max-w-3xl px-6 py-10 sm:px-8">
       <SmokeRenderer deps={deps} />
-      <section className="mt-6 rounded-lg border bg-card p-4 shadow-sm" aria-label="Action log">
-        <h2 className="font-semibold">Custom action log</h2>
+      <section className="mt-8 rounded-3xl border border-eui-ink/10 bg-white p-6" aria-label="Action log">
+        <h2 className="font-eui-display text-xl font-medium">Custom action log</h2>
         <output className="mt-2 block font-mono text-sm" aria-live="polite">
           {calls.length ? calls.join("\n") : "No custom actions yet"}
         </output>
