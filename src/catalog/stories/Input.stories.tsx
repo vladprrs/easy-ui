@@ -1,9 +1,10 @@
 import type { Spec } from "@json-render/core";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { fixtures } from "../fixtures";
-import { ElementStory, SpecStory } from "./story-utils";
+import { ElementStory, SpecStory, titleFor } from "./story-utils";
 
-const meta = { title: "Catalog/Input", render: (args) => <ElementStory type="Input" args={args} />, args: fixtures.Input.props } satisfies Meta<Record<string, unknown>>;
+const meta = { title: "Shadcn/Atoms/Input", render: (args) => <ElementStory type="Input" args={args} />, args: fixtures.Input.props } satisfies Meta<Record<string, unknown>>;
+if (meta.title !== titleFor("Input")) throw new Error(`Story title drift: ${meta.title}`);
 export default meta;
 export const Default: StoryObj<typeof meta> = {};
 export const BoundState: StoryObj<typeof meta> = {

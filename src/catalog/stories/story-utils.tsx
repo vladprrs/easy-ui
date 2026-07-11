@@ -1,8 +1,29 @@
 import type { Spec } from "@json-render/core";
 import { Renderer } from "@json-render/react";
+import { shadcnAtomicLevels, shadcnLayoutNeutral } from "../../designSystems/shadcn/atomicLevels";
+import { wireframeDefinitions } from "../../designSystems/wireframe";
 import { createPlayerRuntime } from "../runtime";
 
 const runtimes = new Map<string, ReturnType<typeof createPlayerRuntime>>();
+
+const levelTitles = {
+  atom: "Atoms",
+  molecule: "Molecules",
+  organism: "Organisms",
+  template: "Templates",
+  page: "Pages",
+} as const;
+
+export function titleFor(name: keyof typeof shadcnAtomicLevels) {
+  const section = shadcnLayoutNeutral.has(name) ? "Layout" : levelTitles[shadcnAtomicLevels[name]];
+  return `Shadcn/${section}/${name}`;
+}
+
+export function wireframeTitleFor(name: keyof typeof wireframeDefinitions) {
+  const definition = wireframeDefinitions[name];
+  const section = "layoutNeutral" in definition && definition.layoutNeutral ? "Layout" : levelTitles[definition.atomicLevel];
+  return `Wireframe/${section}/${name}`;
+}
 
 function getRuntime(system: string) {
   let runtime = runtimes.get(system);
