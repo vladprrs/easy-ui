@@ -1,4 +1,3 @@
-import type { Spec } from "@json-render/core";
 import { Renderer } from "@json-render/react";
 import { Component, type ErrorInfo, type ReactNode, useMemo } from "react";
 import { Link, useOutletContext, useParams } from "react-router";
@@ -7,6 +6,7 @@ import { DeviceFrame } from "./DeviceFrame";
 import { ScreensSidebar } from "./ScreensSidebar";
 import { usePlayerNavigation } from "./navigation";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
+import { splitCanvasSpec } from "./canvasSpec";
 
 export class ScreenErrorBoundary extends Component<{
   prototypeId: string;
@@ -28,16 +28,6 @@ export class ScreenErrorBoundary extends Component<{
       <button type="button" className="mt-4 rounded border px-4 py-2" onClick={this.props.restart}>Restart</button>
     </section>;
   }
-}
-
-function splitCanvasSpec(spec: Spec) {
-  const hotspotIds = new Set(Object.entries(spec.elements).filter(([, element]) => element.type === "Hotspot").map(([id]) => id));
-  const contentElements = Object.fromEntries(Object.entries(spec.elements)
-    .filter(([id]) => !hotspotIds.has(id))
-    .map(([id, element]) => [id, element.children ? { ...element, children: element.children.filter((child) => !hotspotIds.has(child)) } : element]));
-  const content = contentElements[spec.root] ? { ...spec, elements: contentElements } as Spec : null;
-  const hotspots = [...hotspotIds].map((id) => ({ root: id, elements: { [id]: spec.elements[id] } }) as Spec);
-  return { content, hotspots };
 }
 
 export function ScreenView() {

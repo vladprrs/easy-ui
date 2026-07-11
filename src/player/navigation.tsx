@@ -31,6 +31,10 @@ export function buildPlayerPath(routeBase: string, screenId: string) {
   return `${routeBase}/s/${encodeURIComponent(screenId)}`;
 }
 
+export function buildPrototypeRouteBase(protoId: string, version?: number): string {
+  return `/p/${encodeURIComponent(protoId)}${version === undefined ? "" : `/v/${version}`}`;
+}
+
 export function PlayerNavigationProvider({ startScreen, routeBase, children }: { startScreen: string; routeBase: string; children: ReactNode }) {
   const routerNavigate = useNavigate();
   const location = useLocation();
