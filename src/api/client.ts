@@ -68,6 +68,7 @@ export type AtomicLevel = "atom" | "molecule" | "organism" | "template" | "page"
 export interface ComponentSummary { id: string; name: string; designSystem: string; headRev: number; latestVersion: number | null; updatedAt: string }
 export interface ComponentMeta { id: string; name: string; designSystem: string; headRev: number; versions: PrototypeVersionSummary[]; updatedAt: string }
 export interface CatalogComponent { id: string; name: string; designSystem: string; version: number; bundleUrl: string; bundleHash: string; atomicLevel?: AtomicLevel; description: string; events: string[]; slots: string[]; hostAbiVersion: number }
+export interface CatalogManifest { components: CatalogComponent[] }
 export interface DesignSystemComponent { name: string; atomicLevel: AtomicLevel; layoutNeutral: boolean; description: string; events: string[]; slots: string[] }
 export interface DesignSystemSummary { id: string; name: string; description: string; builtinCatalogHash: string; components: DesignSystemComponent[] }
 
@@ -97,6 +98,7 @@ const componentPath = (id: string) => `/api/components/${encodeURIComponent(id)}
 
 export const listPrototypes = (signal?: AbortSignal) => request<PrototypeSummary[]>("/api/prototypes", { signal });
 export const listDesignSystems = (signal?: AbortSignal) => request<{designSystems: DesignSystemSummary[]}>("/api/design-systems", { signal });
+export const getCatalogManifest = (signal?: AbortSignal) => request<CatalogManifest>("/api/catalog/manifest", { signal });
 export const getDesignSystemById = (id: string, signal?: AbortSignal) => request<DesignSystemSummary>(`/api/design-systems/${encodeURIComponent(id)}`, { signal });
 export const createDesignSystem = (id: string, name: string, description: string, signal?: AbortSignal) => request<DesignSystemSummary>("/api/design-systems", { method: "POST", body: { id, name, description }, signal });
 export const listComponents = (signal?: AbortSignal) => request<ComponentSummary[]>("/api/components", { signal });

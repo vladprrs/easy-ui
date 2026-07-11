@@ -12,7 +12,7 @@ test("preview library uses the same-origin static Storybook index", async ({ pag
   const indexResponse = await page.request.get("/storybook/index.json");
   expect(indexResponse.ok()).toBeTruthy();
   await page.goto("/library");
-  await expect(page.getByRole("navigation", { name: "Stories" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Components" })).toBeVisible();
   await expect(page.getByText(/Storybook is unavailable/)).toHaveCount(0);
   await expect(page.getByTitle("Story preview")).toHaveAttribute("src", /^\/storybook\/iframe\.html\?id=.+&viewMode=story$/);
 });

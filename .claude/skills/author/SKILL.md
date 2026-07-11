@@ -43,7 +43,7 @@ node driver.mjs prototype my-flow.json
 
 ### Грамматика документа (format v1, строгий allowlist)
 
-Корень: `{version: 1, id, name, description?, device?, startScreen, state?, screens[]}`. `id` и все ID — slugs; `device` — `mobile | tablet | desktop` (default `desktop`); `startScreen` существует в `screens`.
+Корень: `{version: 1, id, name, description?, designSystem?, device?, startScreen, state?, screens[]}`. `designSystem` — slug зарегистрированной системы (default `shadcn`); `id` и все ID — slugs; `device` — `mobile | tablet | desktop` (default `desktop`); `startScreen` существует в `screens`.
 
 Экран: `{id, name, canvas?: {width,height}, spec: {root, elements}}`. Элемент: `{type, props, children?, visible?, on?}` — только эти ключи. Элементы образуют одно дерево от `root` (≤500 элементов, глубина ≤50).
 
@@ -76,10 +76,19 @@ Condition: boolean, truthiness `{"$state":"/path"}`, либо `{"$state":"/path"
 - Лимит source — 256 KiB; JSON-тело запроса — 1 MiB.
 
 ```bash
-node driver.mjs component rating-stars RatingStars examples/rating-stars.tsx
-# saved rating-stars rev 1
-# published rating-stars version 1
+node driver.mjs component rating-stars RatingStars examples/rating-stars.tsx --design-system yandex-pay
+# saved rating-stars rev 1 in yandex-pay
+# published rating-stars version 1 in yandex-pay
 ```
+
+Систему для компонента выбирает `--design-system`, затем `EASYUI_DESIGN_SYSTEM`; если не заданы оба, при создании сервер использует `shadcn`, а при обновлении сохраняет текущую систему. Флаг имеет приоритет над env. Перенос без изменения source и регистрация новой системы:
+
+```bash
+node driver.mjs component-move rating-stars --design-system yandex-pay
+node driver.mjs design-system my-system "My Design System" "Components for my product"
+```
+
+Перенос создаёт и публикует новую ревизию, но старые published versions остаются в прежней системе. Поэтому один component ID может одновременно появляться в каталогах обеих систем: прототип каждой системы получает последнюю опубликованную версию именно для своей системы. Имя компонента при этом глобально уникально и не может совпадать с builtin-именем любой системы с builtin provider.
 
 Имя — уникальное `^[A-Z][A-Za-z0-9]*$`, не конфликтующее со встроенным каталогом (см. reference), после создания неизменно. Драйвер делает save + publish за один вызов. Save проверяет только синтаксис и контракт; **тип-ошибки ловит publish** — в ответе вывод tsc:
 

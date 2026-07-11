@@ -60,6 +60,11 @@ describe("GalleryPage", () => {
   });
 
   it("filters by registered and legacy design systems and shows readable badges", async () => {
+    vi.mocked(listDesignSystems).mockResolvedValue({ designSystems: [
+      { id: "shadcn", name: "Shadcn", description: "", builtinCatalogHash: "one", components: [] },
+      { id: "wireframe", name: "Wireframe", description: "", builtinCatalogHash: "two", components: [] },
+      { id: "yandex-pay", name: "Yandex Pay Design System", description: "", builtinCatalogHash: "", components: [] },
+    ] });
     vi.mocked(listPrototypes).mockResolvedValue([
       summary,
       { ...summary, id: "wire", name: "Wire flow", designSystem: "wireframe" },
@@ -68,6 +73,8 @@ describe("GalleryPage", () => {
     renderGallery();
 
     expect(await screen.findByRole("button", { name: "Wireframe" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Shadcn" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Yandex Pay Design System" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "classic" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Hello World" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Wireframe" }));

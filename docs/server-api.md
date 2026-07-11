@@ -35,7 +35,7 @@
 
 ## Endpoints компонентов
 
-Идентификатор — slug, имя — уникальное `^[A-Z][A-Za-z0-9]*$`, не конфликтующее со встроенным каталогом ни одной зарегистрированной системы. Имена компонентов глобально уникальны, а не уникальны в паре с системой: это ограничение MVP связано с pins, registry и `components.name UNIQUE`. Имя и `designSystem` после создания неизменны. Удаление soft: компонент исчезает из списка/манифеста и не доступен новым сохранениям, но ранее опубликованные bundle и пины продолжают работать.
+Идентификатор — slug, имя — уникальное `^[A-Z][A-Za-z0-9]*$`, не конфликтующее со встроенным каталогом ни одной зарегистрированной системы с builtin provider. Имена компонентов глобально уникальны, а не уникальны в паре с системой: поэтому и в custom-системе нельзя создать `Button`, `Card` и другие builtin-имена. Это ограничение MVP связано с pins, registry и `components.name UNIQUE`. Имя после создания неизменно; систему head можно сменить. Удаление soft: компонент исчезает из списка/манифеста и не доступен новым сохранениям, но ранее опубликованные bundle и пины продолжают работать.
 
 При добавлении builtin-системы коллизия любого её имени с существующим custom-компонентом является dev-time блокером. Startup-инвариант сравнивает объединение builtin-имён всех зарегистрированных систем со всей таблицей `components` и останавливает сервер с явной ошибкой; grandfathering устраняется вручную до регистрации системы. Композитный ключ `(designSystem, name)` отложен на post-MVP.
 
@@ -44,25 +44,55 @@
 | `GET /components` | `{id,name,designSystem,headRev,latestVersion:number|null,updatedAt}[]` |
 | `POST /components` | `{id,name,source,designSystem?,message?}` → 201 `{id,rev}` и `Location`; `designSystem` по умолчанию `shadcn` |
 | `GET /components/:id` | `{id,name,designSystem,headRev,versions:ComponentVersion[],updatedAt}` |
-| `PUT /components/:id` | `{source,message?,baseRev}` → `{rev}` |
+| `PUT /components/:id` | `{source?,designSystem?,message?,baseRev}` → `{rev}`; хотя бы одно из `source`/`designSystem`, смена системы наследует текущий source |
 | `DELETE /components/:id` | `{baseRev}` → 204 |
-| `GET /components/:id/source` | Текущий `{rev,source,message:string|null,createdAt}` |
+| `GET /components/:id/source` | Текущий `{rev,source,designSystem,message:string|null,createdAt}` |
 | `GET /components/:id/draft` | Alias текущего source DTO |
-| `GET /components/:id/revisions` | `{rev,message:string|null,createdAt}[]` |
-| `GET /components/:id/revisions/:rev` | `{rev,source,message:string|null,createdAt}` |
+| `GET /components/:id/revisions` | `{rev,designSystem,message:string|null,createdAt}[]` |
+| `GET /components/:id/revisions/:rev` | `{rev,source,designSystem,message:string|null,createdAt}` |
 | `POST /components/:id/restore` | `{rev,baseRev}` → `{rev}` |
 | `POST /components/:id/publish` | `{message?,baseRev}` → 201 `{version,hostAbiVersion,warnings}` и `Location` |
-| `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,publishedAt}` |
-| `GET /components/:id/versions/:version` | Active-версия: `{version,rev,source,events,slots,description,example?,propsJsonSchema?,atomicLevel?,bundleHash,hostAbiVersion,publishedAt}`; immutable |
+| `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,designSystem,publishedAt}` |
+| `GET /components/:id/versions/:version` | Active-версия: `{version,rev,source,designSystem,events,slots,description,example?,propsJsonSchema?,atomicLevel?,bundleHash,hostAbiVersion,publishedAt}`; immutable |
 | `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); immutable |
 
 ## Служебные endpoints
 
+### Реестр дизайн-систем
+
+Единственный источник существования и metadata системы — таблица SQLite `design_systems` (`id`, `name`, `description`, внутренний immutable `builtin_provider`, timestamps). `shadcn`, `wireframe` и `yandex-pay` создаются миграцией как обычные registry-записи; API-системы переживают рестарт. Provider связывает запись с кодовым builtin-каталогом, но не является вторым реестром. У системы без provider `components: []`; её доступный каталог формируют опубликованные custom-компоненты.
+
+| Метод и путь | Тело / ответ |
+|---|---|
+| `GET /design-systems` | `{designSystems: DesignSystemSummary[]}` |
+| `GET /design-systems/:id` | `DesignSystemSummary`; неизвестный ID → `404 not_found` |
+| `POST /design-systems` | `{id,name,description}` → 201 `DesignSystemSummary` и `Location`; повтор ID → `409 already_exists` |
+
+`DesignSystemSummary` имеет `{id,name,description,builtinCatalogHash,components}` и не раскрывает provider. Malformed JSON/body не-object даёт `400 invalid_request`; неизвестные поля, неверные типы, невалидный slug, пустые или слишком длинные значения — `422 validation_failed` с `issues[].path`. `PUT`, `PATCH` и `DELETE` на collection или `:id` дают `405 method_not_allowed`: registry metadata в этом API неизменяемы. Повтор идентичного POST не идемпотентен и также даёт 409.
+
+### Система ревизии, публикации и manifest
+
+Система head хранится в `components.design_system`, а каждая immutable ревизия фиксирует её в `component_revisions.design_system`. Publish не дублирует систему: версия связана с конкретной ревизией и читает систему join-ом. Поэтому перенос через `PUT` с `designSystem` и последующий publish не изменяет старые ревизии, версии и prototype pins.
+
+После переноса один компонент намеренно может иметь active-версии в двух системах. `/catalog/manifest` возвращает отдельную запись для каждой пары `(component, designSystem)` — последнюю active-версию в этой системе. Старые и вновь сохраняемые прототипы прежней системы продолжают резолвить последнюю опубликованную версию своей системы; Library поэтому показывает компонент в обеих группах.
+
+### Управляемая миграция компонента между системами
+
+Production-миграция выполняется по явному manifest с `id`, `expectedHeadRev` и SHA-256 ожидаемого source, а не по имени или префиксу. Перед действием читаются meta и `/source`; hash считается от UTF-8 байтов source без канонизации. Допустимы только состояния:
+
+| Read-back | Действие |
+|---|---|
+| ожидаемая rev, исходная система, source совпал | `PUT` с целевой системой и `baseRev`, без source |
+| ожидаемая rev + 1, целевая система, source совпал, head не опубликован | publish head |
+| ожидаемая rev + 1, целевая система, publish именно head active | шаг завершён |
+| любое иное состояние | остановка и ручной разбор |
+
+При `409 revision_conflict` state machine перечитывается, PUT вслепую не повторяется. `already_published` считается успехом только после сверки rev, системы и source hash конфликтующей версии. Результаты rev/version пишутся в deployment log. Лишь после публикации всех компонентов сохраняется новая ревизия прототипа с целевой `doc.designSystem`; иначе save атомарно отклоняется. Старые prototype revisions и pins остаются неизменны. Полный порядок, backup-требования и read-back описаны в [плане v3](plans/2026-07-11-custom-design-systems.md#миграция-существующих-yandex-pay-данных).
+
 | Метод и путь | Ответ |
 |---|---|
 | `GET /health` | `{status:"ready"}` после миграций, seed и ABI-проверки; до готовности 503 `starting` |
-| `GET /design-systems` | `{designSystems:[{id,name,description,builtinCatalogHash,components:[{name,atomicLevel,layoutNeutral,description,events,slots}]}]}` — реестр builtin-систем и их компоненты |
-| `GET /catalog/manifest` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,slots,description,example?,propsJsonSchema?,atomicLevel?}]}` — только последняя active-версия каждого неудалённого компонента; `designSystem` находится в каждой записи |
+| `GET /catalog/manifest` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,slots,description,example?,propsJsonSchema?,atomicLevel?}]}` — последняя active-версия каждого неудалённого компонента для каждой системы |
 | `GET /shims/v1/:name.js` | ESM-шим host ABI v1; immutable |
 
 ## Ошибки и ограничения HTTP
