@@ -1,1862 +1,2350 @@
 {
- "Card": {
-  "description": "Container card for content sections. Use for forms/content boxes, NOT for page headers.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "title": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "description": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "maxWidth": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "sm",
-        "md",
-        "lg",
-        "full"
+ "shadcn": {
+  "name": "Shadcn",
+  "description": "Accessible shadcn/ui components for polished product interfaces.",
+  "components": {
+   "Card": {
+    "description": "Container card for content sections. Use for forms/content boxes, NOT for page headers.",
+    "atomicLevel": "organism",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "title": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
        ]
       },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "centered": {
-     "anyOf": [
-      {
-       "type": "boolean"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "className": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "additionalProperties": false
-  },
-  "slots": [
-   "default"
-  ],
-  "example": {
-   "title": "Overview",
-   "description": "Your account summary"
-  }
- },
- "Stack": {
-  "description": "Flex container for layouts",
-  "props": {
-   "type": "object",
-   "properties": {
-    "direction": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "horizontal",
-        "vertical"
+      "description": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
        ]
       },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "gap": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "none",
-        "sm",
-        "md",
-        "lg",
-        "xl"
+      "maxWidth": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "sm",
+          "md",
+          "lg",
+          "full"
+         ]
+        },
+        {
+         "type": "null"
+        }
        ]
       },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "align": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "start",
-        "center",
-        "end",
-        "stretch"
+      "centered": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
        ]
       },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "justify": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "start",
-        "center",
-        "end",
-        "between",
-        "around"
+      "className": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
        ]
-      },
-      {
-       "type": "null"
       }
-     ]
+     },
+     "additionalProperties": false
     },
-    "className": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "additionalProperties": false
-  },
-  "slots": [
-   "default"
-  ],
-  "example": {
-   "direction": "vertical",
-   "gap": "md"
-  }
- },
- "Grid": {
-  "description": "Grid layout (1-6 columns)",
-  "props": {
-   "type": "object",
-   "properties": {
-    "columns": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "gap": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "sm",
-        "md",
-        "lg",
-        "xl"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "className": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "additionalProperties": false
-  },
-  "slots": [
-   "default"
-  ],
-  "example": {
-   "columns": 3,
-   "gap": "md"
-  }
- },
- "Separator": {
-  "description": "Visual separator line",
-  "props": {
-   "type": "object",
-   "properties": {
-    "orientation": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "horizontal",
-        "vertical"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "additionalProperties": false
-  }
- },
- "Tabs": {
-  "description": "Tab navigation. Use { $bindState } on value for active tab binding.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "tabs": {
-     "type": "array",
-     "items": {
-      "type": "object",
-      "properties": {
-       "label": {
-        "type": "string"
-       },
-       "value": {
-        "type": "string"
-       }
-      },
-      "required": [
-       "label",
-       "value"
-      ],
-      "additionalProperties": false
-     }
-    },
-    "defaultValue": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "value": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "tabs"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "change"
-  ],
-  "slots": [
-   "default"
-  ]
- },
- "Accordion": {
-  "description": "Collapsible sections. Items as [{title, content}]. Type 'single' (default) or 'multiple'.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "items": {
-     "type": "array",
-     "items": {
-      "type": "object",
-      "properties": {
-       "title": {
-        "type": "string"
-       },
-       "content": {
-        "type": "string"
-       }
-      },
-      "required": [
-       "title",
-       "content"
-      ],
-      "additionalProperties": false
-     }
-    },
-    "type": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "single",
-        "multiple"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "items"
-   ],
-   "additionalProperties": false
-  }
- },
- "Collapsible": {
-  "description": "Collapsible section with trigger. Children render inside.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "title": {
-     "type": "string"
-    },
-    "defaultOpen": {
-     "anyOf": [
-      {
-       "type": "boolean"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "title"
-   ],
-   "additionalProperties": false
-  },
-  "slots": [
-   "default"
-  ]
- },
- "Dialog": {
-  "description": "Modal dialog. Set openPath to a boolean state path. Use setState to toggle.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "title": {
-     "type": "string"
-    },
-    "description": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "openPath": {
-     "type": "string"
-    }
-   },
-   "required": [
-    "title",
-    "openPath"
-   ],
-   "additionalProperties": false
-  },
-  "slots": [
-   "default"
-  ]
- },
- "Drawer": {
-  "description": "Bottom sheet drawer. Set openPath to a boolean state path. Use setState to toggle.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "title": {
-     "type": "string"
-    },
-    "description": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "openPath": {
-     "type": "string"
-    }
-   },
-   "required": [
-    "title",
-    "openPath"
-   ],
-   "additionalProperties": false
-  },
-  "slots": [
-   "default"
-  ]
- },
- "Carousel": {
-  "description": "Horizontally scrollable carousel of cards.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "items": {
-     "type": "array",
-     "items": {
-      "type": "object",
-      "properties": {
-       "title": {
-        "anyOf": [
-         {
-          "type": "string"
-         },
-         {
-          "type": "null"
-         }
-        ]
-       },
-       "description": {
-        "anyOf": [
-         {
-          "type": "string"
-         },
-         {
-          "type": "null"
-         }
-        ]
-       }
-      },
-      "additionalProperties": false
-     }
-    }
-   },
-   "required": [
-    "items"
-   ],
-   "additionalProperties": false
-  }
- },
- "Table": {
-  "description": "Data table. columns: header labels. rows: 2D array of cell strings, e.g. [[\"Alice\",\"admin\"],[\"Bob\",\"user\"]].",
-  "props": {
-   "type": "object",
-   "properties": {
-    "columns": {
-     "type": "array",
-     "items": {
-      "type": "string"
-     }
-    },
-    "rows": {
-     "type": "array",
-     "items": {
-      "type": "array",
-      "items": {
-       "type": "string"
-      }
-     }
-    },
-    "caption": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "columns",
-    "rows"
-   ],
-   "additionalProperties": false
-  },
-  "example": {
-   "columns": [
-    "Name",
-    "Role"
-   ],
-   "rows": [
-    [
-     "Alice",
-     "Admin"
+    "slots": [
+     "default"
     ],
-    [
-     "Bob",
-     "User"
+    "example": {
+     "title": "Overview",
+     "description": "Your account summary"
+    }
+   },
+   "Stack": {
+    "description": "Flex container for layouts",
+    "atomicLevel": "atom",
+    "layoutNeutral": true,
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "direction": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "horizontal",
+          "vertical"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "gap": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "none",
+          "sm",
+          "md",
+          "lg",
+          "xl"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "align": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "start",
+          "center",
+          "end",
+          "stretch"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "justify": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "start",
+          "center",
+          "end",
+          "between",
+          "around"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "className": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "additionalProperties": false
+    },
+    "slots": [
+     "default"
+    ],
+    "example": {
+     "direction": "vertical",
+     "gap": "md"
+    }
+   },
+   "Grid": {
+    "description": "Grid layout (1-6 columns)",
+    "atomicLevel": "atom",
+    "layoutNeutral": true,
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "columns": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "gap": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "sm",
+          "md",
+          "lg",
+          "xl"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "className": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "additionalProperties": false
+    },
+    "slots": [
+     "default"
+    ],
+    "example": {
+     "columns": 3,
+     "gap": "md"
+    }
+   },
+   "Separator": {
+    "description": "Visual separator line",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "orientation": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "horizontal",
+          "vertical"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "additionalProperties": false
+    }
+   },
+   "Tabs": {
+    "description": "Tab navigation. Use { $bindState } on value for active tab binding.",
+    "atomicLevel": "organism",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "tabs": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "properties": {
+         "label": {
+          "type": "string"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "label",
+         "value"
+        ],
+        "additionalProperties": false
+       }
+      },
+      "defaultValue": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "value": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "tabs"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "change"
+    ],
+    "slots": [
+     "default"
     ]
-   ]
-  }
- },
- "Heading": {
-  "description": "Heading text (h1-h4)",
-  "props": {
-   "type": "object",
-   "properties": {
-    "text": {
-     "type": "string"
-    },
-    "level": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "h1",
-        "h2",
-        "h3",
-        "h4"
-       ]
+   },
+   "Accordion": {
+    "description": "Collapsible sections. Items as [{title, content}]. Type 'single' (default) or 'multiple'.",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "items": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "properties": {
+         "title": {
+          "type": "string"
+         },
+         "content": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "title",
+         "content"
+        ],
+        "additionalProperties": false
+       }
       },
-      {
-       "type": "null"
+      "type": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "single",
+          "multiple"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
       }
-     ]
+     },
+     "required": [
+      "items"
+     ],
+     "additionalProperties": false
     }
    },
-   "required": [
-    "text"
-   ],
-   "additionalProperties": false
-  },
-  "example": {
-   "text": "Welcome",
-   "level": "h1"
-  }
- },
- "Text": {
-  "description": "Paragraph text",
-  "props": {
-   "type": "object",
-   "properties": {
-    "text": {
-     "type": "string"
-    },
-    "variant": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "body",
-        "caption",
-        "muted",
-        "lead",
-        "code"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "text"
-   ],
-   "additionalProperties": false
-  },
-  "example": {
-   "text": "Hello, world!"
-  }
- },
- "Image": {
-  "description": "Image component. Renders an img tag when src is provided, otherwise a placeholder.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "src": {
-     "anyOf": [
-      {
+   "Collapsible": {
+    "description": "Collapsible section with trigger. Children render inside.",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "title": {
        "type": "string"
       },
-      {
-       "type": "null"
+      "defaultOpen": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ]
       }
-     ]
+     },
+     "required": [
+      "title"
+     ],
+     "additionalProperties": false
     },
-    "alt": {
-     "type": "string"
-    },
-    "width": {
-     "anyOf": [
-      {
-       "type": "number"
+    "slots": [
+     "default"
+    ]
+   },
+   "Dialog": {
+    "description": "Modal dialog. Set openPath to a boolean state path. Use setState to toggle.",
+    "atomicLevel": "organism",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "title": {
+       "type": "string"
       },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "height": {
-     "anyOf": [
-      {
-       "type": "number"
+      "description": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
       },
-      {
-       "type": "null"
+      "openPath": {
+       "type": "string"
       }
+     },
+     "required": [
+      "title",
+      "openPath"
+     ],
+     "additionalProperties": false
+    },
+    "slots": [
+     "default"
+    ]
+   },
+   "Drawer": {
+    "description": "Bottom sheet drawer. Set openPath to a boolean state path. Use setState to toggle.",
+    "atomicLevel": "organism",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "title": {
+       "type": "string"
+      },
+      "description": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "openPath": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "title",
+      "openPath"
+     ],
+     "additionalProperties": false
+    },
+    "slots": [
+     "default"
+    ]
+   },
+   "Carousel": {
+    "description": "Horizontally scrollable carousel of cards.",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "items": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "properties": {
+         "title": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "description": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         }
+        },
+        "additionalProperties": false
+       }
+      }
+     },
+     "required": [
+      "items"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "Table": {
+    "description": "Data table. columns: header labels. rows: 2D array of cell strings, e.g. [[\"Alice\",\"admin\"],[\"Bob\",\"user\"]].",
+    "atomicLevel": "organism",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "columns": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "rows": {
+       "type": "array",
+       "items": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       }
+      },
+      "caption": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "columns",
+      "rows"
+     ],
+     "additionalProperties": false
+    },
+    "example": {
+     "columns": [
+      "Name",
+      "Role"
+     ],
+     "rows": [
+      [
+       "Alice",
+       "Admin"
+      ],
+      [
+       "Bob",
+       "User"
+      ]
      ]
     }
    },
-   "required": [
-    "alt"
-   ],
-   "additionalProperties": false
-  }
- },
- "Avatar": {
-  "description": "User avatar with fallback initials",
-  "props": {
-   "type": "object",
-   "properties": {
-    "src": {
-     "anyOf": [
-      {
+   "Heading": {
+    "description": "Heading text (h1-h4)",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "text": {
        "type": "string"
       },
-      {
-       "type": "null"
+      "level": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "h1",
+          "h2",
+          "h3",
+          "h4"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
       }
-     ]
+     },
+     "required": [
+      "text"
+     ],
+     "additionalProperties": false
     },
-    "name": {
-     "type": "string"
+    "example": {
+     "text": "Welcome",
+     "level": "h1"
+    }
+   },
+   "Text": {
+    "description": "Paragraph text",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "text": {
+       "type": "string"
+      },
+      "variant": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "body",
+          "caption",
+          "muted",
+          "lead",
+          "code"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "text"
+     ],
+     "additionalProperties": false
     },
-    "size": {
-     "anyOf": [
-      {
+    "example": {
+     "text": "Hello, world!"
+    }
+   },
+   "Image": {
+    "description": "Image component. Renders an img tag when src is provided, otherwise a placeholder.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "src": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "alt": {
+       "type": "string"
+      },
+      "width": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "height": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "alt"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "Avatar": {
+    "description": "User avatar with fallback initials",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "src": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "name": {
+       "type": "string"
+      },
+      "size": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "sm",
+          "md",
+          "lg"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "name"
+     ],
+     "additionalProperties": false
+    },
+    "example": {
+     "name": "Jane Doe",
+     "size": "md"
+    }
+   },
+   "Badge": {
+    "description": "Status badge",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "text": {
+       "type": "string"
+      },
+      "variant": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "default",
+          "secondary",
+          "destructive",
+          "outline"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "text"
+     ],
+     "additionalProperties": false
+    },
+    "example": {
+     "text": "Active",
+     "variant": "default"
+    }
+   },
+   "Alert": {
+    "description": "Alert banner",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "title": {
+       "type": "string"
+      },
+      "message": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "type": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "info",
+          "success",
+          "warning",
+          "error"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "title"
+     ],
+     "additionalProperties": false
+    },
+    "example": {
+     "title": "Note",
+     "message": "Your changes have been saved.",
+     "type": "success"
+    }
+   },
+   "Progress": {
+    "description": "Progress bar (value 0-100)",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "value": {
+       "type": "number"
+      },
+      "max": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "label": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "value"
+     ],
+     "additionalProperties": false
+    },
+    "example": {
+     "value": 65,
+     "max": 100,
+     "label": "Upload progress"
+    }
+   },
+   "Skeleton": {
+    "description": "Loading placeholder skeleton",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "width": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "height": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "rounded": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "additionalProperties": false
+    }
+   },
+   "Spinner": {
+    "description": "Loading spinner indicator",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "size": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "sm",
+          "md",
+          "lg"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "label": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "additionalProperties": false
+    }
+   },
+   "Tooltip": {
+    "description": "Hover tooltip. Shows content on hover over text.",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "content": {
+       "type": "string"
+      },
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "content",
+      "text"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "Popover": {
+    "description": "Popover that appears on click of trigger.",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "trigger": {
+       "type": "string"
+      },
+      "content": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "trigger",
+      "content"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "Input": {
+    "description": "Text input field. Use { $bindState } on value for two-way binding. Use checks for validation (e.g. required, email, minLength). validateOn controls timing (default: blur).",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "type": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "text",
+          "email",
+          "password",
+          "number"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "placeholder": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "value": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "checks": {
+       "anyOf": [
+        {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string"
+           },
+           "message": {
+            "type": "string"
+           },
+           "args": {
+            "type": "object",
+            "propertyNames": {
+             "type": "string"
+            },
+            "additionalProperties": {}
+           }
+          },
+          "required": [
+           "type",
+           "message"
+          ],
+          "additionalProperties": false
+         }
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "validateOn": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "change",
+          "blur",
+          "submit"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "label",
+      "name"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "submit",
+     "focus",
+     "blur"
+    ],
+    "example": {
+     "label": "Email",
+     "name": "email",
+     "type": "email",
+     "placeholder": "you@example.com"
+    }
+   },
+   "Textarea": {
+    "description": "Multi-line text input. Use { $bindState } on value for binding. Use checks for validation. validateOn controls timing (default: blur).",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "placeholder": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "rows": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "value": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "checks": {
+       "anyOf": [
+        {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string"
+           },
+           "message": {
+            "type": "string"
+           },
+           "args": {
+            "type": "object",
+            "propertyNames": {
+             "type": "string"
+            },
+            "additionalProperties": {}
+           }
+          },
+          "required": [
+           "type",
+           "message"
+          ],
+          "additionalProperties": false
+         }
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "validateOn": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "change",
+          "blur",
+          "submit"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "label",
+      "name"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "Select": {
+    "description": "Dropdown select input. Use { $bindState } on value for binding. Use checks for validation. validateOn controls timing (default: change).",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "options": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "placeholder": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "value": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "checks": {
+       "anyOf": [
+        {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string"
+           },
+           "message": {
+            "type": "string"
+           },
+           "args": {
+            "type": "object",
+            "propertyNames": {
+             "type": "string"
+            },
+            "additionalProperties": {}
+           }
+          },
+          "required": [
+           "type",
+           "message"
+          ],
+          "additionalProperties": false
+         }
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "validateOn": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "change",
+          "blur",
+          "submit"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "label",
+      "name",
+      "options"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "change"
+    ]
+   },
+   "Checkbox": {
+    "description": "Checkbox input. Use { $bindState } on checked for binding. Use checks for validation. validateOn controls timing (default: change).",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "checked": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "checks": {
+       "anyOf": [
+        {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string"
+           },
+           "message": {
+            "type": "string"
+           },
+           "args": {
+            "type": "object",
+            "propertyNames": {
+             "type": "string"
+            },
+            "additionalProperties": {}
+           }
+          },
+          "required": [
+           "type",
+           "message"
+          ],
+          "additionalProperties": false
+         }
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "validateOn": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "change",
+          "blur",
+          "submit"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "label",
+      "name"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "change"
+    ]
+   },
+   "Radio": {
+    "description": "Radio button group. Use { $bindState } on value for binding. Use checks for validation. validateOn controls timing (default: change).",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "options": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "value": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "checks": {
+       "anyOf": [
+        {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string"
+           },
+           "message": {
+            "type": "string"
+           },
+           "args": {
+            "type": "object",
+            "propertyNames": {
+             "type": "string"
+            },
+            "additionalProperties": {}
+           }
+          },
+          "required": [
+           "type",
+           "message"
+          ],
+          "additionalProperties": false
+         }
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "validateOn": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "change",
+          "blur",
+          "submit"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "label",
+      "name",
+      "options"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "change"
+    ]
+   },
+   "Switch": {
+    "description": "Toggle switch. Use { $bindState } on checked for binding. Use checks for validation. validateOn controls timing (default: change).",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "checked": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "checks": {
+       "anyOf": [
+        {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string"
+           },
+           "message": {
+            "type": "string"
+           },
+           "args": {
+            "type": "object",
+            "propertyNames": {
+             "type": "string"
+            },
+            "additionalProperties": {}
+           }
+          },
+          "required": [
+           "type",
+           "message"
+          ],
+          "additionalProperties": false
+         }
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "validateOn": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "change",
+          "blur",
+          "submit"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "label",
+      "name"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "change"
+    ]
+   },
+   "Slider": {
+    "description": "Range slider input. Use { $bindState } on value for binding.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "min": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "max": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "step": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "value": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "additionalProperties": false
+    },
+    "events": [
+     "change"
+    ]
+   },
+   "Button": {
+    "description": "Clickable button. Bind on.press for handler.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      },
+      "variant": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "primary",
+          "secondary",
+          "danger"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "disabled": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "label"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "press"
+    ],
+    "example": {
+     "label": "Submit",
+     "variant": "primary"
+    }
+   },
+   "Link": {
+    "description": "Anchor link. Bind on.press for click handler.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      },
+      "href": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "label",
+      "href"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "press"
+    ]
+   },
+   "DropdownMenu": {
+    "description": "Dropdown menu with trigger button and selectable items. Use { $bindState } on value for selected item binding.",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      },
+      "items": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "properties": {
+         "label": {
+          "type": "string"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "label",
+         "value"
+        ],
+        "additionalProperties": false
+       }
+      },
+      "value": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "label",
+      "items"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "select"
+    ]
+   },
+   "Toggle": {
+    "description": "Toggle button. Use { $bindState } on pressed for state binding.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      },
+      "pressed": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "variant": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "default",
+          "outline"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "label"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "change"
+    ]
+   },
+   "ToggleGroup": {
+    "description": "Group of toggle buttons. Type 'single' (default) or 'multiple'. Use { $bindState } on value.",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "items": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "properties": {
+         "label": {
+          "type": "string"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "label",
+         "value"
+        ],
+        "additionalProperties": false
+       }
+      },
+      "type": {
+       "anyOf": [
+        {
+         "type": "string",
+         "enum": [
+          "single",
+          "multiple"
+         ]
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "value": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "items"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "change"
+    ]
+   },
+   "ButtonGroup": {
+    "description": "Segmented button group. Use { $bindState } on selected for selected value.",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "buttons": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "properties": {
+         "label": {
+          "type": "string"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "label",
+         "value"
+        ],
+        "additionalProperties": false
+       }
+      },
+      "selected": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "buttons"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "change"
+    ]
+   },
+   "Pagination": {
+    "description": "Page navigation. Use { $bindState } on page for current page number.",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "totalPages": {
+       "type": "number"
+      },
+      "page": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "totalPages"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "change"
+    ]
+   },
+   "Hotspot": {
+    "description": "Transparent, keyboard-accessible absolute-positioned action area.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "x": {
+       "type": "number"
+      },
+      "y": {
+       "type": "number"
+      },
+      "width": {
+       "type": "number",
+       "exclusiveMinimum": 0
+      },
+      "height": {
+       "type": "number",
+       "exclusiveMinimum": 0
+      },
+      "ariaLabel": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "x",
+      "y",
+      "width",
+      "height",
+      "ariaLabel"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "press"
+    ]
+   }
+  }
+ },
+ "wireframe": {
+  "name": "Wireframe",
+  "description": "Schematic low-fidelity components for rapidly mapping interface structure.",
+  "components": {
+   "Box": {
+    "description": "Dashed wireframe container for grouping content.",
+    "atomicLevel": "atom",
+    "layoutNeutral": true,
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      }
+     },
+     "additionalProperties": false
+    },
+    "slots": [
+     "default"
+    ],
+    "example": {
+     "label": "Content region"
+    }
+   },
+   "Stack": {
+    "description": "Vertical layout for wireframe elements.",
+    "atomicLevel": "atom",
+    "layoutNeutral": true,
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "gap": {
+       "default": "md",
        "type": "string",
        "enum": [
         "sm",
         "md",
         "lg"
        ]
-      },
-      {
-       "type": "null"
       }
-     ]
+     },
+     "additionalProperties": false
+    },
+    "slots": [
+     "default"
+    ],
+    "example": {
+     "gap": "md"
     }
    },
-   "required": [
-    "name"
-   ],
-   "additionalProperties": false
-  },
-  "example": {
-   "name": "Jane Doe",
-   "size": "md"
-  }
- },
- "Badge": {
-  "description": "Status badge",
-  "props": {
-   "type": "object",
-   "properties": {
-    "text": {
-     "type": "string"
-    },
-    "variant": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "default",
-        "secondary",
-        "destructive",
-        "outline"
+   "Grid": {
+    "description": "Responsive-looking schematic column layout.",
+    "atomicLevel": "atom",
+    "layoutNeutral": true,
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "columns": {
+       "default": 2,
+       "anyOf": [
+        {
+         "type": "number",
+         "const": 1
+        },
+        {
+         "type": "number",
+         "const": 2
+        },
+        {
+         "type": "number",
+         "const": 3
+        },
+        {
+         "type": "number",
+         "const": 4
+        }
        ]
-      },
-      {
-       "type": "null"
       }
-     ]
+     },
+     "additionalProperties": false
+    },
+    "slots": [
+     "default"
+    ],
+    "example": {
+     "columns": 2
     }
    },
-   "required": [
-    "text"
-   ],
-   "additionalProperties": false
-  },
-  "example": {
-   "text": "Active",
-   "variant": "default"
-  }
- },
- "Alert": {
-  "description": "Alert banner",
-  "props": {
-   "type": "object",
-   "properties": {
-    "title": {
-     "type": "string"
-    },
-    "message": {
-     "anyOf": [
-      {
+   "Heading": {
+    "description": "Wireframe heading text.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "text": {
        "type": "string"
       },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "type": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "info",
-        "success",
-        "warning",
-        "error"
+      "level": {
+       "default": 2,
+       "anyOf": [
+        {
+         "type": "number",
+         "const": 1
+        },
+        {
+         "type": "number",
+         "const": 2
+        },
+        {
+         "type": "number",
+         "const": 3
+        },
+        {
+         "type": "number",
+         "const": 4
+        }
        ]
-      },
-      {
-       "type": "null"
       }
-     ]
+     },
+     "required": [
+      "text"
+     ],
+     "additionalProperties": false
+    },
+    "example": {
+     "text": "Page heading",
+     "level": 2
     }
    },
-   "required": [
-    "title"
-   ],
-   "additionalProperties": false
-  },
-  "example": {
-   "title": "Note",
-   "message": "Your changes have been saved.",
-   "type": "success"
-  }
- },
- "Progress": {
-  "description": "Progress bar (value 0-100)",
-  "props": {
-   "type": "object",
-   "properties": {
-    "value": {
-     "type": "number"
-    },
-    "max": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "label": {
-     "anyOf": [
-      {
+   "Text": {
+    "description": "Wireframe body copy.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "text": {
        "type": "string"
-      },
-      {
-       "type": "null"
       }
-     ]
+     },
+     "required": [
+      "text"
+     ],
+     "additionalProperties": false
+    },
+    "example": {
+     "text": "Placeholder content for the interface."
     }
    },
-   "required": [
-    "value"
-   ],
-   "additionalProperties": false
-  },
-  "example": {
-   "value": 65,
-   "max": 100,
-   "label": "Upload progress"
-  }
- },
- "Skeleton": {
-  "description": "Loading placeholder skeleton",
-  "props": {
-   "type": "object",
-   "properties": {
-    "width": {
-     "anyOf": [
-      {
+   "Image": {
+    "description": "Schematic image placeholder with a diagonal cross.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "alt": {
+       "type": "string",
+       "minLength": 1
+      },
+      "label": {
+       "default": "Image",
+       "type": "string"
+      }
+     },
+     "required": [
+      "alt"
+     ],
+     "additionalProperties": false
+    },
+    "example": {
+     "alt": "Image placeholder",
+     "label": "IMAGE"
+    }
+   },
+   "Button": {
+    "description": "Low-fidelity action button.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
        "type": "string"
       },
-      {
-       "type": "null"
+      "disabled": {
+       "default": false,
+       "type": "boolean"
       }
-     ]
+     },
+     "required": [
+      "label"
+     ],
+     "additionalProperties": false
     },
-    "height": {
-     "anyOf": [
-      {
+    "events": [
+     "press"
+    ],
+    "example": {
+     "label": "Continue",
+     "disabled": false
+    }
+   },
+   "Input": {
+    "description": "Low-fidelity single-line text input.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
        "type": "string"
       },
-      {
-       "type": "null"
+      "value": {
+       "type": "string"
+      },
+      "placeholder": {
+       "type": "string"
+      },
+      "disabled": {
+       "default": false,
+       "type": "boolean"
       }
-     ]
+     },
+     "required": [
+      "label"
+     ],
+     "additionalProperties": false
     },
-    "rounded": {
-     "anyOf": [
-      {
+    "events": [
+     "change"
+    ],
+    "example": {
+     "label": "Name",
+     "value": "",
+     "placeholder": "Enter text",
+     "disabled": false
+    }
+   },
+   "Checkbox": {
+    "description": "Low-fidelity checkbox control.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
+       "type": "string"
+      },
+      "checked": {
+       "default": false,
        "type": "boolean"
       },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "additionalProperties": false
-  }
- },
- "Spinner": {
-  "description": "Loading spinner indicator",
-  "props": {
-   "type": "object",
-   "properties": {
-    "size": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "sm",
-        "md",
-        "lg"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "label": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "additionalProperties": false
-  }
- },
- "Tooltip": {
-  "description": "Hover tooltip. Shows content on hover over text.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "content": {
-     "type": "string"
-    },
-    "text": {
-     "type": "string"
-    }
-   },
-   "required": [
-    "content",
-    "text"
-   ],
-   "additionalProperties": false
-  }
- },
- "Popover": {
-  "description": "Popover that appears on click of trigger.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "trigger": {
-     "type": "string"
-    },
-    "content": {
-     "type": "string"
-    }
-   },
-   "required": [
-    "trigger",
-    "content"
-   ],
-   "additionalProperties": false
-  }
- },
- "Input": {
-  "description": "Text input field. Use { $bindState } on value for two-way binding. Use checks for validation (e.g. required, email, minLength). validateOn controls timing (default: blur).",
-  "props": {
-   "type": "object",
-   "properties": {
-    "label": {
-     "type": "string"
-    },
-    "name": {
-     "type": "string"
-    },
-    "type": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "text",
-        "email",
-        "password",
-        "number"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "placeholder": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "value": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "checks": {
-     "anyOf": [
-      {
-       "type": "array",
-       "items": {
-        "type": "object",
-        "properties": {
-         "type": {
-          "type": "string"
-         },
-         "message": {
-          "type": "string"
-         },
-         "args": {
-          "type": "object",
-          "propertyNames": {
-           "type": "string"
-          },
-          "additionalProperties": {}
-         }
-        },
-        "required": [
-         "type",
-         "message"
-        ],
-        "additionalProperties": false
-       }
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "validateOn": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "change",
-        "blur",
-        "submit"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "label",
-    "name"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "submit",
-   "focus",
-   "blur"
-  ],
-  "example": {
-   "label": "Email",
-   "name": "email",
-   "type": "email",
-   "placeholder": "you@example.com"
-  }
- },
- "Textarea": {
-  "description": "Multi-line text input. Use { $bindState } on value for binding. Use checks for validation. validateOn controls timing (default: blur).",
-  "props": {
-   "type": "object",
-   "properties": {
-    "label": {
-     "type": "string"
-    },
-    "name": {
-     "type": "string"
-    },
-    "placeholder": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "rows": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "value": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "checks": {
-     "anyOf": [
-      {
-       "type": "array",
-       "items": {
-        "type": "object",
-        "properties": {
-         "type": {
-          "type": "string"
-         },
-         "message": {
-          "type": "string"
-         },
-         "args": {
-          "type": "object",
-          "propertyNames": {
-           "type": "string"
-          },
-          "additionalProperties": {}
-         }
-        },
-        "required": [
-         "type",
-         "message"
-        ],
-        "additionalProperties": false
-       }
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "validateOn": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "change",
-        "blur",
-        "submit"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "label",
-    "name"
-   ],
-   "additionalProperties": false
-  }
- },
- "Select": {
-  "description": "Dropdown select input. Use { $bindState } on value for binding. Use checks for validation. validateOn controls timing (default: change).",
-  "props": {
-   "type": "object",
-   "properties": {
-    "label": {
-     "type": "string"
-    },
-    "name": {
-     "type": "string"
-    },
-    "options": {
-     "type": "array",
-     "items": {
-      "type": "string"
-     }
-    },
-    "placeholder": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "value": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "checks": {
-     "anyOf": [
-      {
-       "type": "array",
-       "items": {
-        "type": "object",
-        "properties": {
-         "type": {
-          "type": "string"
-         },
-         "message": {
-          "type": "string"
-         },
-         "args": {
-          "type": "object",
-          "propertyNames": {
-           "type": "string"
-          },
-          "additionalProperties": {}
-         }
-        },
-        "required": [
-         "type",
-         "message"
-        ],
-        "additionalProperties": false
-       }
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "validateOn": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "change",
-        "blur",
-        "submit"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "label",
-    "name",
-    "options"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "change"
-  ]
- },
- "Checkbox": {
-  "description": "Checkbox input. Use { $bindState } on checked for binding. Use checks for validation. validateOn controls timing (default: change).",
-  "props": {
-   "type": "object",
-   "properties": {
-    "label": {
-     "type": "string"
-    },
-    "name": {
-     "type": "string"
-    },
-    "checked": {
-     "anyOf": [
-      {
+      "disabled": {
+       "default": false,
        "type": "boolean"
-      },
-      {
-       "type": "null"
       }
-     ]
+     },
+     "required": [
+      "label"
+     ],
+     "additionalProperties": false
     },
-    "checks": {
-     "anyOf": [
-      {
-       "type": "array",
-       "items": {
-        "type": "object",
-        "properties": {
-         "type": {
-          "type": "string"
-         },
-         "message": {
-          "type": "string"
-         },
-         "args": {
-          "type": "object",
-          "propertyNames": {
-           "type": "string"
-          },
-          "additionalProperties": {}
-         }
-        },
-        "required": [
-         "type",
-         "message"
-        ],
-        "additionalProperties": false
-       }
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "validateOn": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "change",
-        "blur",
-        "submit"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
+    "events": [
+     "change"
+    ],
+    "example": {
+     "label": "Remember choice",
+     "checked": false,
+     "disabled": false
     }
    },
-   "required": [
-    "label",
-    "name"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "change"
-  ]
- },
- "Radio": {
-  "description": "Radio button group. Use { $bindState } on value for binding. Use checks for validation. validateOn controls timing (default: change).",
-  "props": {
-   "type": "object",
-   "properties": {
-    "label": {
-     "type": "string"
+   "Hotspot": {
+    "description": "Transparent, keyboard-accessible absolute-positioned action area.",
+    "atomicLevel": "atom",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "x": {
+       "type": "number"
+      },
+      "y": {
+       "type": "number"
+      },
+      "width": {
+       "type": "number",
+       "exclusiveMinimum": 0
+      },
+      "height": {
+       "type": "number",
+       "exclusiveMinimum": 0
+      },
+      "ariaLabel": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "x",
+      "y",
+      "width",
+      "height",
+      "ariaLabel"
+     ],
+     "additionalProperties": false
     },
-    "name": {
-     "type": "string"
-    },
-    "options": {
-     "type": "array",
-     "items": {
-      "type": "string"
-     }
-    },
-    "value": {
-     "anyOf": [
-      {
+    "events": [
+     "press"
+    ],
+    "example": {
+     "x": 0,
+     "y": 0,
+     "width": 40,
+     "height": 40,
+     "ariaLabel": "Interactive hotspot"
+    }
+   },
+   "Select": {
+    "description": "Low-fidelity option picker.",
+    "atomicLevel": "molecule",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "label": {
        "type": "string"
       },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "checks": {
-     "anyOf": [
-      {
-       "type": "array",
-       "items": {
-        "type": "object",
-        "properties": {
-         "type": {
-          "type": "string"
-         },
-         "message": {
-          "type": "string"
-         },
-         "args": {
-          "type": "object",
-          "propertyNames": {
-           "type": "string"
-          },
-          "additionalProperties": {}
-         }
-        },
-        "required": [
-         "type",
-         "message"
-        ],
-        "additionalProperties": false
-       }
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "validateOn": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "change",
-        "blur",
-        "submit"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "label",
-    "name",
-    "options"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "change"
-  ]
- },
- "Switch": {
-  "description": "Toggle switch. Use { $bindState } on checked for binding. Use checks for validation. validateOn controls timing (default: change).",
-  "props": {
-   "type": "object",
-   "properties": {
-    "label": {
-     "type": "string"
-    },
-    "name": {
-     "type": "string"
-    },
-    "checked": {
-     "anyOf": [
-      {
-       "type": "boolean"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "checks": {
-     "anyOf": [
-      {
-       "type": "array",
-       "items": {
-        "type": "object",
-        "properties": {
-         "type": {
-          "type": "string"
-         },
-         "message": {
-          "type": "string"
-         },
-         "args": {
-          "type": "object",
-          "propertyNames": {
-           "type": "string"
-          },
-          "additionalProperties": {}
-         }
-        },
-        "required": [
-         "type",
-         "message"
-        ],
-        "additionalProperties": false
-       }
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "validateOn": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "change",
-        "blur",
-        "submit"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "label",
-    "name"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "change"
-  ]
- },
- "Slider": {
-  "description": "Range slider input. Use { $bindState } on value for binding.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "label": {
-     "anyOf": [
-      {
+      "value": {
        "type": "string"
       },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "min": {
-     "anyOf": [
-      {
-       "type": "number"
+      "options": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "properties": {
+         "label": {
+          "type": "string"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "label",
+         "value"
+        ],
+        "additionalProperties": false
+       }
       },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "max": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "step": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "value": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "additionalProperties": false
-  },
-  "events": [
-   "change"
-  ]
- },
- "Button": {
-  "description": "Clickable button. Bind on.press for handler.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "label": {
-     "type": "string"
-    },
-    "variant": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "primary",
-        "secondary",
-        "danger"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "disabled": {
-     "anyOf": [
-      {
+      "disabled": {
+       "default": false,
        "type": "boolean"
+      }
+     },
+     "required": [
+      "label",
+      "options"
+     ],
+     "additionalProperties": false
+    },
+    "events": [
+     "change"
+    ],
+    "example": {
+     "label": "Priority",
+     "value": "medium",
+     "options": [
+      {
+       "label": "Low",
+       "value": "low"
       },
       {
-       "type": "null"
+       "label": "Medium",
+       "value": "medium"
       }
-     ]
+     ],
+     "disabled": false
     }
    },
-   "required": [
-    "label"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "press"
-  ],
-  "example": {
-   "label": "Submit",
-   "variant": "primary"
+   "Card": {
+    "description": "Dashed wireframe card with an optional title.",
+    "atomicLevel": "organism",
+    "props": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "title": {
+       "type": "string"
+      }
+     },
+     "additionalProperties": false
+    },
+    "slots": [
+     "default"
+    ],
+    "example": {
+     "title": "Card title"
+    }
+   }
   }
- },
- "Link": {
-  "description": "Anchor link. Bind on.press for click handler.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "label": {
-     "type": "string"
-    },
-    "href": {
-     "type": "string"
-    }
-   },
-   "required": [
-    "label",
-    "href"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "press"
-  ]
- },
- "DropdownMenu": {
-  "description": "Dropdown menu with trigger button and selectable items. Use { $bindState } on value for selected item binding.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "label": {
-     "type": "string"
-    },
-    "items": {
-     "type": "array",
-     "items": {
-      "type": "object",
-      "properties": {
-       "label": {
-        "type": "string"
-       },
-       "value": {
-        "type": "string"
-       }
-      },
-      "required": [
-       "label",
-       "value"
-      ],
-      "additionalProperties": false
-     }
-    },
-    "value": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "label",
-    "items"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "select"
-  ]
- },
- "Toggle": {
-  "description": "Toggle button. Use { $bindState } on pressed for state binding.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "label": {
-     "type": "string"
-    },
-    "pressed": {
-     "anyOf": [
-      {
-       "type": "boolean"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "variant": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "default",
-        "outline"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "label"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "change"
-  ]
- },
- "ToggleGroup": {
-  "description": "Group of toggle buttons. Type 'single' (default) or 'multiple'. Use { $bindState } on value.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "items": {
-     "type": "array",
-     "items": {
-      "type": "object",
-      "properties": {
-       "label": {
-        "type": "string"
-       },
-       "value": {
-        "type": "string"
-       }
-      },
-      "required": [
-       "label",
-       "value"
-      ],
-      "additionalProperties": false
-     }
-    },
-    "type": {
-     "anyOf": [
-      {
-       "type": "string",
-       "enum": [
-        "single",
-        "multiple"
-       ]
-      },
-      {
-       "type": "null"
-      }
-     ]
-    },
-    "value": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "items"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "change"
-  ]
- },
- "ButtonGroup": {
-  "description": "Segmented button group. Use { $bindState } on selected for selected value.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "buttons": {
-     "type": "array",
-     "items": {
-      "type": "object",
-      "properties": {
-       "label": {
-        "type": "string"
-       },
-       "value": {
-        "type": "string"
-       }
-      },
-      "required": [
-       "label",
-       "value"
-      ],
-      "additionalProperties": false
-     }
-    },
-    "selected": {
-     "anyOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "buttons"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "change"
-  ]
- },
- "Pagination": {
-  "description": "Page navigation. Use { $bindState } on page for current page number.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "totalPages": {
-     "type": "number"
-    },
-    "page": {
-     "anyOf": [
-      {
-       "type": "number"
-      },
-      {
-       "type": "null"
-      }
-     ]
-    }
-   },
-   "required": [
-    "totalPages"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "change"
-  ]
- },
- "Hotspot": {
-  "description": "Transparent, keyboard-accessible absolute-positioned action area.",
-  "props": {
-   "type": "object",
-   "properties": {
-    "x": {
-     "type": "number"
-    },
-    "y": {
-     "type": "number"
-    },
-    "width": {
-     "type": "number",
-     "exclusiveMinimum": 0
-    },
-    "height": {
-     "type": "number",
-     "exclusiveMinimum": 0
-    },
-    "ariaLabel": {
-     "type": "string",
-     "minLength": 1
-    }
-   },
-   "required": [
-    "x",
-    "y",
-    "width",
-    "height",
-    "ariaLabel"
-   ],
-   "additionalProperties": false
-  },
-  "events": [
-   "press"
-  ]
  }
 }

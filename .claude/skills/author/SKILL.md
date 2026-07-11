@@ -9,7 +9,7 @@ easy-ui — просмотрщик кликабельных прототипов
 
 Два сценария, от частого к редкому:
 
-1. **Прототип из встроенного каталога** (37 компонентов) — написать JSON, отправить драйвером.
+1. **Прототип из встроенного каталога** (shadcn — 37 компонентов, wireframe — 12) — написать JSON, отправить драйвером.
 2. **Кастомный React-компонент + прототип на нём** — TSX-модуль публикуется через API, затем используется в прототипе как обычный тип.
 
 ## Setup
@@ -28,7 +28,7 @@ node driver.mjs get prototypes
 
 ## Сценарий 1: прототип из встроенных компонентов
 
-1. Прочитать справочник каталога `reference/builtin-catalog.json` — все 37 типов с JSON Schema props, событиями и примерами. Props валидируются строго: неизвестный ключ = ошибка.
+1. Прочитать справочник каталога `reference/builtin-catalog.json` — по ключу на каждую builtin-систему (`shadcn` — 37 типов, `wireframe` — 12), внутри — типы с JSON Schema props, событиями, atomic-уровнем и примерами. Прототипу доступны только builtins его `designSystem` (плюс опубликованные в этой системе кастомные компоненты); у систем, созданных через API (например `yandex-pay`), builtins нет вообще. Props валидируются строго: неизвестный ключ = ошибка.
 2. Написать документ по грамматике ниже (рабочий образец — `examples/rating-demo.json`, но замените в нём кастомный тип `RatingStars` на встроенный, если компонент не публиковали).
 3. Отправить:
 
@@ -119,6 +119,7 @@ node driver.mjs shoot my-flow ./shots
 ```bash
 node driver.mjs get prototypes            # список (id, headRev, latestVersion, ...)
 node driver.mjs get components my-comp    # один ресурс: headRev, versions
+node driver.mjs get design-systems        # реестр систем (builtins + созданные через API)
 node driver.mjs delete prototypes my-flow # hard delete (prototypes) / soft (components)
 ```
 
