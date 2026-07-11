@@ -13,6 +13,20 @@ const DEVICE_WIDTH = { mobile: 390, tablet: 834, desktop: 1280 } as const;
 type Screen = PrototypeDoc["screens"][number];
 type SelectionRect = { left: number; top: number; width: number; height: number };
 
+function containsPoint(rect: DOMRect, x: number, y: number) {
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
+function domDepth(element: Element, root: Element) {
+  let depth = 0;
+  let current: Element | null = element;
+  while (current && current !== root) {
+    depth += 1;
+    current = current.parentElement;
+  }
+  return depth;
+}
+
 export interface EditorCanvasProps {
   doc: PrototypeDoc;
   screen: Screen;
@@ -88,7 +102,6 @@ class EditorCanvasErrorBoundary extends Component<{ prototypeId: string; screenI
 export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stateEpoch, selectedKey, onSelect }: EditorCanvasProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const previewRootRef = useRef<HTMLDivElement>(null);
-  const overlayRef = useRef<HTMLDivElement>(null);
   const [selectionRects, setSelectionRects] = useState<SelectionRect[]>([]);
 
   useEffect(() => markDevtoolsActive(), []);
@@ -135,19 +148,31 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
 
   const handleHitTest = (event: MouseEvent<HTMLDivElement>) => {
     const previewRoot = previewRootRef.current;
-    if (!previewRoot || typeof document.elementsFromPoint !== "function") {
+    if (!previewRoot) {
       onSelect(null);
       return;
     }
-    for (const candidate of document.elementsFromPoint(event.clientX, event.clientY)) {
-      if (candidate === overlayRef.current || !previewRoot.contains(candidate)) continue;
-      const tagged = candidate.closest<HTMLElement>("[data-jr-key]");
-      if (tagged && previewRoot.contains(tagged)) {
-        onSelect(tagged.dataset.jrKey ?? null);
-        return;
+
+    let best: { key: string; depth: number; area: number } | null = null;
+    for (const tagged of previewRoot.querySelectorAll<HTMLElement>("span[data-jr-key]")) {
+      const key = tagged.dataset.jrKey;
+      if (!key) continue;
+      const range = document.createRange();
+      range.selectNodeContents(tagged);
+      const clientRects = Array.from(range.getClientRects());
+      if (!clientRects.some((rect) => containsPoint(rect, event.clientX, event.clientY))) continue;
+
+      const unionRect = range.getBoundingClientRect();
+      const candidate = {
+        key,
+        depth: domDepth(tagged, previewRoot),
+        area: unionRect.width * unionRect.height,
+      };
+      if (!best || candidate.depth > best.depth || (candidate.depth === best.depth && candidate.area < best.area)) {
+        best = candidate;
       }
     }
-    onSelect(null);
+    onSelect(best?.key ?? null);
   };
 
   const rendered = !hasRoot
@@ -163,7 +188,7 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
         nativeHeight={screen.canvas?.height}
         viewportRef={viewportRef}
         previewRootRef={previewRootRef}
-        overlay={<div ref={overlayRef} className="absolute inset-0 z-40 cursor-default" data-testid="editor-hit-overlay" onClick={handleHitTest} />}
+        overlay={<div className="absolute inset-0 z-40 cursor-default" data-testid="editor-hit-overlay" onClick={handleHitTest} />}
         frames={<div className="pointer-events-none absolute inset-0 z-50" aria-hidden="true">{selectionRects.map((rect, index) => <div key={index} className="absolute border-2 border-primary" style={rect} />)}</div>}
       >{rendered}</EditorFrame>
     </JSONUIProvider>

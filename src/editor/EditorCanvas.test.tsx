@@ -99,11 +99,72 @@ describe("EditorCanvas", () => {
     expect(mocks.cleanupDevtools).toHaveBeenCalledOnce();
   });
 
-  it("clears selection when jsdom cannot hit-test", () => {
+  it("clears selection when no element geometry contains the click", () => {
     const doc = makeDoc();
     const onSelect = vi.fn();
     render(<EditorCanvas doc={doc} screen={doc.screens[0]} registry={registry} runtimeKey="runtime" stateEpoch={0} selectedKey={null} onSelect={onSelect} />);
     fireEvent.click(screen.getByTestId("editor-hit-overlay"), { clientX: 10, clientY: 10 });
     expect(onSelect).toHaveBeenCalledWith(null);
+  });
+
+  it("selects the deepest element containing the click", () => {
+    const doc = makeDoc();
+    const onSelect = vi.fn();
+    render(<EditorCanvas doc={doc} screen={doc.screens[0]} registry={registry} runtimeKey="runtime" stateEpoch={0} selectedKey={null} onSelect={onSelect} />);
+
+    const previewRoot = document.querySelector<HTMLElement>("[inert]")!;
+    const parent = document.createElement("span");
+    parent.dataset.jrKey = "root";
+    const child = document.createElement("span");
+    child.dataset.jrKey = "child";
+    parent.append(child);
+    previewRoot.append(parent);
+
+    const rects = new Map<Node, DOMRect>([
+      [parent, DOMRect.fromRect({ x: 0, y: 0, width: 40, height: 40 })],
+      [child, DOMRect.fromRect({ x: 0, y: 0, width: 100, height: 100 })],
+    ]);
+    const rangeSpy = vi.spyOn(document, "createRange").mockImplementation(() => {
+      let selected: Node;
+      return {
+        selectNodeContents: (node: Node) => { selected = node; },
+        getClientRects: () => [rects.get(selected)!] as unknown as DOMRectList,
+        getBoundingClientRect: () => rects.get(selected)!,
+      } as unknown as Range;
+    });
+
+    fireEvent.click(screen.getByTestId("editor-hit-overlay"), { clientX: 10, clientY: 10 });
+    expect(onSelect).toHaveBeenCalledWith("child");
+    rangeSpy.mockRestore();
+  });
+
+  it("prefers the smaller union rect at equal DOM depth", () => {
+    const doc = makeDoc();
+    const onSelect = vi.fn();
+    render(<EditorCanvas doc={doc} screen={doc.screens[0]} registry={registry} runtimeKey="runtime" stateEpoch={0} selectedKey={null} onSelect={onSelect} />);
+
+    const previewRoot = document.querySelector<HTMLElement>("[inert]")!;
+    const large = document.createElement("span");
+    large.dataset.jrKey = "large";
+    const hotspot = document.createElement("span");
+    hotspot.dataset.jrKey = "hotspot";
+    previewRoot.append(large, hotspot);
+
+    const rects = new Map<Node, DOMRect>([
+      [large, DOMRect.fromRect({ x: 0, y: 0, width: 100, height: 100 })],
+      [hotspot, DOMRect.fromRect({ x: 5, y: 5, width: 20, height: 20 })],
+    ]);
+    const rangeSpy = vi.spyOn(document, "createRange").mockImplementation(() => {
+      let selected: Node;
+      return {
+        selectNodeContents: (node: Node) => { selected = node; },
+        getClientRects: () => [rects.get(selected)!] as unknown as DOMRectList,
+        getBoundingClientRect: () => rects.get(selected)!,
+      } as unknown as Range;
+    });
+
+    fireEvent.click(screen.getByTestId("editor-hit-overlay"), { clientX: 10, clientY: 10 });
+    expect(onSelect).toHaveBeenCalledWith("hotspot");
+    rangeSpy.mockRestore();
   });
 });
