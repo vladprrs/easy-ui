@@ -12,7 +12,7 @@ export function Layout() {
         </nav>
       </div>
     </header>
-    <div className="min-h-0">
+    <div className="min-h-0 min-w-0">
       <Outlet />
     </div>
   </div>;
