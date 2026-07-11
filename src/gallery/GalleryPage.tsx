@@ -54,6 +54,7 @@ export function GalleryPage() {
         </Link>
         <div className="mt-4 flex flex-wrap gap-2">
           <Link className="inline-block rounded-full border px-2.5 py-1 text-xs font-medium hover:bg-muted" to={`/p/${prototype.id}/cjm`}>CJM</Link>
+          <Link className="inline-block rounded-full border px-2.5 py-1 text-xs font-medium hover:bg-muted" to={`/p/${prototype.id}/edit`}>Редактор</Link>
           {prototype.latestVersion !== null ? <>
             <Link className="inline-block rounded-full border px-2.5 py-1 text-xs font-medium hover:bg-muted" to={`/p/${prototype.id}/v/${prototype.latestVersion}`}>Published v{prototype.latestVersion}</Link>
             <Link className="inline-block rounded-full border px-2.5 py-1 text-xs font-medium hover:bg-muted" aria-label={`CJM Published v${prototype.latestVersion}`} to={`/p/${prototype.id}/v/${prototype.latestVersion}/cjm`}>CJM</Link>
