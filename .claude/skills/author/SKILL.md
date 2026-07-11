@@ -1,105 +1,134 @@
 ---
 name: author
-description: Create and add components and prototypes in easy-ui — author a custom TSX component, publish it via the Bun API, build a prototype JSON flow from catalog + custom components, validate it, and screenshot it in the player.
+description: Add prototypes and custom components to easy-ui over its HTTP API — build a multi-screen prototype JSON flow, author a custom TSX component, publish them to the easy-ui server (prod or local), and screenshot the result in the player. Use when asked to create, add, update, or publish an easy-ui prototype or component.
 ---
 
-# Authoring components & prototypes in easy-ui
+# Authoring prototypes & components in easy-ui (remote API)
 
-Все пути — от корня репозитория. Три пути добавления, от частого к редкому:
+easy-ui — просмотрщик кликабельных прототипов: многоэкранные флоу из готовых shadcn-компонентов с навигацией и общим стейтом. Этот скилл самодостаточен и работает **только через HTTP API** — доступ к коду сервера не нужен. Все пути ниже — относительно каталога этого скилла. Харнес — `driver.mjs` (plain Node ≥18, без зависимостей).
 
-1. **Прототип из встроенного каталога** → файл `prototypes/*.json` (сидится в БД) или POST в API.
-2. **Кастомный компонент + прототип на нём** → только через Bun API (файловые прототипы кастомные типы не принимают — валидатор отвечает `unknown component type`).
-3. **Новый встроенный компонент** → код в `src/catalog/` (путь Hotspot).
+Два сценария, от частого к редкому:
 
-Спека формата: `docs/prototype-format.md` (строгий allowlist v1). Контракт компонента и все endpoints: `docs/server-api.md`. Харнес — `.claude/skills/author/driver.mjs` (create-or-update + publish + скриншоты).
+1. **Прототип из встроенного каталога** (37 компонентов) — написать JSON, отправить драйвером.
+2. **Кастомный React-компонент + прототип на нём** — TSX-модуль публикуется через API, затем используется в прототипе как обычный тип.
 
-## Запуск серверов
-
-```bash
-PATH="$HOME/.bun/bin:$PATH" DATA_DIR=.e2e-data/skill PORT=8787 ~/.bun/bin/bun server/main.ts   # API (фон)
-npm run dev                                                                                     # vite :5173, proxy /api → :8787 (фон)
-curl -s http://127.0.0.1:8787/api/health   # {"status":"ready"} — после миграций и seed из prototypes/*.json
-```
-
-`DATA_DIR` обязан лежать внутри корня проекта (материализованные TSX резолвят зависимости из корневого `node_modules`). `.e2e-data/` в gitignore — удобно для одноразовой БД. Реальный порт vite брать из лога, не из флагов (code-server их игнорирует).
-
-Список встроенных компонентов (35 shadcn + `Hotspot`):
+## Setup
 
 ```bash
-node -e "import('@json-render/shadcn/catalog').then(m=>console.log(Object.keys(m.shadcnComponentDefinitions).join(' ')))"
+export EASYUI_AUTH="user:pass"     # basic-auth креды инстанса (выдаёт владелец)
+# по умолчанию драйвер ходит на https://easy-ui.pay-offline.ru
+# другой инстанс (например локальный): export EASYUI_API="http://127.0.0.1:8787/api"
 ```
 
-## Путь 1: прототип из встроенных компонентов
-
-Написать `prototypes/<id>.json` по образцу `prototypes/hello-world.json` (`id` = имя файла без `.json`), затем:
+Проверка доступа (список прототипов; без корректного `EASYUI_AUTH` будет 401):
 
 ```bash
-npm run validate:prototypes
+node driver.mjs get prototypes
 ```
 
-Сервер сидит файл в SQLite **один раз** (таблица `seed_log` по имени файла) — правки уже засеянного файла в существующую БД не попадут; либо новый `DATA_DIR`, либо PUT через API/драйвер. Для итераций без файла — сразу `driver.mjs prototype` (ниже).
+## Сценарий 1: прототип из встроенных компонентов
 
-## Путь 2: кастомный компонент + прототип (agent path, основной)
-
-Контракт TSX-модуля: named export `definition` (`props` — Zod strict, `description` обязателен, `events?`/`slots?`/`example?`) + default plain function component, получающий `{props, emit}`. Рабочий пример: `.claude/skills/author/examples/rating-stars.tsx` (канонический — `server/fixtures/rating-stars.tsx`). Импортировать можно только `react`, `react-dom`, `react/jsx-runtime`, `zod`, `@json-render/react` (shim ABI v1); CSS-импорты и произвольные Tailwind-классы — нельзя, стилить inline/CSS-переменными темы.
+1. Прочитать справочник каталога `reference/builtin-catalog.json` — все 37 типов с JSON Schema props, событиями и примерами. Props валидируются строго: неизвестный ключ = ошибка.
+2. Написать документ по грамматике ниже (рабочий образец — `examples/rating-demo.json`, но замените в нём кастомный тип `RatingStars` на встроенный, если компонент не публиковали).
+3. Отправить:
 
 ```bash
-node .claude/skills/author/driver.mjs component rating-stars RatingStars .claude/skills/author/examples/rating-stars.tsx
-# saved rating-stars rev 1 / published rating-stars version 1
+node driver.mjs prototype my-flow.json
+# saved my-flow rev 1
+# component pins: [...]
+# player: https://easy-ui.pay-offline.ru/p/my-flow
 ```
 
-Драйвер сам делает create-or-update (CAS по `headRev`) и publish. Имя — уникальное `^[A-Z][A-Za-z0-9]*$`, не конфликтующее со встроенными, после создания неизменно. Save проверяет только синтаксис и контракт; **тип-ошибки ловит publish** (staging → failed), в ответе — вывод tsc:
+Сервер валидирует документ сам (422 с точными `issues` при ошибке). Драйвер делает create-or-update: повторный запуск с тем же `doc.id` обновляет драфт (CAS по `headRev` берёт на себя). Ссылку player из вывода можно сразу открыть в браузере (те же basic-auth креды).
 
-```
-publish failed (422): ... "Type check failed: ... error TS2339: Property 'missingProp' does not exist ..."
-```
+### Грамматика документа (format v1, строгий allowlist)
 
-Прототип, использующий компонент (рабочий пример — `.claude/skills/author/examples/rating-demo.json`):
+Корень: `{version: 1, id, name, description?, device?, startScreen, state?, screens[]}`. `id` и все ID — slugs; `device` — `mobile | tablet | desktop` (default `desktop`); `startScreen` существует в `screens`.
+
+Экран: `{id, name, canvas?: {width,height}, spec: {root, elements}}`. Элемент: `{type, props, children?, visible?, on?}` — только эти ключи. Элементы образуют одно дерево от `root` (≤500 элементов, глубина ≤50).
+
+`state` — единственный источник начального стейта; пути — абсолютные JSON Pointer (`/path`). `/currentScreen`, `/navStack`, `/_viewer` зарезервированы.
+
+**Директивы** (значение отдельного prop, не весь объект `props`):
+
+- `{"$state": "/path"}` — чтение стейта;
+- `{"$bindState": "/path"}` — двусторонняя привязка (редактируемые значения читать только так — события без payload);
+- `{"$template": "Hello ${/name}"}` — интерполяция;
+- `{"$cond": {"if": condition, "then": literal, "else": literal}}` — выбор значения (только точно эта форма).
+
+Condition: boolean, truthiness `{"$state":"/path"}`, либо `{"$state":"/path", eq|neq|gt|gte|lt|lte: ..., not?: true}` (максимум один оператор; `gt/gte/lt/lte` — только статические числа). Композиция — `{"$and":[...]}` / `{"$or":[...]}`. `repeat`, `watch`, `$computed`, `$item`, `$index`, `$bindItem` — зарезервированы и невалидны.
+
+**События и экшены**: имя события объявлено в definition компонента; значение — экшен или последовательный массив. Терминальный экшен максимум один и последний: `navigate {screenId}`, `back {}`, `restart {}`, `openUrl {url}`. Нетерминальные: `setState {statePath, value}`, `pushState {statePath, value, clearStatePath?}`, `removeState {statePath, index}`. Params — только статические литералы. `Link`, который навигирует, обязан ставить `preventDefault: true` на navigation-экшене.
+
+**URL и Hotspot**: `openUrl.url` и `Link.href` — статические `http(s)`; `Image.src` дополнительно допускает абсолютный путь с `/`. `Hotspot` требует `canvas` у экрана; его прямоугольник — статические числа внутри canvas.
+
+### Версии и публикация прототипа
+
+Каждое сохранение — неизменяемая ревизия (драфт). Плеер показывает драфт сразу — publish не обязателен. Зафиксировать версию (v1, v2, …): `POST /prototypes/:id/publish` c `{baseRev}` — при необходимости через `curl -u "$EASYUI_AUTH"`.
+
+## Сценарий 2: кастомный компонент + прототип
+
+Контракт TSX-модуля — named export `definition` + default plain function component (`memo`/`forwardRef` нельзя). Рабочий образец: `examples/rating-stars.tsx`:
+
+- `definition.props` — Zod **strict** схема; `description: string` обязателен; опционально `events?: string[]`, `slots?: string[]`, `example?` (обязан проходить props-схему).
+- Компонент получает один аргумент `{props, emit}`; `emit("eventName")` без payload.
+- Импортировать можно только: `react`, `react-dom`, `react/jsx-runtime`, `zod`, `@json-render/react`. CSS-импорты и произвольные Tailwind-классы нельзя — стилить inline-стилями и CSS-переменными темы (`var(--border)` и т.п.).
+- Лимит source — 256 KiB; JSON-тело запроса — 1 MiB.
 
 ```bash
-node .claude/skills/author/driver.mjs prototype .claude/skills/author/examples/rating-demo.json
-# saved rating-demo rev 1
+node driver.mjs component rating-stars RatingStars examples/rating-stars.tsx
+# saved rating-stars rev 1
+# published rating-stars version 1
+```
+
+Имя — уникальное `^[A-Z][A-Za-z0-9]*$`, не конфликтующее со встроенным каталогом (см. reference), после создания неизменно. Драйвер делает save + publish за один вызов. Save проверяет только синтаксис и контракт; **тип-ошибки ловит publish** — в ответе вывод tsc:
+
+```
+publish failed (422): ... "Type check failed: ... error TS2339: Property 'missing' does not exist on type '{ value: number; label: string; }'."
+```
+
+Дальше — обычный прототип с этим типом (`examples/rating-demo.json` использует `RatingStars`):
+
+```bash
+node driver.mjs prototype examples/rating-demo.json
 # component pins: [{"id":"rating-stars","name":"RatingStars","version":1,...}]
 ```
 
-Пины фиксируются на момент save: последующий publish компонента не меняет уже сохранённый прототип — чтобы подтянуть новую версию, пересохранить прототип (повторный `driver.mjs prototype`).
+**Пины фиксируются на момент сохранения прототипа**: последующий publish компонента не меняет уже сохранённый прототип. Чтобы подтянуть новую версию компонента — пересохранить прототип (повторный `driver.mjs prototype`).
 
-### Посмотреть результат
+## Посмотреть результат
+
+Ссылка `…/p/<id>` из вывода драйвера открывается в браузере под теми же кредами; экраны — `…/p/<id>/s/<screenId>`. Если в окружении агента есть playwright, драйвер снимет каждый экран сам и **упадёт при ошибках консоли браузера** (валидный по схеме прототип всё ещё может не отрендериться):
 
 ```bash
-node .claude/skills/author/driver.mjs shoot rating-demo
-# .e2e-data/author-shots/rating-demo/rate.png
-# .e2e-data/author-shots/rating-demo/done.png
+node driver.mjs shoot my-flow ./shots
+# ./shots/<screenId>.png на каждый экран
 ```
 
-Скриншотит каждый экран по deep-link `/p/<id>/s/<screen>` и **падает при ошибках консоли браузера** — валидный по схеме прототип всё ещё может не рендериться (см. Gotchas). Интерактив (клики, проверка state) — ad-hoc Playwright-скриптом по образцу скилла `/verify`: `import { chromium } from '/home/coder/project/node_modules/playwright/index.mjs'`.
+## Инспекция и удаление
 
-## Путь 3: новый встроенный компонент (код)
+```bash
+node driver.mjs get prototypes            # список (id, headRev, latestVersion, ...)
+node driver.mjs get components my-comp    # один ресурс: headRev, versions
+node driver.mjs delete prototypes my-flow # hard delete (prototypes) / soft (components)
+```
 
-По образцу Hotspot; точки подключения:
-
-- `src/catalog/<name>.definition.ts` + `src/catalog/<name>.tsx` — definition (Zod strict props, `events`, `description`) и React-компонент.
-- `src/catalog/definitions.ts` — добавить в `sourceComponentDefinitions`.
-- `src/catalog/runtime.ts` — добавить в `builtinComponents` (`createPlayerRuntime`).
-- `src/catalog/fixtures.ts` — пример props в `fixtureOverrides` (или `example` в definition); story в `src/catalog/stories/` и, если она в `expectedStoryIds`, её проверяет `scripts/check-storybook-drift.ts`.
-- `builtinCatalogHash` (server/builtinHash.ts) пересчитывается сам из definitions — руками не трогать.
-
-Проверка: `npm run verify` (typecheck + тесты + validate:prototypes + build + drift).
+Удаление компонента — soft: он исчезает из списка и недоступен новым сохранениям, но опубликованные bundle и пины существующих прототипов продолжают работать.
 
 ## Gotchas
 
-- **`$cond` в props работает** (баг с нерезолвящейся директивой исправлен 2026-07-11: плеер адаптирует doc-форму `{"$cond":{if,then,else}}` в рантаймную через `src/prototype/runtimeSpec.ts`). Альтернатива для показа/скрытия целых элементов — `visible`-условия (`{"$state":"/path"}` / `{"$state":"/path","eq":0}`). Операнды `gt/gte/lt/lte` — только числа; директива не может заменять весь объект `props`.
-- Файловые `prototypes/*.json` — только встроенный каталог; кастомные типы валидатор режет (`unknown component type`). Прототипы с кастомными компонентами живут только в БД через API.
-- Seed одноразовый по имени файла: правка засеянного JSON молча не применится. Итерации — через `driver.mjs prototype` или свежий `DATA_DIR`.
-- Все мутации требуют `baseRev` (409 при гонке) — драйвер берёт `headRev` сам; при ручном curl не забыть.
-- Тело компонента — plain function; `memo`/`forwardRef` в ABI v1 не поддерживаются. `example`, если задан, обязан проходить props-схему.
-- События без payload; редактируемые значения читать через `$bindState`. У события максимум один терминальный экшен (`navigate`/`back`/`restart`/`openUrl`), и он последний.
-- Bun брать из `~/.bun/bin` (npm-шим `/usr/local/bin/bun` битый).
-- Длинные JSON-тела в шелле не инлайнить (бэктики выполняются) — payload собирать в файл, `curl --data-binary @file`; драйвер избавляет от этого.
+- Прототип **обновляется, а не создаётся заново**: `doc.id` — ключ. Не занимайте чужие id — `get prototypes` покажет, что уже есть.
+- Все мутации требуют `baseRev` (409 при гонке) — драйвер берёт `headRev` сам; при ручном `curl` не забыть.
+- Директива не может заменить весь объект `props`; `$cond` принимается только в канонической форме `{"$cond":{if,then,else}}`.
+- Показ/скрытие целого элемента — `visible` с condition, не `$cond` в props.
+- Длинные JSON-тела в шелле не инлайнить (бэктики выполняются как command substitution) — писать payload в файл; драйвер избавляет от этого.
+- `shoot` ждёт `networkidle` — на медленном инстансе первый экран может грузить bundle компонента дольше секунды, это нормально.
 
 ## Troubleshooting
 
-- `422 {"issues":[{"path":["source"],"message":"Type check failed: ..."}]}` на publish — читать вывод tsc в issue; save такие ошибки не ловит.
-- `FAIL <file>.json /screens/.../type: unknown component type: X` из validate:prototypes — кастомный тип в файловом прототипе; перенести прототип в API-путь.
-- `[json-render] Rendering error in <Text>: Objects are not valid as a React child ({$cond})` — не-каноническая форма `$cond` (адаптер переписывает только точное `{"$cond":{if,then,else}}`, остальное оставляет как есть); сверить форму с docs/prototype-format.md.
-- `curl` к :8787 отказывает (exit 7) — API-сервер не запущен либо занят другим портом; health-эндпоинт открыт даже под BASIC_AUTH.
+- `401` на любой запрос — не задан/неверен `EASYUI_AUTH` (формат строго `user:pass`, драйвер сам кодирует base64).
+- `save failed (422) ... "Unrecognized key: \"bogus\""` с path `/screens/0/spec/elements/...` — prop, которого нет в схеме компонента; сверить с `reference/builtin-catalog.json` (для кастомных — со своей Zod-схемой).
+- `save failed (422) ... "Unknown or unpublished component type: X"` — тип не встроенный и не опубликован как компонент; сначала `driver.mjs component ...`.
+- `publish failed (422) ... Type check failed` (компонент) — читать вывод tsc в issue; save такие ошибки не ловит.
+- `save failed (409)` — параллельное редактирование того же id (CAS-конфликт); повторить запуск драйвера (он перечитает `headRev`).
+- `shoot` падает с `Cannot find package 'playwright'` — окружению агента нужен playwright (`npm i playwright && npx playwright install chromium`) либо смотреть прототип в браузере по ссылке player.
