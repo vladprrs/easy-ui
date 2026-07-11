@@ -8,9 +8,18 @@ import { routeComponents, catalogManifest } from "./routes/components";
 import { routeShims } from "./routes/shims";
 import { failStagingPublishes } from "./repos/components";
 import { verifyShimAbi } from "./shims/abi-v1";
+import { isAuthorized, protectResponse, unauthorizedResponse } from "./auth";
 
-export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?:string;dataDir?:string}={}):(request:Request)=>Promise<Response> {
-  return async request=>{ try {
+export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?:string;dataDir?:string;basicAuth?:string}={}):(request:Request)=>Promise<Response> {
+  return async request=>{
+    const authEnabled=Boolean(options.basicAuth);
+    const finish=(response:Response)=>authEnabled?protectResponse(response):response;
+    if(authEnabled) {
+      const url=new URL(request.url);
+      const health=request.method==="GET"&&url.pathname==="/api/health";
+      if(!health&&!isAuthorized(request,options.basicAuth!)) return unauthorizedResponse();
+    }
+    const handle=async()=>{ try {
     const url=new URL(request.url); let segments:string[];
     try { segments=url.pathname.split("/").filter(Boolean).map(decodeURIComponent); } catch { throw new ApiError(400,"invalid_path","Malformed URL encoding"); }
     if(segments[0]==="api") {
@@ -24,12 +33,20 @@ export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?
     if(options.serveDist) return await serveStatic(request,options.serveDist);
     throw new ApiError(404,"not_found","Route not found");
   } catch(error) { return errorResponse(error); } };
+    return finish(await handle());
+  };
 }
 
-export async function startServer(options:{port?:number;database?:string;serveDist?:string}={}) {
+export async function startServer(options:{port?:number;database?:string;serveDist?:string;host?:string}={}) {
+  const host=options.host??process.env.HOST??"127.0.0.1";
+  const basicAuth=process.env.BASIC_AUTH||undefined;
+  if(host!=="127.0.0.1"&&host!=="localhost"&&!basicAuth) {
+    console.error(`Refusing to start easy-ui on non-loopback host ${JSON.stringify(host)} without BASIC_AUTH`);
+    process.exit(1);
+  }
   let ready=false; const db=openDatabase(options.database); failStagingPublishes(db); await verifyShimAbi(); await seedPrototypes(db); ready=true;
   const serveDist=options.serveDist ?? (process.env.SERVE_DIST || undefined);
-  const dataDir=process.env.DATA_DIR??"data"; const server=Bun.serve({hostname:"127.0.0.1",port:options.port??Number(process.env.PORT||8787),fetch:createHandler(db,{ready:()=>ready,serveDist,dataDir})});
+  const dataDir=process.env.DATA_DIR??"data"; const server=Bun.serve({hostname:host,port:options.port??Number(process.env.PORT||8787),fetch:createHandler(db,{ready:()=>ready,serveDist,dataDir,basicAuth})});
   return {server,db};
 }
 

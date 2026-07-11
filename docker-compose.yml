@@ -1,0 +1,22 @@
+services:
+  easy-ui:
+    build: .
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    mem_limit: 1g
+    environment:
+      BASIC_AUTH: ${BASIC_AUTH:?BASIC_AUTH is required}
+    expose:
+      - "8787"
+    volumes:
+      - easy-ui-data:/app/data
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:8787/api/health'); const b=await r.json(); if(r.status!==200||b.status!=='ready') process.exit(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
+volumes:
+  easy-ui-data:

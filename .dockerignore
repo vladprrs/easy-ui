@@ -1,0 +1,17 @@
+node_modules
+dist
+data
+.e2e-data
+.git
+.github
+.claude*
+.codex-home
+docs
+playwright-report
+test-results
+coverage
+*.log
+.env*
+*.db
+*.db-wal
+*.db-shm
