@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import { z } from "zod";
 import type { ComponentDefinition } from "../catalog/definitions";
+import { atomicLevels } from "../designSystems/types";
 
 export interface CustomComponentRef {
   id: string;
@@ -49,8 +50,17 @@ export async function loadCustomComponents(refs: CustomComponentRef[], importMod
       const definition = module.definition as Record<string, unknown>;
       if (!(definition.props instanceof z.ZodType)) throw new Error("definition.props is not a host zod schema");
       if (typeof definition.description !== "string") throw new Error("definition.description must be a string");
+      if (definition.atomicLevel !== undefined && !atomicLevels.includes(definition.atomicLevel as (typeof atomicLevels)[number])) throw new Error("definition.atomicLevel is invalid");
       if (typeof module.default !== "function") throw new Error("default export must be a function component");
-      definitions[ref.name] = module.definition as ComponentDefinition;
+      definitions[ref.name] = {
+        props: definition.props as z.ZodType,
+        description: definition.description,
+        ...(Array.isArray(definition.events) ? { events: definition.events as string[] } : {}),
+        ...(Array.isArray(definition.slots) ? { slots: definition.slots as string[] } : {}),
+        ...(definition.example && typeof definition.example === "object" ? { example: definition.example as Record<string, unknown> } : {}),
+        ...(definition.atomicLevel ? { atomicLevel: definition.atomicLevel as ComponentDefinition["atomicLevel"] } : {}),
+        ...(typeof definition.layoutNeutral === "boolean" ? { layoutNeutral: definition.layoutNeutral } : {}),
+      };
       components[ref.name] = module.default as ComponentType;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);

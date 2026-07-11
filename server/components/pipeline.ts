@@ -2,6 +2,7 @@ import { link, mkdir, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
 import type { DefinitionMeta } from "./types";
+import type { AtomicLevel } from "../../src/designSystems/types";
 
 const imported = new Map<string, Promise<{ definition: { props: z.ZodType }; default: unknown }>>();
 
@@ -35,8 +36,8 @@ export async function importPublished(id:string,rev:number,path:string) {
   return promise;
 }
 
-export function definitionMeta(definition:{events?:string[];slots?:string[];description:string;example?:Record<string,unknown>;props:z.ZodType}):DefinitionMeta {
+export function definitionMeta(definition:{events?:string[];slots?:string[];description:string;example?:Record<string,unknown>;atomicLevel?:AtomicLevel;props:z.ZodType}):DefinitionMeta {
   let propsJsonSchema:unknown;
   try { propsJsonSchema=z.toJSONSchema(definition.props); } catch { /* best effort metadata */ }
-  return {events:definition.events??[],slots:definition.slots??[],description:definition.description,...(definition.example?{example:definition.example}:{}),...(propsJsonSchema?{propsJsonSchema}:{})};
+  return {events:definition.events??[],slots:definition.slots??[],description:definition.description,...(definition.example?{example:definition.example}:{}),...(definition.atomicLevel?{atomicLevel:definition.atomicLevel}:{}),...(propsJsonSchema?{propsJsonSchema}:{})};
 }

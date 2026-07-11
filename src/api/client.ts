@@ -34,6 +34,7 @@ export interface PrototypeSummary {
   name: string;
   description?: string;
   device: PrototypeDoc["device"];
+  designSystem?: string;
   screenCount: number;
   headRev: number;
   latestVersion: number | null;
@@ -44,6 +45,7 @@ export interface PrototypeVersionSummary { version: number; rev: number; publish
 export interface PrototypeMeta {
   id: string;
   name: string;
+  designSystem: string;
   headRev: number;
   latestVersion: number | null;
   versions: PrototypeVersionSummary[];
@@ -61,6 +63,13 @@ export interface PrototypeVersion extends PrototypeDraft { version: number; publ
 export interface PrototypeRevisionSummary { rev: number; message: string | null; createdAt: string }
 export interface PrototypeRevision { rev: number; doc: PrototypeDoc; components: PrototypeComponentPin[]; message: string | null; createdAt: string }
 export interface SavePrototypeResult { rev: number; warnings: unknown[] }
+
+export type AtomicLevel = "atom" | "molecule" | "organism" | "template" | "page";
+export interface ComponentSummary { id: string; name: string; designSystem: string; headRev: number; latestVersion: number | null; updatedAt: string }
+export interface ComponentMeta { id: string; name: string; designSystem: string; headRev: number; versions: PrototypeVersionSummary[]; updatedAt: string }
+export interface CatalogComponent { id: string; name: string; designSystem: string; version: number; bundleUrl: string; bundleHash: string; atomicLevel?: AtomicLevel; description: string; events: string[]; slots: string[]; hostAbiVersion: number }
+export interface DesignSystemComponent { name: string; atomicLevel: AtomicLevel; layoutNeutral: boolean; description: string; events: string[]; slots: string[] }
+export interface DesignSystemSummary { id: string; name: string; description: string; builtinCatalogHash: string; components: DesignSystemComponent[] }
 
 type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
 
@@ -84,8 +93,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 const prototypePath = (id: string) => `/api/prototypes/${encodeURIComponent(id)}`;
+const componentPath = (id: string) => `/api/components/${encodeURIComponent(id)}`;
 
 export const listPrototypes = (signal?: AbortSignal) => request<PrototypeSummary[]>("/api/prototypes", { signal });
+export const listDesignSystems = (signal?: AbortSignal) => request<{designSystems: DesignSystemSummary[]}>("/api/design-systems", { signal });
+export const listComponents = (signal?: AbortSignal) => request<ComponentSummary[]>("/api/components", { signal });
+export const getComponentMeta = (id: string, signal?: AbortSignal) => request<ComponentMeta>(componentPath(id), { signal });
 export const createPrototype = (doc: PrototypeDoc, message?: string, signal?: AbortSignal) => request<{id: string; rev: 1; warnings: unknown[]}>("/api/prototypes", { method: "POST", body: { doc, message }, signal });
 export const getPrototypeMeta = (id: string, signal?: AbortSignal) => request<PrototypeMeta>(prototypePath(id), { signal });
 export const getPrototypeDraft = (id: string, signal?: AbortSignal) => request<PrototypeDraft>(`${prototypePath(id)}/draft`, { signal });
