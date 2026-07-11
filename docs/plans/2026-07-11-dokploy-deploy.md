@@ -69,3 +69,32 @@ easy-ui (Vite SPA + Bun API-сервер, SQLite) сейчас живёт тол
    - Если docker в этом контейнере недоступен — верифицировать патч сервера локально (`BASIC_AUTH=a:b HOST=0.0.0.0 bun server/main.ts`), а сборку образа проверит сам Dokploy при деплое.
 2. Прод после `compose.deploy`: дождаться `composeStatus: done`; `curl -u … https://easy-ui.pay-offline.ru/api/health` → `{"status":"ready"}`; открыть галерею, прогнать флоу прототипа, publish кастомного компонента через API с паролем; повторный `compose.deploy` → данные в volume пережили редеплой.
 3. Негатив: запрос без пароля → 401; TLS-серт Let's Encrypt валиден.
+
+## Триаж ревью (Codex gpt-5.6-sol, 2026-07-11)
+
+**Принято (вошло в план):**
+- [blocker] Fail-closed auth: в compose `BASIC_AUTH: ${BASIC_AUTH:?BASIC_AUTH is required}` (деплой падает без секрета) + сервер отказывается стартовать, если `HOST` не loopback и `BASIC_AUTH` пуст.
+- [blocker] Явный гейт: изменения закоммичены и запушены в GitHub `main` **до** `compose.deploy` (Dokploy тянет из remote).
+- [major] Auth-гейт стоит до всех веток (API, статика, SPA fallback), 401 — прямой `Response` (не ApiError) с `WWW-Authenticate`, `Cache-Control: no-store`. Открыт только `GET /api/health`.
+- [major] При включённом auth: `Vary: Authorization` на все ответы, `public` в cache-control заменяется на `private`.
+- [major] Timing-safe сравнение: SHA-256 обоих значений → сравнение 32-байтовых digest; malformed base64 → 401; scheme case-insensitive.
+- [major] Bun-бинарник: exact-теги образов + `RUN bun --version` в билде (smoke на glibc/AVX2).
+- [major] `${BASIC_AUTH}` инжектится в контейнер только через явный `environment:` с required-оператором (Dokploy кладёт env в `.env` рядом с compose).
+- [major] Healthcheck exec-form `["CMD","bun","-e",...]` с проверкой 200 и `status:"ready"`, `start_period`/`timeout`/`retries`.
+- [major] Идемпотентность API-вызовов: перед create — поиск существующих project/compose/domain; IDs из вложенных полей ответа; domain создаётся до deploy; после deploy — poll статуса.
+- [major] `.dockerignore` расширен (`.github`, `.env*`, coverage/playwright-outputs, SQLite sidecars); слои: сначала package*.json + `npm ci`, потом исходники.
+- [major, частично] Лёгкий hardening: `init: true`, `mem_limit`, `stop_grace_period`, `restart: unless-stopped`. Non-root/cap_drop/read-only rootfs — отклонено (ниже).
+- [minor] `HOST` через `startServer({host})` options, auth-конфиг передаётся в `createHandler`.
+- [minor] Обновить `docs/server-api.md` (trust boundary, env, health-исключение) — код исполняется уже при save (extract), не только publish.
+- [minor] Интеграционные bun-тесты auth-гейта: disabled/missing/wrong/correct, health bypass, статика/SPA под auth, заголовки 401.
+
+**Принято как документированный риск (без реализации сейчас):**
+- Server-side build (vite+storybook) может быть тяжёлым для VPS — если OOM/таймаут, план Б: CI-сборка образа + registry. Фиксируем после первого деплоя.
+- SQLite WAL backup: named volume + Dokploy Volume Backups позже; в docs — предупреждение про `-wal/-shm` и `down -v`.
+- Rollback = revert/checkout предыдущего SHA + `compose.deploy`; миграции forward-only — перед рискованными изменениями бэкапить volume.
+
+**Отклонено:**
+- Traefik/forward-auth вместо app-level — решение зафиксировано на планировании: Dokploy-managed router, свой middleware хрупок; app-level гейт fail-closed покрывает требование.
+- Multi-stage + перенос typescript в dependencies — devDeps нужны в рантайме (publish typecheck); полный `npm ci` в одном стейдже проще и корректнее; размер образа — осознанная цена.
+- Non-root/cap_drop/pids_limit — сервис намеренно исполняет доверенный код за паролем, единственный пользователь; изоляция — контейнер. Пересмотрим при мульти-пользовательском сценарии.
+- Пиновка base-образов по digest — exact-теги достаточны для этого проекта.
