@@ -35,7 +35,7 @@ function LoadedPlayer({ doc, custom, runtimeKey }: { doc: PrototypeDoc; custom?:
     back: () => navigationRef.current.back(),
     openUrl: (url) => { window.open(url, "_blank", "noopener,noreferrer"); },
     restart: () => navigationRef.current.restart(),
-  }, custom), [custom]);
+  }, custom, doc.designSystem), [custom, doc.designSystem]);
 
   return <JSONUIProvider key={`${runtimeKey}:${navigation.sessionNonce}`} registry={runtime.registry} handlers={runtime.handlers} initialState={doc.state}>
     <Outlet context={{ doc, registry: runtime.registry } satisfies PlayerOutletContext} />
@@ -51,7 +51,7 @@ function ReadyPlayer({ loaded, routeBase }: { loaded: Awaited<ReturnType<typeof 
   if (customState.status === "loading") return <div role="status" aria-label="Loading components" />;
   if (customState.status === "error") return <LoadError error={customState.error} retry={customState.reload} />;
   const revision = "version" in loaded ? `v${loaded.version}` : `r${loaded.rev}`;
-  const runtimeKey = `${loaded.doc.id}:${revision}:${loaded.componentManifestHash}`;
+  const runtimeKey = `${loaded.doc.id}:${revision}:${loaded.componentManifestHash}:${loaded.doc.designSystem}`;
   return <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} routeBase={routeBase}>
     <LoadedPlayer key={runtimeKey} doc={loaded.doc} custom={customState.data} runtimeKey={runtimeKey} />
   </PlayerNavigationProvider>;

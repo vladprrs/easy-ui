@@ -1,9 +1,19 @@
 import { defineRegistry, type Components } from "@json-render/react";
 import type { ComponentType } from "react";
-import { shadcnComponents } from "@json-render/shadcn";
-import { catalog, createCatalog } from "./catalog";
-import { componentDefinitions, type ComponentDefinition } from "./definitions";
-import { Hotspot } from "./hotspot";
+import { createCatalog } from "./catalog";
+import type { ComponentDefinition } from "./definitions";
+import { getDesignSystem } from "../designSystems";
+
+const builtinCatalogs = new Map<string, ReturnType<typeof createCatalog>>();
+
+function getBuiltinCatalog(designSystemId: string, definitions: Record<string, ComponentDefinition>) {
+  let runtimeCatalog = builtinCatalogs.get(designSystemId);
+  if (!runtimeCatalog) {
+    runtimeCatalog = createCatalog(definitions);
+    builtinCatalogs.set(designSystemId, runtimeCatalog);
+  }
+  return runtimeCatalog;
+}
 
 export interface PlayerRuntimeDeps {
   navigate: (screenId: string) => void | Promise<void>;
@@ -17,8 +27,9 @@ export interface CustomPlayerRuntime {
   components: Record<string, ComponentType>;
 }
 
-export function createPlayerRuntime(deps: PlayerRuntimeDeps, custom?: CustomPlayerRuntime) {
-  const builtinComponents = { ...shadcnComponents, Hotspot };
+export function createPlayerRuntime(deps: PlayerRuntimeDeps, custom?: CustomPlayerRuntime, designSystemId = "shadcn") {
+  const system = getDesignSystem(designSystemId);
+  const builtinComponents = system.components;
   const actions = {
     navigate: async (params: { screenId: string } | undefined) => deps.navigate(params!.screenId),
     back: async () => deps.back(),
@@ -32,11 +43,12 @@ export function createPlayerRuntime(deps: PlayerRuntimeDeps, custom?: CustomPlay
     if (definitionKeys.length !== componentKeys.length || definitionKeys.some((key, index) => key !== componentKeys[index])) {
       throw new Error("Custom definition and component keys must match");
     }
-    const runtimeCatalog = createCatalog({ ...componentDefinitions, ...custom.definitions });
+    const runtimeCatalog = createCatalog({ ...system.definitions, ...custom.definitions });
     const runtimeComponents = { ...builtinComponents, ...custom.components } as Components<typeof runtimeCatalog>;
     result = defineRegistry(runtimeCatalog, { components: runtimeComponents, actions });
   } else {
-    result = defineRegistry(catalog, { components: builtinComponents, actions });
+    const runtimeCatalog = getBuiltinCatalog(system.id, system.definitions);
+    result = defineRegistry(runtimeCatalog, { components: builtinComponents as Components<typeof runtimeCatalog>, actions });
   }
 
   // In @json-render/react 0.19.0 `handlers` is a factory, not a handler map.

@@ -3,6 +3,7 @@ import { JSONUIProvider, Renderer } from "@json-render/react";
 import { useMemo, useState } from "react";
 import { createPlayerRuntime, type PlayerRuntimeDeps } from "../catalog/runtime";
 
+// This smoke fixture intentionally exercises the default, shadcn-only catalog.
 export const smokeSpec = {
   root: "card",
   elements: {
