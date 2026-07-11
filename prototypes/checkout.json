@@ -13,6 +13,7 @@
     {
       "id": "catalog",
       "name": "Каталог",
+      "note": "Покупатель замечает новинку в каталоге и открывает карточку товара.",
       "canvas": { "width": 390, "height": 844 },
       "spec": {
         "root": "catalog-stack",
@@ -29,6 +30,7 @@
     {
       "id": "product",
       "name": "Товар",
+      "note": "Покупатель изучает кроссовки, цену и добавляет товар в корзину.",
       "spec": {
         "root": "product-card",
         "elements": {
@@ -42,6 +44,8 @@
     {
       "id": "cart",
       "name": "Корзина",
+      "note": "В корзине лежит одна пара кроссовок, заказ готов к оформлению.",
+      "stateOverrides": { "cart": { "count": 1 } },
       "spec": {
         "root": "cart-card",
         "elements": {
@@ -57,6 +61,8 @@
     {
       "id": "checkout-form",
       "name": "Оформление",
+      "note": "Покупатель проверяет предзаполненные данные доставки и переходит к оплате.",
+      "stateOverrides": { "form": { "name": "Анна" } },
       "spec": {
         "root": "form-card",
         "elements": {
@@ -71,6 +77,7 @@
     {
       "id": "success",
       "name": "Успех",
+      "note": "Оплата завершена, покупатель получает подтверждение заказа.",
       "spec": {
         "root": "success-card",
         "elements": {
