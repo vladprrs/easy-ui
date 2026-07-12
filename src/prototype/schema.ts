@@ -19,12 +19,18 @@ const actionSchema = z.strictObject({
   preventDefault: z.boolean().optional(),
 });
 
+const repeatSchema = z.strictObject({
+  statePath: z.string().startsWith("/"),
+  key: z.string().min(1).optional(),
+});
+
 const elementSchema = z.strictObject({
   type: z.string().min(1),
   props: z.record(z.string(), z.unknown()),
   children: z.array(z.string()).optional(),
   visible: z.unknown().optional(),
   on: z.record(z.string(), z.union([actionSchema, z.array(actionSchema).min(1)])).optional(),
+  repeat: repeatSchema.optional(),
 });
 
 const specSchema = z.strictObject({

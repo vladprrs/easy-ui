@@ -99,7 +99,7 @@ describe("prototype v1 validation", () => {
   it("rejects a missing navigate target", () => { const d=clone(); d.screens[0].spec.elements.next.on.press.params.screenId="missing"; expectInvalid(d,/target does not exist/); });
   it("rejects spec.state", () => { const d=clone(); d.screens[0].spec.state={}; expectInvalid(d,/Unrecognized key.*state/); });
   it("rejects watch", () => { const d=clone(); d.screens[0].spec.elements.next.watch={}; expectInvalid(d,/Unrecognized key.*watch/); });
-  it("rejects repeat", () => { const d=clone(); d.screens[0].spec.elements.next.repeat={statePath:"/items"}; expectInvalid(d,/Unrecognized key.*repeat/); });
+  it("rejects a repeat statePath that is not an absolute pointer", () => { const d=clone(); d.screens[0].spec.elements.next.repeat={statePath:"items"}; expectInvalid(d,/statePath/); });
   it("rejects a reserved state path", () => { const d=clone(); d.screens[0].spec.elements.next.on.press={action:"setState",params:{statePath:"/_viewer/x",value:true}}; expectInvalid(d,/reserved viewer namespace/); });
   it("rejects a javascript URL", () => { const d=clone(); d.screens[0].spec.elements.next.on.press={action:"openUrl",params:{url:"javascript:alert(1)"}}; expectInvalid(d,/http\(s\)/); });
   it("rejects a dynamic Image src", () => { const d=clone(); d.screens[0].spec.elements.greeting={type:"Image",props:{src:{$state:"/image"},alt:"x"}}; expectInvalid(d,/URL must be a static string/); });
@@ -236,6 +236,104 @@ describe("custom component definitions", () => {
     const invalidEvent = structuredClone(document);
     invalidEvent.screens[0]!.spec.elements.rating!.on = { press: { action: "back", params: {} } };
     expect(validatePrototype(invalidEvent, { definitions: { RatingStars: definition } }).errors.map((entry) => entry.message)).toContain("unknown event for RatingStars: press");
+  });
+});
+
+describe("repeat", () => {
+  const definitions = {
+    List: { description: "A list container", props: z.strictObject({}) },
+    Item: { description: "A list item", props: z.strictObject({ label: z.unknown().optional() }) },
+    Hotspot: { description: "Hotspot", props: z.strictObject({ x: z.number(), y: z.number(), width: z.number(), height: z.number(), ariaLabel: z.string() }) },
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function repeatDoc(elements: Record<string, any>, state: Record<string, any> = { items: [{ label: "A" }, { label: "B" }] }, canvas?: { width: number; height: number }) {
+    return prototypeDocSchema.parse({
+      version: 1, id: "repeat-test", name: "Repeat test", startScreen: "main", state,
+      screens: [{ id: "main", name: "Main", ...(canvas ? { canvas } : {}), spec: { root: "list", elements } }],
+    });
+  }
+  const validate = (doc: ReturnType<typeof repeatDoc>) => validatePrototype(doc, { definitions });
+
+  it("accepts a valid repeat with $item in props", () => {
+    const doc = repeatDoc({
+      list: { type: "List", props: {}, repeat: { statePath: "/items" }, children: ["item"] },
+      item: { type: "Item", props: { label: { $item: "label" } } },
+    });
+    expect(validate(doc).errors).toEqual([]);
+  });
+
+  it("accepts $index inside a repeat subtree condition", () => {
+    const doc = repeatDoc({
+      list: { type: "List", props: {}, repeat: { statePath: "/items" }, children: ["item"] },
+      item: { type: "Item", props: {}, visible: { $index: true, gt: 0 } },
+    });
+    expect(validate(doc).errors).toEqual([]);
+  });
+
+  it("rejects nested repeat", () => {
+    const doc = repeatDoc({
+      list: { type: "List", props: {}, repeat: { statePath: "/items" }, children: ["inner"] },
+      inner: { type: "List", props: {}, repeat: { statePath: "/items" }, children: ["item"] },
+      item: { type: "Item", props: {} },
+    });
+    expect(validate(doc).errors.map((e) => e.message)).toContain("nested repeat is not allowed");
+  });
+
+  it("rejects more than 20 repeat elements on a screen", () => {
+    const elements: Record<string, unknown> = {
+      list: { type: "List", props: {}, children: Array.from({ length: 21 }, (_, i) => `r${i}`) },
+    };
+    for (let i = 0; i < 21; i++) elements[`r${i}`] = { type: "List", props: {}, repeat: { statePath: "/items" } };
+    const doc = repeatDoc(elements);
+    expect(validate(doc).errors.some((e) => /exceeds 20 repeat elements/.test(e.message))).toBe(true);
+  });
+
+  it("rejects a Hotspot inside a repeat subtree", () => {
+    const doc = repeatDoc({
+      list: { type: "List", props: {}, repeat: { statePath: "/items" }, children: ["hot"] },
+      hot: { type: "Hotspot", props: { x: 0, y: 0, width: 10, height: 10, ariaLabel: "Go" } },
+    }, undefined, { width: 100, height: 100 });
+    expect(validate(doc).errors.some((e) => e.message === "Hotspot is not allowed inside a repeat subtree")).toBe(true);
+  });
+
+  it("rejects $item used outside a repeat subtree", () => {
+    const doc = repeatDoc({
+      list: { type: "Item", props: { label: { $item: "label" } } },
+    });
+    expect(validate(doc).errors.some((e) => /\$item is only allowed inside a repeat subtree/.test(e.message))).toBe(true);
+  });
+
+  it("rejects $index used outside a repeat subtree condition", () => {
+    const doc = repeatDoc({
+      list: { type: "List", props: {}, visible: { $index: true } },
+    });
+    expect(validate(doc).errors.some((e) => /\$index is only allowed inside a repeat subtree/.test(e.message))).toBe(true);
+  });
+
+  it("warns when the repeat state path is not an array in the effective initial state", () => {
+    const doc = repeatDoc({
+      list: { type: "List", props: {}, repeat: { statePath: "/missing" }, children: ["item"] },
+      item: { type: "Item", props: {} },
+    }, { items: [] });
+    expect(validate(doc).warnings.some((e) => /may be populated dynamically/.test(e.message))).toBe(true);
+  });
+
+  it("rejects render cost exceeding the 2000 budget", () => {
+    const doc = repeatDoc({
+      list: { type: "List", props: {}, repeat: { statePath: "/items" }, children: ["item"] },
+      item: { type: "Item", props: {} },
+    }, { items: Array.from({ length: 2500 }, (_, i) => ({ label: `item-${i}` })) });
+    expect(validate(doc).errors.some((e) => /exceeds the budget of 2000/.test(e.message))).toBe(true);
+  });
+
+  it("allows a repeat statePath that resolves to a populated array without a warning", () => {
+    const doc = repeatDoc({
+      list: { type: "List", props: {}, repeat: { statePath: "/items", key: "id" }, children: ["item"] },
+      item: { type: "Item", props: { label: { $item: "label" } } },
+    }, { items: [{ id: "a", label: "A" }, { id: "b", label: "B" }] });
+    const result = validate(doc);
+    expect(result.errors).toEqual([]);
+    expect(result.warnings.some((e) => /may be populated dynamically/.test(e.message))).toBe(false);
   });
 });
 

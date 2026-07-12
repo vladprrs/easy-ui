@@ -43,6 +43,19 @@ describe("toRuntimeSpec", () => {
     expect(runtime.elements.text?.props.value).toBe(lookalike);
   });
 
+  it("passes repeat through to the runtime spec unchanged", () => {
+    const spec: PrototypeDoc["screens"][number]["spec"] = {
+      root: "list",
+      elements: {
+        list: { type: "List", props: {}, repeat: { statePath: "/items", key: "id" }, children: ["item"] },
+        item: { type: "Item", props: { label: { $item: "label" } } },
+      },
+    };
+    const runtime = toRuntimeSpec(spec);
+    expect(runtime.elements.list?.repeat).toEqual({ statePath: "/items", key: "id" });
+    expect(runtime.elements.item?.props).toEqual({ label: { $item: "label" } });
+  });
+
   it("preserves other directives", () => {
     const props = {
       state: { $state: "/name" },

@@ -6,7 +6,7 @@ Prototype files live in `prototypes/*.json`. A file is a self-contained flow; it
 
 The root is a strict object with `version: 1`, slug `id`, human-readable `name`, optional `description`, slug `designSystem` (default `"shadcn"`), `device` (`mobile`, `tablet`, or `desktop`, default `desktop`), slug `startScreen`, `state`, and a non-empty `screens` array. Screen IDs are unique slugs and `startScreen` must exist. The SQLite `design_systems` registry is the single source of registered systems; an unknown system is an error. `shadcn` and `wireframe` registry entries have code-backed builtin providers. A registry entry without a provider starts with no builtin definitions and can use published custom components assigned to it. The default remains `shadcn`, so existing documents without `designSystem` retain their meaning. Version 1 evolves additively: new fields are optional, so existing v1 documents remain valid.
 
-Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, optional non-blank `note` (at most 500 characters), optional `stateOverrides`, and `spec`. `note` is the author's caption below the screen in the CJM view. Screens appear in CJM in their `screens` array order. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, and optional `on`. Its type and props must match the normalized definition in the document's selected design system. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
+Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, optional non-blank `note` (at most 500 characters), optional `stateOverrides`, and `spec`. `note` is the author's caption below the screen in the CJM view. Screens appear in CJM in their `screens` array order. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, optional `on`, and optional `repeat`. Its type and props must match the normalized definition in the document's selected design system. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
 
 ### Per-system component allowlist
 
@@ -41,9 +41,29 @@ Props may be literals or exactly one of these strict directives. A directive may
 - `{ "$template": "Hello ${/name}" }` interpolates paths into text.
 - `{ "$cond": { "if": condition, "then": literal, "else": literal } }` selects a value.
 
-A condition is boolean, a truthiness check `{ "$state": "/path" }`, or a state condition with at most one of `eq`, `neq`, `gt`, `gte`, `lt`, `lte` and optional `not: true`. Operands of `eq` and `neq` are static literals; operands of `gt`, `gte`, `lt`, and `lte` must be static numbers. Recursive composition uses `{ "$and": [conditions...] }` or `{ "$or": [conditions...] }`. No other directive or operator is accepted.
+A condition is boolean, a truthiness check `{ "$state": "/path" }`, an item-field check `{ "$item": "field" }`, an index check `{ "$index": true }`, or one of those combined with at most one of `eq`, `neq`, `gt`, `gte`, `lt`, `lte` and optional `not: true`. Exactly one of `$state`, `$item`, `$index` is required. Operands of `eq` and `neq` are static literals; operands of `gt`, `gte`, `lt`, and `lte` must be static numbers. Recursive composition uses `{ "$and": [conditions...] }` or `{ "$or": [conditions...] }`. No other directive or operator is accepted.
 
-`repeat`, `watch`, `$computed`, `$item`, `$index`, `$bindItem`, `confirm`, `onSuccess`, and `onError` are reserved and invalid in v1. Events carry no payload; editable values must be read through `$bindState`. Only bound values persist while navigating within a player session. Reload or deep-link entry creates fresh state from the document.
+`watch`, `$computed`, `confirm`, `onSuccess`, and `onError` are reserved and invalid in v1. Events carry no payload; editable values must be read through `$bindState`. Only bound values persist while navigating within a player session. Reload or deep-link entry creates fresh state from the document.
+
+## Repeat
+
+An element may carry `repeat: { statePath, key? }` to render its `children` once per item in the state array at `statePath` (an absolute RFC 6901 JSON Pointer). The repeat element itself renders once, using the ambient (non-repeated) state and props; only its `children` subtree is repeated, each copy scoped to one array item. `key` names a field on each item used for shallow, per-item React identity (`String(item[key] ?? index)`); when omitted, the array index is the key. `key` does not affect validation beyond being a non-empty string.
+
+Inside a repeat element's `children` subtree (and only there), props and conditions may additionally use:
+
+- `{ "$item": "field" }` (props) or `{ "$item": "field", ...comparison }` (conditions) — reads a field from the current item; `""` addresses the whole item. The field path is a safe relative path (same segment rules as a JSON Pointer, without the leading `/`); `__proto__`, `prototype`, and `constructor` segments are rejected.
+- `{ "$index": true }` (props) or `{ "$index": true, ...comparison }` (conditions) — the current array index.
+- `{ "$bindItem": "field" }` (props only) — a two-way binding to a field on the current item.
+
+Using `$item`, `$index`, or `$bindItem` outside a repeat subtree is a validation error. Native `$item` in action `params` (e.g. `setState`) resolves to a state *path*, not a value, and is out of scope for v1's static action-params grammar; it is not validated or documented further here.
+
+**Limits** (all enforced by `npm run validate:prototypes` / `validatePrototype`):
+
+- Nested `repeat` — a `repeat` element inside another `repeat` element's subtree — is a validation error. Only one level of repetition is supported in v1.
+- At most 20 `repeat` elements per screen; exceeding this is a validation error.
+- `Hotspot` inside a repeat subtree is a validation error (canvas-anchored hotspots cannot be templated per item).
+- `repeat.statePath` must resolve to an array in the screen's effective initial state (`state` merged with `stateOverrides`); when it doesn't (missing or a non-array value), validation emits a warning — the array may be populated dynamically at runtime.
+- **Render-cost budget**: `cost(el) = 1 + Σ cost(children)`, and for a repeat element, `cost(el) = 1 + len(initialArray) × Σ cost(children)`, computed recursively from the screen's effective initial state. A screen whose root cost exceeds 2000 is a validation error. This bounds the worst-case initial DOM size regardless of nesting depth or repeat count.
 
 ## Events and actions
 

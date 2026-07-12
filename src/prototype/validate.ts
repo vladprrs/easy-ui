@@ -3,6 +3,7 @@ import type { ComponentDefinition } from "../catalog/definitions";
 import { prototypeActionSchemas } from "../catalog/actions";
 import { atomicRank, type AtomicLevel } from "../designSystems/types";
 import { resolveBuiltinSystem } from "../designSystems";
+import { getAtPointer, isSafeJsonPointer, isSafeRelativeFieldPath } from "./pointer";
 import type { PrototypeDoc } from "./schema";
 import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "./stateOverrides";
 import type { PrototypeValidationResult, ValidationIssue } from "./types";
@@ -10,7 +11,8 @@ import type { PrototypeValidationResult, ValidationIssue } from "./types";
 type Obj = Record<string, unknown>;
 const terminals = new Set(["navigate", "back", "restart", "openUrl"]);
 const forbiddenPaths = ["/currentScreen", "/navStack", "/_viewer"];
-const pointerPattern = /^\/(?:[^~/]|~0|~1)*(?:\/(?:[^~/]|~0|~1)*)*$/;
+export const REPEAT_ELEMENT_LIMIT = 20;
+export const REPEAT_RENDER_COST_BUDGET = 2000;
 
 const object = (value: unknown): value is Obj => typeof value === "object" && value !== null && !Array.isArray(value);
 const pathString = (parts: (string | number)[]) => "/" + parts.map(String).join("/");
@@ -18,37 +20,37 @@ const issue = (list: ValidationIssue[], path: (string | number)[], message: stri
 export const isDynamicValue = (value: unknown): boolean => object(value) && Object.keys(value).some((key) => key.startsWith("$"));
 const isStatic = (value: unknown): boolean => !isDynamicValue(value) && (!Array.isArray(value) ? !object(value) || Object.values(value).every(isStatic) : value.every(isStatic));
 
-function stateAt(state: Obj, pointer: string): { exists: boolean; value: unknown } {
-  if (pointer === "") return { exists: true, value: state };
-  let current: unknown = state;
-  for (const raw of pointer.slice(1).split("/")) {
-    const key = raw.replace(/~1/g, "/").replace(/~0/g, "~");
-    if (!object(current) || !Object.hasOwn(current, key)) return { exists: false, value: undefined };
-    current = current[key];
-  }
-  return { exists: true, value: current };
-}
-
 function checkPointer(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj, warnMissing: boolean) {
-  if (typeof value !== "string" || !pointerPattern.test(value)) return issue(errors, path, "state path must be an absolute RFC 6901 JSON Pointer");
+  if (!isSafeJsonPointer(value)) return issue(errors, path, "state path must be an absolute RFC 6901 JSON Pointer");
   if (forbiddenPaths.some((reserved) => value === reserved || value.startsWith(reserved + "/"))) issue(errors, path, "state path uses a reserved viewer namespace");
-  if (warnMissing && !stateAt(state, value).exists) issue(warnings, path, "state path is not present in document state");
+  if (warnMissing && !getAtPointer(state, value).exists) issue(warnings, path, "state path is not present in document state");
 }
 
-function checkCondition(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj): void {
+function checkCondition(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj, insideRepeat: boolean): void {
   if (typeof value === "boolean") return;
   if (!object(value)) return issue(errors, path, "condition must use the closed v1 condition grammar");
   if ("$and" in value || "$or" in value) {
     const key = "$and" in value ? "$and" : "$or";
     if (Object.keys(value).length !== 1 || !Array.isArray(value[key]) || value[key].length === 0) return issue(errors, path, `${key} must be the only key and contain conditions`);
-    value[key].forEach((item, index) => checkCondition(item, [...path, key, index], errors, warnings, state));
+    value[key].forEach((item, index) => checkCondition(item, [...path, key, index], errors, warnings, state, insideRepeat));
     return;
   }
-  const allowed = new Set(["$state", "eq", "neq", "gt", "gte", "lt", "lte", "not"]);
+  const allowed = new Set(["$state", "$item", "$index", "eq", "neq", "gt", "gte", "lt", "lte", "not"]);
   const unknown = Object.keys(value).filter((key) => !allowed.has(key));
   if (unknown.length) issue(errors, path, `unknown condition operator: ${unknown.join(", ")}`);
-  if (!("$state" in value)) issue(errors, path, "condition requires $state");
-  else checkPointer(value.$state, [...path, "$state"], errors, warnings, state, true);
+  const subjectKeys = (["$state", "$item", "$index"] as const).filter((key) => key in value);
+  if (subjectKeys.length !== 1) issue(errors, path, "condition requires exactly one of $state, $item, $index");
+  else {
+    const subject = subjectKeys[0]!;
+    if (subject === "$state") checkPointer(value.$state, [...path, "$state"], errors, warnings, state, true);
+    else if (subject === "$item") {
+      if (!insideRepeat) issue(errors, [...path, "$item"], "$item is only allowed inside a repeat subtree");
+      if (!isSafeRelativeFieldPath(value.$item)) issue(errors, [...path, "$item"], "$item must be a safe relative field path");
+    } else {
+      if (!insideRepeat) issue(errors, [...path, "$index"], "$index is only allowed inside a repeat subtree");
+      if (value.$index !== true) issue(errors, [...path, "$index"], "$index must be true");
+    }
+  }
   const comparisons = ["eq", "neq", "gt", "gte", "lt", "lte"].filter((key) => key in value);
   if (comparisons.length > 1) issue(errors, path, "condition may contain at most one comparison operator");
   if ("not" in value && value.not !== true) issue(errors, [...path, "not"], "not must be true");
@@ -58,19 +60,26 @@ function checkCondition(value: unknown, path: (string | number)[], errors: Valid
   });
 }
 
-function checkDynamic(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj): boolean {
+function checkDynamic(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj, insideRepeat: boolean): boolean {
   if (!isDynamicValue(value)) return false;
   if (!object(value)) return false;
   const keys = Object.keys(value);
   if (keys.length !== 1) { issue(errors, path, "dynamic value must contain exactly one v1 directive"); return true; }
   const key = keys[0]!;
   if (key === "$state" || key === "$bindState") checkPointer(value[key], [...path, key], errors, warnings, state, key === "$state");
+  else if (key === "$item" || key === "$bindItem") {
+    if (!insideRepeat) issue(errors, [...path, key], `${key} is only allowed inside a repeat subtree`);
+    if (!isSafeRelativeFieldPath(value[key])) issue(errors, [...path, key], `${key} must be a safe relative field path`);
+  } else if (key === "$index") {
+    if (!insideRepeat) issue(errors, [...path, key], "$index is only allowed inside a repeat subtree");
+    if (value[key] !== true) issue(errors, [...path, key], "$index must be true");
+  }
   else if (key === "$template") { if (typeof value[key] !== "string") issue(errors, [...path, key], "$template must be a string"); }
   else if (key === "$cond") {
     const cond = value[key];
     if (!object(cond) || !Object.hasOwn(cond, "if") || !Object.hasOwn(cond, "then") || !Object.hasOwn(cond, "else") || Object.keys(cond).some((k) => !["if", "then", "else"].includes(k))) issue(errors, [...path, key], "$cond must be {if, then, else}");
     else {
-      checkCondition(cond.if, [...path, key, "if"], errors, warnings, state);
+      checkCondition(cond.if, [...path, key, "if"], errors, warnings, state, insideRepeat);
       if (!isStatic(cond.then)) issue(errors, [...path, key, "then"], "$cond branches must be static literals");
       if (!isStatic(cond.else)) issue(errors, [...path, key, "else"], "$cond branches must be static literals");
     }
@@ -83,11 +92,13 @@ export function validateElementProps({
   props,
   state,
   path,
+  insideRepeat = false,
 }: {
   definition: ComponentDefinition;
   props: Obj;
   state: Obj;
   path: (string | number)[];
+  insideRepeat?: boolean;
 }): PrototypeValidationResult {
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
   if (isDynamicValue(props)) {
@@ -96,7 +107,7 @@ export function validateElementProps({
   }
   const dynamicPaths = new Set<string>();
   const visit = (value: unknown, relative: (string | number)[]): unknown => {
-    if (checkDynamic(value, [...path, ...relative], errors, warnings, state)) {
+    if (checkDynamic(value, [...path, ...relative], errors, warnings, state, insideRepeat)) {
       dynamicPaths.add(relative.join("/"));
       return undefined;
     }
@@ -148,18 +159,76 @@ export function validatePrototype(
     structural.issues.forEach((entry) => issue(errors, base, entry.message));
     const elements = screen.spec.elements;
     if (Object.keys(elements).length > 500) issue(errors, [...base, "elements"], "screen exceeds 500 elements");
+
+    const insideRepeat = new Set<string>();
+    const repeatKeys: string[] = [];
+    {
+      const seen = new Set<string>();
+      const walkRepeat = (key: string, ancestorRepeat: boolean, depth: number) => {
+        if (seen.has(key) || depth > 60) return;
+        seen.add(key);
+        const element = elements[key];
+        if (!element) return;
+        const hasRepeat = Boolean(element.repeat);
+        if (hasRepeat) {
+          repeatKeys.push(key);
+          if (ancestorRepeat) issue(errors, [...base, "elements", key, "repeat"], "nested repeat is not allowed");
+        }
+        const childAncestorRepeat = ancestorRepeat || hasRepeat;
+        for (const child of element.children ?? []) {
+          if (childAncestorRepeat) insideRepeat.add(child);
+          walkRepeat(child, childAncestorRepeat, depth + 1);
+        }
+      };
+      walkRepeat(screen.spec.root, false, 0);
+    }
+    if (repeatKeys.length > REPEAT_ELEMENT_LIMIT) issue(errors, [...base, "elements"], `screen exceeds ${REPEAT_ELEMENT_LIMIT} repeat elements (found ${repeatKeys.length})`);
+    for (const key of repeatKeys) {
+      const repeat = elements[key]!.repeat!;
+      const repeatPath = [...base, "elements", key, "repeat", "statePath"];
+      checkPointer(repeat.statePath, repeatPath, errors, warnings, effectiveState, false);
+      if (isSafeJsonPointer(repeat.statePath) && !Array.isArray(getAtPointer(effectiveState, repeat.statePath).value)) {
+        issue(warnings, repeatPath, "repeat state path is not an array in the effective initial state; it may be populated dynamically");
+      }
+    }
+    {
+      const memo = new Map<string, number>();
+      const visiting = new Set<string>();
+      const renderCost = (key: string): number => {
+        if (memo.has(key)) return memo.get(key)!;
+        if (visiting.has(key)) return 0;
+        visiting.add(key);
+        const element = elements[key];
+        if (!element) { visiting.delete(key); memo.set(key, 0); return 0; }
+        const childrenCost = (element.children ?? []).reduce((sum, child) => sum + renderCost(child), 0);
+        let repeatLength = 0;
+        if (element.repeat && isSafeJsonPointer(element.repeat.statePath)) {
+          const at = getAtPointer(effectiveState, element.repeat.statePath).value;
+          repeatLength = Array.isArray(at) ? at.length : 0;
+        }
+        const total = element.repeat ? 1 + repeatLength * childrenCost : 1 + childrenCost;
+        visiting.delete(key);
+        memo.set(key, total);
+        return total;
+      };
+      const totalCost = renderCost(screen.spec.root);
+      if (totalCost > REPEAT_RENDER_COST_BUDGET) issue(errors, base, `screen render cost (${totalCost}) exceeds the budget of ${REPEAT_RENDER_COST_BUDGET}`);
+    }
+
     const parents = new Map<string, number>();
     for (const [key, element] of Object.entries(elements)) {
       const ep = [...base, "elements", key];
       const definition = definitions[element.type];
       if (!definition) { issue(errors, [...ep, "type"], `unknown component type: ${element.type}`); continue; }
-      const propIssues = validateElementProps({ definition, props: element.props, state: effectiveState, path: [...ep, "props"] });
+      const elementInsideRepeat = insideRepeat.has(key);
+      const propIssues = validateElementProps({ definition, props: element.props, state: effectiveState, path: [...ep, "props"], insideRepeat: elementInsideRepeat });
       errors.push(...propIssues.errors);
       warnings.push(...propIssues.warnings);
-      if (element.visible !== undefined) checkCondition(element.visible, [...ep, "visible"], errors, warnings, effectiveState);
+      if (element.visible !== undefined) checkCondition(element.visible, [...ep, "visible"], errors, warnings, effectiveState, elementInsideRepeat);
       for (const child of element.children ?? []) parents.set(child, (parents.get(child) ?? 0) + 1);
       if (element.type === "Hotspot") {
         if (!screen.canvas) issue(errors, ep, "Hotspot requires a screen canvas");
+        if (elementInsideRepeat) issue(errors, ep, "Hotspot is not allowed inside a repeat subtree");
         const p = element.props;
         for (const name of ["x", "y", "width", "height"] as const) if (isDynamicValue(p[name])) issue(errors, [...ep, "props", name], "Hotspot coordinates must be static");
         if (screen.canvas && [p.x,p.y,p.width,p.height].every((v) => typeof v === "number") && ((p.x as number) < 0 || (p.y as number) < 0 || (p.x as number)+(p.width as number)>screen.canvas.width || (p.y as number)+(p.height as number)>screen.canvas.height)) issue(errors, [...ep, "props"], "Hotspot is outside canvas bounds");
