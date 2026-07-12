@@ -181,6 +181,30 @@ Content-addressed реестр бинарных ассетов (изображе
 
 **Остаточный риск.** По [модели доверия](#граница-доверия-и-запуск) published-код равен коду репозитория; egress-блок — defense-in-depth, а не sandbox. Точная строка `--proxy-bypass-list` закреплена unit-тестом; главный allowlist-инвариант покрыт server-side unit-тестами; полный adversarial сетевой сценарий помечен `test.fixme` в `e2e/preview/screenshot.spec.ts` (нестабилен в контейнере).
 
+## Visual regression
+
+Встроенный визуальный gate: reference-baseline (PNG-ассет) закрепляется за **канонической поверхностью** (fingerprint), а candidate снимается тем же screenshot job-пайплайном (параметры капчера берутся **из fingerprint**) и сравнивается в отдельном node-подпроцессе (`scripts/visual-diff-worker.mjs`, `pixelmatch` + `pngjs`). UI — `/visual`.
+
+| Метод и путь | Тело / ответ |
+|---|---|
+| `PUT /visual-references` | `{fingerprint, assetId, note?}` → `200 reference`; upsert по канону fingerprint. Ассет обязан существовать и быть `image/png` (иначе `422`). |
+| `GET /visual-references?scope=&prototypeId=&componentId=` | `{references:[reference]}` — каждая с `lastRun`. |
+| `GET /visual-references/:id` | `reference` + `runs:[report]` (полная история). |
+| `POST /visual-references/:id/check` | `{threshold?}` → `202 {runId, jobId?}`. Капчер кандидата + diff-run. `jobId` отсутствует при `reference_missing`. |
+| `GET /visual-runs/:runId` | `running`-плейсхолдер `{runId, referenceId, status:"running", jobId}` **или** терминальный evidence-отчёт. |
+
+**Fingerprint** (`server/visual/fingerprint.ts`). Канонический JSON поверхности; ключи детерминированно сортируются, `undefined`-опционалы отбрасываются, так что семантически равные fingerprint'ы хэшируются одинаково. `fingerprint_json` — UNIQUE-колонка; `id = "vref_" + sha256(fingerprint_json)`. Поля:
+- `scope: "prototype-screen"` → `{prototypeId, screenId, refRevision}`; `scope: "component"` → `{componentId, refVersion}`;
+- общие: `viewport{width,height}`, `deviceScaleFactor ∈ {1,2,3}`, `theme ∈ {light,dark}`, опциональные `propsHash?`, `stateHash?`.
+
+**Метрики (честно).** За один прогон считаются **обе**: `exact-rgba` (полное попиксельное равенство RGBA, `diffPixels/totalPixels`) и `pixelmatch-v1` (все options — `threshold`, `includeAA` — в `metric_options_json`). Никакого «AE». Первичная метрика прогона (колонки `metric`/`diff_pixels`/`total_pixels`/`diff_percent`) — `pixelmatch-v1`; `exact-rgba` кладётся в `candidate_meta_json.exactRgba`; отчёт отдаёт обе под `metrics`. `pass` при `pixelmatch diffPercent ≤ threshold` (по умолчанию 0), иначе `fail`.
+
+**Статусы прогона** (`visual_runs.status`): `pass | fail | error | reference_missing`. **Несовпадение размеров** reference/candidate → `error` **без процента** (dimensions обоих всё равно в отчёте). Ошибка капчера/diff-воркера → `error`.
+
+**Evidence guard (обязательный).** Процент не выдаётся без **обоих** физических файлов. Отчёт прогона ВСЕГДА содержит: `reference`/`candidate` = `{assetId, url, sha256, width, height, mime}` (sha256 и dimensions берутся из content-addressed реестра ассетов), `diffPixels` (числитель), `totalPixels` (знаменатель), `metric` + `metricOptions`, `metrics.{exact-rgba,pixelmatch-v1}`, `diff` (сгенерированное diff-изображение как ассет) и `candidateMeta` (`rev`/`version`, `pins`, `bundleHash?`, `rendererBuild`, `browserVersion` из результата капчера). Если reference-ассет отсутствует (строка есть, но байты стёрты — «пустая reference-директория»): `status:"reference_missing"`, `diffPercent:null`, кандидат **не** снимается.
+
+**Хранение.** `visual_references(id, fingerprint_json UNIQUE, asset_id FK→assets RESTRICT, note, created_at)`, `visual_runs(id, reference_id FK→visual_references CASCADE, candidate_asset_id FK→assets RESTRICT NULL, diff_asset_id FK→assets NULL, metric, metric_options_json, diff_pixels, total_pixels, diff_percent, status, candidate_meta_json, created_at)` (миграция v6). Терминальные прогоны персистятся; `POST check` держит незавершённый прогон в памяти (fallback `GET /visual-runs/:id` читает персистентную строку). Проверка требует screenshot-пайплайн (`SERVE_DIST` + chromium), иначе `501 screenshot_unavailable`.
+
 ## Ошибки и ограничения HTTP
 
 Единый envelope:

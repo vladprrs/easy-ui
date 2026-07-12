@@ -166,3 +166,78 @@ export const screenshotJobContract = registerContract({
   responseSchema: z.object({ status: z.enum(["queued", "running", "done", "error"]), result: screenshotJobResultSchema.optional(), error: z.object({ code: z.string(), message: z.string() }).optional() }),
   errors: [{ status: 404, code: "job_not_found" }],
 });
+
+// --- Visual regression (T7) ---
+
+const viewportPositiveSchema = z.object({ width: z.number().int().positive(), height: z.number().int().positive() });
+const deviceScaleSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
+const hashSchema = z.string().regex(/^[0-9a-f]+$/);
+
+export const fingerprintContractSchema = z.discriminatedUnion("scope", [
+  z.object({ scope: z.literal("prototype-screen"), prototypeId: z.string(), screenId: z.string(), refRevision: z.number().int().positive(), viewport: viewportPositiveSchema, deviceScaleFactor: deviceScaleSchema, theme: z.enum(["light", "dark"]), propsHash: hashSchema.optional(), stateHash: hashSchema.optional() }),
+  z.object({ scope: z.literal("component"), componentId: z.string(), refVersion: z.number().int().positive(), viewport: viewportPositiveSchema, deviceScaleFactor: deviceScaleSchema, theme: z.enum(["light", "dark"]), propsHash: hashSchema.optional(), stateHash: hashSchema.optional() }),
+]);
+
+const metricResultSchema = z.object({ diffPixels: z.number(), totalPixels: z.number(), diffPercent: z.number() });
+const evidenceAssetSchema = z.object({ assetId: z.string(), url: z.string(), sha256: z.string(), width: z.number().nullable(), height: z.number().nullable(), mime: z.string() });
+
+export const runReportSchema = z.object({
+  runId: z.string(), referenceId: z.string(),
+  status: z.enum(["pass", "fail", "error", "reference_missing"]),
+  createdAt: z.string(),
+  metric: z.string().nullable(), metricOptions: z.record(z.string(), z.unknown()).nullable(),
+  diffPixels: z.number().nullable(), totalPixels: z.number().nullable(), diffPercent: z.number().nullable(),
+  metrics: z.object({ "exact-rgba": metricResultSchema.optional(), "pixelmatch-v1": metricResultSchema.optional() }),
+  reference: evidenceAssetSchema.nullable(), candidate: evidenceAssetSchema.nullable(),
+  diff: z.object({ assetId: z.string(), url: z.string() }).nullable(),
+  candidateMeta: z.record(z.string(), z.unknown()).nullable(),
+});
+
+export const referencePublicSchema = z.object({
+  id: z.string(), fingerprint: z.unknown(), note: z.string().nullable(), createdAt: z.string(),
+  asset: assetPublicSchema.extend({ url: z.string() }).nullable(),
+  lastRun: runReportSchema.nullable(),
+});
+
+export const putVisualReferenceContract = registerContract({
+  method: "PUT",
+  path: "/api/visual-references",
+  summary: "Upsert a visual reference by canonical fingerprint (asset must exist and be a PNG).",
+  requestSchema: z.object({ fingerprint: fingerprintContractSchema, assetId: z.string(), note: z.string().optional() }),
+  responseSchema: referencePublicSchema,
+  errors: [{ status: 422, code: "asset_not_found" }, { status: 422, code: "invalid_reference_asset" }, { status: 422, code: "validation_failed" }],
+});
+
+export const listVisualReferencesContract = registerContract({
+  method: "GET",
+  path: "/api/visual-references",
+  summary: "List visual references (optionally filtered by scope/prototypeId/componentId) with the last run.",
+  query: z.object({ scope: z.enum(["prototype-screen", "component"]).optional(), prototypeId: z.string().optional(), componentId: z.string().optional() }),
+  responseSchema: z.object({ references: z.array(referencePublicSchema) }),
+  errors: [],
+});
+
+export const getVisualReferenceContract = registerContract({
+  method: "GET",
+  path: "/api/visual-references/{id}",
+  summary: "Fetch a visual reference with its full run history.",
+  responseSchema: referencePublicSchema.extend({ runs: z.array(runReportSchema) }),
+  errors: [{ status: 404, code: "reference_not_found" }],
+});
+
+export const checkVisualReferenceContract = registerContract({
+  method: "POST",
+  path: "/api/visual-references/{id}/check",
+  summary: "Capture a candidate for the reference fingerprint and enqueue an honest diff run.",
+  requestSchema: z.object({ threshold: z.number().min(0).max(100).optional() }),
+  responseSchema: z.object({ runId: z.string(), jobId: z.string().optional() }),
+  errors: [{ status: 404, code: "reference_not_found" }, { status: 422, code: "invalid_threshold" }, { status: 501, code: "screenshot_unavailable" }],
+});
+
+export const getVisualRunContract = registerContract({
+  method: "GET",
+  path: "/api/visual-runs/{runId}",
+  summary: "Poll a visual run: a running placeholder, or the terminal evidence report.",
+  responseSchema: z.union([runReportSchema, z.object({ runId: z.string(), referenceId: z.string(), status: z.literal("running"), jobId: z.string() })]),
+  errors: [{ status: 404, code: "run_not_found" }],
+});

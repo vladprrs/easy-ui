@@ -3,6 +3,7 @@ import { CapturePrototype } from "../capture/CapturePrototype";
 import { CaptureComponent } from "../capture/CaptureComponent";
 import { GalleryPage } from "../gallery/GalleryPage";
 import { LibraryPage } from "../library/LibraryPage";
+import { VisualPage } from "../visual/VisualPage";
 import { SmokeSpec } from "../smoke/SmokeSpec";
 import { PlayerShell } from "../player/PlayerShell";
 import { ScreenView } from "../player/ScreenView";
@@ -19,6 +20,7 @@ export function AppRoutes() {
       <Route element={<Layout />}>
         <Route index element={<GalleryPage />} />
         <Route path="library" element={<LibraryPage />} />
+        <Route path="visual" element={<VisualPage />} />
         <Route path="debug" element={<SmokeSpec />} />
         <Route path="p/:protoId" element={<PlayerShell />}>
           <Route index element={null} />

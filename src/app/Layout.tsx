@@ -8,6 +8,7 @@ export function Layout() {
         <nav className="flex gap-4 font-eui-ui text-sm" aria-label="Main navigation">
           <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/" end>Gallery</NavLink>
           <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/library">Library</NavLink>
+          <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/visual">Visual</NavLink>
           <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/debug">Debug</NavLink>
         </nav>
       </div>

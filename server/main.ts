@@ -15,8 +15,11 @@ import type { ScreenshotService } from "./screenshot/service";
 import { ScreenshotService as ScreenshotServiceImpl } from "./screenshot/service";
 import { chromiumAvailable, spawnWorker } from "./screenshot/worker-runner";
 import { routeScreenshots } from "./routes/screenshots";
+import type { VisualService } from "./visual/service";
+import { VisualService as VisualServiceImpl } from "./visual/service";
+import { routeVisual } from "./routes/visual";
 
-export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?:string;dataDir?:string;basicAuth?:string;screenshots?:ScreenshotService}={}):(request:Request,server?:Bun.Server<unknown>)=>Promise<Response> {
+export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?:string;dataDir?:string;basicAuth?:string;screenshots?:ScreenshotService;visual?:VisualService}={}):(request:Request,server?:Bun.Server<unknown>)=>Promise<Response> {
   return async (request,server)=>{
     const authEnabled=Boolean(options.basicAuth);
     const finish=(response:Response)=>authEnabled?protectResponse(response):response;
@@ -40,6 +43,7 @@ export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?
     if(segments[0]==="api") {
       if(segments[1]==="health"&&segments.length===2) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); const ready=options.ready?.()!==false; return json({status:ready?"ready":"starting"},ready?200:503,noStore); }
       const shot=await routeScreenshots(request,options.screenshots,segments.slice(1)); if(shot) return shot;
+      const vis=await routeVisual(request,db,options.dataDir??process.env.DATA_DIR??"data",segments.slice(1),options.visual); if(vis) return vis;
       if(segments[1]==="prototypes") return await routePrototypes(request,db,segments.slice(1),options.dataDir,options.serveDist);
       if(segments[1]==="components") return await routeComponents(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data");
       if(segments[1]==="assets") return await routeAssets(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data");
@@ -68,7 +72,8 @@ export async function startServer(options:{port?:number;database?:string;serveDi
   const port=options.port??Number(process.env.PORT||8787);
   const captureHost=host==="0.0.0.0"||host==="::"?"127.0.0.1":host;
   const screenshots=new ScreenshotServiceImpl({db,dataDir,serveDist,captureOrigin:`http://${captureHost}:${port}`,chromiumAvailable:chromiumAvailable(),runJob:spawnWorker});
-  const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>ready,serveDist,dataDir,basicAuth,screenshots})});
+  const visual=new VisualServiceImpl({db,dataDir,screenshots});
+  const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>ready,serveDist,dataDir,basicAuth,screenshots,visual})});
   return {server,db};
 }
 

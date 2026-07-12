@@ -93,6 +93,35 @@ const migrations = [
       FOREIGN KEY (component_id, version) REFERENCES component_publishes(component_id, version) ON DELETE CASCADE,
       FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE RESTRICT)`);
   },
+  (db: Database) => {
+    // v6: visual regression references + runs. A reference pins a PNG asset (FK RESTRICT so a
+    // referenced baseline cannot be pruned) to a canonical surface fingerprint (UNIQUE). Each run
+    // captures a candidate through the screenshot pipeline and records an honest evidence report.
+    db.run(`CREATE TABLE visual_references (
+      id TEXT PRIMARY KEY,
+      fingerprint_json TEXT UNIQUE NOT NULL,
+      asset_id TEXT NOT NULL,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE RESTRICT)`);
+    db.run(`CREATE TABLE visual_runs (
+      id TEXT PRIMARY KEY,
+      reference_id TEXT NOT NULL,
+      candidate_asset_id TEXT,
+      diff_asset_id TEXT,
+      metric TEXT,
+      metric_options_json TEXT,
+      diff_pixels INTEGER,
+      total_pixels INTEGER,
+      diff_percent REAL,
+      status TEXT NOT NULL CHECK(status IN ('pass','fail','error','reference_missing')),
+      candidate_meta_json TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (reference_id) REFERENCES visual_references(id) ON DELETE CASCADE,
+      FOREIGN KEY (candidate_asset_id) REFERENCES assets(id) ON DELETE RESTRICT,
+      FOREIGN KEY (diff_asset_id) REFERENCES assets(id) ON DELETE RESTRICT)`);
+    db.run(`CREATE INDEX visual_runs_reference ON visual_runs (reference_id, created_at, id)`);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {
