@@ -9,7 +9,9 @@
 //   node driver.mjs prototype <doc.json>                 create-or-update (id from doc)
 //   node driver.mjs get <prototypes|components> [id]     inspect (list without id)
 //   node driver.mjs delete <prototypes|components> <id>
-//   node driver.mjs shoot <prototypeId> [outDir]         screenshot every screen
+//   node driver.mjs shoot <prototypeId> [outDir]         screenshot every screen (local playwright)
+//   node driver.mjs snap <prototypeId> [outDir]          screenshot every screen server-side (no playwright)
+//   node driver.mjs status <prototypeId> <screenId>      render-status (renderable, pins, errors)
 //
 // Env:
 //   EASYUI_API   API base, default https://easy-ui.pay-offline.ru/api
@@ -53,7 +55,7 @@ async function getMeta(kind, id) {
 
 function usage(message) {
   if (message) console.error(message);
-  console.error("usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] | component-move <id> --design-system <id> | design-system <id> <name> <description> | prototype <doc.json> | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir]");
+  console.error("usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] | component-move <id> --design-system <id> | design-system <id> <name> <description> | prototype <doc.json> | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] | status <prototypeId> <screenId>");
   process.exit(1);
 }
 
@@ -82,6 +84,8 @@ function parseArgs(argv) {
     get: [1, 2],
     delete: [2, 2],
     shoot: [1, 2],
+    snap: [1, 2],
+    status: [2, 2],
   };
   const range = ranges[command];
   if (!range) usage(command ? `unknown command: ${command}` : undefined);
@@ -165,7 +169,9 @@ if (cmd === "component") {
   console.log(`saved ${doc.id} rev ${save.json.rev}`, save.json.warnings?.length ? save.json.warnings : "");
   const draft = await call("GET", `/prototypes/${doc.id}/draft`);
   console.log("component pins:", JSON.stringify(draft.json.components));
-  console.log(`player: ${API.replace(/\/api$/, "")}/p/${doc.id}`);
+  const base = API.replace(/\/api$/, "");
+  console.log(`player: ${base}/p/${doc.id}`);
+  for (const screen of save.json.screens ?? []) console.log(`screen:  ${base}${screen.url}`);
 } else if (cmd === "get") {
   const [kind, id] = args;
   const r = await call("GET", id ? `/${kind}/${id}` : `/${kind}`);
@@ -205,4 +211,38 @@ if (cmd === "component") {
     console.error("browser errors:\n" + errors.join("\n"));
     process.exit(1);
   }
+} else if (cmd === "snap") {
+  const [id, outDir = `author-shots/${id}`] = args;
+  const draft = await call("GET", `/prototypes/${id}/draft`);
+  if (draft.status !== 200) fail("draft", draft);
+  await mkdir(outDir, { recursive: true });
+  let hadErrors = false;
+  for (const screen of draft.json.doc.screens) {
+    const job = await call("POST", `/prototypes/${id}/screens/${screen.id}/screenshot`, { viewport: { width: 480, height: 800 } });
+    if (job.status !== 202) fail(`screenshot ${screen.id}`, job);
+    let state;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const poll = await call("GET", `/screenshot-jobs/${job.json.jobId}`);
+      if (poll.status !== 200) fail(`screenshot-jobs ${screen.id}`, poll);
+      state = poll.json;
+      if (state.status === "done" || state.status === "error") break;
+    }
+    if (state?.status !== "done") { console.error(`${screen.id}: ${JSON.stringify(state)}`); hadErrors = true; continue; }
+    const png = await fetch(`${API}${state.result.imageUrl.replace(/^\/api/, "")}`, { headers: AUTH ? { authorization: AUTH } : {} });
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(`${outDir}/${screen.id}.png`, Buffer.from(await png.arrayBuffer()));
+    console.log(`${outDir}/${screen.id}.png`);
+    if (state.result.consoleErrors?.length || state.result.pageErrors?.length) {
+      console.error(`${screen.id} browser errors:`, JSON.stringify([...state.result.consoleErrors, ...state.result.pageErrors]));
+      hadErrors = true;
+    }
+  }
+  if (hadErrors) process.exit(1);
+} else if (cmd === "status") {
+  const [id, screenId] = args;
+  const r = await call("GET", `/prototypes/${id}/screens/${screenId}/render-status`);
+  if (r.status !== 200) fail("render-status", r);
+  console.log(JSON.stringify(r.json, null, 2));
+  if (!r.json.renderable) process.exit(1);
 }

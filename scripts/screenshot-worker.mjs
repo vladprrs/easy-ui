@@ -85,6 +85,10 @@ async function run(job) {
       if (origin === job.captureOrigin && matchAllowed(path, job.allowedUrls)) {
         return route.continue({ headers: { ...req.headers(), "x-easyui-capture": job.token } });
       }
+      // Browser chrome noise, not page content: answering empty keeps consoleErrors
+      // an honest signal about the captured document itself.
+      if (origin === job.captureOrigin && path === "/favicon.ico") return route.fulfill({ status: 204, body: "" });
+      console.error(`[egress-abort] ${req.method()} ${req.url()}`);
       return route.abort();
     });
 
@@ -97,7 +101,11 @@ async function run(job) {
     }, { bootstrap: job.bootstrap, key: "__EUI_CAPTURE_BOOTSTRAP__" });
 
     const page = await context.newPage();
-    page.on("console", (msg) => { if (msg.type() === "error" && consoleErrors.length < 100) consoleErrors.push(msg.text()); });
+    page.on("console", (msg) => {
+      if (msg.type() !== "error" || consoleErrors.length >= 100) return;
+      const url = msg.location()?.url;
+      consoleErrors.push(url ? `${msg.text()} (${url})` : msg.text());
+    });
     page.on("pageerror", (err) => { if (pageErrors.length < 100) pageErrors.push(err.message); });
 
     await page.goto(job.captureOrigin + job.captureUrl, { waitUntil: "domcontentloaded", timeout: 20000 });

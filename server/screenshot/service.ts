@@ -102,7 +102,7 @@ export class ScreenshotService {
     const componentPins = full.components.map((p) => ({ id: p.id, version: p.version, bundleHash: p.bundleHash }));
     const theme = opts.theme === "dark" ? "dark" : "light";
     const expected: CaptureExpected = { kind: "prototype", rev: snap.rev, componentManifestHash: full.componentManifestHash, builtinCatalogHash: full.builtinCatalogHash, dsMetaVersion: full.designSystemMetaVersion ?? null, rendererBuild: this.rendererBuild };
-    const allowedUrls = this.prototypeAllowedUrls(id, screenId, full.components, full.assets.map((a) => a.id));
+    const allowedUrls = this.prototypeAllowedUrls(id, screenId, full.components, full.assets.map((a) => a.id), (full.doc as { designSystem?: string }).designSystem);
     const query = new URLSearchParams();
     if (opts.version !== undefined) query.set("version", String(opts.version)); else query.set("rev", String(snap.rev));
     query.set("theme", theme); query.set("dsf", String(dsf));
@@ -121,15 +121,16 @@ export class ScreenshotService {
     const propsHash = propsHashOf(props);
     const theme = opts.theme === "dark" ? "dark" : "light";
     const expected: CaptureExpected = { kind: "component", componentId: id, version, bundleHash: dto.bundleHash, propsHash, dsMetaVersion: getLatestDesignSystemContent(this.deps.db, dto.designSystem).latestMetaVersion, rendererBuild: this.rendererBuild };
-    const allowedUrls = this.componentAllowedUrls(id, version, dto.assets.map((a) => a.id));
+    const allowedUrls = this.componentAllowedUrls(id, version, dto.assets.map((a) => a.id), dto.designSystem);
     const query = new URLSearchParams({ theme, dsf: String(dsf) });
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/${version}?${query}`;
     return this.push({ kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false });
   }
 
-  private prototypeAllowedUrls(id: string, screenId: string, pins: { id: string; version: number }[], docAssetIds: string[]): string[] {
+  private prototypeAllowedUrls(id: string, screenId: string, pins: { id: string; version: number }[], docAssetIds: string[], designSystem?: string): string[] {
     const set = new Set<string>();
     set.add(`/capture/${id}/s/${screenId}`);
+    if (designSystem) { set.add(`/api/design-systems/${designSystem}`); set.add(`/api/design-systems/${designSystem}/versions/`); }
     set.add(`/api/prototypes/${id}/draft`);
     set.add(`/api/prototypes/${id}/revisions`);
     // draft/revision/version endpoints (shell may hit any depending on selector)
@@ -142,9 +143,10 @@ export class ScreenshotService {
     for (const s of buildStaticAllowedUrls(this.deps.serveDist)) set.add(s);
     return [...set];
   }
-  private componentAllowedUrls(id: string, version: number, assetIds: string[]): string[] {
+  private componentAllowedUrls(id: string, version: number, assetIds: string[], designSystem?: string): string[] {
     const set = new Set<string>();
     set.add(`/capture/component/${id}/${version}`);
+    if (designSystem) { set.add(`/api/design-systems/${designSystem}`); set.add(`/api/design-systems/${designSystem}/versions/`); }
     set.add(`/api/components/${id}`);
     set.add(`/api/components/${id}/versions/${version}`);
     set.add(`/api/components/${id}/versions/${version}/bundle.js`);
