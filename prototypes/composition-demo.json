@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "id": "composition-demo",
+  "name": "Composition demo",
+  "description": "Living documentation for repeat, $item/$index in props, $cond, navigation, and state transitions using builtin shadcn components.",
+  "designSystem": "shadcn",
+  "device": "mobile",
+  "startScreen": "board",
+  "state": {
+    "showTips": true,
+    "tasks": [
+      { "id": "t1", "title": "Design the flow", "done": true },
+      { "id": "t2", "title": "Wire up the state", "done": false },
+      { "id": "t3", "title": "Ship the demo", "done": false }
+    ]
+  },
+  "screens": [
+    {
+      "id": "board",
+      "name": "Board",
+      "note": "The board lists tasks with a repeat, then mutates state with pushState/removeState/setState and re-renders live.",
+      "spec": {
+        "root": "board",
+        "elements": {
+          "board": { "type": "Stack", "props": { "direction": "vertical", "gap": "md" }, "children": ["title", "tips", "tips-dismiss", "list", "add", "remove", "focus-link", "done-link"] },
+          "title": { "type": "Heading", "props": { "text": "Task board", "level": "h2" } },
+          "tips": { "type": "Text", "props": { "text": "Tip: use the buttons to mutate state and watch the list re-render.", "variant": "muted" }, "visible": { "$state": "/showTips" } },
+          "tips-dismiss": { "type": "Button", "props": { "label": "Got it", "variant": "secondary" }, "visible": { "$state": "/showTips" }, "on": { "press": { "action": "setState", "params": { "statePath": "/showTips", "value": false } } } },
+          "list": { "type": "Stack", "props": { "direction": "vertical", "gap": "sm" }, "repeat": { "statePath": "/tasks", "key": "id" }, "children": ["row"] },
+          "row": { "type": "Stack", "props": { "direction": "horizontal", "gap": "sm" }, "children": ["marker", "row-title", "row-status"] },
+          "marker": { "type": "Text", "props": { "text": { "$cond": { "if": { "$index": true, "eq": 0 }, "then": "★", "else": "•" } } } },
+          "row-title": { "type": "Text", "props": { "text": { "$item": "title" } } },
+          "row-status": { "type": "Badge", "props": { "text": { "$cond": { "if": { "$item": "done" }, "then": "Done", "else": "Todo" } }, "variant": { "$cond": { "if": { "$item": "done" }, "then": "default", "else": "secondary" } } } },
+          "add": { "type": "Button", "props": { "label": "Add task", "variant": "primary" }, "on": { "press": { "action": "pushState", "params": { "statePath": "/tasks", "value": { "id": "t-extra", "title": "Review with team", "done": false } } } } },
+          "remove": { "type": "Button", "props": { "label": "Remove first", "variant": "secondary" }, "on": { "press": { "action": "removeState", "params": { "statePath": "/tasks", "index": 0 } } } },
+          "focus-link": { "type": "Button", "props": { "label": "Focus mode" }, "on": { "press": { "action": "navigate", "params": { "screenId": "focus" } } } },
+          "done-link": { "type": "Button", "props": { "label": "Finish" }, "on": { "press": { "action": "navigate", "params": { "screenId": "done" } } } }
+        }
+      }
+    },
+    {
+      "id": "focus",
+      "name": "Focus",
+      "note": "In the CJM view a stateOverrides narrows the task array to a single item; the same repeat template renders the overridden state. In the linear player the shared flow state carries over instead.",
+      "stateOverrides": {
+        "tasks": [
+          { "id": "t2", "title": "Wire up the state", "done": false }
+        ]
+      },
+      "spec": {
+        "root": "focus",
+        "elements": {
+          "focus": { "type": "Stack", "props": { "direction": "vertical", "gap": "md" }, "children": ["fh", "flist", "fback"] },
+          "fh": { "type": "Heading", "props": { "text": "Focus mode", "level": "h2" } },
+          "flist": { "type": "Stack", "props": { "direction": "vertical", "gap": "sm" }, "repeat": { "statePath": "/tasks", "key": "id" }, "children": ["frow"] },
+          "frow": { "type": "Stack", "props": { "direction": "horizontal", "gap": "sm" }, "children": ["ftitle", "fstatus"] },
+          "ftitle": { "type": "Text", "props": { "text": { "$item": "title" } } },
+          "fstatus": { "type": "Badge", "props": { "text": { "$cond": { "if": { "$item": "done" }, "then": "Done", "else": "Todo" } }, "variant": "secondary" } },
+          "fback": { "type": "Button", "props": { "label": "Back to board" }, "on": { "press": { "action": "navigate", "params": { "screenId": "board" } } } }
+        }
+      }
+    },
+    {
+      "id": "done",
+      "name": "Done",
+      "note": "A terminal screen; restart returns to the start screen with fresh document state.",
+      "spec": {
+        "root": "done",
+        "elements": {
+          "done": { "type": "Card", "props": { "title": "All set", "description": "You explored repeat, $item/$index, $cond, and state transitions.", "maxWidth": "full" }, "children": ["restart"] },
+          "restart": { "type": "Button", "props": { "label": "Start over", "variant": "primary" }, "on": { "press": { "action": "restart", "params": {} } } }
+        }
+      }
+    }
+  ]
+}
