@@ -1,168 +1,197 @@
-# План: устранение проблем из developer-фидбэка (2026-07-12)
+# План v2: устранение проблем из developer-фидбэка (2026-07-12)
 
-Источник: `docs/easy-ui-developer-feedback.md` (перенос 50+ компонентов Yandex Pay). Покрываем все 14 пунктов: P0 §1–5, P1 §6–10, P2 §11–14. Исполнение — волнами Codex по зонам владения файлов; порядок волн отражает зависимости, а не только приоритеты фидбэка.
+Источник: `docs/easy-ui-developer-feedback.md` (14 пунктов P0–P2). Ревью v1 (Codex gpt-5.6-sol, max) выдало 6 blocker / 18 major / 1 minor — все приняты; триаж в конце. v2 — переработанная архитектура.
 
-## Ключевые факты разведки (на них опирается план)
+## Ключевые факты разведки и ревью
 
-- **SPA fallback 404** (`server/static.ts:12-14`): `index.html` отдаётся только при `Accept: text/html`, без расширения и вне `/api`. Любой programmatic клиент (curl, screenshot-фетчер) получает 404 на `/p/:id/s/:screenId`. Это корень P0 §1.
-- **События без payload**: `events?: string[]` везде (`src/catalog/normalize.ts:4-12`, `server/components/types.ts`, `docs/prototype-format.md:46` «Events carry no payload»). Params действий — только статические литералы (`src/prototype/validate.ts:180`).
-- **`setState/pushState/removeState` обрабатывает библиотека** внутри `JSONUIProvider`; наш runtime отдаёт no-op factory (`src/catalog/runtime.ts:54-58`). Чтобы резолвить `$event` в params, придётся отдавать **реальную** SetState-factory/handlers из easy-ui.
-- **json-render уже умеет repeat**: `UIElement.repeat {statePath, key?}`, `RepeatScopeProvider`, `$item`/`$index`/`$bindItem` (`@json-render/core` d.ts, `@json-render/react/dist/index.js:1113-1140`). v1 их запрещает искусственно (`schema.ts` strictObject + reserved list).
-- **Named slots в Renderer нет**: `slots: string[]` в каталоге — метаданные; все children сливаются в один `children` ReactNode (`@json-render/react/dist/index.js:1076-1108`).
-- **Custom-компоненты оборачивает наш loader** (`src/customComponents/loader.ts:33-71`) — легальная точка для slot-роутинга и emit-перехвата без форка библиотеки.
-- **Playwright есть только как devDependency e2e**; в prod-образе браузера нет — screenshot endpoint требует правки Dockerfile.
-- Ошибочный envelope, sha256-хелперы, immutable-паттерны, CAS/baseRev — уже есть и переиспользуются (`server/http.ts`, `server/components/pipeline.ts:9`).
-- Хранилище — SQLite (WAL, strict), миграции forward-only `server/migrations.ts` (user_version=3 сейчас).
+- **SPA fallback 404** (`server/static.ts:12-14`): `Accept`-гейт режет programmatic-клиентов; но fallback сам по себе не доказывает render readiness — нужны раздельные статусы.
+- **`emit` библиотеки — `(event: string) => void`**; `Renderer` сам резолвит `on`-биндинги, `ActionProvider` перехватывает `setState/pushState/removeState` до наших handlers (`@json-render/react/dist/index.js:483,956,1248`). Своей SetState-factory payload не доставить — нужен **собственный event-адаптер для custom-компонентов**.
+- **Named slots в Renderer нет**: children сливаются в один `ReactNode`, DOM-маркеры появляются после рендера — слот-роутинг делается **до** создания children, по индексам `element.children`.
+- **repeat нативный** (`RepeatScopeProvider/useRepeatScope` экспортированы), но scope = `{item,index,basePath}` без key; `$item` в action params — это path, не значение; лимит элементов не учитывает expansion.
+- **`JSONUIProvider` игнорирует `onStateChange` при внешнем store** — inspector строится на инструментированном store.
+- **Store уязвим к `__proto__`-сегментам** pointer'ов (`@json-render/core/dist/index.js:649`) — нужен общий safe-pointer parser.
+- **Bun.serve закрывает idle in-flight запрос ~10s** — долгие handlers требуют `server.timeout(request, n)`.
+- **`DROP TABLE component_publishes` упадёт по FK RESTRICT** от `prototype_revision_components` — нужен строгий rebuild-алгоритм.
+- Playwright в prod-образе нет; образ — Node 24 + Bun (`Dockerfile:1`), node-subprocess реалистичен.
+- `ApiError.status` не допускает 501; `pathString` в issues не RFC6901-escaped.
 
 ## Архитектурные решения
 
-### A. Каноничный URL и render-status (P0 §1, P1 §9)
+### A. Static serving, render-status, lifecycle (P0 §1, P1 §9)
 
-1. **Починка fallback**: в `serveStatic` отдавать `index.html` для любых `GET/HEAD` запросов вне `/api/`, `/storybook/`-файлов и путей с расширением, **без** проверки `Accept`. 404 остаётся для путей с расширением, которых нет на диске.
-2. **`GET /api/prototypes/:id/screens/:screenId/render-status`** (+ вариант `?version=n`): собирает по head-ревизии (или версии) `{status, url, revision, publishedVersion, resolvedPins, bundleStatus, renderable, errors[]}`. Коды ошибок: `prototype_not_found`, `screen_not_found`, `bundle_failed` (пин ссылается на не-active publish), `revision_not_published` (запрошенная версия отсутствует), `route_not_ready` не нужен после починки fallback — оставляем в enum для совместимости, но сервер его не выдаёт.
-3. **Canonical URLs в ответах save/publish**: additively — `screens: [{id, url}]` в ответ `POST/PUT /prototypes` и `POST /publish` (url версии — `/p/:id/v/:n/s/:sid`).
-4. **Lifecycle-поля** (P1 §9): в `GET /prototypes/:id` и `GET /components/:id` добавить `draftRevision` (=headRev), `validatedRevision` (=headRev — save всегда валидирует), `publishedVersion` (=latestVersion), `deployedVersion` (= publishedVersion — single-server), `renderable: boolean` (агрегат render-status по startScreen для прототипа; для компонента — наличие active-версии). Семантика документируется в `docs/server-api.md`.
+1. **Fallback**: `serveStatic` отдаёт `index.html` для `GET/HEAD` вне `/api/` и путей с расширением, без `Accept`-гейта. Неизвестный extensionless путь получит SPA (React покажет 404-страницу) — это осознанно; истинность маршрута проверяет render-status, а не HTTP-код статики.
+2. **`GET /api/prototypes/:id/screens/:screenId/render-status`** (`?version=n` | `?rev=n`): раздельные проверки и статусы:
+   - `document_ready` — документ ревизии/версии существует, screenId в нём есть;
+   - `bundles_ready` — все пины резолвятся в рендеримые публикации (см. K: active|deprecated|superseded — с warnings; rejected/failed/staging → `bundle_failed`);
+   - `local_route_ready` — SPA-статика доступна процессу (SERVE_DIST); в dev-режиме без dist — `route_not_ready` с message про Vite-origin.
+   Ошибки: `prototype_not_found`, `screen_not_found`, `version_not_found`, `revision_not_found`, `bundle_failed`, `route_not_ready`. Ответ: `{status, renderable, url, revision, publishedVersion, resolvedPins, bundleStatus, warnings, errors}`.
+3. **Canonical URLs**: additively `screens:[{id,url}]` в ответы create/save/publish.
+4. **Lifecycle-модель без фикций**: новая таблица `validation_records(resource_type, resource_id, rev, validator_version, catalog_hash, ok, issues_json, created_at)` — пишется при save (прототипы) и publish-стадиях (компоненты). Meta-ответы получают `{draftRevision, validatedRevision (из validation_records), publishedVersion, renderable: {head: bool, published: bool|null}}` — `renderable` считается той же логикой, что render-status (без external probe). `deployedVersion` не выдумываем: single-server, поле опускаем, семантику фиксируем в docs. Restore прототипа прогоняет `validatePrototype` и пишет validation record.
 
-### B. Типизированные event payloads + `$event` (P0 §2, часть P2 §12)
+### B. Typed event payloads + `$event` (P0 §2)
 
-1. **Формат объявления**: `events` в definition принимает `string[]` (legacy) **или** `Record<name, ZodSchema>` (custom TSX) / `Record<name, JSONSchema>` (persisted `DefinitionMeta.eventsSchema`, manifest, design-systems API). Нормализация в `src/catalog/normalize.ts` приводит обе формы к `{name, payloadSchema?}`; наружу `events: string[]` сохраняется для обратной совместимости, новое поле `eventPayloads?: Record<name, JSONSchema>` — additive.
-2. **Доставка payload**: в loader-обёртке custom-компонентов перехватываем `emit(name, payload?)` — payload валидируется схемой (в dev — ошибка в консоль/inspector, в prod — предупреждение) и кладётся в event-контекст диспатча. Для builtin-компонентов payload появляется только если библиотека его реально передаёт — выяснить по исходникам `@json-render/react`/`shadcn` на исполнении; если emit туда не прокидывает данные, builtin остаются payloadless (допустимо: боль фидбэка — custom).
-3. **Свои handlers для state-действий**: `createPlayerRuntime` отдаёт реальную SetState-factory (вместо no-op), реализующую `setState/pushState/removeState` через store с резолвом param-источников:
-   - `{"$event": "/json/pointer"}` — указатель внутрь payload (`""` — весь payload);
-   - `{"$elementId": true}` — ключ элемента;
-   - `{"$itemIndex": true}` / `{"$itemKey": true}` — из repeat-scope (см. C).
-   Терминальные действия (`navigate/openUrl`) получают те же источники в params (например, `screenId` из `$event` **не** поддерживаем — навигация остаётся статической, это осознанное сужение против injection; `openUrl.url` тоже остаётся статическим).
-4. **Валидация**: `src/prototype/validate.ts` — `$event`-указатель допустим только в событии, чей payload-schema объявлена и указатель типобезопасен по JSON Schema (best-effort: проверка существования property-пути; unknown-путь — warning). Payloadless событие + `$event` — ошибка.
-5. **Формат-док**: `docs/prototype-format.md` — снять «Events carry no payload», описать `$event/$elementId/$itemIndex/$itemKey` как источники значений только в `params` действий.
+1. **Объявление**: `events` в definition — `string[]` (legacy) или `Record<name, ZodSchema>`; персист в `DefinitionMeta.eventPayloads: Record<name, JSONSchema>` (additive), manifest/design-systems API отдают оба поля (`events: string[]` сохраняется).
+2. **Доставка — собственный event-адаптер, только для custom-компонентов** (builtin остаются payloadless — деградация зафиксирована в acceptance matrix):
+   - `toRuntimeSpec` для custom-элементов кладёт скрытую метадату `__euiOn` (raw `on`-биндинги) и `__euiKey` (element key) в props; адаптер-обёртка (в `src/customComponents/loader.ts`) снимает их до вызова компонента;
+   - обёртка даёт компоненту `emit(name, payload?)` (новый тип `EasyUIComponentProps` — отдельный модуль ABI, см. B.5); payload валидируется схемой (fail → ошибка в inspector + событие не диспатчится);
+   - обёртка сама резолвит params: `{"$event":"/ptr"}` (RFC6901 внутрь payload), `{"$elementId":true}`, `{"$itemIndex":true}`/`{"$itemKey":true}` (см. C.3) — в литералы, затем вызывает `useActions().execute()` с уже-статическими params (built-in `setState` обработает ActionProvider штатно). Никаких глобальных mutable контекстов — резолв в момент emit, синхронно, с correlation id для inspector.
+   - штатные (payloadless) события custom-компонентов продолжают работать через тот же адаптер (payload = undefined).
+3. **Params-грамматика**: `$event/$elementId/$itemIndex/$itemKey` — **param sources** (не prop-директивы). Разрешены в `setState/pushState/removeState` (`value`, элементы объектов/массивов value) и в `navigate.screenId` (runtime-guard: значение обязано быть существующим screenId, иначе no-op + inspector error). `openUrl.url` — статический (безопасность). **Условное действие**: у любого action появляется опциональный `$if` — condition-грамматика v1, расширенная `{"$event":"/ptr"}`-операндом в `eq/neq` и truthiness; false → действие пропускается (терминальность проверяется по потенциально исполнимой цепочке: не более одного терминального, последним).
+4. **Валидация**: `$event` допустим только на событии с объявленной payload-схемой; указатель проверяется по JSON Schema best-effort (неизвестный путь — warning). Payloadless событие + `$event` — ошибка. `$if` — та же condition-валидация.
+5. **ABI/совместимость**: `hostAbiVersion` остаётся 1 (ничего в v1 не ломаем); новый опциональный контракт: компонент может импортировать `easy-ui/runtime` (новый shim) с типом `EasyUIComponentProps` (= BaseComponentProps + `emit(name, payload?)` + `slots`). `definition.capabilities?: {typedEvents?: true, namedSlots?: true}` — по ним валидация отличает custom-возможности.
+6. **Формат-док**: снять «Events carry no payload», описать param sources и `$if`.
 
-### C. Композиция: repeat/templates + named slots (P0 §3)
+### C. Композиция: repeat + named slots (P0 §3)
 
-1. **Repeat (нативный)**: разрешить в `elementSchema` опциональный `repeat: {statePath, key?}` — passthrough в runtime-spec. Внутри поддерева repeat разрешаются `$item`/`$index` в props (passthrough — библиотека резолвит) и `$bindItem`. Валидация: `repeat.statePath` — валидный указатель; `$item`/`$index` вне repeat-поддерева — ошибка; глубина/лимиты прежние. Это и есть «$each + item template»: template — обычное поддерево children повторяемого элемента.
-2. **Named slots — только для custom-компонентов** (боль фидбэка именно там; builtin остаются с одним `children`):
-   - в `elementSchema` — опциональный `slot: slug` у ребёнка;
-   - loader-обёртка группирует React-children по `data-slot`-маркерам: адаптер `toRuntimeSpec` оборачивает slot-детей в синтетический builtin `SlotMarker` (наш компонент, рендерит `<div data-eui-slot>` прозрачно), а обёртка custom-компонента до рендера разбирает children на `Record<slotName, ReactNode>` и передаёт **новым** полем `slots` в `BaseComponentProps` (ABI-additive: старые компоненты его игнорируют);
-   - валидация: `slot` допустим только если родитель — custom-компонент, объявивший это имя в `definition.slots`; неизвестный slot — ошибка; дети без `slot` идут в `default`.
-3. **Event bubbling с item-контекстом**: emit внутри repeat-scope дополняет диспатч-контекст `$itemIndex`/`$itemKey` (loader-обёртка читает `useRepeatScope`). Для builtin внутри repeat `$itemIndex` берётся из scope на этапе резолва params (внутри нашей SetState-factory — scope прокидывается через контекст диспатча).
-4. **Reusable composite definitions и локальный state scope** — **отложено** (post-scope): закрывается связкой repeat+slots+custom components; фиксируем в плане как declined с обоснованием «дублирует custom components в MVP».
+1. **Repeat**: `elementSchema` получает опциональный `repeat: {statePath, key?}` — passthrough. `$item`/`$index` разрешаются в props **и** в conditions (`visible`, `$cond.if`, `$if`); в action params нативный `$item` — это путь, поэтому в наших param sources `$itemIndex`/`$itemKey` вычисляются адаптером (C.3), а `$item`-в-params не открываем (документируем).
+   Валидация: `repeat.statePath` — валидный safe-указатель; effective initial state по нему — массив (иначе warning: может наполняться динамически); `key` — имя поля item (shallow, документируем); `$item/$index` вне repeat-поддерева — ошибка. **Лимит раскрытия**: суммарно ≤ 2000 отрендеренных инстансов на экран — проверяется в runtime (обёртка Renderer считает по длинам массивов в state при рендере? — нет: считаем в валидации по initial state как warning, а жёсткий runtime-лимит ставит capture/player на длину массива per repeat = 200, с усечением и warning в inspector). Депс-лимиты v1 остаются.
+2. **Named slots — только custom-компоненты, роутинг до рендера**: у ребёнка опциональный `slot: slug`. `toRuntimeSpec` формирует на родителе `__euiSlots: {name: [indices]}` — индексы позиций в `element.children`. Адаптер (B.2) делает `React.Children.toArray(children)` и раскладывает по индексам в `slots: Record<name, ReactNode>` (без `slot` → `default`), передаёт в `EasyUIComponentProps.slots`. Никакой интроспекции внутренних props Renderer.
+   Валидация: `slot` допустим только если родитель — custom с `capabilities.namedSlots` и имя ∈ `definition.slots`; неизвестный слот — ошибка; builtin-родитель + `slot` — ошибка.
+3. **Item-контекст событий**: адаптер custom-компонента читает `useRepeatScope()` (публичный экспорт); `$itemIndex` = scope.index, `$itemKey` = `item[repeat.key]` — repeat.key прокидывается через `__euiRepeatKey` метадату от `toRuntimeSpec` ближайшего repeat-предка. Вне repeat-scope `$itemIndex/$itemKey` → ошибка валидации.
+4. **Declined**: reusable composite definitions, локальный state scope, conditional slot content (частично покрыт: `visible` у slot-детей работает) — в acceptance matrix.
 
 ### D. Asset registry (P0 §4)
 
-1. Таблица `assets(id TEXT PK, sha256 TEXT UNIQUE, mime, size INTEGER, original_name, created_at)` + байты на диске `DATA_DIR/assets/<sha256>` (не в SQLite — дешёвый backup, потоковая отдача).
-2. `POST /api/assets` — raw body (`Content-Type` = mime) либо multipart c одним файлом; лимит 5 MiB; allowlist mime: png, jpeg, webp, gif, svg+xml, woff2, ttf, otf. Дедуп: существующий sha256 → 200 с тем же `id` (id = `asset_<sha256[0:16]>` — content-addressed). Ответ: `{id, url:"/api/assets/<id>", sha256, mime, size, deduplicated}`.
-3. `GET /api/assets/:id` — immutable cache, correct content-type; SVG отдаётся с `Content-Disposition: inline` и CSP-safe заголовками (`Content-Security-Policy: script-src 'none'`) против XSS.
-4. **`$asset` директива**: `{"$asset": "asset_..."}` допустима в prop, где ожидается URL (`Image.src` и props custom-компонентов); резолв в `toRuntimeSpec` → строка `/api/assets/<id>`. Валидация на save: asset существует; несуществующий — ошибка. Пины assets по ревизии: таблица `prototype_revision_assets(prototype_id, rev, asset_id)` — read-back показывает hash/pins.
-5. Multi-file component package — **отложено** (фидбэк предлагает как альтернативу; asset URL из custom TSX закрывает кейс: `/api/assets/<id>` — same-origin absolute path).
+1. Таблица `assets(id TEXT PK, sha256 TEXT UNIQUE NOT NULL, mime, size, width?, height?, original_name, created_at)`; `id = "asset_" + sha256` (полный, 64 hex — коллизий нет). Байты — `DATA_DIR/assets/<sha256>`, запись атомарная: temp-файл + `rename`; чтение сверяет размер; целостность — `PRAGMA`-независимый аудит-скрипт (orphan-файлы/битые строки) в `npm run verify` не включаем (нужна живая БД), но добавляем `scripts/audit-assets.ts` для ручного/деплойного запуска. Backup-процедура в docs обновляется: db + `-wal/-shm` + `assets/`.
+2. `POST /api/assets` — raw body с `Content-Type` (или multipart, один файл). Лимит 5 MiB (413). **Magic-byte-валидация** реального типа (png/jpeg/webp/gif/svg/woff2/ttf/otf); mismatch с заявленным mime → 422. Для растров — decode-check размеров, лимит 16 Mpx (decompression bomb). Дедуп: existing sha256 → 200 `{deduplicated:true}`. Ответ: `{id, url, sha256, mime, size, width?, height?}`.
+3. `GET /api/assets/:id` — immutable, correct content-type и жёсткие заголовки: `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`, `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin`, `Referrer-Policy: no-referrer`. SVG не санитизируем в v1 — политика заголовков + same-origin + BasicAuth-граница; зафиксировано как остаточный риск в docs (admin-only инструмент).
+4. **`$asset` в документах**: `{"$asset":"asset_<sha256>"}` в URL-пропах; резолв в `toRuntimeSpec` → `/api/assets/<id>`. Save: `collectAndValidateAssetRefs(db, doc)` до транзакции (422 на несуществующий); пины `prototype_revision_assets(prototype_id, rev, asset_id, FK RESTRICT)`; restore копирует пины; read-back (`/draft`, `/revisions/:rev`, `/versions/:v`) отдаёт `assets:[{id,sha256,mime,size}]`.
+5. **Component asset pins**: на publish компилят source — сканируем строковые литералы `/api/assets/asset_<sha256>` в исходнике; найденные валидируются и пишутся в `component_publish_assets(component_id, version, asset_id, FK RESTRICT)`; read-back версии показывает. Отсутствие ссылок — ок.
+6. **Declined**: multi-file component package; локальные file-imports в TSX (закрыто asset-URL); в acceptance matrix.
 
-### E. Screenshot endpoint + visual regression (P0 §5, P1 §6)
+### E. Скриншоты (P0 §5) и visual regression (P1 §6)
 
-1. **Worker**: `server/screenshot/worker.ts` — запускается subprocess'ом (`node scripts/screenshot-worker.mjs` c playwright chromium; playwright переезжает из devDependencies в dependencies **только** если прод должен уметь скриншоты — да, должен: Dockerfile добавляет `npx playwright install --with-deps chromium`). Worker открывает `http://127.0.0.1:<port>/p/:id/s/:sid` (или `/v/:n/`), с internal-bypass Basic Auth (loopback-запрос с сгенерированным одноразовым токеном в заголовке — сервер принимает `X-EasyUI-Internal: <token>` только с 127.0.0.1), ждёт fonts/network-idle, собирает console/page errors, снимает PNG.
-2. **`POST /api/prototypes/:id/screens/:screenId/screenshot`** `{revision?|version?, viewport{width,height}, deviceScaleFactor?, theme?, waitForFonts?}` → синхронно (таймаут 30s) `{imageUrl, assetId, width, height, consoleErrors, pageErrors, bundleHash: componentManifestHash, componentPins}`. PNG сохраняется в asset registry (дедуп бесплатно). Отсутствие браузера в окружении → 501 `screenshot_unavailable` с понятным message (dev без установленного chromium).
-3. **Visual references** (P1 §6): таблицы `visual_references(id, scope('prototype-screen'|'component'), prototype_id?, screen_id?, component_id?, viewport_w, viewport_h, theme, asset_id, note, created_at)` и `visual_runs(id, reference_id, candidate_asset_id, diff_asset_id?, metric('AE'), diff_pixels, total_pixels, diff_percent, status('pass'|'fail'|'error'), created_at, revision/version snapshot)`.
-   - `PUT /api/visual-references` (создать/заменить reference: asset + метаданные), `GET /api/visual-references?prototypeId=...`;
-   - `POST /api/visual-references/:id/check` — снимает candidate через screenshot-pipeline, сравнивает `pixelmatch` (+`pngjs`; новые прод-зависимости), пишет diff-image в assets, возвращает отчёт с dimensions/sha256 обоих файлов/metric/diff-числами. Несовпадение dimensions → `status:"error"`, без процента.
-   - **Evidence guard**: нет reference → `{status:"visual_reference_missing", pixelDiffPercent:null}`; процент выдаётся только при физических файлах + sha256 + dimensions + числителе/знаменателе (все поля обязательны в ответе).
-   - UI: страница `/visual` (или вкладка в Library): список references, история runs, side-by-side + diff.
+1. **Capture-shell**: новый роут `/capture/:protoId/s/:screenId` (+`?rev=n|version=n&theme=&dsf=`) — рендер экрана **без** app-chrome/DeviceFrame, 1:1 поверхность; данные ревизии — существующий `GET /revisions/:rev`. Готовность: shell выставляет `window.__EUI_CAPTURE_READY__ = {revision, componentManifestHash, pins}` после mount + `document.fonts.ready` + `img.decode()` всех изображений; CSS-анимации/caret глушатся стилем в capture-режиме.
+2. **Worker**: `scripts/screenshot-worker.mjs` — node subprocess, прямой exact dep `playwright` (dependencies) + `npx --no-install playwright install --with-deps chromium` в Dockerfile; JSON-протокол stdin/stdout, kill process group по таймауту, гарантированный close browser/context, фиксированные locale/timezone (`ru-RU`, `Europe/Moscow`), `colorScheme` из параметра, `reducedMotion: reduce`. Ожидание: `__EUI_CAPTURE_READY__` (poll, 20s дедлайн), не `networkidle`. Консольные/страничные ошибки собираются (лимит 100). Egress: `context.route` абортит все не-loopback запросы.
+3. **Аутентификация капчера**: capture-session — `POST` внутренняя генерация при запросе скриншота: одноразовая запись `{token(32B random), prototypeId, rev, screenId, expiresAt(+60s)}` в памяти; worker шлёт `X-EasyUI-Capture: <token>` **только** на loopback-origin (через `context.route`-инжект по origin). Сервер принимает токен только если: `server.requestIP()` — loopback, метод GET/HEAD, путь ∈ allowlist (`/capture/*`, `/assets/*`, `/api/prototypes/<id>/...` read-only, `/api/components/*/bundle.js`, `/api/shims/*`, статика SPA). `createHandler` переводится на `fetch(request, server)`; для screenshot-запроса ставится `server.timeout(request, 120)`.
+4. **`POST /api/prototypes/:id/screens/:screenId/screenshot`** `{rev?|version?, viewport, deviceScaleFactor?, theme?, waitForFonts?}` → синхронно `{imageUrl, assetId, width, height, consoleErrors, pageErrors, bundleHash, componentPins, rendererBuild, browserVersion}`. PNG → asset registry. Очередь: серверный пул concurrency=1 (FIFO, отказ 429 при глубине >5). Без браузера/дистa → 501 `screenshot_unavailable` (ApiError расширяется 429/501). Dev: работает при `SERVE_DIST` (иначе 501 c message).
+5. **Component capture harness** (нужен до visual): роут `/capture/component/:id/:version?props=<base64 json>|example` — рендер published-компонента с example/переданными props через loader, тот же readiness-протокол.
+6. **Visual references**: `visual_references(id, fingerprint_json UNIQUE, asset_id FK, note, created_at)` где fingerprint = `{scope: "prototype-screen"|"component", prototypeId?, screenId?, componentId?, refRevision|refVersion, propsHash?, stateHash?, viewport, deviceScaleFactor, theme}`; `visual_runs(id, reference_id FK, candidate_asset_id, diff_asset_id?, metric, metric_options_json, diff_pixels, total_pixels, diff_percent, status('pass'|'fail'|'error'|'reference_missing'), candidate_meta_json(rev/version/pins/rendererBuild/browser), created_at)`.
+   - `PUT /api/visual-references` (upsert по fingerprint), `GET /api/visual-references?scope&id`, `POST /api/visual-references/:id/check {rev?|version?, threshold?}` — capture → сравнение в **worker'е** (pixelmatch+pngjs там же, не в Bun-процессе): метрики честно именуются `exact-rgba` (полное попиксельное равенство) и `pixelmatch-v1` (все options в `metric_options_json`); никакого «AE». Несовпадение dimensions → `error` без процента.
+   - **Evidence guard**: нет reference для fingerprint → `{status:"visual_reference_missing", pixelDiffPercent:null}`; отчёт всегда содержит оба sha256, dimensions, числитель/знаменатель, metric+options.
+   - UI `/visual`: список references, история runs, side-by-side + diff-изображение.
 
-### F. Токены/шрифты/иконки дизайн-системы (P1 §7)
+### F. Tokens/fonts/icons + версии темы (P1 §7)
 
-1. Колонки в `design_systems`: `tokens TEXT(JSON)`, `fonts TEXT(JSON)`, `icons TEXT(JSON)`, `meta_rev INTEGER DEFAULT 1` (версия метаданных, инкремент на каждое изменение). `PATCH /api/design-systems/:id` (только custom-систем; builtin — 405) принимает `{tokens?, fonts?, icons?, baseMetaRev}` (CAS по meta_rev). Token-значения: строки/числа; ключи — dot-path. Fonts: `[{family, src: asset_id|url, weight?, style?}]`; icons: `[{name, assetId, viewBox?, themes?}]`.
-2. **Доставка в runtime**: player при загрузке системы инжектит `<style>`: токены → CSS custom properties `--eui-<dot-path через ->`, fonts → `@font-face` (src через `/api/assets/...`). Custom-компоненты используют `var(--eui-color-text-primary)`; helper `token("color.text.primary")` — экспорт из нового shim-модуля `easy-ui/tokens` (ABI-allowlist пополняется, shim резолвит из `__easyUiShared.tokens`). Версия tokens пинится в ревизии прототипа: `prototype_revisions.design_system_meta_rev` — read-back показывает, с какой версией темы сохранён прототип (enforcement — post-MVP, как с builtinCatalogHash).
-3. Font loading status — секция в interaction inspector (см. H): `document.fonts` статусы.
+1. **Immutable-версии**: `design_system_versions(system_id FK, version INTEGER, tokens_json, fonts_json, icons_json, created_at, PK(system_id,version))`. `PATCH /api/design-systems/:id` (custom-only; builtin → 405) с `{tokens?, fonts?, icons?, baseVersion}` создаёт версию `baseVersion+1` (CAS). `GET /api/design-systems/:id` отдаёт `latestMetaVersion` и содержимое последней; `GET .../versions/:v` — immutable.
+2. **Грамматика**: token-ключ `^[a-z][a-z0-9]*(\.[a-z0-9-]+)*$`, значение — строка ≤256 без `;{}<>` или конечное число; fonts `[{family(safe), src: assetId, weight?, style?}]` — **только** asset-backed; icons `[{name(slug), assetId, viewBox?, themes?{light?,dark?}}]` — assetId валидируются.
+3. **Пин**: `prototype_revisions.design_system_meta_version INTEGER NULL` — на save фиксируется latest; player/capture загружают именно пиновую версию (по head — latest). Acceptance «prototype pins design-system version» выполняется по-настоящему.
+4. **Доставка**: инжект `<style>` — токены → `--eui-<key с '.'→'-'>`, шрифты → `@font-face` c `/api/assets/...`; сериализация экранированная (значения через CSS.escape-эквивалент на нашей стороне, генерация только из провалидированной грамматики). Shim `easy-ui/runtime` экспортирует `token(key)` (читает CSS-переменную/снапшот из `__easyUiShared.tokens`) и `Icon({name,size,theme?})` (рендер `<img src=/api/assets/...>` по icon-registry текущей системы+версии). ABI-allowlist пополняется этим одним модулем.
+5. Font loading status — в inspector (`document.fonts` статусы).
 
 ### G. OpenAPI, JSON Schema, capabilities (P1 §8)
 
-1. `GET /api/openapi.json` — OpenAPI 3.1, генерируется скриптом `scripts/generate-openapi.ts` из декларативной таблицы маршрутов + zod-схем (`z.toJSONSchema`, zod 4 native) в build-time, коммитится как `server/openapi.json`, отдаётся статически; `npm run verify` проверяет свежесть (drift-check).
-2. `GET /api/schemas/prototype-document.json` — JSON Schema документа из `prototypeDocSchema` (+ ручные уточнения директив). `GET /api/schemas/component-definition.json` — схема definition-контракта.
-3. `GET /api/capabilities` — `{apiVersion, documentVersion: 1, actions:[...], directives:["$state","$bindState","$template","$cond","$event","$asset",...], paramSources, limits{elements:500, depth:50, bodyMiB:1, sourceKiB:256, assetMiB:5}, designSystems:[ids], features:{renderStatus, screenshots, visualRegression, assets, typedEvents, repeat, slots}}`.
-4. Validation errors: уже есть `issues[].path` — привести все руты к единому виду (JSON path строкой в поле `pointer` дополнительно к массиву), задокументировать в `docs/server-api.md`.
+1. **Route contracts как единый источник**: декларативный реестр маршрутов `server/contracts.ts` — `{method, path, params, requestSchema?, responseSchema, errors[]}`; runtime-роутер маршрутизирует **по нему** (обёртка над существующими handlers валидирует вход по contract'у), генератор `scripts/generate-openapi.ts` строит OpenAPI 3.1 из того же реестра (`z.toJSONSchema`). `server/openapi.json` коммитится, drift-check в verify. Contract-тест обходит все endpoints и сверяет фактические ответы со схемами.
+2. `GET /api/openapi.json`, `GET /api/schemas/prototype-document.json`, `GET /api/schemas/component-definition.json`.
+3. `GET /api/capabilities`: `{apiVersion, documentVersion, actions, directives, paramSources:["$event","$elementId","$itemIndex","$itemKey"], conditions, limits, designSystems, features{...}}`.
+4. Issues: legacy `path` (как есть) + новое поле `pointer` (RFC6901-корректный string, с escape `~0/~1`) добавляется централизованно в `errorResponse`.
 
-### H. Interaction inspector (P2 §12) + автогалерея (P1 §10)
+### H. Inspector (P2 §12) и Library/gallery (P1 §10)
 
-1. **Inspector**: панель в player за query `?debug=1` (и кнопка в editor). Источники: внешний `createStateStore` + `onStateChange` (state diff), обёртка action-handlers (наша SetState-factory и терминальные хендлеры логируют `{component, elementId, event, payload, action, params, prev, next, navTarget}`), ошибки payload-валидации, font loading status. Лента последних N=50 записей, кнопка clear. Реализация — отдельный модуль `src/player/inspector/`.
-2. **Автогалерея/Library** (P1 §10): custom-компоненты получают живое превью — роут `/library/preview/:componentId/:version` рендерит компонент с `example`-props через существующий loader (изолированный error boundary); карточка Library встраивает превью iframe'ом (как Storybook-карточки). Фильтры Library: по atomicLevel (есть) + по статусу `Published / Visual pending / Verified / Blocked / Rejected` — вычисляется из component_publishes.status + наличия visual reference/последнего run (E.3, K). Данные — только из manifest/API, ручной учёт не нужен.
+1. **Inspector**: инструментированный store — `createStateStore(initial)` оборачивается прокси с логом `set/update` (prev/next diff на уровне store); custom event-адаптер логирует `{correlationId, elementId, component, event, payload, payloadValid, actions[{action, params, $if result}], navTarget}`; терминальные handlers логируют navigate/back/openUrl/restart; + font loading, runtime-ошибки payload/slots/repeat-limit. UI-панель в player за `?debug=1`, лента 50 записей. Модуль `src/player/inspector/`.
+2. **Library**: живое превью custom-компонентов — iframe на capture-shell компонента (`/capture/component/:id/:version?props=example`, E.5). Статус-фильтры: `Published / Visual pending / Verified / Blocked / Rejected` — verification key = `{componentId, version, propsHash(example), metaVersion темы, viewport, theme}`; `Verified` только при pass-run последнего check ровно этого ключа. Метадата `variants/states` — **declined** (нет источника в definition-контракте; в acceptance matrix). Figma-бейдж из J.
 
 ### I. Semantic validation (P2 §13)
 
-Расширить `validatePrototype` (всё — warnings, кроме отмеченного):
-- событие объявлено в definition, но ни один элемент этого типа его не обрабатывает — **не** warning на уровне элемента, а сводный: элемент интерактивного типа без `on` вовсе;
-- `navigate` на неизвестный screen — уже ошибка (остаётся);
-- недостижимый screen — уже warning (остаётся);
-- отсутствующий component pin при чтении ревизии (render-status покрывает);
-- `$event`-биндинг без item identity в payload повторяемого элемента;
-- интерактивный элемент без accessible label (`aria-label`/`label`/текстовый ребёнок — эвристика);
-- `Image.src`/props с base64 > 100KB;
-- несколько screens без единого `navigate` между ними;
-- экран из единственного custom-компонента-«монолита» (page-level или без children при доступной композиции);
-- `Image.src` с относительным путём вне `/api/assets` и не из `public/` — предупреждение о недоступности в player runtime.
+Политика: существующие hard errors **не** ослабляются. Definition metadata расширяется: `capabilities`, `interactive?: boolean` (custom; builtin — таблица в `src/catalog/`), `accessibleLabelProps?: string[]`, `urlProps?: string[]`. Новые warnings:
+- interactive-компонент размещён без единого обработчика в `on`;
+- событие с payload-схемой обработано действием без использования `$event` при наличии в шаблоне повторяемого контекста без item identity;
+- интерактивный элемент без accessible label (по `accessibleLabelProps`/текстовому ребёнку);
+- inline base64 в string-props длиной >100KB (любой prop);
+- ≥2 screens и ни одного `navigate` между разными screens;
+- экран, чей root — единственный custom-компонент уровня page/organism без children (монолит-подсказка);
+- `urlProps` со значением-путём вне `/api/assets/` и не начинающимся с `/` public-конвенций — предупреждение о недоступности в runtime.
+`$event`/slots/repeat-валидации перечислены в B/C. Unreachable screens, unknown navigate target — уже есть.
 
 ### J. Figma provenance (P2 §11)
 
-Опциональное поле `figma` (`{fileKey, nodeIds[], referenceScreenshots[assetIds], lastSyncedAt}`) на компонентах и прототипах: колонка `figma TEXT(JSON)` в `components` и `prototypes` (head-метаданные, не в ревизиях), принимается в POST/PUT (strict-валидация формы), отдаётся в meta/manifest. referenceScreenshots валидируются на существование assets. UI: карточка Library/Gallery показывает бейдж Figma-источника.
+Immutable на ревизиях: колонка `figma_json TEXT NULL` в `prototype_revisions` и `component_revisions` (принимается в POST/PUT рядом с doc/source, strict-схема `{fileKey, nodeIds[], referenceScreenshots[assetIds], lastSyncedAt}`; referenceScreenshots валидируются по assets). Head-meta отдаёт provenance головной ревизии; read-back ревизии/версии — её собственную. Restore копирует figma_json вместе с ревизией. Library/Gallery — бейдж.
 
-### K. Статусы ревизий/версий (P2 §14)
+### K. Статусы версий компонентов (P2 §14)
 
-1. Расширить CHECK `component_publishes.status`: `staging|active|failed|rejected|deprecated|superseded` (+ колонки `status_reason TEXT`, `superseded_by INTEGER`). Миграция v4 пересоздаёт таблицу (SQLite CHECK immutable) с переносом данных.
-2. `POST /api/components/:id/versions/:version/status` `{status: rejected|deprecated|superseded|active, reason?, supersededBy?, baseRev}` — переходы разрешены только из/в перечисленные (staging/failed — не трогать руками). `superseded` требует `supersededBy`.
-3. Резолв пинов и manifest: новые пины и manifest выбирают только `active`; существующие пины на rejected/deprecated версии **продолжают работать** (bundle endpoint отдаёт любую не-staging/failed), render-status помечает их `warnings:["pin_deprecated"]`. Library показывает статус-бейдж и причину.
-4. Прототипные версии: аналогичный статус — **отложено** (не запрошено фидбэком явно; компонентных статусов достаточно).
+1. Статусы: `staging|active|failed|rejected|deprecated|superseded|archived` (+`status_reason`, `superseded_by`, `status_rev INTEGER DEFAULT 1`). Миграция пересоздаёт `component_publishes` **строгим алгоритмом**: `PRAGMA foreign_keys=OFF` в этой миграции невозможен внутри транзакции → порядок: снять копию child-таблицы `prototype_revision_components` во временную, DROP child, rebuild parent (все PK/UNIQUE/FK/CHECK), восстановить child с FK, `PRAGMA foreign_key_check`, только затем bump `user_version`. Тест на populated-копии v3 (active/failed/staging, soft-deleted, несколько pinned revisions) — фикстура из `.backups/`-подобного снапшота, синтезированного тестом.
+2. **Transition matrix** (`POST /components/:id/versions/:version/status {status, reason?, supersededBy?, baseStatusRev}`): `active → rejected|deprecated|superseded|archived`; `deprecated|superseded → archived|active`; `rejected → archived`; `archived → (нет)`; staging/failed — не управляются вручную. CAS по `status_rev` (не headRev). `superseded` требует `supersededBy`: та же component, версия существует, не self, без циклов.
+3. **Семантика исполнения**: новые пины/manifest — только `active`. Существующие пины: `active|deprecated|superseded` рендерятся (render-status warning `pin_deprecated|pin_superseded`), `rejected|archived|failed|staging` → `bundle_failed` (rejected может означать вредный код — не исполняем). Metadata любой версии остаётся читаемой. Library — бейдж+reason.
 
-## Отложено (declined) — с обоснованием
+## Acceptance matrix (фидбэк → реализация)
 
-- Multi-file component package (D.5) — asset registry закрывает кейс через URL.
-- Reusable composite definitions / локальный state scope (C.4) — custom components + slots + repeat покрывают сценарии MVP.
-- `$event` в `navigate.screenId`/`openUrl.url` — статичность навигации сохраняется намеренно (безопасность/валидируемость).
-- Прототипные version-статусы (K.4).
-- Автоматический deploy tokens enforcement (F.2) — пин meta_rev диагностический, как builtinCatalogHash.
+| Критерий фидбэка | Статус | Где |
+|---|---|---|
+| §1 render-status, коды ошибок, canonical URLs, renderable | ✅ | A |
+| §1 «route после publish без ручной диагностики ingress» | ⚠️ частично: external ingress probe вне scope (нет доступа к ingress) | A.2 |
+| §2 payload в setState/navigate | ✅ ($event) | B.3 |
+| §2 payload в openUrl | ❌ declined: статический URL — security | B.3 |
+| §2 conditional actions | ✅ (`$if`) | B.3 |
+| §2 payload у builtin events | ⚠️ declined: `emit` библиотеки без payload; custom-only | B.2 |
+| §2 debug mode показывает payload | ✅ | H.1 |
+| §2 старые payloadless events работают | ✅ | B.2 |
+| §3 named slots (несколько regions) | ✅ custom-компоненты | C.2 |
+| §3 $each из state, item+index в template, events с item context | ✅ | C.1, C.3 |
+| §3 валидация slots/templates, лимиты | ✅ | C.1-2 |
+| §3 reusable composites, local state scope | ❌ declined: покрыто custom components | C.4 |
+| §4 asset API, dedup SHA-256, MIME/size, content-addressed, read-back pins | ✅ | D |
+| §4 multi-file package / локальные imports | ❌ declined: asset-URL закрывает кейс | D.6 |
+| §4 «нельзя опубликовать file:// путь» | ✅ (валидации URL v1 + I) | I |
+| §5 screenshot: revision+pins, console errors, fonts/idle, themes/viewport, CI-воспроизводимость | ✅ | E.1-4 |
+| §6 visual: references, привязка, capture, diff, история, evidence guard | ✅ (метрики exact-rgba + pixelmatch-v1, не «AE») | E.6 |
+| §7 tokens versioned, token helper, font status, icon registry, prototype pin версии темы | ✅ | F |
+| §8 OpenAPI, JSON Schemas, capabilities, validation errors с path | ✅ | G |
+| §9 lifecycle-модель | ✅ (validation records; deployedVersion опущен как тавтология single-server) | A.4 |
+| §10 автогалерея: превью, фильтры статусов | ✅ | H.2 |
+| §10 variants/states metadata | ❌ declined: нет источника в контракте definition | H.2 |
+| §11 Figma provenance на ревизиях | ✅ | J |
+| §12 interaction inspector | ✅ | H.1 |
+| §13 semantic warnings | ✅ (список скорректирован под существующие hard errors) | I |
+| §14 статусы rejected/deprecated/superseded/archived + reason | ✅ | K |
 
-## Волны исполнения (file ownership)
+## Сквозная безопасность
 
-Каждая задача — отдельный `--fresh` Codex-диспатч `--write --effort medium`. Верификация оркестратором между волнами. Коммиты — по зонам после верификации.
+- Safe JSON Pointer parser (`src/prototype/pointer.ts` + серверный реюз): запрет `__proto__/prototype/constructor`-сегментов во **всех** записях/биндингах/repeat/`$event`-путях; store оборачивается hardened-обёрткой (null-prototype контейнеры при set).
+- Asset-заголовки (D.3), magic bytes, pixel limits.
+- Capture-token: TTL 60s, audience, loopback `server.requestIP`, GET/HEAD allowlist, egress-блок в worker.
+- Rejected-бандлы не исполняются (K.3).
 
-### Волна 1 (независимые фундаменты, параллельно)
-- **T1. SPA fallback + render-status + canonical URLs + lifecycle-поля** (A). Владение: `server/static.ts`, `server/routes/prototypes.ts`, `server/repos/prototypes.ts`, `server/routes/components.ts` (lifecycle-поля meta), новый `server/routes/renderStatus.ts`, `server/main.ts` (маршрут), тесты `server/**/*.test.ts` соответствующих зон, `docs/server-api.md` (§render-status/lifecycle).
-- **T2. Asset registry** (D). Владение: `server/migrations.ts` (v4-часть assets — координируется: T2 создаёт migration v4 целиком по спеке плана, включая колонки для F/J/K, чтобы не плодить конфликтующие миграции), новые `server/routes/assets.ts`, `server/repos/assets.ts`, `server/main.ts` (маршрут — non-conflicting добавка согласуется с T1: T1 коммитится раньше, T2 ребейзится оркестратором), `docs/server-api.md` (§assets).
-- **T3. Repeat + $item/$index + валидация** (C.1). Владение: `src/prototype/schema.ts`, `src/prototype/validate.ts`, `src/prototype/runtimeSpec.ts`, их тесты, `docs/prototype-format.md`.
+## Волны исполнения (file ownership; каждая задача — свежий Codex-диспатч)
 
-Примечание: единственный общий файл волны — `server/main.ts` и `migrations.ts`; чтобы избежать конфликтов, T2 стартует после коммита T1 (полуволна), T3 полностью независим.
+Миграции: **по одной на фичу** — v4 assets (T2), v5 validation_records (T1), v6 visual (T7), v7 design_system_versions (T8), v8 figma (T12), v9 statuses (T10). Нумерация фиксируется порядком коммитов волн; задача создаёт следующую свободную.
 
-### Волна 2 (события и слоты)
-- **T4. Typed event payloads + $event + своя SetState-factory** (B). Владение: `src/catalog/normalize.ts`, `src/catalog/runtime.ts`, `src/catalog/actions.ts`, `src/customComponents/loader.ts`, `src/prototype/validate.ts` (после T3), `server/components/{types,pipeline,extract-subprocess}.ts` (eventsSchema в meta), `docs/prototype-format.md`, `docs/server-api.md`.
-- **T5. Named slots для custom + SlotMarker + item-контекст событий** (C.2, C.3) — после T4 (общий loader). Владение: `src/customComponents/loader.ts`, `src/prototype/{schema,validate,runtimeSpec}.ts` (координация с T3/T4 — T5 стартует после их коммитов), `src/catalog/` (SlotMarker), docs.
+### Волна 1 (последовательно внутри, T3 параллельно)
+- **T1. Static fallback + render-status + canonical URLs + lifecycle + contracts-каркас** (A, G.1-каркас: реестр contracts вводится сразу, чтобы новые endpoints регистрировались в нём). Файлы: `server/static.ts`, `server/main.ts` (переход на `fetch(request, server)`), `server/contracts.ts` (новый), `server/routes/{prototypes,components}.ts`, `server/repos/prototypes.ts`, `server/routes/renderStatus.ts` (новый), миграция validation_records, `server/http.ts` (статусы 429/501, pointer в issues), тесты, `docs/server-api.md`.
+- **T2. Asset registry + $asset + пины** (D целиком, включая фронтовую часть $asset). Файлы: миграция assets, `server/routes/assets.ts`, `server/repos/assets.ts`, `server/assets/validate.ts` (magic bytes), `server/validation.ts` (collectAndValidateAssetRefs), `src/prototype/{schema,validate,runtimeSpec}.ts` ($asset), `src/prototype/pointer.ts` (safe parser — вводится здесь, T3/T4 переиспользуют), тесты, docs. Старт после коммита T1.
+- **T3. Repeat + $item/$index + лимиты** (C.1). Файлы: `src/prototype/{schema,validate,runtimeSpec}.ts` — конфликт с T2! → T3 стартует после коммита T2. Итого волна 1: T1 → T2 → T3 последовательно (общие файлы), зато задачи маленькие.
 
-### Волна 3 (скриншоты и visual)
-- **T6. Screenshot endpoint + Dockerfile + internal-auth bypass** (E.1, E.2). Владение: `server/screenshot/`, `scripts/screenshot-worker.mjs`, `server/main.ts`, `Dockerfile`, `package.json` (deps), docs.
-- **T7. Visual references + diff pipeline + UI /visual** (E.3) — после T6. Владение: `server/routes/visual.ts`, `server/repos/visual.ts`, `src/visual/` (UI), `src/app/routes.tsx`, docs.
+### Волна 2 (события/слоты)
+- **T4. Event-адаптер: typed payloads, $event, $if, EasyUIComponentProps, shim easy-ui/runtime** (B). Файлы: `src/customComponents/loader.ts`, `src/catalog/{normalize,runtime,actions}.ts`, `src/prototype/validate.ts`, `server/components/{types,pipeline,extract-subprocess,compile}.ts`, `server/shims/`, docs.
+- **T5. Named slots + item-context событий** (C.2-3). После T4 (loader общий). Файлы: loader, `src/prototype/{schema,validate,runtimeSpec}.ts`, docs.
 
-### Волна 4 (метаданные системы и API-дискавери, параллельно)
-- **T8. Tokens/fonts/icons + PATCH design-systems + инжект CSS-vars + shim easy-ui/tokens** (F). Владение: `server/routes/designSystems.ts`, `server/designSystems.ts`, `server/shims/`, `server/components/compile.ts` (ABI-allowlist), `src/designSystems/`, `src/player/` (инжект), docs.
-- **T9. OpenAPI + JSON Schemas + capabilities** (G). Владение: `scripts/generate-openapi.ts`, `server/openapi.json`, `server/routes/meta.ts` (новый), `server/main.ts` (после коммитов волны 3), `package.json` (verify-шаг), docs.
-- **T10. Статусы версий компонентов** (K; миграционные колонки уже в v4 от T2). Владение: `server/repos/components.ts`, `server/routes/components.ts`, docs.
+### Волна 3 (капчер)
+- **T6. Capture-shell (prototype+component) + worker + screenshot endpoint + Dockerfile + capture-auth** (E.1-5). Файлы: `src/capture/` (новый), `src/app/routes.tsx`, `scripts/screenshot-worker.mjs`, `server/screenshot/`, `server/main.ts`, `Dockerfile`, `package.json`, docs.
+- **T7. Visual references + runs + UI /visual** (E.6). После T6. Файлы: миграция visual, `server/routes/visual.ts`, `server/repos/visual.ts`, `src/visual/`, `src/app/routes.tsx`, docs.
 
-### Волна 5 (UX-слой, параллельно)
-- **T11. Interaction inspector** (H.1). Владение: `src/player/inspector/`, `src/player/PlayerShell.tsx`, `src/catalog/runtime.ts` (хук логгера — после T4), docs.
-- **T12. Library: живые превью custom + статус-фильтры + Figma-бейджи; Figma provenance API** (H.2, J). Владение: `src/library/`, `src/app/routes.tsx` (после T7), `server/routes/{components,prototypes}.ts` + `server/repos/*` (поле figma; после T10), docs.
-- **T13. Semantic validation pack** (I). Владение: `src/prototype/validate.ts` (после T5), тесты, docs.
+### Волна 4 (параллельно: серверные зоны не пересекаются)
+- **T8. Design-system versions: tokens/fonts/icons + PATCH + инжект + token()/Icon** (F). Файлы: миграция ds-versions, `server/routes/designSystems.ts`, `server/designSystems.ts`, `server/shims/`, `src/designSystems/`, `src/player/` (инжект), docs.
+- **T9. OpenAPI-генератор + schemas + capabilities + contract-тест** (G, поверх каркаса T1). Файлы: `scripts/generate-openapi.ts`, `server/openapi.json`, `server/routes/meta.ts`, `package.json` (verify), тесты, docs.
+- **T10. Статусы версий + миграция rebuild + transition matrix** (K). Файлы: миграция statuses (+populated-тест), `server/repos/components.ts`, `server/routes/components.ts`, docs.
 
-### Волна 6 — интеграция
-- **T14. Финал**: `npm run verify`, `npm run e2e`, runtime-прогон `/verify`-скилла, обновление `CLAUDE.md`-описаний зон при необходимости, сквозной demo-прототип в `prototypes/` (repeat+slots+$event+$asset) как living-документация.
+### Волна 5 (параллельно)
+- **T11. Inspector** (H.1). Файлы: `src/player/inspector/`, `src/player/PlayerShell.tsx`, хуки в loader/runtime (после T4/T5), docs.
+- **T12. Library-превью + статус-фильтры + Figma provenance (API+UI)** (H.2, J). Файлы: миграция figma, `src/library/`, `server/routes/*` (figma поля), `server/repos/*`, docs.
+- **T13. Semantic validation pack + definition metadata** (I). Файлы: `src/prototype/validate.ts`, `src/catalog/`, `server/components/*` (metadata), docs.
+
+### Волна 6
+- **T14. Интеграция**: демо-прототип (repeat+slots+$event+$asset+tokens), `npm run verify`, `npm run e2e`, runtime-прогон `/verify`, обновление CLAUDE.md-зон.
 
 ## Done-критерии (сквозные)
 
-- `npm run verify` зелёный (typecheck, тесты, validate:prototypes, drift-checks).
-- `npm run e2e` зелёный (dev + preview проекты).
-- Каждый новый endpoint покрыт серверным тестом (happy + ошибки envelope).
-- `curl` без Accept-заголовка получает 200 text/html на `/p/<id>/s/<screen>` (после T1).
-- Демо: событие с payload из custom-компонента меняет state через `$event`; repeat-список из state рендерит элементы; `$asset`-картинка отображается; скриншот-endpoint возвращает PNG в dev; visual check выдаёт корректный процент и guard-статусы.
-- Обратная совместимость: все существующие `prototypes/*.json` валидны без изменений; старые payloadless events работают; старые компоненты без slots работают.
+- `npm run verify` и `npm run e2e` зелёные после каждой волны.
+- Каждый endpoint зарегистрирован в contracts и покрыт тестом (happy + error envelope); contract-тест зелёный.
+- `curl` без `Accept` → 200 text/html на `/p/<id>/s/<screen>`.
+- Демо-сценарии волны 6 работают в runtime-прогоне.
+- Обратная совместимость: существующие `prototypes/*.json` валидны; payloadless events и компоненты без capabilities работают; ABI v1 не изменён.
+- Миграции проходят на populated v3-копии.
 
-## Риски
+## Триаж ревью v1 (Codex, 2026-07-12)
 
-- **Payload у builtin-событий** зависит от внутренностей @json-render — принято решение деградировать до custom-only без блока (B.2).
-- **Playwright в Bun**: worker запускается под node subprocess, не в Bun-процессе (E.1) — изоляция рисков рантайма.
-- **Пересоздание таблицы component_publishes** в миграции v4 (K.1) — обязательный backup перед прод-деплоем (процедура из `docs/server-api.md#deployment`); миграция тестируется на копии prod-данных из `.backups/`.
-- **Одна миграция v4 на все волны** — T2 создаёт её целиком по спеке; последующие задачи колонок не добавляют. Если в ходе исполнения потребуется новое поле — v5, forward-only.
-- Rollback прод-деплоя: предыдущий SHA + redeploy; миграции forward-only, поэтому деплоить только после полного verify.
-
-## Триаж ревью
-
-(заполняется после Stage 2)
+Blockers 1–6: **приняты** — event-адаптер вместо SetState-factory (B.2), слот-роутинг по индексам до рендера + EasyUIComponentProps (C.2), capture-shell с rev/version + 501 в dev без dist (E.1, E.4), `server.timeout` + очередь (E.4), capture-session c requestIP/allowlist/egress-блоком (E.3), строгий rebuild-алгоритм миграции + populated-тест (K.1).
+Majors 7–24: **приняты** — acceptance matrix добавлена (7); repeat-лимиты/семантика уточнены, $itemKey через метадату (8); readiness-протокол и пул (9); fingerprint + честные метрики + component harness до visual (10); transition matrix + statusRev + rejected не исполняется (11); validation records вместо фиктивных полей, deployedVersion опущен (12); asset-заголовки/magic bytes/лимиты (13); полный sha256-id, atomic write, component asset pins (14); $asset-декомпозиция исправлена (15); immutable design_system_versions + грамматика + Icon API (16); инструментированный store (17); safe-pointer hardening (18); route contracts + pointer + статусы 429/501 (19); figma на ревизиях (20); verification key (21); политика hard-errors + definition metadata (22); раздельные статусы route/document/bundles, `route_not_ready` сохранён (23); миграция на фичу (24). Minor 25: **принят** (exact `playwright`, протокол worker, diff в worker'е).
+Отклонений нет; сужения scope перечислены в acceptance matrix как declined с обоснованиями.
