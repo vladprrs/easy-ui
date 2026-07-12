@@ -27,7 +27,7 @@ export function CjmFrame({ nativeWidth, nativeHeight, resetKey, children }: { na
     return () => observer.disconnect();
   }, [nativeHeight, resetKey, scale]);
   const height = nativeHeight === undefined ? measuredHeight : nativeHeight * scale;
-  return <div className="overflow-hidden rounded-xl bg-background" style={{ width: TILE_WIDTH, height }}>
+  return <div className="overflow-hidden rounded-xl bg-background text-foreground" style={{ width: TILE_WIDTH, height }}>
     <div ref={innerRef} style={{ width: nativeWidth, ...(nativeHeight === undefined ? {} : { height: nativeHeight }), transform: `scale(${scale})`, transformOrigin: "top left" }}>{children}</div>
   </div>;
 }

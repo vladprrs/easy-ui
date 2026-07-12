@@ -38,7 +38,7 @@ export function DeviceFrame({ defaultDevice, canvas, children }: {
           </button>
         ))}
       </div>
-      <div ref={hostRef} className="overflow-hidden rounded-[28px] bg-background shadow-[0_20px_60px_rgba(2,2,5,0.35)]" style={{ width: frame?.width ?? "100%", maxWidth: "100%", minHeight: frame?.height }}>
+      <div ref={hostRef} className="overflow-hidden rounded-[28px] bg-background text-foreground shadow-[0_20px_60px_rgba(2,2,5,0.35)]" style={{ width: frame?.width ?? "100%", maxWidth: "100%", minHeight: frame?.height }}>
         <div style={{ width: contentWidth ?? "100%", height: contentHeight, transform: `scale(${scale})`, transformOrigin: "top left" }}>
           {children}
         </div>

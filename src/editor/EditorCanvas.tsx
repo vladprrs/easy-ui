@@ -74,7 +74,7 @@ export function EditorFrame({ nativeWidth, nativeHeight, viewportRef, previewRoo
   }, [nativeHeight, previewRootRef]);
 
   return <div ref={hostRef} className="min-w-0 w-full">
-    <div ref={viewportRef} className="relative overflow-hidden rounded-xl border bg-background shadow-sm" style={{ width: nativeWidth * scale, height: contentHeight * scale }}>
+    <div ref={viewportRef} className="relative overflow-hidden rounded-xl border bg-background text-foreground shadow-sm" style={{ width: nativeWidth * scale, height: contentHeight * scale }}>
       <div style={{ width: nativeWidth, ...(nativeHeight === undefined ? {} : { height: nativeHeight }), transform: `scale(${scale})`, transformOrigin: "top left" }}>
         <div ref={previewRootRef} inert>{children}</div>
       </div>
