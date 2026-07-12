@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { ApiError } from "../http";
 import type { DefinitionMeta } from "../components/types";
+import { latestValidatedRev } from "../validationRecords";
 
 const now=()=>new Date().toISOString();
 type Row={id:string;name:string;head_rev:number;design_system:string;deleted_at:string|null;created_at:string;updated_at:string};
@@ -12,7 +13,19 @@ export class ComponentRepo {
   save(id:string,source:string|undefined,designSystem:string|undefined,baseRev:number,message?:string) { return this.db.transaction(()=>{const r=this.cas(id,baseRev),head=this.source(id,r.head_rev),nextSource=source??head.source,nextSystem=designSystem??r.design_system,rev=r.head_rev+1,at=now();this.db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,message,created_at) VALUES (?,?,?,?,?,?)").run(id,rev,nextSource,nextSystem,message??null,at);this.db.query("UPDATE components SET head_rev=?,design_system=?,updated_at=? WHERE id=? AND deleted_at IS NULL").run(rev,nextSystem,at,id);return {rev};})(); }
   delete(id:string,baseRev:number) { this.db.transaction(()=>{this.cas(id,baseRev);this.db.query("UPDATE components SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL").run(now(),now(),id);})(); }
   list(){return (this.db.query(`SELECT c.*, (SELECT MAX(version) FROM component_publishes p WHERE p.component_id=c.id AND p.status='active') latest FROM components c WHERE deleted_at IS NULL ORDER BY updated_at DESC`).all() as (Row&{latest:number|null})[]).map(r=>({id:r.id,name:r.name,designSystem:r.design_system,headRev:r.head_rev,latestVersion:r.latest,updatedAt:r.updated_at}));}
-  meta(id:string){const r=this.row(id);return {id:r.id,name:r.name,designSystem:r.design_system,headRev:r.head_rev,versions:this.versions(id),updatedAt:r.updated_at};}
+  meta(id:string){
+    const r=this.row(id); const versions=this.versions(id);
+    const active=versions.filter(v=>v.status==="active");
+    const publishedVersion=active.at(-1)?.version??null;
+    const headActive=active.some(v=>v.rev===r.head_rev);
+    return {
+      id:r.id,name:r.name,designSystem:r.design_system,headRev:r.head_rev,versions,updatedAt:r.updated_at,
+      draftRevision:r.head_rev,
+      validatedRevision:latestValidatedRev(this.db,"component",id),
+      publishedVersion,
+      renderable:{head:headActive,published:publishedVersion!==null?true:null},
+    };
+  }
   source(id:string,rev?:number){const r=this.row(id); const n=rev??r.head_rev; const x=this.db.query("SELECT rev,source,design_system,message,created_at FROM component_revisions WHERE component_id=? AND rev=?").get(id,n) as {rev:number;source:string;design_system:string;message:string|null;created_at:string}|null;if(!x)throw new ApiError(404,"not_found","Component revision not found");return {rev:x.rev,source:x.source,designSystem:x.design_system,message:x.message,createdAt:x.created_at};}
   revisions(id:string){this.row(id);return (this.db.query("SELECT rev,design_system,message,created_at FROM component_revisions WHERE component_id=? ORDER BY rev DESC").all(id) as {rev:number;design_system:string;message:string|null;created_at:string}[]).map(x=>({rev:x.rev,designSystem:x.design_system,message:x.message,createdAt:x.created_at}));}
   restore(id:string,sourceRev:number,baseRev:number){const src=this.source(id,sourceRev);return this.save(id,src.source,src.designSystem,baseRev,`Restore revision ${sourceRev}`);}

@@ -1,8 +1,23 @@
 export type ErrorDetails = { issues?: unknown[]; warnings?: unknown[]; currentRev?: number; currentVersion?: number };
 
 export class ApiError extends Error {
-  constructor(public status: 400|404|405|409|413|415|422, public code: string, message: string, public details: ErrorDetails = {}) { super(message); }
+  constructor(public status: 400|404|405|409|413|415|422|429|501, public code: string, message: string, public details: ErrorDetails = {}) { super(message); }
 }
+
+// RFC 6901 JSON Pointer. Array paths are escaped segment-by-segment (~ -> ~0, / -> ~1);
+// string paths that already look like a pointer are passed through unchanged.
+export const toPointer = (path: unknown): string | undefined => {
+  if (Array.isArray(path)) return "/" + path.map((seg) => String(seg).replace(/~/g, "~0").replace(/\//g, "~1")).join("/");
+  if (typeof path === "string") return path === "" || path.startsWith("/") ? path : "/" + path;
+  return undefined;
+};
+const withPointer = (issue: unknown): unknown => {
+  if (!issue || typeof issue !== "object" || Array.isArray(issue)) return issue;
+  const record = issue as Record<string, unknown>;
+  if (!("path" in record) || "pointer" in record) return issue;
+  const pointer = toPointer(record.path);
+  return pointer === undefined ? issue : { ...record, pointer };
+};
 
 export const json = (body: unknown, status = 200, headers?: HeadersInit): Response => {
   const out = new Headers(headers); out.set("content-type", "application/json; charset=utf-8");
@@ -11,7 +26,11 @@ export const json = (body: unknown, status = 200, headers?: HeadersInit): Respon
 export const noStore = { "cache-control": "no-store" };
 export const immutable = { "cache-control": "public, max-age=31536000, immutable" };
 export const errorResponse = (error: unknown): Response => {
-  if (error instanceof ApiError) return json({ error: { code: error.code, message: error.message, ...error.details } }, error.status, noStore);
+  if (error instanceof ApiError) {
+    const details = { ...error.details };
+    if (Array.isArray(details.issues)) details.issues = details.issues.map(withPointer);
+    return json({ error: { code: error.code, message: error.message, ...details } }, error.status, noStore);
+  }
   console.error(error);
   return json({ error: { code: "internal_error", message: "Internal server error" } }, 500, noStore);
 };

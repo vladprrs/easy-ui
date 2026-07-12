@@ -11,7 +11,7 @@ import { failStagingPublishes } from "./repos/components";
 import { verifyShimAbi } from "./shims/abi-v1";
 import { isAuthorized, protectResponse, unauthorizedResponse } from "./auth";
 
-export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?:string;dataDir?:string;basicAuth?:string}={}):(request:Request)=>Promise<Response> {
+export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?:string;dataDir?:string;basicAuth?:string}={}):(request:Request,server?:Bun.Server<unknown>)=>Promise<Response> {
   return async request=>{
     const authEnabled=Boolean(options.basicAuth);
     const finish=(response:Response)=>authEnabled?protectResponse(response):response;
@@ -25,7 +25,7 @@ export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?
     try { segments=url.pathname.split("/").filter(Boolean).map(decodeURIComponent); } catch { throw new ApiError(400,"invalid_path","Malformed URL encoding"); }
     if(segments[0]==="api") {
       if(segments[1]==="health"&&segments.length===2) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); const ready=options.ready?.()!==false; return json({status:ready?"ready":"starting"},ready?200:503,noStore); }
-      if(segments[1]==="prototypes") return await routePrototypes(request,db,segments.slice(1),options.dataDir);
+      if(segments[1]==="prototypes") return await routePrototypes(request,db,segments.slice(1),options.dataDir,options.serveDist);
       if(segments[1]==="components") return await routeComponents(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data");
       if(segments[1]==="design-systems") return await routeDesignSystems(request,db,segments.slice(1));
       if(segments[1]==="catalog"&&segments[2]==="manifest"&&segments.length===3) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); return json({components:catalogManifest(db)},200,noStore); }

@@ -15,15 +15,16 @@
 | Метод и путь | Тело / ответ |
 |---|---|
 | `GET /prototypes` | `PrototypeListItem[]`: `{id,name,description?,device,designSystem,screenCount,headRev,latestVersion:number|null,updatedAt}` |
-| `POST /prototypes` | `{doc,message?}` → 201 `{id,rev,warnings}` и `Location` |
-| `GET /prototypes/:id` | `{id,name,designSystem,headRev,latestVersion:number|null,versions:PrototypeVersion[],updatedAt}` |
+| `POST /prototypes` | `{doc,message?}` → 201 `{id,rev,warnings,screens}` и `Location` |
+| `GET /prototypes/:id` | `{id,name,designSystem,headRev,latestVersion:number|null,versions:PrototypeVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable}` |
 | `GET /prototypes/:id/draft` | `{doc,rev,builtinCatalogHash,componentManifestHash,components:ComponentPin[]}` |
-| `PUT /prototypes/:id` | `{doc,message?,baseRev}` → `{rev,warnings}`; `doc.id` обязан совпадать с `:id` |
+| `GET /prototypes/:id/screens/:screenId/render-status?version=n\|rev=n` | Готовность экрана к рендеру — см. [Render status](#render-status) |
+| `PUT /prototypes/:id` | `{doc,message?,baseRev}` → `{rev,warnings,screens}`; `doc.id` обязан совпадать с `:id` |
 | `DELETE /prototypes/:id` | `{baseRev}` → 204; hard delete с каскадом ревизий |
 | `GET /prototypes/:id/revisions?limit&before` | `{rev,message:string|null,createdAt}[]`; `limit` по умолчанию 20, максимум 100 |
 | `GET /prototypes/:id/revisions/:rev` | `{rev,doc,components:ComponentPin[],message:string|null,createdAt}` |
 | `POST /prototypes/:id/restore` | `{rev,baseRev}` → `{rev}` (номер новой head-ревизии) |
-| `POST /prototypes/:id/publish` | `{message?,baseRev}` → 201 `{version,rev}` и `Location` |
+| `POST /prototypes/:id/publish` | `{message?,baseRev}` → 201 `{version,rev,screens}` и `Location` |
 | `GET /prototypes/:id/versions` | `PrototypeVersion[]`: `{version,rev,publishedAt}` |
 | `GET /prototypes/:id/versions/:version` | `{version,rev,doc,builtinCatalogHash,componentManifestHash,components:ComponentPin[],publishedAt}`; immutable |
 
@@ -32,6 +33,49 @@
 ### Матрица `designSystem` в DTO прототипов
 
 Нормализованный `doc` — источник истины. Если ответ содержит `doc`, система находится только в `doc.designSystem` и не дублируется сверху: это draft, конкретная revision и опубликованная version. В list и meta, где документа нет, `designSystem` находится top-level и отражает текущий head. Ответы create, save и restore содержат только номер ревизии (и применимые warnings), поэтому отдельного поля системы в них нет. Старый документ без поля при чтении нормализуется в `designSystem: "shadcn"`.
+
+### Canonical URLs
+
+Ответы `POST /prototypes`, `PUT /prototypes/:id` и `POST /prototypes/:id/publish` additively содержат `screens:[{id,url}]` — канонический player-URL каждого экрана. Для create/save это head-форма `/p/<id>/s/<screen>`, для publish — version-форма `/p/<id>/v/<n>/s/<screen>`. URL — это SPA-маршрут: истинность маршрута (существование экрана, готовность бандлов) подтверждает [render-status](#render-status), а не HTTP-код статики. SPA-fallback отдаёт `index.html` для любого GET/HEAD вне `/api/` и путей без расширения, независимо от заголовка `Accept` (programmatic-клиент без `Accept: text/html` тоже получает SPA); неизвестный extensionless-путь получает SPA и рендерит клиентскую 404-страницу.
+
+### Render status
+
+`GET /prototypes/:id/screens/:screenId/render-status` с опциональным `?version=n` **или** `?rev=n` (взаимоисключающие; по умолчанию — head-ревизия) раздельно проверяет три условия готовности:
+
+- **document_ready** — документ целевой ревизии/версии существует и содержит `screenId`;
+- **bundles_ready** — все пины ревизии резолвятся в рендеримые публикации компонентов (`active`; будущие `deprecated`/`superseded` рендерятся с warning; прочие статусы → `bundle_failed`);
+- **local_route_ready** — SPA-статика раздаётся этим процессом (`SERVE_DIST`); в dev без dist — `route_not_ready` с указанием использовать Vite-origin.
+
+Ответ (`200`, `no-store`):
+
+```json
+{
+  "status": { "document": true, "bundles": true, "route": true },
+  "renderable": true,
+  "url": "/p/<id>/s/<screen>",
+  "revision": 3,
+  "publishedVersion": 1,
+  "resolvedPins": [{ "id": "…", "name": "…", "version": 1, "bundleUrl": "…", "bundleHash": "…", "status": "active" }],
+  "bundleStatus": "ready",
+  "warnings": [{ "code": "pin_deprecated", "message": "…" }],
+  "errors": [{ "code": "route_not_ready", "message": "…" }]
+}
+```
+
+`renderable` = document_ready ∧ bundles_ready (готовность контента, независимо от local route). Отсутствие ресурса — типизированный `404`: `prototype_not_found`, `screen_not_found`, `version_not_found`, `revision_not_found`. `bundle_failed` и `route_not_ready` — диагностические записи в `errors[]` тела с `200`. Внешний ingress-probe (доступность домена за прокси) вне scope MVP.
+
+### Lifecycle-модель
+
+Sever ведёт неизменяемый журнал валидаций `validation_records(resource_type, resource_id, rev, validator_version, catalog_hash, ok, issues_json, created_at)`. Запись создаётся при `POST`/`PUT` прототипа (проверка прошла → `ok=1`, warnings в `issues_json`), при `restore` (restore теперь заново прогоняет `validatePrototype` против живого каталога и пишет результат, не блокируя восстановление), а также на publish-стадиях компонентов (`ok=1` при активации, `ok=0` при провале импорта).
+
+Meta-ответы прототипов и компонентов additively несут lifecycle-поля:
+
+- `draftRevision` — текущая head-ревизия;
+- `validatedRevision` — последняя ревизия с прошедшей (`ok`) записью валидации, либо `null`;
+- `publishedVersion` — последняя опубликованная версия (для компонента — последняя `active`), либо `null`;
+- `renderable: {head, published}` — та же логика, что render-status (document ∧ bundles), без external probe; `published` = `null`, если публикаций нет.
+
+Поле `deployedVersion` намеренно **не** выдаётся: инстанс single-server, поэтому «задеплоенная» версия тождественна опубликованной и отдельное поле было бы тавтологией.
 
 ## Endpoints компонентов
 
@@ -43,7 +87,7 @@
 |---|---|
 | `GET /components` | `{id,name,designSystem,headRev,latestVersion:number|null,updatedAt}[]` |
 | `POST /components` | `{id,name,source,designSystem?,message?}` → 201 `{id,rev}` и `Location`; `designSystem` по умолчанию `shadcn` |
-| `GET /components/:id` | `{id,name,designSystem,headRev,versions:ComponentVersion[],updatedAt}` |
+| `GET /components/:id` | `{id,name,designSystem,headRev,versions:ComponentVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable}` (lifecycle-поля — см. [Lifecycle-модель](#lifecycle-модель)) |
 | `PUT /components/:id` | `{source?,designSystem?,message?,baseRev}` → `{rev}`; хотя бы одно из `source`/`designSystem`, смена системы наследует текущий source |
 | `DELETE /components/:id` | `{baseRev}` → 204 |
 | `GET /components/:id/source` | Текущий `{rev,source,designSystem,message:string|null,createdAt}` |
@@ -112,7 +156,9 @@ Production-миграция выполняется по явному manifest с
 }
 ```
 
-Опциональные поля присутствуют только когда применимы. Типичные статусы: 400 — неверный JSON/DTO или отсутствующий `baseRev`; 404 — ресурс; 405 — метод; 409 — CAS-конфликт, дубликат либо повторный publish ревизии; 413 — лимит; 415 — не `application/json`; 422 — семантическая валидация. JSON body ограничен 1 MiB, source компонента — 256 KiB.
+Опциональные поля присутствуют только когда применимы. Типичные статусы: 400 — неверный JSON/DTO или отсутствующий `baseRev`; 404 — ресурс; 405 — метод; 409 — CAS-конфликт, дубликат либо повторный publish ревизии; 413 — лимит; 415 — не `application/json`; 422 — семантическая валидация; 429 — очередь занята; 501 — возможность недоступна в этом окружении. JSON body ограничен 1 MiB, source компонента — 256 KiB.
+
+Каждый элемент `issues[]` дополнительно получает поле `pointer` — корректный RFC 6901 JSON Pointer с escape `~0`/`~1` (легаси-поле `path` сохраняется как есть). Pointer добавляется централизованно в `errorResponse`: для массивных `path` каждый сегмент экранируется, строковые pointer-подобные `path` проходят без изменений.
 
 ## Контракт кастомного компонента
 

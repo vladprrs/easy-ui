@@ -57,6 +57,20 @@ const migrations = [
     db.run("ALTER TABLE component_revisions ADD COLUMN design_system TEXT NOT NULL DEFAULT 'shadcn'");
     db.run(`UPDATE component_revisions SET design_system=(SELECT c.design_system FROM components c WHERE c.id=component_id)`);
   },
+  (db: Database) => {
+    db.run(`CREATE TABLE validation_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      resource_type TEXT NOT NULL CHECK(resource_type IN ('prototype','component')),
+      resource_id TEXT NOT NULL,
+      rev INTEGER NOT NULL,
+      validator_version TEXT NOT NULL,
+      catalog_hash TEXT NOT NULL,
+      ok INTEGER NOT NULL CHECK(ok IN (0,1)),
+      issues_json TEXT NOT NULL,
+      created_at TEXT NOT NULL)`);
+    db.run(`CREATE INDEX validation_records_resource
+      ON validation_records (resource_type, resource_id, rev, id)`);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

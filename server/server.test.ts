@@ -359,7 +359,7 @@ describe("prototype API", () => {
       body: JSON.stringify({ baseRev: 3 }),
     });
     expect(response.status).toBe(201);
-    expect(await body(response)).toEqual({ version: 1, rev: 3 });
+    expect(await body(response)).toMatchObject({ version: 1, rev: 3, screens: expect.arrayContaining([expect.objectContaining({ id: expect.any(String), url: expect.stringContaining("/v/1/s/") })]) });
     response = await fetch(`${base}/api/prototypes/hello-world/publish`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -415,7 +415,7 @@ describe("prototype API", () => {
   });
 });
 
-test("static serving is contained and fallback is HTML-only", async () => {
+test("static serving is contained and the SPA fallback ignores Accept", async () => {
   const dir = await mkdtemp(resolve(tmpdir(), "easy-ui-dist-"));
   dirs.push(dir);
   await mkdir(resolve(dir, "assets"));
@@ -428,10 +428,16 @@ test("static serving is contained and fallback is HTML-only", async () => {
   });
   expect(r.status).toBe(200);
   expect(await r.text()).toContain("SPA");
+  // Programmatic clients (no text/html Accept) still reach the SPA on extensionless routes.
   r = await fetch(`${base}/dashboard`, {
     headers: { accept: "application/json" },
   });
-  expect(r.status).toBe(404);
+  expect(r.status).toBe(200);
+  expect(r.headers.get("content-type")).toContain("text/html");
+  r = await fetch(`${base}/p/hello-world/s/home`);
+  expect(r.status).toBe(200);
+  expect(await r.text()).toContain("SPA");
+  // Extension paths and /api/* are never SPA-fallbacked.
   r = await fetch(`${base}/missing.js`, { headers: { accept: "text/html" } });
   expect(r.status).toBe(404);
   for (const path of ["/%2e%2e%2fsecret", "/%252e%252e%252fsecret", "/bad%5cpath", "/api/unknown"]) {

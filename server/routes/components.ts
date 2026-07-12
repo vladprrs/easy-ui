@@ -7,6 +7,7 @@ import { importPublished, materializeSource, sha256 } from "../components/pipeli
 import { ApiError, immutable, json, noStore, readJson } from "../http";
 import { ComponentRepo } from "../repos/components";
 import { requireRegisteredDesignSystem } from "../designSystems";
+import { recordValidation } from "../validationRecords";
 
 const slug=/^[a-z0-9]+(?:-[a-z0-9]+)*$/, componentName=/^[A-Z][A-Za-z0-9]*$/;
 function bad(message:string,path="source"):never{throw new ApiError(422,"validation_failed","Component is invalid",{issues:[{path:[path],message}]});}
@@ -26,7 +27,8 @@ export async function publishComponent(db:Database,repo:ComponentRepo,id:string,
   const extracted=await checkSource(revision.source,path,true); await typecheckComponent(path); const compiled=await compileComponent(path);
   const staged=repo.stage(id,baseRev,{...compiled,sourceHash:sha256(revision.source),meta:extracted.meta!},message); await hooks.afterStage?.({id,...staged});
   try { await hooks.beforeImport?.({id,...staged}); await importPublished(id,staged.rev,path); repo.activate(id,staged.version); }
-  catch(error){repo.fail(id,staged.version);throw new ApiError(422,"validation_failed","Published component import failed",{issues:[{path:["source"],message:error instanceof Error?error.message:String(error)}]});}
+  catch(error){repo.fail(id,staged.version);const detail=error instanceof Error?error.message:String(error);recordValidation(db,{resourceType:"component",resourceId:id,rev:staged.rev,catalogHash:compiled.bundleHash,ok:false,issues:[{path:"/source",message:detail}]});throw new ApiError(422,"validation_failed","Published component import failed",{issues:[{path:["source"],message:detail}]});}
+  recordValidation(db,{resourceType:"component",resourceId:id,rev:staged.rev,catalogHash:compiled.bundleHash,ok:true,issues:extracted.warnings.map(message=>({path:"/",message}))});
   const warnings=[...extracted.warnings];
   if(!extracted.meta!.atomicLevel) warnings.push("Atomic design level is not provided; component will be classified as Other");
   return {version:staged.version,hostAbiVersion:1,warnings};

@@ -9,8 +9,9 @@ export async function serveStatic(request:Request,dist:string):Promise<Response>
   const root=resolve(dist); const candidate=resolve(root,`.${pathname}`);
   if(candidate!==root&&!candidate.startsWith(root+sep)) throw new ApiError(404,"not_found","File not found");
   const file=Bun.file(candidate); if(await file.exists()&&file.size>0) return new Response(request.method==="HEAD"?null:file,{headers:{"content-type":file.type||"application/octet-stream"}});
-  const acceptsHtml=request.headers.get("accept")?.split(",").some(x=>x.trim().split(";",1)[0]==="text/html")??false;
-  if(pathname.startsWith("/api/")||extname(pathname)||!acceptsHtml) throw new ApiError(404,"not_found","File not found");
+  // SPA fallback for GET/HEAD outside /api/ and non-extension paths, regardless of Accept.
+  // An unknown extensionless route still gets index.html; render-status, not the HTTP code, proves route truth.
+  if(pathname.startsWith("/api/")||extname(pathname)) throw new ApiError(404,"not_found","File not found");
   const index=Bun.file(resolve(root,"index.html")); if(!await index.exists()) throw new ApiError(404,"not_found","File not found");
   return new Response(request.method==="HEAD"?null:index,{headers:{"content-type":"text/html; charset=utf-8"}});
 }
