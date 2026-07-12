@@ -13,10 +13,10 @@ export function isV2StandardShim(name: string): name is ShimName {
 }
 
 /**
- * Source of the `/api/shims/v2/easy-ui-runtime.js` module. `token(key)` reads
- * from the (currently empty) `globalThis.__easyUiShared.tokens` snapshot that
- * T8 will populate; `Icon` is a signature-fixed stub that renders nothing until
- * T8 wires the icon registry.
+ * Source of the `/api/shims/v2/easy-ui-runtime.js` module. `token(key)` and
+ * `Icon` read from the `globalThis.__easyUiShared` theme snapshot populated by
+ * the design-system theme injector; without an injected theme both degrade to
+ * empty string / null.
  */
 export function emitEasyUiRuntimeShim(): string {
   return [
@@ -26,10 +26,15 @@ export function emitEasyUiRuntimeShim(): string {
     "  const tokens = shared.tokens ?? {};",
     "  return Object.prototype.hasOwnProperty.call(tokens, key) ? String(tokens[key]) : \"\";",
     "}",
-    "export function Icon(_props) {",
-    "  return null;",
+    "export function Icon(props) {",
+    "  const icons = shared.icons ?? {};",
+    "  const icon = props && Object.prototype.hasOwnProperty.call(icons, props.name) ? icons[props.name] : undefined;",
+    "  if (!icon || !React) return null;",
+    "  const themed = props.theme && icon.themes ? icon.themes[props.theme] : undefined;",
+    "  const src = themed ?? icon.assetUrl;",
+    "  const size = typeof props.size === \"number\" ? props.size : undefined;",
+    "  return React.createElement(\"img\", { src, width: size, height: size, alt: props.name, \"data-eui-icon\": props.name });",
     "}",
-    "void React;",
     "",
   ].join("\n");
 }

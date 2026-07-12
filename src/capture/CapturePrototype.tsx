@@ -1,11 +1,12 @@
 import { useMemo, useRef } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useApi } from "../api/hooks";
-import { getPrototypeDraft, getPrototypeRevisionFull, getPrototypeVersion, type PrototypeComponentPin } from "../api/client";
+import { getDesignSystemById, getDesignSystemVersion, getPrototypeDraft, getPrototypeRevisionFull, getPrototypeVersion, type PrototypeComponentPin, type ThemeContent } from "../api/client";
 import type { PrototypeDoc } from "../prototype/schema";
 import { loadCustomComponents } from "../customComponents/loader";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
+import { ThemeStyle } from "../designSystems/theme";
 import { CaptureSurface } from "./CaptureSurface";
 import { CaptureStyle, useCaptureTheme, usePublishError, usePublishOnSettle } from "./CaptureChrome";
 import { bootstrapRendererBuild } from "./readiness";
@@ -17,6 +18,15 @@ interface LoadedPrototype {
   componentManifestHash: string;
   builtinCatalogHash: string;
   components: PrototypeComponentPin[];
+  dsMetaVersion: number | null;
+  theme: ThemeContent | null;
+}
+
+async function loadTheme(designSystem: string, metaVersion: number | null, signal: AbortSignal): Promise<ThemeContent | null> {
+  try {
+    const data = metaVersion != null ? await getDesignSystemVersion(designSystem, metaVersion, signal) : await getDesignSystemById(designSystem, signal);
+    return { tokens: data.tokens ?? {}, fonts: data.fonts ?? [], icons: data.icons ?? [] };
+  } catch { return null; }
 }
 
 const deviceSizes: Record<string, { width: number; height: number } | null> = {
@@ -26,9 +36,12 @@ const deviceSizes: Record<string, { width: number; height: number } | null> = {
 };
 
 async function loadPrototype(id: string, rev: number | undefined, version: number | undefined, signal: AbortSignal): Promise<LoadedPrototype> {
-  if (version !== undefined) { const v = await getPrototypeVersion(id, version, signal); return { doc: v.doc, rev: v.rev, componentManifestHash: v.componentManifestHash, builtinCatalogHash: v.builtinCatalogHash, components: v.components }; }
-  if (rev !== undefined) { const r = await getPrototypeRevisionFull(id, rev, signal); return { doc: r.doc, rev: r.rev, componentManifestHash: r.componentManifestHash, builtinCatalogHash: r.builtinCatalogHash, components: r.components }; }
-  const d = await getPrototypeDraft(id, signal); return { doc: d.doc, rev: d.rev, componentManifestHash: d.componentManifestHash, builtinCatalogHash: d.builtinCatalogHash, components: d.components };
+  const base = version !== undefined ? await getPrototypeVersion(id, version, signal)
+    : rev !== undefined ? await getPrototypeRevisionFull(id, rev, signal)
+    : await getPrototypeDraft(id, signal);
+  const dsMetaVersion = base.designSystemMetaVersion ?? null;
+  const theme = await loadTheme(base.doc.designSystem, dsMetaVersion, signal);
+  return { doc: base.doc, rev: base.rev, componentManifestHash: base.componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components: base.components, dsMetaVersion, theme };
 }
 
 function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPrototype; custom?: CustomPlayerRuntime; screenId: string }) {
@@ -43,7 +56,7 @@ function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPr
   usePublishOnSettle(ref, (): CaptureReady => ({
     status: "ready", kind: "prototype", revision: loaded.rev,
     componentManifestHash: loaded.componentManifestHash, builtinCatalogHash: loaded.builtinCatalogHash,
-    dsMetaVersion: null, rendererBuild: bootstrapRendererBuild(),
+    dsMetaVersion: loaded.dsMetaVersion, rendererBuild: bootstrapRendererBuild(),
   }));
 
   if (!screen || !tree) return <div ref={ref} data-capture-error="screen-not-found" />;
@@ -52,6 +65,7 @@ function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPr
     ? { width: screen.canvas.width, height: screen.canvas.height }
     : size ? { width: size.width, height: size.height } : { width: "100%" as const };
   return <div ref={ref} id="eui-capture-surface" className="bg-background text-foreground" style={style}>
+    <ThemeStyle content={loaded.theme} />
     <CaptureSurface designSystem={doc.designSystem} custom={custom} tree={tree} initialState={doc.state} screenIds={screenIds} canvas={screen.canvas} />
   </div>;
 }

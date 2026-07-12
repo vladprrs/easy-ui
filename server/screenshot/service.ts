@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import type { CaptureExpected } from "../../src/capture/protocol";
+import { getLatestDesignSystemContent } from "../designSystems";
 import { ApiError } from "../http";
 import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
@@ -100,7 +101,7 @@ export class ScreenshotService {
     const full = repo.revision(id, snap.rev);
     const componentPins = full.components.map((p) => ({ id: p.id, version: p.version, bundleHash: p.bundleHash }));
     const theme = opts.theme === "dark" ? "dark" : "light";
-    const expected: CaptureExpected = { kind: "prototype", rev: snap.rev, componentManifestHash: full.componentManifestHash, builtinCatalogHash: full.builtinCatalogHash, dsMetaVersion: null, rendererBuild: this.rendererBuild };
+    const expected: CaptureExpected = { kind: "prototype", rev: snap.rev, componentManifestHash: full.componentManifestHash, builtinCatalogHash: full.builtinCatalogHash, dsMetaVersion: full.designSystemMetaVersion ?? null, rendererBuild: this.rendererBuild };
     const allowedUrls = this.prototypeAllowedUrls(id, screenId, full.components, full.assets.map((a) => a.id));
     const query = new URLSearchParams();
     if (opts.version !== undefined) query.set("version", String(opts.version)); else query.set("rev", String(snap.rev));
@@ -114,12 +115,12 @@ export class ScreenshotService {
     const { viewport, dsf } = validateViewport(opts.viewport, opts.deviceScaleFactor);
     this.guardQueue();
     const repo = new ComponentRepo(this.deps.db);
-    const dto = repo.version(id, version) as { version: number; bundleHash: string; propsJsonSchema?: unknown; assets: { id: string }[] };
+    const dto = repo.version(id, version) as { version: number; bundleHash: string; designSystem: string; propsJsonSchema?: unknown; assets: { id: string }[] };
     const props = opts.props ?? {};
     validatePropsAgainstSchema(props, dto.propsJsonSchema);
     const propsHash = propsHashOf(props);
     const theme = opts.theme === "dark" ? "dark" : "light";
-    const expected: CaptureExpected = { kind: "component", componentId: id, version, bundleHash: dto.bundleHash, propsHash, dsMetaVersion: null, rendererBuild: this.rendererBuild };
+    const expected: CaptureExpected = { kind: "component", componentId: id, version, bundleHash: dto.bundleHash, propsHash, dsMetaVersion: getLatestDesignSystemContent(this.deps.db, dto.designSystem).latestMetaVersion, rendererBuild: this.rendererBuild };
     const allowedUrls = this.componentAllowedUrls(id, version, dto.assets.map((a) => a.id));
     const query = new URLSearchParams({ theme, dsf: String(dsf) });
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/${version}?${query}`;

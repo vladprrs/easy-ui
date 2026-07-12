@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef } from "react";
 import { Outlet, useParams } from "react-router";
 import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
 import type { ComponentDefinition } from "../catalog/definitions";
+import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import type { PrototypeDoc } from "../prototype/schema";
 import { EasyUiActionRuntime } from "./actionRuntime";
 import { PlayerNavigationProvider, usePlayerNavigation } from "./navigation";
@@ -20,7 +21,8 @@ export interface PlayerOutletContext {
   onError: (message: string, detail?: Record<string, unknown>) => void;
 }
 
-function LoadedPlayer({ doc, custom, runtimeKey }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string }) {
+function LoadedPlayer({ doc, custom, runtimeKey, metaVersion }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; metaVersion: number | null | undefined }) {
+  const themeContent = useDesignSystemTheme(doc.designSystem, metaVersion);
   const navigation = usePlayerNavigation();
   const navigationRef = useRef(navigation);
   useEffect(() => { navigationRef.current = navigation; }, [navigation]);
@@ -54,14 +56,15 @@ function LoadedPlayer({ doc, custom, runtimeKey }: { doc: PrototypeDoc; custom?:
   }), [doc, onError, navigation.sessionNonce]);
 
   return <JSONUIProvider key={`${runtimeKey}:${navigation.sessionNonce}`} registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
+    <ThemeStyle content={themeContent} />
     <Outlet context={{ doc, registry: runtime.registry, runtime: actionRuntime, customTypes, customDefinitions, onError } satisfies PlayerOutletContext} />
     {import.meta.env.DEV && import.meta.env.MODE !== "test" ? <Suspense fallback={null}><Devtools /></Suspense> : null}
   </JSONUIProvider>;
 }
 
-function ReadyPlayer({ doc, custom, runtimeKey, routeBase }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string }) {
+function ReadyPlayer({ doc, custom, runtimeKey, routeBase, metaVersion }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; metaVersion: number | null | undefined }) {
   return <PlayerNavigationProvider key={runtimeKey} startScreen={doc.startScreen} routeBase={routeBase}>
-    <LoadedPlayer key={runtimeKey} doc={doc} custom={custom} runtimeKey={runtimeKey} />
+    <LoadedPlayer key={runtimeKey} doc={doc} custom={custom} runtimeKey={runtimeKey} metaVersion={metaVersion} />
   </PlayerNavigationProvider>;
 }
 
@@ -69,6 +72,6 @@ export function PlayerShell() {
   const { protoId, version } = useParams();
   const numericVersion = version === undefined ? undefined : Number(version);
   return <PrototypeLoader protoId={protoId} version={numericVersion}>
-    {({ loaded, custom, runtimeKey, routeBase }) => <ReadyPlayer doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} routeBase={routeBase} />}
+    {({ loaded, custom, runtimeKey, routeBase }) => <ReadyPlayer doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} routeBase={routeBase} metaVersion={loaded.designSystemMetaVersion} />}
   </PrototypeLoader>;
 }

@@ -111,8 +111,24 @@ Meta-ответы прототипов и компонентов additively не
 | `GET /design-systems` | `{designSystems: DesignSystemSummary[]}` |
 | `GET /design-systems/:id` | `DesignSystemSummary`; неизвестный ID → `404 not_found` |
 | `POST /design-systems` | `{id,name,description}` → 201 `DesignSystemSummary` и `Location`; повтор ID → `409 already_exists` |
+| `PATCH /design-systems/:id` | Тема (см. §Тема) `{tokens?,fonts?,icons?,baseVersion}` → 200 `DesignSystemSummary`; builtin → `405`; CAS-конфликт → `409 version_conflict` |
+| `GET /design-systems/:id/versions/:v` | Immutable `{systemId,version,tokens,fonts,icons,createdAt}`; отсутствует → `404 not_found` |
 
-`DesignSystemSummary` имеет `{id,name,description,builtinCatalogHash,components}` и не раскрывает provider. Malformed JSON/body не-object даёт `400 invalid_request`; неизвестные поля, неверные типы, невалидный slug, пустые или слишком длинные значения — `422 validation_failed` с `issues[].path`. `PUT`, `PATCH` и `DELETE` на collection или `:id` дают `405 method_not_allowed`: registry metadata в этом API неизменяемы. Повтор идентичного POST не идемпотентен и также даёт 409.
+`DesignSystemSummary` имеет `{id,name,description,builtinCatalogHash,components}` плюс additively `latestMetaVersion` и содержимое последней версии темы `{tokens,fonts,icons}`; provider не раскрывается. Malformed JSON/body не-object даёт `400 invalid_request`; неизвестные поля, неверные типы, невалидный slug, пустые или слишком длинные значения — `422 validation_failed` с `issues[].path`. `PUT` и `DELETE` на collection или `:id`, а также `PATCH` на collection дают `405 method_not_allowed`: registry metadata в этом API неизменяемы. Повтор идентичного POST не идемпотентен и также даёт 409.
+
+#### Тема дизайн-системы (tokens/fonts/icons) и версии
+
+Тема кастомной системы — три строго-валидируемых коллекции, хранимые как **immutable-версии** в `design_system_versions(system_id, version, tokens_json, fonts_json, icons_json, created_at)`. `PATCH /design-systems/:id` доступен **только для кастомных систем** (builtin-provider → `405`) и создаёт версию `baseVersion+1` с CAS по последней версии: `baseVersion≠latest` → `409 version_conflict` с `currentVersion`. Первая тема создаётся при `baseVersion:0`. PATCH-семантика: переданная коллекция заменяет предыдущую, опущенная — наследуется. Версии неизменяемы и читаются через `GET …/versions/:v`.
+
+Грамматика (нарушение → `422 validation_failed` с `issues[].path`):
+
+- **tokens**: карта ключ→значение. Ключ `^[a-z][a-z0-9]*(\.[a-z0-9-]+)*$`; значение — строка ≤256 без `;{}<>` **или** конечное число.
+- **fonts**: `[{family, src, weight?, style?}]`, только asset-backed. `family` — буквы/цифры/пробел/дефис, ≤64. `src` — `asset_<64hex>`, который обязан существовать и быть font-типом (`font/woff2|ttf|otf`). `weight` — 1..1000 или `normal|bold`; `style` — `normal|italic|oblique`.
+- **icons**: `[{name, assetId, viewBox?, themes?{light?,dark?}}]`. `name` — slug; `assetId` и `themes.*` — существующие asset'ы image-типа (`image/*`); `viewBox` — цифры/пробелы/точки/дефисы.
+
+**Пин версии темы.** При сохранении/создании ревизии прототипа в `prototype_revisions.design_system_meta_version` фиксируется latest meta-version его системы (NULL, если версий темы нет — например у builtin). Restore копирует пин исходной ревизии, а не берёт latest. Пин **диагностический** (как `builtinCatalogHash`), enforcement нет; read-back `/draft`, `/revisions/:rev`, `/versions/:v` отдаёт `designSystemMetaVersion` additively.
+
+**Доставка в runtime.** Player и capture грузят пиновую версию (latest для head) и инжектят `<style data-eui-theme>`: токены → CSS custom properties `--eui-<key с '.'→'-'>`, шрифты → `@font-face` с `src: url(/api/assets/<id>)`. Сериализация только из провалидированной грамматики; строковые значения дополнительно CSS-эскейпятся. Снапшот темы кладётся в `globalThis.__easyUiShared.tokens` (плоская карта key→string|number) и `.icons` (name→{assetUrl, themes}), откуда их читают `token()`/`Icon` shim'а `easy-ui/runtime` (ABI v2). Cleanup восстанавливает предыдущий снапшот при размонтировании.
 
 ### Система ревизии, публикации и manifest
 

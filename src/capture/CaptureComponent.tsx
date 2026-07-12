@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useApi } from "../api/hooks";
-import { getComponentMeta, getComponentVersion, type ComponentVersion } from "../api/client";
+import { getComponentMeta, getComponentVersion, getDesignSystemById, type ComponentVersion, type ThemeContent } from "../api/client";
 import { loadCustomComponents } from "../customComponents/loader";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
+import { ThemeStyle } from "../designSystems/theme";
 import { CaptureSurface } from "./CaptureSurface";
 import { CaptureStyle, useCaptureTheme, usePublishError } from "./CaptureChrome";
 import { bootstrapRendererBuild, publishReady, readBootstrap, settleSurface } from "./readiness";
@@ -15,6 +16,8 @@ interface LoadedComponent {
   name: string;
   version: ComponentVersion;
   props: Record<string, unknown>;
+  dsMetaVersion: number | null;
+  theme: ThemeContent | null;
 }
 
 async function loadComponent(id: string, version: number, propsFromUrlExample: boolean, signal: AbortSignal): Promise<LoadedComponent> {
@@ -23,7 +26,10 @@ async function loadComponent(id: string, version: number, propsFromUrlExample: b
   const props = bootstrap?.kind === "component" && bootstrap.props
     ? bootstrap.props
     : propsFromUrlExample && versionDto.example ? versionDto.example : {};
-  return { id, name: meta.name, version: versionDto, props };
+  // Components are not theme-pinned: use the latest theme of the component's design system.
+  let dsMetaVersion: number | null = null; let theme: ThemeContent | null = null;
+  try { const ds = await getDesignSystemById(versionDto.designSystem, signal); dsMetaVersion = ds.latestMetaVersion ?? null; theme = { tokens: ds.tokens ?? {}, fonts: ds.fonts ?? [], icons: ds.icons ?? [] }; } catch { /* theme is best-effort */ }
+  return { id, name: meta.name, version: versionDto, props, dsMetaVersion, theme };
 }
 
 function LoadedComponentCapture({ loaded, custom }: { loaded: LoadedComponent; custom: CustomPlayerRuntime }) {
@@ -42,7 +48,7 @@ function LoadedComponentCapture({ loaded, custom }: { loaded: LoadedComponent; c
         await settleSurface(ref.current ?? document);
         if (!cancelled) publishReady({
           status: "ready", kind: "component", componentId: loaded.id, version: version.version,
-          bundleHash: version.bundleHash, propsHash, dsMetaVersion: null, rendererBuild: bootstrapRendererBuild(),
+          bundleHash: version.bundleHash, propsHash, dsMetaVersion: loaded.dsMetaVersion, rendererBuild: bootstrapRendererBuild(),
         });
       } catch (error) {
         if (!cancelled) publishReady({ status: "error", error: error instanceof Error ? error.message : String(error) });
@@ -53,6 +59,7 @@ function LoadedComponentCapture({ loaded, custom }: { loaded: LoadedComponent; c
   }, []);
 
   return <div ref={ref} id="eui-capture-surface" className="bg-background text-foreground inline-block">
+    <ThemeStyle content={loaded.theme} />
     <CaptureSurface designSystem={version.designSystem} custom={custom} tree={tree} initialState={{}} screenIds={new Set()} />
   </div>;
 }

@@ -58,10 +58,11 @@ export interface PrototypeDraft {
   builtinCatalogHash: string;
   componentManifestHash: string;
   components: PrototypeComponentPin[];
+  designSystemMetaVersion?: number | null;
 }
 export interface PrototypeVersion extends PrototypeDraft { version: number; publishedAt: string }
 export interface PrototypeRevisionSummary { rev: number; message: string | null; createdAt: string }
-export interface PrototypeRevision { rev: number; doc: PrototypeDoc; components: PrototypeComponentPin[]; message: string | null; createdAt: string }
+export interface PrototypeRevision { rev: number; doc: PrototypeDoc; components: PrototypeComponentPin[]; message: string | null; createdAt: string; designSystemMetaVersion?: number | null }
 export interface SavePrototypeResult { rev: number; warnings: unknown[] }
 
 export type AtomicLevel = "atom" | "molecule" | "organism" | "template" | "page";
@@ -70,7 +71,11 @@ export interface ComponentMeta { id: string; name: string; designSystem: string;
 export interface CatalogComponent { id: string; name: string; designSystem: string; version: number; bundleUrl: string; bundleHash: string; atomicLevel?: AtomicLevel; description: string; events: string[]; slots: string[]; hostAbiVersion: number }
 export interface CatalogManifest { components: CatalogComponent[] }
 export interface DesignSystemComponent { name: string; atomicLevel: AtomicLevel; layoutNeutral: boolean; description: string; events: string[]; slots: string[] }
-export interface DesignSystemSummary { id: string; name: string; description: string; builtinCatalogHash: string; components: DesignSystemComponent[] }
+export interface ThemeFont { family: string; src: string; weight?: number | string; style?: string }
+export interface ThemeIcon { name: string; assetId: string; viewBox?: string; themes?: { light?: string; dark?: string } }
+export interface ThemeContent { tokens: Record<string, string | number>; fonts: ThemeFont[]; icons: ThemeIcon[] }
+export interface DesignSystemSummary { id: string; name: string; description: string; builtinCatalogHash: string; components: DesignSystemComponent[]; latestMetaVersion?: number | null; tokens?: ThemeContent["tokens"]; fonts?: ThemeContent["fonts"]; icons?: ThemeContent["icons"] }
+export interface DesignSystemVersion extends ThemeContent { systemId: string; version: number; createdAt: string }
 
 type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
 
@@ -101,6 +106,9 @@ export const listDesignSystems = (signal?: AbortSignal) => request<{designSystem
 export const getCatalogManifest = (signal?: AbortSignal) => request<CatalogManifest>("/api/catalog/manifest", { signal });
 export const getDesignSystemById = (id: string, signal?: AbortSignal) => request<DesignSystemSummary>(`/api/design-systems/${encodeURIComponent(id)}`, { signal });
 export const createDesignSystem = (id: string, name: string, description: string, signal?: AbortSignal) => request<DesignSystemSummary>("/api/design-systems", { method: "POST", body: { id, name, description }, signal });
+export const getDesignSystemVersion = (id: string, version: number, signal?: AbortSignal) => request<DesignSystemVersion>(`/api/design-systems/${encodeURIComponent(id)}/versions/${version}`, { signal });
+export interface ThemePatch { tokens?: Record<string, string | number>; fonts?: ThemeFont[]; icons?: ThemeIcon[]; baseVersion: number }
+export const patchDesignSystemTheme = (id: string, patch: ThemePatch, signal?: AbortSignal) => request<DesignSystemSummary>(`/api/design-systems/${encodeURIComponent(id)}`, { method: "PATCH", body: patch, signal });
 export const listComponents = (signal?: AbortSignal) => request<ComponentSummary[]>("/api/components", { signal });
 export const getComponentMeta = (id: string, signal?: AbortSignal) => request<ComponentMeta>(componentPath(id), { signal });
 export const createPrototype = (doc: PrototypeDoc, message?: string, signal?: AbortSignal) => request<{id: string; rev: 1; warnings: unknown[]}>("/api/prototypes", { method: "POST", body: { doc, message }, signal });

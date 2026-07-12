@@ -234,6 +234,36 @@ export const checkVisualReferenceContract = registerContract({
   errors: [{ status: 404, code: "reference_not_found" }, { status: 422, code: "invalid_threshold" }, { status: 501, code: "screenshot_unavailable" }],
 });
 
+// --- Design-system theme versions (T8) ---
+
+const tokenValueContractSchema = z.union([z.string(), z.number()]);
+const themeTokensSchema = z.record(z.string(), tokenValueContractSchema);
+const themeFontSchema = z.object({ family: z.string(), src: z.string(), weight: z.union([z.number(), z.string()]).optional(), style: z.string().optional() });
+const themeIconSchema = z.object({ name: z.string(), assetId: z.string(), viewBox: z.string().optional(), themes: z.object({ light: z.string().optional(), dark: z.string().optional() }).optional() });
+export const themeContentSchema = z.object({ tokens: themeTokensSchema, fonts: z.array(themeFontSchema), icons: z.array(themeIconSchema) });
+
+export const patchDesignSystemThemeContract = registerContract({
+  method: "PATCH",
+  path: "/api/design-systems/{id}",
+  summary: "Append an immutable theme version (tokens/fonts/icons) to a custom design system (CAS on baseVersion).",
+  requestSchema: z.object({ tokens: themeTokensSchema.optional(), fonts: z.array(themeFontSchema).optional(), icons: z.array(themeIconSchema).optional(), baseVersion: z.number().int().min(0) }),
+  responseSchema: z.object({ id: z.string(), latestMetaVersion: z.number().nullable() }).and(themeContentSchema),
+  errors: [
+    { status: 404, code: "not_found" },
+    { status: 405, code: "method_not_allowed", description: "builtin themes are immutable" },
+    { status: 409, code: "version_conflict" },
+    { status: 422, code: "validation_failed" },
+  ],
+});
+
+export const getDesignSystemVersionContract = registerContract({
+  method: "GET",
+  path: "/api/design-systems/{id}/versions/{version}",
+  summary: "Read an immutable design-system theme version.",
+  responseSchema: z.object({ systemId: z.string(), version: z.number(), createdAt: z.string() }).and(themeContentSchema),
+  errors: [{ status: 404, code: "not_found" }],
+});
+
 export const getVisualRunContract = registerContract({
   method: "GET",
   path: "/api/visual-runs/{runId}",

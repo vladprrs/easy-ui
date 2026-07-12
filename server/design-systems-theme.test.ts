@@ -1,0 +1,182 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { resolve } from "node:path";
+import { openDatabase } from "./db";
+import { createHandler } from "./main";
+import { PrototypeRepo } from "./repos/prototypes";
+import { prototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
+
+const dirs: string[] = [];
+afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
+
+async function setup() {
+  const dir = await mkdtemp(resolve(process.cwd(), ".ds-theme-test-"));
+  dirs.push(dir);
+  const db = openDatabase(":memory:");
+  return { dir, db, handler: createHandler(db, { dataDir: dir }) };
+}
+
+type Bytes = Uint8Array<ArrayBuffer>;
+function png(width = 4, height = 4): Bytes {
+  const b = new Uint8Array(24);
+  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  b.set([0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52], 8);
+  new DataView(b.buffer).setUint32(16, width, false);
+  new DataView(b.buffer).setUint32(20, height, false);
+  return b;
+}
+const woff2 = (): Bytes => { const b = new Uint8Array(16); b.set([0x77, 0x4f, 0x46, 0x32], 0); return b; };
+
+const upload = (bytes: Bytes, mime: string) => new Request("http://test/api/assets", { method: "POST", headers: { "content-type": mime }, body: bytes });
+const req = (url: string, method = "GET", value?: unknown) => new Request(`http://test/api${url}`, { method, headers: value ? { "content-type": "application/json" } : undefined, body: value ? JSON.stringify(value) : undefined });
+
+async function uploadAsset(handler: (r: Request) => Promise<Response>, bytes: Bytes, mime: string): Promise<string> {
+  return (await (await handler(upload(bytes, mime))).json() as { id: string }).id;
+}
+async function createCustomSystem(handler: (r: Request) => Promise<Response>, id: string): Promise<void> {
+  const r = await handler(req("/design-systems", "POST", { id, name: "Custom", description: "A custom system" }));
+  expect(r.status).toBe(201);
+}
+
+describe("PATCH /api/design-systems/:id — theme grammar", () => {
+  test("creates version 1 for valid tokens/fonts/icons and reads it back immutably", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "custom-a");
+    const fontId = await uploadAsset(handler, woff2(), "font/woff2");
+    const iconId = await uploadAsset(handler, png(), "image/png");
+    const patch = {
+      tokens: { "color.primary": "#123456", "spacing.lg": 24 },
+      fonts: [{ family: "Inter", src: fontId, weight: 500, style: "normal" }],
+      icons: [{ name: "close", assetId: iconId, viewBox: "0 0 24 24", themes: { dark: iconId } }],
+      baseVersion: 0,
+    };
+    const r = await handler(req("/design-systems/custom-a", "PATCH", patch));
+    expect(r.status).toBe(200);
+    const body = await r.json() as { latestMetaVersion: number; tokens: Record<string, unknown>; fonts: unknown[]; icons: unknown[] };
+    expect(body.latestMetaVersion).toBe(1);
+    expect(body.tokens).toEqual({ "color.primary": "#123456", "spacing.lg": 24 });
+
+    const v = await handler(req("/design-systems/custom-a/versions/1"));
+    expect(v.status).toBe(200);
+    const vbody = await v.json() as { systemId: string; version: number; tokens: Record<string, unknown> };
+    expect(vbody).toMatchObject({ systemId: "custom-a", version: 1 });
+    expect(vbody.tokens).toEqual({ "color.primary": "#123456", "spacing.lg": 24 });
+    // GET summary exposes latestMetaVersion + latest content additively.
+    const s = await handler(req("/design-systems/custom-a")); const sbody = await s.json() as { latestMetaVersion: number; fonts: unknown[] };
+    expect(sbody.latestMetaVersion).toBe(1);
+    expect(sbody.fonts).toHaveLength(1);
+    db.close();
+  });
+
+  test("rejects an invalid token key/value with 422", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "custom-b");
+    const bad = await handler(req("/design-systems/custom-b", "PATCH", { tokens: { "Color.Primary": "x" }, baseVersion: 0 }));
+    expect(bad.status).toBe(422);
+    const badVal = await handler(req("/design-systems/custom-b", "PATCH", { tokens: { "color.a": "x{y}" }, baseVersion: 0 }));
+    expect(badVal.status).toBe(422);
+    db.close();
+  });
+
+  test("rejects a font referencing a non-existent asset (422)", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "custom-c");
+    const r = await handler(req("/design-systems/custom-c", "PATCH", { fonts: [{ family: "X", src: `asset_${"a".repeat(64)}` }], baseVersion: 0 }));
+    expect(r.status).toBe(422);
+    db.close();
+  });
+
+  test("rejects a font pointing at a non-font asset (422)", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "custom-d");
+    const imageId = await uploadAsset(handler, png(), "image/png");
+    const r = await handler(req("/design-systems/custom-d", "PATCH", { fonts: [{ family: "X", src: imageId }], baseVersion: 0 }));
+    expect(r.status).toBe(422);
+    expect((await r.json() as { error: { code: string } }).error.code).toBe("validation_failed");
+    db.close();
+  });
+
+  test("rejects an icon pointing at a font asset (422)", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "custom-e");
+    const fontId = await uploadAsset(handler, woff2(), "font/woff2");
+    const r = await handler(req("/design-systems/custom-e", "PATCH", { icons: [{ name: "x", assetId: fontId }], baseVersion: 0 }));
+    expect(r.status).toBe(422);
+    db.close();
+  });
+});
+
+describe("PATCH CAS + immutability + builtin guard", () => {
+  test("baseVersion mismatch → 409 version_conflict", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "cas-a");
+    expect((await handler(req("/design-systems/cas-a", "PATCH", { tokens: { "a.b": "1" }, baseVersion: 0 }))).status).toBe(200);
+    const conflict = await handler(req("/design-systems/cas-a", "PATCH", { tokens: { "a.b": "2" }, baseVersion: 0 }));
+    expect(conflict.status).toBe(409);
+    const cbody = await conflict.json() as { error: { code: string; currentVersion: number } };
+    expect(cbody.error.code).toBe("version_conflict");
+    expect(cbody.error.currentVersion).toBe(1);
+    db.close();
+  });
+
+  test("consecutive PATCHes create immutable versions; earlier version unchanged", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "cas-b");
+    expect((await handler(req("/design-systems/cas-b", "PATCH", { tokens: { "a.b": "1" }, baseVersion: 0 }))).status).toBe(200);
+    // omitted tokens inherit; provide fonts=[] to keep, change tokens
+    expect((await handler(req("/design-systems/cas-b", "PATCH", { tokens: { "a.b": "2" }, baseVersion: 1 }))).status).toBe(200);
+    const v1 = await (await handler(req("/design-systems/cas-b/versions/1"))).json() as { tokens: Record<string, string> };
+    const v2 = await (await handler(req("/design-systems/cas-b/versions/2"))).json() as { tokens: Record<string, string> };
+    expect(v1.tokens).toEqual({ "a.b": "1" });
+    expect(v2.tokens).toEqual({ "a.b": "2" });
+    expect(db.query("SELECT COUNT(*) c FROM design_system_versions WHERE system_id='cas-b'").get()).toEqual({ c: 2 });
+    db.close();
+  });
+
+  test("PATCH on a builtin system → 405", async () => {
+    const { db, handler } = await setup();
+    const r = await handler(req("/design-systems/shadcn", "PATCH", { tokens: { "a.b": "1" }, baseVersion: 0 }));
+    expect(r.status).toBe(405);
+    db.close();
+  });
+
+  test("GET missing version → 404", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "cas-c");
+    expect((await handler(req("/design-systems/cas-c/versions/7"))).status).toBe(404);
+    db.close();
+  });
+});
+
+// A minimal custom-system document (repo-level: HTTP validation of custom types is a route concern).
+function customDoc(id: string, designSystem: string): PrototypeDoc {
+  return prototypeDocSchema.parse({
+    version: 1, id, name: id, device: "mobile", startScreen: "s", designSystem, state: {},
+    screens: [{ id: "s", name: "S", spec: { root: "r", elements: { r: { type: "Widget", props: {} } } } }],
+  });
+}
+
+describe("prototype pins the latest theme version", () => {
+  test("save pins latest, read-back exposes designSystemMetaVersion, restore copies the pin", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "pinsys");
+    const repo = new PrototypeRepo(db);
+
+    // No theme versions yet: pin is null.
+    const doc = customDoc("pinproto", "pinsys");
+    repo.create(doc);
+    expect(repo.draft("pinproto").designSystemMetaVersion).toBe(null);
+
+    // Bump the theme to v1, then save rev 2: the new revision pins 1.
+    expect((await handler(req("/design-systems/pinsys", "PATCH", { tokens: { "a.b": "1" }, baseVersion: 0 }))).status).toBe(200);
+    repo.save("pinproto", doc, 1);
+    expect(repo.draft("pinproto").designSystemMetaVersion).toBe(1);
+    expect(repo.revision("pinproto", 2).designSystemMetaVersion).toBe(1);
+
+    // Bump theme to v2, then restore rev 1 (pin null) → rev 3 copies the source pin (null), not latest.
+    expect((await handler(req("/design-systems/pinsys", "PATCH", { tokens: { "a.b": "2" }, baseVersion: 1 }))).status).toBe(200);
+    repo.restore("pinproto", 1, 2);
+    expect(repo.revision("pinproto", 3).designSystemMetaVersion).toBe(null);
+    db.close();
+  });
+});

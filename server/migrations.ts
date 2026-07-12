@@ -122,6 +122,20 @@ const migrations = [
       FOREIGN KEY (diff_asset_id) REFERENCES assets(id) ON DELETE RESTRICT)`);
     db.run(`CREATE INDEX visual_runs_reference ON visual_runs (reference_id, created_at, id)`);
   },
+  (db: Database) => {
+    // v7: immutable design-system theme versions (tokens/fonts/icons) + a diagnostic pin of the
+    // latest theme version onto each prototype revision. Versions are append-only snapshots; the
+    // pin is additive (NULL when the system has no versions or is a builtin without a theme).
+    db.run(`CREATE TABLE design_system_versions (
+      system_id TEXT NOT NULL REFERENCES design_systems(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      tokens_json TEXT NOT NULL,
+      fonts_json TEXT NOT NULL,
+      icons_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (system_id, version))`);
+    db.run("ALTER TABLE prototype_revisions ADD COLUMN design_system_meta_version INTEGER");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

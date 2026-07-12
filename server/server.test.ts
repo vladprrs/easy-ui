@@ -69,10 +69,11 @@ describe("prototype API", () => {
       expect(response.status).toBe(status);
       if(path) expect((await body(response)) as {error:{issues:{path:string[]}[]}}).toMatchObject({error:{code:"validation_failed",issues:expect.arrayContaining([expect.objectContaining({path:[path]})])}});
     }
-    for(const method of ["PUT","PATCH","DELETE"]) {
-      expect((await fetch(`${base}/api/design-systems`,{method})).status).toBe(405);
-      expect((await fetch(`${base}/api/design-systems/product-ui`,{method})).status).toBe(405);
-    }
+    for(const method of ["PUT","PATCH","DELETE"]) expect((await fetch(`${base}/api/design-systems`,{method})).status).toBe(405);
+    for(const method of ["PUT","DELETE"]) expect((await fetch(`${base}/api/design-systems/product-ui`,{method})).status).toBe(405);
+    // PATCH on :id is the theme endpoint: custom systems accept it, builtin systems reject with 405.
+    expect((await fetch(`${base}/api/design-systems/product-ui`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({tokens:{"color.a":"#111"},baseVersion:0})})).status).toBe(200);
+    expect((await fetch(`${base}/api/design-systems/shadcn`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({baseVersion:0})})).status).toBe(405);
     db.close();
   });
 
