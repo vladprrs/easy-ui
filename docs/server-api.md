@@ -159,6 +159,28 @@ Content-addressed реестр бинарных ассетов (изображе
 
 **Backup.** Логический снапшот прод-данных должен включать БД (`easy-ui.db` + `-wal`/`-shm`) **и** каталог `DATA_DIR/assets/`. Целостность (orphan-файлы, битые/недостающие байты, unpinned) проверяет ручной/деплойный скрипт `scripts/audit-assets.ts` (в `npm run verify` не входит — требует живую БД).
 
+## Скриншоты
+
+Асинхронный job-API рендерит экран прототипа (или опубликованный компонент) в PNG через headless Chromium (playwright) в отдельном node-подпроцессе. PNG складывается в реестр ассетов (D). Требует `SERVE_DIST` **и** установленного chromium; иначе POST сразу отвечает `501 screenshot_unavailable`.
+
+| Метод и путь | Тело / ответ |
+|---|---|
+| `POST /prototypes/:id/screens/:screenId/screenshot` | `{rev?\|version?, viewport{width,height}, deviceScaleFactor?, theme?, waitForFonts?}` → `202 {jobId}` |
+| `POST /components/:id/versions/:version/screenshot` | `{props?, viewport, deviceScaleFactor?, theme?, waitForFonts?}` → `202 {jobId}` (props валидируются) |
+| `GET /screenshot-jobs/:jobId` | `{status: queued\|running\|done\|error, result?, error?}` |
+
+`result` (при `done`): `{imageUrl, assetId, width, height, consoleErrors, pageErrors, rendererBuild, browserVersion, componentPins?|bundleHash?}`.
+
+**Границы (bounds).** `width ∈ [64,2000]`, `height ∈ [64,4000]`, `deviceScaleFactor ∈ {1,2,3}`, `width×height×dsf² ≤ 20 Mpx` — иначе `422 invalid_viewport`. PNG подчиняется лимитам ассетов (5 MiB / 16 Mpx). Пул concurrency 1, очередь ≤5 (`429 queue_full`), hard deadline job 60 s, TTL результата 10 минут (PNG остаётся в ассетах). Jobs хранятся в памяти.
+
+**Snapshot цели при enqueue.** POST атомарно резолвит цель в `expected` (`prototype`: `{rev, componentManifestHash, builtinCatalogHash, dsMetaVersion, rendererBuild}`; `component`: `{componentId, version, bundleHash, propsHash, dsMetaVersion, rendererBuild}`) и сохраняет в job. Queued job не может «уехать» на более поздний head. Capture-shell (`/capture/:id/s/:screen`, `/capture/component/:id/:version`) выставляет discriminated `window.__EUI_CAPTURE_READY__` той же формы; worker строго канонически сравнивает с `expected` и падает при mismatch/`status:"error"` (быстрый fail вместо таймаута; readiness poll 20 s). Хеши добавлены в revision DTO additively.
+
+**Session-auth капчера.** При dequeue минтится одноразовая (в рамках job) capture-session: `{token(32B), kind, allowedUrls (точный immutable snapshot), expected, props?}`, TTL = deadline 60 s + 30 s, revoke в `finally`. Worker шлёт `X-EasyUI-Capture: <token>` только на loopback capture-origin (инжект в `context.route` по exact origin). Сервер принимает токен как транспортную авторизацию (обходит BasicAuth) только при: `server.requestIP()` ∈ loopback (`127.0.0.1`/`::1`/`::ffff:127.0.0.1`), метод GET/HEAD, нормализованный decoded-путь ∈ `allowedUrls`. `allowedUrls`: capture-route, revision/version/draft endpoint, pinned bundle URLs, pinned `/api/assets/:id` (из документа и компонентов), `/api/shims/`, транзитивная статика SPA из Vite-манифеста (js/css/`/fonts/*`/index; fallback — префиксы `/assets/`, `/fonts/`). Bootstrap (`__EUI_CAPTURE_BOOTSTRAP__`, включая произвольные `props` компонента) доставляется через `page.addInitScript` — page-JS не нуждается в токене.
+
+**Egress-модель (defense-in-depth).** Network namespace в этом окружении недоступен (нет прав на unshare), поэтому изоляция задаётся Chromium-флагами и контекстом: `--proxy-server=http://127.0.0.1:<deny-port>` (контролируемый deny-proxy — локальный TCP-сокет, немедленно закрывающий соединения), `--proxy-bypass-list=<-loopback>;127.0.0.1:<capture-port>` (port-scoped: `<-loopback>` отключает implicit loopback-bypass, мимо proxy идёт только точный capture-origin), `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"`, `--disable-quic`, `--webrtc-ip-handling-policy=disable_non_proxied_udp` + `--force-webrtc-ip-handling-policy`; контекст — `serviceWorkers:"block"`, `routeWebSocket` close, `context.route` в allowlist-режиме (только captureOrigin + путь ∈ allowedUrls, включая redirect-цепочки; иной loopback-порт или `[::1]` — abort). locale `ru-RU`, timezone `Europe/Moscow`, `reducedMotion: reduce`; CSS-анимации/caret глушатся стилем в capture-режиме.
+
+**Остаточный риск.** По [модели доверия](#граница-доверия-и-запуск) published-код равен коду репозитория; egress-блок — defense-in-depth, а не sandbox. Точная строка `--proxy-bypass-list` закреплена unit-тестом; главный allowlist-инвариант покрыт server-side unit-тестами; полный adversarial сетевой сценарий помечен `test.fixme` в `e2e/preview/screenshot.spec.ts` (нестабилен в контейнере).
+
 ## Ошибки и ограничения HTTP
 
 Единый envelope:

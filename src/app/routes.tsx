@@ -1,4 +1,6 @@
 import { Link, Route, Routes } from "react-router";
+import { CapturePrototype } from "../capture/CapturePrototype";
+import { CaptureComponent } from "../capture/CaptureComponent";
 import { GalleryPage } from "../gallery/GalleryPage";
 import { LibraryPage } from "../library/LibraryPage";
 import { SmokeSpec } from "../smoke/SmokeSpec";
@@ -12,6 +14,8 @@ import { pillPrimary } from "./chrome";
 export function AppRoutes() {
   return (
     <Routes>
+      <Route path="capture/:protoId/s/:screenId" element={<CapturePrototype />} />
+      <Route path="capture/component/:id/:version" element={<CaptureComponent />} />
       <Route element={<Layout />}>
         <Route index element={<GalleryPage />} />
         <Route path="library" element={<LibraryPage />} />

@@ -121,3 +121,48 @@ export const getAssetContract = registerContract({
   summary: "Fetch asset bytes with immutable caching and hardened, inert delivery headers.",
   errors: [{ status: 404, code: "asset_not_found" }],
 });
+
+// --- Screenshots (T6) ---
+
+const viewportSchema = z.object({ width: z.number().int(), height: z.number().int() });
+const screenshotErrors = [
+  { status: 422, code: "invalid_viewport", description: "viewport/dsf bounds violated" },
+  { status: 429, code: "queue_full", description: "screenshot queue is full" },
+  { status: 501, code: "screenshot_unavailable", description: "no SERVE_DIST or chromium" },
+];
+
+export const jobAcceptedSchema = z.object({ jobId: z.string() });
+
+export const prototypeScreenshotContract = registerContract({
+  method: "POST",
+  path: "/api/prototypes/{id}/screens/{screenId}/screenshot",
+  summary: "Enqueue a prototype-screen screenshot job; resolves the target snapshot atomically.",
+  requestSchema: z.object({ rev: z.number().int().optional(), version: z.number().int().optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional() }),
+  responseSchema: jobAcceptedSchema,
+  errors: [{ status: 404, code: "prototype_not_found" }, { status: 404, code: "screen_not_found" }, ...screenshotErrors],
+});
+
+export const componentScreenshotContract = registerContract({
+  method: "POST",
+  path: "/api/components/{id}/versions/{version}/screenshot",
+  summary: "Enqueue a published-component screenshot job with optional props.",
+  requestSchema: z.object({ props: z.record(z.string(), z.unknown()).optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional() }),
+  responseSchema: jobAcceptedSchema,
+  errors: [{ status: 404, code: "not_found" }, { status: 422, code: "invalid_props" }, ...screenshotErrors],
+});
+
+export const screenshotJobResultSchema = z.object({
+  imageUrl: z.string(), assetId: z.string(), width: z.number(), height: z.number(),
+  consoleErrors: z.array(z.string()), pageErrors: z.array(z.string()),
+  bundleHash: z.string().optional(),
+  componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string() })).optional(),
+  rendererBuild: z.string().nullable(), browserVersion: z.string(),
+});
+
+export const screenshotJobContract = registerContract({
+  method: "GET",
+  path: "/api/screenshot-jobs/{jobId}",
+  summary: "Poll a screenshot job (queued|running|done|error) and read its result.",
+  responseSchema: z.object({ status: z.enum(["queued", "running", "done", "error"]), result: screenshotJobResultSchema.optional(), error: z.object({ code: z.string(), message: z.string() }).optional() }),
+  errors: [{ status: 404, code: "job_not_found" }],
+});
