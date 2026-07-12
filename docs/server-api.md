@@ -17,18 +17,18 @@
 | `GET /prototypes` | `PrototypeListItem[]`: `{id,name,description?,device,designSystem,screenCount,headRev,latestVersion:number|null,updatedAt}` |
 | `POST /prototypes` | `{doc,message?}` → 201 `{id,rev,warnings,screens}` и `Location` |
 | `GET /prototypes/:id` | `{id,name,designSystem,headRev,latestVersion:number|null,versions:PrototypeVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable}` |
-| `GET /prototypes/:id/draft` | `{doc,rev,builtinCatalogHash,componentManifestHash,components:ComponentPin[]}` |
+| `GET /prototypes/:id/draft` | `{doc,rev,builtinCatalogHash,componentManifestHash,components:ComponentPin[],assets:AssetPin[]}` |
 | `GET /prototypes/:id/screens/:screenId/render-status?version=n\|rev=n` | Готовность экрана к рендеру — см. [Render status](#render-status) |
 | `PUT /prototypes/:id` | `{doc,message?,baseRev}` → `{rev,warnings,screens}`; `doc.id` обязан совпадать с `:id` |
 | `DELETE /prototypes/:id` | `{baseRev}` → 204; hard delete с каскадом ревизий |
 | `GET /prototypes/:id/revisions?limit&before` | `{rev,message:string|null,createdAt}[]`; `limit` по умолчанию 20, максимум 100 |
-| `GET /prototypes/:id/revisions/:rev` | `{rev,doc,components:ComponentPin[],message:string|null,createdAt}` |
+| `GET /prototypes/:id/revisions/:rev` | `{rev,doc,components:ComponentPin[],assets:AssetPin[],message:string|null,createdAt}` |
 | `POST /prototypes/:id/restore` | `{rev,baseRev}` → `{rev}` (номер новой head-ревизии) |
 | `POST /prototypes/:id/publish` | `{message?,baseRev}` → 201 `{version,rev,screens}` и `Location` |
 | `GET /prototypes/:id/versions` | `PrototypeVersion[]`: `{version,rev,publishedAt}` |
-| `GET /prototypes/:id/versions/:version` | `{version,rev,doc,builtinCatalogHash,componentManifestHash,components:ComponentPin[],publishedAt}`; immutable |
+| `GET /prototypes/:id/versions/:version` | `{version,rev,doc,builtinCatalogHash,componentManifestHash,components:ComponentPin[],assets:AssetPin[],publishedAt}`; immutable |
 
-`ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её встроенный каталог. Дескриптор v1 включает имена, descriptions, events, slots и actions, но намеренно не включает `atomicLevel`: классификация может меняться без изменения render-совместимости. В MVP хеш диагностический — рантайм не сравнивает и не блокирует его mismatch; enforcement и таблицы совместимости оставлены на post-MVP.
+`ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её встроенный каталог. Дескриптор v1 включает имена, descriptions, events, slots и actions, но намеренно не включает `atomicLevel`: классификация может меняться без изменения render-совместимости. В MVP хеш диагностический — рантайм не сравнивает и не блокирует его mismatch; enforcement и таблицы совместимости оставлены на post-MVP.
 
 ### Матрица `designSystem` в DTO прототипов
 
@@ -97,7 +97,7 @@ Meta-ответы прототипов и компонентов additively не
 | `POST /components/:id/restore` | `{rev,baseRev}` → `{rev}` |
 | `POST /components/:id/publish` | `{message?,baseRev}` → 201 `{version,hostAbiVersion,warnings}` и `Location` |
 | `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,designSystem,publishedAt}` |
-| `GET /components/:id/versions/:version` | Active-версия: `{version,rev,source,designSystem,events,slots,description,example?,propsJsonSchema?,atomicLevel?,bundleHash,hostAbiVersion,publishedAt}`; immutable |
+| `GET /components/:id/versions/:version` | Active-версия: `{version,rev,source,designSystem,events,slots,description,example?,propsJsonSchema?,atomicLevel?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; immutable |
 | `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); immutable |
 
 ## Служебные endpoints
@@ -138,6 +138,25 @@ Production-миграция выполняется по явному manifest с
 | `GET /health` | `{status:"ready"}` после миграций, seed и ABI-проверки; до готовности 503 `starting` |
 | `GET /catalog/manifest` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,slots,description,example?,propsJsonSchema?,atomicLevel?}]}` — последняя active-версия каждого неудалённого компонента для каждой системы |
 | `GET /shims/v1/:name.js` | ESM-шим host ABI v1; immutable |
+
+### Ассеты
+
+Content-addressed реестр бинарных ассетов (изображения и шрифты). `id = "asset_" + полный sha256` (64 hex-символа) — контент-адрес, коллизий нет. Байты хранятся в `DATA_DIR/assets/<sha256>` атомарной записью (temp-файл + `rename`); таблица `assets(id,sha256,mime,size,width?,height?,original_name?,created_at)`. Пины `prototype_revision_assets` и `component_publish_assets` держат FK `ON DELETE RESTRICT`: пиновые байты нельзя удалить.
+
+| Метод и путь | Тело / ответ |
+|---|---|
+| `POST /assets` | Raw body с `Content-Type` (или `multipart/form-data` с ровно одним файлом). Новый ассет → 201 `{id,url,sha256,mime,size,width?,height?}` и `Location`; существующий sha256 → 200 с тем же телом и `deduplicated:true` |
+| `GET /assets/:id` | Байты ассета; корректный `Content-Type`, immutable cache и жёсткие inert-заголовки (см. ниже). Неизвестный `id` → `404 asset_not_found` |
+
+Приём: реальный тип определяется по magic-байтам и обязан совпадать с заявленным `Content-Type` — иначе `422 asset_type_mismatch`; неподдерживаемый заявленный тип — `422 unsupported_asset_type`. Допустимы `image/png`, `image/jpeg`, `image/webp`, `image/gif`, `image/svg+xml`, `font/woff2`, `font/ttf`, `font/otf`. Лимит размера — 5 MiB (`413 asset_too_large`). Для растров декодируются размеры из заголовков (png/jpeg/webp/gif) и применяется лимит 16 Mpx (`413 asset_too_large`, decompression-bomb guard). SVG в v1 не санитизируется — вместо этого отдаётся инертно.
+
+Заголовки `GET /assets/:id`: `Cache-Control: public, max-age=31536000, immutable`, `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`, `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin`, `Referrer-Policy: no-referrer`. Ассеты остаются за границей BasicAuth и same-origin (остаточный риск SVG зафиксирован здесь как admin-only инструмент).
+
+**Ссылки из документов.** В URL-пропах документа допустима директива `{"$asset":"asset_<sha256>"}` (см. [формат](prototype-format.md#assets)); резолвится в `/api/assets/<id>` при построении runtime-спека. На save `collectAndValidateAssetRefs` проверяет существование до транзакции (`422 asset_not_found`) и пинует ассеты в `prototype_revision_assets` на каждой ревизии; restore копирует пины. Read-back (`/draft`, `/revisions/:rev`, `/versions/:v`) отдаёт `assets:[{id,sha256,mime,size}]`.
+
+**Ссылки из компонентов.** На publish source сканируется на строковые литералы `/api/assets/asset_<sha256>`; найденные ассеты валидируются (`422 asset_not_found` при dangling) и пинуются в `component_publish_assets`; read-back версии показывает `assets`.
+
+**Backup.** Логический снапшот прод-данных должен включать БД (`easy-ui.db` + `-wal`/`-shm`) **и** каталог `DATA_DIR/assets/`. Целостность (orphan-файлы, битые/недостающие байты, unpinned) проверяет ручной/деплойный скрипт `scripts/audit-assets.ts` (в `npm run verify` не входит — требует живую БД).
 
 ## Ошибки и ограничения HTTP
 

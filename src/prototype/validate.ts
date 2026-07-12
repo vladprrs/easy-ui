@@ -4,7 +4,7 @@ import { prototypeActionSchemas } from "../catalog/actions";
 import { atomicRank, type AtomicLevel } from "../designSystems/types";
 import { resolveBuiltinSystem } from "../designSystems";
 import { getAtPointer, isSafeJsonPointer, isSafeRelativeFieldPath } from "./pointer";
-import type { PrototypeDoc } from "./schema";
+import { isAssetId, type PrototypeDoc } from "./schema";
 import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "./stateOverrides";
 import type { PrototypeValidationResult, ValidationIssue } from "./types";
 
@@ -74,6 +74,7 @@ function checkDynamic(value: unknown, path: (string | number)[], errors: Validat
     if (!insideRepeat) issue(errors, [...path, key], "$index is only allowed inside a repeat subtree");
     if (value[key] !== true) issue(errors, [...path, key], "$index must be true");
   }
+  else if (key === "$asset") { if (!isAssetId(value[key])) issue(errors, [...path, key], "$asset must be an asset id (asset_ followed by 64 hex chars)"); }
   else if (key === "$template") { if (typeof value[key] !== "string") issue(errors, [...path, key], "$template must be a string"); }
   else if (key === "$cond") {
     const cond = value[key];
@@ -291,7 +292,12 @@ export function validatePrototype(
   return { errors, warnings };
 }
 
+const isAssetDirective = (value: unknown): value is { $asset: unknown } => object(value) && Object.keys(value).length === 1 && Object.hasOwn(value, "$asset");
+
 function checkUrl(value: unknown, path: (string | number)[], image: boolean, errors: ValidationIssue[]) {
+  // {"$asset":"asset_<sha256>"} resolves to /api/assets/<id>; its id is validated by checkDynamic
+  // (via validateElementProps), so accept it here to avoid a duplicate/spurious "static string" error.
+  if (isAssetDirective(value)) return;
   if (typeof value !== "string" || isDynamicValue(value)) return issue(errors, path, "URL must be a static string");
   if (image && value.startsWith("/")) return;
   try { const url = new URL(value); if (url.protocol !== "http:" && url.protocol !== "https:") issue(errors, path, "URL must use http(s)"); }

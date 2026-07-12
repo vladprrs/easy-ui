@@ -56,6 +56,17 @@ describe("toRuntimeSpec", () => {
     expect(runtime.elements.item?.props).toEqual({ label: { $item: "label" } });
   });
 
+  it("resolves an $asset directive to its /api/assets URL", () => {
+    const id = `asset_${"a".repeat(64)}`;
+    const runtime = toRuntimeSpec(specWith({ src: { $asset: id }, nested: { icon: { $asset: id } } }));
+    expect(runtime.elements.text?.props).toEqual({ src: `/api/assets/${id}`, nested: { icon: `/api/assets/${id}` } });
+  });
+
+  it("leaves an $asset lookalike (extra keys) untouched", () => {
+    const lookalike = { $asset: "asset_x", extra: 1 };
+    expect(toRuntimeSpec(specWith({ value: lookalike })).elements.text?.props.value).toEqual(lookalike);
+  });
+
   it("preserves other directives", () => {
     const props = {
       state: { $state: "/name" },

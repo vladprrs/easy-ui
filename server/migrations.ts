@@ -71,6 +71,28 @@ const migrations = [
     db.run(`CREATE INDEX validation_records_resource
       ON validation_records (resource_type, resource_id, rev, id)`);
   },
+  (db: Database) => {
+    // v5: content-addressed asset registry with FK-RESTRICT pins so pinned bytes cannot be pruned.
+    db.run(`CREATE TABLE assets (
+      id TEXT PRIMARY KEY,
+      sha256 TEXT UNIQUE NOT NULL,
+      mime TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      width INTEGER,
+      height INTEGER,
+      original_name TEXT,
+      created_at TEXT NOT NULL)`);
+    db.run(`CREATE TABLE prototype_revision_assets (
+      prototype_id TEXT NOT NULL, rev INTEGER NOT NULL, asset_id TEXT NOT NULL,
+      PRIMARY KEY (prototype_id, rev, asset_id),
+      FOREIGN KEY (prototype_id, rev) REFERENCES prototype_revisions(prototype_id, rev) ON DELETE CASCADE,
+      FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE RESTRICT)`);
+    db.run(`CREATE TABLE component_publish_assets (
+      component_id TEXT NOT NULL, version INTEGER NOT NULL, asset_id TEXT NOT NULL,
+      PRIMARY KEY (component_id, version, asset_id),
+      FOREIGN KEY (component_id, version) REFERENCES component_publishes(component_id, version) ON DELETE CASCADE,
+      FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE RESTRICT)`);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

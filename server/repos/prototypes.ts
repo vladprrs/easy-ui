@@ -101,7 +101,18 @@ export class PrototypeRepo {
       this.db.query("INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version) VALUES (?,?,?,?)").run(id,rev,pin.id,pin.version);
     }
   }
-  create(doc: PrototypeDoc, message?: string,pins:ComponentPin[]=[]): {id:string;rev:1} {
+  private insertAssetPins(id:string,rev:number,assetIds:string[]):void {
+    for(const assetId of assetIds) {
+      const exists=this.db.query("SELECT 1 ok FROM assets WHERE id=?").get(assetId);
+      if(!exists) throw new ApiError(422,"asset_not_found","A referenced asset does not exist",{issues:[{path:["screens"],message:`unknown asset: ${assetId}`}]});
+      this.db.query("INSERT OR IGNORE INTO prototype_revision_assets (prototype_id,rev,asset_id) VALUES (?,?,?)").run(id,rev,assetId);
+    }
+  }
+  private assets(id:string,rev:number) {
+    return this.db.query(`SELECT a.id,a.sha256,a.mime,a.size FROM prototype_revision_assets pra
+      JOIN assets a ON a.id=pra.asset_id WHERE pra.prototype_id=? AND pra.rev=? ORDER BY a.id`).all(id,rev) as {id:string;sha256:string;mime:string;size:number}[];
+  }
+  create(doc: PrototypeDoc, message?: string,pins:ComponentPin[]=[],assetIds:string[]=[]): {id:string;rev:1} {
     return this.db.transaction(() => {
       if (this.db.query("SELECT 1 ok FROM prototypes WHERE id=?").get(doc.id)) throw new ApiError(409,"already_exists","Prototype already exists");
       const at=now();
@@ -109,14 +120,16 @@ export class PrototypeRepo {
         VALUES (?,?,?,?,?,1,?,?,?)`).run(doc.id,doc.name,doc.description??null,doc.device,doc.screens.length,doc.designSystem,at,at);
       this.insertRevision(doc.id,1,doc,message??null,at);
       this.insertPins(doc.id,1,pins);
+      this.insertAssetPins(doc.id,1,assetIds);
       return {id:doc.id,rev:1 as const};
     })();
   }
-  save(id:string, doc:PrototypeDoc, baseRev:number, message?:string,pins:ComponentPin[]=[]): {rev:number} {
+  save(id:string, doc:PrototypeDoc, baseRev:number, message?:string,pins:ComponentPin[]=[],assetIds:string[]=[]): {rev:number} {
     return this.db.transaction(() => {
       const head=this.cas(id,baseRev); const rev=head.head_rev+1; const at=now();
       this.insertRevision(id,rev,doc,message??null,at);
       this.insertPins(id,rev,pins);
+      this.insertAssetPins(id,rev,assetIds);
       this.db.query(`UPDATE prototypes SET name=?,description=?,device=?,screen_count=?,head_rev=?,design_system=?,updated_at=? WHERE id=?`)
         .run(doc.name,doc.description??null,doc.device,doc.screens.length,rev,doc.designSystem,at,id);
       return {rev};
@@ -137,6 +150,8 @@ export class PrototypeRepo {
       this.insertRevision(id,rev,doc,`Restore revision ${sourceRev}`,at);
       this.db.query(`INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version)
         SELECT prototype_id,?,component_id,component_version FROM prototype_revision_components WHERE prototype_id=? AND rev=?`).run(rev,id,sourceRev);
+      this.db.query(`INSERT INTO prototype_revision_assets (prototype_id,rev,asset_id)
+        SELECT prototype_id,?,asset_id FROM prototype_revision_assets WHERE prototype_id=? AND rev=?`).run(rev,id,sourceRev);
       this.db.query(`UPDATE prototypes SET name=?,description=?,device=?,screen_count=?,head_rev=?,design_system=?,updated_at=? WHERE id=?`)
         .run(doc.name,doc.description??null,doc.device,doc.screens.length,rev,doc.designSystem,at,id);
       return {rev};
@@ -182,10 +197,10 @@ export class PrototypeRepo {
       renderable:{head:this.renderableForRev(id,r.head_rev),published:latest?this.renderableForRev(id,latest.rev):null},
     };
   }
-  draft(id:string) { const r=this.row(id); const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev); return {doc:parseStoredPrototypeDoc(x.doc,id,x.rev),rev:x.rev,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components}; }
+  draft(id:string) { const r=this.row(id); const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev); return {doc:parseStoredPrototypeDoc(x.doc,id,x.rev),rev:x.rev,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,r.head_rev)}; }
   revisions(id:string,limit:number,before?:number) { this.row(id); const sql=`SELECT rev,message,created_at FROM prototype_revisions WHERE prototype_id=? ${before!==undefined?"AND rev < ?":""} ORDER BY rev DESC LIMIT ?`; const rows=(before!==undefined?this.db.query(sql).all(id,before,limit):this.db.query(sql).all(id,limit)) as {rev:number;message:string|null;created_at:string}[]; return rows.map(r=>({rev:r.rev,message:r.message,createdAt:r.created_at})); }
   private revisionRow(id:string,rev:number): RevisionRow { const r=this.db.query("SELECT rev,doc,builtin_catalog_hash,message,created_at FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,rev) as RevisionRow|null; if(!r) throw new ApiError(404,"not_found","Prototype revision not found"); return r; }
-  revision(id:string,rev:number) { const r=this.revisionRow(id,rev); return {rev:r.rev,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),components:this.pins(id,rev),message:r.message,createdAt:r.created_at}; }
+  revision(id:string,rev:number) { const r=this.revisionRow(id,rev); return {rev:r.rev,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),components:this.pins(id,rev),assets:this.assets(id,rev),message:r.message,createdAt:r.created_at}; }
   versions(id:string) { this.row(id); return (this.db.query("SELECT version,rev,published_at FROM prototype_publishes WHERE prototype_id=? ORDER BY version").all(id) as {version:number;rev:number;published_at:string}[]).map(r=>({version:r.version,rev:r.rev,publishedAt:r.published_at})); }
-  version(id:string,version:number) { const p=this.db.query("SELECT rev,published_at FROM prototype_publishes WHERE prototype_id=? AND version=?").get(id,version) as {rev:number;published_at:string}|null; if(!p) throw new ApiError(404,"not_found","Prototype version not found"); const r=this.revisionRow(id,p.rev); const components=this.pins(id,p.rev); return {version,rev:p.rev,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,publishedAt:p.published_at}; }
+  version(id:string,version:number) { const p=this.db.query("SELECT rev,published_at FROM prototype_publishes WHERE prototype_id=? AND version=?").get(id,version) as {rev:number;published_at:string}|null; if(!p) throw new ApiError(404,"not_found","Prototype version not found"); const r=this.revisionRow(id,p.rev); const components=this.pins(id,p.rev); return {version,rev:p.rev,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,p.rev),publishedAt:p.published_at}; }
 }

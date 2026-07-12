@@ -8,6 +8,7 @@ import { ApiError, immutable, json, noStore, readJson } from "../http";
 import { ComponentRepo } from "../repos/components";
 import { requireRegisteredDesignSystem } from "../designSystems";
 import { recordValidation } from "../validationRecords";
+import { collectAndValidateComponentAssetRefs } from "../validation";
 
 const slug=/^[a-z0-9]+(?:-[a-z0-9]+)*$/, componentName=/^[A-Z][A-Za-z0-9]*$/;
 function bad(message:string,path="source"):never{throw new ApiError(422,"validation_failed","Component is invalid",{issues:[{path:[path],message}]});}
@@ -24,9 +25,11 @@ async function checkSource(source:string,path:string,smoke=false){
 export type PublishHooks={afterStage?:(x:{id:string;version:number;rev:number})=>void|Promise<void>;beforeImport?:(x:{id:string;version:number;rev:number})=>void|Promise<void>};
 export async function publishComponent(db:Database,repo:ComponentRepo,id:string,baseRev:number,dataDir:string,message?:string,hooks:PublishHooks={}){
   const revision=repo.source(id); const path=await materializeSource(dataDir,id,revision.rev,revision.source);
+  // Validate /api/assets/asset_<sha256> literals in source before staging so a dangling ref fails fast.
+  const assetIds=collectAndValidateComponentAssetRefs(db,revision.source);
   const extracted=await checkSource(revision.source,path,true); await typecheckComponent(path); const compiled=await compileComponent(path);
   const staged=repo.stage(id,baseRev,{...compiled,sourceHash:sha256(revision.source),meta:extracted.meta!},message); await hooks.afterStage?.({id,...staged});
-  try { await hooks.beforeImport?.({id,...staged}); await importPublished(id,staged.rev,path); repo.activate(id,staged.version); }
+  try { await hooks.beforeImport?.({id,...staged}); await importPublished(id,staged.rev,path); repo.activate(id,staged.version); repo.pinAssets(id,staged.version,assetIds); }
   catch(error){repo.fail(id,staged.version);const detail=error instanceof Error?error.message:String(error);recordValidation(db,{resourceType:"component",resourceId:id,rev:staged.rev,catalogHash:compiled.bundleHash,ok:false,issues:[{path:"/source",message:detail}]});throw new ApiError(422,"validation_failed","Published component import failed",{issues:[{path:["source"],message:detail}]});}
   recordValidation(db,{resourceType:"component",resourceId:id,rev:staged.rev,catalogHash:compiled.bundleHash,ok:true,issues:extracted.warnings.map(message=>({path:"/",message}))});
   const warnings=[...extracted.warnings];

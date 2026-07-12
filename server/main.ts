@@ -5,6 +5,7 @@ import { routePrototypes } from "./routes/prototypes";
 import { seedPrototypes } from "./seed";
 import { serveStatic } from "./static";
 import { routeComponents, catalogManifest } from "./routes/components";
+import { routeAssets } from "./routes/assets";
 import { routeDesignSystems } from "./routes/designSystems";
 import { routeShims } from "./routes/shims";
 import { failStagingPublishes } from "./repos/components";
@@ -27,6 +28,7 @@ export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?
       if(segments[1]==="health"&&segments.length===2) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); const ready=options.ready?.()!==false; return json({status:ready?"ready":"starting"},ready?200:503,noStore); }
       if(segments[1]==="prototypes") return await routePrototypes(request,db,segments.slice(1),options.dataDir,options.serveDist);
       if(segments[1]==="components") return await routeComponents(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data");
+      if(segments[1]==="assets") return await routeAssets(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data");
       if(segments[1]==="design-systems") return await routeDesignSystems(request,db,segments.slice(1));
       if(segments[1]==="catalog"&&segments[2]==="manifest"&&segments.length===3) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); return json({components:catalogManifest(db)},200,noStore); }
       if(segments[1]==="shims"&&segments[2]==="v1") return routeShims(request,segments.slice(1));

@@ -13,6 +13,11 @@ export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
 
 export const slugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "must be a slug");
 
+// Content-addressed asset id: "asset_" + full lowercase sha256 (64 hex). Referenced from URL
+// props via the {"$asset": "asset_<sha256>"} directive, which resolves to /api/assets/<id>.
+export const ASSET_ID_PATTERN = /^asset_[0-9a-f]{64}$/;
+export const isAssetId = (value: unknown): value is string => typeof value === "string" && ASSET_ID_PATTERN.test(value);
+
 const actionSchema = z.strictObject({
   action: z.string().min(1),
   params: z.record(z.string(), z.unknown()).optional(),

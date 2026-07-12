@@ -86,3 +86,38 @@ export const renderStatusContract = registerContract({
     { status: 404, code: "revision_not_found" },
   ],
 });
+
+// --- Asset registry (T2) ---
+
+export const assetPublicSchema = z.object({
+  id: z.string(),
+  sha256: z.string(),
+  mime: z.string(),
+  size: z.number(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+});
+
+export const assetUploadResponseSchema = assetPublicSchema.extend({
+  url: z.string(),
+  deduplicated: z.literal(true).optional(),
+});
+
+export const uploadAssetContract = registerContract({
+  method: "POST",
+  path: "/api/assets",
+  summary: "Upload a content-addressed asset (raw body with Content-Type, or a single-file multipart form).",
+  responseSchema: assetUploadResponseSchema,
+  errors: [
+    { status: 413, code: "asset_too_large" },
+    { status: 422, code: "unsupported_asset_type" },
+    { status: 422, code: "asset_type_mismatch" },
+  ],
+});
+
+export const getAssetContract = registerContract({
+  method: "GET",
+  path: "/api/assets/{id}",
+  summary: "Fetch asset bytes with immutable caching and hardened, inert delivery headers.",
+  errors: [{ status: 404, code: "asset_not_found" }],
+});

@@ -1,9 +1,47 @@
 import type { Database } from "bun:sqlite";
 import { normalizeDefinitions, type ComponentDefinition } from "../src/catalog/definitions";
-import type { PrototypeDoc } from "../src/prototype/schema";
+import { isAssetId, type PrototypeDoc } from "../src/prototype/schema";
 import { importPublished } from "./components/pipeline";
 import { requireRegisteredDesignSystem } from "./designSystems";
 import { ApiError } from "./http";
+
+// Walks every element prop looking for {"$asset":"<id>"} directives, returning the referenced ids.
+export function collectAssetIds(doc:PrototypeDoc):string[] {
+  const ids=new Set<string>();
+  const walk=(value:unknown):void => {
+    if(Array.isArray(value)) { value.forEach(walk); return; }
+    if(typeof value!=="object"||value===null) return;
+    const record=value as Record<string,unknown>;
+    if(Object.keys(record).length===1&&typeof record.$asset==="string") { if(isAssetId(record.$asset)) ids.add(record.$asset); return; }
+    for(const item of Object.values(record)) walk(item);
+  };
+  for(const screen of doc.screens) for(const element of Object.values(screen.spec.elements)) walk(element.props);
+  return [...ids];
+}
+
+// Collects and validates asset references in a document before its save transaction. A referenced
+// asset that does not exist is a 422 (asset_not_found) so pins never dangle. Returns the ids to pin.
+export function collectAndValidateAssetRefs(db:Database,doc:PrototypeDoc):string[] {
+  const ids=collectAssetIds(doc);
+  const missing=ids.filter(id=>!db.query("SELECT 1 ok FROM assets WHERE id=?").get(id));
+  if(missing.length) throw new ApiError(422,"asset_not_found","Prototype references assets that do not exist",{issues:missing.map(id=>({path:["screens"],message:`unknown asset: ${id}`}))});
+  return ids;
+}
+
+// Scans compiled/source text for /api/assets/asset_<sha256> string references (component publish).
+const ASSET_URL_PATTERN=/\/api\/assets\/(asset_[0-9a-f]{64})/g;
+export function collectAssetIdsFromSource(source:string):string[] {
+  const ids=new Set<string>();
+  for(const match of source.matchAll(ASSET_URL_PATTERN)) ids.add(match[1]!);
+  return [...ids];
+}
+
+export function collectAndValidateComponentAssetRefs(db:Database,source:string):string[] {
+  const ids=collectAssetIdsFromSource(source);
+  const missing=ids.filter(id=>!db.query("SELECT 1 ok FROM assets WHERE id=?").get(id));
+  if(missing.length) throw new ApiError(422,"asset_not_found","Component references assets that do not exist",{issues:missing.map(id=>({path:["source"],message:`unknown asset: ${id}`}))});
+  return ids;
+}
 
 export type ComponentPin={id:string;name:string;version:number;bundleHash:string;sourcePath:string};
 export async function snapshotDefinitions(db:Database,doc:PrototypeDoc,dataDir:string):Promise<{definitions:Record<string,ComponentDefinition>;pins:ComponentPin[]}> {

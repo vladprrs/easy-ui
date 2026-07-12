@@ -12,6 +12,10 @@ function adaptProp(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(adaptProp);
   if (!isObject(value)) return value;
 
+  if (Object.hasOwn(value, "$asset") && Object.keys(value).length === 1 && typeof value.$asset === "string") {
+    return `/api/assets/${value.$asset}`;
+  }
+
   if (Object.hasOwn(value, "$cond")) {
     const keys = Object.keys(value);
     const condition = value.$cond;
