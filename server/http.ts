@@ -1,4 +1,4 @@
-export type ErrorDetails = { issues?: unknown[]; warnings?: unknown[]; currentRev?: number; currentVersion?: number };
+export type ErrorDetails = { issues?: unknown[]; warnings?: unknown[]; currentRev?: number; currentVersion?: number; currentStatusRev?: number };
 
 export class ApiError extends Error {
   constructor(public status: 400|404|405|409|413|415|422|429|501, public code: string, message: string, public details: ErrorDetails = {}) { super(message); }
@@ -35,7 +35,10 @@ export const errorResponse = (error: unknown): Response => {
   return json({ error: { code: "internal_error", message: "Internal server error" } }, 500, noStore);
 };
 
-export async function readJson(request: Request, maxBytes = 1_048_576): Promise<unknown> {
+// JSON request-body ceiling enforced by readJson (surfaced in /api/capabilities limits).
+export const MAX_JSON_BODY_BYTES = 1_048_576;
+
+export async function readJson(request: Request, maxBytes = MAX_JSON_BODY_BYTES): Promise<unknown> {
   const type = request.headers.get("content-type")?.split(";",1)[0]?.trim().toLowerCase();
   if (type !== "application/json") throw new ApiError(415, "unsupported_media_type", "Content-Type must be application/json");
   const declared = Number(request.headers.get("content-length"));

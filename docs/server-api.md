@@ -96,9 +96,38 @@ Meta-ответы прототипов и компонентов additively не
 | `GET /components/:id/revisions/:rev` | `{rev,source,designSystem,message:string|null,createdAt}` |
 | `POST /components/:id/restore` | `{rev,baseRev}` → `{rev}` |
 | `POST /components/:id/publish` | `{message?,baseRev}` → 201 `{version,hostAbiVersion,warnings}` и `Location` |
-| `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,designSystem,publishedAt}` |
-| `GET /components/:id/versions/:version` | Active-версия: `{version,rev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,propsJsonSchema?,atomicLevel?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; immutable |
-| `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); immutable |
+| `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,statusReason:string\|null,supersededBy:number\|null,statusRev,designSystem,publishedAt}` |
+| `GET /components/:id/versions/:version` | Метадата версии **любого статуса**: `{version,rev,status,statusReason,supersededBy,statusRev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,propsJsonSchema?,atomicLevel?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; immutable |
+| `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); отдаётся при статусе `active\|deprecated\|superseded`, иначе `404 bundle_unavailable`; immutable |
+| `POST /components/:id/versions/:version/status` | `{status, reason?, supersededBy?, baseStatusRev}` → 200 `{status, statusRev}`; см. [Статусы версий](#статусы-версий-компонентов) |
+
+### Статусы версий компонентов
+
+Каждая опубликованная версия имеет lifecycle-статус в `component_publishes.status` (+`status_reason`, `superseded_by`, `status_rev`). `staging`/`failed` — внутренние стадии publish-пайплайна и **вручную не управляются**. Остальные переходы задаёт `POST …/versions/:version/status` с CAS по `statusRev` (не `headRev`).
+
+**Матрица переходов** (иные → `422 invalid_transition`):
+
+| Из | Разрешённые цели |
+|---|---|
+| `active` | `rejected`, `deprecated`, `superseded`, `archived` |
+| `deprecated` | `archived`, `active` |
+| `superseded` | `archived`, `active` |
+| `rejected` | `archived` |
+| `archived` | — (терминальный) |
+| `staging`, `failed` | — (только пайплайн) |
+
+- **CAS.** `baseStatusRev≠current` → `409 status_conflict` с `currentStatusRev`. Успешный переход возвращает новый `statusRev` (инкремент).
+- **`reason`.** Обязателен для `rejected` (иначе `422 validation_failed`, `issues[].path=["reason"]`); сохраняется в `statusReason` и очищается при переходах без `reason`.
+- **`supersededBy`.** Обязателен для `superseded`: версия **того же** компонента, существует, не сама себя, без циклов (обход цепочки `superseded_by`); нарушение → `422 validation_failed`. Хранится только пока статус `superseded`, иначе сбрасывается в NULL.
+
+**Семантика исполнения.**
+
+- **Новые пины и `/catalog/manifest`** резолвят только `active`-версии: `rejected`/`deprecated`/`superseded` в новые прототипы не подхватываются.
+- **Существующие пины** (`prototype_revision_components`): bundle отдаётся при `active|deprecated|superseded` (старые прототипы продолжают рендериться), а `rejected|archived|failed|staging` → `404 bundle_unavailable`. `rejected` трактуется как потенциально вредный код и не исполняется.
+- **render-status** для пинов на `deprecated|superseded` добавляет `warnings` `pin_deprecated`/`pin_superseded` (renderable), а на `rejected|archived|failed|staging` — `errors` `bundle_failed` (не renderable).
+- **Метадата** любой версии (`GET …/versions/:version`) читается независимо от статуса.
+
+Миграция v8 расширяет `CHECK(status)` строгим rebuild-алгоритмом `component_publishes`: снапшот всех FK-child (`prototype_revision_components` RESTRICT, `component_publish_assets` CASCADE) → drop children → rebuild parent → recreate children → restore rows → `PRAGMA foreign_key_check`.
 
 ## Служебные endpoints
 
@@ -241,6 +270,33 @@ Content-addressed реестр бинарных ассетов (изображе
 Опциональные поля присутствуют только когда применимы. Типичные статусы: 400 — неверный JSON/DTO или отсутствующий `baseRev`; 404 — ресурс; 405 — метод; 409 — CAS-конфликт, дубликат либо повторный publish ревизии; 413 — лимит; 415 — не `application/json`; 422 — семантическая валидация (включая `event_schema_not_serializable` — типизированный event-payload не сериализуется в JSON Schema); 429 — очередь занята; 501 — возможность недоступна в этом окружении. JSON body ограничен 1 MiB, source компонента — 256 KiB.
 
 Каждый элемент `issues[]` дополнительно получает поле `pointer` — корректный RFC 6901 JSON Pointer с escape `~0`/`~1` (легаси-поле `path` сохраняется как есть). Pointer добавляется централизованно в `errorResponse`: для массивных `path` каждый сегмент экранируется, строковые pointer-подобные `path` проходят без изменений.
+
+## Discovery
+
+Машиночитаемое самоописание API:
+
+- `GET /api/openapi.json` — OpenAPI 3.1-документ. Отдаётся закоммиченный артефакт `server/openapi.json`, сгенерированный из реестра контрактов `server/contracts.ts` командой `npm run generate:openapi`. Дрифт ловится в `npm run verify` (`verify:openapi`) и contract-тестом. Операции несут расширение `x-easyui-validated`: `true` — handler валидирует вход по схемам контракта (`parseWith`/`parseQuery`), `false` — контракт документационный, handler валидирует вход самостоятельно.
+- `GET /api/schemas/prototype-document.json` — JSON Schema (draft 2020-12) формата документа прототипа, производная от `prototypeDocSchema`. Директивы props (`$state`, `$bindState`, `$template`, `$cond`, `$asset`) и param sources событий (`$event`, `$elementId`, `$itemIndex`, `$itemKey`) описаны в `$defs` как `anyOf` с `$comment` — их семантика enforce'ится валидатором `src/prototype/validate.ts`, а не самой схемой.
+- `GET /api/schemas/component-definition.json` — JSON Schema контракта `definition` кастомного компонента (props/events/slots/capabilities/description/example/atomicLevel).
+- `GET /api/capabilities` — фичи и лимиты инстанса:
+
+```json
+{
+  "apiVersion": 1,
+  "documentVersion": 1,
+  "actions": ["navigate", "back", "openUrl", "restart", "setState", "pushState", "removeState"],
+  "directives": ["$state", "$bindState", "$template", "$cond", "$asset"],
+  "paramSources": ["$event", "$elementId", "$itemIndex", "$itemKey"],
+  "conditions": ["$and", "$or", "$state", "$item", "$index", "eq", "neq", "gt", "gte", "lt", "lte", "not"],
+  "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5 },
+  "designSystems": ["shadcn", "wireframe", "..."],
+  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true }
+}
+```
+
+`designSystems` читается из живого реестра БД; значения `limits` импортируются из модулей, где они реально enforce'ятся (`src/prototype/validate.ts`, `server/assets/validate.ts`, `server/screenshot/service.ts`, `server/http.ts`), — двойного хардкода нет.
+
+**Правило**: каждый новый endpoint обязан регистрироваться в `server/contracts.ts` (`registerContract`) — contract-тест `server/contract.test.ts` требует покрытия каждого контракта, а drift-check заставит перегенерировать `server/openapi.json`.
 
 ## Контракт кастомного компонента
 

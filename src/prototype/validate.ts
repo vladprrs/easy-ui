@@ -13,6 +13,8 @@ const terminals = new Set(["navigate", "back", "restart", "openUrl"]);
 const forbiddenPaths = ["/currentScreen", "/navStack", "/_viewer"];
 export const REPEAT_ELEMENT_LIMIT = 20;
 export const REPEAT_RENDER_COST_BUDGET = 2000;
+export const ELEMENTS_PER_SCREEN_LIMIT = 500;
+export const TREE_DEPTH_LIMIT = 50;
 
 const object = (value: unknown): value is Obj => typeof value === "object" && value !== null && !Array.isArray(value);
 const pathString = (parts: (string | number)[]) => "/" + parts.map(String).join("/");
@@ -209,7 +211,7 @@ export function validatePrototype(
     const structural = validateSpec(screen.spec as Spec, { checkOrphans: true });
     structural.issues.forEach((entry) => issue(errors, base, entry.message));
     const elements = screen.spec.elements;
-    if (Object.keys(elements).length > 500) issue(errors, [...base, "elements"], "screen exceeds 500 elements");
+    if (Object.keys(elements).length > ELEMENTS_PER_SCREEN_LIMIT) issue(errors, [...base, "elements"], `screen exceeds ${ELEMENTS_PER_SCREEN_LIMIT} elements`);
 
     const insideRepeat = new Set<string>();
     const nearestRepeatHasKey = new Map<string, boolean>();
@@ -388,7 +390,7 @@ export function validatePrototype(
     for (const [child, count] of parents) if (count > 1) issue(errors, [...base,"elements",child], "element has more than one parent");
     const visiting = new Set<string>(), visited = new Set<string>();
     const dfs = (key: string, depth: number, ancestorLevel?: AtomicLevel) => {
-      if (depth > 50) issue(errors, [...base,"elements",key], "tree depth exceeds 50");
+      if (depth > TREE_DEPTH_LIMIT) issue(errors, [...base,"elements",key], `tree depth exceeds ${TREE_DEPTH_LIMIT}`);
       if (visiting.has(key)) { issue(errors, [...base,"elements",key], "children cycle detected"); return; }
       if (visited.has(key)) return;
       visiting.add(key);

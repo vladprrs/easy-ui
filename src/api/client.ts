@@ -67,7 +67,12 @@ export interface SavePrototypeResult { rev: number; warnings: unknown[] }
 
 export type AtomicLevel = "atom" | "molecule" | "organism" | "template" | "page";
 export interface ComponentSummary { id: string; name: string; designSystem: string; headRev: number; latestVersion: number | null; updatedAt: string }
-export interface ComponentMeta { id: string; name: string; designSystem: string; headRev: number; versions: PrototypeVersionSummary[]; updatedAt: string }
+export type ComponentStatus = "staging" | "active" | "failed" | "rejected" | "deprecated" | "superseded" | "archived";
+export interface ComponentVersionSummary { version: number; rev: number; status: ComponentStatus; statusReason: string | null; supersededBy: number | null; statusRev: number; designSystem: string; publishedAt: string }
+export interface ComponentMeta { id: string; name: string; designSystem: string; headRev: number; versions: ComponentVersionSummary[]; updatedAt: string }
+export interface ComponentStatusResult { status: ComponentStatus; statusRev: number }
+export const setComponentVersionStatus = (id: string, version: number, change: { status: ComponentStatus; reason?: string; supersededBy?: number; baseStatusRev: number }, signal?: AbortSignal) =>
+  request<ComponentStatusResult>(`${componentPath(id)}/versions/${version}/status`, { method: "POST", body: change, signal });
 export interface CatalogComponent { id: string; name: string; designSystem: string; version: number; bundleUrl: string; bundleHash: string; atomicLevel?: AtomicLevel; description: string; events: string[]; slots: string[]; hostAbiVersion: number }
 export interface CatalogManifest { components: CatalogComponent[] }
 export interface DesignSystemComponent { name: string; atomicLevel: AtomicLevel; layoutNeutral: boolean; description: string; events: string[]; slots: string[] }
@@ -126,7 +131,7 @@ export const listPrototypeRevisions = (id: string, options: {limit?: number; bef
 export const getPrototypeRevision = (id: string, rev: number, signal?: AbortSignal) => request<PrototypeRevision>(`${prototypePath(id)}/revisions/${rev}`, { signal });
 export interface PrototypeRevisionFull extends PrototypeRevision { builtinCatalogHash: string; componentManifestHash: string }
 export const getPrototypeRevisionFull = (id: string, rev: number, signal?: AbortSignal) => request<PrototypeRevisionFull>(`${prototypePath(id)}/revisions/${rev}`, { signal });
-export interface ComponentVersion { version: number; rev: number; name?: string; source: string; designSystem: string; bundleHash: string; hostAbiVersion: number; events: string[]; slots: string[]; description?: string; example?: Record<string, unknown>; propsJsonSchema?: unknown; assets: { id: string; sha256: string; mime: string; size: number }[]; publishedAt: string }
+export interface ComponentVersion { version: number; rev: number; status?: ComponentStatus; statusReason?: string | null; supersededBy?: number | null; statusRev?: number; name?: string; source: string; designSystem: string; bundleHash: string; hostAbiVersion: number; events: string[]; slots: string[]; description?: string; example?: Record<string, unknown>; propsJsonSchema?: unknown; assets: { id: string; sha256: string; mime: string; size: number }[]; publishedAt: string }
 export const getComponentVersion = (id: string, version: number, signal?: AbortSignal) => request<ComponentVersion>(`${componentPath(id)}/versions/${version}`, { signal });
 export const restorePrototype = (id: string, rev: number, baseRev: number, signal?: AbortSignal) => request<{rev: number}>(`${prototypePath(id)}/restore`, { method: "POST", body: { rev, baseRev }, signal });
 export const publishPrototype = (id: string, baseRev: number, message?: string, signal?: AbortSignal) => request<{version: number; rev: number}>(`${prototypePath(id)}/publish`, { method: "POST", body: { baseRev, message }, signal });

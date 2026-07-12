@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getCatalogManifest, listDesignSystems } from "../api/client";
+import { getCatalogManifest, getComponentMeta, listDesignSystems } from "../api/client";
 import { fetchStorybookIndex } from "./storybookIndex";
 import { LibraryPage } from "./LibraryPage";
 
@@ -9,7 +9,7 @@ vi.mock("./storybookIndex", async (importOriginal) => {
   const original = await importOriginal<typeof import("./storybookIndex")>();
   return { ...original, fetchStorybookIndex: vi.fn() };
 });
-vi.mock("../api/client", () => ({ getCatalogManifest: vi.fn(), listDesignSystems: vi.fn() }));
+vi.mock("../api/client", () => ({ getCatalogManifest: vi.fn(), getComponentMeta: vi.fn(), listDesignSystems: vi.fn() }));
 
 const systems = { designSystems: [
   { id: "shadcn", name: "Shadcn", description: "", builtinCatalogHash: "one", components: [] },
@@ -26,6 +26,9 @@ describe("LibraryPage", () => {
   beforeEach(() => {
     vi.mocked(listDesignSystems).mockResolvedValue(systems);
     vi.mocked(getCatalogManifest).mockResolvedValue({ components: [] });
+    vi.mocked(getComponentMeta).mockResolvedValue({ id: "rating", name: "Rating", designSystem: "yandex-pay", headRev: 3, updatedAt: "now", versions: [
+      { version: 3, rev: 3, status: "deprecated", statusReason: "use v4", supersededBy: null, statusRev: 2, designSystem: "yandex-pay", publishedAt: "now" },
+    ] });
   });
 
   it("keeps registry systems and custom cards visible when Storybook is unavailable", async () => {
@@ -38,6 +41,8 @@ describe("LibraryPage", () => {
     fireEvent.click(within(switcher).getByRole("button", { name: "Yandex Pay Design System" }));
     fireEvent.click(screen.getByRole("button", { name: "Rating" }));
     expect(screen.getByRole("heading", { name: "Rating" })).toBeTruthy();
+    // Status badge from getComponentMeta (deprecated) with reason in the title.
+    expect((await screen.findByText("Deprecated")).getAttribute("title")).toBe("Deprecated: use v4");
     expect(screen.getByText("Choose a rating")).toBeTruthy();
     expect(screen.queryByTitle("Story preview")).toBeNull();
   });

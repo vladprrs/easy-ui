@@ -18,6 +18,7 @@ import { routeScreenshots } from "./routes/screenshots";
 import type { VisualService } from "./visual/service";
 import { VisualService as VisualServiceImpl } from "./visual/service";
 import { routeVisual } from "./routes/visual";
+import { routeMeta } from "./routes/meta";
 
 export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?:string;dataDir?:string;basicAuth?:string;screenshots?:ScreenshotService;visual?:VisualService}={}):(request:Request,server?:Bun.Server<unknown>)=>Promise<Response> {
   return async (request,server)=>{
@@ -50,6 +51,7 @@ export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?
       if(segments[1]==="design-systems") return await routeDesignSystems(request,db,segments.slice(1));
       if(segments[1]==="catalog"&&segments[2]==="manifest"&&segments.length===3) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); return json({components:catalogManifest(db)},200,noStore); }
       if(segments[1]==="shims"&&(segments[2]==="v1"||segments[2]==="v2")) return routeShims(request,segments.slice(1));
+      const meta=routeMeta(request,db,segments.slice(1)); if(meta) return meta;
       throw new ApiError(404,"not_found","API route not found");
     }
     if(options.serveDist) return await serveStatic(request,options.serveDist);

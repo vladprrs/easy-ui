@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
-import { getCatalogManifest, listDesignSystems, type CatalogComponent } from "../api/client";
+import { useCallback, useMemo, useState } from "react";
+import { getCatalogManifest, getComponentMeta, listDesignSystems, type CatalogComponent } from "../api/client";
 import { useApi } from "../api/hooks";
 import { chip, chipActive, headingBar, kicker } from "../app/chrome";
 import { atomicLevelLabel, groupLibraryEntries, selectionForComponent, selectionForStory, selectionKey, type LibrarySelection } from "./libraryModel";
+import { componentStatusBadge } from "./statusBadge";
 import { fetchStorybookIndex, parseStorybookTitle, type StorybookEntry } from "./storybookIndex";
 
 const levelOrder = ["Layout", "Atoms", "Molecules", "Organisms", "Templates", "Pages", "Other"];
@@ -86,8 +87,13 @@ function StoryPreview({ story }: { story: StorybookEntry }) {
 }
 
 function ComponentMetadata({ component, systemName }: { component: CatalogComponent; systemName: string }) {
+  const loadMeta = useCallback((signal?: AbortSignal) => getComponentMeta(component.id, signal), [component.id]);
+  const meta = useApi(loadMeta, [component.id]);
+  const version = meta.status === "ready" ? meta.data.versions.find((entry) => entry.version === component.version) : undefined;
+  const badge = version ? componentStatusBadge(version.status, version.statusReason) : null;
   return <article className="max-w-2xl rounded-3xl bg-eui-lav p-6">
-    <p className={kicker}>Custom component</p><h2 className="mt-2 font-eui-display text-2xl font-medium">{component.name}</h2>
+    <div className="flex items-center gap-2"><p className={kicker}>Custom component</p>{badge ? <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${badge.className}`} title={badge.title}>{badge.label}</span> : null}</div>
+    <h2 className="mt-2 font-eui-display text-2xl font-medium">{component.name}</h2>
     <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
       <Metadata label="System" value={systemName} /><Metadata label="Atomic level" value={component.atomicLevel ?? "Other"} /><Metadata label="Version" value={`v${component.version}`} />
       <Metadata label="Description" value={component.description || "No description"} /><Metadata label="Events" value={component.events.length ? component.events.join(", ") : "None"} /><Metadata label="Slots" value={component.slots.length ? component.slots.join(", ") : "None"} />

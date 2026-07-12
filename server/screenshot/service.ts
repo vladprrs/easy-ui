@@ -36,7 +36,7 @@ interface InternalJob {
   result?: ScreenshotResult; error?: { code: string; message: string }; resultExpiresAt?: number;
 }
 
-const MAX_QUEUE = 5;
+export const MAX_QUEUE = 5;
 const RESULT_TTL_MS = 10 * 60_000;
 
 function validateViewport(viewport: unknown, dsf: unknown): { viewport: Viewport; dsf: number } {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { prototypeDocSchema } from "../src/prototype/schema";
 import { ApiError } from "./http";
 
 // Declarative route registry. Minimal by design: it is the single source of truth for
@@ -22,6 +23,15 @@ export interface RouteContract {
   requestSchema?: z.ZodType;
   responseSchema?: z.ZodType;
   errors: RouteError[];
+  /** Success status code for the OpenAPI document (default 200). */
+  status?: number;
+  /** Content type of a non-JSON success response (openapi: content key without schema). */
+  contentType?: string;
+  /**
+   * true — the handler validates its input through this contract's schemas (parseWith/parseQuery).
+   * false/omitted — the contract is documentation; the handler validates independently.
+   */
+  validated?: boolean;
 }
 
 const registry: RouteContract[] = [];
@@ -78,6 +88,7 @@ export const renderStatusContract = registerContract({
   path: "/api/prototypes/{id}/screens/{screenId}/render-status",
   summary: "Report whether a prototype screen is renderable (document, bundles, local route).",
   query: renderStatusQuerySchema,
+  validated: true,
   responseSchema: renderStatusResponseSchema,
   errors: [
     { status: 404, code: "prototype_not_found" },
@@ -107,6 +118,7 @@ export const uploadAssetContract = registerContract({
   method: "POST",
   path: "/api/assets",
   summary: "Upload a content-addressed asset (raw body with Content-Type, or a single-file multipart form).",
+  status: 201,
   responseSchema: assetUploadResponseSchema,
   errors: [
     { status: 413, code: "asset_too_large" },
@@ -137,6 +149,7 @@ export const prototypeScreenshotContract = registerContract({
   method: "POST",
   path: "/api/prototypes/{id}/screens/{screenId}/screenshot",
   summary: "Enqueue a prototype-screen screenshot job; resolves the target snapshot atomically.",
+  status: 202,
   requestSchema: z.object({ rev: z.number().int().optional(), version: z.number().int().optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional() }),
   responseSchema: jobAcceptedSchema,
   errors: [{ status: 404, code: "prototype_not_found" }, { status: 404, code: "screen_not_found" }, ...screenshotErrors],
@@ -146,6 +159,7 @@ export const componentScreenshotContract = registerContract({
   method: "POST",
   path: "/api/components/{id}/versions/{version}/screenshot",
   summary: "Enqueue a published-component screenshot job with optional props.",
+  status: 202,
   requestSchema: z.object({ props: z.record(z.string(), z.unknown()).optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional() }),
   responseSchema: jobAcceptedSchema,
   errors: [{ status: 404, code: "not_found" }, { status: 422, code: "invalid_props" }, ...screenshotErrors],
@@ -229,6 +243,7 @@ export const checkVisualReferenceContract = registerContract({
   method: "POST",
   path: "/api/visual-references/{id}/check",
   summary: "Capture a candidate for the reference fingerprint and enqueue an honest diff run.",
+  status: 202,
   requestSchema: z.object({ threshold: z.number().min(0).max(100).optional() }),
   responseSchema: z.object({ runId: z.string(), jobId: z.string().optional() }),
   errors: [{ status: 404, code: "reference_not_found" }, { status: 422, code: "invalid_threshold" }, { status: 501, code: "screenshot_unavailable" }],
@@ -270,4 +285,385 @@ export const getVisualRunContract = registerContract({
   summary: "Poll a visual run: a running placeholder, or the terminal evidence report.",
   responseSchema: z.union([runReportSchema, z.object({ runId: z.string(), referenceId: z.string(), status: z.literal("running"), jobId: z.string() })]),
   errors: [{ status: 404, code: "run_not_found" }],
+});
+
+// --- T9: remaining endpoints. These contracts are documentation-first (validated: false):
+// the handlers keep their existing hand-rolled validation; the schemas below describe the
+// wire format for OpenAPI generation and the contract test. Complex DTOs list their main
+// fields and stay loose (passthrough) on purpose.
+
+const errorCatalog = {
+  invalidRequest: { status: 400, code: "invalid_request" },
+  baseRevRequired: { status: 400, code: "base_rev_required" },
+  notFound: { status: 404, code: "not_found" },
+  methodNotAllowed: { status: 405, code: "method_not_allowed" },
+  alreadyExists: { status: 409, code: "already_exists" },
+  revConflict: { status: 409, code: "revision_conflict" },
+  alreadyPublished: { status: 409, code: "already_published" },
+  payloadTooLarge: { status: 413, code: "payload_too_large" },
+  unsupportedMediaType: { status: 415, code: "unsupported_media_type" },
+  validationFailed: { status: 422, code: "validation_failed" },
+} as const;
+
+const slugString = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+const positiveInt = z.number().int().positive();
+const isoDate = z.string();
+const issueSchema = z.looseObject({ path: z.unknown(), message: z.string() });
+const screenUrlSchema = z.object({ id: z.string(), url: z.string() });
+const casBody = { baseRev: positiveInt, message: z.string().optional() };
+
+// --- Prototypes CRUD / revisions / versions / publish / restore ---
+
+const prototypeListItemSchema = z.looseObject({
+  id: z.string(), name: z.string(), designSystem: z.string(), device: z.string(),
+  screenCount: z.number(), headRev: z.number(), latestVersion: z.number().nullable(), updatedAt: isoDate,
+});
+
+export const listPrototypesContract = registerContract({
+  method: "GET", path: "/api/prototypes",
+  summary: "List prototypes with head revision and latest published version.",
+  responseSchema: z.array(prototypeListItemSchema),
+  errors: [errorCatalog.methodNotAllowed],
+});
+
+export const createPrototypeContract = registerContract({
+  method: "POST", path: "/api/prototypes",
+  summary: "Create a prototype from a document (revision 1); validates against the design-system catalog.",
+  status: 201,
+  requestSchema: z.object({ doc: prototypeDocSchema, message: z.string().optional() }),
+  responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }],
+});
+
+const renderableSchema = z.object({ head: z.boolean(), published: z.boolean().nullable() });
+
+export const getPrototypeContract = registerContract({
+  method: "GET", path: "/api/prototypes/{id}",
+  summary: "Prototype lifecycle meta: head/draft revision, validated revision, published versions, renderable.",
+  responseSchema: z.looseObject({
+    id: z.string(), name: z.string(), designSystem: z.string(), headRev: z.number(),
+    latestVersion: z.number().nullable(), versions: z.array(z.looseObject({ version: z.number(), rev: z.number(), publishedAt: isoDate })),
+    updatedAt: isoDate, draftRevision: z.number(), validatedRevision: z.number().nullable(),
+    publishedVersion: z.number().nullable(), renderable: renderableSchema,
+  }),
+  errors: [errorCatalog.notFound],
+});
+
+export const savePrototypeContract = registerContract({
+  method: "PUT", path: "/api/prototypes/{id}",
+  summary: "Save a new head revision (CAS on baseRev); document id must match the path id.",
+  requestSchema: z.object({ doc: prototypeDocSchema, ...casBody }),
+  responseSchema: z.looseObject({ rev: z.number(), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.validationFailed],
+});
+
+export const deletePrototypeContract = registerContract({
+  method: "DELETE", path: "/api/prototypes/{id}",
+  summary: "Delete a prototype (CAS on baseRev). Responds 204 without a body.",
+  status: 204,
+  requestSchema: z.object({ baseRev: positiveInt }),
+  errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict],
+});
+
+const prototypeRevisionCoreSchema = z.looseObject({
+  doc: z.looseObject({ id: z.string(), version: z.literal(1), screens: z.array(z.unknown()) }),
+  rev: z.number(), builtinCatalogHash: z.string(), componentManifestHash: z.string(),
+  components: z.array(z.looseObject({ id: z.string(), version: z.number() })),
+  assets: z.array(assetPublicSchema.omit({ width: true, height: true })),
+  designSystemMetaVersion: z.number().nullable(),
+});
+
+export const getPrototypeDraftContract = registerContract({
+  method: "GET", path: "/api/prototypes/{id}/draft",
+  summary: "Read the head revision document with catalog hashes, component pins and asset pins.",
+  responseSchema: prototypeRevisionCoreSchema,
+  errors: [errorCatalog.notFound],
+});
+
+export const listPrototypeRevisionsContract = registerContract({
+  method: "GET", path: "/api/prototypes/{id}/revisions",
+  summary: "List revisions (newest first) with cursor pagination.",
+  query: z.object({ limit: z.string().optional(), before: z.string().optional() }),
+  responseSchema: z.array(z.looseObject({ rev: z.number(), message: z.string().nullable(), createdAt: isoDate })),
+  errors: [errorCatalog.invalidRequest, errorCatalog.notFound],
+});
+
+export const getPrototypeRevisionContract = registerContract({
+  method: "GET", path: "/api/prototypes/{id}/revisions/{rev}",
+  summary: "Read a specific immutable revision.",
+  responseSchema: prototypeRevisionCoreSchema.extend({ message: z.string().nullable(), createdAt: isoDate }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.notFound],
+});
+
+export const restorePrototypeContract = registerContract({
+  method: "POST", path: "/api/prototypes/{id}/restore",
+  summary: "Restore an older revision as a new head revision (copies component/asset pins).",
+  requestSchema: z.object({ rev: positiveInt, ...casBody }),
+  responseSchema: z.looseObject({ rev: z.number() }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.validationFailed],
+});
+
+export const publishPrototypeContract = registerContract({
+  method: "POST", path: "/api/prototypes/{id}/publish",
+  summary: "Publish the head revision as the next immutable version; returns canonical screen URLs.",
+  status: 201,
+  requestSchema: z.object(casBody),
+  responseSchema: z.looseObject({ version: z.number(), rev: z.number(), screens: z.array(screenUrlSchema) }),
+  errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, errorCatalog.validationFailed],
+});
+
+export const listPrototypeVersionsContract = registerContract({
+  method: "GET", path: "/api/prototypes/{id}/versions",
+  summary: "List published versions.",
+  responseSchema: z.array(z.looseObject({ version: z.number(), rev: z.number(), publishedAt: isoDate })),
+  errors: [errorCatalog.notFound],
+});
+
+export const getPrototypeVersionContract = registerContract({
+  method: "GET", path: "/api/prototypes/{id}/versions/{version}",
+  summary: "Read a published version (immutable cache headers).",
+  responseSchema: prototypeRevisionCoreSchema.extend({ version: z.number(), publishedAt: isoDate }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.notFound],
+});
+
+// --- Components CRUD / publish / versions / bundle ---
+
+const componentListItemSchema = z.looseObject({
+  id: z.string(), name: z.string(), designSystem: z.string(), headRev: z.number(),
+  latestVersion: z.number().nullable(), updatedAt: isoDate,
+});
+
+export const listComponentsContract = registerContract({
+  method: "GET", path: "/api/components",
+  summary: "List custom components with head revision and latest active version.",
+  responseSchema: z.array(componentListItemSchema),
+  errors: [errorCatalog.methodNotAllowed],
+});
+
+export const createComponentContract = registerContract({
+  method: "POST", path: "/api/components",
+  summary: "Create a custom component from TSX source (syntax-checked and definition-extracted).",
+  status: 201,
+  requestSchema: z.object({ id: slugString, name: z.string().regex(/^[A-Z][A-Za-z0-9]*$/), source: z.string(), designSystem: slugString.optional(), message: z.string().optional() }),
+  responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1) }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.payloadTooLarge, errorCatalog.validationFailed],
+});
+
+export const getComponentContract = registerContract({
+  method: "GET", path: "/api/components/{id}",
+  summary: "Component lifecycle meta: head revision, versions, validated revision, renderable.",
+  responseSchema: z.looseObject({
+    id: z.string(), name: z.string(), designSystem: z.string(), headRev: z.number(),
+    versions: z.array(z.unknown()), updatedAt: isoDate, draftRevision: z.number(), publishedVersion: z.number().nullable(),
+  }),
+  errors: [errorCatalog.notFound],
+});
+
+export const saveComponentContract = registerContract({
+  method: "PUT", path: "/api/components/{id}",
+  summary: "Save a new head revision of source and/or move the component between design systems (CAS on baseRev).",
+  requestSchema: z.object({ source: z.string().optional(), designSystem: slugString.optional(), ...casBody }),
+  responseSchema: z.looseObject({ rev: z.number() }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.payloadTooLarge, errorCatalog.validationFailed],
+});
+
+export const deleteComponentContract = registerContract({
+  method: "DELETE", path: "/api/components/{id}",
+  summary: "Soft-delete a component (CAS on baseRev). Responds 204 without a body.",
+  status: 204,
+  requestSchema: z.object({ baseRev: positiveInt }),
+  errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict],
+});
+
+const componentSourceSchema = z.looseObject({ rev: z.number(), source: z.string(), designSystem: z.string(), message: z.string().nullable(), createdAt: isoDate });
+
+export const getComponentSourceContract = registerContract({
+  method: "GET", path: "/api/components/{id}/source",
+  summary: "Read the head revision source.",
+  responseSchema: componentSourceSchema,
+  errors: [errorCatalog.notFound],
+});
+
+export const getComponentDraftContract = registerContract({
+  method: "GET", path: "/api/components/{id}/draft",
+  summary: "Alias of /source: read the head revision source.",
+  responseSchema: componentSourceSchema,
+  errors: [errorCatalog.notFound],
+});
+
+export const listComponentRevisionsContract = registerContract({
+  method: "GET", path: "/api/components/{id}/revisions",
+  summary: "List source revisions (newest first).",
+  responseSchema: z.array(z.looseObject({ rev: z.number(), designSystem: z.string(), message: z.string().nullable(), createdAt: isoDate })),
+  errors: [errorCatalog.notFound],
+});
+
+export const getComponentRevisionContract = registerContract({
+  method: "GET", path: "/api/components/{id}/revisions/{rev}",
+  summary: "Read a specific source revision.",
+  responseSchema: componentSourceSchema,
+  errors: [errorCatalog.invalidRequest, errorCatalog.notFound],
+});
+
+export const restoreComponentContract = registerContract({
+  method: "POST", path: "/api/components/{id}/restore",
+  summary: "Restore an older source revision as a new head revision.",
+  requestSchema: z.object({ rev: positiveInt, ...casBody }),
+  responseSchema: z.looseObject({ rev: z.number() }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict],
+});
+
+export const publishComponentContract = registerContract({
+  method: "POST", path: "/api/components/{id}/publish",
+  summary: "Publish the head revision: typecheck, compile, import-verify and activate the next version.",
+  status: 201,
+  requestSchema: z.object(casBody),
+  responseSchema: z.looseObject({ version: z.number(), hostAbiVersion: z.number(), warnings: z.array(z.string()) }),
+  errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, errorCatalog.validationFailed, { status: 422, code: "event_schema_not_serializable" }],
+});
+
+export const listComponentVersionsContract = registerContract({
+  method: "GET", path: "/api/components/{id}/versions",
+  summary: "List published versions with lifecycle status.",
+  responseSchema: z.array(z.looseObject({ version: z.number(), rev: z.number(), status: z.string(), designSystem: z.string(), publishedAt: isoDate })),
+  errors: [errorCatalog.notFound],
+});
+
+export const getComponentVersionContract = registerContract({
+  method: "GET", path: "/api/components/{id}/versions/{version}",
+  summary: "Read a published version: source, definition metadata, bundle hash, ABI, asset pins.",
+  responseSchema: z.looseObject({
+    version: z.number(), rev: z.number(), source: z.string(), designSystem: z.string(),
+    events: z.array(z.string()), slots: z.array(z.string()), description: z.string(),
+    bundleHash: z.string(), hostAbiVersion: z.number(),
+    assets: z.array(assetPublicSchema.omit({ width: true, height: true })), publishedAt: isoDate,
+  }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.notFound],
+});
+
+export const setComponentVersionStatusContract = registerContract({
+  method: "POST", path: "/api/components/{id}/versions/{version}/status",
+  summary: "Transition a published version's lifecycle status (transition matrix, CAS by statusRev).",
+  requestSchema: z.object({
+    status: z.enum(["active", "rejected", "deprecated", "superseded", "archived"]),
+    reason: z.string().optional(),
+    supersededBy: positiveInt.optional(),
+    baseStatusRev: positiveInt,
+  }),
+  responseSchema: z.looseObject({ status: z.string(), statusRev: z.number() }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.notFound, { status: 409, code: "status_conflict" }, { status: 422, code: "invalid_transition" }, errorCatalog.validationFailed],
+});
+
+export const getComponentBundleContract = registerContract({
+  method: "GET", path: "/api/components/{id}/versions/{version}/bundle.js",
+  summary: "Fetch the compiled ESM bundle of an active version (immutable cache headers).",
+  contentType: "text/javascript",
+  errors: [errorCatalog.invalidRequest, errorCatalog.notFound],
+});
+
+// --- Design systems ---
+
+const designSystemSummarySchema = z.looseObject({
+  id: z.string(), name: z.string(), description: z.string(), builtinCatalogHash: z.string(),
+  components: z.array(z.looseObject({ name: z.string(), description: z.string(), events: z.array(z.string()), slots: z.array(z.string()) })),
+  latestMetaVersion: z.number().nullable(),
+  tokens: themeTokensSchema, fonts: z.array(themeFontSchema), icons: z.array(themeIconSchema),
+});
+
+export const listDesignSystemsContract = registerContract({
+  method: "GET", path: "/api/design-systems",
+  summary: "List registered design systems (builtin + custom) with catalogs and latest theme content.",
+  responseSchema: z.object({ designSystems: z.array(designSystemSummarySchema) }),
+  errors: [errorCatalog.methodNotAllowed],
+});
+
+export const getDesignSystemContract = registerContract({
+  method: "GET", path: "/api/design-systems/{id}",
+  summary: "Read one design system summary.",
+  responseSchema: designSystemSummarySchema,
+  errors: [errorCatalog.notFound],
+});
+
+export const createDesignSystemContract = registerContract({
+  method: "POST", path: "/api/design-systems",
+  summary: "Register a custom design system.",
+  status: 201,
+  requestSchema: z.strictObject({ id: slugString, name: z.string(), description: z.string() }),
+  responseSchema: designSystemSummarySchema,
+  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed],
+});
+
+// --- Catalog manifest / shims / health ---
+
+export const catalogManifestContract = registerContract({
+  method: "GET", path: "/api/catalog/manifest",
+  summary: "Manifest of the latest active custom-component versions across design systems.",
+  responseSchema: z.object({ components: z.array(z.looseObject({ id: z.string(), name: z.string(), designSystem: z.string(), version: z.number(), bundleUrl: z.string(), bundleHash: z.string(), hostAbiVersion: z.number() })) }),
+  errors: [errorCatalog.methodNotAllowed],
+});
+
+export const getShimContract = registerContract({
+  method: "GET", path: "/api/shims/{abi}/{file}",
+  summary: "Host-provided ESM shims for published bundles (abi v1: react/zod/…; v2 additionally easy-ui/runtime).",
+  contentType: "text/javascript",
+  errors: [{ status: 404, code: "not_found" }, errorCatalog.methodNotAllowed],
+});
+
+export const healthContract = registerContract({
+  method: "GET", path: "/api/health",
+  summary: "Liveness/readiness: 200 ready, 503 while starting. Exempt from BasicAuth.",
+  responseSchema: z.object({ status: z.enum(["ready", "starting"]) }),
+  errors: [errorCatalog.methodNotAllowed],
+});
+
+// --- Discovery (T9: served by server/routes/meta.ts) ---
+
+export const openapiContract = registerContract({
+  method: "GET", path: "/api/openapi.json",
+  summary: "OpenAPI 3.1 document generated from this contract registry (committed as server/openapi.json).",
+  validated: true,
+  responseSchema: z.looseObject({ openapi: z.string(), info: z.looseObject({ title: z.string(), version: z.string() }), paths: z.record(z.string(), z.unknown()) }),
+  errors: [errorCatalog.methodNotAllowed],
+});
+
+export const prototypeDocumentSchemaContract = registerContract({
+  method: "GET", path: "/api/schemas/prototype-document.json",
+  summary: "JSON Schema of the prototype document format, with directive annotations ($state/$bindState/$template/$cond/$asset and event param sources).",
+  validated: true,
+  responseSchema: z.looseObject({ $schema: z.string(), type: z.literal("object"), properties: z.record(z.string(), z.unknown()) }),
+  errors: [errorCatalog.methodNotAllowed],
+});
+
+export const componentDefinitionSchemaContract = registerContract({
+  method: "GET", path: "/api/schemas/component-definition.json",
+  summary: "JSON Schema of the exported custom-component `definition` contract.",
+  validated: true,
+  responseSchema: z.looseObject({ $schema: z.string(), type: z.literal("object"), properties: z.record(z.string(), z.unknown()) }),
+  errors: [errorCatalog.methodNotAllowed],
+});
+
+export const capabilitiesResponseSchema = z.object({
+  apiVersion: z.literal(1),
+  documentVersion: z.literal(1),
+  actions: z.array(z.string()),
+  directives: z.array(z.string()),
+  paramSources: z.array(z.string()),
+  conditions: z.array(z.string()),
+  limits: z.object({
+    elements: z.number(), depth: z.number(), bodyMiB: z.number(), sourceKiB: z.number(),
+    assetMiB: z.number(), repeatBudget: z.number(), repeatPerScreen: z.number(), screenshotQueue: z.number(),
+  }),
+  designSystems: z.array(z.string()),
+  features: z.object({
+    renderStatus: z.boolean(), screenshots: z.boolean(), visualRegression: z.boolean(), assets: z.boolean(),
+    typedEvents: z.boolean(), repeat: z.boolean(), namedSlots: z.boolean(), themeVersions: z.boolean(),
+  }),
+});
+
+export const capabilitiesContract = registerContract({
+  method: "GET", path: "/api/capabilities",
+  summary: "Machine-readable feature discovery: actions, directives, param sources, conditions, limits, design systems.",
+  validated: true,
+  responseSchema: capabilitiesResponseSchema,
+  errors: [errorCatalog.methodNotAllowed],
 });

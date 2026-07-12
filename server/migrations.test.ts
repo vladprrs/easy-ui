@@ -2,11 +2,14 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { migrate } from "./migrations";
 
-test("migrations are idempotent and install the complete v7 schema",()=>{
+test("migrations are idempotent and install the complete v8 schema",()=>{
   const db=new Database(":memory:"); migrate(db); migrate(db);
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(7);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
   const names=(db.query("SELECT name FROM sqlite_master WHERE type='table'").all() as {name:string}[]).map(x=>x.name);
   expect(names).toEqual(expect.arrayContaining(["prototypes","prototype_revisions","prototype_revision_components","prototype_publishes","components","component_revisions","component_publishes","seed_log","design_systems","validation_records","assets","prototype_revision_assets","component_publish_assets","visual_references","visual_runs","design_system_versions"]));
+  // v8 widened the component_publishes lifecycle columns.
+  const cols=(db.query("PRAGMA table_info(component_publishes)").all() as {name:string}[]).map(c=>c.name);
+  expect(cols).toEqual(expect.arrayContaining(["status","status_reason","superseded_by","status_rev"]));
   db.close();
 });
 
@@ -28,7 +31,7 @@ test("upgrades a populated v2 database and backfills revision design systems",()
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(7);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
   expect(db.query("SELECT design_system FROM component_revisions WHERE component_id='custom'").get()).toEqual({design_system:"wireframe"});
   expect(db.query("SELECT COUNT(*) count FROM design_systems").get()).toEqual({count:3});
   expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='validation_records'").get()).toEqual({name:"validation_records"});
@@ -47,7 +50,7 @@ test("adds validation_records to a populated v3 database without touching existi
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(7);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
   expect(db.query("SELECT COUNT(*) count FROM validation_records").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM prototypes").get()).toEqual({count:1});
   expect(db.query("SELECT COUNT(*) count FROM components").get()).toEqual({count:1});
@@ -67,7 +70,7 @@ test("adds the v5 asset registry to a populated v4 database without touching exi
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(7);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
   expect(db.query("SELECT COUNT(*) count FROM assets").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM prototypes").get()).toEqual({count:1});
   expect(db.query("SELECT COUNT(*) count FROM validation_records").get()).toEqual({count:1});
@@ -86,7 +89,7 @@ test("adds the v6 visual regression tables to a populated v5 database with FK RE
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(7);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
   expect(db.query("SELECT COUNT(*) count FROM visual_references").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM assets").get()).toEqual({count:1});
   // FK RESTRICT: an asset used as a reference baseline cannot be deleted.
@@ -109,7 +112,7 @@ test("adds the v7 design-system theme versions to a populated v6 database with F
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(7);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
   expect(db.query("SELECT COUNT(*) count FROM design_system_versions").get()).toEqual({count:0});
   expect((db.query("PRAGMA table_info(prototype_revisions)").all() as {name:string}[]).map(c=>c.name)).toContain("design_system_meta_version");
   // Existing rows survive and the new pin column defaults to NULL.
@@ -119,6 +122,75 @@ test("adds the v7 design-system theme versions to a populated v6 database with F
   db.run("INSERT INTO design_system_versions (system_id,version,tokens_json,fonts_json,icons_json,created_at) VALUES ('cust',1,'{}','[]','[]','now')");
   db.run("DELETE FROM design_systems WHERE id='cust'");
   expect(db.query("SELECT COUNT(*) count FROM design_system_versions").get()).toEqual({count:0});
+  db.close();
+});
+
+// Rebuild component_publishes back to its pre-status (v1/v5-era) shape so we can populate a
+// database that predates the v8 lifecycle columns, then let migrate() run the strict rebuild.
+function revertComponentPublishesToPreStatus(db:Database):void {
+  db.run("DROP TABLE prototype_revision_components");
+  db.run("DROP TABLE component_publish_assets");
+  db.run("DROP TABLE component_publishes");
+  db.run(`CREATE TABLE component_publishes (
+    component_id TEXT NOT NULL REFERENCES components(id), version INTEGER NOT NULL,
+    rev INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'staging'
+      CHECK(status IN ('staging','active','failed')),
+    compiled_js TEXT NOT NULL, definition_meta TEXT NOT NULL,
+    source_hash TEXT NOT NULL, bundle_hash TEXT NOT NULL, host_abi_version INTEGER NOT NULL,
+    message TEXT, published_at TEXT NOT NULL,
+    PRIMARY KEY (component_id, version), UNIQUE (component_id, rev),
+    FOREIGN KEY (component_id, rev) REFERENCES component_revisions(component_id, rev))`);
+  db.run(`CREATE TABLE prototype_revision_components (
+    prototype_id TEXT NOT NULL, rev INTEGER NOT NULL, component_id TEXT NOT NULL,
+    component_version INTEGER NOT NULL, PRIMARY KEY (prototype_id, rev, component_id),
+    FOREIGN KEY (prototype_id, rev) REFERENCES prototype_revisions(prototype_id, rev) ON DELETE CASCADE,
+    FOREIGN KEY (component_id, component_version) REFERENCES component_publishes(component_id, version) ON DELETE RESTRICT)`);
+  db.run(`CREATE TABLE component_publish_assets (
+    component_id TEXT NOT NULL, version INTEGER NOT NULL, asset_id TEXT NOT NULL,
+    PRIMARY KEY (component_id, version, asset_id),
+    FOREIGN KEY (component_id, version) REFERENCES component_publishes(component_id, version) ON DELETE CASCADE,
+    FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE RESTRICT)`);
+}
+
+test("v8 strictly rebuilds component_publishes on a populated pre-status database preserving children and FKs",()=>{
+  const db=new Database(":memory:"); migrate(db);
+  // Drop to the pre-v8 (pre-status) component_publishes shape, then set the DB back to v7.
+  revertComponentPublishesToPreStatus(db); db.run("PRAGMA user_version = 7");
+  const insert=()=>{
+    // A live component with active/failed/staging versions, a soft-deleted component still pinned,
+    // pins across several prototype revisions and a component_publish_asset row (v5 FK-child).
+    db.run("INSERT INTO components (id,name,head_rev,design_system,deleted_at,created_at,updated_at) VALUES ('c1','C1',3,'shadcn',NULL,'now','now')");
+    db.run("INSERT INTO components (id,name,head_rev,design_system,deleted_at,created_at,updated_at) VALUES ('c2','C2',1,'shadcn','now','now','now')");
+    for(const [id,rev] of [["c1",1],["c1",2],["c1",3],["c2",1]] as const) db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES (?,?,?,'shadcn','now')",[id,rev,`src-${id}-${rev}`]);
+    for(const [id,ver,rev,status] of [["c1",1,1,"active"],["c1",2,2,"failed"],["c1",3,3,"staging"],["c2",1,1,"active"]] as const)
+      db.run("INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,message,published_at) VALUES (?,?,?,?,'js','{}','sh','bh',1,NULL,'now')",[id,ver,rev,status]);
+    db.run("INSERT INTO prototypes (id,name,device,screen_count,head_rev,design_system,created_at,updated_at) VALUES ('p1','P1','desktop',1,2,'shadcn','now','now')");
+    db.run(`INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,created_at) VALUES ('p1',1,'{"version":1,"id":"p1","designSystem":"shadcn"}','h','now')`);
+    db.run(`INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,created_at) VALUES ('p1',2,'{"version":1,"id":"p1","designSystem":"shadcn"}','h','now')`);
+    db.run("INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version) VALUES ('p1',1,'c1',1)");
+    db.run("INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version) VALUES ('p1',1,'c2',1)");
+    db.run("INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version) VALUES ('p1',2,'c1',1)");
+    db.run("INSERT INTO assets (id,sha256,mime,size,created_at) VALUES ('asset_z','z','image/png',10,'now')");
+    db.run("INSERT INTO component_publish_assets (component_id,version,asset_id) VALUES ('c1',1,'asset_z')");
+  };
+  insert();
+
+  migrate(db);
+
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
+  // No FK violations after the rebuild.
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  // Parent rows and their statuses survive; new columns default.
+  expect(db.query("SELECT status,status_reason,superseded_by,status_rev FROM component_publishes WHERE component_id='c1' AND version=2").get()).toEqual({status:"failed",status_reason:null,superseded_by:null,status_rev:1});
+  expect(db.query("SELECT COUNT(*) count FROM component_publishes").get()).toEqual({count:4});
+  // FK-children survive with all their rows.
+  expect(db.query("SELECT COUNT(*) count FROM prototype_revision_components").get()).toEqual({count:3});
+  expect(db.query("SELECT version v FROM component_publish_assets WHERE asset_id='asset_z'").get()).toEqual({v:1});
+  // RESTRICT is still enforced: a pinned publish cannot be deleted.
+  expect(()=>db.run("DELETE FROM component_publishes WHERE component_id='c1' AND version=1")).toThrow();
+  // The widened CHECK now accepts a lifecycle status; the old one would have rejected it.
+  db.run("UPDATE component_publishes SET status='deprecated',status_rev=2 WHERE component_id='c1' AND version=1");
+  expect(db.query("SELECT status FROM component_publishes WHERE component_id='c1' AND version=1").get()).toEqual({status:"deprecated"});
   db.close();
 });
 

@@ -136,6 +136,52 @@ const migrations = [
       PRIMARY KEY (system_id, version))`);
     db.run("ALTER TABLE prototype_revisions ADD COLUMN design_system_meta_version INTEGER");
   },
+  (db: Database) => {
+    // v8: component publish lifecycle statuses. Widen the CHECK to
+    // staging|active|failed|rejected|deprecated|superseded|archived and add status_reason,
+    // superseded_by, status_rev (CAS token). `component_publishes` has FK-children with RESTRICT
+    // (prototype_revision_components) and CASCADE (component_publish_assets from v5); PRAGMA
+    // foreign_keys is a no-op inside this transaction, so we rebuild with a strict order: snapshot
+    // every FK-child into a temp table, drop the children, rebuild the parent, recreate the children
+    // (with their FKs + PKs), restore the child rows, then PRAGMA foreign_key_check before bumping
+    // user_version. Any new FK-child of component_publishes must be added to this list.
+    db.run("CREATE TABLE _prc_backup AS SELECT * FROM prototype_revision_components");
+    db.run("CREATE TABLE _cpa_backup AS SELECT * FROM component_publish_assets");
+    db.run("DROP TABLE prototype_revision_components");
+    db.run("DROP TABLE component_publish_assets");
+    db.run("ALTER TABLE component_publishes RENAME TO _cp_old");
+    db.run(`CREATE TABLE component_publishes (
+      component_id TEXT NOT NULL REFERENCES components(id), version INTEGER NOT NULL,
+      rev INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'staging'
+        CHECK(status IN ('staging','active','failed','rejected','deprecated','superseded','archived')),
+      status_reason TEXT, superseded_by INTEGER, status_rev INTEGER NOT NULL DEFAULT 1,
+      compiled_js TEXT NOT NULL, definition_meta TEXT NOT NULL,
+      source_hash TEXT NOT NULL, bundle_hash TEXT NOT NULL, host_abi_version INTEGER NOT NULL,
+      message TEXT, published_at TEXT NOT NULL,
+      PRIMARY KEY (component_id, version), UNIQUE (component_id, rev),
+      FOREIGN KEY (component_id, rev) REFERENCES component_revisions(component_id, rev))`);
+    db.run(`INSERT INTO component_publishes
+      (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,message,published_at)
+      SELECT component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,message,published_at FROM _cp_old`);
+    db.run("DROP TABLE _cp_old");
+    db.run(`CREATE TABLE prototype_revision_components (
+      prototype_id TEXT NOT NULL, rev INTEGER NOT NULL, component_id TEXT NOT NULL,
+      component_version INTEGER NOT NULL, PRIMARY KEY (prototype_id, rev, component_id),
+      FOREIGN KEY (prototype_id, rev) REFERENCES prototype_revisions(prototype_id, rev) ON DELETE CASCADE,
+      FOREIGN KEY (component_id, component_version)
+        REFERENCES component_publishes(component_id, version) ON DELETE RESTRICT)`);
+    db.run(`CREATE TABLE component_publish_assets (
+      component_id TEXT NOT NULL, version INTEGER NOT NULL, asset_id TEXT NOT NULL,
+      PRIMARY KEY (component_id, version, asset_id),
+      FOREIGN KEY (component_id, version) REFERENCES component_publishes(component_id, version) ON DELETE CASCADE,
+      FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE RESTRICT)`);
+    db.run("INSERT INTO prototype_revision_components SELECT * FROM _prc_backup");
+    db.run("INSERT INTO component_publish_assets SELECT * FROM _cpa_backup");
+    db.run("DROP TABLE _prc_backup");
+    db.run("DROP TABLE _cpa_backup");
+    const violations = db.query("PRAGMA foreign_key_check").all();
+    if (violations.length) throw new Error(`v8 rebuild left foreign-key violations: ${JSON.stringify(violations)}`);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {
