@@ -344,3 +344,63 @@ describe("repository prototypes", () => {
   const files = import.meta.glob("../../../prototypes/*.json", { eager: true, import: "default" });
   for (const [filename, document] of Object.entries(files)) it(`${filename} is valid`, () => expect(messages(document)).toEqual([]));
 });
+
+describe("typed events, param sources and $if validation", () => {
+  const widget = {
+    description: "Custom widget",
+    props: z.strictObject({}),
+    events: ["rate", "plain"],
+    eventPayloadSchemas: { rate: z.strictObject({ value: z.number() }) },
+  };
+  const doc = (on: Record<string, unknown>, opts: { type?: string; repeat?: unknown; extra?: Record<string, unknown> } = {}) => prototypeDocSchema.parse({
+    version: 1, id: "t", name: "T", designSystem: "shadcn", startScreen: "s", state: {},
+    screens: [{ id: "s", name: "S", spec: { root: "w", elements: {
+      w: opts.repeat
+        ? { type: opts.type ?? "MyWidget", props: {}, repeat: opts.repeat, children: ["c"] }
+        : { type: opts.type ?? "MyWidget", props: {}, on },
+      ...(opts.repeat ? { c: { type: "MyWidget", props: {}, on } } : {}),
+      ...(opts.extra ?? {}),
+    } } }],
+  });
+  const errs = (on: Record<string, unknown>, opts?: Parameters<typeof doc>[1]) =>
+    validatePrototype(doc(on, opts), { definitions: { MyWidget: widget } }).errors.map((e) => e.message);
+
+  it("allows $event only on a custom event with a declared payload schema", () => {
+    expect(errs({ rate: { action: "setState", params: { statePath: "/x", value: { $event: "/value" } } } })).toEqual([]);
+  });
+
+  it("rejects $event on a payloadless custom event", () => {
+    expect(errs({ plain: { action: "setState", params: { statePath: "/x", value: { $event: "" } } } }))
+      .toContain("$event is only allowed on an event with a declared payload schema");
+  });
+
+  it("rejects param sources and $if on a builtin element (fail closed)", () => {
+    // No definitions option → builtin shadcn Button is resolved and recognized as builtin.
+    const builtin = validatePrototype(doc({ press: { action: "setState", params: { statePath: "/x", value: { $event: "/value" } } } }, { type: "Button" })).errors.map((e) => e.message);
+    expect(builtin).toContain("param sources are only allowed on custom component events");
+    const cond = validatePrototype(doc({ press: { action: "setState", $if: { $event: "/ok" }, params: { statePath: "/x", value: 1 } } }, { type: "Button" })).errors.map((e) => e.message);
+    expect(cond).toContain("conditional actions ($if) are only allowed on custom component events");
+  });
+
+  it("rejects a param source in a disallowed location (statePath is not a value/index/screenId)", () => {
+    expect(errs({ rate: { action: "setState", params: { statePath: { $event: "/value" }, value: 1 } } }).some((m) => m.includes("is not allowed here"))).toBe(true);
+  });
+
+  it("requires repeat.key for $itemKey and forbids item sources outside a repeat scope", () => {
+    expect(errs({ rate: { action: "setState", params: { statePath: "/x", value: { $itemKey: true } } } }))
+      .toContain("$itemKey is only allowed inside a repeat subtree");
+    expect(errs({ rate: { action: "setState", params: { statePath: "/x", value: { $itemKey: true } } } }, { repeat: { statePath: "/items" } }))
+      .toContain("$itemKey requires the repeat element to declare a key");
+    expect(errs({ rate: { action: "setState", params: { statePath: "/x", value: { $itemKey: true } } } }, { repeat: { statePath: "/items", key: "id" } }))
+      .toEqual([]);
+  });
+
+  it("rejects the reserved __eui* namespace in document props", () => {
+    const withEui = prototypeDocSchema.parse({
+      version: 1, id: "t", name: "T", designSystem: "shadcn", startScreen: "s", state: {},
+      screens: [{ id: "s", name: "S", spec: { root: "w", elements: { w: { type: "Text", props: { __euiKey: "hax", text: "x" } } } } }],
+    });
+    expect(validatePrototype(withEui).errors.map((e) => e.message))
+      .toContain("the __eui* namespace is reserved and cannot appear in props");
+  });
+});

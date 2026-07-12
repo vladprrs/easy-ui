@@ -45,7 +45,7 @@ export class TileErrorBoundary extends Component<{ prototypeId: string; screenId
 
 export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, routeBase }: { doc: PrototypeDoc; screen: PrototypeDoc["screens"][number]; registry: ComponentRegistry; handlers: NonNullable<JSONUIProviderProps["handlers"]>; runtimeKey: string; routeBase: string }) {
   const spec = useMemo(() => {
-    const runtimeSpec = toRuntimeSpec(screen.spec);
+    const runtimeSpec = toRuntimeSpec(screen.spec).spec;
     return screen.canvas ? splitCanvasSpec(runtimeSpec).content : runtimeSpec;
   }, [screen.canvas, screen.spec]);
   const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);

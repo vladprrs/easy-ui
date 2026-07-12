@@ -106,7 +106,7 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
 
   useEffect(() => markDevtoolsActive(), []);
 
-  const spec = useMemo(() => stripSpecEvents(toRuntimeSpec(screen.spec)), [screen.spec]);
+  const spec = useMemo(() => stripSpecEvents(toRuntimeSpec(screen.spec).spec), [screen.spec]);
   const hasRoot = Boolean(spec.root && spec.elements[spec.root]);
   const specs = useMemo(() => screen.canvas && hasRoot ? splitCanvasSpec(spec) : null, [hasRoot, screen.canvas, spec]);
   const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);

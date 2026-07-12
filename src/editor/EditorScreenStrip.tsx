@@ -17,7 +17,7 @@ function ScreenTile({ doc, screen, registry, handlers, runtimeKey, stateEpoch, s
   runtimeKey: string; stateEpoch: number; selected: boolean; onSelect: () => void;
 }) {
   const spec = useMemo(() => {
-    const stripped = stripSpecEvents(toRuntimeSpec(screen.spec));
+    const stripped = stripSpecEvents(toRuntimeSpec(screen.spec).spec);
     if (!stripped.root || !stripped.elements[stripped.root]) return null;
     return screen.canvas ? splitCanvasSpec(stripped).content : stripped;
   }, [screen.canvas, screen.spec]);

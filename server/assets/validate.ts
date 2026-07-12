@@ -63,7 +63,7 @@ function looksLikeSvg(bytes: Uint8Array): boolean {
   // Skip a UTF-8/UTF-16 BOM, then scan a bounded prefix for an <svg or <?xml/<!-- opener.
   let text: string;
   try { text = new TextDecoder("utf-8", { fatal: false }).decode(bytes.subarray(0, 2048)); } catch { return false; }
-  const trimmed = text.replace(/^﻿/, "").trimStart();
+  const trimmed = text.replace(/^\uFEFF/, "").trimStart();
   if (trimmed.startsWith("<svg")) return true;
   if (trimmed.startsWith("<?xml") || trimmed.startsWith("<!--") || trimmed.startsWith("<!DOCTYPE")) return /<svg[\s>]/i.test(text);
   return false;

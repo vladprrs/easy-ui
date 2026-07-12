@@ -3,6 +3,7 @@ import type { ComponentType } from "react";
 import { createCatalog } from "./catalog";
 import type { ComponentDefinition } from "./definitions";
 import { resolveBuiltinSystem } from "../designSystems";
+import { wrapCustomComponent, type EasyUIComponentProps } from "../player/easyUiRuntime";
 
 const builtinCatalogs = new Map<string, ReturnType<typeof createCatalog>>();
 
@@ -44,7 +45,11 @@ export function createPlayerRuntime(deps: PlayerRuntimeDeps, custom?: CustomPlay
       throw new Error("Custom definition and component keys must match");
     }
     const runtimeCatalog = createCatalog({ ...system.definitions, ...custom.definitions });
-    const runtimeComponents = { ...builtinComponents, ...custom.components } as Components<typeof runtimeCatalog>;
+    // Custom components are wrapped with the event adapter so they receive
+    // emit(name, payload?)/on()/slots and route dispatch through the runtime.
+    const wrappedCustom = Object.fromEntries(Object.entries(custom.components).map(([name, component]) =>
+      [name, wrapCustomComponent(name, component as ComponentType<EasyUIComponentProps>)]));
+    const runtimeComponents = { ...builtinComponents, ...wrappedCustom } as Components<typeof runtimeCatalog>;
     result = defineRegistry(runtimeCatalog, { components: runtimeComponents, actions });
   } else {
     const runtimeCatalog = getBuiltinCatalog(system.id, system.definitions);

@@ -88,6 +88,41 @@ function checkDynamic(value: unknown, path: (string | number)[], errors: Validat
   return true;
 }
 
+const PARAM_SOURCE_KEYS = new Set(["$event", "$elementId", "$itemIndex", "$itemKey"]);
+const isParamSource = (value: unknown): value is Obj => object(value) && Object.keys(value).length === 1 && PARAM_SOURCE_KEYS.has(Object.keys(value)[0]!);
+
+// Replaces every param-source directive with `undefined` so the remaining literal
+// structure can be static-checked and validated against the action's Zod schema.
+function stripSources(value: unknown): unknown {
+  if (isParamSource(value)) return undefined;
+  if (Array.isArray(value)) return value.map(stripSources);
+  if (object(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, stripSources(item)]));
+  return value;
+}
+
+// Validates an action-level `$if` condition (custom events only): boolean, $and/$or,
+// or a `{$event}`-operand truthiness/eq/neq check. `hasPayload` gates `$event`.
+function checkActionCondition(value: unknown, path: (string | number)[], errors: ValidationIssue[], hasPayload: boolean): void {
+  if (typeof value === "boolean") return;
+  if (!object(value)) return issue(errors, path, "$if condition must use the closed v1 condition grammar");
+  if ("$and" in value || "$or" in value) {
+    const key = "$and" in value ? "$and" : "$or";
+    if (Object.keys(value).length !== 1 || !Array.isArray(value[key]) || value[key].length === 0) return issue(errors, path, `${key} must be the only key and contain conditions`);
+    value[key].forEach((item, index) => checkActionCondition(item, [...path, key, index], errors, hasPayload));
+    return;
+  }
+  const allowed = new Set(["$event", "eq", "neq", "not"]);
+  const unknown = Object.keys(value).filter((key) => !allowed.has(key));
+  if (unknown.length) return issue(errors, path, `unknown $if operator: ${unknown.join(", ")}`);
+  if (!("$event" in value)) return issue(errors, path, "$if condition requires a $event operand");
+  if (!hasPayload) issue(errors, [...path, "$event"], "$event is only allowed on an event with a declared payload schema");
+  if (typeof value.$event !== "string") issue(errors, [...path, "$event"], "$event must be a JSON Pointer string");
+  const comparisons = ["eq", "neq"].filter((key) => key in value);
+  if (comparisons.length > 1) issue(errors, path, "$if may contain at most one comparison operator");
+  comparisons.forEach((key) => { if (!isStatic(value[key])) issue(errors, [...path, key], "$if operand must be a static literal"); });
+  if ("not" in value && value.not !== true) issue(errors, [...path, "not"], "not must be true");
+}
+
 export function validateElementProps({
   definition,
   props,
@@ -106,6 +141,15 @@ export function validateElementProps({
     issue(errors, path, "a directive cannot be the entire props object");
     return { errors, warnings };
   }
+  const scanEui = (value: unknown, at: (string | number)[]): void => {
+    if (Array.isArray(value)) { value.forEach((item, index) => scanEui(item, [...at, index])); return; }
+    if (!object(value)) return;
+    for (const key of Object.keys(value)) {
+      if (key.startsWith("__eui")) issue(errors, [...at, key], "the __eui* namespace is reserved and cannot appear in props");
+      scanEui(value[key], [...at, key]);
+    }
+  };
+  scanEui(props, path);
   const dynamicPaths = new Set<string>();
   const visit = (value: unknown, relative: (string | number)[]): unknown => {
     if (checkDynamic(value, [...path, ...relative], errors, warnings, state, insideRepeat)) {
@@ -133,6 +177,12 @@ export function validatePrototype(
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
   let definitions = options?.definitions;
   if (!definitions) definitions = resolveBuiltinSystem(doc.designSystem).definitions;
+  // A type is "custom" when it is not part of the design system's builtin allowlist:
+  // its events are dispatched by our adapter (which understands param sources/$if),
+  // whereas builtin events are dispatched by the library and must stay payloadless.
+  let builtinNames: Set<string>;
+  try { builtinNames = new Set(Object.keys(resolveBuiltinSystem(doc.designSystem).definitions)); }
+  catch { builtinNames = new Set(); }
   const screenIds = new Set(doc.screens.map((screen) => screen.id));
   const navigation = new Map<string, Set<string>>();
   for (const [screenIndex, screen] of doc.screens.entries()) {
@@ -162,10 +212,11 @@ export function validatePrototype(
     if (Object.keys(elements).length > 500) issue(errors, [...base, "elements"], "screen exceeds 500 elements");
 
     const insideRepeat = new Set<string>();
+    const nearestRepeatHasKey = new Map<string, boolean>();
     const repeatKeys: string[] = [];
     {
       const seen = new Set<string>();
-      const walkRepeat = (key: string, ancestorRepeat: boolean, depth: number) => {
+      const walkRepeat = (key: string, ancestorRepeat: boolean, ancestorHasKey: boolean, depth: number) => {
         if (seen.has(key) || depth > 60) return;
         seen.add(key);
         const element = elements[key];
@@ -176,12 +227,13 @@ export function validatePrototype(
           if (ancestorRepeat) issue(errors, [...base, "elements", key, "repeat"], "nested repeat is not allowed");
         }
         const childAncestorRepeat = ancestorRepeat || hasRepeat;
+        const childAncestorHasKey = hasRepeat ? Boolean(element.repeat!.key) : ancestorHasKey;
         for (const child of element.children ?? []) {
-          if (childAncestorRepeat) insideRepeat.add(child);
-          walkRepeat(child, childAncestorRepeat, depth + 1);
+          if (childAncestorRepeat) { insideRepeat.add(child); nearestRepeatHasKey.set(child, childAncestorHasKey); }
+          walkRepeat(child, childAncestorRepeat, childAncestorHasKey, depth + 1);
         }
       };
-      walkRepeat(screen.spec.root, false, 0);
+      walkRepeat(screen.spec.root, false, false, 0);
     }
     if (repeatKeys.length > REPEAT_ELEMENT_LIMIT) issue(errors, [...base, "elements"], `screen exceeds ${REPEAT_ELEMENT_LIMIT} repeat elements (found ${repeatKeys.length})`);
     for (const key of repeatKeys) {
@@ -236,9 +288,15 @@ export function validatePrototype(
       }
       if (element.type === "Image") checkUrl(element.props.src, [...ep,"props","src"], true, errors);
       if (element.type === "Link") checkUrl(element.props.href, [...ep,"props","href"], false, errors);
+      const isCustomType = !builtinNames.has(element.type) && Boolean(definitions[element.type]);
+      const eventPayloadNames = new Set<string>([
+        ...Object.keys(definition.eventPayloadSchemas ?? {}),
+        ...Object.keys((definition as { eventPayloads?: Record<string, unknown> }).eventPayloads ?? {}),
+      ]);
       for (const [event, bindings] of Object.entries(element.on ?? {})) {
         const events = "events" in definition ? definition.events : [];
         if (!(events ?? []).includes(event)) issue(errors, [...ep,"on",event], `unknown event for ${element.type}: ${event}`);
+        const hasPayload = eventPayloadNames.has(event);
         const actions = Array.isArray(bindings) ? bindings : [bindings];
         const terminalIndexes = actions.map((a,i) => terminals.has(a.action) ? i : -1).filter((i) => i >= 0);
         if (terminalIndexes.length > 1) issue(errors, [...ep,"on",event], "event may contain at most one terminal action");
@@ -247,9 +305,54 @@ export function validatePrototype(
           const ap = [...ep,"on",event,actionIndex];
           const actionDef = prototypeActionSchemas[action.action as keyof typeof prototypeActionSchemas];
           if (!actionDef) return issue(errors, [...ap,"action"], `unknown action: ${action.action}`);
-          if (!isStatic(action.params ?? {})) issue(errors, [...ap,"params"], "action params must contain only static literals");
-          const parsed = actionDef.params.safeParse(action.params ?? {});
-          if (!parsed.success) parsed.error.issues.forEach((zIssue) => issue(errors, [...ap,"params",...zIssue.path.map(String)], zIssue.message));
+          // $if is a custom-only conditional; the native Renderer cannot evaluate it.
+          if ((action as { $if?: unknown }).$if !== undefined) {
+            if (!isCustomType) issue(errors, [...ap,"$if"], "conditional actions ($if) are only allowed on custom component events");
+            else checkActionCondition((action as { $if?: unknown }).$if, [...ap,"$if"], errors, hasPayload);
+          }
+          // Collect param-source directives; they are allowed only in custom events
+          // and only under value (setState/pushState), index (removeState) or screenId (navigate).
+          const sourcePaths = new Set<string>();
+          const scanParams = (value: unknown, rel: (string | number)[]): void => {
+            if (isParamSource(value)) {
+              sourcePaths.add(rel.join("/"));
+              const srcKey = Object.keys(value)[0]!;
+              const rootAllowed = (action.action === "setState" || action.action === "pushState") ? rel[0] === "value"
+                : action.action === "removeState" ? (rel.length === 1 && rel[0] === "index")
+                : action.action === "navigate" ? (rel.length === 1 && rel[0] === "screenId") : false;
+              if (!isCustomType) issue(errors, [...ap,"params",...rel], "param sources are only allowed on custom component events");
+              else if (!rootAllowed) issue(errors, [...ap,"params",...rel], `${srcKey} is not allowed here`);
+              else {
+                if (srcKey === "$event") {
+                  if (!hasPayload) issue(errors, [...ap,"params",...rel], "$event is only allowed on an event with a declared payload schema");
+                  else if (typeof value.$event !== "string") issue(errors, [...ap,"params",...rel], "$event must be a JSON Pointer string");
+                }
+                if (srcKey === "$elementId" && value.$elementId !== true) issue(errors, [...ap,"params",...rel], "$elementId must be true");
+                if (srcKey === "$itemIndex") {
+                  if (value.$itemIndex !== true) issue(errors, [...ap,"params",...rel], "$itemIndex must be true");
+                  if (!elementInsideRepeat) issue(errors, [...ap,"params",...rel], "$itemIndex is only allowed inside a repeat subtree");
+                }
+                if (srcKey === "$itemKey") {
+                  if (value.$itemKey !== true) issue(errors, [...ap,"params",...rel], "$itemKey must be true");
+                  if (!elementInsideRepeat) issue(errors, [...ap,"params",...rel], "$itemKey is only allowed inside a repeat subtree");
+                  else if (!nearestRepeatHasKey.get(key)) issue(errors, [...ap,"params",...rel], "$itemKey requires the repeat element to declare a key");
+                }
+              }
+              return;
+            }
+            if (Array.isArray(value)) { value.forEach((item, index) => scanParams(item, [...rel, index])); return; }
+            if (object(value)) { for (const [k, v] of Object.entries(value)) scanParams(v, [...rel, k]); return; }
+          };
+          scanParams(action.params ?? {}, []);
+          // Remaining literals must be static (no non-source directives) and match the schema.
+          const staticized = stripSources(action.params ?? {});
+          if (!isStatic(staticized)) issue(errors, [...ap,"params"], "action params must contain only static literals or param sources");
+          const parsed = actionDef.params.safeParse(staticized);
+          if (!parsed.success) parsed.error.issues.forEach((zIssue) => {
+            const zPath = zIssue.path.map(String).join("/");
+            if ([...sourcePaths].some((sourcePath) => zPath === sourcePath || zPath.startsWith(sourcePath + "/"))) return;
+            issue(errors, [...ap,"params",...zIssue.path.map(String)], zIssue.message);
+          });
           const statePath = action.params?.statePath;
           if (["setState","pushState","removeState"].includes(action.action)) checkPointer(statePath, [...ap,"params","statePath"], errors, warnings, effectiveState, false);
           if (action.action === "navigate" && typeof action.params?.screenId === "string") {

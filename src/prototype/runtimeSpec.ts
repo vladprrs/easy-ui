@@ -4,6 +4,36 @@ import type { PrototypeDoc } from "./schema";
 type PrototypeSpec = PrototypeDoc["screens"][number]["spec"];
 type JsonObject = Record<string, unknown>;
 
+/** Raw action binding (or list) as authored in `element.on`, kept unresolved. */
+export type RawActionBinding = unknown;
+
+export interface ElementMetadata {
+  /** Component type of the element. */
+  type: string;
+  /** Raw (unresolved) `on` bindings for a custom element, moved out of props. */
+  on?: Record<string, RawActionBinding>;
+  /** `repeat.key` of the nearest repeat ancestor, when any (for `$itemKey`). */
+  repeatKey?: string;
+  /** Named-slot child index map (`{slot: [childIndex...]}`); populated by T5. */
+  slotIndices?: Record<string, number[]>;
+}
+
+/**
+ * A runtime tree is the atomic pairing of the library `spec` (with custom
+ * `on` bindings and `$eui*` side-channel stripped out of props except the
+ * string `__euiKey`) and a `metadata` map keyed by element key. All structural
+ * transforms operate on the whole tree so spec and metadata never drift.
+ */
+export interface RuntimeTree {
+  spec: Spec;
+  metadata: Record<string, ElementMetadata>;
+}
+
+export interface ToRuntimeSpecOptions {
+  /** Element types treated as custom components (their `on` moves to metadata). */
+  customTypes?: ReadonlySet<string>;
+}
+
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -35,12 +65,95 @@ function adaptProp(value: unknown): unknown {
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, adaptProp(item)]));
 }
 
-export function toRuntimeSpec(spec: PrototypeSpec): Spec {
-  return {
-    root: spec.root,
-    elements: Object.fromEntries(Object.entries(spec.elements).map(([key, element]) => [key, {
-      ...element,
-      props: adaptProp(element.props) as Record<string, unknown>,
-    }])) as Spec["elements"],
-  };
+/** String key injected into a custom element's props so the adapter can find its metadata. */
+export const EUI_KEY_PROP = "__euiKey";
+
+/**
+ * Builds the runtime tree from a prototype screen spec. Custom elements (types
+ * in `options.customTypes`) have their `on` bindings moved into `metadata` and
+ * receive only a string `__euiKey` in props; builtin elements keep `on` in the
+ * spec for native (payloadless) handling. Without `customTypes` no element is
+ * treated as custom (legacy behavior).
+ */
+export function toRuntimeSpec(spec: PrototypeSpec, options: ToRuntimeSpecOptions = {}): RuntimeTree {
+  const customTypes = options.customTypes ?? new Set<string>();
+  const metadata: Record<string, ElementMetadata> = {};
+
+  // Nearest repeat.key per element, resolved by a downward walk from root.
+  const repeatKeyOf = new Map<string, string | undefined>();
+  {
+    const seen = new Set<string>();
+    const walk = (key: string, inheritedKey: string | undefined) => {
+      if (seen.has(key)) return;
+      seen.add(key);
+      const element = spec.elements[key];
+      if (!element) return;
+      repeatKeyOf.set(key, inheritedKey);
+      const ownKey = element.repeat && typeof element.repeat.key === "string" ? element.repeat.key : undefined;
+      const childKey = ownKey ?? inheritedKey;
+      for (const child of element.children ?? []) walk(child, childKey);
+    };
+    walk(spec.root, undefined);
+  }
+
+  const elements = Object.fromEntries(Object.entries(spec.elements).map(([key, element]) => {
+    const isCustom = customTypes.has(element.type);
+    const props = adaptProp(element.props) as Record<string, unknown>;
+    if (!isCustom) {
+      metadata[key] = { type: element.type };
+      return [key, { ...element, props }];
+    }
+    const meta: ElementMetadata = { type: element.type };
+    if (element.on && Object.keys(element.on).length) meta.on = element.on as Record<string, RawActionBinding>;
+    const repeatKey = repeatKeyOf.get(key);
+    if (repeatKey !== undefined) meta.repeatKey = repeatKey;
+    metadata[key] = meta;
+    const runtimeElement = { ...element, props: { ...props, [EUI_KEY_PROP]: key } };
+    delete (runtimeElement as { on?: unknown }).on;
+    return [key, runtimeElement];
+  })) as Spec["elements"];
+
+  return { spec: { root: spec.root, elements }, metadata };
+}
+
+/**
+ * Removes all `on` bindings from both the spec and metadata, yielding an inert
+ * tree that cannot dispatch actions (used by the editor's non-interactive
+ * canvas). Custom `on` lives in metadata; builtin `on` lives in the spec.
+ */
+export function stripEvents(tree: RuntimeTree): RuntimeTree {
+  const elements = Object.fromEntries(Object.entries(tree.spec.elements).map(([key, element]) => {
+    if (!("on" in element)) return [key, element];
+    const withoutEvents = { ...element };
+    delete (withoutEvents as { on?: unknown }).on;
+    return [key, withoutEvents];
+  })) as Spec["elements"];
+  const metadata = Object.fromEntries(Object.entries(tree.metadata).map(([key, meta]) => {
+    if (!meta.on) return [key, meta];
+    const next = { ...meta };
+    delete next.on;
+    return [key, next];
+  }));
+  return { spec: { ...tree.spec, elements }, metadata };
+}
+
+/**
+ * Splits a canvas runtime tree into a content tree (Hotspots removed) and one
+ * single-element tree per Hotspot, rebuilding the metadata map for each so the
+ * side-channel stays consistent with the trimmed spec.
+ */
+export function splitCanvas(tree: RuntimeTree): { content: RuntimeTree | null; hotspots: RuntimeTree[] } {
+  const spec = tree.spec;
+  const hotspotIds = new Set(Object.entries(spec.elements).filter(([, element]) => element.type === "Hotspot").map(([id]) => id));
+  const contentElements = Object.fromEntries(Object.entries(spec.elements)
+    .filter(([id]) => !hotspotIds.has(id))
+    .map(([id, element]) => [id, element.children ? { ...element, children: element.children.filter((child) => !hotspotIds.has(child)) } : element]));
+  const contentSpec = contentElements[spec.root] ? { ...spec, elements: contentElements } as Spec : null;
+  const contentMetadata = Object.fromEntries(Object.entries(tree.metadata).filter(([id]) => !hotspotIds.has(id)));
+  const content = contentSpec ? { spec: contentSpec, metadata: contentMetadata } : null;
+  const hotspots = [...hotspotIds].map((id) => ({
+    spec: { root: id, elements: { [id]: spec.elements[id] } } as Spec,
+    metadata: tree.metadata[id] ? { [id]: tree.metadata[id]! } : {},
+  }));
+  return { content, hotspots };
 }

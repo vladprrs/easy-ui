@@ -5,7 +5,8 @@ import { z } from "zod";
 import { definitionMeta } from "./pipeline";
 
 const atomicLevel=z.enum(["atom","molecule","organism","template","page"]);
-const resultSchema=z.strictObject({ok:z.boolean(),meta:z.strictObject({events:z.array(z.string()),slots:z.array(z.string()),description:z.string(),example:z.record(z.string(),z.unknown()).optional(),atomicLevel:atomicLevel.optional(),propsJsonSchema:z.unknown().optional()}).optional(),warnings:z.array(z.string()).default([]),error:z.string().optional()});
+const capabilitiesSchema=z.strictObject({typedEvents:z.literal(true).optional(),namedSlots:z.literal(true).optional()});
+const resultSchema=z.strictObject({ok:z.boolean(),meta:z.strictObject({events:z.array(z.string()),eventPayloads:z.record(z.string(),z.unknown()).optional(),slots:z.array(z.string()),capabilities:capabilitiesSchema.optional(),description:z.string(),example:z.record(z.string(),z.unknown()).optional(),atomicLevel:atomicLevel.optional(),propsJsonSchema:z.unknown().optional()}).optional(),warnings:z.array(z.string()).default([]),error:z.string().optional()});
 export type ExtractResult=z.output<typeof resultSchema>;
 
 async function child(sourcePath:string,resultPath:string,smoke:boolean) {
@@ -15,7 +16,8 @@ async function child(sourcePath:string,resultPath:string,smoke:boolean) {
     if(typeof mod.default!=="function") throw new Error("default export must be a plain function component");
     const d=mod.definition;
     if(!d || typeof d!=="object" || !(d.props instanceof z.ZodType)) throw new Error("definition.props must be a ZodType");
-    const metadata=z.strictObject({events:z.array(z.string()).optional(),slots:z.array(z.string()).optional(),description:z.string().min(1),example:z.record(z.string(),z.unknown()).optional(),atomicLevel:atomicLevel.optional(),props:z.instanceof(z.ZodType)}).parse(d);
+    const eventsSchema=z.union([z.array(z.string()),z.record(z.string(),z.instanceof(z.ZodType))]);
+    const metadata=z.strictObject({events:eventsSchema.optional(),slots:z.array(z.string()).optional(),capabilities:capabilitiesSchema.optional(),description:z.string().min(1),example:z.record(z.string(),z.unknown()).optional(),atomicLevel:atomicLevel.optional(),props:z.instanceof(z.ZodType)}).parse(d);
     if(metadata.example) metadata.props.parse(metadata.example);
     const warnings:string[]=[];
     if(smoke) {

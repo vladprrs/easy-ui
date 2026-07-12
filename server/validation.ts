@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { normalizeDefinitions, type ComponentDefinition } from "../src/catalog/definitions";
+import { normalizeEvents } from "../src/catalog/normalize";
 import { isAssetId, type PrototypeDoc } from "../src/prototype/schema";
 import { importPublished } from "./components/pipeline";
 import { requireRegisteredDesignSystem } from "./designSystems";
@@ -55,7 +56,10 @@ export async function snapshotDefinitions(db:Database,doc:PrototypeDoc,dataDir:s
       WHERE c.name=? AND cr.design_system=? AND c.deleted_at IS NULL ORDER BY cp.version DESC LIMIT 1`).get(name,doc.designSystem) as {id:string;name:string;version:number;rev:number;bundleHash:string;source:string}|null;
     if(!row) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["screens"],message:`Unknown or unpublished component type in design system '${doc.designSystem}': ${name}`}]});
     const {materializeSource}=await import("./components/pipeline"); const path=await materializeSource(dataDir,row.id,row.rev,row.source);
-    const mod=await importPublished(row.id,row.rev,path); custom[name]=mod.definition as ComponentDefinition;
+    const mod=await importPublished(row.id,row.rev,path);
+    const raw=mod.definition as ComponentDefinition&{events?:unknown};
+    const {events,eventPayloadSchemas}=normalizeEvents(raw.events as Parameters<typeof normalizeEvents>[0]);
+    custom[name]={...raw,events,...(eventPayloadSchemas?{eventPayloadSchemas}:{})} as ComponentDefinition;
     pins.push({id:row.id,name:row.name,version:row.version,bundleHash:row.bundleHash,sourcePath:path});
   }
   return {definitions:{...builtin,...normalizeDefinitions(custom)},pins};

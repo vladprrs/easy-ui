@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentType } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { z } from "zod";
 import { componentDefinitions } from "../catalog/definitions";
 import { fixtures } from "../catalog/fixtures";
@@ -45,15 +46,16 @@ describe("design system import smoke test", () => {
       "yandex-pay",
     );
 
-    const render = runtime.registry.CustomPin as unknown as (props: Record<string, unknown>) => ReturnType<typeof CustomPin>;
-    const rendered = render({
+    // Custom components are registered through the event adapter (which uses hooks),
+    // so render it through React rather than calling it as a plain function.
+    const Registered = runtime.registry.CustomPin as unknown as ComponentType<Record<string, unknown>>;
+    const html = renderToStaticMarkup(createElement(Registered, {
       element: { type: "CustomPin", props: {} },
       children: undefined,
       emit: () => undefined,
       on: () => ({ shouldPreventDefault: false, bound: false, emit: () => undefined }),
-    });
-    expect(rendered.type).toBe("div");
-    expect(rendered.props["data-custom-pin"]).toBe(true);
+    }));
+    expect(html).toContain("data-custom-pin");
   });
 
   it("validates against explicitly supplied definitions for a custom system", () => {

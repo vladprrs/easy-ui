@@ -4,6 +4,7 @@ import { createMemoryRouter, Outlet, RouterProvider } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import { createPlayerRuntime } from "../catalog/runtime";
 import { prototypeDocSchema } from "../prototype/schema";
+import { EasyUiActionRuntime } from "./actionRuntime";
 import { ScreenErrorBoundary } from "./ScreenView";
 import { ScreenView } from "./ScreenView";
 
@@ -60,15 +61,13 @@ describe("ScreenView canvas", () => {
         spec: { root: "details-copy", elements: { "details-copy": { type: "Text", props: { text: "Details" } } } },
       }],
     });
-    const runtime = createPlayerRuntime({
-      navigate: navigation.navigate,
-      back: navigation.back,
-      openUrl() {},
-      restart: navigation.restart,
-    });
+    const deps = { navigate: navigation.navigate, back: navigation.back, openUrl() {}, restart: navigation.restart };
+    const runtime = createPlayerRuntime(deps);
+    const actionRuntime = new EasyUiActionRuntime({ initialState: doc.state, screenIds: new Set(doc.screens.map((s) => s.id)), deps });
+    const context = { doc, registry: runtime.registry, runtime: actionRuntime, customTypes: new Set<string>(), customDefinitions: {}, onError: () => {} };
     const router = createMemoryRouter([{
       path: "/p/:protoId",
-      element: <JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} initialState={doc.state}><Outlet context={{ doc, registry: runtime.registry }} /></JSONUIProvider>,
+      element: <JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}><Outlet context={context} /></JSONUIProvider>,
       children: [{ path: "s/:screenId", element: <ScreenView /> }],
     }], { initialEntries: ["/p/canvas-prototype/s/canvas"] });
 

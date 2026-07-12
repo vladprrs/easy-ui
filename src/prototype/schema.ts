@@ -22,6 +22,8 @@ const actionSchema = z.strictObject({
   action: z.string().min(1),
   params: z.record(z.string(), z.unknown()).optional(),
   preventDefault: z.boolean().optional(),
+  // Custom-component-only conditional guard; grammar validated in validate.ts.
+  $if: z.unknown().optional(),
 });
 
 const repeatSchema = z.strictObject({

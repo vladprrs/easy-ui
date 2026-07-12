@@ -1,13 +1,13 @@
 import { Renderer } from "@json-render/react";
-import { Component, type ErrorInfo, type ReactNode, useMemo } from "react";
+import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo } from "react";
 import { Link, useOutletContext, useParams } from "react-router";
 import type { PlayerOutletContext } from "./PlayerShell";
 import { DeviceFrame } from "./DeviceFrame";
 import { ScreensSidebar } from "./ScreensSidebar";
 import { usePlayerNavigation } from "./navigation";
-import { toRuntimeSpec } from "../prototype/runtimeSpec";
-import { splitCanvasSpec } from "./canvasSpec";
+import { splitCanvas, toRuntimeSpec } from "../prototype/runtimeSpec";
 import { CanvasLayers } from "./CanvasLayers";
+import { EasyUiRuntimeProvider } from "./easyUiRuntime";
 import { pillGhostOnDark } from "../app/chrome";
 
 export class ScreenErrorBoundary extends Component<{
@@ -33,23 +33,27 @@ export class ScreenErrorBoundary extends Component<{
 }
 
 export function ScreenView() {
-  const { doc, registry } = useOutletContext<PlayerOutletContext>();
+  const { doc, registry, runtime, customTypes, customDefinitions, onError } = useOutletContext<PlayerOutletContext>();
   const { screenId } = useParams();
   const { version } = useParams();
   const navigation = usePlayerNavigation();
   const screen = doc.screens.find((item) => item.id === screenId);
   const screenSpec = screen?.spec;
   const screenCanvas = screen?.canvas;
+  const tree = useMemo(() => (screenSpec ? toRuntimeSpec(screenSpec, { customTypes }) : null), [screenSpec, customTypes]);
   const specs = useMemo(() => {
-    if (!screenSpec) return null;
-    const runtimeSpec = toRuntimeSpec(screenSpec);
-    return screenCanvas ? splitCanvasSpec(runtimeSpec) : { content: runtimeSpec, hotspots: [] };
-  }, [screenCanvas, screenSpec]);
+    if (!tree) return null;
+    if (screenCanvas) { const { content, hotspots } = splitCanvas(tree); return { content: content?.spec ?? null, hotspots: hotspots.map((h) => h.spec) }; }
+    return { content: tree.spec, hotspots: [] };
+  }, [screenCanvas, tree]);
+  useEffect(() => { runtime.setScreenSpec(specs?.content ?? null); return () => runtime.setScreenSpec(null); }, [runtime, specs]);
   if (!screen) return <main className="flex h-full items-start justify-center bg-eui-graphite p-8 text-white"><section className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h1 className="font-eui-display text-2xl font-bold">Screen not found</h1><p className="mt-2 text-eui-ondark-2">This screen does not exist in “{doc.name}”.</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">Back to gallery</Link></section></main>;
 
-  const rendered = screen.canvas
-    ? <CanvasLayers canvas={screen.canvas} specs={specs!} registry={registry} />
-    : <Renderer registry={registry} spec={specs!.content!} />;
+  const rendered = <EasyUiRuntimeProvider value={{ metadata: tree!.metadata, runtime, definitions: customDefinitions, onError }}>
+    {screen.canvas
+      ? <CanvasLayers canvas={screen.canvas} specs={specs!} registry={registry} />
+      : <Renderer registry={registry} spec={specs!.content!} />}
+  </EasyUiRuntimeProvider>;
 
   return <main className="flex h-full min-h-0 flex-col bg-eui-graphite text-white">
     <header className="flex items-center gap-4 border-b border-white/15 px-6 py-3 font-eui-ui">

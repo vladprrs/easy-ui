@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import { z } from "zod";
 import type { ComponentDefinition } from "../catalog/definitions";
+import { normalizeEvents, type ComponentCapabilities } from "../catalog/normalize";
 import { atomicLevels } from "../designSystems/types";
 
 export interface CustomComponentRef {
@@ -52,10 +53,15 @@ export async function loadCustomComponents(refs: CustomComponentRef[], importMod
       if (typeof definition.description !== "string") throw new Error("definition.description must be a string");
       if (definition.atomicLevel !== undefined && !atomicLevels.includes(definition.atomicLevel as (typeof atomicLevels)[number])) throw new Error("definition.atomicLevel is invalid");
       if (typeof module.default !== "function") throw new Error("default export must be a function component");
+      const { events, eventPayloadSchemas } = normalizeEvents(definition.events as Parameters<typeof normalizeEvents>[0]);
+      const capabilities = definition.capabilities && typeof definition.capabilities === "object"
+        ? (definition.capabilities as ComponentCapabilities) : undefined;
       definitions[ref.name] = {
         props: definition.props as z.ZodType,
         description: definition.description,
-        ...(Array.isArray(definition.events) ? { events: definition.events as string[] } : {}),
+        ...(events.length ? { events } : {}),
+        ...(eventPayloadSchemas ? { eventPayloadSchemas } : {}),
+        ...(capabilities ? { capabilities } : {}),
         ...(Array.isArray(definition.slots) ? { slots: definition.slots as string[] } : {}),
         ...(definition.example && typeof definition.example === "object" ? { example: definition.example as Record<string, unknown> } : {}),
         ...(definition.atomicLevel ? { atomicLevel: definition.atomicLevel as ComponentDefinition["atomicLevel"] } : {}),
