@@ -6,7 +6,7 @@ Prototype files live in `prototypes/*.json`. A file is a self-contained flow; it
 
 The root is a strict object with `version: 1`, slug `id`, human-readable `name`, optional `description`, slug `designSystem` (default `"shadcn"`), `device` (`mobile`, `tablet`, or `desktop`, default `desktop`), slug `startScreen`, `state`, and a non-empty `screens` array. Screen IDs are unique slugs and `startScreen` must exist. The SQLite `design_systems` registry is the single source of registered systems; an unknown system is an error. `shadcn` and `wireframe` registry entries have code-backed builtin providers. A registry entry without a provider starts with no builtin definitions and can use published custom components assigned to it. The default remains `shadcn`, so existing documents without `designSystem` retain their meaning. Version 1 evolves additively: new fields are optional, so existing v1 documents remain valid.
 
-Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, optional non-blank `note` (at most 500 characters), optional `stateOverrides`, and `spec`. `note` is the author's caption below the screen in the CJM view. Screens appear in CJM in their `screens` array order. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, optional `on`, and optional `repeat`. Its type and props must match the normalized definition in the document's selected design system. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
+Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, optional non-blank `note` (at most 500 characters), optional `stateOverrides`, and `spec`. `note` is the author's caption below the screen in the CJM view. Screens appear in CJM in their `screens` array order. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, optional `on`, optional `repeat`, and optional `slot`. Its type and props must match the normalized definition in the document's selected design system. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
 
 ### Per-system component allowlist
 
@@ -67,6 +67,17 @@ Using `$item`, `$index`, or `$bindItem` outside a repeat subtree is a validation
 - `Hotspot` inside a repeat subtree is a validation error (canvas-anchored hotspots cannot be templated per item).
 - `repeat.statePath` must resolve to an array in the screen's effective initial state (`state` merged with `stateOverrides`); when it doesn't (missing or a non-array value), validation emits a warning — the array may be populated dynamically at runtime.
 - **Render-cost budget**: `cost(el) = 1 + Σ cost(children)`, and for a repeat element, `cost(el) = 1 + len(initialArray) × Σ cost(children)`, computed recursively from the screen's effective initial state. A screen whose root cost exceeds 2000 is a validation error. This bounds the worst-case initial DOM size regardless of nesting depth or repeat count.
+
+## Named slots
+
+A child element may carry `slot: "<slug>"` to route it into a named region of its parent. Named slots exist **only for custom components** that opt in via `capabilities.namedSlots` and declare the region names in `definition.slots` (see `docs/server-api.md`). The parent component receives its children partitioned into `slots: Record<name, ReactNode>`; children without a `slot` field land in `slots.default`, and for a named-slot component `children === slots.default`. Slot routing is resolved before render from each child's position in the parent's `children` array — there are no DOM markers.
+
+**Rules** (enforced by `validatePrototype`):
+
+- `slot` is allowed only on a child whose parent is a custom component with `capabilities.namedSlots`; a `slot` under a builtin parent, or under a custom parent without that capability, is a validation error.
+- The `slot` value must be one of the parent's declared `definition.slots`; an unknown name is a validation error.
+- `repeat` on a custom component with named slots is a validation error: a repeated element hands the library a single repeated-children node, so positional slot routing does not apply. `repeat` is allowed on a child *inside* a slot.
+- Legacy custom components (without `capabilities.namedSlots`) receive their children unchanged, exactly as before.
 
 ## Events and actions
 

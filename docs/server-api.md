@@ -190,6 +190,36 @@ Content-addressed реестр бинарных ассетов (изображе
 
 `definition.capabilities?: { typedEvents?: true; namedSlots?: true }` объявляет расширенные возможности; наличие любой capability требует host **ABI v2**.
 
+#### Named slots (`capabilities.namedSlots` + `slots`)
+
+Компонент с `capabilities.namedSlots: true` объявляет допустимые регионы в `definition.slots: string[]` (slug-имена). Хост раскладывает детей элемента по слотам и передаёт компоненту `slots: Record<name, ReactNode>` в `EasyUIComponentProps`: ребёнок с `slot: "<name>"` в документе попадает в `slots[name]`, ребёнок без `slot` — в `slots.default`, и для named-slot компонента `children === slots.default`. Роутинг выполняется до рендера по позиции ребёнка в `element.children` (side-channel `slotIndices`), без DOM-маркеров. Legacy-компоненты без capability получают прежний `children` без изменений. Документные правила и запреты (`slot` только под namedSlots-родителем и только из объявленного набора; `repeat` на namedSlots-родителе запрещён) — в `docs/prototype-format.md#named-slots`. Пример: `server/fixtures/named-slots-panel.tsx`.
+
+```tsx
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+export const definition = {
+  props: z.strictObject({ title: z.string() }),
+  events: [],
+  capabilities: { namedSlots: true } as const,
+  slots: ["header", "items"],
+  description: "A panel that routes children into header and items slots",
+  example: { title: "Panel" },
+};
+
+type Props = z.output<typeof definition.props>;
+export default function Panel({ props, slots }: EasyUIComponentProps<Props>) {
+  return (
+    <section>
+      <h2>{props.title}</h2>
+      <header>{slots.header}</header>
+      <ul>{slots.items}</ul>
+      <div>{slots.default}</div>
+    </section>
+  );
+}
+```
+
 #### Host ABI и shims v2
 
 `hostAbiVersion` вычисляется на publish как **максимум требований**: ABI 2, если compiled JS импортирует `easy-ui/runtime` **или** объявлена любая `capabilities` (typedEvents/namedSlots); иначе ABI 1. ABI v2 = ABI v1 + модуль `easy-ui/runtime` (`/api/shims/v2/easy-ui-runtime.js`, экспортирует тип `EasyUIComponentProps`, `token(key)`, `Icon`), и для ABI 2 остальные шимы тоже резолвятся из `/api/shims/v2/*`. Loader поддерживает оба ABI. Тип `easy-ui-runtime.d.ts` подключается в publish-typecheck через `paths`.

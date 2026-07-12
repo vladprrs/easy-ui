@@ -268,11 +268,28 @@ export function validatePrototype(
       if (totalCost > REPEAT_RENDER_COST_BUDGET) issue(errors, base, `screen render cost (${totalCost}) exceeds the budget of ${REPEAT_RENDER_COST_BUDGET}`);
     }
 
+    const parentOf = new Map<string, string>();
+    for (const [parentKey, element] of Object.entries(elements)) for (const child of element.children ?? []) parentOf.set(child, parentKey);
     const parents = new Map<string, number>();
     for (const [key, element] of Object.entries(elements)) {
       const ep = [...base, "elements", key];
       const definition = definitions[element.type];
       if (!definition) { issue(errors, [...ep, "type"], `unknown component type: ${element.type}`); continue; }
+      // Named slots: `slot` is valid only on a child of a custom component with capabilities.namedSlots,
+      // and only for a slot name declared by that parent's definition.
+      const childSlot = (element as { slot?: unknown }).slot;
+      if (typeof childSlot === "string") {
+        const parentKey = parentOf.get(key);
+        const parent = parentKey ? elements[parentKey] : undefined;
+        const parentDef = parent ? definitions[parent.type] : undefined;
+        const parentIsCustom = Boolean(parent) && !builtinNames.has(parent!.type) && Boolean(parentDef);
+        if (!parent) issue(errors, [...ep, "slot"], "slot requires a parent element");
+        else if (!parentIsCustom || parentDef?.capabilities?.namedSlots !== true) issue(errors, [...ep, "slot"], "slot is only allowed on a child of a custom component with named slots");
+        else if (!(parentDef.slots ?? []).includes(childSlot)) issue(errors, [...ep, "slot"], `unknown slot for ${parent.type}: ${childSlot}`);
+      }
+      // A repeat element renders its children as a single RepeatChildren node, so slot indices are
+      // inapplicable: named-slot custom parents may not also repeat.
+      if (element.repeat && definition.capabilities?.namedSlots === true) issue(errors, [...ep, "repeat"], "repeat is not allowed on a custom component with named slots");
       const elementInsideRepeat = insideRepeat.has(key);
       const propIssues = validateElementProps({ definition, props: element.props, state: effectiveState, path: [...ep, "props"], insideRepeat: elementInsideRepeat });
       errors.push(...propIssues.errors);

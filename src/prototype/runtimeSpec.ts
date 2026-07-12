@@ -96,19 +96,37 @@ export function toRuntimeSpec(spec: PrototypeSpec, options: ToRuntimeSpecOptions
     walk(spec.root, undefined);
   }
 
+  // Slot name of each child element (side-channel `slot` field), for building the parent's slot map.
+  const slotOf = (childKey: string): string | undefined => {
+    const value = (spec.elements[childKey] as { slot?: unknown } | undefined)?.slot;
+    return typeof value === "string" ? value : undefined;
+  };
+
   const elements = Object.fromEntries(Object.entries(spec.elements).map(([key, element]) => {
     const isCustom = customTypes.has(element.type);
     const props = adaptProp(element.props) as Record<string, unknown>;
+    const bare = { ...element };
+    delete (bare as { slot?: unknown }).slot;
     if (!isCustom) {
       metadata[key] = { type: element.type };
-      return [key, { ...element, props }];
+      return [key, { ...bare, props }];
     }
     const meta: ElementMetadata = { type: element.type };
     if (element.on && Object.keys(element.on).length) meta.on = element.on as Record<string, RawActionBinding>;
     const repeatKey = repeatKeyOf.get(key);
     if (repeatKey !== undefined) meta.repeatKey = repeatKey;
+    // Named-slot child map: index-of-position in element.children per slot ("default" when no slot).
+    const children = element.children ?? [];
+    if (children.some((childKey) => slotOf(childKey) !== undefined)) {
+      const slotIndices: Record<string, number[]> = {};
+      children.forEach((childKey, index) => {
+        const slotName = slotOf(childKey) ?? "default";
+        (slotIndices[slotName] ??= []).push(index);
+      });
+      meta.slotIndices = slotIndices;
+    }
     metadata[key] = meta;
-    const runtimeElement = { ...element, props: { ...props, [EUI_KEY_PROP]: key } };
+    const runtimeElement = { ...bare, props: { ...props, [EUI_KEY_PROP]: key } };
     delete (runtimeElement as { on?: unknown }).on;
     return [key, runtimeElement];
   })) as Spec["elements"];

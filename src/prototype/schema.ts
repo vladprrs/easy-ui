@@ -38,6 +38,9 @@ const elementSchema = z.strictObject({
   visible: z.unknown().optional(),
   on: z.record(z.string(), z.union([actionSchema, z.array(actionSchema).min(1)])).optional(),
   repeat: repeatSchema.optional(),
+  // Named-slot placement: routes this child into a parent custom component's slot
+  // (see validate.ts — parent must be a custom component with capabilities.namedSlots).
+  slot: slugSchema.optional(),
 });
 
 const specSchema = z.strictObject({

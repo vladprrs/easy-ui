@@ -128,4 +128,48 @@ describe("toRuntimeSpec", () => {
     };
     expect(toRuntimeSpec(specWith(props)).spec.elements.text?.props).toEqual(props);
   });
+
+  it("builds a slotIndices map on a custom parent and strips the slot field from the spec", () => {
+    const spec: PrototypeDoc["screens"][number]["spec"] = {
+      root: "panel",
+      elements: {
+        panel: { type: "Panel", props: {}, children: ["h", "a", "b"] },
+        h: { type: "Item", props: {}, slot: "header" },
+        a: { type: "Item", props: {}, slot: "items" },
+        b: { type: "Item", props: {} },
+      },
+    };
+    const { spec: runtime, metadata } = toRuntimeSpec(spec, { customTypes: new Set(["Panel"]) });
+    expect(metadata.panel?.slotIndices).toEqual({ header: [0], items: [1], default: [2] });
+    // The side-channel is the only carrier of slot: the field never leaks into the runtime spec.
+    expect((runtime.elements.h as { slot?: unknown }).slot).toBeUndefined();
+    expect((runtime.elements.a as { slot?: unknown }).slot).toBeUndefined();
+  });
+
+  it("omits slotIndices when no child declares a slot", () => {
+    const spec: PrototypeDoc["screens"][number]["spec"] = {
+      root: "panel",
+      elements: {
+        panel: { type: "Panel", props: {}, children: ["a"] },
+        a: { type: "Item", props: {} },
+      },
+    };
+    const { metadata } = toRuntimeSpec(spec, { customTypes: new Set(["Panel"]) });
+    expect(metadata.panel?.slotIndices).toBeUndefined();
+  });
+
+  it("propagates repeatKey through a named-slot parent to a slotted child (item context)", () => {
+    const spec: PrototypeDoc["screens"][number]["spec"] = {
+      root: "list",
+      elements: {
+        list: { type: "List", props: {}, repeat: { statePath: "/rows", key: "id" }, children: ["panel"] },
+        panel: { type: "Panel", props: {}, children: ["cell"] },
+        cell: { type: "Cell", props: {}, slot: "items", on: { tap: { action: "back" } } },
+      },
+    };
+    const { metadata } = toRuntimeSpec(spec, { customTypes: new Set(["List", "Panel", "Cell"]) });
+    // The repeat scope reaches a custom component nested inside a slot inside a repeat.
+    expect(metadata.cell?.repeatKey).toBe("id");
+    expect(metadata.panel?.slotIndices).toEqual({ items: [0] });
+  });
 });

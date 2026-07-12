@@ -404,3 +404,63 @@ describe("typed events, param sources and $if validation", () => {
       .toContain("the __eui* namespace is reserved and cannot appear in props");
   });
 });
+
+describe("named slots", () => {
+  const definitions = {
+    Panel: { description: "A slotted panel", props: z.strictObject({}), slots: ["header", "items"], capabilities: { namedSlots: true } as const },
+    Plain: { description: "A plain custom container", props: z.strictObject({}) },
+    Item: { description: "An item", props: z.strictObject({}) },
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const doc = (elements: Record<string, any>, state: Record<string, any> = {}) => prototypeDocSchema.parse({
+    version: 1, id: "slots", name: "Slots", designSystem: "shadcn", startScreen: "s", state,
+    screens: [{ id: "s", name: "S", spec: { root: "panel", elements } }],
+  });
+  const errs = (elements: Record<string, unknown>, state?: Record<string, unknown>) =>
+    validatePrototype(doc(elements, state), { definitions }).errors.map((e) => e.message);
+
+  it("accepts children routed to declared slots of a named-slots custom parent", () => {
+    expect(errs({
+      panel: { type: "Panel", props: {}, children: ["h", "a", "b"] },
+      h: { type: "Item", props: {}, slot: "header" },
+      a: { type: "Item", props: {}, slot: "items" },
+      b: { type: "Item", props: {} },
+    })).toEqual([]);
+  });
+
+  it("rejects an unknown slot name", () => {
+    expect(errs({
+      panel: { type: "Panel", props: {}, children: ["h"] },
+      h: { type: "Item", props: {}, slot: "footer" },
+    })).toContain("unknown slot for Panel: footer");
+  });
+
+  it("rejects a slot child of a builtin parent", () => {
+    expect(errs({
+      panel: { type: "Card", props: {}, children: ["h"] },
+      h: { type: "Item", props: {}, slot: "header" },
+    })).toContain("slot is only allowed on a child of a custom component with named slots");
+  });
+
+  it("rejects a slot child of a custom parent without the namedSlots capability", () => {
+    expect(errs({
+      panel: { type: "Plain", props: {}, children: ["h"] },
+      h: { type: "Item", props: {}, slot: "header" },
+    })).toContain("slot is only allowed on a child of a custom component with named slots");
+  });
+
+  it("rejects repeat on a named-slots custom parent", () => {
+    expect(errs({
+      panel: { type: "Panel", props: {}, repeat: { statePath: "/items" }, children: ["a"] },
+      a: { type: "Item", props: {} },
+    }, { items: [] })).toContain("repeat is not allowed on a custom component with named slots");
+  });
+
+  it("allows repeat on a child inside a slot", () => {
+    expect(errs({
+      panel: { type: "Panel", props: {}, children: ["list"] },
+      list: { type: "Plain", props: {}, slot: "items", repeat: { statePath: "/items" }, children: ["a"] },
+      a: { type: "Item", props: {} },
+    }, { items: [{}, {}] })).toEqual([]);
+  });
+});

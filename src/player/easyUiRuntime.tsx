@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, type ComponentType, type ReactNode } from "react";
+import { Children, createContext, useContext, useMemo, type ComponentType, type ReactNode } from "react";
 import { useRepeatScope, type BaseComponentProps } from "@json-render/react";
 import type { ComponentDefinition } from "../catalog/definitions";
 import type { ElementMetadata } from "../prototype/runtimeSpec";
@@ -123,7 +123,21 @@ export function wrapCustomComponent(name: string, Component: ComponentType<EasyU
       };
     }, [on, emit]);
 
-    const slots = useMemo<Record<string, ReactNode>>(() => ({ default: libraryProps.children }), [libraryProps.children]);
+    // Named-slot routing (custom components with capabilities.namedSlots). Children arrive from the
+    // library in element.children order, so slotIndices (side-channel) map positions to slot names.
+    // Contract: for a named-slot component `children === slots.default`; legacy components without the
+    // capability keep the prior single-child behavior (slots carries only `default`).
+    const namedSlots = definition?.capabilities?.namedSlots === true;
+    const slotIndices = meta?.slotIndices;
+    const slots = useMemo<Record<string, ReactNode>>(() => {
+      if (!namedSlots || !slotIndices) return { default: libraryProps.children };
+      const array = Children.toArray(libraryProps.children);
+      const result: Record<string, ReactNode> = { default: [] };
+      for (const [slotName, indices] of Object.entries(slotIndices)) {
+        result[slotName] = indices.map((index) => array[index]).filter((node) => node !== undefined);
+      }
+      return result;
+    }, [namedSlots, slotIndices, libraryProps.children]);
 
     const componentProps: EasyUIComponentProps = {
       ...libraryProps,
@@ -131,6 +145,7 @@ export function wrapCustomComponent(name: string, Component: ComponentType<EasyU
       emit,
       on: onHandle,
       slots,
+      ...(namedSlots ? { children: slots.default } : {}),
     };
     return <Component {...componentProps} />;
   };
