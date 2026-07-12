@@ -1,4 +1,4 @@
-import type { AtomicLevel, CatalogComponent, DesignSystemSummary } from "../api/client";
+import type { AtomicLevel, CatalogComponent, ComponentVersionSummary, DesignSystemSummary, VisualReference } from "../api/client";
 import { parseStorybookTitle, type StorybookEntry } from "./storybookIndex";
 
 export type LibrarySelection =
@@ -40,4 +40,55 @@ export const selectionForComponent = (component: CatalogComponent): LibrarySelec
 
 export function selectionKey(selection: LibrarySelection): string {
   return selection.kind === "story" ? `story:${selection.storyId}` : `custom:${selection.componentId}:${selection.designSystem}`;
+}
+
+// --- Library status filters (plan §H.2) ---
+//
+// A custom component maps to a boolean status vector derived from its version history and its
+// latest passing visual run. The mapping is intentionally fixed and documented so the filter
+// chips are unambiguous:
+//   published     = the component has at least one active version.
+//   rejected      = its latest (highest-numbered) version is rejected.
+//   blocked       = its latest version is deprecated | superseded | archived.
+//   verified      = published AND the active version has a passing last visual run for its
+//                   component reference (fingerprint {scope:"component", componentId, refVersion}).
+//   visualPending = published AND not verified.
+// Note that rejected/blocked describe the *latest* version even when an older active version keeps
+// the component present in the manifest, so a manifest entry can still read as blocked/rejected.
+export const LIBRARY_STATUS_KEYS = ["published", "verified", "visual-pending", "blocked", "rejected"] as const;
+export type LibraryStatusKey = (typeof LIBRARY_STATUS_KEYS)[number];
+export const libraryStatusLabel: Record<LibraryStatusKey, string> = {
+  published: "Published", verified: "Verified", "visual-pending": "Visual pending", blocked: "Blocked", rejected: "Rejected",
+};
+
+export interface ComponentLibraryStatus { published: boolean; rejected: boolean; blocked: boolean; verified: boolean; visualPending: boolean }
+
+const BLOCKED_STATUSES = new Set(["deprecated", "superseded", "archived"]);
+
+export function componentLibraryStatus(
+  componentId: string,
+  activeVersion: number,
+  versions: ComponentVersionSummary[],
+  references: VisualReference[],
+): ComponentLibraryStatus {
+  const published = versions.some((version) => version.status === "active");
+  const latest = versions.reduce<ComponentVersionSummary | null>((max, version) => (!max || version.version > max.version ? version : max), null);
+  const rejected = latest?.status === "rejected";
+  const blocked = latest !== null && BLOCKED_STATUSES.has(latest.status);
+  const verified = published && references.some((reference) =>
+    reference.fingerprint.scope === "component"
+    && (reference.fingerprint as { componentId?: string }).componentId === componentId
+    && (reference.fingerprint as { refVersion?: number }).refVersion === activeVersion
+    && reference.lastRun?.status === "pass");
+  return { published, rejected, blocked, verified, visualPending: published && !verified };
+}
+
+export function matchesLibraryFilter(status: ComponentLibraryStatus, filter: LibraryStatusKey): boolean {
+  switch (filter) {
+    case "published": return status.published;
+    case "verified": return status.verified;
+    case "visual-pending": return status.visualPending;
+    case "blocked": return status.blocked;
+    case "rejected": return status.rejected;
+  }
 }

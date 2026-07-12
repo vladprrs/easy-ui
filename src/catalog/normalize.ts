@@ -28,6 +28,16 @@ export type ComponentDefinition = {
   example?: Record<string, unknown>;
   atomicLevel?: AtomicLevel;
   layoutNeutral?: boolean;
+  /**
+   * Semantic-validation metadata (additive; drives `validatePrototype` warnings).
+   * Custom definitions declare these; builtin values live in `builtinSemantics.ts`.
+   */
+  /** The element is interactive (a control the user acts on). */
+  interactive?: boolean;
+  /** Prop names that carry an accessible label for the control. */
+  accessibleLabelProps?: string[];
+  /** Prop names whose value is a URL (checked for local-path availability). */
+  urlProps?: string[];
 };
 
 const isZodType = (value: unknown): value is z.ZodType => value instanceof z.ZodType;

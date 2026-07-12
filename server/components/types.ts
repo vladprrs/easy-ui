@@ -13,6 +13,10 @@ export type CustomComponentDefinition<Props extends Record<string, unknown> = Re
   description: string;
   example?: Props;
   atomicLevel?: AtomicLevel;
+  /** Semantic-validation metadata (additive). */
+  interactive?: boolean;
+  accessibleLabelProps?: string[];
+  urlProps?: string[];
 };
 
 export type CustomComponentModule<Props extends Record<string, unknown> = Record<string, unknown>> = {
@@ -30,4 +34,8 @@ export type DefinitionMeta = {
   example?: Record<string, unknown>;
   propsJsonSchema?: unknown;
   atomicLevel?: AtomicLevel;
+  /** Semantic-validation metadata (additive; mirrors the definition fields). */
+  interactive?: boolean;
+  accessibleLabelProps?: string[];
+  urlProps?: string[];
 };

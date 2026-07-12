@@ -56,7 +56,7 @@ the preview project tests the generated `dist/` output.
 ## Repository structure
 
 - `prototypes/` — prototype documents.
-- `src/player/` — session-aware prototype player and navigation.
+- `src/player/` — session-aware prototype player and navigation; add `?debug=1` for the [interaction inspector](docs/inspector.md).
 - `src/catalog/` — json-render catalog, fixtures, and Storybook stories.
 - `src/gallery/` and `src/library/` — prototype gallery and embedded Storybook browser.
 - `scripts/` — prototype, CSS, and Storybook drift validation.

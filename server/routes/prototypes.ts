@@ -9,6 +9,7 @@ import { PrototypeRepo } from "../repos/prototypes";
 import { collectAndValidateAssetRefs, snapshotDefinitions } from "../validation";
 import { headScreenUrl, renderStatus, versionScreenUrl } from "./renderStatus";
 import { recordValidation } from "../validationRecords";
+import { parseFigmaInput } from "../figma";
 
 const headScreens = (doc:PrototypeDoc) => doc.screens.map(s=>({id:s.id,url:headScreenUrl(doc.id,s.id)}));
 
@@ -46,13 +47,13 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
   const repo=new PrototypeRepo(db);
   if(segments.length===1) {
     if(request.method==="GET") return json(repo.list(),200,noStore);
-    if(request.method==="POST") { const b=objectBody(await readJson(request)); const doc=parseDoc(b.doc); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions); const assetIds=collectAndValidateAssetRefs(db,doc); const result=repo.create(doc,message(b),snapshot.pins,assetIds); recordPrototypeValidation(db,doc.id,result.rev,warnings); return json({...result,warnings,screens:headScreens(doc)},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(result.id)}`}); }
+    if(request.method==="POST") { const b=objectBody(await readJson(request)); const doc=parseDoc(b.doc); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions); const assetIds=collectAndValidateAssetRefs(db,doc); const figma=parseFigmaInput(db,b.figma,"figma"); const result=repo.create(doc,message(b),snapshot.pins,assetIds,figma); recordPrototypeValidation(db,doc.id,result.rev,warnings); return json({...result,warnings,screens:headScreens(doc)},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(result.id)}`}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }
   const id=segments[1]!; const tail=segments.slice(2);
   if(!tail.length) {
     if(request.method==="GET") return json(repo.meta(id),200,noStore);
-    if(request.method==="PUT") { const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions); const assetIds=collectAndValidateAssetRefs(db,doc); const saved=repo.save(id,doc,base,message(b),snapshot.pins,assetIds); recordPrototypeValidation(db,id,saved.rev,warnings); return json({...saved,warnings,screens:headScreens(doc)},200,noStore); }
+    if(request.method==="PUT") { const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions); const assetIds=collectAndValidateAssetRefs(db,doc); const figma=parseFigmaInput(db,b.figma,"figma"); const saved=repo.save(id,doc,base,message(b),snapshot.pins,assetIds,figma); recordPrototypeValidation(db,id,saved.rev,warnings); return json({...saved,warnings,screens:headScreens(doc)},200,noStore); }
     if(request.method==="DELETE") { const b=objectBody(await readJson(request)); repo.delete(id,baseRev(b)); return new Response(null,{status:204,headers:noStore}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }

@@ -41,6 +41,9 @@ export interface PrototypeSummary {
   updatedAt: string;
 }
 
+// Figma provenance (plan §J): an immutable per-revision link back to the source Figma file.
+export interface FigmaProvenance { fileKey: string; nodeIds: string[]; referenceScreenshots?: string[]; lastSyncedAt?: string }
+
 export interface PrototypeVersionSummary { version: number; rev: number; publishedAt: string }
 export interface PrototypeMeta {
   id: string;
@@ -50,6 +53,7 @@ export interface PrototypeMeta {
   latestVersion: number | null;
   versions: PrototypeVersionSummary[];
   updatedAt: string;
+  figma?: FigmaProvenance | null;
 }
 export interface PrototypeComponentPin { id: string; name: string; version: number; bundleUrl: string; bundleHash: string }
 export interface PrototypeDraft {
@@ -69,11 +73,11 @@ export type AtomicLevel = "atom" | "molecule" | "organism" | "template" | "page"
 export interface ComponentSummary { id: string; name: string; designSystem: string; headRev: number; latestVersion: number | null; updatedAt: string }
 export type ComponentStatus = "staging" | "active" | "failed" | "rejected" | "deprecated" | "superseded" | "archived";
 export interface ComponentVersionSummary { version: number; rev: number; status: ComponentStatus; statusReason: string | null; supersededBy: number | null; statusRev: number; designSystem: string; publishedAt: string }
-export interface ComponentMeta { id: string; name: string; designSystem: string; headRev: number; versions: ComponentVersionSummary[]; updatedAt: string }
+export interface ComponentMeta { id: string; name: string; designSystem: string; headRev: number; versions: ComponentVersionSummary[]; updatedAt: string; figma?: FigmaProvenance | null }
 export interface ComponentStatusResult { status: ComponentStatus; statusRev: number }
 export const setComponentVersionStatus = (id: string, version: number, change: { status: ComponentStatus; reason?: string; supersededBy?: number; baseStatusRev: number }, signal?: AbortSignal) =>
   request<ComponentStatusResult>(`${componentPath(id)}/versions/${version}/status`, { method: "POST", body: change, signal });
-export interface CatalogComponent { id: string; name: string; designSystem: string; version: number; bundleUrl: string; bundleHash: string; atomicLevel?: AtomicLevel; description: string; events: string[]; slots: string[]; hostAbiVersion: number }
+export interface CatalogComponent { id: string; name: string; designSystem: string; version: number; bundleUrl: string; bundleHash: string; atomicLevel?: AtomicLevel; description: string; events: string[]; slots: string[]; hostAbiVersion: number; example?: Record<string, unknown> }
 export interface CatalogManifest { components: CatalogComponent[] }
 export interface DesignSystemComponent { name: string; atomicLevel: AtomicLevel; layoutNeutral: boolean; description: string; events: string[]; slots: string[] }
 export interface ThemeFont { family: string; src: string; weight?: number | string; style?: string }
@@ -114,6 +118,20 @@ export const createDesignSystem = (id: string, name: string, description: string
 export const getDesignSystemVersion = (id: string, version: number, signal?: AbortSignal) => request<DesignSystemVersion>(`/api/design-systems/${encodeURIComponent(id)}/versions/${version}`, { signal });
 export interface ThemePatch { tokens?: Record<string, string | number>; fonts?: ThemeFont[]; icons?: ThemeIcon[]; baseVersion: number }
 export const patchDesignSystemTheme = (id: string, patch: ThemePatch, signal?: AbortSignal) => request<DesignSystemSummary>(`/api/design-systems/${encodeURIComponent(id)}`, { method: "PATCH", body: patch, signal });
+// Visual regression references (plan §E.6). The Library reads these to mark a component version
+// Verified when its last run passed.
+export type VisualRunStatus = "pass" | "fail" | "error" | "reference_missing";
+export interface VisualRunReport { runId: string; referenceId: string; status: VisualRunStatus; createdAt: string; diffPercent: number | null }
+export interface VisualComponentFingerprint { scope: "component"; componentId: string; refVersion: number; [key: string]: unknown }
+export interface VisualReference { id: string; fingerprint: VisualComponentFingerprint | { scope: string; [key: string]: unknown }; note: string | null; createdAt: string; lastRun: VisualRunReport | null }
+export const listVisualReferences = (params: { scope?: "prototype-screen" | "component"; componentId?: string; prototypeId?: string } = {}, signal?: AbortSignal) => {
+  const query = new URLSearchParams();
+  if (params.scope) query.set("scope", params.scope);
+  if (params.componentId) query.set("componentId", params.componentId);
+  if (params.prototypeId) query.set("prototypeId", params.prototypeId);
+  const suffix = query.size ? `?${query}` : "";
+  return request<{ references: VisualReference[] }>(`/api/visual-references${suffix}`, { signal });
+};
 export const listComponents = (signal?: AbortSignal) => request<ComponentSummary[]>("/api/components", { signal });
 export const getComponentMeta = (id: string, signal?: AbortSignal) => request<ComponentMeta>(componentPath(id), { signal });
 export const createPrototype = (doc: PrototypeDoc, message?: string, signal?: AbortSignal) => request<{id: string; rev: 1; warnings: unknown[]}>("/api/prototypes", { method: "POST", body: { doc, message }, signal });
@@ -131,7 +149,7 @@ export const listPrototypeRevisions = (id: string, options: {limit?: number; bef
 export const getPrototypeRevision = (id: string, rev: number, signal?: AbortSignal) => request<PrototypeRevision>(`${prototypePath(id)}/revisions/${rev}`, { signal });
 export interface PrototypeRevisionFull extends PrototypeRevision { builtinCatalogHash: string; componentManifestHash: string }
 export const getPrototypeRevisionFull = (id: string, rev: number, signal?: AbortSignal) => request<PrototypeRevisionFull>(`${prototypePath(id)}/revisions/${rev}`, { signal });
-export interface ComponentVersion { version: number; rev: number; status?: ComponentStatus; statusReason?: string | null; supersededBy?: number | null; statusRev?: number; name?: string; source: string; designSystem: string; bundleHash: string; hostAbiVersion: number; events: string[]; slots: string[]; description?: string; example?: Record<string, unknown>; propsJsonSchema?: unknown; assets: { id: string; sha256: string; mime: string; size: number }[]; publishedAt: string }
+export interface ComponentVersion { version: number; rev: number; status?: ComponentStatus; statusReason?: string | null; supersededBy?: number | null; statusRev?: number; name?: string; source: string; designSystem: string; bundleHash: string; hostAbiVersion: number; events: string[]; slots: string[]; description?: string; example?: Record<string, unknown>; propsJsonSchema?: unknown; assets: { id: string; sha256: string; mime: string; size: number }[]; figma?: FigmaProvenance | null; publishedAt: string }
 export const getComponentVersion = (id: string, version: number, signal?: AbortSignal) => request<ComponentVersion>(`${componentPath(id)}/versions/${version}`, { signal });
 export const restorePrototype = (id: string, rev: number, baseRev: number, signal?: AbortSignal) => request<{rev: number}>(`${prototypePath(id)}/restore`, { method: "POST", body: { rev, baseRev }, signal });
 export const publishPrototype = (id: string, baseRev: number, message?: string, signal?: AbortSignal) => request<{version: number; rev: number}>(`${prototypePath(id)}/publish`, { method: "POST", body: { baseRev, message }, signal });

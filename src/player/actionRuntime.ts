@@ -4,6 +4,7 @@ import type { PlayerRuntimeDeps } from "../catalog/runtime";
 import { createHardenedStore } from "../prototype/hardenedStore";
 import { getAtPointer, isSafeJsonPointer } from "../prototype/pointer";
 import { computeRenderCost, REPEAT_RENDER_COST_BUDGET } from "../prototype/renderCost";
+import type { InspectorActionResult, InspectorLogger } from "./inspector/log";
 
 export interface EmitContext {
   event: string;
@@ -12,6 +13,8 @@ export interface EmitContext {
   elementId: string;
   itemIndex?: number;
   itemKey?: unknown;
+  /** Inspector correlation id assigned synchronously on emit. */
+  correlationId?: string;
 }
 
 export interface RawAction {
@@ -76,6 +79,8 @@ export interface EasyUiActionRuntimeOptions {
   screenIds: ReadonlySet<string>;
   deps: PlayerRuntimeDeps;
   onError?: (message: string, detail?: Record<string, unknown>) => void;
+  /** Optional inspector logger (plan H.1). Behavior is unchanged when omitted. */
+  logger?: InspectorLogger;
 }
 
 /**
@@ -86,19 +91,64 @@ export interface EasyUiActionRuntimeOptions {
  */
 export class EasyUiActionRuntime {
   readonly store: StateStore;
+  /** Inspector logger shared with the event adapter (read via runtime context). */
+  readonly logger: InspectorLogger | undefined;
   private readonly screenIds: ReadonlySet<string>;
   private readonly deps: PlayerRuntimeDeps;
   private readonly onError: (message: string, detail?: Record<string, unknown>) => void;
   private currentSpec: Spec | null = null;
+  /** True while a dispatched state action mutates the store (suppresses the store-level log). */
+  private inDispatchMutation = false;
 
   constructor(options: EasyUiActionRuntimeOptions) {
     this.screenIds = options.screenIds;
     this.deps = options.deps;
-    this.onError = options.onError ?? (() => {});
-    this.store = createHardenedStore(options.initialState, {
+    this.logger = options.logger;
+    const report = options.onError ?? (() => {});
+    this.onError = (message, detail) => {
+      this.logger?.logRuntimeError(message, detail);
+      report(message, detail);
+    };
+    const store = createHardenedStore(options.initialState, {
       guard: (next) => this.withinBudget(next),
       onError: (message) => this.onError(message),
     });
+    this.store = this.logger ? this.instrumentStore(store, this.logger) : store;
+  }
+
+  /**
+   * Wraps the store so mutations that do not come from {@link dispatch} (builtin
+   * component actions executed by the library) still land in the inspector as
+   * `setState` entries with a store-level prev/next diff.
+   */
+  private instrumentStore(store: StateStore, logger: InspectorLogger): StateStore {
+    const logSet = (statePath: string, previous: unknown, next: unknown): void => {
+      if (this.inDispatchMutation || previous === next) return;
+      logger.logAction({ correlationId: "", action: "setState", params: { statePath }, result: { type: "state", statePath, previous, next } });
+    };
+    return {
+      ...store,
+      set: (path, value) => {
+        const previous = store.get(path);
+        store.set(path, value);
+        logSet(path, previous, store.get(path));
+      },
+      update: (updates) => {
+        const before = Object.keys(updates).map((path) => [path, store.get(path)] as const);
+        store.update(updates);
+        for (const [path, previous] of before) logSet(path, previous, store.get(path));
+      },
+    };
+  }
+
+  private logAction(ctx: EmitContext, action: string, params: Record<string, unknown>, result: InspectorActionResult): void {
+    this.logger?.logAction({ correlationId: ctx.correlationId ?? "", action, params, result });
+  }
+
+  /** Runs a store mutation with the store-level inspector log muted (dispatch logs richer entries itself). */
+  private mutate(fn: () => void): void {
+    this.inDispatchMutation = true;
+    try { fn(); } finally { this.inDispatchMutation = false; }
   }
 
   private withinBudget(state: StateModel): boolean {
@@ -112,51 +162,89 @@ export class EasyUiActionRuntime {
   }
 
   private async dispatchOne(action: RawAction, ctx: EmitContext): Promise<void> {
-    if (action.$if !== undefined && !evaluateActionCondition(action.$if, ctx)) return;
+    if (action.$if !== undefined && !evaluateActionCondition(action.$if, ctx)) {
+      if (this.logger) {
+        const params = action.params ? (resolveParamValue(action.params, ctx) as Record<string, unknown>) : {};
+        this.logAction(ctx, action.action, params, { type: "skipped" });
+      }
+      return;
+    }
     const params = action.params ? (resolveParamValue(action.params, ctx) as Record<string, unknown>) : {};
     switch (action.action) {
       case "setState": {
-        if (typeof params.statePath === "string") this.store.set(params.statePath, params.value);
+        if (typeof params.statePath === "string") {
+          const statePath = params.statePath;
+          const previous = this.store.get(statePath);
+          this.mutate(() => this.store.set(statePath, params.value));
+          this.logAction(ctx, "setState", params, { type: "state", statePath, previous, next: this.store.get(statePath) });
+        }
         return;
       }
       case "pushState": {
         if (typeof params.statePath === "string") {
-          const arr = this.store.get(params.statePath);
+          const statePath = params.statePath;
+          const arr = this.store.get(statePath);
           const base = Array.isArray(arr) ? arr : [];
-          this.store.set(params.statePath, [...base, params.value]);
-          if (typeof params.clearStatePath === "string") this.store.set(params.clearStatePath, "");
+          const previous = arr;
+          this.mutate(() => {
+            this.store.set(statePath, [...base, params.value]);
+            if (typeof params.clearStatePath === "string") this.store.set(params.clearStatePath, "");
+          });
+          this.logAction(ctx, "pushState", params, { type: "state", statePath, previous, next: this.store.get(statePath) });
         }
         return;
       }
       case "removeState": {
         if (typeof params.statePath !== "string") return;
+        const statePath = params.statePath;
         const index = params.index;
-        const arr = this.store.get(params.statePath);
+        const arr = this.store.get(statePath);
         if (!Array.isArray(arr)) return;
         if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= arr.length) {
-          this.onError(`removeState index out of range: ${String(index)}`, { statePath: params.statePath });
+          const message = `removeState index out of range: ${String(index)}`;
+          this.onError(message, { statePath });
+          this.logAction(ctx, "removeState", params, { type: "error", message });
           return;
         }
-        this.store.set(params.statePath, arr.filter((_, i) => i !== index));
+        const previous = arr;
+        this.mutate(() => this.store.set(statePath, arr.filter((_, i) => i !== index)));
+        this.logAction(ctx, "removeState", params, { type: "state", statePath, previous, next: this.store.get(statePath) });
         return;
       }
       case "navigate": {
         const screenId = params.screenId;
         if (typeof screenId !== "string" || !this.screenIds.has(screenId)) {
-          this.onError(`navigate target does not exist: ${String(screenId)}`);
+          const message = `navigate target does not exist: ${String(screenId)}`;
+          this.onError(message);
+          this.logAction(ctx, "navigate", params, { type: "error", message });
           return;
         }
+        this.logAction(ctx, "navigate", params, { type: "nav", target: screenId });
         await this.deps.navigate(screenId);
         return;
       }
-      case "back": return void (await this.deps.back());
-      case "restart": return void (await this.deps.restart());
-      case "openUrl": {
-        if (typeof params.url === "string") await this.deps.openUrl(params.url);
+      case "back": {
+        this.logAction(ctx, "back", params, { type: "nav", target: "(back)" });
+        await this.deps.back();
         return;
       }
-      default:
-        this.onError(`unknown action: ${action.action}`);
+      case "restart": {
+        this.logAction(ctx, "restart", params, { type: "nav", target: "(restart)" });
+        await this.deps.restart();
+        return;
+      }
+      case "openUrl": {
+        if (typeof params.url === "string") {
+          this.logAction(ctx, "openUrl", params, { type: "url", url: params.url });
+          await this.deps.openUrl(params.url);
+        }
+        return;
+      }
+      default: {
+        const message = `unknown action: ${action.action}`;
+        this.onError(message);
+        this.logAction(ctx, action.action, params, { type: "error", message });
+      }
     }
   }
 

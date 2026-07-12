@@ -6,6 +6,7 @@ import { latestDesignSystemMetaVersion, requireRegisteredDesignSystem } from "..
 import { ApiError } from "../http";
 import type { ComponentPin } from "../validation";
 import { latestValidatedRev } from "../validationRecords";
+import { parseFigmaStored } from "../figma";
 
 type Pin = { id: string; name: string; version: number; bundleUrl: string; bundleHash: string };
 export type ResolvedPin = Pin & { status: string };
@@ -13,7 +14,7 @@ export type BundleReadiness = { resolvedPins: ResolvedPin[]; bundles: boolean; b
 // Statuses that still render (K adds deprecated/superseded later; tolerated ahead of that migration).
 const RENDERABLE_PIN_STATUS = new Set(["active", "deprecated", "superseded"]);
 type PrototypeRow = { id:string; name:string; description:string|null; device:string; screen_count:number; head_rev:number; design_system:string; created_at:string; updated_at:string };
-type RevisionRow = { rev:number; doc:string; builtin_catalog_hash:string; design_system_meta_version:number|null; message:string|null; created_at:string };
+type RevisionRow = { rev:number; doc:string; builtin_catalog_hash:string; design_system_meta_version:number|null; figma_json:string|null; message:string|null; created_at:string };
 
 const now = () => new Date().toISOString();
 const missing = () => new ApiError(404, "not_found", "Prototype not found");
@@ -91,11 +92,11 @@ export class PrototypeRepo {
   }
   // Pins the latest design-system theme version onto the revision (diagnostic, like builtinCatalogHash).
   // `metaVersion` is undefined for fresh saves (resolve latest now) and explicit for restore (copy source pin).
-  private insertRevision(id:string, rev:number, doc:PrototypeDoc, message:string|null, createdAt:string, metaVersion?:number|null): void {
+  private insertRevision(id:string, rev:number, doc:PrototypeDoc, message:string|null, createdAt:string, metaVersion?:number|null, figmaJson:string|null=null): void {
     const pin=metaVersion===undefined?latestDesignSystemMetaVersion(this.db,doc.designSystem):metaVersion;
     this.db.query(`INSERT INTO prototype_revisions
-      (prototype_id,rev,doc,builtin_catalog_hash,design_system_meta_version,message,created_at) VALUES (?,?,?,?,?,?,?)`)
-      .run(id,rev,JSON.stringify(doc),builtinCatalogHashFor(doc.designSystem,requireRegisteredDesignSystem(this.db,doc.designSystem,["designSystem"]).definitions),pin,message,createdAt);
+      (prototype_id,rev,doc,builtin_catalog_hash,design_system_meta_version,figma_json,message,created_at) VALUES (?,?,?,?,?,?,?,?)`)
+      .run(id,rev,JSON.stringify(doc),builtinCatalogHashFor(doc.designSystem,requireRegisteredDesignSystem(this.db,doc.designSystem,["designSystem"]).definitions),pin,figmaJson,message,createdAt);
   }
   private insertPins(id:string,rev:number,pins:ComponentPin[]):void {
     for(const pin of pins) {
@@ -115,22 +116,22 @@ export class PrototypeRepo {
     return this.db.query(`SELECT a.id,a.sha256,a.mime,a.size FROM prototype_revision_assets pra
       JOIN assets a ON a.id=pra.asset_id WHERE pra.prototype_id=? AND pra.rev=? ORDER BY a.id`).all(id,rev) as {id:string;sha256:string;mime:string;size:number}[];
   }
-  create(doc: PrototypeDoc, message?: string,pins:ComponentPin[]=[],assetIds:string[]=[]): {id:string;rev:1} {
+  create(doc: PrototypeDoc, message?: string,pins:ComponentPin[]=[],assetIds:string[]=[],figmaJson:string|null=null): {id:string;rev:1} {
     return this.db.transaction(() => {
       if (this.db.query("SELECT 1 ok FROM prototypes WHERE id=?").get(doc.id)) throw new ApiError(409,"already_exists","Prototype already exists");
       const at=now();
       this.db.query(`INSERT INTO prototypes (id,name,description,device,screen_count,head_rev,design_system,created_at,updated_at)
         VALUES (?,?,?,?,?,1,?,?,?)`).run(doc.id,doc.name,doc.description??null,doc.device,doc.screens.length,doc.designSystem,at,at);
-      this.insertRevision(doc.id,1,doc,message??null,at);
+      this.insertRevision(doc.id,1,doc,message??null,at,undefined,figmaJson);
       this.insertPins(doc.id,1,pins);
       this.insertAssetPins(doc.id,1,assetIds);
       return {id:doc.id,rev:1 as const};
     })();
   }
-  save(id:string, doc:PrototypeDoc, baseRev:number, message?:string,pins:ComponentPin[]=[],assetIds:string[]=[]): {rev:number} {
+  save(id:string, doc:PrototypeDoc, baseRev:number, message?:string,pins:ComponentPin[]=[],assetIds:string[]=[],figmaJson:string|null=null): {rev:number} {
     return this.db.transaction(() => {
       const head=this.cas(id,baseRev); const rev=head.head_rev+1; const at=now();
-      this.insertRevision(id,rev,doc,message??null,at);
+      this.insertRevision(id,rev,doc,message??null,at,undefined,figmaJson);
       this.insertPins(id,rev,pins);
       this.insertAssetPins(id,rev,assetIds);
       this.db.query(`UPDATE prototypes SET name=?,description=?,device=?,screen_count=?,head_rev=?,design_system=?,updated_at=? WHERE id=?`)
@@ -141,7 +142,7 @@ export class PrototypeRepo {
   restore(id:string, sourceRev:number, baseRev:number): {rev:number} {
     return this.db.transaction(() => {
       const head=this.cas(id,baseRev);
-      const source=this.db.query("SELECT doc,design_system_meta_version FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,sourceRev) as {doc:string;design_system_meta_version:number|null}|null;
+      const source=this.db.query("SELECT doc,design_system_meta_version,figma_json FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,sourceRev) as {doc:string;design_system_meta_version:number|null;figma_json:string|null}|null;
       if (!source) throw new ApiError(404,"not_found","Prototype revision not found");
       const doc=parseStoredPrototypeDoc(source.doc,id,sourceRev); const rev=head.head_rev+1; const at=now();
       const mismatched=this.db.query(`SELECT c.name FROM prototype_revision_components prc
@@ -150,7 +151,7 @@ export class PrototypeRepo {
         JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
         WHERE prc.prototype_id=? AND prc.rev=? AND cr.design_system<>? LIMIT 1`).get(id,sourceRev,doc.designSystem) as {name:string}|null;
       if(mismatched) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["screens"],message:`Component pin belongs to a different design system: ${mismatched.name}`}]});
-      this.insertRevision(id,rev,doc,`Restore revision ${sourceRev}`,at,source.design_system_meta_version);
+      this.insertRevision(id,rev,doc,`Restore revision ${sourceRev}`,at,source.design_system_meta_version,source.figma_json);
       this.db.query(`INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version)
         SELECT prototype_id,?,component_id,component_version FROM prototype_revision_components WHERE prototype_id=? AND rev=?`).run(rev,id,sourceRev);
       this.db.query(`INSERT INTO prototype_revision_assets (prototype_id,rev,asset_id)
@@ -198,12 +199,13 @@ export class PrototypeRepo {
       validatedRevision:latestValidatedRev(this.db,"prototype",id),
       publishedVersion,
       renderable:{head:this.renderableForRev(id,r.head_rev),published:latest?this.renderableForRev(id,latest.rev):null},
+      figma:parseFigmaStored(this.revisionRow(id,r.head_rev).figma_json),
     };
   }
-  draft(id:string) { const r=this.row(id); const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev); return {doc:parseStoredPrototypeDoc(x.doc,id,x.rev),rev:x.rev,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,r.head_rev),designSystemMetaVersion:x.design_system_meta_version}; }
+  draft(id:string) { const r=this.row(id); const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev); return {doc:parseStoredPrototypeDoc(x.doc,id,x.rev),rev:x.rev,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,r.head_rev),designSystemMetaVersion:x.design_system_meta_version,figma:parseFigmaStored(x.figma_json)}; }
   revisions(id:string,limit:number,before?:number) { this.row(id); const sql=`SELECT rev,message,created_at FROM prototype_revisions WHERE prototype_id=? ${before!==undefined?"AND rev < ?":""} ORDER BY rev DESC LIMIT ?`; const rows=(before!==undefined?this.db.query(sql).all(id,before,limit):this.db.query(sql).all(id,limit)) as {rev:number;message:string|null;created_at:string}[]; return rows.map(r=>({rev:r.rev,message:r.message,createdAt:r.created_at})); }
-  private revisionRow(id:string,rev:number): RevisionRow { const r=this.db.query("SELECT rev,doc,builtin_catalog_hash,design_system_meta_version,message,created_at FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,rev) as RevisionRow|null; if(!r) throw new ApiError(404,"not_found","Prototype revision not found"); return r; }
-  revision(id:string,rev:number) { const r=this.revisionRow(id,rev); const components=this.pins(id,rev); return {rev:r.rev,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,rev),designSystemMetaVersion:r.design_system_meta_version,message:r.message,createdAt:r.created_at}; }
+  private revisionRow(id:string,rev:number): RevisionRow { const r=this.db.query("SELECT rev,doc,builtin_catalog_hash,design_system_meta_version,figma_json,message,created_at FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,rev) as RevisionRow|null; if(!r) throw new ApiError(404,"not_found","Prototype revision not found"); return r; }
+  revision(id:string,rev:number) { const r=this.revisionRow(id,rev); const components=this.pins(id,rev); return {rev:r.rev,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,rev),designSystemMetaVersion:r.design_system_meta_version,figma:parseFigmaStored(r.figma_json),message:r.message,createdAt:r.created_at}; }
   versions(id:string) { this.row(id); return (this.db.query("SELECT version,rev,published_at FROM prototype_publishes WHERE prototype_id=? ORDER BY version").all(id) as {version:number;rev:number;published_at:string}[]).map(r=>({version:r.version,rev:r.rev,publishedAt:r.published_at})); }
-  version(id:string,version:number) { const p=this.db.query("SELECT rev,published_at FROM prototype_publishes WHERE prototype_id=? AND version=?").get(id,version) as {rev:number;published_at:string}|null; if(!p) throw new ApiError(404,"not_found","Prototype version not found"); const r=this.revisionRow(id,p.rev); const components=this.pins(id,p.rev); return {version,rev:p.rev,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,p.rev),designSystemMetaVersion:r.design_system_meta_version,publishedAt:p.published_at}; }
+  version(id:string,version:number) { const p=this.db.query("SELECT rev,published_at FROM prototype_publishes WHERE prototype_id=? AND version=?").get(id,version) as {rev:number;published_at:string}|null; if(!p) throw new ApiError(404,"not_found","Prototype version not found"); const r=this.revisionRow(id,p.rev); const components=this.pins(id,p.rev); return {version,rev:p.rev,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,p.rev),designSystemMetaVersion:r.design_system_meta_version,figma:parseFigmaStored(r.figma_json),publishedAt:p.published_at}; }
 }

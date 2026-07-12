@@ -129,6 +129,24 @@ Meta-ответы прототипов и компонентов additively не
 
 Миграция v8 расширяет `CHECK(status)` строгим rebuild-алгоритмом `component_publishes`: снапшот всех FK-child (`prototype_revision_components` RESTRICT, `component_publish_assets` CASCADE) → drop children → rebuild parent → recreate children → restore rows → `PRAGMA foreign_key_check`.
 
+## Figma provenance
+
+Ссылка на исходный Figma-файл — **immutable-свойство ревизии**: колонка `figma_json TEXT NULL` в `prototype_revisions` и `component_revisions` (миграция v9, два additive `ALTER`). Поле `figma` принимается опционально рядом с `doc`/`source`:
+
+- Прототипы: `POST /prototypes` и `PUT /prototypes/:id` — `{doc, message?, figma?}`.
+- Компоненты: `POST /components` (`{id,name,source,…,figma?}`) и `PUT /components/:id` (`{source?,designSystem?,figma?,baseRev}`; допускается изменение **только** `figma` — создаётся новая ревизия с прежним source).
+
+**Строгая схема** (`z.strictObject`, лишние ключи → `422 validation_failed`):
+
+| Поле | Правило |
+|---|---|
+| `fileKey` | строка 1..128, `^[A-Za-z0-9_-]+$` |
+| `nodeIds` | 1..50 строк, каждая 1..64, `^[A-Za-z0-9:._-]+$` |
+| `referenceScreenshots?` | ≤50 asset-id (`asset_<64hex>`); каждый обязан существовать в реестре assets, иначе `422 asset_not_found` |
+| `lastSyncedAt?` | ISO-дата (`Date.parse`-валидная), ≤40 символов |
+
+**Семантика.** Значение сохраняется на **создаваемой** ревизии; `restore` копирует `figma_json` исходной ревизии вместе с документом/исходником. `publish` прототипа переиспользует head-ревизию, поэтому version-read-back отдаёт её `figma`. Read-back additively отдаёт поле `figma` (объект или `null`): прототип — `GET /prototypes/:id` (head), `…/draft`, `…/revisions/:rev`, `…/versions/:v`; компонент — `GET /components/:id` (head), `…/source`, `…/draft`, `…/revisions/:rev`, `…/versions/:v`. Легаси-ревизии без ссылки читаются как `figma: null`.
+
 ## Служебные endpoints
 
 ### Реестр дизайн-систем
@@ -249,6 +267,20 @@ Content-addressed реестр бинарных ассетов (изображе
 **Evidence guard (обязательный).** Процент не выдаётся без **обоих** физических файлов. Отчёт прогона ВСЕГДА содержит: `reference`/`candidate` = `{assetId, url, sha256, width, height, mime}` (sha256 и dimensions берутся из content-addressed реестра ассетов), `diffPixels` (числитель), `totalPixels` (знаменатель), `metric` + `metricOptions`, `metrics.{exact-rgba,pixelmatch-v1}`, `diff` (сгенерированное diff-изображение как ассет) и `candidateMeta` (`rev`/`version`, `pins`, `bundleHash?`, `rendererBuild`, `browserVersion` из результата капчера). Если reference-ассет отсутствует (строка есть, но байты стёрты — «пустая reference-директория»): `status:"reference_missing"`, `diffPercent:null`, кандидат **не** снимается.
 
 **Хранение.** `visual_references(id, fingerprint_json UNIQUE, asset_id FK→assets RESTRICT, note, created_at)`, `visual_runs(id, reference_id FK→visual_references CASCADE, candidate_asset_id FK→assets RESTRICT NULL, diff_asset_id FK→assets NULL, metric, metric_options_json, diff_pixels, total_pixels, diff_percent, status, candidate_meta_json, created_at)` (миграция v6). Терминальные прогоны персистятся; `POST check` держит незавершённый прогон в памяти (fallback `GET /visual-runs/:id` читает персистентную строку). Проверка требует screenshot-пайплайн (`SERVE_DIST` + chromium), иначе `501 screenshot_unavailable`.
+
+## Library-фильтры
+
+`/library` строит статус каждого custom-компонента чистыми функциями (`src/library/libraryModel.ts`); сетевые вызовы выполняются **лениво после манифеста** (по `GET /components/:id` за версиями/`figma` и `GET /visual-references?scope=component` за прогонами). Маппинг статусов зафиксирован и однозначен:
+
+| Чип | Условие |
+|---|---|
+| `Published` | есть хотя бы одна `active`-версия |
+| `Rejected` | **последняя** (макс. номер) версия — `rejected` |
+| `Blocked` | последняя версия — `deprecated` \| `superseded` \| `archived` |
+| `Verified` | `Published` **и** последний visual-run reference'а этой active-версии (`fingerprint {scope:"component", componentId, refVersion}`) = `pass` |
+| `Visual pending` | `Published` и **не** `Verified` |
+
+`Rejected`/`Blocked` описывают **последнюю** версию, даже если более старая `active`-версия сохраняет компонент в манифесте — поэтому manifest-запись может читаться как blocked/rejected. Фильтры-чипы объединяются по OR; пока статус компонента не загружен, он не скрывается. Живое превью карточки — iframe на `/capture/component/:id/:version?props=example` (при наличии `example` в манифесте, иначе meta-карточка). Figma-бейдж на карточке/в списке — при `figma` на head-ревизии (тултип `fileKey` + число `nodeIds`).
 
 ## Ошибки и ограничения HTTP
 

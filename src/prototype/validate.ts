@@ -1,5 +1,6 @@
 import { validateSpec, type Spec } from "@json-render/core";
 import type { ComponentDefinition } from "../catalog/definitions";
+import { BUILTIN_SEMANTICS, isPublicRuntimePath, type BuiltinSemantics } from "../catalog/builtinSemantics";
 import { prototypeActionSchemas } from "../catalog/actions";
 import { atomicRank, type AtomicLevel } from "../designSystems/types";
 import { resolveBuiltinSystem } from "../designSystems";
@@ -21,6 +22,57 @@ const pathString = (parts: (string | number)[]) => "/" + parts.map(String).join(
 const issue = (list: ValidationIssue[], path: (string | number)[], message: string): void => { list.push({ path: pathString(path), message }); };
 export const isDynamicValue = (value: unknown): boolean => object(value) && Object.keys(value).some((key) => key.startsWith("$"));
 const isStatic = (value: unknown): boolean => !isDynamicValue(value) && (!Array.isArray(value) ? !object(value) || Object.values(value).every(isStatic) : value.every(isStatic));
+
+// --- Semantic-validation helpers (warnings; never errors) ---
+
+// Inline base64 / data-URL string props larger than this are flagged (upload as an asset instead).
+export const INLINE_BASE64_WARN_BYTES = 100 * 1024;
+// Payload property names that identify which repeated item an event refers to.
+const ITEM_IDENTITY_KEYS = new Set(["itemId", "id", "key", "value"]);
+
+// Resolves the semantic metadata for an element: builtin values come from the
+// static table; custom values come from the definition's own additive fields.
+function elementSemantics(type: string, definition: ComponentDefinition, isCustom: boolean): BuiltinSemantics {
+  if (!isCustom) return BUILTIN_SEMANTICS[type] ?? {};
+  return {
+    interactive: definition.interactive === true,
+    accessibleLabelProps: definition.accessibleLabelProps,
+    urlProps: definition.urlProps,
+  };
+}
+
+// True when any (possibly nested) prop value is a two-way binding directive.
+function hasTwoWayBinding(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasTwoWayBinding);
+  if (!object(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length === 1 && (keys[0] === "$bindState" || keys[0] === "$bindItem")) return true;
+  return Object.values(value).some(hasTwoWayBinding);
+}
+
+// A label prop counts as provided when it is a non-blank string or any dynamic directive.
+function labelProvided(value: unknown): boolean {
+  if (typeof value === "string") return value.trim().length > 0;
+  return isDynamicValue(value);
+}
+
+// Top-level property names declared by an event's payload schema (zod shape or JSON Schema).
+function payloadPropertyNames(definition: ComponentDefinition, event: string): Set<string> {
+  const zodSchema = definition.eventPayloadSchemas?.[event] as { shape?: Record<string, unknown> } | undefined;
+  if (zodSchema && object(zodSchema.shape)) return new Set(Object.keys(zodSchema.shape));
+  const jsonSchema = definition.eventPayloads?.[event] as { properties?: Record<string, unknown> } | undefined;
+  if (jsonSchema && object(jsonSchema.properties)) return new Set(Object.keys(jsonSchema.properties));
+  return new Set();
+}
+
+// Flags any string prop that carries a large inline base64 / data-URL payload.
+function scanInlineBase64(value: unknown, at: (string | number)[], warnings: ValidationIssue[]): void {
+  if (Array.isArray(value)) { value.forEach((item, index) => scanInlineBase64(item, [...at, index], warnings)); return; }
+  if (object(value)) { for (const [key, item] of Object.entries(value)) scanInlineBase64(item, [...at, key], warnings); return; }
+  if (typeof value !== "string" || value.length <= INLINE_BASE64_WARN_BYTES) return;
+  const looksBase64 = value.startsWith("data:") || /^[A-Za-z0-9+/\s]+={0,2}$/.test(value);
+  if (looksBase64) issue(warnings, at, `inline base64/data-URL value exceeds ${Math.round(INLINE_BASE64_WARN_BYTES / 1024)}KB; upload it as an asset instead`);
+}
 
 function checkPointer(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj, warnMissing: boolean) {
   if (!isSafeJsonPointer(value)) return issue(errors, path, "state path must be an absolute RFC 6901 JSON Pointer");
@@ -308,6 +360,29 @@ export function validatePrototype(
       if (element.type === "Image") checkUrl(element.props.src, [...ep,"props","src"], true, errors);
       if (element.type === "Link") checkUrl(element.props.href, [...ep,"props","href"], false, errors);
       const isCustomType = !builtinNames.has(element.type) && Boolean(definitions[element.type]);
+      // --- Semantic warnings (never block validation) ---
+      const sem = elementSemantics(element.type, definition, isCustomType);
+      const hasHandler = Boolean(element.on) && Object.keys(element.on!).length > 0;
+      if (sem.interactive && !sem.selfDriven && !hasHandler && !hasTwoWayBinding(element.props)) {
+        issue(warnings, ep, `interactive ${element.type} has no event handler and no two-way binding`);
+      }
+      if (sem.interactive && sem.accessibleLabelProps?.length) {
+        const hasLabel = sem.accessibleLabelProps.some((prop) => labelProvided(element.props[prop]));
+        const hasTextChild = (element.children ?? []).some((childKey) => {
+          const child = elements[childKey];
+          if (!child) return false;
+          const text = child.props.text ?? child.props.label ?? child.props.title;
+          return labelProvided(text);
+        });
+        if (!hasLabel && !hasTextChild) issue(warnings, ep, `interactive ${element.type} has no accessible label`);
+      }
+      scanInlineBase64(element.props, [...ep, "props"], warnings);
+      if (sem.urlProps) for (const prop of sem.urlProps) {
+        const value = element.props[prop];
+        if (typeof value === "string" && value.startsWith("/") && !isPublicRuntimePath(value)) {
+          issue(warnings, [...ep, "props", prop], `${prop} points to a local path (${value}) that may be unavailable in the player runtime`);
+        }
+      }
       const eventPayloadNames = new Set<string>([
         ...Object.keys(definition.eventPayloadSchemas ?? {}),
         ...Object.keys((definition as { eventPayloads?: Record<string, unknown> }).eventPayloads ?? {}),
@@ -316,6 +391,7 @@ export function validatePrototype(
         const events = "events" in definition ? definition.events : [];
         if (!(events ?? []).includes(event)) issue(errors, [...ep,"on",event], `unknown event for ${element.type}: ${event}`);
         const hasPayload = eventPayloadNames.has(event);
+        let eventUsesEventSource = false;
         const actions = Array.isArray(bindings) ? bindings : [bindings];
         const terminalIndexes = actions.map((a,i) => terminals.has(a.action) ? i : -1).filter((i) => i >= 0);
         if (terminalIndexes.length > 1) issue(errors, [...ep,"on",event], "event may contain at most one terminal action");
@@ -343,6 +419,7 @@ export function validatePrototype(
               else if (!rootAllowed) issue(errors, [...ap,"params",...rel], `${srcKey} is not allowed here`);
               else {
                 if (srcKey === "$event") {
+                  eventUsesEventSource = true;
                   if (!hasPayload) issue(errors, [...ap,"params",...rel], "$event is only allowed on an event with a declared payload schema");
                   else if (typeof value.$event !== "string") issue(errors, [...ap,"params",...rel], "$event must be a JSON Pointer string");
                 }
@@ -385,6 +462,14 @@ export function validatePrototype(
           if (action.action === "openUrl") checkUrl(action.params?.url, [...ap,"params","url"], false, errors);
         });
         if (element.type === "Link" && actions.some((action) => terminals.has(action.action)) && !actions.some((action) => action.preventDefault === true)) issue(errors, [...ep,"on",event], "Link navigation requires preventDefault: true");
+        // A repeated element that reads $event out of a payload lacking item identity cannot tell
+        // which item was acted on — warn so authors add an itemId/id/key/value field to the payload.
+        if (elementInsideRepeat && hasPayload && eventUsesEventSource) {
+          const names = payloadPropertyNames(definition, event);
+          if (![...names].some((name) => ITEM_IDENTITY_KEYS.has(name))) {
+            issue(warnings, [...ep,"on",event], `event payload has no item identity (itemId/id/key/value) for a repeated element`);
+          }
+        }
       }
     }
     for (const [child, count] of parents) if (count > 1) issue(errors, [...base,"elements",child], "element has more than one parent");
@@ -406,11 +491,27 @@ export function validatePrototype(
       visited.add(key);
     };
     dfs(screen.spec.root, 1);
+
+    // Monolithic screen: the whole screen is a single custom organism/page with no children —
+    // a hint that the screen reconstructs a page in one component instead of composing the system.
+    const rootElement = elements[screen.spec.root];
+    const rootDefinition = rootElement ? definitions[rootElement.type] : undefined;
+    const rootIsCustom = Boolean(rootElement) && !builtinNames.has(rootElement!.type) && Boolean(rootDefinition);
+    const rootLevel = rootDefinition?.atomicLevel;
+    if (rootIsCustom && (rootLevel === "organism" || rootLevel === "page") && !(rootElement!.children?.length) && Object.keys(elements).length === 1) {
+      issue(warnings, [...base, "elements", screen.spec.root], `monolithic screen: root ${rootElement!.type} is a single custom ${rootLevel} with no children; consider composing it from design-system elements`);
+    }
   }
   const reachableScreens = new Set<string>();
   const visitScreen = (id: string) => { if (reachableScreens.has(id)) return; reachableScreens.add(id); navigation.get(id)?.forEach(visitScreen); };
   visitScreen(doc.startScreen);
   doc.screens.forEach((screen, index) => { if (!reachableScreens.has(screen.id)) issue(warnings, ["screens",index,"id"], "screen is not reachable by navigate actions"); });
+  // Multiple screens with no navigate action moving between two different screens: likely
+  // disconnected screens (back/restart/openUrl don't count as inter-screen navigation).
+  if (doc.screens.length >= 2) {
+    const hasCrossScreenNavigate = [...navigation.entries()].some(([source, targets]) => [...targets].some((target) => target !== source));
+    if (!hasCrossScreenNavigate) issue(warnings, ["screens"], "prototype has multiple screens but no navigate action moves between different screens");
+  }
   return { errors, warnings };
 }
 

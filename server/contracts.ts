@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { prototypeDocSchema } from "../src/prototype/schema";
 import { ApiError } from "./http";
+import { figmaSchema } from "./figma";
+
+// Figma provenance (plan §J): optional on write, nullable on read-back.
+const figmaResponseSchema = figmaSchema.nullable();
 
 // Declarative route registry. Minimal by design: it is the single source of truth for
 // request-shape validation today and the input for the OpenAPI generator (T9) later.
@@ -330,7 +334,7 @@ export const createPrototypeContract = registerContract({
   method: "POST", path: "/api/prototypes",
   summary: "Create a prototype from a document (revision 1); validates against the design-system catalog.",
   status: 201,
-  requestSchema: z.object({ doc: prototypeDocSchema, message: z.string().optional() }),
+  requestSchema: z.object({ doc: prototypeDocSchema, message: z.string().optional(), figma: figmaSchema.optional() }),
   responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
   errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }],
 });
@@ -344,7 +348,7 @@ export const getPrototypeContract = registerContract({
     id: z.string(), name: z.string(), designSystem: z.string(), headRev: z.number(),
     latestVersion: z.number().nullable(), versions: z.array(z.looseObject({ version: z.number(), rev: z.number(), publishedAt: isoDate })),
     updatedAt: isoDate, draftRevision: z.number(), validatedRevision: z.number().nullable(),
-    publishedVersion: z.number().nullable(), renderable: renderableSchema,
+    publishedVersion: z.number().nullable(), renderable: renderableSchema, figma: figmaResponseSchema,
   }),
   errors: [errorCatalog.notFound],
 });
@@ -352,7 +356,7 @@ export const getPrototypeContract = registerContract({
 export const savePrototypeContract = registerContract({
   method: "PUT", path: "/api/prototypes/{id}",
   summary: "Save a new head revision (CAS on baseRev); document id must match the path id.",
-  requestSchema: z.object({ doc: prototypeDocSchema, ...casBody }),
+  requestSchema: z.object({ doc: prototypeDocSchema, figma: figmaSchema.optional(), ...casBody }),
   responseSchema: z.looseObject({ rev: z.number(), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
   errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.validationFailed],
 });
@@ -371,6 +375,7 @@ const prototypeRevisionCoreSchema = z.looseObject({
   components: z.array(z.looseObject({ id: z.string(), version: z.number() })),
   assets: z.array(assetPublicSchema.omit({ width: true, height: true })),
   designSystemMetaVersion: z.number().nullable(),
+  figma: figmaResponseSchema,
 });
 
 export const getPrototypeDraftContract = registerContract({
@@ -444,7 +449,7 @@ export const createComponentContract = registerContract({
   method: "POST", path: "/api/components",
   summary: "Create a custom component from TSX source (syntax-checked and definition-extracted).",
   status: 201,
-  requestSchema: z.object({ id: slugString, name: z.string().regex(/^[A-Z][A-Za-z0-9]*$/), source: z.string(), designSystem: slugString.optional(), message: z.string().optional() }),
+  requestSchema: z.object({ id: slugString, name: z.string().regex(/^[A-Z][A-Za-z0-9]*$/), source: z.string(), designSystem: slugString.optional(), message: z.string().optional(), figma: figmaSchema.optional() }),
   responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1) }),
   errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.payloadTooLarge, errorCatalog.validationFailed],
 });
@@ -455,6 +460,7 @@ export const getComponentContract = registerContract({
   responseSchema: z.looseObject({
     id: z.string(), name: z.string(), designSystem: z.string(), headRev: z.number(),
     versions: z.array(z.unknown()), updatedAt: isoDate, draftRevision: z.number(), publishedVersion: z.number().nullable(),
+    figma: figmaResponseSchema,
   }),
   errors: [errorCatalog.notFound],
 });
@@ -462,7 +468,7 @@ export const getComponentContract = registerContract({
 export const saveComponentContract = registerContract({
   method: "PUT", path: "/api/components/{id}",
   summary: "Save a new head revision of source and/or move the component between design systems (CAS on baseRev).",
-  requestSchema: z.object({ source: z.string().optional(), designSystem: slugString.optional(), ...casBody }),
+  requestSchema: z.object({ source: z.string().optional(), designSystem: slugString.optional(), figma: figmaSchema.optional(), ...casBody }),
   responseSchema: z.looseObject({ rev: z.number() }),
   errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.payloadTooLarge, errorCatalog.validationFailed],
 });
@@ -475,7 +481,7 @@ export const deleteComponentContract = registerContract({
   errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict],
 });
 
-const componentSourceSchema = z.looseObject({ rev: z.number(), source: z.string(), designSystem: z.string(), message: z.string().nullable(), createdAt: isoDate });
+const componentSourceSchema = z.looseObject({ rev: z.number(), source: z.string(), designSystem: z.string(), figma: figmaResponseSchema, message: z.string().nullable(), createdAt: isoDate });
 
 export const getComponentSourceContract = registerContract({
   method: "GET", path: "/api/components/{id}/source",
@@ -536,7 +542,7 @@ export const getComponentVersionContract = registerContract({
     version: z.number(), rev: z.number(), source: z.string(), designSystem: z.string(),
     events: z.array(z.string()), slots: z.array(z.string()), description: z.string(),
     bundleHash: z.string(), hostAbiVersion: z.number(),
-    assets: z.array(assetPublicSchema.omit({ width: true, height: true })), publishedAt: isoDate,
+    assets: z.array(assetPublicSchema.omit({ width: true, height: true })), figma: figmaResponseSchema, publishedAt: isoDate,
   }),
   errors: [errorCatalog.invalidRequest, errorCatalog.notFound],
 });

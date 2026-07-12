@@ -478,11 +478,57 @@
                   "__schema0": {
                     "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
                     "type": "string"
+                  },
+                  "__schema1": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9:._-]+$",
+                    "type": "string"
+                  },
+                  "__schema2": {
+                    "pattern": "^asset_[0-9a-f]{64}$",
+                    "type": "string"
                   }
                 },
                 "properties": {
                   "designSystem": {
                     "$ref": "#/$defs/__schema0"
+                  },
+                  "figma": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fileKey": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9_-]+$",
+                        "type": "string"
+                      },
+                      "lastSyncedAt": {
+                        "maxLength": 40,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "nodeIds": {
+                        "items": {
+                          "$ref": "#/$defs/__schema1"
+                        },
+                        "maxItems": 50,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "referenceScreenshots": {
+                        "items": {
+                          "$ref": "#/$defs/__schema2"
+                        },
+                        "maxItems": 50,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "fileKey",
+                      "nodeIds"
+                    ],
+                    "type": "object"
                   },
                   "id": {
                     "$ref": "#/$defs/__schema0"
@@ -667,6 +713,18 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9:._-]+$",
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "pattern": "^asset_[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
                   "additionalProperties": {},
                   "properties": {
                     "designSystem": {
@@ -674,6 +732,49 @@
                     },
                     "draftRevision": {
                       "type": "number"
+                    },
+                    "figma": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fileKey": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "type": "string"
+                            },
+                            "lastSyncedAt": {
+                              "maxLength": 40,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "nodeIds": {
+                              "items": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "referenceScreenshots": {
+                              "items": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "maxItems": 50,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "fileKey",
+                            "nodeIds"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "headRev": {
                       "type": "number"
@@ -710,7 +811,8 @@
                     "versions",
                     "updatedAt",
                     "draftRevision",
-                    "publishedVersion"
+                    "publishedVersion",
+                    "figma"
                   ],
                   "type": "object"
                 }
@@ -748,6 +850,18 @@
           "content": {
             "application/json": {
               "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9:._-]+$",
+                    "type": "string"
+                  },
+                  "__schema1": {
+                    "pattern": "^asset_[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
                 "properties": {
                   "baseRev": {
                     "exclusiveMinimum": 0,
@@ -757,6 +871,42 @@
                   "designSystem": {
                     "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
                     "type": "string"
+                  },
+                  "figma": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fileKey": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9_-]+$",
+                        "type": "string"
+                      },
+                      "lastSyncedAt": {
+                        "maxLength": 40,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "nodeIds": {
+                        "items": {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        "maxItems": 50,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "referenceScreenshots": {
+                        "items": {
+                          "$ref": "#/$defs/__schema1"
+                        },
+                        "maxItems": 50,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "fileKey",
+                      "nodeIds"
+                    ],
+                    "type": "object"
                   },
                   "message": {
                     "type": "string"
@@ -867,6 +1017,18 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9:._-]+$",
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "pattern": "^asset_[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
                   "additionalProperties": {},
                   "properties": {
                     "createdAt": {
@@ -874,6 +1036,49 @@
                     },
                     "designSystem": {
                       "type": "string"
+                    },
+                    "figma": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fileKey": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "type": "string"
+                            },
+                            "lastSyncedAt": {
+                              "maxLength": 40,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "nodeIds": {
+                              "items": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "referenceScreenshots": {
+                              "items": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "maxItems": 50,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "fileKey",
+                            "nodeIds"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "message": {
                       "anyOf": [
@@ -896,6 +1101,7 @@
                     "rev",
                     "source",
                     "designSystem",
+                    "figma",
                     "message",
                     "createdAt"
                   ],
@@ -1228,6 +1434,18 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9:._-]+$",
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "pattern": "^asset_[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
                   "additionalProperties": {},
                   "properties": {
                     "createdAt": {
@@ -1235,6 +1453,49 @@
                     },
                     "designSystem": {
                       "type": "string"
+                    },
+                    "figma": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fileKey": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "type": "string"
+                            },
+                            "lastSyncedAt": {
+                              "maxLength": 40,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "nodeIds": {
+                              "items": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "referenceScreenshots": {
+                              "items": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "maxItems": 50,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "fileKey",
+                            "nodeIds"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "message": {
                       "anyOf": [
@@ -1257,6 +1518,7 @@
                     "rev",
                     "source",
                     "designSystem",
+                    "figma",
                     "message",
                     "createdAt"
                   ],
@@ -1309,6 +1571,18 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9:._-]+$",
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "pattern": "^asset_[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
                   "additionalProperties": {},
                   "properties": {
                     "createdAt": {
@@ -1316,6 +1590,49 @@
                     },
                     "designSystem": {
                       "type": "string"
+                    },
+                    "figma": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fileKey": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "type": "string"
+                            },
+                            "lastSyncedAt": {
+                              "maxLength": 40,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "nodeIds": {
+                              "items": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "referenceScreenshots": {
+                              "items": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "maxItems": 50,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "fileKey",
+                            "nodeIds"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "message": {
                       "anyOf": [
@@ -1338,6 +1655,7 @@
                     "rev",
                     "source",
                     "designSystem",
+                    "figma",
                     "message",
                     "createdAt"
                   ],
@@ -1455,6 +1773,18 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9:._-]+$",
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "pattern": "^asset_[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
                   "additionalProperties": {},
                   "properties": {
                     "assets": {
@@ -1499,6 +1829,49 @@
                       },
                       "type": "array"
                     },
+                    "figma": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fileKey": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "type": "string"
+                            },
+                            "lastSyncedAt": {
+                              "maxLength": 40,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "nodeIds": {
+                              "items": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "referenceScreenshots": {
+                              "items": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "maxItems": 50,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "fileKey",
+                            "nodeIds"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "hostAbiVersion": {
                       "type": "number"
                     },
@@ -1532,6 +1905,7 @@
                     "bundleHash",
                     "hostAbiVersion",
                     "assets",
+                    "figma",
                     "publishedAt"
                   ],
                   "type": "object"
@@ -3159,6 +3533,16 @@
                     ],
                     "type": "object"
                   },
+                  "__schema11": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9:._-]+$",
+                    "type": "string"
+                  },
+                  "__schema12": {
+                    "pattern": "^asset_[0-9a-f]{64}$",
+                    "type": "string"
+                  },
                   "__schema2": {
                     "minLength": 1,
                     "type": "string"
@@ -3404,6 +3788,42 @@
                       "startScreen",
                       "state",
                       "screens"
+                    ],
+                    "type": "object"
+                  },
+                  "figma": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fileKey": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9_-]+$",
+                        "type": "string"
+                      },
+                      "lastSyncedAt": {
+                        "maxLength": 40,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "nodeIds": {
+                        "items": {
+                          "$ref": "#/$defs/__schema11"
+                        },
+                        "maxItems": 50,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "referenceScreenshots": {
+                        "items": {
+                          "$ref": "#/$defs/__schema12"
+                        },
+                        "maxItems": 50,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "fileKey",
+                      "nodeIds"
                     ],
                     "type": "object"
                   },
@@ -3609,6 +4029,16 @@
                   "$defs": {
                     "__schema0": {
                       "type": "string"
+                    },
+                    "__schema1": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9:._-]+$",
+                      "type": "string"
+                    },
+                    "__schema2": {
+                      "pattern": "^asset_[0-9a-f]{64}$",
+                      "type": "string"
                     }
                   },
                   "additionalProperties": {},
@@ -3618,6 +4048,49 @@
                     },
                     "draftRevision": {
                       "type": "number"
+                    },
+                    "figma": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fileKey": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "type": "string"
+                            },
+                            "lastSyncedAt": {
+                              "maxLength": 40,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "nodeIds": {
+                              "items": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "referenceScreenshots": {
+                              "items": {
+                                "$ref": "#/$defs/__schema2"
+                              },
+                              "maxItems": 50,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "fileKey",
+                            "nodeIds"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "headRev": {
                       "type": "number"
@@ -3719,7 +4192,8 @@
                     "draftRevision",
                     "validatedRevision",
                     "publishedVersion",
-                    "renderable"
+                    "renderable",
+                    "figma"
                   ],
                   "type": "object"
                 }
@@ -3789,6 +4263,16 @@
                       "action"
                     ],
                     "type": "object"
+                  },
+                  "__schema11": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9:._-]+$",
+                    "type": "string"
+                  },
+                  "__schema12": {
+                    "pattern": "^asset_[0-9a-f]{64}$",
+                    "type": "string"
                   },
                   "__schema2": {
                     "minLength": 1,
@@ -4043,6 +4527,42 @@
                     ],
                     "type": "object"
                   },
+                  "figma": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fileKey": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9_-]+$",
+                        "type": "string"
+                      },
+                      "lastSyncedAt": {
+                        "maxLength": 40,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "nodeIds": {
+                        "items": {
+                          "$ref": "#/$defs/__schema11"
+                        },
+                        "maxItems": 50,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "referenceScreenshots": {
+                        "items": {
+                          "$ref": "#/$defs/__schema12"
+                        },
+                        "maxItems": 50,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "fileKey",
+                      "nodeIds"
+                    ],
+                    "type": "object"
+                  },
                   "message": {
                     "type": "string"
                   }
@@ -4178,6 +4698,18 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9:._-]+$",
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "pattern": "^asset_[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
                   "additionalProperties": {},
                   "properties": {
                     "assets": {
@@ -4264,6 +4796,49 @@
                       ],
                       "type": "object"
                     },
+                    "figma": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fileKey": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "type": "string"
+                            },
+                            "lastSyncedAt": {
+                              "maxLength": 40,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "nodeIds": {
+                              "items": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "referenceScreenshots": {
+                              "items": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "maxItems": 50,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "fileKey",
+                            "nodeIds"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "rev": {
                       "type": "number"
                     }
@@ -4275,7 +4850,8 @@
                     "componentManifestHash",
                     "components",
                     "assets",
-                    "designSystemMetaVersion"
+                    "designSystemMetaVersion",
+                    "figma"
                   ],
                   "type": "object"
                 }
@@ -4651,6 +5227,18 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9:._-]+$",
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "pattern": "^asset_[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
                   "additionalProperties": {},
                   "properties": {
                     "assets": {
@@ -4740,6 +5328,49 @@
                       ],
                       "type": "object"
                     },
+                    "figma": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fileKey": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "type": "string"
+                            },
+                            "lastSyncedAt": {
+                              "maxLength": 40,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "nodeIds": {
+                              "items": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "referenceScreenshots": {
+                              "items": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "maxItems": 50,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "fileKey",
+                            "nodeIds"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "message": {
                       "anyOf": [
                         {
@@ -4762,6 +5393,7 @@
                     "components",
                     "assets",
                     "designSystemMetaVersion",
+                    "figma",
                     "message",
                     "createdAt"
                   ],
@@ -5218,6 +5850,18 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9:._-]+$",
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "pattern": "^asset_[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
                   "additionalProperties": {},
                   "properties": {
                     "assets": {
@@ -5304,6 +5948,49 @@
                       ],
                       "type": "object"
                     },
+                    "figma": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fileKey": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "type": "string"
+                            },
+                            "lastSyncedAt": {
+                              "maxLength": 40,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "nodeIds": {
+                              "items": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "referenceScreenshots": {
+                              "items": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "maxItems": 50,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "fileKey",
+                            "nodeIds"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "publishedAt": {
                       "type": "string"
                     },
@@ -5322,6 +6009,7 @@
                     "components",
                     "assets",
                     "designSystemMetaVersion",
+                    "figma",
                     "version",
                     "publishedAt"
                   ],

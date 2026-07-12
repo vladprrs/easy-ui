@@ -1,11 +1,13 @@
 import { JSONUIProvider } from "@json-render/react";
-import { lazy, Suspense, useEffect, useMemo, useRef } from "react";
-import { Outlet, useParams } from "react-router";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Outlet, useParams, useSearchParams } from "react-router";
 import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
 import type { ComponentDefinition } from "../catalog/definitions";
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import type { PrototypeDoc } from "../prototype/schema";
 import { EasyUiActionRuntime } from "./actionRuntime";
+import { InspectorPanel } from "./inspector/InspectorPanel";
+import { InspectorLog } from "./inspector/log";
 import { PlayerNavigationProvider, usePlayerNavigation } from "./navigation";
 import { PrototypeLoader } from "./PrototypeLoader";
 export { LoadError, MissingPrototype } from "./PrototypeLoader";
@@ -21,7 +23,7 @@ export interface PlayerOutletContext {
   onError: (message: string, detail?: Record<string, unknown>) => void;
 }
 
-function LoadedPlayer({ doc, custom, runtimeKey, metaVersion }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; metaVersion: number | null | undefined }) {
+function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; metaVersion: number | null | undefined; debug: boolean }) {
   const themeContent = useDesignSystemTheme(doc.designSystem, metaVersion);
   const navigation = usePlayerNavigation();
   const navigationRef = useRef(navigation);
@@ -33,6 +35,9 @@ function LoadedPlayer({ doc, custom, runtimeKey, metaVersion }: { doc: Prototype
     openUrl: (url) => { window.open(url, "_blank", "noopener,noreferrer"); },
     restart: () => navigationRef.current.restart(),
   }, custom, doc.designSystem), [custom, doc.designSystem]);
+
+  // Interaction inspector (H.1), activated by ?debug=1 (latched in PlayerShell).
+  const inspectorLog = useMemo(() => (debug ? new InspectorLog() : null), [debug]);
 
   const customDefinitions = useMemo(() => custom?.definitions ?? {}, [custom]);
   const customTypes = useMemo(() => new Set(Object.keys(customDefinitions)), [customDefinitions]);
@@ -52,26 +57,35 @@ function LoadedPlayer({ doc, custom, runtimeKey, metaVersion }: { doc: Prototype
       restart: () => navigationRef.current.restart(),
     },
     onError,
+    ...(inspectorLog ? { logger: inspectorLog } : {}),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [doc, onError, navigation.sessionNonce]);
+  }), [doc, onError, inspectorLog, navigation.sessionNonce]);
 
   return <JSONUIProvider key={`${runtimeKey}:${navigation.sessionNonce}`} registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
     <ThemeStyle content={themeContent} />
     <Outlet context={{ doc, registry: runtime.registry, runtime: actionRuntime, customTypes, customDefinitions, onError } satisfies PlayerOutletContext} />
+    {inspectorLog ? <InspectorPanel log={inspectorLog} /> : null}
     {import.meta.env.DEV && import.meta.env.MODE !== "test" ? <Suspense fallback={null}><Devtools /></Suspense> : null}
   </JSONUIProvider>;
 }
 
-function ReadyPlayer({ doc, custom, runtimeKey, routeBase, metaVersion }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; metaVersion: number | null | undefined }) {
+function ReadyPlayer({ doc, custom, runtimeKey, routeBase, metaVersion, debug }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; metaVersion: number | null | undefined; debug: boolean }) {
   return <PlayerNavigationProvider key={runtimeKey} startScreen={doc.startScreen} routeBase={routeBase}>
-    <LoadedPlayer key={runtimeKey} doc={doc} custom={custom} runtimeKey={runtimeKey} metaVersion={metaVersion} />
+    <LoadedPlayer key={runtimeKey} doc={doc} custom={custom} runtimeKey={runtimeKey} metaVersion={metaVersion} debug={debug} />
   </PlayerNavigationProvider>;
 }
 
 export function PlayerShell() {
   const { protoId, version } = useParams();
+  // Interaction inspector (H.1): ?debug=1 enables the panel. The flag is latched
+  // for the lifetime of the shell because player navigation rewrites the URL
+  // (replace on bootstrap/restart) and drops the query string.
+  const [search] = useSearchParams();
+  const debugParam = search.get("debug") === "1";
+  const [debug, setDebug] = useState(debugParam);
+  if (debugParam && !debug) setDebug(true); // render-time latch (never turns back off)
   const numericVersion = version === undefined ? undefined : Number(version);
   return <PrototypeLoader protoId={protoId} version={numericVersion}>
-    {({ loaded, custom, runtimeKey, routeBase }) => <ReadyPlayer doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} routeBase={routeBase} metaVersion={loaded.designSystemMetaVersion} />}
+    {({ loaded, custom, runtimeKey, routeBase }) => <ReadyPlayer doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} routeBase={routeBase} metaVersion={loaded.designSystemMetaVersion} debug={debug} />}
   </PrototypeLoader>;
 }

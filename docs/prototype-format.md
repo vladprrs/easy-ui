@@ -124,6 +124,22 @@ A URL prop may reference a registered binary asset (image or font) by content-ad
 - The id format is validated: `asset_` + 64 lowercase hex chars. A malformed id is a validation error.
 - On save the server verifies every referenced asset exists (`422 asset_not_found` otherwise) and pins it to the revision; restoring an earlier revision copies its asset pins. Pinned asset bytes cannot be deleted while any revision references them.
 
+## Semantic warnings
+
+Beyond the structural errors above, `validatePrototype` emits **warnings** — advisory diagnostics that never block validation, saving, or playback (like the atomic-nesting warnings). They point at likely authoring mistakes that the JSON grammar alone cannot catch. Existing hard errors are unchanged; these are strictly additive.
+
+Warnings draw on optional **definition metadata**. Custom components declare it on their definition (`interactive?: boolean`, `accessibleLabelProps?: string[]`, `urlProps?: string[]`; serialized additively into the component's `DefinitionMeta`). Builtin components get the same metadata from a static table (`src/catalog/builtinSemantics.ts`), derived from their real prop schemas: interactive controls are `Button`, `Link`, `Input`, `Textarea`, `Select`, `Checkbox`, `Radio`, `Switch`, `Slider`, `Toggle`, `ToggleGroup`, `Tabs`, `DropdownMenu`, `ButtonGroup`, `Pagination`, and `Hotspot`; `accessibleLabelProps` is `["label"]` (or `["ariaLabel"]` for `Hotspot`) where the schema has one; `urlProps` is `["src"]` for `Image`/`Avatar` and `["href"]` for `Link`.
+
+The warnings are:
+
+- **Interactive element with no handler and no binding** — an interactive element with neither an `on` handler nor any `$bindState`/`$bindItem` prop does nothing in the flow. **Self-driven** controls (`Tabs`, `DropdownMenu`, `ToggleGroup`, `ButtonGroup`, `Pagination`, `Link`) manage their own internal UI state (or navigate via `href`) and are exempt.
+- **Interactive element without an accessible label** — an interactive element whose `accessibleLabelProps` are all blank/unset and which has no text-bearing child (`text`/`label`/`title`). A dynamic value (`$state`/`$template`/`$bindState`) counts as a provided label.
+- **Repeated element reads `$event` from a payload without item identity** — inside a `repeat` subtree, an event that binds `$event` while its declared payload schema has none of the identity fields `itemId`, `id`, `key`, `value` cannot tell which item was acted on.
+- **Large inline base64** — any string prop longer than 100 KB that is a `data:` URL or bare base64 should be uploaded as an asset (`$asset`) instead. (A `data:` URL in `Image.src`/`Link.href` remains a hard error; this warning covers every other string prop.)
+- **Multiple screens with no inter-screen navigation** — two or more screens but no `navigate` action targeting a *different* screen (`back`/`restart`/`openUrl` do not count) suggests disconnected screens.
+- **Monolithic screen** — a screen whose sole element is a single custom `organism`/`page` component with no children likely reconstructs a page in one component instead of composing it from design-system elements.
+- **URL prop with a non-public local path** — a `urlProps` value that begins with `/` but not with a runtime-served public prefix (`/api/assets/`, `/design/`, `/fonts/`, `/images/`) may be unavailable to the player runtime.
+
 ## Author checklist
 
 - Filename and document `id` match; every ID is a slug.
@@ -132,6 +148,7 @@ A URL prop may reference a registered binary asset (image or font) by content-ad
 - Component props and events match the catalog; required props are present.
 - `designSystem` is registered and every component belongs to its per-system allowlist.
 - Atomic nesting warnings have been reviewed, even though they do not block validation.
+- Semantic warnings (interactive handlers/labels, item identity, inline base64, screen connectivity, monolithic screens, local URL paths) have been reviewed.
 - Directives, conditions, actions, and params use only the closed v1 grammar.
 - State paths are valid, non-reserved JSON Pointers; bound initial values are in `state` where appropriate.
 - Terminal actions are unique and last; navigating links prevent their default browser action.

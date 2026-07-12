@@ -182,6 +182,12 @@ const migrations = [
     const violations = db.query("PRAGMA foreign_key_check").all();
     if (violations.length) throw new Error(`v8 rebuild left foreign-key violations: ${JSON.stringify(violations)}`);
   },
+  (db: Database) => {
+    // v9: Figma provenance on revisions (plan §J). Additive, immutable-per-revision JSON blob
+    // {fileKey,nodeIds,referenceScreenshots?,lastSyncedAt?}; NULL when a revision has no link.
+    db.run("ALTER TABLE prototype_revisions ADD COLUMN figma_json TEXT");
+    db.run("ALTER TABLE component_revisions ADD COLUMN figma_json TEXT");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

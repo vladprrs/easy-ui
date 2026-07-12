@@ -2,21 +2,27 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { migrate } from "./migrations";
 
-test("migrations are idempotent and install the complete v8 schema",()=>{
+test("migrations are idempotent and install the complete v9 schema",()=>{
   const db=new Database(":memory:"); migrate(db); migrate(db);
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
   const names=(db.query("SELECT name FROM sqlite_master WHERE type='table'").all() as {name:string}[]).map(x=>x.name);
   expect(names).toEqual(expect.arrayContaining(["prototypes","prototype_revisions","prototype_revision_components","prototype_publishes","components","component_revisions","component_publishes","seed_log","design_systems","validation_records","assets","prototype_revision_assets","component_publish_assets","visual_references","visual_runs","design_system_versions"]));
   // v8 widened the component_publishes lifecycle columns.
   const cols=(db.query("PRAGMA table_info(component_publishes)").all() as {name:string}[]).map(c=>c.name);
   expect(cols).toEqual(expect.arrayContaining(["status","status_reason","superseded_by","status_rev"]));
+  // v9 added Figma provenance columns to both revision tables.
+  expect((db.query("PRAGMA table_info(prototype_revisions)").all() as {name:string}[]).map(c=>c.name)).toContain("figma_json");
+  expect((db.query("PRAGMA table_info(component_revisions)").all() as {name:string}[]).map(c=>c.name)).toContain("figma_json");
   db.close();
 });
 
-// Roll a fully-migrated database back below v7 for the pre-v7 upgrade fixtures.
+// Roll a fully-migrated database back below v7 (and below the v9 figma columns) for the
+// pre-v7 upgrade fixtures, so re-migration re-runs v7..v9 cleanly.
 function rollbackBelowV7(db:Database):void {
   db.run("DROP TABLE design_system_versions");
   db.run("ALTER TABLE prototype_revisions DROP COLUMN design_system_meta_version");
+  db.run("ALTER TABLE prototype_revisions DROP COLUMN figma_json");
+  db.run("ALTER TABLE component_revisions DROP COLUMN figma_json");
 }
 
 test("upgrades a populated v2 database and backfills revision design systems",()=>{
@@ -31,7 +37,7 @@ test("upgrades a populated v2 database and backfills revision design systems",()
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
   expect(db.query("SELECT design_system FROM component_revisions WHERE component_id='custom'").get()).toEqual({design_system:"wireframe"});
   expect(db.query("SELECT COUNT(*) count FROM design_systems").get()).toEqual({count:3});
   expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='validation_records'").get()).toEqual({name:"validation_records"});
@@ -50,7 +56,7 @@ test("adds validation_records to a populated v3 database without touching existi
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
   expect(db.query("SELECT COUNT(*) count FROM validation_records").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM prototypes").get()).toEqual({count:1});
   expect(db.query("SELECT COUNT(*) count FROM components").get()).toEqual({count:1});
@@ -70,7 +76,7 @@ test("adds the v5 asset registry to a populated v4 database without touching exi
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
   expect(db.query("SELECT COUNT(*) count FROM assets").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM prototypes").get()).toEqual({count:1});
   expect(db.query("SELECT COUNT(*) count FROM validation_records").get()).toEqual({count:1});
@@ -89,7 +95,7 @@ test("adds the v6 visual regression tables to a populated v5 database with FK RE
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
   expect(db.query("SELECT COUNT(*) count FROM visual_references").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM assets").get()).toEqual({count:1});
   // FK RESTRICT: an asset used as a reference baseline cannot be deleted.
@@ -112,7 +118,7 @@ test("adds the v7 design-system theme versions to a populated v6 database with F
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
   expect(db.query("SELECT COUNT(*) count FROM design_system_versions").get()).toEqual({count:0});
   expect((db.query("PRAGMA table_info(prototype_revisions)").all() as {name:string}[]).map(c=>c.name)).toContain("design_system_meta_version");
   // Existing rows survive and the new pin column defaults to NULL.
@@ -154,8 +160,12 @@ function revertComponentPublishesToPreStatus(db:Database):void {
 
 test("v8 strictly rebuilds component_publishes on a populated pre-status database preserving children and FKs",()=>{
   const db=new Database(":memory:"); migrate(db);
-  // Drop to the pre-v8 (pre-status) component_publishes shape, then set the DB back to v7.
-  revertComponentPublishesToPreStatus(db); db.run("PRAGMA user_version = 7");
+  // Drop to the pre-v8 (pre-status) component_publishes shape and remove the v9 figma columns,
+  // then set the DB back to v7 so re-migration re-runs v8 (rebuild) and v9 (figma).
+  revertComponentPublishesToPreStatus(db);
+  db.run("ALTER TABLE prototype_revisions DROP COLUMN figma_json");
+  db.run("ALTER TABLE component_revisions DROP COLUMN figma_json");
+  db.run("PRAGMA user_version = 7");
   const insert=()=>{
     // A live component with active/failed/staging versions, a soft-deleted component still pinned,
     // pins across several prototype revisions and a component_publish_asset row (v5 FK-child).
@@ -177,7 +187,7 @@ test("v8 strictly rebuilds component_publishes on a populated pre-status databas
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(8);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
   // No FK violations after the rebuild.
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   // Parent rows and their statuses survive; new columns default.

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import helloDocument from "../../../prototypes/hello-world.json";
-import { prototypeDocSchema } from "../schema";
+import type { ComponentDefinition } from "../../catalog/definitions";
+import { prototypeDocSchema, type PrototypeDoc } from "../schema";
 import { isDynamicValue, validateElementProps, validatePrototype } from "../validate";
 
 const hello: unknown = helloDocument;
@@ -343,6 +344,96 @@ describe("repeat", () => {
 describe("repository prototypes", () => {
   const files = import.meta.glob("../../../prototypes/*.json", { eager: true, import: "default" });
   for (const [filename, document] of Object.entries(files)) it(`${filename} is valid`, () => expect(messages(document)).toEqual([]));
+  // Semantic warnings must stay calibrated: no shipped prototype gains a new warning.
+  for (const [filename, document] of Object.entries(files)) it(`${filename} has no warnings`, () => {
+    const parsed = prototypeDocSchema.parse(document);
+    expect(validatePrototype(parsed).warnings).toEqual([]);
+  });
+});
+
+describe("semantic warnings", () => {
+  const warns = (doc: PrototypeDoc, definitions?: Record<string, ComponentDefinition>) =>
+    validatePrototype(doc, definitions ? { definitions } : undefined).warnings.map((w) => w.message);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const screen = (elements: Record<string, any>, root: string, extra: Record<string, unknown> = {}) => ({ id: "s", name: "S", spec: { root, elements }, ...extra });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const build = (elements: Record<string, any>, root: string, opts: { state?: Record<string, unknown>; screens?: any[] } = {}) => prototypeDocSchema.parse({
+    version: 1, id: "sw", name: "SW", designSystem: "shadcn", startScreen: "s", state: opts.state ?? {},
+    screens: opts.screens ?? [screen(elements, root)],
+  });
+
+  it("warns on an interactive element with no handler and no binding, and not otherwise", () => {
+    const bare = build({ b: { type: "Button", props: { label: "Go" } } }, "b");
+    expect(warns(bare)).toContain("interactive Button has no event handler and no two-way binding");
+    const handled = build({ b: { type: "Button", props: { label: "Go" }, on: { press: { action: "back", params: {} } } } }, "b");
+    expect(warns(handled)).not.toContain("interactive Button has no event handler and no two-way binding");
+    const bound = build({ i: { type: "Input", props: { label: "Name", name: "n", value: { $bindState: "/n" } } } }, "i", { state: { n: "" } });
+    expect(warns(bound)).not.toContain("interactive Input has no event handler and no two-way binding");
+    // Self-driven controls (Tabs) are exempt even without a handler.
+    const tabs = build({ t: { type: "Tabs", props: { tabs: [{ label: "A", value: "a" }], defaultValue: "a" } } }, "t");
+    expect(warns(tabs).some((m) => m.includes("no event handler"))).toBe(false);
+  });
+
+  it("warns on an interactive element without an accessible label", () => {
+    const def: ComponentDefinition = { description: "Toggle", props: z.strictObject({ label: z.string() }), events: ["press"], interactive: true, accessibleLabelProps: ["label"] };
+    const missing = build({ w: { type: "Widget", props: { label: "" }, on: { press: { action: "back", params: {} } } } }, "w");
+    expect(warns(missing, { Widget: def })).toContain("interactive Widget has no accessible label");
+    const labelled = build({ w: { type: "Widget", props: { label: "Save" }, on: { press: { action: "back", params: {} } } } }, "w");
+    expect(warns(labelled, { Widget: def })).not.toContain("interactive Widget has no accessible label");
+  });
+
+  it("warns when a repeated element reads $event from a payload without item identity", () => {
+    const noId: ComponentDefinition = { description: "Picker", props: z.strictObject({}), events: ["pick"], eventPayloadSchemas: { pick: z.strictObject({ label: z.string() }) } };
+    const withId: ComponentDefinition = { description: "Picker", props: z.strictObject({}), events: ["pick"], eventPayloadSchemas: { pick: z.strictObject({ id: z.string() }) } };
+    const list: ComponentDefinition = { description: "List", props: z.strictObject({}) };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const doc = (payloadKey: string): any => build({
+      list: { type: "List", props: {}, repeat: { statePath: "/items" }, children: ["w"] },
+      w: { type: "Picker", props: {}, on: { pick: { action: "setState", params: { statePath: "/x", value: { $event: `/${payloadKey}` } } } } },
+    }, "list", { state: { items: [{}] } });
+    expect(warns(doc("label"), { Picker: noId, List: list })).toContain("event payload has no item identity (itemId/id/key/value) for a repeated element");
+    expect(warns(doc("id"), { Picker: withId, List: list }).some((m) => m.includes("item identity"))).toBe(false);
+  });
+
+  it("warns on a large inline base64/data-URL string prop", () => {
+    const big = "A".repeat(120 * 1024);
+    const flagged = build({ t: { type: "Text", props: { text: big } } }, "t");
+    expect(warns(flagged).some((m) => m.includes("inline base64/data-URL value exceeds"))).toBe(true);
+    const small = build({ t: { type: "Text", props: { text: "hello" } } }, "t");
+    expect(warns(small).some((m) => m.includes("inline base64"))).toBe(false);
+  });
+
+  it("warns when multiple screens have no navigate between different screens", () => {
+    const disconnected = build({}, "b", { screens: [
+      screen({ b: { type: "Button", props: { label: "Back" }, on: { press: { action: "back", params: {} } } } }, "b"),
+      screen({ b2: { type: "Button", props: { label: "Back" }, on: { press: { action: "back", params: {} } } } }, "b2", { id: "s2", name: "S2" }),
+    ] });
+    expect(warns(disconnected)).toContain("prototype has multiple screens but no navigate action moves between different screens");
+    const connected = build({}, "b", { screens: [
+      screen({ b: { type: "Button", props: { label: "Next" }, on: { press: { action: "navigate", params: { screenId: "s2" } } } } }, "b"),
+      screen({ b2: { type: "Button", props: { label: "Back" }, on: { press: { action: "back", params: {} } } } }, "b2", { id: "s2", name: "S2" }),
+    ] });
+    expect(warns(connected).some((m) => m.includes("no navigate action moves between"))).toBe(false);
+  });
+
+  it("warns on a monolithic screen (single custom organism/page root with no children)", () => {
+    const page: ComponentDefinition = { description: "Whole page", props: z.strictObject({}), atomicLevel: "page" };
+    const container: ComponentDefinition = { description: "Container", props: z.strictObject({}), atomicLevel: "organism" };
+    const item: ComponentDefinition = { description: "Item", props: z.strictObject({}), atomicLevel: "atom" };
+    const mono = build({ p: { type: "Page", props: {} } }, "p");
+    expect(warns(mono, { Page: page }).some((m) => m.startsWith("monolithic screen:"))).toBe(true);
+    const composed = build({ p: { type: "Container", props: {}, children: ["c"] }, c: { type: "Item", props: {} } }, "p");
+    expect(warns(composed, { Container: container, Item: item }).some((m) => m.startsWith("monolithic screen:"))).toBe(false);
+  });
+
+  it("warns on a urlProp pointing to a non-public local path, but not a public one", () => {
+    const local = build({ img: { type: "Image", props: { src: "/uploads/x.png", alt: "x", width: 10, height: 10 } } }, "img");
+    expect(warns(local).some((m) => m.includes("may be unavailable in the player runtime"))).toBe(true);
+    const publicPath = build({ img: { type: "Image", props: { src: "/images/x.png", alt: "x", width: 10, height: 10 } } }, "img");
+    expect(warns(publicPath).some((m) => m.includes("may be unavailable"))).toBe(false);
+    const asset = build({ img: { type: "Image", props: { src: "/api/assets/asset_" + "a".repeat(64), alt: "x", width: 10, height: 10 } } }, "img");
+    expect(warns(asset).some((m) => m.includes("may be unavailable"))).toBe(false);
+  });
 });
 
 describe("typed events, param sources and $if validation", () => {

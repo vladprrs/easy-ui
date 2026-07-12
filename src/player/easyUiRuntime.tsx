@@ -27,6 +27,10 @@ export function EasyUiRuntimeProvider({ value, children }: { value: EasyUiRuntim
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+let correlationSeq = 0;
+/** Synchronous correlation id assigned per emit, linking the event entry to its action entries. */
+const nextCorrelationId = (): string => `e${++correlationSeq}`;
+
 /** Deep-verifies a payload is JSON-safe and contains no `$`-prefixed keys, then deep-freezes it. */
 export function freezeJsonSafePayload(value: unknown): { ok: true; value: unknown } | { ok: false; error: string } {
   const walk = (node: unknown): boolean => {
@@ -91,23 +95,36 @@ export function wrapCustomComponent(name: string, Component: ComponentType<EasyU
       if (!runtime || !on) return;
       const bindings = on[event] as RawAction | RawAction[] | undefined;
       if (!bindings) return;
+      const logger = runtime.logger;
+      const correlationId = logger ? nextCorrelationId() : "";
+      const logEvent = (delivered: unknown, payloadValid: boolean) =>
+        logger?.logEvent({ correlationId, elementId: euiKey ?? "", component: name, event, payload: delivered, payloadValid });
       const schema = definition?.eventPayloadSchemas?.[event];
       let deliveredPayload: unknown = undefined;
       if (schema) {
         const parsed = schema.safeParse(payload);
         if (!parsed.success) {
+          logEvent(payload, false);
+          logger?.logRuntimeError(`event "${event}" payload failed validation`, { component: name, event });
           reportError(`event "${event}" payload failed validation`, { component: name, event });
           return;
         }
         const safe = freezeJsonSafePayload(parsed.data);
-        if (!safe.ok) { reportError(`event "${event}": ${safe.error}`, { component: name, event }); return; }
+        if (!safe.ok) {
+          logEvent(payload, false);
+          logger?.logRuntimeError(`event "${event}": ${safe.error}`, { component: name, event });
+          reportError(`event "${event}": ${safe.error}`, { component: name, event });
+          return;
+        }
         deliveredPayload = safe.value;
       }
+      logEvent(deliveredPayload, true);
       const itemKey = repeatScope && meta?.repeatKey !== undefined && itemField(repeatScope.item, meta.repeatKey);
       const ctx: EmitContext = {
         event,
         payload: deliveredPayload,
         elementId: euiKey ?? "",
+        ...(correlationId ? { correlationId } : {}),
         ...(repeatScope ? { itemIndex: repeatScope.index } : {}),
         ...(repeatScope && meta?.repeatKey !== undefined ? { itemKey } : {}),
       };
