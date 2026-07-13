@@ -7,9 +7,9 @@ export const pillGhost =
 export const pillGhostOnDark =
   "inline-flex items-center justify-center rounded-full border border-white/25 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/80";
 export const chip =
-  "inline-flex items-center rounded-full border border-eui-ink/15 px-3 py-1 text-sm font-medium text-eui-ink";
+  "inline-flex items-center rounded-full border border-eui-ink/15 px-3 py-1 text-sm font-medium text-eui-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand";
 export const chipActive =
-  "inline-flex items-center rounded-full bg-eui-brand px-3 py-1 text-sm font-bold text-white";
+  "inline-flex items-center rounded-full bg-eui-brand px-3 py-1 text-sm font-bold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand";
 export const plate = "rounded-3xl bg-eui-lav p-6";
 export const card = "rounded-3xl bg-eui-lav p-6";
 export const kicker =

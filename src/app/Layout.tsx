@@ -9,7 +9,7 @@ export function Layout() {
           <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/" end>Gallery</NavLink>
           <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/library">Library</NavLink>
           <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/visual">Visual</NavLink>
-          <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/debug">Debug</NavLink>
+          {import.meta.env.DEV ? <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/debug">Debug</NavLink> : null}
         </nav>
       </div>
     </header>
