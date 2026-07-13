@@ -1,9 +1,14 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { PrototypeDraft } from "../api/client";
 import { routeObjects } from "../app/routes";
 import { prototypeDocSchema } from "../prototype/schema";
+
+const mocks = vi.hoisted(() => ({ loadCustom: vi.fn() }));
+vi.mock("../customComponents/loader", () => ({ loadCustomComponents: mocks.loadCustom }));
 
 const doc = prototypeDocSchema.parse({
   version: 1, id: "editor-demo", name: "Editor demo", description: "Draft", device: "mobile", startScreen: "home", state: {},
@@ -12,14 +17,15 @@ const doc = prototypeDocSchema.parse({
 const draft: PrototypeDraft = { doc, rev: 7, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] };
 const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
 
-function renderEditor() {
-  const router = createMemoryRouter(routeObjects, { initialEntries: ["/p/editor-demo/edit"] });
+function renderEditor(protoId = "editor-demo") {
+  const router = createMemoryRouter(routeObjects, { initialEntries: [`/p/${protoId}/edit`] });
   render(<RouterProvider router={router} />);
 }
 
 describe("EditorShell", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    mocks.loadCustom.mockReset().mockResolvedValue(undefined);
     vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
     Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: vi.fn(() => []) });
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
@@ -81,6 +87,50 @@ describe("EditorShell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText(expectedPath)).toBeTruthy();
+  });
+
+  it("renders a custom DS component with named-slot metadata in the canvas and strip previews", async () => {
+    const customDoc = prototypeDocSchema.parse({
+      ...doc, id: "custom-demo", name: "Custom demo",
+      screens: [{ id: "home", name: "Home", spec: { root: "widget", elements: {
+        widget: { type: "Widget", props: { label: "Custom label" }, children: ["header-text", "body-text"], on: { press: { action: "back" } } },
+        "header-text": { type: "Text", props: { text: "In header" }, slot: "header" },
+        "body-text": { type: "Text", props: { text: "In body" } },
+      } } }],
+    });
+    const customDraft: PrototypeDraft = { doc: customDoc, rev: 1, builtinCatalogHash: "builtin", componentManifestHash: "custom", components: [{ id: "widget", name: "Widget", version: 1, bundleUrl: "/api/components/widget/versions/1/bundle.js", bundleHash: "hash" }] };
+    mocks.loadCustom.mockResolvedValue({
+      definitions: { Widget: { props: z.object({ label: z.string().optional() }), description: "w", events: ["press"], slots: ["header"], capabilities: { namedSlots: true } } },
+      components: { Widget: ({ props, slots }: { props: { label?: string }; slots: Record<string, ReactNode> }) =>
+        <div><span data-testid="widget-label">{props.label}</span><div data-testid="widget-header">{slots.header}</div><div data-testid="widget-body">{slots.default}</div></div> },
+    });
+    vi.mocked(fetch).mockImplementation((input) => String(input) === "/api/prototypes/custom-demo/draft" ? json(customDraft) : Promise.reject(new Error(`Unexpected request: ${String(input)}`)));
+    renderEditor("custom-demo");
+    // Canvas + screen strip both render the custom component through the runtime adapter.
+    const labels = await screen.findAllByTestId("widget-label");
+    expect(labels).toHaveLength(2);
+    for (const label of labels) expect(label.textContent).toBe("Custom label");
+    // slotIndices metadata survives the inert transform: the slotted child routes into the named slot.
+    for (const header of screen.getAllByTestId("widget-header")) expect(within(header as HTMLElement).getByText("In header")).toBeTruthy();
+    for (const body of screen.getAllByTestId("widget-body")) {
+      expect(within(body as HTMLElement).getByText("In body")).toBeTruthy();
+      expect(within(body as HTMLElement).queryByText("In header")).toBeNull();
+    }
+  });
+
+  it("renders composition-demo previews inertly without losing repeat/$cond composition", async () => {
+    const compositionDoc = prototypeDocSchema.parse((await import("../../prototypes/composition-demo.json")).default);
+    const compositionDraft: PrototypeDraft = { doc: compositionDoc, rev: 1, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] };
+    vi.mocked(fetch).mockImplementation((input) => String(input) === "/api/prototypes/composition-demo/draft" ? json(compositionDraft) : Promise.reject(new Error(`Unexpected request: ${String(input)}`)));
+    renderEditor("composition-demo");
+    await screen.findByRole("heading", { name: "Composition demo" });
+    // Repeat rows and the $cond first-row marker render in the previews (canvas + strip).
+    expect(screen.getAllByText("Design the flow").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("★").length).toBeGreaterThanOrEqual(2);
+    // Events are stripped: pressing the dismiss button must not mutate state.
+    const tipsBefore = screen.getAllByText(/use the buttons to mutate state/).length;
+    for (const dismiss of screen.getAllByRole("button", { name: "Got it", hidden: true })) fireEvent.click(dismiss);
+    expect(screen.getAllByText(/use the buttons to mutate state/)).toHaveLength(tipsBefore);
   });
 
   it("keeps the inspector usable for a screen without a root", async () => {

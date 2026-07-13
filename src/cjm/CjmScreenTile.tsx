@@ -1,10 +1,11 @@
 import { JSONUIProvider, Renderer, type ComponentRegistry, type JSONUIProviderProps } from "@json-render/react";
 import { Component, createRef, type ErrorInfo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
+import type { ComponentDefinition } from "../catalog/definitions";
 import type { PrototypeDoc } from "../prototype/schema";
 import { mergeScreenState } from "../prototype/stateOverrides";
-import { toRuntimeSpec } from "../prototype/runtimeSpec";
-import { splitCanvasSpec } from "../player/canvasSpec";
+import { splitCanvas, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
+import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { buildPlayerPath } from "../player/navigation";
 import { cjm } from "../app/strings/cjm";
 
@@ -44,18 +45,24 @@ export class TileErrorBoundary extends Component<{ prototypeId: string; screenId
   }
 }
 
-export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, routeBase }: { doc: PrototypeDoc; screen: PrototypeDoc["screens"][number]; registry: ComponentRegistry; handlers: NonNullable<JSONUIProviderProps["handlers"]>; runtimeKey: string; routeBase: string }) {
-  const spec = useMemo(() => {
-    const runtimeSpec = toRuntimeSpec(screen.spec).spec;
-    return screen.canvas ? splitCanvasSpec(runtimeSpec).content : runtimeSpec;
-  }, [screen.canvas, screen.spec]);
+export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, routeBase, customTypes, customDefinitions }: { doc: PrototypeDoc; screen: PrototypeDoc["screens"][number]; registry: ComponentRegistry; handlers: NonNullable<JSONUIProviderProps["handlers"]>; runtimeKey: string; routeBase: string; customTypes?: ReadonlySet<string>; customDefinitions?: Record<string, ComponentDefinition> }) {
+  // Inert runtime tree: events are stripped from spec and metadata alike.
+  const tree = useMemo<RuntimeTree | null>(() => {
+    const inert = stripEvents(toRuntimeSpec(screen.spec, { customTypes }));
+    if (!inert.spec.root || !inert.spec.elements[inert.spec.root]) return null;
+    return screen.canvas ? splitCanvas(inert).content : inert;
+  }, [customTypes, screen.canvas, screen.spec]);
+  const runtimeValue = useMemo<EasyUiRuntimeValue>(
+    () => ({ metadata: tree?.metadata ?? {}, runtime: null, definitions: customDefinitions ?? {} }),
+    [customDefinitions, tree],
+  );
   const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
   const nativeWidth = screen.canvas?.width ?? DEVICE_WIDTH[doc.device];
   return <article className="w-[304px] rounded-[20px] bg-white p-3 shadow-sm">
     <div className="relative">
       <TileErrorBoundary key={`${runtimeKey}:${screen.id}`} prototypeId={doc.id} screenId={screen.id}>
         <JSONUIProvider key={`${runtimeKey}:${screen.id}`} registry={registry} handlers={handlers} initialState={initialState}>
-          <div inert>{spec ? <CjmFrame nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`}><Renderer registry={registry} spec={spec} /></CjmFrame> : <div className="flex h-64 w-[280px] items-center justify-center rounded-xl border bg-background font-eui-ui text-sm text-eui-slate-500">{cjm.noContent}</div>}</div>
+          <div inert>{tree ? <CjmFrame nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`}><EasyUiRuntimeProvider value={runtimeValue}><Renderer registry={registry} spec={tree.spec} /></EasyUiRuntimeProvider></CjmFrame> : <div className="flex h-64 w-[280px] items-center justify-center rounded-xl border bg-background font-eui-ui text-sm text-eui-slate-500">{cjm.noContent}</div>}</div>
         </JSONUIProvider>
       </TileErrorBoundary>
       <Link to={buildPlayerPath(routeBase, screen.id)} className="absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring" aria-label={cjm.openScreenAria(screen.name, doc.name)} />

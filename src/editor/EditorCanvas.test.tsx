@@ -79,6 +79,21 @@ describe("EditorCanvas", () => {
     }
   });
 
+  it("moves custom on into the metadata side-channel and keeps a string __euiKey in the inert spec", () => {
+    const doc = makeDoc({
+      root: "root",
+      elements: {
+        root: { type: "Box", props: {}, children: ["widget"] },
+        widget: { type: "Widget", props: { label: "Hi" }, on: { press: { action: "back" } } },
+      },
+    });
+    render(<EditorCanvas doc={doc} screen={doc.screens[0]} registry={registry} runtimeKey="runtime" stateEpoch={0} selectedKey={null} onSelect={vi.fn()} customTypes={new Set(["Widget"])} customDefinitions={{}} />);
+    const spec = JSON.parse(screen.getByTestId("runtime-spec").textContent ?? "null");
+    expect(spec.elements.widget.props.__euiKey).toBe("widget");
+    expect(spec.elements.widget).not.toHaveProperty("on");
+    expect(spec.elements.root).not.toHaveProperty("on");
+  });
+
   it("remounts the provider when stateEpoch changes", () => {
     const doc = makeDoc();
     const view = renderCanvas(doc, 1);

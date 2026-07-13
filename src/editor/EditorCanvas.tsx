@@ -1,12 +1,12 @@
 import { markDevtoolsActive } from "@json-render/core";
 import { JSONUIProvider, Renderer, type ComponentRegistry, type JSONUIProviderProps } from "@json-render/react";
 import { Component, type ErrorInfo, type MouseEvent, type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ComponentDefinition } from "../catalog/definitions";
 import type { PrototypeDoc } from "../prototype/schema";
-import { toRuntimeSpec } from "../prototype/runtimeSpec";
+import { splitCanvas, stripEvents, toRuntimeSpec } from "../prototype/runtimeSpec";
 import { mergeScreenState } from "../prototype/stateOverrides";
 import { CanvasLayers } from "../player/CanvasLayers";
-import { splitCanvasSpec } from "../player/canvasSpec";
-import { stripSpecEvents } from "./stripSpecEvents";
+import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 
 const DEVICE_WIDTH = { mobile: 390, tablet: 834, desktop: 1280 } as const;
 
@@ -36,6 +36,10 @@ export interface EditorCanvasProps {
   stateEpoch: number;
   selectedKey: string | null;
   onSelect: (elementKey: string | null) => void;
+  /** Custom component types of the prototype (their `on` moves to metadata). */
+  customTypes?: ReadonlySet<string>;
+  /** Custom component definitions, exposed to the runtime side-channel. */
+  customDefinitions?: Record<string, ComponentDefinition>;
 }
 
 export function EditorFrame({ nativeWidth, nativeHeight, viewportRef, previewRootRef, children, overlay, frames }: {
@@ -99,16 +103,27 @@ class EditorCanvasErrorBoundary extends Component<{ prototypeId: string; screenI
   }
 }
 
-export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stateEpoch, selectedKey, onSelect }: EditorCanvasProps) {
+export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stateEpoch, selectedKey, onSelect, customTypes, customDefinitions }: EditorCanvasProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const previewRootRef = useRef<HTMLDivElement>(null);
   const [selectionRects, setSelectionRects] = useState<SelectionRect[]>([]);
 
   useEffect(() => markDevtoolsActive(), []);
 
-  const spec = useMemo(() => stripSpecEvents(toRuntimeSpec(screen.spec).spec), [screen.spec]);
+  // Inert runtime tree: events are stripped from both the spec and the metadata,
+  // so neither builtin `on` nor custom `emit` can dispatch actions from the canvas.
+  const tree = useMemo(() => stripEvents(toRuntimeSpec(screen.spec, { customTypes })), [customTypes, screen.spec]);
+  const spec = tree.spec;
   const hasRoot = Boolean(spec.root && spec.elements[spec.root]);
-  const specs = useMemo(() => screen.canvas && hasRoot ? splitCanvasSpec(spec) : null, [hasRoot, screen.canvas, spec]);
+  const specs = useMemo(() => {
+    if (!screen.canvas || !hasRoot) return null;
+    const { content, hotspots } = splitCanvas(tree);
+    return { content: content?.spec ?? null, hotspots: hotspots.map((hotspot) => hotspot.spec) };
+  }, [hasRoot, screen.canvas, tree]);
+  const runtimeValue = useMemo<EasyUiRuntimeValue>(
+    () => ({ metadata: tree.metadata, runtime: null, definitions: customDefinitions ?? {} }),
+    [customDefinitions, tree.metadata],
+  );
   const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
 
   const measureSelection = useCallback(() => {
@@ -177,9 +192,11 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
 
   const rendered = !hasRoot
     ? <div className="flex h-64 items-center justify-center text-sm text-eui-slate-500">Нет содержимого</div>
-    : screen.canvas && specs
-      ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} />
-      : <Renderer registry={registry} spec={spec} />;
+    : <EasyUiRuntimeProvider value={runtimeValue}>
+      {screen.canvas && specs
+        ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} />
+        : <Renderer registry={registry} spec={spec} />}
+    </EasyUiRuntimeProvider>;
 
   return <EditorCanvasErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id}>
     <JSONUIProvider key={`${runtimeKey}:${screen.id}:${stateEpoch}`} registry={registry} handlers={handlers} initialState={initialState}>

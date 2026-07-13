@@ -1,6 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { PrototypeDraft, PrototypeVersion } from "../api/client";
 import { prototypeDocSchema } from "../prototype/schema";
 import { routeObjects } from "../app/routes";
@@ -79,6 +81,30 @@ describe("CjmShell", () => {
     render(<><TileErrorBoundary prototypeId={brokenDoc.id} screenId="broken"><Broken /></TileErrorBoundary><p>Still alive</p></>);
     expect(screen.getByTestId("tile-error")).toBeTruthy();
     expect(screen.getByText("Still alive")).toBeTruthy();
+  });
+
+  it("renders a custom DS component with named-slot metadata in tiles", async () => {
+    const customDoc = prototypeDocSchema.parse({
+      ...doc, startScreen: "custom", screens: [{ id: "custom", name: "Custom", spec: { root: "widget", elements: {
+        widget: { type: "Widget", props: { label: "Custom label" }, children: ["header-text", "body-text"], on: { press: { action: "back" } } },
+        "header-text": { type: "Text", props: { text: "In header" }, slot: "header" },
+        "body-text": { type: "Text", props: { text: "In body" } },
+      } } }],
+    });
+    mocks.getDraft.mockResolvedValue({ ...draft, doc: customDoc, componentManifestHash: "custom", components: [{ id: "widget", name: "Widget", version: 1, bundleUrl: "/api/components/widget/versions/1/bundle.js", bundleHash: "hash" }] });
+    mocks.loadCustom.mockResolvedValue({
+      definitions: { Widget: { props: z.object({ label: z.string().optional() }), description: "w", events: ["press"], slots: ["header"], capabilities: { namedSlots: true } } },
+      components: { Widget: ({ props, slots }: { props: { label?: string }; slots: Record<string, ReactNode> }) =>
+        <div><span data-testid="widget-label">{props.label}</span><div data-testid="widget-header">{slots.header}</div><div data-testid="widget-body">{slots.default}</div></div> },
+    });
+    renderAt("/p/journey/cjm");
+    expect((await screen.findByTestId("widget-label")).textContent).toBe("Custom label");
+    // slotIndices metadata survives the inert transform: the slotted child routes into the named slot.
+    const header = screen.getByTestId("widget-header");
+    expect(within(header).getByText("In header")).toBeTruthy();
+    const body = screen.getByTestId("widget-body");
+    expect(within(body).getByText("In body")).toBeTruthy();
+    expect(within(body).queryByText("In header")).toBeNull();
   });
 
   it("isolates state stores between tiles", async () => {
