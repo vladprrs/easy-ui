@@ -3993,7 +3993,7 @@
                 }
               }
             },
-            "description": "not_found"
+            "description": "prototype_not_found"
           },
           "409": {
             "content": {
@@ -4209,7 +4209,7 @@
                 }
               }
             },
-            "description": "not_found"
+            "description": "prototype_not_found"
           }
         },
         "summary": "Prototype lifecycle meta: head/draft revision, validated revision, published versions, renderable.",
@@ -4653,7 +4653,7 @@
                 }
               }
             },
-            "description": "not_found"
+            "description": "prototype_not_found"
           },
           "409": {
             "content": {
@@ -4867,7 +4867,7 @@
                 }
               }
             },
-            "description": "not_found"
+            "description": "prototype_not_found"
           }
         },
         "summary": "Read the head revision document with catalog hashes, component pins and asset pins.",
@@ -4972,7 +4972,7 @@
                 }
               }
             },
-            "description": "not_found"
+            "description": "prototype_not_found"
           },
           "409": {
             "content": {
@@ -5082,7 +5082,7 @@
                 }
               }
             },
-            "description": "not_found"
+            "description": "prototype_not_found | revision_not_found"
           },
           "409": {
             "content": {
@@ -5194,7 +5194,7 @@
                 }
               }
             },
-            "description": "not_found"
+            "description": "prototype_not_found"
           }
         },
         "summary": "List revisions (newest first) with cursor pagination.",
@@ -5421,7 +5421,7 @@
                 }
               }
             },
-            "description": "not_found"
+            "description": "prototype_not_found | revision_not_found"
           }
         },
         "summary": "Read a specific immutable revision.",
@@ -5728,7 +5728,7 @@
                 }
               }
             },
-            "description": "prototype_not_found | screen_not_found"
+            "description": "prototype_not_found | screen_not_found | version_not_found | revision_not_found"
           },
           "422": {
             "content": {
@@ -5817,7 +5817,7 @@
                 }
               }
             },
-            "description": "not_found"
+            "description": "prototype_not_found"
           }
         },
         "summary": "List published versions.",
@@ -6037,7 +6037,7 @@
                 }
               }
             },
-            "description": "not_found"
+            "description": "prototype_not_found | version_not_found"
           }
         },
         "summary": "Read a published version (immutable cache headers).",

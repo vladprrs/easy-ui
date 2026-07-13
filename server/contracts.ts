@@ -156,7 +156,7 @@ export const prototypeScreenshotContract = registerContract({
   status: 202,
   requestSchema: z.object({ rev: z.number().int().optional(), version: z.number().int().optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional() }),
   responseSchema: jobAcceptedSchema,
-  errors: [{ status: 404, code: "prototype_not_found" }, { status: 404, code: "screen_not_found" }, ...screenshotErrors],
+  errors: [{ status: 404, code: "prototype_not_found" }, { status: 404, code: "screen_not_found" }, { status: 404, code: "version_not_found" }, { status: 404, code: "revision_not_found" }, ...screenshotErrors],
 });
 
 export const componentScreenshotContract = registerContract({
@@ -300,6 +300,9 @@ const errorCatalog = {
   invalidRequest: { status: 400, code: "invalid_request" },
   baseRevRequired: { status: 400, code: "base_rev_required" },
   notFound: { status: 404, code: "not_found" },
+  prototypeNotFound: { status: 404, code: "prototype_not_found" },
+  versionNotFound: { status: 404, code: "version_not_found" },
+  revisionNotFound: { status: 404, code: "revision_not_found" },
   methodNotAllowed: { status: 405, code: "method_not_allowed" },
   alreadyExists: { status: 409, code: "already_exists" },
   revConflict: { status: 409, code: "revision_conflict" },
@@ -350,7 +353,7 @@ export const getPrototypeContract = registerContract({
     updatedAt: isoDate, draftRevision: z.number(), validatedRevision: z.number().nullable(),
     publishedVersion: z.number().nullable(), renderable: renderableSchema, figma: figmaResponseSchema,
   }),
-  errors: [errorCatalog.notFound],
+  errors: [errorCatalog.prototypeNotFound],
 });
 
 export const savePrototypeContract = registerContract({
@@ -358,7 +361,7 @@ export const savePrototypeContract = registerContract({
   summary: "Save a new head revision (CAS on baseRev); document id must match the path id.",
   requestSchema: z.object({ doc: prototypeDocSchema, figma: figmaSchema.optional(), ...casBody }),
   responseSchema: z.looseObject({ rev: z.number(), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.validationFailed],
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.validationFailed],
 });
 
 export const deletePrototypeContract = registerContract({
@@ -366,7 +369,7 @@ export const deletePrototypeContract = registerContract({
   summary: "Delete a prototype (CAS on baseRev). Responds 204 without a body.",
   status: 204,
   requestSchema: z.object({ baseRev: positiveInt }),
-  errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict],
+  errors: [errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict],
 });
 
 const prototypeRevisionCoreSchema = z.looseObject({
@@ -382,7 +385,7 @@ export const getPrototypeDraftContract = registerContract({
   method: "GET", path: "/api/prototypes/{id}/draft",
   summary: "Read the head revision document with catalog hashes, component pins and asset pins.",
   responseSchema: prototypeRevisionCoreSchema,
-  errors: [errorCatalog.notFound],
+  errors: [errorCatalog.prototypeNotFound],
 });
 
 export const listPrototypeRevisionsContract = registerContract({
@@ -390,14 +393,14 @@ export const listPrototypeRevisionsContract = registerContract({
   summary: "List revisions (newest first) with cursor pagination.",
   query: z.object({ limit: z.string().optional(), before: z.string().optional() }),
   responseSchema: z.array(z.looseObject({ rev: z.number(), message: z.string().nullable(), createdAt: isoDate })),
-  errors: [errorCatalog.invalidRequest, errorCatalog.notFound],
+  errors: [errorCatalog.invalidRequest, errorCatalog.prototypeNotFound],
 });
 
 export const getPrototypeRevisionContract = registerContract({
   method: "GET", path: "/api/prototypes/{id}/revisions/{rev}",
   summary: "Read a specific immutable revision.",
   responseSchema: prototypeRevisionCoreSchema.extend({ message: z.string().nullable(), createdAt: isoDate }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.notFound],
+  errors: [errorCatalog.invalidRequest, errorCatalog.prototypeNotFound, errorCatalog.revisionNotFound],
 });
 
 export const restorePrototypeContract = registerContract({
@@ -405,7 +408,7 @@ export const restorePrototypeContract = registerContract({
   summary: "Restore an older revision as a new head revision (copies component/asset pins).",
   requestSchema: z.object({ rev: positiveInt, ...casBody }),
   responseSchema: z.looseObject({ rev: z.number() }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.validationFailed],
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revisionNotFound, errorCatalog.revConflict, errorCatalog.validationFailed],
 });
 
 export const publishPrototypeContract = registerContract({
@@ -414,21 +417,21 @@ export const publishPrototypeContract = registerContract({
   status: 201,
   requestSchema: z.object(casBody),
   responseSchema: z.looseObject({ version: z.number(), rev: z.number(), screens: z.array(screenUrlSchema) }),
-  errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, errorCatalog.validationFailed],
+  errors: [errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, errorCatalog.validationFailed],
 });
 
 export const listPrototypeVersionsContract = registerContract({
   method: "GET", path: "/api/prototypes/{id}/versions",
   summary: "List published versions.",
   responseSchema: z.array(z.looseObject({ version: z.number(), rev: z.number(), publishedAt: isoDate })),
-  errors: [errorCatalog.notFound],
+  errors: [errorCatalog.prototypeNotFound],
 });
 
 export const getPrototypeVersionContract = registerContract({
   method: "GET", path: "/api/prototypes/{id}/versions/{version}",
   summary: "Read a published version (immutable cache headers).",
   responseSchema: prototypeRevisionCoreSchema.extend({ version: z.number(), publishedAt: isoDate }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.notFound],
+  errors: [errorCatalog.invalidRequest, errorCatalog.prototypeNotFound, errorCatalog.versionNotFound],
 });
 
 // --- Components CRUD / publish / versions / bundle ---

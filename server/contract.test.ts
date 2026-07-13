@@ -93,6 +93,11 @@ function orderedCases(): [string, Case][] {
     ["POST /api/prototypes/{id}/publish", { run: () => call("POST", "/api/prototypes/contract-proto/publish", { baseRev: 3 }), expected: ok(201) }],
     ["GET /api/prototypes/{id}/versions", { run: () => call("GET", "/api/prototypes/contract-proto/versions"), expected: ok() }],
     ["GET /api/prototypes/{id}/versions/{version}", { run: () => call("GET", "/api/prototypes/contract-proto/versions/1"), expected: ok() }],
+    // Granular 404 codes (W0-4): prototype vs version vs revision
+    ["GET /api/prototypes/{id}", { run: () => call("GET", "/api/prototypes/contract-missing"), expected: err(404, "prototype_not_found") }],
+    ["GET /api/prototypes/{id}/versions/{version}", { run: () => call("GET", "/api/prototypes/contract-missing/versions/1"), expected: err(404, "prototype_not_found") }],
+    ["GET /api/prototypes/{id}/versions/{version}", { run: () => call("GET", "/api/prototypes/contract-proto/versions/99"), expected: err(404, "version_not_found") }],
+    ["GET /api/prototypes/{id}/revisions/{rev}", { run: () => call("GET", "/api/prototypes/contract-proto/revisions/99"), expected: err(404, "revision_not_found") }],
     ["GET /api/prototypes/{id}/screens/{screenId}/render-status", { run: () => call("GET", `/api/prototypes/contract-proto/screens/${state.screenId}/render-status`), expected: ok() }],
     // Screenshots: unavailable in this environment (no service) — typed error envelope
     ["POST /api/prototypes/{id}/screens/{screenId}/screenshot", { run: () => call("POST", `/api/prototypes/contract-proto/screens/${state.screenId}/screenshot`, { viewport: { width: 320, height: 480 } }), expected: err(501, "screenshot_unavailable") }],

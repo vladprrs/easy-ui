@@ -46,6 +46,21 @@ test("checkout CJM supports direct load and rejects an unknown version", async (
   await expect(page.getByRole("list", { name: "CJM screens" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Мобильное оформление заказа" })).toBeVisible();
 
+  // Unknown published version (W0-4): a dedicated state with working escape links.
   await page.goto("/p/checkout/v/999/cjm");
+  await expect(page.getByRole("heading", { name: "Версия 999 не опубликована" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "К галерее" })).toBeVisible();
+  await page.getByRole("link", { name: "Открыть текущую" }).click();
+  await expect(page).toHaveURL(/\/p\/checkout\/cjm$/);
+  await expect(page.getByRole("list", { name: "CJM screens" })).toBeVisible();
+
+  // Same state in the player at /p/:id/v/N; «Открыть текущую» lands on the draft player.
+  await page.goto("/p/checkout/v/99");
+  await expect(page.getByRole("heading", { name: "Версия 99 не опубликована" })).toBeVisible();
+  await page.getByRole("link", { name: "Открыть текущую" }).click();
+  await expect(page).toHaveURL(/\/p\/checkout\/s\/catalog$/);
+
+  // A missing prototype still reads as prototype-not-found.
+  await page.goto("/p/no-such-proto/v/1");
   await expect(page.getByRole("heading", { name: "Prototype not found" })).toBeVisible();
 });
