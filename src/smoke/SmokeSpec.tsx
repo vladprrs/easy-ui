@@ -2,6 +2,8 @@ import type { Spec } from "@json-render/core";
 import { JSONUIProvider, Renderer } from "@json-render/react";
 import { useMemo, useState } from "react";
 import { createPlayerRuntime, type PlayerRuntimeDeps } from "../catalog/runtime";
+import { appShell } from "../app/strings/common";
+import { useDocumentTitle } from "../app/useDocumentTitle";
 
 // This smoke fixture intentionally exercises the default, shadcn-only catalog.
 export const smokeSpec = {
@@ -89,6 +91,7 @@ export function SmokeRenderer({ deps }: { deps: PlayerRuntimeDeps }) {
 }
 
 export function SmokeSpec() {
+  useDocumentTitle(appShell.navDebug);
   const [calls, setCalls] = useState<string[]>([]);
   const deps = useMemo<PlayerRuntimeDeps>(() => ({
     navigate: (screenId) => setCalls((items) => [...items, `navigate:${screenId}`]),

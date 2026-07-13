@@ -3,6 +3,7 @@ import { getCatalogManifest, getComponentMeta, listDesignSystems, listVisualRefe
 import { useApi } from "../api/hooks";
 import { chip, chipActive, headingBar, kicker } from "../app/chrome";
 import { figmaBadgeTitle, levelSection, library } from "../app/strings/library";
+import { useDocumentTitle } from "../app/useDocumentTitle";
 import { atomicLevelLabel, componentLibraryStatus, groupLibraryEntries, LIBRARY_STATUS_KEYS, libraryStatusLabel, matchesLibraryFilter, selectionForComponent, selectionForStory, selectionKey, type ComponentLibraryStatus, type LibrarySelection, type LibraryStatusKey } from "./libraryModel";
 import { componentStatusBadge } from "./statusBadge";
 import { fetchStorybookIndex, parseStorybookTitle, type StorybookEntry } from "./storybookIndex";
@@ -35,6 +36,7 @@ async function loadLibraryStatuses(components: CatalogComponent[], signal: Abort
 }
 
 export function LibraryPage() {
+  useDocumentTitle(library.title);
   const registry = useApi(listDesignSystems, []);
   const storybook = useApi(fetchStories, []);
   const manifest = useApi(getCatalogManifest, []);

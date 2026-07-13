@@ -38,6 +38,7 @@ describe("GalleryPage", () => {
     vi.mocked(listPrototypes).mockReturnValue(request.promise);
     renderGallery();
     expect(screen.getByText("Загружаем прототипы…")).toBeTruthy();
+    expect(document.title).toBe("Прототипы — easy-ui");
     await act(async () => request.resolve([summary]));
     expect(screen.getByRole("heading", { name: "Hello World" })).toBeTruthy();
     expect(screen.getByText("Телефон")).toBeTruthy();

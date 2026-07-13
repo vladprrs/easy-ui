@@ -8,7 +8,8 @@ import { prototypeDocSchema } from "../prototype/schema";
 import { validatePrototype } from "../prototype/validate";
 import { pillGhost, pillPrimary } from "../app/chrome";
 import { formatApiError } from "../app/strings/common";
-import { editor } from "../app/strings/editor";
+import { editor, editorDocumentTitle } from "../app/strings/editor";
+import { useDocumentTitle } from "../app/useDocumentTitle";
 import { EditorCanvas } from "./EditorCanvas";
 import { editorReducer, type EditorState } from "./editorReducer";
 import { EditorScreenStrip } from "./EditorScreenStrip";
@@ -32,6 +33,7 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
     doc, baseRev: rev, dirty: false, stateEpoch: 0,
     selection: { screenId: doc.screens.some((screen) => screen.id === doc.startScreen) ? doc.startScreen : doc.screens[0]!.id, elementKey: null },
   }));
+  useDocumentTitle(editorDocumentTitle(state.doc.name));
   const [issues, setIssues] = useState<DisplayIssue[]>([]);
   const [saving, setSaving] = useState(false);
   const [conflictRev, setConflictRev] = useState<number | null>(null);

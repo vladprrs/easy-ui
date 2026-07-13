@@ -13,6 +13,10 @@ export const loader = {
   loadErrorTitle: "Не удалось загрузить прототип",
 } as const;
 
+/** document.title плеера: имя прототипа (+версия) и текущий экран (W0-3). */
+export const playerDocumentTitle = (docName: string, screenName: string, version?: number) =>
+  version === undefined ? `${docName} · ${screenName}` : `${docName} v${version} · ${screenName}`;
+
 export const player = {
   backToGallery: "← Галерея",
   back: "Назад",

@@ -5,8 +5,10 @@ import { useApi } from "../api/hooks";
 import { chip, chipActive, headingPage, pillGhost, plate } from "../app/chrome";
 import { common } from "../app/strings/common";
 import { cjmVersionLink, deviceNames, gallery, versionLink } from "../app/strings/gallery";
+import { useDocumentTitle } from "../app/useDocumentTitle";
 
 export function GalleryPage() {
+  useDocumentTitle(gallery.title);
   const prototypes = useApi(listPrototypes, []);
   const designSystems = useApi(listDesignSystems, []);
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);

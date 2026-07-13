@@ -8,6 +8,7 @@ import {
 import { describeFingerprint, evidenceDenominator, formatPercent, referenceScope, statusLabel, statusTone } from "./visualModel";
 import { common, formatApiError } from "../app/strings/common";
 import { visual } from "../app/strings/visual";
+import { useDocumentTitle } from "../app/useDocumentTitle";
 import { ApiError } from "../api/client";
 
 const scopeFilters: { id: string | null; label: string }[] = [
@@ -21,6 +22,7 @@ const errorText = (caught: unknown): string => caught instanceof ApiError
   : caught instanceof Error ? caught.message : String(caught);
 
 export function VisualPage() {
+  useDocumentTitle(visual.title);
   const [scope, setScope] = useState<string | null>(null);
   const references = useApi((signal) => listVisualReferences(scope, signal), [scope]);
   const [selectedId, setSelectedId] = useState<string | null>(null);

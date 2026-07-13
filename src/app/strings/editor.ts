@@ -1,5 +1,8 @@
 // Строки редактора прототипов (W0-5).
 
+/** document.title редактора черновика (W0-3). */
+export const editorDocumentTitle = (docName: string) => `${docName} · Редактор`;
+
 export const editor = {
   backToCjm: "← Назад к CJM",
   dirtyAria: "Есть несохранённые изменения",

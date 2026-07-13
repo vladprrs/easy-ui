@@ -9,8 +9,9 @@ import { splitCanvas, toRuntimeSpec } from "../prototype/runtimeSpec";
 import { CanvasLayers } from "./CanvasLayers";
 import { EasyUiRuntimeProvider } from "./easyUiRuntime";
 import { pillGhostOnDark } from "../app/chrome";
-import { player } from "../app/strings/player";
+import { player, playerDocumentTitle } from "../app/strings/player";
 import { common } from "../app/strings/common";
+import { useDocumentTitle } from "../app/useDocumentTitle";
 
 export class ScreenErrorBoundary extends Component<{
   prototypeId: string;
@@ -40,6 +41,9 @@ export function ScreenView() {
   const { version } = useParams();
   const navigation = usePlayerNavigation();
   const screen = doc.screens.find((item) => item.id === screenId);
+  useDocumentTitle(screen
+    ? playerDocumentTitle(doc.name, screen.name, version === undefined ? undefined : Number(version))
+    : player.screenMissingTitle);
   const screenSpec = screen?.spec;
   const screenCanvas = screen?.canvas;
   const tree = useMemo(() => (screenSpec ? toRuntimeSpec(screenSpec, { customTypes }) : null), [screenSpec, customTypes]);

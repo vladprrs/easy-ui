@@ -55,6 +55,7 @@ describe("PlayerShell", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/s/welcome"));
     expect(mocks.getDraft).toHaveBeenCalledWith("hello-world", expect.any(AbortSignal));
     const input = await screen.findByLabelText("Name");
+    expect(document.title).toBe("Hello World · Welcome — easy-ui");
     fireEvent.change(input, { target: { value: "Lin" } });
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Lin");
     expect(screen.getByText("Hello, Lin!")).toBeTruthy();
@@ -70,6 +71,7 @@ describe("PlayerShell", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/v/2/s/welcome"));
     expect(mocks.getVersion).toHaveBeenCalledWith("hello-world", 2, expect.any(AbortSignal));
     expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/hello-world/v/2/cjm");
+    expect(document.title).toBe("Hello World v2 · Welcome — easy-ui");
   });
 
   it("links to the draft CJM from the sidebar", async () => {

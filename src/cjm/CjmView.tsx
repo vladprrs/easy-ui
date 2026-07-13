@@ -1,14 +1,16 @@
 import { useMemo } from "react";
 import { Link } from "react-router";
 import { pillPrimary } from "../app/chrome";
-import { cjm } from "../app/strings/cjm";
+import { cjm, cjmDocumentTitle } from "../app/strings/cjm";
+import { useDocumentTitle } from "../app/useDocumentTitle";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { createPlayerRuntime } from "../catalog/runtime";
 import type { PrototypeDoc } from "../prototype/schema";
 import { CjmScreenTile } from "./CjmScreenTile";
 import { createCjmRegistry } from "./cjmRegistry";
 
-export function CjmView({ doc, custom, runtimeKey, routeBase, editable }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; editable: boolean }) {
+export function CjmView({ doc, custom, runtimeKey, routeBase, editable, version }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; editable: boolean; version?: number }) {
+  useDocumentTitle(cjmDocumentTitle(doc.name, version));
   const runtime = useMemo(() => createPlayerRuntime({ navigate() {}, back() {}, openUrl() {}, restart() {} }, custom, doc.designSystem), [custom, doc.designSystem]);
   const registry = useMemo(() => createCjmRegistry(runtime.registry), [runtime.registry]);
   return <main className="h-full min-h-0 bg-eui-lav p-6 sm:p-8">
