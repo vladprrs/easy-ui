@@ -298,7 +298,7 @@ describe("prototype API", () => {
     expect(await body(response)).toEqual({ status: "ready" });
     response = await fetch(`${base}/api/prototypes`);
     const seeded = await body(response);
-    expect(seeded).toHaveLength(5);
+    expect(seeded).toHaveLength(6);
     expect(response.headers.get("cache-control")).toBe("no-store");
     const original = prototypeDocSchema.parse(await Bun.file(resolve("prototypes/hello-world.json")).json());
     response = await fetch(`${base}/api/prototypes/hello-world`, {

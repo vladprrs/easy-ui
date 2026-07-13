@@ -44,8 +44,15 @@ export default defineConfig({
   ],
   projects: [
     {
+      // Provisions API-backed fixtures (custom design system, W0-8) before dev specs run.
+      name: "dev-setup",
+      testMatch: /dev\/.*\.setup\.ts/,
+      use: { baseURL: `http://${viteHost}:5173` },
+    },
+    {
       name: "dev",
       testMatch: /dev\/.*\.spec\.ts/,
+      dependencies: ["dev-setup"],
       use: { baseURL: `http://${viteHost}:5173` },
     },
     {

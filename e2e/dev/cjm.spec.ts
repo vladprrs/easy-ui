@@ -29,7 +29,10 @@ test("checkout CJM opens from gallery and preserves player history semantics", a
   await cartOverlay.click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/cart$/);
   await expect(page.getByRole("button", { name: "Back" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Оформить" })).toBeEnabled();
+  // The tile link opens a NEW player session with fresh document state (CJM stateOverrides are
+  // tile-only). Since checkout@2 the cart totals are $cond-driven, so with /cart/count = 0 the
+  // checkout button is correctly disabled here.
+  await expect(page.getByRole("button", { name: "Оформить" })).toBeDisabled();
 
   await page.goBack();
   await expect(page).toHaveURL(/\/p\/checkout\/cjm$/);

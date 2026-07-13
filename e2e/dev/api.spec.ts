@@ -7,7 +7,7 @@ test("API revisions, publishing, component bundles, and shim ABI work end to end
   const seeded = await request.get(`${api}/prototypes`);
   expect(seeded.ok()).toBeTruthy();
   expect((await seeded.json()).map((item: { id: string }) => item.id)).toEqual(
-    expect.arrayContaining(["checkout", "hello-world", "settings"]),
+    expect.arrayContaining(["checkout", "hello-world", "settings", "scale-demo", "composition-demo", "wireframe-demo"]),
   );
 
   const draft = await (await request.get(`${api}/prototypes/hello-world/draft`)).json();

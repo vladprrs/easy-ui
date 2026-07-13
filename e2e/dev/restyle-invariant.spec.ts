@@ -56,6 +56,9 @@ test.describe("restyle prototype invariants", () => {
 
   test("Storybook preview keeps the story font", async ({ page }) => {
     await page.goto("/library");
+    // The e2e custom design system fixture sorts before Shadcn; select the builtin system
+    // explicitly so the default selection is a Storybook story, not a custom meta-card.
+    await page.locator('[aria-label="Design systems"]').getByRole("button", { name: "Shadcn", exact: true }).click();
     const iframe = page.getByTitle("Story preview");
     await expect(iframe).toHaveAttribute("src", /^\/storybook\/iframe\.html\?id=.+&viewMode=story$/);
     await iframe.evaluate((element: HTMLIFrameElement) => {
