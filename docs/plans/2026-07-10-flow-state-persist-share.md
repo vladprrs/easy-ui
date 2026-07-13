@@ -1,5 +1,7 @@
 # Persist/deep-link стейта плеера (share-ссылка + авто-персист) — без своего StateStore
 
+> **SUPERSEDED (2026-07-13):** заменён планом `2026-07-13-ui-ux-improvements.md` — sessionStorage-resume и state в share-query противоречат принятой политике состояния флоу (entryReason/reset-banner) и hardened store из `2026-07-12-feedback-fixes.md`. Share решается scoped-токенами (W3-3 нового плана).
+
 > **Аддендум 2026-07-10** (из adversarial-ревью серверного плана `2026-07-10-server-api-versioning.md`; этот план исполняется **после** серверного, перед исполнением пересмотреть с учётом нового async-PlayerShell):
 > 1. Persist-ключ и `baseline` должны включать ревизию/версию прототипа (после серверного плана doc приходит с `rev`/`version`) + hash манифеста кастомных компонентов — иначе снапшот от старой ревизии подхватится новой с тем же initial state.
 > 2. Share-ссылка на опубликованный прототип пинует `version` в пути (`/p/:id/v/:version/...`), а не только screen+state.
