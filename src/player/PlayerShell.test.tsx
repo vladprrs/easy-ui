@@ -58,7 +58,7 @@ describe("PlayerShell", () => {
     fireEvent.change(input, { target: { value: "Lin" } });
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Lin");
     expect(screen.getByText("Hello, Lin!")).toBeTruthy();
-    const device = screen.getByRole("region", { name: "Prototype device preview" });
+    const device = screen.getByRole("region", { name: "Превью прототипа на устройстве" });
     fireEvent.click(within(device).getByRole("button", { name: "Details" }));
     await screen.findByText("This is the second screen.");
     fireEvent.click(within(device).getByRole("button", { name: "Back" }));
@@ -81,7 +81,7 @@ describe("PlayerShell", () => {
     const router = renderAt("/p/hello-world/s/welcome");
     const input = await screen.findByLabelText("Name");
     fireEvent.change(input, { target: { value: "Changed" } });
-    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    fireEvent.click(screen.getByRole("button", { name: "Начать сначала" }));
     expect((await screen.findByLabelText("Name") as HTMLInputElement).value).toBe("Ada");
     await router.navigate("/p/other/s/welcome");
     await waitFor(() => expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Grace"));

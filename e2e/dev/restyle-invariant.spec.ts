@@ -24,7 +24,7 @@ async function expectBaseTokens(page: Page) {
 test.describe("restyle prototype invariants", () => {
   for (const { name, path, content } of [
     { name: "player", path: `/p/${prototypeId}`, content: '[data-jr-key="preferences-card"]' },
-    { name: "CJM", path: `/p/${prototypeId}/cjm`, content: '[aria-label="CJM screens"] [role="tab"]' },
+    { name: "CJM", path: `/p/${prototypeId}/cjm`, content: '[aria-label="Экраны CJM"] [role="tab"]' },
     { name: "editor", path: `/p/${prototypeId}/edit`, content: '[data-jr-key="preferences-card"]' },
     { name: "debug", path: "/debug", content: "main h1" },
   ]) {
@@ -37,7 +37,7 @@ test.describe("restyle prototype invariants", () => {
 
   test("prototype dialog portal keeps the prototype font", async ({ page }) => {
     await page.goto(`/p/${prototypeId}`);
-    await page.getByLabel("Prototype device preview").getByRole("button", { name: "О приложении" }).click();
+    await page.getByLabel("Превью прототипа на устройстве").getByRole("button", { name: "О приложении" }).click();
     await expect(page).toHaveURL(/\/p\/settings\/s\/about$/);
     await expectPrototypeFont(page.getByRole("dialog"));
   });
@@ -49,7 +49,7 @@ test.describe("restyle prototype invariants", () => {
     expect(await page.evaluate(() => document.fonts.check("16px Coil") && document.fonts.check('14px "YS Text"'))).toBe(true);
 
     const headingFont = await page.getByRole("heading", { level: 1 }).evaluate((element) => getComputedStyle(element).fontFamily);
-    const navFont = await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link").first().evaluate((element) => getComputedStyle(element).fontFamily);
+    const navFont = await page.getByRole("navigation", { name: "Основная навигация" }).getByRole("link").first().evaluate((element) => getComputedStyle(element).fontFamily);
     expect(headingFont).toMatch(/^Coil/);
     expect(navFont).toMatch(/^(?:"?YS Text)/);
   });
@@ -58,13 +58,13 @@ test.describe("restyle prototype invariants", () => {
     await page.goto("/library");
     // The e2e custom design system fixture sorts before Shadcn; select the builtin system
     // explicitly so the default selection is a Storybook story, not a custom meta-card.
-    await page.locator('[aria-label="Design systems"]').getByRole("button", { name: "Shadcn", exact: true }).click();
-    const iframe = page.getByTitle("Story preview");
+    await page.locator('[aria-label="Дизайн-системы"]').getByRole("button", { name: "Shadcn", exact: true }).click();
+    const iframe = page.getByTitle("Превью истории");
     await expect(iframe).toHaveAttribute("src", /^\/storybook\/iframe\.html\?id=.+&viewMode=story$/);
     await iframe.evaluate((element: HTMLIFrameElement) => {
       element.src = `http://localhost:6006${element.getAttribute("src")!.replace(/^\/storybook/, "")}`;
     });
-    const preview = page.frameLocator('iframe[title="Story preview"]');
+    const preview = page.frameLocator('iframe[title="Превью истории"]');
     const story = preview.locator("#storybook-root [role=alert]").first();
     await expectPrototypeFont(story);
   });

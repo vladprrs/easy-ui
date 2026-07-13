@@ -10,7 +10,7 @@ export interface CanvasLayersProps {
 export function CanvasLayers({ canvas, specs: { content, hotspots }, registry }: CanvasLayersProps) {
   return <div className="relative" style={{ width: canvas.width, height: canvas.height }}>
     <div className="absolute inset-0">{content ? <Renderer registry={registry} spec={content} /> : null}</div>
-    <div className="pointer-events-none absolute inset-0" aria-label="Hotspots">
+    <div className="pointer-events-none absolute inset-0" aria-label="Хотспоты">
       {hotspots.map((spec) => <div className="pointer-events-auto" key={spec.root}><Renderer registry={registry} spec={spec} /></div>)}
     </div>
   </div>;

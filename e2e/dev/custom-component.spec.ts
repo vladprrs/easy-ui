@@ -50,6 +50,6 @@ test("custom component hooks, events, state templates, and published navigation 
   await expect(page).toHaveURL(/\/p\/custom-rating-flow\/v\/1\/s\/rating$/);
   await page.getByRole("button", { name: "Next" }).click();
   await expect(page).toHaveURL(/\/p\/custom-rating-flow\/v\/1\/s\/done$/);
-  await page.getByLabel("Prototype device preview").getByRole("button", { name: "Back" }).click();
+  await page.getByLabel("Превью прототипа на устройстве").getByRole("button", { name: "Back" }).click();
   await expect(page).toHaveURL(/\/p\/custom-rating-flow\/v\/1\/s\/rating$/);
 });

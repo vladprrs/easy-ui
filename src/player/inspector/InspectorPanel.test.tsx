@@ -24,7 +24,7 @@ describe("InspectorPanel", () => {
     log.logRuntimeError("navigate target does not exist: ghost");
     render(<InspectorPanel log={log} />);
 
-    const panel = screen.getByRole("complementary", { name: "Interaction inspector" });
+    const panel = screen.getByRole("complementary", { name: "Инспектор взаимодействий" });
     const items = within(panel).getAllByRole("listitem");
     expect(items[0]!.textContent).toContain("navigate target does not exist: ghost");
     expect(items[1]!.textContent).toContain("setState");
@@ -34,19 +34,19 @@ describe("InspectorPanel", () => {
     expect(items[2]!.textContent).toContain("YpPaymentMethodCard");
     expect(items[2]!.textContent).toContain("press");
 
-    fireEvent.change(within(panel).getByLabelText("Filter entries"), { target: { value: "event" } });
+    fireEvent.change(within(panel).getByLabelText("Фильтр записей"), { target: { value: "event" } });
     expect(within(panel).getAllByRole("listitem")).toHaveLength(1);
 
-    fireEvent.click(within(panel).getByRole("button", { name: "Clear" }));
-    expect(within(panel).getByText("No entries yet — interact with the prototype.")).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "Очистить" }));
+    expect(within(panel).getByText("Записей пока нет — повзаимодействуйте с прототипом.")).toBeTruthy();
   });
 
   it("collapses to a floating toggle and expands back", () => {
     render(<InspectorPanel log={new InspectorLog()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Collapse inspector" }));
-    expect(screen.queryByRole("complementary", { name: "Interaction inspector" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /Inspector \(/ }));
-    expect(screen.getByRole("complementary", { name: "Interaction inspector" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Свернуть инспектор" }));
+    expect(screen.queryByRole("complementary", { name: "Инспектор взаимодействий" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Инспектор \(/ }));
+    expect(screen.getByRole("complementary", { name: "Инспектор взаимодействий" })).toBeTruthy();
   });
 });
 
@@ -66,7 +66,7 @@ describe("player integration (?debug=1)", () => {
   it("shows the panel with ?debug=1 and records builtin state mutations", async () => {
     renderAt("/p/hello-world/s/welcome?debug=1");
     const input = await screen.findByLabelText("Name");
-    const panel = screen.getByRole("complementary", { name: "Interaction inspector" });
+    const panel = screen.getByRole("complementary", { name: "Инспектор взаимодействий" });
     fireEvent.change(input, { target: { value: "Lin" } });
     await waitFor(() => {
       const items = within(panel).getAllByRole("listitem");
@@ -78,6 +78,6 @@ describe("player integration (?debug=1)", () => {
   it("does not render the panel without the debug flag", async () => {
     renderAt("/p/hello-world/s/welcome");
     await screen.findByLabelText("Name");
-    expect(screen.queryByRole("complementary", { name: "Interaction inspector" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Инспектор взаимодействий" })).toBeNull();
   });
 });

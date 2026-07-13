@@ -18,7 +18,7 @@ test("checkout keeps session state, then restart invalidates stale history", asy
   await page.getByRole("button", { name: "Оформить" }).click();
   const name = page.getByRole("textbox", { name: "Имя" });
   await name.fill("Анна");
-  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByRole("button", { name: "Назад" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/cart$/);
   await page.getByRole("button", { name: "Оформить" }).click();
   await expect(name).toHaveValue("Анна");

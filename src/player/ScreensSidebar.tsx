@@ -1,11 +1,12 @@
 import type { PrototypeDoc } from "../prototype/schema";
 import { usePlayerNavigation } from "./navigation";
 import { kickerOnDark } from "../app/chrome";
+import { player } from "../app/strings/player";
 
 export function ScreensSidebar({ doc, currentScreen }: { doc: PrototypeDoc; currentScreen: string }) {
   const navigation = usePlayerNavigation();
   return (
-    <aside className="w-52 shrink-0 border-r border-white/15 p-4 font-eui-ui" aria-label="Screens">
+    <aside className="w-52 shrink-0 border-r border-white/15 p-4 font-eui-ui" aria-label={player.screensAria}>
       <h2 className={`${kickerOnDark} mb-2 px-2`}>{doc.name}</h2>
       <nav><ul className="space-y-1">
         {doc.screens.map((screen) => <li key={screen.id}>

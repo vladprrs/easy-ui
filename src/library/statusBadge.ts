@@ -1,4 +1,5 @@
 import type { ComponentStatus } from "../api/client";
+import { componentStatusLabels } from "../app/strings/library";
 
 // Visual status badge for a custom component version (K.3). `active` (and lifecycle-internal
 // staging/failed) render no badge; deprecated/superseded/rejected/archived show a coloured pill
@@ -6,10 +7,10 @@ import type { ComponentStatus } from "../api/client";
 export interface ComponentStatusBadge { label: string; className: string; title: string }
 
 const BADGES: Partial<Record<ComponentStatus, { label: string; className: string }>> = {
-  deprecated: { label: "Deprecated", className: "bg-amber-100 text-amber-800" },
-  superseded: { label: "Superseded", className: "bg-sky-100 text-sky-800" },
-  rejected: { label: "Rejected", className: "bg-rose-100 text-rose-800" },
-  archived: { label: "Archived", className: "bg-eui-slate-200 text-eui-slate-600" },
+  deprecated: { label: componentStatusLabels.deprecated, className: "bg-amber-100 text-amber-800" },
+  superseded: { label: componentStatusLabels.superseded, className: "bg-sky-100 text-sky-800" },
+  rejected: { label: componentStatusLabels.rejected, className: "bg-rose-100 text-rose-800" },
+  archived: { label: componentStatusLabels.archived, className: "bg-eui-slate-200 text-eui-slate-600" },
 };
 
 export function componentStatusBadge(status: ComponentStatus, reason?: string | null): ComponentStatusBadge | null {

@@ -1,4 +1,5 @@
 import type { AtomicLevel, CatalogComponent, ComponentVersionSummary, DesignSystemSummary, VisualReference } from "../api/client";
+import { libraryStatusLabels } from "../app/strings/library";
 import { parseStorybookTitle, type StorybookEntry } from "./storybookIndex";
 
 export type LibrarySelection =
@@ -57,9 +58,7 @@ export function selectionKey(selection: LibrarySelection): string {
 // the component present in the manifest, so a manifest entry can still read as blocked/rejected.
 export const LIBRARY_STATUS_KEYS = ["published", "verified", "visual-pending", "blocked", "rejected"] as const;
 export type LibraryStatusKey = (typeof LIBRARY_STATUS_KEYS)[number];
-export const libraryStatusLabel: Record<LibraryStatusKey, string> = {
-  published: "Published", verified: "Verified", "visual-pending": "Visual pending", blocked: "Blocked", rejected: "Rejected",
-};
+export const libraryStatusLabel: Record<LibraryStatusKey, string> = libraryStatusLabels;
 
 export interface ComponentLibraryStatus { published: boolean; rejected: boolean; blocked: boolean; verified: boolean; visualPending: boolean }
 

@@ -1,14 +1,9 @@
+import { referenceScopeLabel, runStatusLabel } from "../app/strings/visual";
 import type { RunReport, RunStatus, VisualReference } from "./api";
 
-/** Human label + tone class fragment for a run status. */
+/** Human label + tone class fragment for a run status (RU-словарь W0-5). */
 export function statusLabel(status: RunStatus): string {
-  switch (status) {
-    case "pass": return "Pass";
-    case "fail": return "Fail";
-    case "error": return "Error";
-    case "reference_missing": return "Reference missing";
-    case "running": return "Running…";
-  }
+  return runStatusLabel(status);
 }
 
 export function statusTone(status: RunStatus): string {
@@ -42,8 +37,7 @@ export function describeFingerprint(fingerprint: Record<string, unknown> | undef
 }
 
 export function referenceScope(reference: VisualReference): string {
-  const scope = reference.fingerprint.scope;
-  return scope === "prototype-screen" ? "Prototype screen" : scope === "component" ? "Component" : "Unknown";
+  return referenceScopeLabel(reference.fingerprint.scope);
 }
 
 /** Denominator for the evidence footer of a report. */

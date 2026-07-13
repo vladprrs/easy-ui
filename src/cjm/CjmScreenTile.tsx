@@ -6,6 +6,7 @@ import { mergeScreenState } from "../prototype/stateOverrides";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { splitCanvasSpec } from "../player/canvasSpec";
 import { buildPlayerPath } from "../player/navigation";
+import { cjm } from "../app/strings/cjm";
 
 const TILE_WIDTH = 280;
 const HEIGHT_CAP = 420;
@@ -39,7 +40,7 @@ export class TileErrorBoundary extends Component<{ prototypeId: string; screenId
   componentDidCatch(error: Error, info: ErrorInfo) { if (import.meta.env.DEV) console.error(`[cjm] ${this.props.prototypeId}/${this.props.screenId}`, error, info); }
   render() {
     if (!this.state.error) return this.props.children;
-    return <div className="flex h-72 w-[280px] items-center justify-center rounded-xl border border-destructive bg-background p-6 text-center" role="alert" data-testid="tile-error"><div><h3 ref={this.heading} className="font-eui-ui font-semibold">Экран не удалось отобразить</h3><p className="mt-2 font-eui-ui text-xs text-eui-slate-500">{this.state.error.message}</p></div></div>;
+    return <div className="flex h-72 w-[280px] items-center justify-center rounded-xl border border-destructive bg-background p-6 text-center" role="alert" data-testid="tile-error"><div><h3 ref={this.heading} className="font-eui-ui font-semibold">{cjm.tileErrorTitle}</h3><p className="mt-2 font-eui-ui text-xs text-eui-slate-500">{this.state.error.message}</p></div></div>;
   }
 }
 
@@ -54,10 +55,10 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
     <div className="relative">
       <TileErrorBoundary key={`${runtimeKey}:${screen.id}`} prototypeId={doc.id} screenId={screen.id}>
         <JSONUIProvider key={`${runtimeKey}:${screen.id}`} registry={registry} handlers={handlers} initialState={initialState}>
-          <div inert>{spec ? <CjmFrame nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`}><Renderer registry={registry} spec={spec} /></CjmFrame> : <div className="flex h-64 w-[280px] items-center justify-center rounded-xl border bg-background font-eui-ui text-sm text-eui-slate-500">Нет содержимого</div>}</div>
+          <div inert>{spec ? <CjmFrame nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`}><Renderer registry={registry} spec={spec} /></CjmFrame> : <div className="flex h-64 w-[280px] items-center justify-center rounded-xl border bg-background font-eui-ui text-sm text-eui-slate-500">{cjm.noContent}</div>}</div>
         </JSONUIProvider>
       </TileErrorBoundary>
-      <Link to={buildPlayerPath(routeBase, screen.id)} className="absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring" aria-label={`Открыть экран “${screen.name}” прототипа “${doc.name}” в плеере`} />
+      <Link to={buildPlayerPath(routeBase, screen.id)} className="absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring" aria-label={cjm.openScreenAria(screen.name, doc.name)} />
     </div>
     <h2 className="mt-4 font-eui-ui text-lg font-semibold">{screen.name}</h2>
     {screen.note ? <p className="mt-1 font-eui-ui text-sm text-eui-slate-500">{screen.note}</p> : null}

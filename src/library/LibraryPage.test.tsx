@@ -38,39 +38,39 @@ describe("LibraryPage", () => {
     vi.mocked(fetchStorybookIndex).mockResolvedValue(null);
     vi.mocked(getCatalogManifest).mockResolvedValue(ratingManifest);
     renderLibrary();
-    expect(await screen.findByText(/Storybook is unavailable/)).toBeTruthy();
-    const switcher = screen.getByLabelText("Design systems");
+    expect(await screen.findByText(/Storybook недоступен/)).toBeTruthy();
+    const switcher = screen.getByLabelText("Дизайн-системы");
     expect(within(switcher).getByRole("button", { name: "Yandex Pay Design System" })).toBeTruthy();
     fireEvent.click(within(switcher).getByRole("button", { name: "Yandex Pay Design System" }));
     fireEvent.click(screen.getByRole("button", { name: "Rating" }));
     expect(screen.getByRole("heading", { name: "Rating" })).toBeTruthy();
     // Status badge from getComponentMeta (deprecated) with reason in the title.
-    expect((await screen.findByText("Deprecated")).getAttribute("title")).toBe("Deprecated: use v4");
+    expect((await screen.findByText("Устаревший")).getAttribute("title")).toBe("Устаревший: use v4");
     // Figma badge from the component head revision provenance.
-    expect((await screen.findByText("Figma")).getAttribute("title")).toBe("Figma abc · 2 nodes");
+    expect((await screen.findByText("Figma")).getAttribute("title")).toBe("Figma abc · 2 узла");
     // Live preview iframe targets the component capture shell with the example props.
-    expect(screen.getByTitle("Rating preview").getAttribute("src")).toBe("/capture/component/rating/3?props=example");
+    expect(screen.getByTitle("Превью компонента Rating").getAttribute("src")).toBe("/capture/component/rating/3?props=example");
     expect(screen.getByText("Choose a rating")).toBeTruthy();
-    expect(screen.queryByTitle("Story preview")).toBeNull();
+    expect(screen.queryByTitle("Превью истории")).toBeNull();
   });
 
   it("filters the custom component list by status chips", async () => {
     vi.mocked(fetchStorybookIndex).mockResolvedValue(null);
     vi.mocked(getCatalogManifest).mockResolvedValue(ratingManifest);
     renderLibrary();
-    const switcher = await screen.findByLabelText("Design systems");
+    const switcher = await screen.findByLabelText("Дизайн-системы");
     fireEvent.click(within(switcher).getByRole("button", { name: "Yandex Pay Design System" }));
-    const navigation = screen.getByRole("navigation", { name: "Components" });
+    const navigation = screen.getByRole("navigation", { name: "Компоненты" });
     expect(within(navigation).getByRole("button", { name: /Rating/ })).toBeTruthy();
     // Wait for the lazy status load (meta latest version is deprecated → blocked, not verified).
     await waitFor(() => expect(vi.mocked(getComponentMeta)).toHaveBeenCalled());
-    const filters = screen.getByLabelText("Status filters");
+    const filters = screen.getByLabelText("Фильтры статусов");
     // Verified filter hides the deprecated component.
-    fireEvent.click(within(filters).getByRole("button", { name: "Verified" }));
+    fireEvent.click(within(filters).getByRole("button", { name: "Проверен" }));
     await waitFor(() => expect(within(navigation).queryByRole("button", { name: /Rating/ })).toBeNull());
     // Switching to Blocked brings it back.
-    fireEvent.click(within(filters).getByRole("button", { name: "Verified" }));
-    fireEvent.click(within(filters).getByRole("button", { name: "Blocked" }));
+    fireEvent.click(within(filters).getByRole("button", { name: "Проверен" }));
+    fireEvent.click(within(filters).getByRole("button", { name: "Заблокирован" }));
     expect(within(navigation).getByRole("button", { name: /Rating/ })).toBeTruthy();
   });
 
@@ -83,17 +83,17 @@ describe("LibraryPage", () => {
     } });
     renderLibrary();
 
-    const switcher = await screen.findByLabelText("Design systems");
+    const switcher = await screen.findByLabelText("Дизайн-системы");
     expect(within(switcher).getAllByRole("button").map((button) => button.textContent)).toEqual(["Shadcn", "Wireframe", "Yandex Pay Design System"]);
     expect(within(switcher).getByRole("button", { name: "Shadcn" }).getAttribute("aria-pressed")).toBe("true");
-    const navigation = screen.getByRole("navigation", { name: "Components" });
-    expect(within(navigation).getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["Atoms", "Pages", "Other"]);
+    const navigation = screen.getByRole("navigation", { name: "Компоненты" });
+    expect(within(navigation).getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["Атомы", "Страницы", "Прочее"]);
     expect(within(navigation).getByRole("button", { name: "Button" })).toBeTruthy();
     expect(within(navigation).getByRole("button", { name: "Legacy story" })).toBeTruthy();
 
     fireEvent.click(within(switcher).getByRole("button", { name: "Wireframe" }));
     expect(within(navigation).getByRole("button", { name: "Input" })).toBeTruthy();
     expect(within(navigation).queryByRole("button", { name: "Button" })).toBeNull();
-    expect(screen.getByTitle("Story preview").getAttribute("src")).toContain("id=wire");
+    expect(screen.getByTitle("Превью истории").getAttribute("src")).toContain("id=wire");
   });
 });

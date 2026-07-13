@@ -11,16 +11,17 @@ import { Layout } from "./Layout";
 import { CjmShell } from "../cjm/CjmShell";
 import { EditorShell } from "../editor/EditorShell";
 import { headingPage, kicker, pillPrimary } from "./chrome";
+import { appShell } from "./strings/common";
 
 function NotFound() {
   return (
     <main className="mx-auto flex max-w-screen-md flex-col items-start gap-4 px-6 py-16">
-      <p className={kicker}>Ошибка 404</p>
-      <h1 className={headingPage}>Страница не найдена</h1>
+      <p className={kicker}>{appShell.notFoundKicker}</p>
+      <h1 className={headingPage}>{appShell.notFoundTitle}</h1>
       <p className="text-sm text-eui-slate-500">
-        Такой страницы нет — возможно, прототип был удалён или ссылка устарела.
+        {appShell.notFoundBody}
       </p>
-      <Link className={`${pillPrimary} mt-2`} to="/">В галерею</Link>
+      <Link className={`${pillPrimary} mt-2`} to="/">{appShell.notFoundCta}</Link>
     </main>
   );
 }

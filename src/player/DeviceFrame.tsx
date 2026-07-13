@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { PrototypeDoc } from "../prototype/schema";
 import { pillGhostOnDark } from "../app/chrome";
+import { deviceNames } from "../app/strings/common";
+import { player } from "../app/strings/player";
 
 type Device = PrototypeDoc["device"];
 const sizes: Record<Exclude<Device, "desktop">, { width: number; height: number }> = {
@@ -30,11 +32,11 @@ export function DeviceFrame({ defaultDevice, canvas, children }: {
   const contentHeight = canvas?.height ?? frame?.height;
 
   return (
-    <section className="min-w-0 flex-1 overflow-auto p-6" aria-label="Prototype device preview" style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(132,78,220,0.18), transparent 70%)" }}>
-      <div className="mb-3 flex gap-2 font-eui-ui" role="group" aria-label="Device">
+    <section className="min-w-0 flex-1 overflow-auto p-6" aria-label={player.devicePreviewAria} style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(132,78,220,0.18), transparent 70%)" }}>
+      <div className="mb-3 flex gap-2 font-eui-ui" role="group" aria-label={player.deviceAria}>
         {(["mobile", "tablet", "desktop"] as const).map((item) => (
-          <button key={item} type="button" aria-pressed={device === item} onClick={() => setDevice(item)} className={`${pillGhostOnDark} px-3 py-1 capitalize aria-pressed:bg-white/15`}>
-            {item}
+          <button key={item} type="button" aria-pressed={device === item} onClick={() => setDevice(item)} className={`${pillGhostOnDark} px-3 py-1 aria-pressed:bg-white/15`}>
+            {deviceNames[item]}
           </button>
         ))}
       </div>

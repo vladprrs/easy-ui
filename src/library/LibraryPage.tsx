@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { getCatalogManifest, getComponentMeta, listDesignSystems, listVisualReferences, type CatalogComponent, type ComponentVersionSummary, type FigmaProvenance, type VisualReference } from "../api/client";
 import { useApi } from "../api/hooks";
 import { chip, chipActive, headingBar, kicker } from "../app/chrome";
+import { figmaBadgeTitle, levelSection, library } from "../app/strings/library";
 import { atomicLevelLabel, componentLibraryStatus, groupLibraryEntries, LIBRARY_STATUS_KEYS, libraryStatusLabel, matchesLibraryFilter, selectionForComponent, selectionForStory, selectionKey, type ComponentLibraryStatus, type LibrarySelection, type LibraryStatusKey } from "./libraryModel";
 import { componentStatusBadge } from "./statusBadge";
 import { fetchStorybookIndex, parseStorybookTitle, type StorybookEntry } from "./storybookIndex";
@@ -80,45 +81,45 @@ export function LibraryPage() {
 
   return <main className="flex h-full min-h-0 flex-col lg:flex-row">
     <aside className="w-full shrink-0 border-b p-5 font-eui-ui lg:w-72 lg:border-b-0 lg:border-r">
-      <h1 className={headingBar}>Component library</h1>
-      {registry.status === "loading" ? <p className="mt-4 text-sm text-eui-slate-500" role="status">Loading design systems…</p> : null}
-      {registry.status === "error" ? <SourceError label="Design systems are unavailable." retry={registry.reload} /> : null}
-      <div className="mt-4 flex flex-wrap gap-2" aria-label="Design systems">
+      <h1 className={headingBar}>{library.title}</h1>
+      {registry.status === "loading" ? <p className="mt-4 text-sm text-eui-slate-500" role="status">{library.loadingSystems}</p> : null}
+      {registry.status === "error" ? <SourceError label={library.systemsUnavailable} retry={registry.reload} /> : null}
+      <div className="mt-4 flex flex-wrap gap-2" aria-label={library.designSystemsAria}>
         {groups.map((group) => <button type="button" key={group.system.id} aria-pressed={active?.system.id === group.system.id} className={active?.system.id === group.system.id ? chipActive : `${chip} hover:bg-eui-lilac-100/60`} onClick={() => {
           setActiveSystem(group.system.id);
           setSelection(firstSelection(group.stories, group.components));
         }}>{group.system.name}</button>)}
       </div>
-      <div className="mt-3 flex flex-wrap gap-2" aria-label="Status filters">
+      <div className="mt-3 flex flex-wrap gap-2" aria-label={library.statusFiltersAria}>
         {LIBRARY_STATUS_KEYS.map((key) => <button type="button" key={key} aria-pressed={filters.has(key)} className={filters.has(key) ? chipActive : `${chip} hover:bg-eui-lilac-100/60`} onClick={() => toggleFilter(key)}>{libraryStatusLabel[key]}</button>)}
       </div>
-      <nav className="mt-5 space-y-4" aria-label="Components">
-        {levelOrder.filter((level) => storyGroups[level]?.length).map((level) => <EntrySection key={`story-${level}`} title={level} entries={storyGroups[level].map((story) => ({
+      <nav className="mt-5 space-y-4" aria-label={library.componentsAria}>
+        {levelOrder.filter((level) => storyGroups[level]?.length).map((level) => <EntrySection key={`story-${level}`} title={levelSection(level)} entries={storyGroups[level].map((story) => ({
           key: `story:${story.id}`, name: parseStorybookTitle(story).name, active: selected?.kind === "story" && selected.storyId === story.id, select: () => setSelection(selectionForStory(story)),
         }))} />)}
-        {levelOrder.filter((level) => customGroups[level]?.length).map((level) => <EntrySection key={`custom-${level}`} title={`${level} · Custom`} entries={customGroups[level].map((component) => ({
+        {levelOrder.filter((level) => customGroups[level]?.length).map((level) => <EntrySection key={`custom-${level}`} title={`${levelSection(level)} · ${library.customSectionSuffix}`} entries={customGroups[level].map((component) => ({
           key: `custom:${component.id}:${component.designSystem}`, name: component.name, active: selected?.kind === "custom" && selected.componentId === component.id && selected.designSystem === component.designSystem, select: () => setSelection(selectionForComponent(component)),
           badge: statusMap.get(componentKey(component))?.figma ? <FigmaDot /> : undefined,
         }))} />)}
-        {active && !active.stories.length && !active.components.length && storybook.status !== "loading" && manifest.status !== "loading" ? <p className="text-sm text-eui-slate-500">No components published yet.</p> : null}
+        {active && !active.stories.length && !active.components.length && storybook.status !== "loading" && manifest.status !== "loading" ? <p className="text-sm text-eui-slate-500">{library.noComponents}</p> : null}
       </nav>
     </aside>
     <section className="flex min-h-0 flex-1 flex-col gap-3 p-4 font-eui-ui">
-      {storybook.status === "loading" ? <p className="rounded-xl bg-eui-lav p-3 text-sm text-eui-slate-500" role="status">Loading Storybook…</p> : null}
-      {storybook.status === "error" || (storybook.status === "ready" && !storybook.data) ? <SourceError label="Storybook is unavailable; custom components are still available." retry={storybook.reload} /> : null}
-      {manifest.status === "loading" ? <p className="rounded-xl bg-eui-lav p-3 text-sm text-eui-slate-500" role="status">Loading custom catalog…</p> : null}
-      {manifest.status === "error" ? <SourceError label="Custom catalog is unavailable." retry={manifest.reload} /> : null}
-      {selectedStory ? <StoryPreview story={selectedStory} /> : selectedComponent ? <ComponentMetadata component={selectedComponent} systemName={active?.system.name ?? selectedComponent.designSystem} /> : <div className="flex flex-1 items-center justify-center rounded-3xl bg-eui-lav p-6 text-eui-slate-500">Select a component to see its details.</div>}
+      {storybook.status === "loading" ? <p className="rounded-xl bg-eui-lav p-3 text-sm text-eui-slate-500" role="status">{library.loadingStorybook}</p> : null}
+      {storybook.status === "error" || (storybook.status === "ready" && !storybook.data) ? <SourceError label={library.storybookUnavailable} retry={storybook.reload} /> : null}
+      {manifest.status === "loading" ? <p className="rounded-xl bg-eui-lav p-3 text-sm text-eui-slate-500" role="status">{library.loadingCatalog}</p> : null}
+      {manifest.status === "error" ? <SourceError label={library.catalogUnavailable} retry={manifest.reload} /> : null}
+      {selectedStory ? <StoryPreview story={selectedStory} /> : selectedComponent ? <ComponentMetadata component={selectedComponent} systemName={active?.system.name ?? selectedComponent.designSystem} /> : <div className="flex flex-1 items-center justify-center rounded-3xl bg-eui-lav p-6 text-eui-slate-500">{library.selectComponent}</div>}
     </section>
   </main>;
 }
 
 function SourceError({ label, retry }: { label: string; retry: () => void }) {
-  return <div className="mt-3 rounded-xl bg-eui-lilac-100 p-3 text-sm text-eui-slate-500" role="alert">{label} <button type="button" className="font-bold underline" onClick={retry}>Retry</button></div>;
+  return <div className="mt-3 rounded-xl bg-eui-lilac-100 p-3 text-sm text-eui-slate-500" role="alert">{label} <button type="button" className="font-bold underline" onClick={retry}>{library.retry}</button></div>;
 }
 
 function FigmaDot() {
-  return <span className="ml-1 inline-block rounded px-1 text-[10px] font-bold text-eui-brand" aria-hidden="true" title="Linked to Figma">F</span>;
+  return <span className="ml-1 inline-block rounded px-1 text-[10px] font-bold text-eui-brand" aria-hidden="true" title={library.linkedToFigma}>F</span>;
 }
 
 function EntrySection({ title, entries }: { title: string; entries: { key: string; name: string; active: boolean; select: () => void; badge?: ReactNode }[] }) {
@@ -128,11 +129,11 @@ function EntrySection({ title, entries }: { title: string; entries: { key: strin
 function StoryPreview({ story }: { story: StorybookEntry }) {
   const parsed = parseStorybookTitle(story);
   const iframeUrl = `/storybook/iframe.html?id=${encodeURIComponent(story.id)}&viewMode=story`;
-  return <><div className="flex items-center gap-3 text-sm"><span className="font-bold">{parsed.name} · {parsed.level}</span><a className="ml-auto text-eui-slate-500 underline hover:text-eui-brand" href={iframeUrl} target="_blank" rel="noreferrer">Open in Storybook</a></div><iframe className="min-h-0 flex-1 overflow-hidden rounded-3xl border border-eui-ink/10" title="Story preview" src={iframeUrl} /></>;
+  return <><div className="flex items-center gap-3 text-sm"><span className="font-bold">{parsed.name} · {parsed.level}</span><a className="ml-auto text-eui-slate-500 underline hover:text-eui-brand" href={iframeUrl} target="_blank" rel="noreferrer">{library.openInStorybook}</a></div><iframe className="min-h-0 flex-1 overflow-hidden rounded-3xl border border-eui-ink/10" title={library.storyPreviewTitle} src={iframeUrl} /></>;
 }
 
 function FigmaBadge({ figma }: { figma: FigmaProvenance }) {
-  const title = `Figma ${figma.fileKey} · ${figma.nodeIds.length} node${figma.nodeIds.length === 1 ? "" : "s"}`;
+  const title = figmaBadgeTitle(figma.fileKey, figma.nodeIds.length);
   return <span className="rounded-full bg-eui-lilac-100 px-2 py-0.5 text-xs font-bold text-eui-brand" title={title}>Figma</span>;
 }
 
@@ -144,14 +145,14 @@ function ComponentMetadata({ component, systemName }: { component: CatalogCompon
   const figma = meta.status === "ready" ? meta.data.figma ?? null : null;
   const previewUrl = component.example ? `/capture/component/${encodeURIComponent(component.id)}/${component.version}?props=example` : null;
   return <article className="max-w-2xl rounded-3xl bg-eui-lav p-6">
-    <div className="flex items-center gap-2"><p className={kicker}>Custom component</p>{badge ? <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${badge.className}`} title={badge.title}>{badge.label}</span> : null}{figma ? <FigmaBadge figma={figma} /> : null}</div>
+    <div className="flex items-center gap-2"><p className={kicker}>{library.customBadge}</p>{badge ? <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${badge.className}`} title={badge.title}>{badge.label}</span> : null}{figma ? <FigmaBadge figma={figma} /> : null}</div>
     <h2 className="mt-2 font-eui-display text-2xl font-medium">{component.name}</h2>
     {previewUrl
-      ? <iframe className="mt-4 h-64 w-full overflow-hidden rounded-2xl border border-eui-ink/10 bg-background" title={`${component.name} preview`} src={previewUrl} />
-      : <p className="mt-4 rounded-2xl bg-eui-lilac-100/50 p-4 text-sm text-eui-slate-500">No example props are defined, so a live preview is unavailable.</p>}
+      ? <iframe className="mt-4 h-64 w-full overflow-hidden rounded-2xl border border-eui-ink/10 bg-background" title={library.previewTitle(component.name)} src={previewUrl} />
+      : <p className="mt-4 rounded-2xl bg-eui-lilac-100/50 p-4 text-sm text-eui-slate-500">{library.noExampleProps}</p>}
     <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
-      <Metadata label="System" value={systemName} /><Metadata label="Atomic level" value={component.atomicLevel ?? "Other"} /><Metadata label="Version" value={`v${component.version}`} />
-      <Metadata label="Description" value={component.description || "No description"} /><Metadata label="Events" value={component.events.length ? component.events.join(", ") : "None"} /><Metadata label="Slots" value={component.slots.length ? component.slots.join(", ") : "None"} />
+      <Metadata label={library.metaSystem} value={systemName} /><Metadata label={library.metaAtomicLevel} value={levelSection(atomicLevelLabel(component.atomicLevel))} /><Metadata label={library.metaVersion} value={`v${component.version}`} />
+      <Metadata label={library.metaDescription} value={component.description || library.noDescription} /><Metadata label={library.metaEvents} value={component.events.length ? component.events.join(", ") : library.none} /><Metadata label={library.metaSlots} value={component.slots.length ? component.slots.join(", ") : library.none} />
     </dl>
   </article>;
 }

@@ -6,11 +6,13 @@ import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { loadCustomComponents } from "../customComponents/loader";
 import { loadPrototypeDraft, loadPrototypeVersion } from "../prototype/loader";
 import { buildPrototypeRouteBase } from "./navigation";
+import { common, formatApiError } from "../app/strings/common";
+import { loader } from "../app/strings/player";
 
 const loaderPlate = "mx-auto max-w-xl rounded-2xl bg-eui-lilac-100 p-6 text-center font-eui-ui text-eui-ink";
 
 export function MissingPrototype() {
-  return <main className={loaderPlate}><h1 className="text-2xl font-bold">Prototype not found</h1><p className="mt-2">This prototype does not exist.</p><Link className="mt-4 inline-block underline" to="/">Back to gallery</Link></main>;
+  return <main className={loaderPlate}><h1 className="text-2xl font-bold">{loader.missingTitle}</h1><p className="mt-2">{loader.missingBody}</p><Link className="mt-4 inline-block underline" to="/">{common.backToGallery}</Link></main>;
 }
 
 // version_not_found (W0-4): the prototype exists, but the requested published version does not.
@@ -20,19 +22,21 @@ export function MissingVersion({ protoId, version }: { protoId: string; version:
   const currentPath = location.pathname.replace(`/v/${version}`, "") || buildPrototypeRouteBase(protoId);
   return (
     <main className={loaderPlate} role="alert">
-      <h1 className="text-2xl font-bold">Версия {version} не опубликована</h1>
-      <p className="mt-2">У этого прототипа нет опубликованной версии {version}.</p>
+      <h1 className="text-2xl font-bold">{loader.missingVersionTitle(version)}</h1>
+      <p className="mt-2">{loader.missingVersionBody(version)}</p>
       <p className="mt-4 flex justify-center gap-4">
-        <Link className="underline" to={currentPath}>Открыть текущую</Link>
-        <Link className="underline" to="/">К галерее</Link>
+        <Link className="underline" to={currentPath}>{loader.openCurrent}</Link>
+        <Link className="underline" to="/">{loader.toGallery}</Link>
       </p>
     </main>
   );
 }
 
 export function LoadError({ error, retry }: { error: unknown; retry: () => void }) {
-  const message = error instanceof Error ? error.message : String(error);
-  return <main className={loaderPlate} role="alert"><h1 className="text-2xl font-bold">Could not load prototype</h1><p className="mt-2 whitespace-pre-wrap">{message}</p><button className="mt-4 underline" onClick={retry}>Retry</button></main>;
+  const message = error instanceof ApiError
+    ? formatApiError(error.code, { message: error.message, status: error.status, currentRev: error.currentRev, currentVersion: error.currentVersion })
+    : error instanceof Error ? error.message : String(error);
+  return <main className={loaderPlate} role="alert"><h1 className="text-2xl font-bold">{loader.loadErrorTitle}</h1><p className="mt-2 whitespace-pre-wrap">{message}</p><button className="mt-4 underline" onClick={retry}>{common.retry}</button></main>;
 }
 
 export interface PrototypeLoaderResult {
@@ -57,7 +61,7 @@ function LoadedPrototype({ loaded, routeBase, children }: {
     () => loaded.components.length ? loadCustomComponents(loaded.components) : Promise.resolve(undefined),
     [loaded.componentManifestHash],
   );
-  if (customState.status === "loading") return <div className={loaderPlate} role="status" aria-label="Loading components">Загрузка прототипа…</div>;
+  if (customState.status === "loading") return <div className={loaderPlate} role="status" aria-label={loader.loadingComponents}>{loader.loadingPrototype}</div>;
   if (customState.status === "error") return <LoadError error={customState.error} retry={customState.reload} />;
   const revision = "version" in loaded ? `v${loaded.version}` : `r${loaded.rev}`;
   const runtimeKey = `${loaded.doc.id}:${revision}:${loaded.componentManifestHash}:${loaded.doc.designSystem}`;
@@ -72,7 +76,7 @@ export function PrototypeLoader({ protoId, version, children }: PrototypeLoaderP
     [protoId, version],
   );
   if (!protoId || (version !== undefined && (!Number.isInteger(version) || version < 1))) return <MissingPrototype />;
-  if (prototypeState.status === "loading") return <div className={loaderPlate} role="status" aria-label="Loading prototype">Загрузка прототипа…</div>;
+  if (prototypeState.status === "loading") return <div className={loaderPlate} role="status" aria-label={loader.loadingPrototype}>{loader.loadingPrototype}</div>;
   if (prototypeState.status === "error") {
     if (prototypeState.error instanceof ApiError && prototypeState.error.status === 404) {
       if (prototypeState.error.code === "version_not_found" && version !== undefined) return <MissingVersion protoId={protoId} version={version} />;

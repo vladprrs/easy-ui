@@ -39,13 +39,13 @@ describe("CjmShell", () => {
     expect(screen.getByText("Review the order")).toBeTruthy();
     expect(screen.getByText("From cart to success")).toBeTruthy();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
-    expect(screen.getByRole("link", { name: "Открыть экран “Cart” прототипа “Checkout journey” в плеере" }).getAttribute("href")).toBe("/p/journey/s/cart");
+    expect(screen.getByRole("link", { name: "Открыть экран «Cart» прототипа «Checkout journey» в плеере" }).getAttribute("href")).toBe("/p/journey/s/cart");
     expect(screen.getByRole("link", { name: "Открыть плеер" }).getAttribute("href")).toBe("/p/journey");
   });
 
   it("keeps published tile links version-aware", async () => {
     renderAt("/p/journey/v/2/cjm");
-    expect((await screen.findByRole("link", { name: "Открыть экран “Success” прототипа “Checkout journey” в плеере" })).getAttribute("href")).toBe("/p/journey/v/2/s/success");
+    expect((await screen.findByRole("link", { name: "Открыть экран «Success» прототипа «Checkout journey» в плеере" })).getAttribute("href")).toBe("/p/journey/v/2/s/success");
   });
 
   it("omits the description block when the document has no description", async () => {
@@ -59,7 +59,7 @@ describe("CjmShell", () => {
     const dialogDoc = prototypeDocSchema.parse({ ...doc, state: { open: false }, screens: [{ id: "cart", name: "Cart", stateOverrides: { open: true }, spec: { root: "dialog", elements: { dialog: { type: "Dialog", props: { title: "Modal", openPath: "/open" } } } } }] });
     mocks.getDraft.mockResolvedValue({ ...draft, doc: dialogDoc });
     renderAt("/p/journey/cjm");
-    const list = await screen.findByRole("list", { name: "CJM screens" });
+    const list = await screen.findByRole("list", { name: "Экраны CJM" });
     await waitFor(() => expect(document.body.style.pointerEvents).not.toBe("none"));
     expect(list.getAttribute("aria-hidden")).toBeNull();
     expect(screen.getByRole("link", { name: /Открыть экран/ })).toBeTruthy();

@@ -37,10 +37,10 @@ describe("GalleryPage", () => {
     const request = deferred<(typeof summary)[]>();
     vi.mocked(listPrototypes).mockReturnValue(request.promise);
     renderGallery();
-    expect(screen.getByText("Loading prototypes…")).toBeTruthy();
+    expect(screen.getByText("Загружаем прототипы…")).toBeTruthy();
     await act(async () => request.resolve([summary]));
     expect(screen.getByRole("heading", { name: "Hello World" })).toBeTruthy();
-    expect(screen.getByText("Mobile")).toBeTruthy();
+    expect(screen.getByText("Телефон")).toBeTruthy();
     expect(screen.getByText("2")).toBeTruthy();
     const draftLink = screen.getByRole("link", { name: "Hello World" });
     expect(within(screen.getByRole("heading", { name: "Hello World" }).closest("li")!).getByText("Shadcn")).toBeTruthy();
@@ -75,8 +75,8 @@ describe("GalleryPage", () => {
     vi.mocked(listPrototypes).mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce([]);
     renderGallery();
     expect(await screen.findByText("API недоступен")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("No prototypes found.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
+    expect(await screen.findByText("Прототипов пока нет.")).toBeTruthy();
     expect(listPrototypes).toHaveBeenCalledTimes(2);
   });
 

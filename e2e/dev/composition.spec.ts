@@ -36,7 +36,7 @@ test("seeded composition-demo renders a repeat from state and navigates between 
   await page.goto("/p/composition-demo");
   await expect(page).toHaveURL(/\/p\/composition-demo\/s\/board$/);
 
-  const preview = page.getByLabel("Prototype device preview");
+  const preview = page.getByLabel("Превью прототипа на устройстве");
 
   // repeat over /tasks (3 items) with $item in props and $cond-driven status badges.
   await expect(preview.getByText("Design the flow")).toBeVisible();
@@ -112,7 +112,7 @@ test("typed event payload drives setState via $event, $if gates an action, slots
   await page.goto("/p/typed-events-flow?debug=1");
   await expect(page).toHaveURL(/\/p\/typed-events-flow\/s\/plans/);
 
-  const preview = page.getByLabel("Prototype device preview");
+  const preview = page.getByLabel("Превью прототипа на устройстве");
   // Named slots routed the children into the header/body regions.
   await expect(preview.getByText("Choose a plan")).toBeVisible();
   await expect(preview.getByText("Picked:", { exact: false })).toBeVisible();
@@ -129,7 +129,7 @@ test("typed event payload drives setState via $event, $if gates an action, slots
   await expect(preview.getByText("Amount applied")).toBeVisible();
 
   // Inspector (?debug=1) logs the typed event with its payload.
-  const inspector = page.getByRole("complementary", { name: "Interaction inspector" });
+  const inspector = page.getByRole("complementary", { name: "Инспектор взаимодействий" });
   await expect(inspector).toBeVisible();
   await expect(inspector.getByText("choose", { exact: false }).first()).toBeVisible();
   await expect(inspector.getByText(/"label":"Pro plan"/)).toBeVisible();

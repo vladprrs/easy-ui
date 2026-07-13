@@ -4,9 +4,9 @@ import { describeFingerprint, evidenceDenominator, formatPercent, referenceScope
 
 describe("visualModel", () => {
   it("labels every run status", () => {
-    expect(statusLabel("pass")).toBe("Pass");
-    expect(statusLabel("reference_missing")).toBe("Reference missing");
-    expect(statusLabel("running")).toBe("Running…");
+    expect(statusLabel("pass")).toBe("Пройдено");
+    expect(statusLabel("reference_missing")).toBe("Нет эталона");
+    expect(statusLabel("running")).toBe("Выполняется…");
     for (const s of ["pass", "fail", "error", "reference_missing", "running"] as const) expect(statusTone(s)).toBeTruthy();
   });
 
@@ -26,7 +26,7 @@ describe("visualModel", () => {
 
   it("classifies reference scope and reads the denominator", () => {
     const ref = { fingerprint: { scope: "component" } } as unknown as VisualReference;
-    expect(referenceScope(ref)).toBe("Component");
+    expect(referenceScope(ref)).toBe("Компонент");
     const report = { totalPixels: null, metrics: { "exact-rgba": { diffPixels: 0, totalPixels: 16, diffPercent: 0 } } } as unknown as RunReport;
     expect(evidenceDenominator(report)).toBe(16);
   });

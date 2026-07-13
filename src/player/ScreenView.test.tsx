@@ -25,7 +25,7 @@ describe("ScreenView error boundary", () => {
     render(<ScreenErrorBoundary prototypeId="broken-prototype" screenId="bad-screen" restart={restart}><BrokenRuntimeProp /></ScreenErrorBoundary>);
     expect(screen.getByRole("alert").textContent).toContain("broken-prototype");
     expect(screen.getByRole("alert").textContent).toContain("bad-screen");
-    screen.getByRole("button", { name: "Restart" }).click();
+    screen.getByRole("button", { name: "Начать сначала" }).click();
     expect(restart).toHaveBeenCalledOnce();
   });
 });

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
+import { loader } from "../app/strings/player";
 
 export interface PlayerLocationState {
   sessionNonce: string;
@@ -85,7 +86,7 @@ export function PlayerNavigationProvider({ startScreen, routeBase, children }: {
     restart,
   }), [back, navigate, restart, sessionNonce, state?.flowDepth]);
 
-  if (isBootstrap || isStale) return <div role="status" aria-label="Loading prototype" />;
+  if (isBootstrap || isStale) return <div role="status" aria-label={loader.loadingPrototype} />;
   return <NavigationContext value={value}>{children}</NavigationContext>;
 }
 
@@ -102,5 +103,5 @@ export function StartScreenRedirect({ startScreen }: { startScreen: string }) {
     if (!protoId) return;
     navigation.navigate(startScreen);
   }, [navigation, protoId, startScreen]);
-  return <div role="status" aria-label="Opening prototype" />;
+  return <div role="status" aria-label={loader.loadingPrototype} />;
 }

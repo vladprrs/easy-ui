@@ -9,6 +9,8 @@ import { splitCanvas, toRuntimeSpec } from "../prototype/runtimeSpec";
 import { CanvasLayers } from "./CanvasLayers";
 import { EasyUiRuntimeProvider } from "./easyUiRuntime";
 import { pillGhostOnDark } from "../app/chrome";
+import { player } from "../app/strings/player";
+import { common } from "../app/strings/common";
 
 export class ScreenErrorBoundary extends Component<{
   prototypeId: string;
@@ -24,10 +26,10 @@ export class ScreenErrorBoundary extends Component<{
   render() {
     if (!this.state.error) return this.props.children;
     return <section role="alert" className="rounded-2xl bg-white/10 p-6 text-eui-orange">
-      <h1 className="font-eui-display text-xl font-bold">This screen could not be rendered</h1>
-      <p className="mt-2 font-mono text-sm text-eui-ondark-2">Prototype: {this.props.prototypeId} · Screen: {this.props.screenId}</p>
+      <h1 className="font-eui-display text-xl font-bold">{player.screenErrorTitle}</h1>
+      <p className="mt-2 font-mono text-sm text-eui-ondark-2">{player.screenErrorContext(this.props.prototypeId, this.props.screenId)}</p>
       <p className="mt-2 text-sm">{this.state.error.message}</p>
-      <button type="button" className={`${pillGhostOnDark} mt-4 font-eui-ui`} onClick={this.props.restart}>Restart</button>
+      <button type="button" className={`${pillGhostOnDark} mt-4 font-eui-ui`} onClick={this.props.restart}>{player.restart}</button>
     </section>;
   }
 }
@@ -47,7 +49,7 @@ export function ScreenView() {
     return { content: tree.spec, hotspots: [] };
   }, [screenCanvas, tree]);
   useEffect(() => { runtime.setScreenSpec(specs?.content ?? null); return () => runtime.setScreenSpec(null); }, [runtime, specs]);
-  if (!screen) return <main className="flex h-full items-start justify-center bg-eui-graphite p-8 text-white"><section className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h1 className="font-eui-display text-2xl font-bold">Screen not found</h1><p className="mt-2 text-eui-ondark-2">This screen does not exist in “{doc.name}”.</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">Back to gallery</Link></section></main>;
+  if (!screen) return <main className="flex h-full items-start justify-center bg-eui-graphite p-8 text-white"><section className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h1 className="font-eui-display text-2xl font-bold">{player.screenMissingTitle}</h1><p className="mt-2 text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">{common.backToGallery}</Link></section></main>;
 
   const rendered = <EasyUiRuntimeProvider value={{ metadata: tree!.metadata, runtime, definitions: customDefinitions, onError }}>
     {screen.canvas
@@ -57,12 +59,12 @@ export function ScreenView() {
 
   return <main className="flex h-full min-h-0 flex-col bg-eui-graphite text-white">
     <header className="flex items-center gap-4 border-b border-white/15 px-6 py-3 font-eui-ui">
-      <Link className="text-sm text-eui-ondark-2 hover:text-white" to="/">← Галерея</Link>
+      <Link className="text-sm text-eui-ondark-2 hover:text-white" to="/">{player.backToGallery}</Link>
       <h1 className="font-eui-display font-medium text-white">{doc.name}</h1>
       {version === undefined ? null : <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-white">v{version}</span>}
       <div className="ml-auto flex gap-2">
-        <button type="button" onClick={navigation.back} disabled={navigation.flowDepth === 0} className={`${pillGhostOnDark} disabled:opacity-50`}>Back</button>
-        <button type="button" onClick={navigation.restart} className={pillGhostOnDark}>Restart</button>
+        <button type="button" onClick={navigation.back} disabled={navigation.flowDepth === 0} className={`${pillGhostOnDark} disabled:opacity-50`}>{player.back}</button>
+        <button type="button" onClick={navigation.restart} className={pillGhostOnDark}>{player.restart}</button>
         <Link className={pillGhostOnDark} to={`${version === undefined ? `/p/${doc.id}` : `/p/${doc.id}/v/${version}`}/cjm`}>CJM</Link>
       </div>
     </header>

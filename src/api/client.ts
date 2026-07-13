@@ -96,7 +96,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) {
-    let error: ApiErrorBody = { code: "http_error", message: `API request failed (${response.status})` };
+    let error: ApiErrorBody = { code: "http_error", message: `Не удалось выполнить запрос к API (${response.status})` };
     try {
       const value = await response.json() as { error?: Partial<ApiErrorBody> };
       if (value.error && typeof value.error.code === "string" && typeof value.error.message === "string") error = value.error as ApiErrorBody;

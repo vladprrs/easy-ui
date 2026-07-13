@@ -1,7 +1,9 @@
 /**
  * Local API client for the visual-regression surface. Kept inside the feature
- * folder (not src/api/client.ts) so T7 owns its own transport.
+ * folder (not src/api/client.ts) so T7 owns its own transport; errors reuse the
+ * shared ApiError class so the server `code` survives for formatApiError (W0-5).
  */
+import { ApiError, type ApiErrorBody } from "../api/client";
 
 export interface MetricResult { diffPixels: number; totalPixels: number; diffPercent: number }
 export interface EvidenceAsset { assetId: string; url: string; sha256: string; width: number | null; height: number | null; mime: string }
@@ -39,9 +41,13 @@ export interface VisualReferenceDetail extends VisualReference { runs: RunReport
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   if (!response.ok) {
-    let message = `Request failed (${response.status})`;
-    try { const body = await response.json() as { error?: { message?: string } }; if (body.error?.message) message = body.error.message; } catch { /* keep fallback */ }
-    throw new Error(message);
+    // W0-5: сохраняем ApiError.code (раньше обёртка теряла его, оставляя только message).
+    let error: ApiErrorBody = { code: "http_error", message: `Не удалось выполнить запрос к API (${response.status})` };
+    try {
+      const body = await response.json() as { error?: Partial<ApiErrorBody> };
+      if (body.error && typeof body.error.code === "string" && typeof body.error.message === "string") error = body.error as ApiErrorBody;
+    } catch { /* keep fallback for non-JSON error responses */ }
+    throw new ApiError(response.status, error);
   }
   if (response.status === 204) return undefined as T;
   return await response.json() as T;

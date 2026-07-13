@@ -9,14 +9,14 @@ describe("componentStatusBadge", () => {
   });
 
   it("renders a coloured badge for the terminal statuses", () => {
-    expect(componentStatusBadge("deprecated")).toMatchObject({ label: "Deprecated", title: "Deprecated" });
-    expect(componentStatusBadge("superseded")).toMatchObject({ label: "Superseded" });
-    expect(componentStatusBadge("rejected")).toMatchObject({ label: "Rejected" });
-    expect(componentStatusBadge("archived")).toMatchObject({ label: "Archived" });
+    expect(componentStatusBadge("deprecated")).toMatchObject({ label: "Устаревший", title: "Устаревший" });
+    expect(componentStatusBadge("superseded")).toMatchObject({ label: "Заменён" });
+    expect(componentStatusBadge("rejected")).toMatchObject({ label: "Отклонён" });
+    expect(componentStatusBadge("archived")).toMatchObject({ label: "В архиве" });
   });
 
   it("carries the reason into the title when provided", () => {
-    expect(componentStatusBadge("rejected", "  unsafe code  ")).toMatchObject({ title: "Rejected: unsafe code" });
-    expect(componentStatusBadge("deprecated", "   ")?.title).toBe("Deprecated");
+    expect(componentStatusBadge("rejected", "  unsafe code  ")).toMatchObject({ title: "Отклонён: unsafe code" });
+    expect(componentStatusBadge("deprecated", "   ")?.title).toBe("Устаревший");
   });
 });

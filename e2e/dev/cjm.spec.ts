@@ -14,7 +14,7 @@ test("checkout CJM opens from gallery and preserves player history semantics", a
   await checkoutCard.getByRole("link", { name: "CJM", exact: true }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/cjm$/);
 
-  const journey = page.getByRole("list", { name: "CJM screens" });
+  const journey = page.getByRole("list", { name: "Экраны CJM" });
   await expect(journey).toBeVisible();
   await expect(journey).not.toHaveAttribute("aria-hidden", "true");
   for (const screenName of ["Каталог", "Товар", "Корзина", "Оформление", "Успех"]) {
@@ -24,11 +24,11 @@ test("checkout CJM opens from gallery and preserves player history semantics", a
   await expect(page.getByText("Лёгкие кроссовки × 1", { exact: true })).toBeVisible();
 
   expect(await page.evaluate(() => document.body.style.pointerEvents)).not.toBe("none");
-  const cartOverlay = page.getByRole("link", { name: /Открыть экран “Корзина”.*в плеере/ });
+  const cartOverlay = page.getByRole("link", { name: /Открыть экран «Корзина».*в плеере/ });
   await expect(cartOverlay).toBeVisible();
   await cartOverlay.click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/cart$/);
-  await expect(page.getByRole("button", { name: "Back" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Назад" })).toBeDisabled();
   // The tile link opens a NEW player session with fresh document state (CJM stateOverrides are
   // tile-only). Since checkout@2 the cart totals are $cond-driven, so with /cart/count = 0 the
   // checkout button is correctly disabled here.
@@ -36,7 +36,7 @@ test("checkout CJM opens from gallery and preserves player history semantics", a
 
   await page.goBack();
   await expect(page).toHaveURL(/\/p\/checkout\/cjm$/);
-  await expect(page.getByRole("list", { name: "CJM screens" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Экраны CJM" })).toBeVisible();
 
   await page.getByRole("link", { name: "Открыть плеер" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/catalog$/);
@@ -46,7 +46,7 @@ test("checkout CJM opens from gallery and preserves player history semantics", a
 
 test("checkout CJM supports direct load and rejects an unknown version", async ({ page }) => {
   await page.goto("/p/checkout/cjm");
-  await expect(page.getByRole("list", { name: "CJM screens" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Экраны CJM" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Мобильное оформление заказа" })).toBeVisible();
 
   // Unknown published version (W0-4): a dedicated state with working escape links.
@@ -55,7 +55,7 @@ test("checkout CJM supports direct load and rejects an unknown version", async (
   await expect(page.getByRole("link", { name: "К галерее" })).toBeVisible();
   await page.getByRole("link", { name: "Открыть текущую" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/cjm$/);
-  await expect(page.getByRole("list", { name: "CJM screens" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Экраны CJM" })).toBeVisible();
 
   // Same state in the player at /p/:id/v/N; «Открыть текущую» lands on the draft player.
   await page.goto("/p/checkout/v/99");
@@ -65,5 +65,5 @@ test("checkout CJM supports direct load and rejects an unknown version", async (
 
   // A missing prototype still reads as prototype-not-found.
   await page.goto("/p/no-such-proto/v/1");
-  await expect(page.getByRole("heading", { name: "Prototype not found" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Прототип не найден" })).toBeVisible();
 });
