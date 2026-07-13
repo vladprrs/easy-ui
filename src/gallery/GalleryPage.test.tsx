@@ -42,12 +42,33 @@ describe("GalleryPage", () => {
     expect(screen.getByRole("heading", { name: "Hello World" })).toBeTruthy();
     expect(screen.getByText("Mobile")).toBeTruthy();
     expect(screen.getByText("2")).toBeTruthy();
-    const draftLink = screen.getByRole("link", { name: /Открыть «Hello World»/ });
+    const draftLink = screen.getByRole("link", { name: "Hello World" });
     expect(within(screen.getByRole("heading", { name: "Hello World" }).closest("li")!).getByText("Shadcn")).toBeTruthy();
     expect(draftLink.getAttribute("href")).toBe("/p/hello-world");
-    expect(screen.getByRole("link", { name: "Published v2" }).getAttribute("href")).toBe("/p/hello-world/v/2");
+    expect(screen.getByRole("link", { name: "Версия v2" }).getAttribute("href")).toBe("/p/hello-world/v/2");
     expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/hello-world/cjm");
-    expect(screen.getByRole("link", { name: "CJM Published v2" }).getAttribute("href")).toBe("/p/hello-world/v/2/cjm");
+    expect(screen.getByRole("link", { name: "CJM v2" }).getAttribute("href")).toBe("/p/hello-world/v/2/cjm");
+  });
+
+  it("stretches the card link over a non-interactive layer and keeps actions separately focusable", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([summary]);
+    renderGallery();
+    const card = (await screen.findByRole("heading", { name: "Hello World" })).closest("li")!;
+    // Stretched-link: the title link covers the whole card via an absolute pseudo-element.
+    const cardLink = within(card).getByRole("link", { name: "Hello World" });
+    expect(card.className).toContain("relative");
+    expect(cardLink.className).toContain("after:absolute");
+    expect(cardLink.className).toContain("after:inset-0");
+    // No nested interactive elements: no anchor lives inside another anchor.
+    for (const anchor of Array.from(card.querySelectorAll("a"))) {
+      expect(anchor.parentElement?.closest("a")).toBeNull();
+    }
+    // Actions sit above the stretched link with their own tab stops.
+    const actions = within(card).getAllByRole("link").filter((link) => link !== cardLink);
+    expect(actions.map((link) => link.textContent)).toEqual(["CJM", "Редактор", "Версия v2", "CJM v2"]);
+    const actionsRow = actions[0]!.parentElement!;
+    expect(actionsRow.className).toContain("relative");
+    expect(actionsRow.className).toContain("z-10");
   });
 
   it("shows an API error and retries", async () => {
