@@ -6,6 +6,7 @@ import { normalizeDefinitions, type ComponentDefinition } from "../../catalog/no
 import { createFixtures } from "../fixtures";
 import type { DesignSystem } from "../types";
 import { shadcnAtomicLevels, shadcnLayoutNeutral } from "./atomicLevels";
+import { ShadcnImage } from "./image";
 import { shadcnFixtureOverrides } from "./overrides";
 
 export const sourceComponentDefinitions = {
@@ -25,7 +26,8 @@ const classifiedDefinitions = Object.fromEntries(
 };
 
 export const componentDefinitions = normalizeDefinitions(classifiedDefinitions);
-export const shadcnComponentsWithHotspot = { ...shadcnComponents, Hotspot };
+// Image is a local wrapper: adds an onError placeholder over the upstream component (W0-2).
+export const shadcnComponentsWithHotspot = { ...shadcnComponents, Image: ShadcnImage, Hotspot };
 export const fixtures = createFixtures(componentDefinitions, shadcnFixtureOverrides);
 
 export const shadcnSystem: DesignSystem = {
