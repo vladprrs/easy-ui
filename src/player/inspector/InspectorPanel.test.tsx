@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AppRoutes } from "../../app/routes";
+import { routeObjects } from "../../app/routes";
 import type { PrototypeDraft } from "../../api/client";
 import { prototypeDocSchema } from "../../prototype/schema";
 import { InspectorLog } from "./log";
@@ -58,7 +58,7 @@ describe("player integration (?debug=1)", () => {
   });
 
   function renderAt(path: string) {
-    const router = createMemoryRouter([{ path: "*", element: <AppRoutes /> }], { initialEntries: [path] });
+    const router = createMemoryRouter(routeObjects, { initialEntries: [path] });
     render(<RouterProvider router={router} />);
     return router;
   }

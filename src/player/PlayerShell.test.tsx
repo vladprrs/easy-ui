@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AppRoutes } from "../app/routes";
+import { routeObjects } from "../app/routes";
 import type { PrototypeDraft, PrototypeVersion } from "../api/client";
 import { prototypeDocSchema } from "../prototype/schema";
 
@@ -13,7 +13,7 @@ const hello = prototypeDocSchema.parse((await import("../../prototypes/hello-wor
 const draft = (doc = hello, rev = 1): PrototypeDraft => ({ doc, rev, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] });
 
 function renderAt(path: string) {
-  const router = createMemoryRouter([{ path: "*", element: <AppRoutes /> }], { initialEntries: [path] });
+  const router = createMemoryRouter(routeObjects, { initialEntries: [path] });
   render(<RouterProvider router={router} />);
   return router;
 }

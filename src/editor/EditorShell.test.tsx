@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrototypeDraft } from "../api/client";
-import { AppRoutes } from "../app/routes";
+import { routeObjects } from "../app/routes";
 import { prototypeDocSchema } from "../prototype/schema";
 
 const doc = prototypeDocSchema.parse({
@@ -13,7 +13,7 @@ const draft: PrototypeDraft = { doc, rev: 7, builtinCatalogHash: "builtin", comp
 const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
 
 function renderEditor() {
-  const router = createMemoryRouter([{ path: "*", element: <AppRoutes /> }], { initialEntries: ["/p/editor-demo/edit"] });
+  const router = createMemoryRouter(routeObjects, { initialEntries: ["/p/editor-demo/edit"] });
   render(<RouterProvider router={router} />);
 }
 

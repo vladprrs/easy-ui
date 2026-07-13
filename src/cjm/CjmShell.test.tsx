@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrototypeDraft, PrototypeVersion } from "../api/client";
 import { prototypeDocSchema } from "../prototype/schema";
-import { AppRoutes } from "../app/routes";
+import { routeObjects } from "../app/routes";
 import { TileErrorBoundary } from "./CjmScreenTile";
 
 const mocks = vi.hoisted(() => ({ getDraft: vi.fn(), getVersion: vi.fn(), loadCustom: vi.fn() }));
@@ -20,8 +20,10 @@ const doc = prototypeDocSchema.parse({
 });
 const draft: PrototypeDraft = { doc, rev: 4, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] };
 
+afterEach(cleanup);
+
 function renderAt(path: string) {
-  const router = createMemoryRouter([{ path: "*", element: <AppRoutes /> }], { initialEntries: [path] });
+  const router = createMemoryRouter(routeObjects, { initialEntries: [path] });
   render(<RouterProvider router={router} />);
   return router;
 }

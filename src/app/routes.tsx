@@ -1,4 +1,4 @@
-import { Link, Route, Routes } from "react-router";
+import { Link, type RouteObject } from "react-router";
 import { CapturePrototype } from "../capture/CapturePrototype";
 import { CaptureComponent } from "../capture/CaptureComponent";
 import { GalleryPage } from "../gallery/GalleryPage";
@@ -28,29 +28,36 @@ function NotFound() {
   );
 }
 
-export function AppRoutes() {
-  return (
-    <Routes>
-      <Route path="capture/:protoId/s/:screenId" element={<CapturePrototype />} />
-      <Route path="capture/component/:id/:version" element={<CaptureComponent />} />
-      <Route element={<Layout />}>
-        <Route index element={<GalleryPage />} />
-        <Route path="library" element={<LibraryPage />} />
-        <Route path="visual" element={<VisualPage />} />
-        <Route path="debug" element={<SmokeSpec />} />
-        <Route path="p/:protoId" element={<PlayerShell />}>
-          <Route index element={null} />
-          <Route path="s/:screenId" element={<ScreenView />} />
-        </Route>
-        <Route path="p/:protoId/v/:version" element={<PlayerShell />}>
-          <Route index element={null} />
-          <Route path="s/:screenId" element={<ScreenView />} />
-        </Route>
-        <Route path="p/:protoId/cjm" element={<CjmShell />} />
-        <Route path="p/:protoId/edit" element={<EditorShell />} />
-        <Route path="p/:protoId/v/:version/cjm" element={<CjmShell />} />
-        <Route path="*" element={<NotFound />} />
-      </Route>
-    </Routes>
-  );
-}
+export const routeObjects: RouteObject[] = [
+  { path: "capture/:protoId/s/:screenId", element: <CapturePrototype /> },
+  { path: "capture/component/:id/:version", element: <CaptureComponent /> },
+  {
+    element: <Layout />,
+    children: [
+      { index: true, element: <GalleryPage /> },
+      { path: "library", element: <LibraryPage /> },
+      { path: "visual", element: <VisualPage /> },
+      { path: "debug", element: <SmokeSpec /> },
+      {
+        path: "p/:protoId",
+        element: <PlayerShell />,
+        children: [
+          { index: true, element: null },
+          { path: "s/:screenId", element: <ScreenView /> },
+        ],
+      },
+      {
+        path: "p/:protoId/v/:version",
+        element: <PlayerShell />,
+        children: [
+          { index: true, element: null },
+          { path: "s/:screenId", element: <ScreenView /> },
+        ],
+      },
+      { path: "p/:protoId/cjm", element: <CjmShell /> },
+      { path: "p/:protoId/edit", element: <EditorShell /> },
+      { path: "p/:protoId/v/:version/cjm", element: <CjmShell /> },
+      { path: "*", element: <NotFound /> },
+    ],
+  },
+];
