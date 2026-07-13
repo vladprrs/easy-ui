@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { openDatabase } from "./db";
 import { createHandler } from "./main";
 import { prototypeDocSchema } from "../src/prototype/schema";
-import { ScreenshotService, validatePropsAgainstSchema, type RunJob, type WorkerResult } from "./screenshot/service";
+import { ScreenshotService, themeAssetIds, validatePropsAgainstSchema, type RunJob, type WorkerResult } from "./screenshot/service";
 import { CaptureSessionStore, isLoopbackAddress, matchAllowed } from "./screenshot/sessions";
 import { buildStaticAllowedUrls, rendererBuildFrom } from "./screenshot/allowedUrls";
 
@@ -138,6 +138,32 @@ describe("capture-session store", () => {
 });
 
 describe("allowedUrls builder", () => {
+  test("collects every font and icon variant from a design-system theme", () => {
+    expect(themeAssetIds({
+      tokens: {},
+      fonts: [{ family: "YS Text", src: "asset_font" }],
+      icons: [{ name: "pay", assetId: "asset_icon", themes: { light: "asset_light", dark: "asset_dark" } }],
+    })).toEqual(["asset_font", "asset_icon", "asset_light", "asset_dark"]);
+  });
+
+  test("prototype screenshot allowlist includes pinned design-system font assets", async () => {
+    const { db, dir, handler } = await setup();
+    const sha = "a".repeat(64);
+    const assetId = `asset_${sha}`;
+    db.run(
+      "INSERT INTO assets (id,sha256,mime,size,width,height,original_name,created_at) VALUES (?,?,?,?,?,?,?,?)",
+      [assetId, sha, "font/woff2", 16, null, null, "ys-text.woff2", "now"],
+    );
+    db.run(
+      "INSERT INTO design_system_versions (system_id,version,tokens_json,fonts_json,icons_json,created_at) VALUES (?,?,?,?,?,?)",
+      ["shadcn", 1, "{}", JSON.stringify([{ family: "YS Text", src: assetId, weight: 400 }]), "[]", "now"],
+    );
+    expect((await handler(req("/prototypes", "POST", { doc: await helloDoc("theme-assets") }))).status).toBe(201);
+    const service = makeService(db, dir);
+    const { jobId } = service.enqueuePrototype("theme-assets", "welcome", { viewport: { width: 390, height: 844 } });
+    expect(service.peek(jobId)?.allowedUrls).toContain(`/api/assets/${assetId}`);
+  });
+
   test("includes index.html and assets, tolerating a missing dist build", () => {
     const urls = buildStaticAllowedUrls("dist");
     expect(urls).toContain("/index.html");

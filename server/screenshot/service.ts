@@ -1,7 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import type { CaptureExpected } from "../../src/capture/protocol";
-import { getLatestDesignSystemContent } from "../designSystems";
+import { getDesignSystemVersion, getLatestDesignSystemContent } from "../designSystems";
+import type { ThemeContent } from "../designSystemsMeta";
 import { ApiError } from "../http";
 import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
@@ -55,6 +56,23 @@ function propsHashOf(props: unknown): string {
   return new Bun.CryptoHasher("sha256").update(canonicalStringify(props ?? {})).digest("hex");
 }
 
+/**
+ * Theme assets are fetched at render time by injected @font-face rules and the
+ * shared icon registry. They are not part of a prototype document or component
+ * bundle, so screenshot capture must allowlist them explicitly.
+ */
+export function themeAssetIds(content: ThemeContent | null): string[] {
+  if (!content) return [];
+  const ids = new Set<string>();
+  for (const font of content.fonts) ids.add(font.src);
+  for (const icon of content.icons) {
+    ids.add(icon.assetId);
+    if (icon.themes?.light) ids.add(icon.themes.light);
+    if (icon.themes?.dark) ids.add(icon.themes.dark);
+  }
+  return [...ids];
+}
+
 export interface ScreenshotServiceDeps {
   db: Database; dataDir: string; serveDist?: string;
   captureOrigin: string; chromiumAvailable: boolean; runJob: RunJob;
@@ -102,7 +120,14 @@ export class ScreenshotService {
     const componentPins = full.components.map((p) => ({ id: p.id, version: p.version, bundleHash: p.bundleHash }));
     const theme = opts.theme === "dark" ? "dark" : "light";
     const expected: CaptureExpected = { kind: "prototype", rev: snap.rev, componentManifestHash: full.componentManifestHash, builtinCatalogHash: full.builtinCatalogHash, dsMetaVersion: full.designSystemMetaVersion ?? null, rendererBuild: this.rendererBuild };
-    const allowedUrls = this.prototypeAllowedUrls(id, screenId, full.components, full.assets.map((a) => a.id), (full.doc as { designSystem?: string }).designSystem);
+    const allowedUrls = this.prototypeAllowedUrls(
+      id,
+      screenId,
+      full.components,
+      full.assets.map((a) => a.id),
+      (full.doc as { designSystem?: string }).designSystem,
+      full.designSystemMetaVersion ?? null,
+    );
     const query = new URLSearchParams();
     if (opts.version !== undefined) query.set("version", String(opts.version)); else query.set("rev", String(snap.rev));
     query.set("theme", theme); query.set("dsf", String(dsf));
@@ -127,10 +152,24 @@ export class ScreenshotService {
     return this.push({ kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false });
   }
 
-  private prototypeAllowedUrls(id: string, screenId: string, pins: { id: string; version: number }[], docAssetIds: string[], designSystem?: string): string[] {
+  private prototypeAllowedUrls(
+    id: string,
+    screenId: string,
+    pins: { id: string; version: number }[],
+    docAssetIds: string[],
+    designSystem?: string,
+    designSystemMetaVersion?: number | null,
+  ): string[] {
     const set = new Set<string>();
     set.add(`/capture/${id}/s/${screenId}`);
-    if (designSystem) { set.add(`/api/design-systems/${designSystem}`); set.add(`/api/design-systems/${designSystem}/versions/`); }
+    if (designSystem) {
+      set.add(`/api/design-systems/${designSystem}`);
+      set.add(`/api/design-systems/${designSystem}/versions/`);
+      const content = designSystemMetaVersion == null
+        ? getLatestDesignSystemContent(this.deps.db, designSystem)
+        : getDesignSystemVersion(this.deps.db, designSystem, designSystemMetaVersion);
+      for (const assetId of themeAssetIds(content)) set.add(`/api/assets/${assetId}`);
+    }
     set.add(`/api/prototypes/${id}/draft`);
     set.add(`/api/prototypes/${id}/revisions`);
     // draft/revision/version endpoints (shell may hit any depending on selector)
@@ -146,7 +185,13 @@ export class ScreenshotService {
   private componentAllowedUrls(id: string, version: number, assetIds: string[], designSystem?: string): string[] {
     const set = new Set<string>();
     set.add(`/capture/component/${id}/${version}`);
-    if (designSystem) { set.add(`/api/design-systems/${designSystem}`); set.add(`/api/design-systems/${designSystem}/versions/`); }
+    if (designSystem) {
+      set.add(`/api/design-systems/${designSystem}`);
+      set.add(`/api/design-systems/${designSystem}/versions/`);
+      for (const assetId of themeAssetIds(getLatestDesignSystemContent(this.deps.db, designSystem))) {
+        set.add(`/api/assets/${assetId}`);
+      }
+    }
     set.add(`/api/components/${id}`);
     set.add(`/api/components/${id}/versions/${version}`);
     set.add(`/api/components/${id}/versions/${version}/bundle.js`);
