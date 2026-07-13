@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 716 520" width="716" height="520" role="img" aria-label="Белые лёгкие кроссовки">
+  <rect width="716" height="520" rx="24" fill="#eef2f7"/>
+  <ellipse cx="358" cy="420" rx="250" ry="26" fill="#d7dee8"/>
+  <!-- sole -->
+  <path d="M108 366 C108 342 130 330 168 330 L560 330 C600 330 626 344 626 372 C626 396 602 408 560 408 L168 408 C132 408 108 394 108 366 Z" fill="#f8fafc" stroke="#c3ccd9" stroke-width="6"/>
+  <path d="M120 392 L614 392" stroke="#c3ccd9" stroke-width="5" stroke-linecap="round"/>
+  <!-- upper -->
+  <path d="M132 336 C132 258 176 196 236 176 C284 160 318 178 366 210 C414 242 470 268 542 280 C592 288 616 306 616 336 L132 336 Z" fill="#ffffff" stroke="#c3ccd9" stroke-width="6"/>
+  <!-- heel patch -->
+  <path d="M132 336 C132 276 158 224 200 196 C176 244 168 292 168 336 Z" fill="#e2e8f0"/>
+  <!-- side stripe -->
+  <path d="M258 336 C300 300 356 268 430 252 C402 292 380 320 368 336 Z" fill="#94a3b8"/>
+  <!-- toe cap -->
+  <path d="M542 280 C592 288 616 306 616 336 L500 336 C512 314 526 296 542 280 Z" fill="#e2e8f0"/>
+  <!-- lace panel -->
+  <path d="M300 216 C336 238 388 262 448 276 L404 336 L262 336 Z" fill="#f1f5f9" stroke="#c3ccd9" stroke-width="4"/>
+  <path d="M312 232 L396 268" stroke="#94a3b8" stroke-width="7" stroke-linecap="round"/>
+  <path d="M300 252 L380 288" stroke="#94a3b8" stroke-width="7" stroke-linecap="round"/>
+  <path d="M290 274 L362 306" stroke="#94a3b8" stroke-width="7" stroke-linecap="round"/>
+  <!-- collar -->
+  <path d="M236 176 C258 168 282 170 300 180 C284 198 272 220 266 244 C250 226 240 202 236 176 Z" fill="#cbd5e1"/>
+</svg>

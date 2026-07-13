@@ -21,7 +21,7 @@
           "catalog-stack": { "type": "Stack", "props": { "direction": "vertical", "gap": "md" }, "children": ["catalog-title", "product-card"] },
           "catalog-title": { "type": "Text", "props": { "text": "Новинки", "variant": "lead" } },
           "product-card": { "type": "Card", "props": { "title": "Лёгкие кроссовки", "description": "7 990 ₽", "maxWidth": "full" }, "children": ["product-image", "product-badge", "product-hotspot"] },
-          "product-image": { "type": "Image", "props": { "src": { "$asset": "asset_379aa3e6404e22be93965ec20ea97fbc3f51b2206c6200b302cf27159173419b" }, "alt": "Белые лёгкие кроссовки", "width": 358, "height": 260 } },
+          "product-image": { "type": "Image", "props": { "src": "/images/sneakers.jpg", "alt": "Белые лёгкие кроссовки", "width": 358, "height": 260 } },
           "product-badge": { "type": "Badge", "props": { "text": "Хит", "variant": "secondary" } },
           "product-hotspot": { "type": "Hotspot", "props": { "x": 16, "y": 90, "width": 358, "height": 260, "ariaLabel": "Открыть карточку кроссовок" }, "on": { "press": { "action": "navigate", "params": { "screenId": "product" } } } }
         }
@@ -35,7 +35,7 @@
         "root": "product-card",
         "elements": {
           "product-card": { "type": "Card", "props": { "title": "Лёгкие кроссовки", "description": "Дышащий верх и мягкая подошва для прогулок каждый день.", "maxWidth": "full" }, "children": ["product-photo", "product-price", "add-to-cart"] },
-          "product-photo": { "type": "Image", "props": { "src": { "$asset": "asset_379aa3e6404e22be93965ec20ea97fbc3f51b2206c6200b302cf27159173419b" }, "alt": "Белые лёгкие кроссовки", "width": 358, "height": 300 } },
+          "product-photo": { "type": "Image", "props": { "src": "/images/sneakers.jpg", "alt": "Белые лёгкие кроссовки", "width": 358, "height": 300 } },
           "product-price": { "type": "Text", "props": { "text": "7 990 ₽", "variant": "lead" } },
           "add-to-cart": { "type": "Button", "props": { "label": "В корзину", "variant": "primary" }, "on": { "press": [{ "action": "setState", "params": { "statePath": "/cart/count", "value": 1 } }, { "action": "navigate", "params": { "screenId": "cart" } }] } }
         }
@@ -53,8 +53,8 @@
           "cart-count": { "type": "Badge", "props": { "text": { "$state": "/cart/count" }, "variant": "secondary" } },
           "cart-empty": { "type": "Text", "props": { "text": "Корзина пуста", "variant": "muted" }, "visible": { "$state": "/cart/count", "eq": 0 } },
           "cart-item": { "type": "Text", "props": { "text": "Лёгкие кроссовки × 1" }, "visible": { "$state": "/cart/count", "gt": 0 } },
-          "cart-total": { "type": "Text", "props": { "text": { "$cond": { "if": { "$state": "/cart/count", "gt": 0 }, "then": "Итого: 7 990 ₽ · товаров: 1", "else": "Итого: 0 ₽ · товаров: 0" } }, "variant": "lead" } },
-          "checkout-button": { "type": "Button", "props": { "label": "Оформить", "variant": "primary", "disabled": { "$cond": { "if": { "$state": "/cart/count", "gt": 0 }, "then": false, "else": true } } }, "on": { "press": { "action": "navigate", "params": { "screenId": "checkout-form" } } } }
+          "cart-total": { "type": "Text", "props": { "text": { "$template": "Итого: 7 990 ₽ · товаров: ${/cart/count}" }, "variant": "lead" } },
+          "checkout-button": { "type": "Button", "props": { "label": "Оформить", "variant": "primary" }, "on": { "press": { "action": "navigate", "params": { "screenId": "checkout-form" } } } }
         }
       }
     },
