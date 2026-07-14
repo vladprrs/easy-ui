@@ -61,7 +61,7 @@ test.describe("prototype editor", () => {
     await cleanup(request);
   });
 
-  test("edits text, draws a scaled selection frame, and persists the draft", async ({ page }) => {
+  test("edits text, saves and publishes it, then opens the immutable player version", async ({ page }) => {
     await page.setViewportSize({ width: 760, height: 800 });
     await page.goto(`/p/${prototypeId}/edit`);
 
@@ -99,10 +99,13 @@ test.describe("prototype editor", () => {
     await textInput.press("Enter");
     await expect(canvas.getByText(updatedText, { exact: true })).toBeVisible();
 
-    await page.getByRole("button", { name: "Сохранить", exact: true }).click();
-    await expect(page.getByText("Сохранено", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Опубликовать", exact: true }).click();
+    const publishDialog = page.getByRole("dialog", { name: "Публикация прототипа" });
+    await publishDialog.getByRole("textbox", { name: "Сообщение к версии (необязательно)" }).fill("E2E publish");
+    await publishDialog.getByRole("button", { name: "Сохранить и опубликовать", exact: true }).click();
+    await expect(page.getByText("v 1 опубликована", { exact: true })).toBeVisible();
 
-    await page.goto(`/p/${prototypeId}/s/${screenId}`);
+    await page.goto(`/p/${prototypeId}/v/1`);
     await expect(page.getByText(updatedText, { exact: true })).toBeVisible();
 
     await page.goto(`/p/${prototypeId}/edit`);

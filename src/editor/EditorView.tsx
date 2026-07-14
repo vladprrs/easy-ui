@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useBlocker } from "react-router";
-import { ApiError, getPrototypeDraft, savePrototype, type PrototypeDraft } from "../api/client";
+import { ApiError, getPrototypeDraft, listPrototypeVersions, publishPrototype, savePrototype, type PrototypeDraft } from "../api/client";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { createPlayerRuntime } from "../catalog/runtime";
 import { resolveBuiltinSystem } from "../designSystems";
@@ -39,6 +39,14 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
   useDocumentTitle(editorDocumentTitle(state.doc.name));
   const [issues, setIssues] = useState<DisplayIssue[]>([]);
   const [saving, setSaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishedVersion, setPublishedVersion] = useState<number | null>(null);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
+  const [publishMessage, setPublishMessage] = useState("");
+  // Отложенная публикация «сохранить и опубликовать» (W3-1): чистая оркестрация,
+  // на рендер не влияет — живёт в ref, продолжение в success-ветке runSave.
+  const publishIntentRef = useRef<{ message?: string } | null>(null);
+  const [publishNotice, setPublishNotice] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ConflictState | null>(null);
   const [copyFallback, setCopyFallback] = useState(false);
   const fallbackRef = useRef<HTMLTextAreaElement>(null);
@@ -64,6 +72,34 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
     return () => window.removeEventListener("beforeunload", beforeUnload);
   }, [state.dirty]);
   useEffect(() => { if (copyFallback) fallbackRef.current?.select(); }, [copyFallback]);
+  // Стал ли драфт новее loaded.rev (save в этой сессии) — гейт против stale-ответа
+  // listPrototypeVersions, прилетевшего после сохранения.
+  const savedSinceLoadRef = useRef(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    savedSinceLoadRef.current = false;
+    void listPrototypeVersions(loaded.doc.id, controller.signal).then((versions) => {
+      if (savedSinceLoadRef.current) return;
+      const headVersion = versions.find((version) => version.rev === loaded.rev);
+      setPublishedVersion(headVersion?.version ?? null);
+    }).catch((error) => { if (!(error instanceof DOMException && error.name === "AbortError")) setPublishedVersion(null); });
+    return () => controller.abort();
+  }, [loaded.doc.id, loaded.rev]);
+
+  const runPublish = useCallback(async (baseRev: number, message?: string) => {
+    setIssues([]); setPublishNotice(null); setPublishing(true);
+    try {
+      const result = await publishPrototype(state.doc.id, baseRev, message);
+      setPublishedVersion(result.version);
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "already_published" && error.currentVersion !== undefined) {
+        setPublishedVersion(error.currentVersion);
+        setPublishNotice(editor.alreadyPublished(error.currentVersion));
+      } else if (error instanceof ApiError) {
+        setIssues([{ path: editor.diffDocLabel, message: formatApiError(error.code, { message: error.message, status: error.status, currentRev: error.currentRev, currentVersion: error.currentVersion }) }]);
+      } else setIssues([{ path: editor.diffDocLabel, message: error instanceof Error ? error.message : String(error) }]);
+    } finally { setPublishing(false); }
+  }, [state.doc.id]);
 
   // Сохранение с baseRev (W2-4): обычный save идёт от state.baseRev, «Перезаписать»
   // из диалога конфликта — от свежезагруженного remote rev. Повторная гонка (снова
@@ -71,16 +107,23 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
   const runSave = useCallback(async (baseRev: number) => {
     setIssues([]); setConflict(null);
     const parsed = prototypeDocSchema.safeParse(state.doc);
-    if (!parsed.success) { setIssues(humanizeIssues(state.doc, parsed.error.issues)); return; }
+    if (!parsed.success) { publishIntentRef.current = null; setIssues(humanizeIssues(state.doc, parsed.error.issues)); return; }
     const validated = validatePrototype(parsed.data, { definitions });
-    if (validated.errors.length) { setIssues(humanizeIssues(state.doc, validated.errors)); return; }
+    if (validated.errors.length) { publishIntentRef.current = null; setIssues(humanizeIssues(state.doc, validated.errors)); return; }
     setSaving(true);
     try {
       // Pass through the figma provenance that came with the draft so an editor save
       // does not erase it; null (or a legacy draft without the field) omits it (WF-5).
       const result = await savePrototype(state.doc.id, parsed.data, baseRev, loaded.figma ?? null);
       dispatch({ type: "saved", rev: result.rev, doc: parsed.data });
+      savedSinceLoadRef.current = true;
+      setPublishedVersion(null);
       setIssues([]);
+      const intent = publishIntentRef.current;
+      if (intent) {
+        publishIntentRef.current = null;
+        await runPublish(result.rev, intent.message);
+      }
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         // Трёхсторонний diff: base = savedDoc (checkpoint загруженной ревизии),
@@ -89,13 +132,14 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
           const remote = await getPrototypeDraft(state.doc.id);
           setConflict({ remoteRev: remote.rev, remoteChanges: diffDocs(state.savedDoc, remote.doc), localChanges: diffDocs(state.savedDoc, parsed.data) });
         } catch {
+          publishIntentRef.current = null;
           setIssues([{ path: editor.diffDocLabel, message: formatApiError(error.code, { message: error.message, status: error.status, currentRev: error.currentRev }) }]);
         }
-      } else if (error instanceof ApiError && error.status === 422) setIssues(humanizeIssues(state.doc, error.issues));
-      else if (error instanceof ApiError) setIssues([{ path: editor.diffDocLabel, message: formatApiError(error.code, { message: error.message, status: error.status, currentRev: error.currentRev, currentVersion: error.currentVersion }) }]);
-      else setIssues([{ path: editor.diffDocLabel, message: error instanceof Error ? error.message : String(error) }]);
+      } else if (error instanceof ApiError && error.status === 422) { publishIntentRef.current = null; setIssues(humanizeIssues(state.doc, error.issues)); }
+      else if (error instanceof ApiError) { publishIntentRef.current = null; setIssues([{ path: editor.diffDocLabel, message: formatApiError(error.code, { message: error.message, status: error.status, currentRev: error.currentRev, currentVersion: error.currentVersion }) }]); }
+      else { publishIntentRef.current = null; setIssues([{ path: editor.diffDocLabel, message: error instanceof Error ? error.message : String(error) }]); }
     } finally { setSaving(false); }
-  }, [definitions, loaded.figma, state.doc, state.savedDoc]);
+  }, [definitions, loaded.figma, runPublish, state.doc, state.savedDoc]);
   const save = useCallback(() => runSave(state.baseRev), [runSave, state.baseRev]);
 
   // Ctrl+Z / Ctrl+Shift+Z (Cmd на mac). В текстовых полях не срабатывает —
@@ -127,6 +171,15 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
     } catch { setCopyFallback(true); }
   };
 
+  const confirmPublish = () => {
+    const message = publishMessage.trim() || undefined;
+    setPublishDialogOpen(false);
+    setPublishMessage("");
+    if (!state.dirty) { void runPublish(state.baseRev, message); return; }
+    publishIntentRef.current = { message };
+    void save();
+  };
+
   // h-dvh: на /p/*-маршрутах глобальный app-header схлопнут (WF-4), поэтому
   // редактор владеет всей высотой вьюпорта. Родительский grid (min-h-dvh) не
   // ограничивает высоту ряда — h-full здесь не работает, страница бы скроллилась,
@@ -139,16 +192,30 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
       status={<>
         {state.dirty ? <span className="text-eui-magenta" aria-label={editor.dirtyAria}>●</span> : null}
         <span aria-live="polite" className="rounded-full bg-eui-lilac-100 px-3 py-1 text-xs text-eui-slate-500">{saving ? editor.saving : state.dirty ? editor.notSaved : editor.saved}</span>
+        {publishedVersion !== null ? <span aria-live="polite" className="rounded-full bg-eui-lilac-100 px-3 py-1 text-xs text-eui-slate-500">{editor.publishedVersion(publishedVersion)}</span> : null}
       </>}
       actions={<>
         <button type="button" disabled={!canUndo} onClick={() => dispatch({ type: "undo" })} title={editor.undoTitle} aria-label={editor.undoTitle} className={`${pillGhost} disabled:opacity-50`}>{editor.undo}</button>
         <button type="button" disabled={!canRedo} onClick={() => dispatch({ type: "redo" })} title={editor.redoTitle} aria-label={editor.redoTitle} className={`${pillGhost} disabled:opacity-50`}>{editor.redo}</button>
         <button type="button" disabled={saving} onClick={save} className={`${pillPrimary} disabled:opacity-50`}>{editor.save}</button>
+        <button type="button" disabled={saving || publishing} onClick={() => { setPublishNotice(null); setPublishDialogOpen(true); }} className={`${pillPrimary} disabled:opacity-50`}>{publishing ? editor.publishing : editor.publish}</button>
       </>}
     />
+    {publishNotice ? <div role="status" className="border-b border-eui-ink/10 bg-eui-lilac-100 px-6 py-3 font-eui-ui text-sm text-eui-slate-500">{publishNotice}</div> : null}
     {issues.length > 0 ? <div className="border-b border-eui-ink/10 bg-white px-6 py-3 font-eui-ui"><Issues issues={issues} /></div> : null}
     <EditorScreenStrip doc={state.doc} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedScreenId={screen.id} onSelect={(screenId) => dispatch({ type: "select-screen", screenId })} customTypes={customTypes} customDefinitions={customDefinitions} />
     <div className="flex min-h-0 flex-1"><section className="min-w-0 flex-1 overflow-auto bg-eui-lav p-6" aria-label={editor.canvasAria}><EditorCanvas doc={state.doc} screen={screen} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedKey={state.selection.elementKey} onSelect={(elementKey) => dispatch({ type: "select-element", elementKey })} customTypes={customTypes} customDefinitions={customDefinitions} /></section><DocEpochContext.Provider value={state.docEpoch}><InspectorPanel state={state} definitions={definitions} dispatch={dispatch} /></DocEpochContext.Provider></div>
+    {publishDialogOpen ? <div role="dialog" aria-modal="true" aria-label={editor.publishDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
+      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+        <h2 className="font-eui-display text-lg font-medium">{editor.publishDialogTitle}</h2>
+        <p className="mt-1 text-sm text-eui-slate-500">{editor.publishDialogBody}</p>
+        <label className="mt-4 block text-sm font-medium">{editor.publishMessageLabel}<textarea value={publishMessage} onChange={(event) => setPublishMessage(event.target.value)} placeholder={editor.publishMessagePlaceholder} className="mt-2 min-h-24 w-full rounded-xl border border-eui-ink/15 bg-white p-3 font-eui-ui text-sm" /></label>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" className={pillGhost} onClick={() => { setPublishDialogOpen(false); setPublishMessage(""); }}>{editor.publishCancel}</button>
+          <button type="button" className={pillPrimary} onClick={confirmPublish}>{state.dirty ? editor.saveAndPublish : editor.publishConfirm}</button>
+        </div>
+      </div>
+    </div> : null}
     {conflict ? <div role="dialog" aria-modal="true" aria-label={editor.conflictDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
       <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-xl">
         <h2 className="font-eui-display text-lg font-medium">{editor.conflictDialogTitle(conflict.remoteRev)}</h2>
@@ -161,7 +228,7 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
         <div className="mt-4 flex flex-wrap justify-end gap-2">
           <button type="button" className={pillGhost} onClick={copy}>{editor.copyLocalJson}</button>
           <button type="button" className={pillGhost} onClick={onReload}>{editor.reloadDraft}</button>
-          <button type="button" className={pillGhost} onClick={() => setConflict(null)}>{editor.conflictCancel}</button>
+          <button type="button" className={pillGhost} onClick={() => { setConflict(null); publishIntentRef.current = null; }}>{editor.conflictCancel}</button>
           <button type="button" disabled={saving} className={`${pillPrimary} disabled:opacity-50`} onClick={() => runSave(conflict.remoteRev)}>{editor.conflictOverwrite}</button>
         </div>
       </div>

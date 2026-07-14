@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrototypeDraft } from "../api/client";
@@ -122,7 +122,7 @@ describe("EditorView (W2-2: защита правок + undo/redo)", () => {
     const repeatedSave = new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true });
     window.dispatchEvent(repeatedSave);
     expect(repeatedSave.defaultPrevented).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(1);
 
     finishSave(new Response(JSON.stringify({ rev: 8, warnings: [] }), { status: 200, headers: { "content-type": "application/json" } }));
     expect(await screen.findByText("Сохранено")).toBeTruthy();
@@ -224,5 +224,114 @@ describe("EditorView (W2-2: защита правок + undo/redo)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Вернуть правку/ }));
     expect(await screen.findByText("Сохранено")).toBeTruthy();
+  });
+
+  it("publishes the head revision with an optional message", async () => {
+    let publishBody: { baseRev: number; message?: string } | undefined;
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/prototypes/editor-demo/versions") return json([]);
+      if (url === "/api/prototypes/editor-demo/publish" && init?.method === "POST") {
+        publishBody = JSON.parse(String(init.body));
+        return json({ version: 2, rev: 7, screens: [] }, 201);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView();
+    await screen.findByRole("heading", { name: "Editor demo" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Опубликовать" }));
+    const dialog = screen.getByRole("dialog", { name: "Публикация прототипа" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Сообщение к версии (необязательно)" }), { target: { value: "Готово для показа" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Опубликовать" }));
+
+    expect(await screen.findByText("v 2 опубликована")).toBeTruthy();
+    expect(publishBody).toEqual({ baseRev: 7, message: "Готово для показа" });
+  });
+
+  it("saves a dirty draft before publishing the newly created head revision", async () => {
+    const requests: string[] = [];
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/prototypes/editor-demo/versions") return json([]);
+      if (url === "/api/prototypes/editor-demo" && init?.method === "PUT") {
+        requests.push(`save:${(JSON.parse(String(init.body)) as { baseRev: number }).baseRev}`);
+        return json({ rev: 8, warnings: [] });
+      }
+      if (url === "/api/prototypes/editor-demo/publish" && init?.method === "POST") {
+        requests.push(`publish:${(JSON.parse(String(init.body)) as { baseRev: number }).baseRev}`);
+        return json({ version: 1, rev: 8, screens: [] }, 201);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView();
+    await screen.findByRole("heading", { name: "Editor demo" });
+    editText("Published change");
+
+    fireEvent.click(screen.getByRole("button", { name: "Опубликовать" }));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить и опубликовать" }));
+
+    expect(await screen.findByText("v 1 опубликована")).toBeTruthy();
+    expect(requests).toEqual(["save:7", "publish:8"]);
+  });
+
+  it("continues save-and-publish after resolving a save conflict", async () => {
+    const requests: string[] = [];
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/prototypes/editor-demo/versions") return json([]);
+      if (url === "/api/prototypes/editor-demo" && init?.method === "PUT") {
+        const { baseRev } = JSON.parse(String(init.body)) as { baseRev: number };
+        requests.push(`save:${baseRev}`);
+        return baseRev === 7
+          ? json({ error: { code: "revision_conflict", message: "conflict", currentRev: 9 } }, 409)
+          : json({ rev: 10, warnings: [] });
+      }
+      if (url === "/api/prototypes/editor-demo/draft") return json({ ...draft, rev: 9 });
+      if (url === "/api/prototypes/editor-demo/publish" && init?.method === "POST") {
+        requests.push(`publish:${(JSON.parse(String(init.body)) as { baseRev: number }).baseRev}`);
+        return json({ version: 2, rev: 10, screens: [] }, 201);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView();
+    await screen.findByRole("heading", { name: "Editor demo" });
+    editText("Local publish after conflict");
+
+    fireEvent.click(screen.getByRole("button", { name: "Опубликовать" }));
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить и опубликовать" }));
+    const conflictDialog = await screen.findByRole("dialog", { name: "Конфликт версий черновика" });
+    fireEvent.click(within(conflictDialog).getByRole("button", { name: "Перезаписать" }));
+
+    expect(await screen.findByText("v 2 опубликована")).toBeTruthy();
+    expect(requests).toEqual(["save:7", "save:9", "publish:10"]);
+  });
+
+  it("treats already_published as an informative published state with its version", async () => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/prototypes/editor-demo/versions") return json([]);
+      if (url === "/api/prototypes/editor-demo/publish" && init?.method === "POST") {
+        return json({ error: { code: "already_published", message: "already published", currentRev: 7, currentVersion: 4 } }, 409);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView();
+    await screen.findByRole("heading", { name: "Editor demo" });
+    fireEvent.click(screen.getByRole("button", { name: "Опубликовать" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Публикация прототипа" })).getByRole("button", { name: "Опубликовать" }));
+
+    expect(await screen.findByText("v 4 опубликована")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("Текущая ревизия уже опубликована как версия v 4.");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows the published-version badge when the loaded head is already a version", async () => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      if (String(input) === "/api/prototypes/editor-demo/versions") return json([{ version: 3, rev: 7, publishedAt: "2026-07-14T00:00:00.000Z" }]);
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+    renderView();
+    expect(await screen.findByText("v 3 опубликована")).toBeTruthy();
   });
 });
