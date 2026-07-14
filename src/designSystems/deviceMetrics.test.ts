@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canonicalViewport, playerDesktopMinStageHeight, previewNativeWidth, previewTile } from "./deviceMetrics";
+import { canonicalViewport, editorStripTile, playerDesktopMinStageHeight, previewNativeWidth, previewTile } from "./deviceMetrics";
 
 describe("deviceMetrics", () => {
   it("фиксирует канонический viewport капчера/валидации (mobile/tablet), desktop — auto-height", () => {
@@ -19,6 +19,12 @@ describe("deviceMetrics", () => {
   it("фиксирует размеры превью-тайла", () => {
     expect(previewTile).toEqual({ width: 280, heightCap: 420, fallbackHeight: 360 });
     expect(previewTile.fallbackHeight).toBeLessThanOrEqual(previewTile.heightCap);
+  });
+
+  it("фиксирует размеры тайла ленты редактора (W2-1): cap ~180px, компактнее CJM-превью", () => {
+    expect(editorStripTile).toEqual({ width: 280, heightCap: 180, fallbackHeight: 180 });
+    expect(editorStripTile.fallbackHeight).toBeLessThanOrEqual(editorStripTile.heightCap);
+    expect(editorStripTile.heightCap).toBeLessThan(previewTile.heightCap);
   });
 
   it("player-only min-height — положительное число, не пересекающееся с каноническим viewport", () => {

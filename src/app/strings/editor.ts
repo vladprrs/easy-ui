@@ -22,6 +22,9 @@ export const editor = {
   close: "Закрыть",
   noContent: "Нет содержимого",
   selectScreenAria: (name: string) => `Выбрать экран «${name}»`,
+  screensTitle: (count: number) => `Экраны (${count})`,
+  collapseStrip: "Свернуть",
+  expandStrip: "Развернуть",
   // Инспектор редактора
   inspectorAria: "Инспектор",
   sectionElement: "Элемент",

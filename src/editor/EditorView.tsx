@@ -79,7 +79,11 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
     } catch { setCopyFallback(true); }
   };
 
-  return <main className="flex h-full min-h-0 w-full min-w-0 max-w-[100vw] flex-col overflow-hidden bg-white">
+  // h-dvh: на /p/*-маршрутах глобальный app-header схлопнут (WF-4), поэтому
+  // редактор владеет всей высотой вьюпорта. Родительский grid (min-h-dvh) не
+  // ограничивает высоту ряда — h-full здесь не работает, страница бы скроллилась,
+  // а канвас+инспектор теряли бы приоритет высоты (W2-1).
+  return <main className="flex h-dvh min-h-0 w-full min-w-0 max-w-[100vw] flex-col overflow-hidden bg-white">
     <PrototypeChrome
       prototypeId={state.doc.id}
       prototypeName={state.doc.name}

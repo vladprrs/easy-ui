@@ -51,6 +51,17 @@ export const previewTile = {
 } as const;
 
 /**
+ * 2в. Тайл ленты редактора (W2-1): компактнее CJM-превью — cap высоты
+ * ~180px, чтобы канвас и инспектор получали приоритет высоты в редакторе.
+ * На канонический viewport и капчер не влияет.
+ */
+export const editorStripTile = {
+  width: 280,
+  heightCap: 180,
+  fallbackHeight: 180,
+} as const;
+
+/**
  * 3. Player-only: минимальная высота стейджа плеера для desktop-прототипов
  * (auto-height). Потребляется лэйаутом плеера (W1-1); канонический viewport
  * и капчер не затрагивает.
