@@ -44,6 +44,37 @@ test("deep link opens the requested screen and offers an easy-ui entry", async (
   await expect(page).toHaveURL(/\/p\/checkout\/s\/product$/);
 });
 
+test("presentation hotkeys browse, restart, show help, and direct Esc exits", async ({ page }) => {
+  await page.goto("/p/hello-world/present");
+  await expect(page).toHaveURL(/\/p\/hello-world\/present\/s\/welcome$/);
+  const input = page.getByLabel("Name");
+  const initialName = await input.inputValue();
+  await input.fill("Lin");
+
+  // Живой input прототипа блокирует и browse, и Restart.
+  await input.press("ArrowRight");
+  await input.press("r");
+  await expect(page).toHaveURL(/\/p\/hello-world\/present\/s\/welcome$/);
+  await expect(input).toHaveValue("Linr");
+
+  await input.fill("Lin");
+  await input.blur();
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/\/p\/hello-world\/present\/s\/details$/);
+  await page.keyboard.press("R");
+  await expect(page).toHaveURL(/\/p\/hello-world\/present\/s\/welcome$/);
+  await expect(page.getByLabel("Name")).toHaveValue(initialName);
+
+  await page.getByLabel("Name").blur();
+  await page.keyboard.press("Shift+/");
+  await expect(page.getByRole("dialog", { name: "Горячие клавиши" })).toBeVisible();
+  await page.keyboard.press("Shift+/");
+  await expect(page.getByRole("dialog", { name: "Горячие клавиши" })).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(/\/p\/hello-world\/s\/welcome$/);
+});
+
 test("gallery card opens the presentation at the start screen", async ({ page }) => {
   await page.goto("/");
   const card = page.getByRole("listitem").filter({ hasText: "Мобильное оформление заказа" });

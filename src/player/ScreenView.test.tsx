@@ -8,10 +8,10 @@ import { EasyUiActionRuntime } from "./actionRuntime";
 import { ScreenErrorBoundary } from "./ScreenView";
 import { ScreenView } from "./ScreenView";
 
-const navigation = vi.hoisted(() => ({ navigate: vi.fn(), restart: vi.fn(), back: vi.fn() }));
+const navigation = vi.hoisted(() => ({ navigate: vi.fn(), browse: vi.fn(), restart: vi.fn(), back: vi.fn() }));
 vi.mock("./navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./navigation")>()),
-  usePlayerNavigation: () => ({ ...navigation, sessionNonce: "test", flowDepth: 0, entryReason: "flow" as const, goToScreen: navigation.navigate, browseToScreen: navigation.navigate, flowResetVisible: false, dismissFlowReset: () => {} }),
+  usePlayerNavigation: () => ({ ...navigation, sessionNonce: "test", flowDepth: 0, entryReason: "flow" as const, goToScreen: navigation.browse, browseToScreen: navigation.browse, flowResetVisible: false, dismissFlowReset: () => {} }),
   // Баннер читает контекст через оригинальный usePlayerNavigation — вне провайдера стаб.
   FlowResetBanner: () => null,
 }));
@@ -93,6 +93,57 @@ describe("ScreenView stage controls (W1-1)", () => {
     expect(screen.queryByRole("button", { name: "Home" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Развернуть список экранов" }));
     expect(screen.getByRole("button", { name: "Home" })).toBeTruthy();
+  });
+
+  it("handles browse, restart, zoom and help hotkeys", () => {
+    navigation.browse.mockReset();
+    navigation.restart.mockReset();
+    const doc = prototypeDocSchema.parse({
+      ...mobileDoc(),
+      screens: [
+        ...mobileDoc().screens,
+        { id: "details", name: "Details", spec: { root: "copy", elements: { copy: { type: "Text", props: { text: "Details" } } } } },
+      ],
+    });
+    renderPlayer(doc, "/p/stage-prototype/s/home");
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(navigation.browse).toHaveBeenCalledWith("details");
+    fireEvent.keyDown(window, { key: "r" });
+    expect(navigation.restart).toHaveBeenCalledOnce();
+
+    const fit = screen.getByRole("button", { name: "Вписать" });
+    const actual = screen.getByRole("button", { name: "100%" });
+    fireEvent.keyDown(window, { key: "f" });
+    expect(actual.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.keyDown(window, { key: "F" });
+    expect(fit.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.keyDown(window, { key: "?", shiftKey: true });
+    expect(screen.getByRole("dialog", { name: "Горячие клавиши" })).toBeTruthy();
+    fireEvent.keyDown(window, { key: "?", shiftKey: true });
+    expect(screen.queryByRole("dialog", { name: "Горячие клавиши" })).toBeNull();
+  });
+
+  it("ignores hotkeys from a real prototype input and filtered events", async () => {
+    navigation.browse.mockReset();
+    navigation.restart.mockReset();
+    const doc = prototypeDocSchema.parse((await import("../../prototypes/hello-world.json")).default);
+    renderPlayer(doc, "/p/hello-world/s/welcome");
+    const input = screen.getByLabelText("Name");
+    input.focus();
+    fireEvent.keyDown(input, { key: "ArrowRight" });
+    fireEvent.keyDown(input, { key: "r" });
+    expect(navigation.browse).not.toHaveBeenCalled();
+    expect(navigation.restart).not.toHaveBeenCalled();
+
+    input.blur();
+    fireEvent.keyDown(window, { key: "r", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "r", repeat: true });
+    const prevented = new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true });
+    prevented.preventDefault();
+    window.dispatchEvent(prevented);
+    expect(navigation.restart).not.toHaveBeenCalled();
   });
 });
 

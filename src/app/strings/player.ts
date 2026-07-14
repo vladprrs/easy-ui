@@ -40,6 +40,17 @@ export const player = {
   flowResetMessage: "Состояние флоу сброшено — ссылка вела в середину флоу.",
   flowResetRestart: "Начать сначала",
   flowResetDismiss: "Скрыть уведомление о сбросе",
+  hotkeysTitle: "Горячие клавиши",
+  hotkeysClose: "Закрыть подсказку",
+} as const;
+
+export const playerHotkeys = {
+  previous: "Предыдущий экран",
+  next: "Следующий экран",
+  restart: "Начать сначала",
+  zoom: "Вписать / 100%",
+  exitPresent: "Вернуться в плеер",
+  help: "Показать или скрыть эту подсказку",
 } as const;
 
 /** document.title режима презентации (W1-2). */

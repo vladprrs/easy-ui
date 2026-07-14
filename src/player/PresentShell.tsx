@@ -9,10 +9,10 @@ import { pillGhostOnDark } from "../app/chrome";
 import { player, present, presentDocumentTitle } from "../app/strings/player";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { EasyUiActionRuntime } from "./actionRuntime";
-import { DeviceFrame, type StageZoom } from "./DeviceFrame";
+import { DeviceFrame, isPlayerHelpHotkey, isPlayerHotkeyEvent, type StageZoom } from "./DeviceFrame";
 import { buildPlayerPath, FlowResetBanner, PlayerNavigationProvider, usePlayerNavigation } from "./navigation";
 import { PrototypeLoader } from "./PrototypeLoader";
-import { ScreenErrorBoundary } from "./ScreenView";
+import { PlayerHotkeysHelp, ScreenErrorBoundary } from "./ScreenView";
 import { ScreenSurface } from "./ScreenSurface";
 
 /** Презентация всегда вписывает фрейм в вьюпорт — зум-контролов нет (W1-2). */
@@ -27,9 +27,8 @@ const fitZoom: StageZoom = { mode: "fit", zoom: 1 };
  * {@link EasyUiActionRuntime}; капчер-протокол (capture-session, postMessage)
  * сюда не подключён и не раскрывается.
  *
- * Выход: Esc возвращает в плеер на тот же экран; при прямом входе по ссылке
- * (нет истории easy-ui — навигация типа POP) вместо Esc-поведения показывается
- * кнопка «Открыть в easy-ui».
+ * Выход: Esc возвращает в плеер на тот же экран. При прямом входе по ссылке
+ * дополнительно показывается кнопка «Открыть в easy-ui» с тем же маршрутом.
  */
 export function PresentShell() {
   const { protoId, version } = useParams();
@@ -60,6 +59,7 @@ function LoadedPresent({ doc, custom, runtimeKey, playerBase, metaVersion, versi
   const themeContent = useDesignSystemTheme(doc.designSystem, metaVersion);
   const navigation = usePlayerNavigation();
   const routerNavigate = useNavigate();
+  const [hotkeysVisible, setHotkeysVisible] = useState(false);
   const navigationRef = useRef(navigation);
   useEffect(() => { navigationRef.current = navigation; }, [navigation]);
   useDocumentTitle(presentDocumentTitle(doc.name, version));
@@ -98,21 +98,35 @@ function LoadedPresent({ doc, custom, runtimeKey, playerBase, metaVersion, versi
   const location = useLocation();
   const exitPath = `${screen ? buildPlayerPath(playerBase, screen.id) : playerBase}${location.search}`;
 
+  const currentIndex = screen ? doc.screens.indexOf(screen) : -1;
   useEffect(() => {
-    if (directEntry) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      void routerNavigate(exitPath);
+      if (!isPlayerHotkeyEvent(event)) return;
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        const offset = event.key === "ArrowLeft" ? -1 : 1;
+        const target = doc.screens[currentIndex + offset];
+        if (!target) return;
+        event.preventDefault();
+        navigation.browseToScreen(target.id);
+      } else if (event.key.toLowerCase() === "r") {
+        event.preventDefault();
+        navigation.restart();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        void routerNavigate(exitPath);
+      } else if (isPlayerHelpHotkey(event)) {
+        event.preventDefault();
+        setHotkeysVisible((visible) => !visible);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [directEntry, exitPath, routerNavigate]);
-
-  const currentIndex = screen ? doc.screens.indexOf(screen) : -1;
+  }, [currentIndex, doc.screens, exitPath, navigation, routerNavigate]);
 
   return <JSONUIProvider key={`${runtimeKey}:${navigation.sessionNonce}`} registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
     <ThemeStyle content={themeContent} />
     <main className="flex h-dvh min-h-0 flex-col bg-eui-graphite font-eui-ui text-white">
+      {hotkeysVisible && <PlayerHotkeysHelp present onClose={() => setHotkeysVisible(false)} />}
       <div className="relative flex min-h-0 min-w-0 flex-1">
         {/* Компактный баннер сброса (W1-5): deep-link в середину флоу презентации. */}
         <FlowResetBanner compact />

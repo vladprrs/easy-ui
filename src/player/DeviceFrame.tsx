@@ -30,6 +30,7 @@ export interface StageZoomController {
   effectiveScale: number;
   fit: () => void;
   actualSize: () => void;
+  toggleFitActual: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
   /** Обратный канал DeviceFrame → контроллер: фактический scale после вычисления. */
@@ -52,9 +53,26 @@ export function useStageZoom(): StageZoomController {
   }, []);
   const fit = useCallback(() => setValue({ mode: "fit", zoom: 1 }), []);
   const actualSize = useCallback(() => setValue({ mode: "manual", zoom: 1 }), []);
+  const toggleFitActual = useCallback(() => setValue((prev) => prev.mode === "fit"
+    ? { mode: "manual", zoom: 1 }
+    : { mode: "fit", zoom: 1 }), []);
   const zoomIn = useCallback(() => zoomBy(zoomStep), [zoomBy]);
   const zoomOut = useCallback(() => zoomBy(1 / zoomStep), [zoomBy]);
-  return { value, effectiveScale, fit, actualSize, zoomIn, zoomOut, onEffectiveScale };
+  return { value, effectiveScale, fit, actualSize, toggleFitActual, zoomIn, zoomOut, onEffectiveScale };
+}
+
+const hotkeyInteractiveSelector = "input, textarea, select, button, a, [contenteditable]:not([contenteditable=\"false\"])";
+
+/** Общий гейт хоткеев для плеера и презентации, включая shadow/composed tree. */
+export function isPlayerHotkeyEvent(event: KeyboardEvent) {
+  if (event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return false;
+  const isInteractive = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(hotkeyInteractiveSelector));
+  if (event.composedPath().some(isInteractive)) return false;
+  return !isInteractive(document.activeElement);
+}
+
+export function isPlayerHelpHotkey(event: KeyboardEvent) {
+  return event.key === "?" || (event.code === "Slash" && event.shiftKey);
 }
 
 const frameCard = "overflow-hidden bg-background text-foreground shadow-[0_20px_60px_rgba(2,2,5,0.35)]";

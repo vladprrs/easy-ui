@@ -62,6 +62,30 @@ describe("PresentShell (W1-2)", () => {
     await screen.findByText("This is the second screen.");
     expect(router.state.location.pathname).toBe("/p/hello-world/present/s/details");
     expect(screen.getByRole("link", { name: "Открыть в easy-ui" }).getAttribute("href")).toBe("/p/hello-world/s/details");
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/s/details"));
+  });
+
+  it("supports browse, restart and help hotkeys but ignores a focused prototype input", async () => {
+    const router = renderAt("/p/hello-world/present");
+    const input = await screen.findByLabelText("Name") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Lin" } });
+    input.focus();
+    fireEvent.keyDown(input, { key: "ArrowRight" });
+    fireEvent.keyDown(input, { key: "r" });
+    expect(router.state.location.pathname).toBe("/p/hello-world/present/s/welcome");
+    expect(input.value).toBe("Lin");
+
+    input.blur();
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/present/s/details"));
+    fireEvent.keyDown(window, { key: "R" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/present/s/welcome"));
+    expect((await screen.findByLabelText("Name") as HTMLInputElement).value).toBe("Ada");
+
+    fireEvent.keyDown(window, { key: "?", shiftKey: true });
+    expect(screen.getByRole("dialog", { name: "Горячие клавиши" })).toBeTruthy();
+    expect(screen.getByText("Вернуться в плеер")).toBeTruthy();
   });
 
   it("enters from the player chrome action and Esc returns to the player at the same screen", async () => {

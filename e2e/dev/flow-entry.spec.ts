@@ -85,6 +85,44 @@ test("?debug=1 survives all transitions; sidebar browse is replace outside flowD
   await expect(page.getByRole("complementary", { name: "Инспектор взаимодействий" }).or(page.getByRole("button", { name: /Инспектор/ }))).toBeVisible();
 });
 
+test("player hotkeys browse outside flowDepth, toggle zoom, show help, and restart with query", async ({ page }) => {
+  await page.goto("/p/hello-world?source=hotkeys");
+  await expect(page).toHaveURL(/\/p\/hello-world\/s\/welcome\?source=hotkeys$/);
+  const chromeActions = page.getByTestId("chrome-actions");
+  const back = chromeActions.getByRole("button", { name: "Назад" });
+  const input = page.getByLabel("Name");
+  const initialName = await input.inputValue();
+  await input.fill("Lin");
+
+  await input.press("ArrowRight");
+  await input.press("r");
+  await expect(page).toHaveURL(/\/p\/hello-world\/s\/welcome\?source=hotkeys$/);
+  await expect(input).toHaveValue(/r/);
+  await expect(input).not.toHaveValue(initialName);
+
+  await input.fill("Lin");
+  await input.blur();
+  const fit = chromeActions.getByRole("button", { name: "Вписать" });
+  const actual = chromeActions.getByRole("button", { name: "100%" });
+  await expect(fit).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("F");
+  await expect(actual).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("f");
+  await expect(fit).toHaveAttribute("aria-pressed", "true");
+
+  await page.keyboard.press("Shift+/");
+  await expect(page.getByRole("dialog", { name: "Горячие клавиши" })).toBeVisible();
+  await page.keyboard.press("Shift+/");
+  await expect(page.getByRole("dialog", { name: "Горячие клавиши" })).toHaveCount(0);
+
+  await page.keyboard.press("ArrowRight");
+  await expect(page).toHaveURL(/\/p\/hello-world\/s\/details\?source=hotkeys$/);
+  await expect(back).toBeDisabled();
+  await page.keyboard.press("R");
+  await expect(page).toHaveURL(/\/p\/hello-world\/s\/welcome\?source=hotkeys$/);
+  await expect(page.getByLabel("Name")).toHaveValue(initialName);
+});
+
 test("presentation deep link shows the compact reset banner", async ({ page }) => {
   await page.goto("/p/checkout/present/s/cart");
   await expect(page).toHaveURL(/\/p\/checkout\/present\/s\/cart$/);

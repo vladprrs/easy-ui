@@ -1,14 +1,14 @@
-import { Component, type ErrorInfo, type ReactNode, useMemo, useState } from "react";
+import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useOutletContext, useParams } from "react-router";
 import type { PlayerOutletContext } from "./PlayerShell";
-import { DeviceFrame, useStageZoom } from "./DeviceFrame";
+import { DeviceFrame, isPlayerHelpHotkey, isPlayerHotkeyEvent, useStageZoom } from "./DeviceFrame";
 import { ScreensSidebar } from "./ScreensSidebar";
 import { buildPrototypeRouteBase, FlowResetBanner, usePlayerNavigation } from "./navigation";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { ScreenSurface } from "./ScreenSurface";
 import { chip, chipActive, pillGhost, pillGhostOnDark } from "../app/chrome";
 import { PrototypeChrome } from "../app/PrototypeChrome";
-import { player, playerDocumentTitle } from "../app/strings/player";
+import { player, playerDocumentTitle, playerHotkeys } from "../app/strings/player";
 import { common, deviceNames } from "../app/strings/common";
 import { canonicalViewport } from "../designSystems/deviceMetrics";
 import { useDocumentTitle } from "../app/useDocumentTitle";
@@ -37,6 +37,34 @@ export class ScreenErrorBoundary extends Component<{
 
 const zoomChip = "inline-flex items-center rounded-full px-2.5 py-1 text-sm font-medium text-eui-ink transition-colors hover:bg-eui-lilac-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand aria-pressed:bg-eui-brand aria-pressed:font-bold aria-pressed:text-white";
 
+const hotkeyRows = [
+  ["←", playerHotkeys.previous],
+  ["→", playerHotkeys.next],
+  ["R", playerHotkeys.restart],
+  ["F", playerHotkeys.zoom],
+  ["?", playerHotkeys.help],
+] as const;
+
+export function PlayerHotkeysHelp({ onClose, present = false }: { onClose: () => void; present?: boolean }) {
+  const rows = present
+    ? [...hotkeyRows.filter(([key]) => key !== "F"), ["Esc", playerHotkeys.exitPresent] as const]
+    : hotkeyRows;
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-eui-graphite/70 p-4" role="presentation">
+    <section role="dialog" aria-modal="true" aria-labelledby="player-hotkeys-title" className="w-full max-w-sm rounded-3xl bg-white p-6 text-eui-ink shadow-2xl">
+      <div className="flex items-center justify-between gap-4">
+        <h2 id="player-hotkeys-title" className="font-eui-display text-xl font-bold">{player.hotkeysTitle}</h2>
+        <button type="button" aria-label={player.hotkeysClose} title={player.hotkeysClose} onClick={onClose} className="rounded-full px-2 py-1 text-xl leading-none hover:bg-eui-lilac-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand">×</button>
+      </div>
+      <dl className="mt-5 grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-3">
+        {rows.map(([key, label]) => <div key={key} className="contents">
+          <dt><kbd className="inline-flex min-w-10 justify-center rounded-lg border border-eui-ink/20 bg-eui-lilac-50 px-2 py-1 font-mono text-sm font-bold">{key}</kbd></dt>
+          <dd className="text-sm text-eui-slate-700">{label}</dd>
+        </div>)}
+      </dl>
+    </section>
+  </div>;
+}
+
 export function ScreenView() {
   const { doc, registry, runtime, customTypes, customDefinitions, onError } = useOutletContext<PlayerOutletContext>();
   const { screenId } = useParams();
@@ -44,6 +72,7 @@ export function ScreenView() {
   const navigation = usePlayerNavigation();
   const [device, setDevice] = useState(doc.device);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [hotkeysVisible, setHotkeysVisible] = useState(false);
   const stageZoom = useStageZoom();
   const screen = doc.screens.find((item) => item.id === screenId);
   useDocumentTitle(screen
@@ -51,6 +80,8 @@ export function ScreenView() {
     : player.screenMissingTitle);
   const screenSpec = screen?.spec;
   const screenCanvas = screen?.canvas;
+  // customTypes — стабильный Set из контекста загрузчика; пересчёт дерева нужен только при его замене.
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const tree = useMemo(() => (screenSpec ? toRuntimeSpec(screenSpec, { customTypes }) : null), [screenSpec, customTypes]);
   const numericVersion = version === undefined ? undefined : Number(version);
   // Вход в презентацию с текущего экрана (W1-2); present-маршруты живут вне /p-хрома.
@@ -61,7 +92,32 @@ export function ScreenView() {
   // mobile/tablet); desktop auto-height рендерится fluid-веткой без масштаба.
   const hasFixedViewport = screenCanvas !== undefined || canonicalViewport[device] !== null;
   const zoomValue = stageZoom.value;
+  const toggleFitActual = stageZoom.toggleFitActual;
   const isActualSize = zoomValue.mode === "manual" && zoomValue.zoom === 1;
+  const currentIndex = screen ? doc.screens.indexOf(screen) : -1;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isPlayerHotkeyEvent(event)) return;
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        const offset = event.key === "ArrowLeft" ? -1 : 1;
+        const target = doc.screens[currentIndex + offset];
+        if (!target) return;
+        event.preventDefault();
+        navigation.browseToScreen(target.id);
+      } else if (event.key.toLowerCase() === "r") {
+        event.preventDefault();
+        navigation.restart();
+      } else if (event.key.toLowerCase() === "f" && hasFixedViewport) {
+        event.preventDefault();
+        toggleFitActual();
+      } else if (isPlayerHelpHotkey(event)) {
+        event.preventDefault();
+        setHotkeysVisible((visible) => !visible);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [currentIndex, doc.screens, hasFixedViewport, navigation, toggleFitActual]);
   // Единый хром /p/* (WF-4): вью поставляет только слоты, тело вью — stage (W1-1).
   const chrome = <PrototypeChrome
     prototypeId={doc.id}
@@ -95,6 +151,7 @@ export function ScreenView() {
   const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} />;
 
   return <main className="flex h-dvh min-h-0 flex-col">
+    {hotkeysVisible && <PlayerHotkeysHelp onClose={() => setHotkeysVisible(false)} />}
     {chrome}
     <FlowResetBanner />
     <div className="flex min-h-0 flex-1 bg-eui-graphite text-white">
