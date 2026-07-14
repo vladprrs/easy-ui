@@ -1,6 +1,6 @@
 import { JSONUIProvider } from "@json-render/react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useNavigationType, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useNavigationType, useParams } from "react-router";
 import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import type { PrototypeDoc } from "../prototype/schema";
@@ -10,7 +10,7 @@ import { player, present, presentDocumentTitle } from "../app/strings/player";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { EasyUiActionRuntime } from "./actionRuntime";
 import { DeviceFrame, type StageZoom } from "./DeviceFrame";
-import { buildPlayerPath, PlayerNavigationProvider, usePlayerNavigation } from "./navigation";
+import { buildPlayerPath, FlowResetBanner, PlayerNavigationProvider, usePlayerNavigation } from "./navigation";
 import { PrototypeLoader } from "./PrototypeLoader";
 import { ScreenErrorBoundary } from "./ScreenView";
 import { ScreenSurface } from "./ScreenSurface";
@@ -94,7 +94,9 @@ function LoadedPresent({ doc, custom, runtimeKey, playerBase, metaVersion, versi
   const screen = doc.screens.find((item) => item.id === screenId);
   const tree = useMemo(() => (screen ? toRuntimeSpec(screen.spec, { customTypes }) : null), [screen, customTypes]);
   // Возврат в плеер — на тот же экран, что открыт в презентации.
-  const exitPath = screen ? buildPlayerPath(playerBase, screen.id) : playerBase;
+  // Query string (в т.ч. ?debug=1) сохраняется переходом (W1-5).
+  const location = useLocation();
+  const exitPath = `${screen ? buildPlayerPath(playerBase, screen.id) : playerBase}${location.search}`;
 
   useEffect(() => {
     if (directEntry) return;
@@ -111,7 +113,9 @@ function LoadedPresent({ doc, custom, runtimeKey, playerBase, metaVersion, versi
   return <JSONUIProvider key={`${runtimeKey}:${navigation.sessionNonce}`} registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
     <ThemeStyle content={themeContent} />
     <main className="flex h-dvh min-h-0 flex-col bg-eui-graphite font-eui-ui text-white">
-      <div className="flex min-h-0 min-w-0 flex-1">
+      <div className="relative flex min-h-0 min-w-0 flex-1">
+        {/* Компактный баннер сброса (W1-5): deep-link в середину флоу презентации. */}
+        <FlowResetBanner compact />
         <DeviceFrame device={doc.device} canvas={screen?.canvas} zoom={fitZoom}>
           {screen && tree
             ? <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>

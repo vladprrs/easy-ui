@@ -1,9 +1,9 @@
 import { Component, type ErrorInfo, type ReactNode, useMemo, useState } from "react";
-import { Link, useOutletContext, useParams } from "react-router";
+import { Link, useLocation, useOutletContext, useParams } from "react-router";
 import type { PlayerOutletContext } from "./PlayerShell";
 import { DeviceFrame, useStageZoom } from "./DeviceFrame";
 import { ScreensSidebar } from "./ScreensSidebar";
-import { buildPrototypeRouteBase, usePlayerNavigation } from "./navigation";
+import { buildPrototypeRouteBase, FlowResetBanner, usePlayerNavigation } from "./navigation";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { ScreenSurface } from "./ScreenSurface";
 import { chip, chipActive, pillGhost, pillGhostOnDark } from "../app/chrome";
@@ -54,7 +54,9 @@ export function ScreenView() {
   const tree = useMemo(() => (screenSpec ? toRuntimeSpec(screenSpec, { customTypes }) : null), [screenSpec, customTypes]);
   const numericVersion = version === undefined ? undefined : Number(version);
   // Вход в презентацию с текущего экрана (W1-2); present-маршруты живут вне /p-хрома.
-  const presentPath = `${buildPrototypeRouteBase(doc.id, numericVersion)}/present${screen ? `/s/${encodeURIComponent(screen.id)}` : ""}`;
+  // Query string (в т.ч. ?debug=1) сохраняется переходом (W1-5).
+  const location = useLocation();
+  const presentPath = `${buildPrototypeRouteBase(doc.id, numericVersion)}/present${screen ? `/s/${encodeURIComponent(screen.id)}` : ""}${location.search}`;
   // Zoom-контролы осмысленны только для фиксированного viewport (canvas-экран или
   // mobile/tablet); desktop auto-height рендерится fluid-веткой без масштаба.
   const hasFixedViewport = screenCanvas !== undefined || canonicalViewport[device] !== null;
@@ -94,6 +96,7 @@ export function ScreenView() {
 
   return <main className="flex h-dvh min-h-0 flex-col">
     {chrome}
+    <FlowResetBanner />
     <div className="flex min-h-0 flex-1 bg-eui-graphite text-white">
       <ScreensSidebar doc={doc} currentScreen={screen.id} collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((prev) => !prev)} />
       <DeviceFrame device={device} canvas={screen.canvas} zoom={zoomValue} onEffectiveScale={stageZoom.onEffectiveScale}>

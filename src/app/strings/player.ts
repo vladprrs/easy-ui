@@ -36,6 +36,10 @@ export const player = {
   screenErrorContext: (prototypeId: string, screenId: string) => `Прототип: ${prototypeId} · Экран: ${screenId}`,
   screenMissingTitle: "Экран не найден",
   screenMissingBody: (docName: string) => `В прототипе «${docName}» нет такого экрана.`,
+  // Баннер сброса состояния флоу (W1-5): bootstrap-вход не на стартовом экране.
+  flowResetMessage: "Состояние флоу сброшено — ссылка вела в середину флоу.",
+  flowResetRestart: "Начать сначала",
+  flowResetDismiss: "Скрыть уведомление о сбросе",
 } as const;
 
 /** document.title режима презентации (W1-2). */

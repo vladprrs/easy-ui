@@ -11,7 +11,9 @@ import { ScreenView } from "./ScreenView";
 const navigation = vi.hoisted(() => ({ navigate: vi.fn(), restart: vi.fn(), back: vi.fn() }));
 vi.mock("./navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./navigation")>()),
-  usePlayerNavigation: () => ({ ...navigation, sessionNonce: "test", flowDepth: 0, goToScreen: navigation.navigate }),
+  usePlayerNavigation: () => ({ ...navigation, sessionNonce: "test", flowDepth: 0, entryReason: "flow" as const, goToScreen: navigation.navigate, browseToScreen: navigation.navigate, flowResetVisible: false, dismissFlowReset: () => {} }),
+  // Баннер читает контекст через оригинальный usePlayerNavigation — вне провайдера стаб.
+  FlowResetBanner: () => null,
 }));
 
 function BrokenRuntimeProp(): never {

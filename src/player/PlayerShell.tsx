@@ -77,9 +77,9 @@ function ReadyPlayer({ doc, custom, runtimeKey, routeBase, metaVersion, debug }:
 
 export function PlayerShell() {
   const { protoId, version } = useParams();
-  // Interaction inspector (H.1): ?debug=1 enables the panel. The flag is latched
-  // for the lifetime of the shell because player navigation rewrites the URL
-  // (replace on bootstrap/restart) and drops the query string.
+  // Interaction inspector (H.1): ?debug=1 enables the panel. Навигация плеера
+  // сохраняет query string во всех переходах (W1-5); латч остаётся страховкой
+  // на случай внешних переходов, теряющих query (история, ручная правка URL).
   const [search] = useSearchParams();
   const debugParam = search.get("debug") === "1";
   const [debug, setDebug] = useState(debugParam);

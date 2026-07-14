@@ -97,6 +97,31 @@ describe("PlayerShell", () => {
     await waitFor(() => expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Ada"));
   });
 
+  it("deep link into the middle of the flow shows the reset banner; restart returns to start (W1-5)", async () => {
+    const router = renderAt("/p/hello-world/s/details");
+    await screen.findByText("This is the second screen.");
+    expect(router.state.location.pathname).toBe("/p/hello-world/s/details");
+    const banner = await screen.findByTestId("flow-reset-banner");
+    fireEvent.click(within(banner).getByRole("button", { name: "Начать сначала" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/s/welcome"));
+    expect(screen.queryByTestId("flow-reset-banner")).toBeNull();
+  });
+
+  it("sidebar navigation is browse: replace outside flowDepth, Back stays disabled, no banner (W1-5)", async () => {
+    const router = renderAt("/p/hello-world");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/s/welcome"));
+    await screen.findByLabelText("Name");
+    const sidebar = screen.getByRole("complementary", { name: "Экраны" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "Details" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/s/details"));
+    const state = router.state.location.state as { flowDepth: number; entryReason: string };
+    expect(state.flowDepth).toBe(0);
+    expect(state.entryReason).toBe("browse");
+    const back = within(screen.getByTestId("chrome-actions")).getByRole("button", { name: "Назад" }) as HTMLButtonElement;
+    expect(back.disabled).toBe(true);
+    expect(screen.queryByTestId("flow-reset-banner")).toBeNull();
+  });
+
   it("shows pinned component diagnostics when a bundle fails", async () => {
     mocks.getDraft.mockResolvedValue({ ...draft(), componentManifestHash: "custom", components: [{ id: "rating", name: "RatingStars", version: 3, bundleUrl: "/api/components/rating/versions/3/bundle.js", bundleHash: "hash" }] });
     mocks.loadCustom.mockRejectedValue(new Error("Custom component RatingStars v3: broken contract"));
