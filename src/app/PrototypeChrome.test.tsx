@@ -83,5 +83,6 @@ describe("Layout app header on /p/*", () => {
     render(<RouterProvider router={router} />);
     expect(await screen.findByText("home")).toBeTruthy();
     expect(screen.getByRole("navigation", { name: appShell.mainNavAria })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "API и документация" }).getAttribute("href")).toBe("/api/openapi.json");
   });
 });
