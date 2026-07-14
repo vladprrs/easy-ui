@@ -46,7 +46,10 @@ jobs:
           DEPLOY_URL: ${{ secrets.DOKPLOY_DEPLOY_URL }}
         run: |
           if [ -n "$DEPLOY_URL" ]; then
-            curl -fsS -X POST "$DEPLOY_URL" -H 'content-type: application/json' -d '{}' && echo "deploy triggered"
+            resp=$(curl -fsS -X POST "$DEPLOY_URL" -H 'content-type: application/json' -d '{"ref":"refs/heads/main"}')
+            echo "$resp"
+            case "$resp" in *"Not Match"*|*error*) echo "deploy trigger rejected"; exit 1 ;; esac
+            echo "deploy triggered"
           else
             echo "DOKPLOY_DEPLOY_URL secret not set — skipping deploy trigger"
           fi

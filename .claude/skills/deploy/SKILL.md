@@ -1,11 +1,11 @@
 ---
 name: deploy
-description: Deploy easy-ui to production (easy-ui.pay-offline.ru on Dokploy) — push to main triggers auto-deploy; check deploy status, trigger a manual deploy/redeploy, watch progress, and verify the live instance (health, basic auth, SPA).
+description: Deploy easy-ui to production (easy-ui.pay-offline.ru on Dokploy) — push to main builds the image in GitHub Actions (GHCR) and auto-deploys; check deploy status, trigger a manual redeploy, watch progress, and verify the live instance (health, basic auth, SPA).
 ---
 
 # Deploy easy-ui to Dokploy
 
-Production runs at **https://easy-ui.pay-offline.ru** — a Dokploy compose service built from GitHub `vladprrs/easy-ui@main` (`docker-compose.yml` at repo root, single container: Bun server serving API + `dist` static, named volume `easy-ui-data:/app/data` for SQLite + published component modules). Full deployment contract: `docs/server-api.md#deployment`; plan/history: `docs/plans/2026-07-11-dokploy-deploy.md`.
+Production runs at **https://easy-ui.pay-offline.ru** — a Dokploy compose service running the prebuilt image `ghcr.io/vladprrs/easy-ui:latest` (`docker-compose.yml` at repo root, single container: Bun server serving API + `dist` static, named volume `easy-ui-data:/app/data` for SQLite + published component modules). The image is built by GitHub Actions (`.github/workflows/build-image.yml`) — **never on the prod server**: server-side builds (npm ci + chromium + vite + storybook) starved the 1-CPU host and took the whole box down three times on 2026-07-14. Full deployment contract: `docs/server-api.md#deployment`; plan/history: `docs/plans/2026-07-11-dokploy-deploy.md`.
 
 All paths below are relative to the repo root. The driver is `.claude/skills/deploy/driver.mjs` (plain node, zero deps).
 
@@ -22,11 +22,12 @@ Without `DOKPLOY_API_KEY` the driver exits with code 2.
 
 ## Deploy (normal path)
 
-Auto-deploy is on: **any push to `main` triggers a production build+deploy** via a GitHub webhook (hook id 651559498 → Dokploy `/api/deploy/compose/<refreshToken>`). So the deploy itself is:
+Auto-deploy is on: **any push to `main`** runs the `build-image` workflow (build image in Actions → push `ghcr.io/vladprrs/easy-ui:{latest,<sha>}` → POST the Dokploy deploy URL from the `DOKPLOY_DEPLOY_URL` Actions secret with `{"ref":"refs/heads/main"}` — without `ref` Dokploy answers "Branch Not Match" and does nothing). Dokploy then only does `docker compose pull` + `up` (`pull_policy: always`), ~1-2 min, no load on the host. The old direct GitHub→Dokploy webhook (hook id 651559498) is **disabled** — do not re-enable it: it makes Dokploy build from source on the server. So the deploy itself is:
 
 ```bash
 git push origin main
-node .claude/skills/deploy/driver.mjs watch    # poll until done/error (~2-3 min server-side build)
+gh run watch --repo vladprrs/easy-ui $(gh run list --repo vladprrs/easy-ui --workflow build-image --limit 1 --json databaseId --jq '.[0].databaseId')   # ~3-6 min CI build
+node .claude/skills/deploy/driver.mjs watch    # poll Dokploy until done/error (~1-2 min pull+up)
 node .claude/skills/deploy/driver.mjs verify   # health/auth/SPA checks against prod
 ```
 
@@ -45,7 +46,7 @@ PASS  SPA with creds (200)
 node .claude/skills/deploy/driver.mjs deploy "reason for redeploy"
 ```
 
-Triggers `compose.deploy` and watches until terminal state. Exit 1 on failed deployment (error message printed; full build logs only in Dokploy UI → project easy-ui → deployments).
+Triggers `compose.deploy` (pull `ghcr.io/vladprrs/easy-ui:latest` + up) and watches until terminal state. Exit 1 on failed deployment (error message printed; full logs only in Dokploy UI → project easy-ui → deployments). This redeploys whatever `latest` currently points to — to ship new code, push to `main` and let the workflow build the image first. To rebuild the image without a code change: `gh workflow run build-image --repo vladprrs/easy-ui` (workflow_dispatch does not auto-trigger the Dokploy deploy — run `deploy` after it finishes).
 
 ## Status
 
@@ -55,13 +56,15 @@ node .claude/skills/deploy/driver.mjs status   # composeStatus + last 3 deployme
 
 ## Rollback
 
-No first-class rollback. Revert the offending commit and push (webhook redeploys), or `git push origin <good-sha>:main`. DB migrations are forward-only — if a schema change is involved, restoring the `easy-ui-data` volume from a backup is the only way back (mind SQLite WAL: `easy-ui.db` + `-wal` + `-shm` are one unit).
+No first-class rollback. Point the compose file at a known-good image tag (`ghcr.io/vladprrs/easy-ui:<sha>` — every main commit is tagged) and redeploy, or revert the offending commit and push (workflow rebuilds and redeploys). DB migrations are forward-only — if a schema change is involved, restoring the `easy-ui-data` volume from a backup is the only way back (mind SQLite WAL: `easy-ui.db` + `-wal` + `-shm` are one unit).
 
 ## Gotchas
 
-- **Deploy happens on every push to main** — pushing an unfinished commit deploys it. There is no staging environment.
-- Dokploy builds the image **on the prod server** (`npm ci` + vite + storybook build, ~2-3 min, `mem_limit: 1g`). A failing build leaves the previous container running.
+- **Deploy happens on every push to main** — pushing an unfinished commit deploys it (after the CI build). There is no staging environment.
+- **Never build on the prod server.** The image comes prebuilt from GHCR (public package, anonymous pull). If Dokploy ever reports a source build, the disabled webhook was re-enabled or `docker-compose.yml` regained a `build:` section — fix that first.
+- A failing CI build or failed pull leaves the previous container running — prod stays up.
 - `compose.deploy` only **queues**; `watch` polls `compose.one` every 15 s. Deployment status `running` with no progress for >10 min = check Dokploy UI logs.
+- The API returns `deployments` unsorted and `composeStatus` can hold a stale `error` — the driver sorts by `createdAt` and trusts only the newest deployment's status.
 - The app itself enforces basic auth (`BASIC_AUTH` env in the Dokploy service, not Traefik). Changing the password = edit the compose service env in Dokploy (UI or `compose.update` API) + redeploy, then update `.env` here.
 - `curl` against SPA routes without `Accept: text/html` returns 404 — the static server's SPA fallback is HTML-only. Browsers are unaffected; the driver sends the header.
 - `/api/health` is the only unauthenticated endpoint (used by the container healthcheck). Everything else, including static assets, is behind basic auth.
@@ -70,5 +73,6 @@ No first-class rollback. Revert the offending commit and push (webhook redeploys
 ## Troubleshooting
 
 - `DOKPLOY_API_KEY is not set` → create `.env` from `.env.example` (the key is in the Dokploy service owner's settings).
-- `deployment failed: ...` from watch → build error on the server; read logs in Dokploy UI (API doesn't expose logPath contents).
+- `deployment failed: ...` from watch → pull/up error on the server; read logs in Dokploy UI (API doesn't expose logPath contents). Check `docker manifest inspect ghcr.io/vladprrs/easy-ui:latest` — if the manifest is missing or the package went private, the pull fails.
+- Workflow's "Trigger Dokploy deploy" step answered `Branch Not Match` → the POST body lost `{"ref":"refs/heads/main"}`; Dokploy matches the branch from the push-payload `ref`.
 - `verify` FAIL on "health open, ready" right after deploy → server seeds on startup (healthcheck `start_period` 90 s); wait ~30 s and re-run.

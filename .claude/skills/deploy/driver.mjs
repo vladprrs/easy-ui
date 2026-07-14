@@ -37,16 +37,20 @@ async function api(path, body) {
   return res.json();
 }
 
+// API returns deployments unsorted — always order by createdAt explicitly.
+const byCreatedAt = (deployments) =>
+  (deployments ?? []).slice().sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
 async function composeState() {
   const c = await api(`compose.one?composeId=${COMPOSE_ID}`);
-  const last = c.deployments?.at(-1) ?? {};
+  const last = byCreatedAt(c.deployments).at(-1) ?? {};
   return { composeStatus: c.composeStatus, last };
 }
 
 async function status() {
   const c = await api(`compose.one?composeId=${COMPOSE_ID}`);
   console.log(`composeStatus: ${c.composeStatus}`);
-  for (const d of (c.deployments ?? []).slice(-3))
+  for (const d of byCreatedAt(c.deployments).slice(-3))
     console.log(`  ${d.createdAt}  ${d.status.padEnd(7)} ${(d.title ?? "").split("\n")[0].slice(0, 70)}`);
 }
 
@@ -58,11 +62,13 @@ async function watch({ timeoutMs = 15 * 60_000 } = {}) {
     const line = `${composeStatus} / ${last.status} ${(last.title ?? "").split("\n")[0].slice(0, 60)}`;
     if (line !== lastLine) console.log(new Date().toISOString().slice(11, 19), line);
     lastLine = line;
-    if (last.status === "error" || composeStatus === "error") {
+    // composeStatus may lag or hold a stale "error" from a previous run —
+    // only the newest deployment's status decides the outcome.
+    if (last.status === "error") {
       console.error(`deployment failed: ${last.errorMessage ?? "see Dokploy UI logs"}`);
       process.exit(1);
     }
-    if (composeStatus === "done" && last.status === "done") return;
+    if (last.status === "done") return;
     await new Promise(r => setTimeout(r, 15_000));
   }
   console.error("watch timed out");
