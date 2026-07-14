@@ -6,6 +6,7 @@ import { LibraryPage } from "../library/LibraryPage";
 import { VisualPage } from "../visual/VisualPage";
 import { SmokeSpec } from "../smoke/SmokeSpec";
 import { PlayerShell } from "../player/PlayerShell";
+import { PresentShell } from "../player/PresentShell";
 import { ScreenView } from "../player/ScreenView";
 import { Layout } from "./Layout";
 import { CjmShell } from "../cjm/CjmShell";
@@ -28,9 +29,18 @@ function NotFound() {
   );
 }
 
+/** Дети present-маршрута: index (redirect на startScreen делает навигация) и экран. */
+const presentChildren = (): RouteObject[] => [
+  { index: true, element: null },
+  { path: "s/:screenId", element: null },
+];
+
 export const routeObjects: RouteObject[] = [
   { path: "capture/:protoId/s/:screenId", element: <CapturePrototype /> },
   { path: "capture/component/:id/:version", element: <CaptureComponent /> },
+  // Презентация (W1-2): вне Layout и вне PrototypeChrome — как capture.
+  { path: "p/:protoId/present", element: <PresentShell />, children: presentChildren() },
+  { path: "p/:protoId/v/:version/present", element: <PresentShell />, children: presentChildren() },
   {
     element: <Layout />,
     children: [

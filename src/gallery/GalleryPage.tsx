@@ -55,6 +55,7 @@ export function GalleryPage() {
           <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.systemLabel}</dt><dd className="inline-flex rounded-full bg-eui-lilac-200 px-2.5 py-1 text-xs font-medium">{systemNames.get(prototype.designSystem ?? "shadcn") ?? prototype.designSystem ?? "shadcn"}</dd></div>
         </dl>
         <div className="relative z-10 mt-5 flex flex-wrap gap-2">
+          <Link className={`${pillGhost} bg-white`} to={`/p/${prototype.id}/present`}>{gallery.presentLink}</Link>
           <Link className={pillGhost} to={`/p/${prototype.id}/cjm`}>CJM</Link>
           <Link className={pillGhost} to={`/p/${prototype.id}/edit`}>{gallery.editorLink}</Link>
           {prototype.latestVersion !== null ? <>

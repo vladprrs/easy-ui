@@ -12,6 +12,7 @@ export const gallery = {
   screensLabel: "Экраны",
   systemLabel: "Система",
   editorLink: "Редактор",
+  presentLink: "Презентация",
   emptyFiltered: "Нет прототипов с выбранной дизайн-системой.",
   empty: "Прототипов пока нет.",
 } as const;

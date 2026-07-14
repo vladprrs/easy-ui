@@ -20,6 +20,7 @@ export const playerDocumentTitle = (docName: string, screenName: string, version
 export const player = {
   back: "Назад",
   restart: "Начать сначала",
+  present: "Презентация",
   screensAria: "Экраны",
   screensCollapse: "Свернуть список экранов",
   screensExpand: "Развернуть список экранов",
@@ -35,6 +36,19 @@ export const player = {
   screenErrorContext: (prototypeId: string, screenId: string) => `Прототип: ${prototypeId} · Экран: ${screenId}`,
   screenMissingTitle: "Экран не найден",
   screenMissingBody: (docName: string) => `В прототипе «${docName}» нет такого экрана.`,
+} as const;
+
+/** document.title режима презентации (W1-2). */
+export const presentDocumentTitle = (docName: string, version?: number) =>
+  version === undefined ? `${docName} · Презентация` : `${docName} v${version} · Презентация`;
+
+// Режим презентации (W1-2): только прототип на экране + минимальная оснастка.
+export const present = {
+  pagerAria: "Экраны презентации",
+  counter: (current: number, total: number) => `${current} / ${total}`,
+  openInApp: "Открыть в easy-ui",
+  exitHint: "Esc — вернуться в плеер",
+  screenDot: (name: string) => `Экран «${name}»`,
 } as const;
 
 export const inspector = {

@@ -1,13 +1,11 @@
-import { Renderer } from "@json-render/react";
-import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useState } from "react";
+import { Component, type ErrorInfo, type ReactNode, useMemo, useState } from "react";
 import { Link, useOutletContext, useParams } from "react-router";
 import type { PlayerOutletContext } from "./PlayerShell";
 import { DeviceFrame, useStageZoom } from "./DeviceFrame";
 import { ScreensSidebar } from "./ScreensSidebar";
-import { usePlayerNavigation } from "./navigation";
-import { splitCanvas, toRuntimeSpec } from "../prototype/runtimeSpec";
-import { CanvasLayers } from "./CanvasLayers";
-import { EasyUiRuntimeProvider } from "./easyUiRuntime";
+import { buildPrototypeRouteBase, usePlayerNavigation } from "./navigation";
+import { toRuntimeSpec } from "../prototype/runtimeSpec";
+import { ScreenSurface } from "./ScreenSurface";
 import { chip, chipActive, pillGhost, pillGhostOnDark } from "../app/chrome";
 import { PrototypeChrome } from "../app/PrototypeChrome";
 import { player, playerDocumentTitle } from "../app/strings/player";
@@ -54,13 +52,9 @@ export function ScreenView() {
   const screenSpec = screen?.spec;
   const screenCanvas = screen?.canvas;
   const tree = useMemo(() => (screenSpec ? toRuntimeSpec(screenSpec, { customTypes }) : null), [screenSpec, customTypes]);
-  const specs = useMemo(() => {
-    if (!tree) return null;
-    if (screenCanvas) { const { content, hotspots } = splitCanvas(tree); return { content: content?.spec ?? null, hotspots: hotspots.map((h) => h.spec) }; }
-    return { content: tree.spec, hotspots: [] };
-  }, [screenCanvas, tree]);
-  useEffect(() => { runtime.setScreenSpec(specs?.content ?? null); return () => runtime.setScreenSpec(null); }, [runtime, specs]);
   const numericVersion = version === undefined ? undefined : Number(version);
+  // Вход в презентацию с текущего экрана (W1-2); present-маршруты живут вне /p-хрома.
+  const presentPath = `${buildPrototypeRouteBase(doc.id, numericVersion)}/present${screen ? `/s/${encodeURIComponent(screen.id)}` : ""}`;
   // Zoom-контролы осмысленны только для фиксированного viewport (canvas-экран или
   // mobile/tablet); desktop auto-height рендерится fluid-веткой без масштаба.
   const hasFixedViewport = screenCanvas !== undefined || canonicalViewport[device] !== null;
@@ -89,17 +83,14 @@ export function ScreenView() {
           <span className="px-1.5 text-xs tabular-nums text-eui-slate-500" aria-hidden="true">{player.zoomPercent(Math.round(stageZoom.effectiveScale * 100))}</span>
         </div>}
       </>}
+      <Link className={pillGhost} to={presentPath}>{player.present}</Link>
       <button type="button" onClick={navigation.back} disabled={navigation.flowDepth === 0} className={`${pillGhost} disabled:opacity-50`}>{player.back}</button>
       <button type="button" onClick={navigation.restart} className={pillGhost}>{player.restart}</button>
     </>}
   />;
   if (!screen) return <main className="flex h-dvh min-h-0 flex-col">{chrome}<div className="flex min-h-0 flex-1 items-start justify-center bg-eui-graphite p-8 text-white"><section role="alert" className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h2 className="font-eui-display text-2xl font-bold">{player.screenMissingTitle}</h2><p className="mt-2 text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">{common.backToGallery}</Link></section></div></main>;
 
-  const rendered = <EasyUiRuntimeProvider value={{ metadata: tree!.metadata, runtime, definitions: customDefinitions, onError }}>
-    {screen.canvas
-      ? <CanvasLayers canvas={screen.canvas} specs={specs!} registry={registry} />
-      : <Renderer registry={registry} spec={specs!.content!} />}
-  </EasyUiRuntimeProvider>;
+  const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} />;
 
   return <main className="flex h-dvh min-h-0 flex-col">
     {chrome}

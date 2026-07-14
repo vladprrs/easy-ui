@@ -66,7 +66,9 @@ describe("GalleryPage", () => {
     }
     // Actions sit above the stretched link with their own tab stops.
     const actions = within(card).getAllByRole("link").filter((link) => link !== cardLink);
-    expect(actions.map((link) => link.textContent)).toEqual(["CJM", "Редактор", "Версия v2", "CJM v2"]);
+    expect(actions.map((link) => link.textContent)).toEqual(["Презентация", "CJM", "Редактор", "Версия v2", "CJM v2"]);
+    // Кнопка «Презентация» (W1-2) ведёт на present-маршрут вне Layout/PrototypeChrome.
+    expect(within(card).getByRole("link", { name: "Презентация" }).getAttribute("href")).toBe("/p/hello-world/present");
     const actionsRow = actions[0]!.parentElement!;
     expect(actionsRow.className).toContain("relative");
     expect(actionsRow.className).toContain("z-10");
