@@ -3,12 +3,9 @@ import type { PrototypeDoc } from "../prototype/schema";
 import { pillGhostOnDark } from "../app/chrome";
 import { deviceNames } from "../app/strings/common";
 import { player } from "../app/strings/player";
+import { canonicalViewport } from "../designSystems/deviceMetrics";
 
 type Device = PrototypeDoc["device"];
-const sizes: Record<Exclude<Device, "desktop">, { width: number; height: number }> = {
-  mobile: { width: 390, height: 844 },
-  tablet: { width: 834, height: 1112 },
-};
 
 export function DeviceFrame({ defaultDevice, canvas, children }: {
   defaultDevice: Device;
@@ -26,7 +23,7 @@ export function DeviceFrame({ defaultDevice, canvas, children }: {
     return () => observer.disconnect();
   }, []);
 
-  const frame = device === "desktop" ? null : sizes[device];
+  const frame = canonicalViewport[device];
   const contentWidth = canvas?.width ?? frame?.width;
   const scale = contentWidth ? Math.min(1, availableWidth / contentWidth) : 1;
   const contentHeight = canvas?.height ?? frame?.height;

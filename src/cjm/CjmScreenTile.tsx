@@ -8,28 +8,24 @@ import { splitCanvas, stripEvents, toRuntimeSpec, type RuntimeTree } from "../pr
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { buildPlayerPath } from "../player/navigation";
 import { cjm } from "../app/strings/cjm";
-
-const TILE_WIDTH = 280;
-const HEIGHT_CAP = 420;
-const FALLBACK_HEIGHT = 360;
-const DEVICE_WIDTH = { mobile: 390, tablet: 834, desktop: 1280 } as const;
+import { previewNativeWidth, previewTile } from "../designSystems/deviceMetrics";
 
 export function CjmFrame({ nativeWidth, nativeHeight, resetKey, children }: { nativeWidth: number; nativeHeight?: number; resetKey: string; children: ReactNode }) {
   const innerRef = useRef<HTMLDivElement>(null);
-  const scale = TILE_WIDTH / nativeWidth;
-  const [measuredHeight, setMeasuredHeight] = useState(FALLBACK_HEIGHT);
+  const scale = previewTile.width / nativeWidth;
+  const [measuredHeight, setMeasuredHeight] = useState<number>(previewTile.fallbackHeight);
   useEffect(() => {
     if (nativeHeight !== undefined) return;
     const element = innerRef.current;
     if (!element) return;
     if (typeof ResizeObserver === "undefined") return;
-    const measure = () => setMeasuredHeight(Math.min(element.scrollHeight * scale, HEIGHT_CAP));
+    const measure = () => setMeasuredHeight(Math.min(element.scrollHeight * scale, previewTile.heightCap));
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
   }, [nativeHeight, resetKey, scale]);
   const height = nativeHeight === undefined ? measuredHeight : nativeHeight * scale;
-  return <div className="overflow-hidden rounded-xl bg-background text-foreground" style={{ width: TILE_WIDTH, height }}>
+  return <div className="overflow-hidden rounded-xl bg-background text-foreground" style={{ width: previewTile.width, height }}>
     <div ref={innerRef} style={{ width: nativeWidth, ...(nativeHeight === undefined ? {} : { height: nativeHeight }), transform: `scale(${scale})`, transformOrigin: "top left" }}>{children}</div>
   </div>;
 }
@@ -57,7 +53,7 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
     [customDefinitions, tree],
   );
   const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
-  const nativeWidth = screen.canvas?.width ?? DEVICE_WIDTH[doc.device];
+  const nativeWidth = screen.canvas?.width ?? previewNativeWidth[doc.device];
   return <article className="w-[304px] rounded-[20px] bg-white p-3 shadow-sm">
     <div className="relative">
       <TileErrorBoundary key={`${runtimeKey}:${screen.id}`} prototypeId={doc.id} screenId={screen.id}>

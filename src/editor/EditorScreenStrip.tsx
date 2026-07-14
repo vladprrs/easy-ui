@@ -9,8 +9,8 @@ import { splitCanvas, stripEvents, toRuntimeSpec, type RuntimeTree } from "../pr
 import { CjmFrame, TileErrorBoundary } from "../cjm/CjmScreenTile";
 import { createCjmRegistry } from "../cjm/cjmRegistry";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
+import { previewNativeWidth } from "../designSystems/deviceMetrics";
 
-const DEVICE_WIDTH = { mobile: 390, tablet: 834, desktop: 1280 } as const;
 type Screen = PrototypeDoc["screens"][number];
 
 function ScreenTile({ doc, screen, registry, handlers, runtimeKey, stateEpoch, selected, onSelect, customTypes, customDefinitions }: {
@@ -34,7 +34,7 @@ function ScreenTile({ doc, screen, registry, handlers, runtimeKey, stateEpoch, s
     <div className="relative">
       <TileErrorBoundary key={key} prototypeId={doc.id} screenId={screen.id}>
         <JSONUIProvider key={key} registry={registry} handlers={handlers} initialState={initialState}>
-          <div inert>{tree ? <CjmFrame nativeWidth={screen.canvas?.width ?? DEVICE_WIDTH[doc.device]} nativeHeight={screen.canvas?.height} resetKey={key}><EasyUiRuntimeProvider value={runtimeValue}><Renderer registry={registry} spec={tree.spec} /></EasyUiRuntimeProvider></CjmFrame> : <div className="flex h-64 w-[280px] items-center justify-center rounded-lg border border-eui-ink/10 bg-white text-sm text-eui-slate-500">{editor.noContent}</div>}</div>
+          <div inert>{tree ? <CjmFrame nativeWidth={screen.canvas?.width ?? previewNativeWidth[doc.device]} nativeHeight={screen.canvas?.height} resetKey={key}><EasyUiRuntimeProvider value={runtimeValue}><Renderer registry={registry} spec={tree.spec} /></EasyUiRuntimeProvider></CjmFrame> : <div className="flex h-64 w-[280px] items-center justify-center rounded-lg border border-eui-ink/10 bg-white text-sm text-eui-slate-500">{editor.noContent}</div>}</div>
         </JSONUIProvider>
       </TileErrorBoundary>
       <button type="button" aria-label={editor.selectScreenAria(screen.name)} aria-pressed={selected} onClick={onSelect} className="absolute inset-0 rounded-lg focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring aria-pressed:ring-4 aria-pressed:ring-primary" />

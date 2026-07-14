@@ -6,6 +6,7 @@ import type { PrototypeDoc } from "../prototype/schema";
 import { loadCustomComponents } from "../customComponents/loader";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
+import { canonicalViewport } from "../designSystems/deviceMetrics";
 import { ThemeStyle } from "../designSystems/theme";
 import { CaptureSurface } from "./CaptureSurface";
 import { CaptureStyle, useCaptureTheme, usePublishError, usePublishOnSettle } from "./CaptureChrome";
@@ -28,12 +29,6 @@ async function loadTheme(designSystem: string, metaVersion: number | null, signa
     return { tokens: data.tokens ?? {}, fonts: data.fonts ?? [], icons: data.icons ?? [] };
   } catch { return null; }
 }
-
-const deviceSizes: Record<string, { width: number; height: number } | null> = {
-  mobile: { width: 390, height: 844 },
-  tablet: { width: 834, height: 1112 },
-  desktop: null,
-};
 
 async function loadPrototype(id: string, rev: number | undefined, version: number | undefined, signal: AbortSignal): Promise<LoadedPrototype> {
   const base = version !== undefined ? await getPrototypeVersion(id, version, signal)
@@ -60,7 +55,7 @@ function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPr
   }));
 
   if (!screen || !tree) return <div ref={ref} data-capture-error="screen-not-found" />;
-  const size = screen.canvas ?? deviceSizes[doc.device] ?? null;
+  const size = screen.canvas ?? canonicalViewport[doc.device] ?? null;
   const style = screen.canvas
     ? { width: screen.canvas.width, height: screen.canvas.height }
     : size ? { width: size.width, height: size.height } : { width: "100%" as const };

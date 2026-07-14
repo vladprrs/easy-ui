@@ -7,8 +7,7 @@ import { splitCanvas, stripEvents, toRuntimeSpec } from "../prototype/runtimeSpe
 import { mergeScreenState } from "../prototype/stateOverrides";
 import { CanvasLayers } from "../player/CanvasLayers";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
-
-const DEVICE_WIDTH = { mobile: 390, tablet: 834, desktop: 1280 } as const;
+import { previewNativeWidth } from "../designSystems/deviceMetrics";
 
 type Screen = PrototypeDoc["screens"][number];
 type SelectionRect = { left: number; top: number; width: number; height: number };
@@ -201,7 +200,7 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
   return <EditorCanvasErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id}>
     <JSONUIProvider key={`${runtimeKey}:${screen.id}:${stateEpoch}`} registry={registry} handlers={handlers} initialState={initialState}>
       <EditorFrame
-        nativeWidth={screen.canvas?.width ?? DEVICE_WIDTH[doc.device]}
+        nativeWidth={screen.canvas?.width ?? previewNativeWidth[doc.device]}
         nativeHeight={screen.canvas?.height}
         viewportRef={viewportRef}
         previewRootRef={previewRootRef}
