@@ -65,25 +65,10 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
   }, [state.dirty]);
   useEffect(() => { if (copyFallback) fallbackRef.current?.select(); }, [copyFallback]);
 
-  // Ctrl+Z / Ctrl+Shift+Z (Cmd на mac). В текстовых полях не срабатывает —
-  // нативный text-undo внутри поля остаётся живым (W2-2).
-  useEffect(() => {
-    const isTextTarget = (target: EventTarget | null) => target instanceof HTMLElement
-      && (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT");
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "z") return;
-      if (isTextTarget(event.target)) return;
-      event.preventDefault();
-      dispatch({ type: event.shiftKey ? "redo" : "undo" });
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
   // Сохранение с baseRev (W2-4): обычный save идёт от state.baseRev, «Перезаписать»
   // из диалога конфликта — от свежезагруженного remote rev. Повторная гонка (снова
   // 409) честно перезапускает цикл: новый fetch remote-драфта → новый diff → диалог.
-  const runSave = async (baseRev: number) => {
+  const runSave = useCallback(async (baseRev: number) => {
     setIssues([]); setConflict(null);
     const parsed = prototypeDocSchema.safeParse(state.doc);
     if (!parsed.success) { setIssues(humanizeIssues(state.doc, parsed.error.issues)); return; }
@@ -110,8 +95,31 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
       else if (error instanceof ApiError) setIssues([{ path: editor.diffDocLabel, message: formatApiError(error.code, { message: error.message, status: error.status, currentRev: error.currentRev, currentVersion: error.currentVersion }) }]);
       else setIssues([{ path: editor.diffDocLabel, message: error instanceof Error ? error.message : String(error) }]);
     } finally { setSaving(false); }
-  };
-  const save = () => runSave(state.baseRev);
+  }, [definitions, loaded.figma, state.doc, state.savedDoc]);
+  const save = useCallback(() => runSave(state.baseRev), [runSave, state.baseRev]);
+
+  // Ctrl+Z / Ctrl+Shift+Z (Cmd на mac). В текстовых полях не срабатывает —
+  // нативный text-undo внутри поля остаётся живым (W2-2). Ctrl/Cmd+S, напротив,
+  // сохраняет и из полей инспектора; пока save выполняется, повторный PUT не стартует.
+  useEffect(() => {
+    const isTextTarget = (target: EventTarget | null) => target instanceof HTMLElement
+      && (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT");
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (key === "s") {
+        event.preventDefault();
+        if (!saving) void save();
+        return;
+      }
+      if (key !== "z" || isTextTarget(event.target)) return;
+      event.preventDefault();
+      dispatch({ type: event.shiftKey ? "redo" : "undo" });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [save, saving]);
+
   const copy = async () => {
     try {
       if (!navigator.clipboard?.writeText) throw new Error(editor.clipboardUnavailable);

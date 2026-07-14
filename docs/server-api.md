@@ -28,6 +28,8 @@
 | `GET /prototypes/:id/versions` | `PrototypeVersion[]`: `{version,rev,publishedAt}` |
 | `GET /prototypes/:id/versions/:version` | `{version,rev,doc,builtinCatalogHash,componentManifestHash,components:ComponentPin[],assets:AssetPin[],publishedAt}`; immutable |
 
+`PUT /prototypes/:id` — это осознанный checkpoint, а не no-op. Даже если `doc` не изменился, успешный запрос с актуальным `baseRev` создаёт новую ревизию: сервер заново разрешает и фиксирует пины active custom-бандлов, текущей версии темы дизайн-системы и ассетов, а также сохраняет переданный `message`. CAS по `baseRev` действует как обычно. Сервер намеренно не дедуплицирует такие ревизии, потому что повторное сохранение выражает явное решение зафиксировать актуальное окружение документа.
+
 `ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её встроенный каталог. Дескриптор v1 включает имена, descriptions, events, slots и actions, но намеренно не включает `atomicLevel`: классификация может меняться без изменения render-совместимости. В MVP хеш диагностический — рантайм не сравнивает и не блокирует его mismatch; enforcement и таблицы совместимости оставлены на post-MVP.
 
 ### Матрица `designSystem` в DTO прототипов

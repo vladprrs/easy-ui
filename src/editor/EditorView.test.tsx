@@ -83,6 +83,51 @@ describe("EditorView (W2-2: защита правок + undo/redo)", () => {
     expect(await screen.findByText("Не сохранено")).toBeTruthy();
   });
 
+  it("saves via Ctrl/Cmd+S, prevents the browser shortcut, and works inside inspector fields", async () => {
+    let saves = 0;
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/prototypes/editor-demo" && init?.method === "PUT") {
+        saves += 1;
+        return json({ rev: 7 + saves, warnings: [] });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+    renderView();
+    await screen.findByRole("heading", { name: "Editor demo" });
+
+    const ctrlSave = new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(ctrlSave);
+    expect(ctrlSave.defaultPrevented).toBe(true);
+    await waitFor(() => expect(saves).toBe(1));
+
+    const input = editText("After");
+    const metaSave = new KeyboardEvent("keydown", { key: "s", metaKey: true, bubbles: true, cancelable: true });
+    input.dispatchEvent(metaSave);
+    expect(metaSave.defaultPrevented).toBe(true);
+    await waitFor(() => expect(saves).toBe(2));
+  });
+
+  it("does not start another Ctrl+S save while saving", async () => {
+    let finishSave!: (response: Response) => void;
+    const pendingSave = new Promise<Response>((resolve) => { finishSave = resolve; });
+    const fetchMock = vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/prototypes/editor-demo" && init?.method === "PUT") return pendingSave;
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+    renderView();
+    await screen.findByRole("heading", { name: "Editor demo" });
+
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    expect(await screen.findByText("Сохранение…")).toBeTruthy();
+    const repeatedSave = new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(repeatedSave);
+    expect(repeatedSave.defaultPrevented).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    finishSave(new Response(JSON.stringify({ rev: 8, warnings: [] }), { status: 200, headers: { "content-type": "application/json" } }));
+    expect(await screen.findByText("Сохранено")).toBeTruthy();
+  });
+
   it("exposes undo/redo buttons with honest disabled states", async () => {
     renderView();
     await screen.findByRole("heading", { name: "Editor demo" });
