@@ -1,6 +1,7 @@
 services:
   easy-ui:
-    build: .
+    image: ghcr.io/vladprrs/easy-ui:latest
+    pull_policy: always
     restart: unless-stopped
     init: true
     stop_grace_period: 30s

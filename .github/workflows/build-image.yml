@@ -1,0 +1,52 @@
+name: build-image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-image-main
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/vladprrs/easy-ui:latest
+            ghcr.io/vladprrs/easy-ui:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/vladprrs/easy-ui
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Trigger Dokploy deploy
+        if: ${{ github.event_name == 'push' }}
+        env:
+          DEPLOY_URL: ${{ secrets.DOKPLOY_DEPLOY_URL }}
+        run: |
+          if [ -n "$DEPLOY_URL" ]; then
+            curl -fsS -X POST "$DEPLOY_URL" -H 'content-type: application/json' -d '{}' && echo "deploy triggered"
+          else
+            echo "DOKPLOY_DEPLOY_URL secret not set — skipping deploy trigger"
+          fi
