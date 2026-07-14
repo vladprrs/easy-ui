@@ -45,7 +45,11 @@ describe("CjmShell", () => {
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     expect(screen.getByRole("link", { name: "Открыть экран «Cart» прототипа «Checkout journey» в плеере" }).getAttribute("href")).toBe("/p/journey/s/cart");
     expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey");
-    expect(document.title).toBe("Checkout journey · CJM — easy-ui");
+    expect(screen.getByText("демо-состояние")).toBeTruthy();
+    const metadata = screen.getByLabelText("Метаданные CJM");
+    expect(within(metadata).getByText("2 экрана")).toBeTruthy();
+    expect(within(metadata).getByText("Shadcn")).toBeTruthy();
+    await waitFor(() => expect(document.title).toBe("Checkout journey · CJM — easy-ui"));
   });
 
   it("keeps published tile links version-aware", async () => {
@@ -54,7 +58,25 @@ describe("CjmShell", () => {
     // PrototypeChrome version policy (WF-4): player keeps /v/N, editor goes to the draft.
     expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey/v/2");
     expect(screen.getByRole("link", { name: /Редактор/ }).getAttribute("href")).toBe("/p/journey/edit");
-    expect(document.title).toBe("Checkout journey v2 · CJM — easy-ui");
+    expect(screen.getByText("v2")).toBeTruthy();
+    await waitFor(() => expect(document.title).toBe("Checkout journey v2 · CJM — easy-ui"));
+  });
+
+  it("labels static and dynamic authored navigate transitions without creating edges", async () => {
+    const transitionDoc = prototypeDocSchema.parse({ ...doc, state: { target: "secret" }, screens: [
+      { id: "cart", name: "Cart", spec: { root: "actions", elements: {
+        actions: { type: "Stack", props: {}, children: ["static", "dynamic"] },
+        static: { type: "Button", props: { label: "Static" }, on: { press: { action: "navigate", params: { screenId: "success" } } } },
+        dynamic: { type: "Button", props: { label: "Dynamic" }, on: { press: { action: "navigate", params: { screenId: { $event: "/screenId" } } } } },
+      } } },
+      { id: "success", name: "Success", spec: { root: "text", elements: { text: { type: "Text", props: { text: "Done" } } } } },
+      { id: "secret", name: "Secret", spec: { root: "text", elements: { text: { type: "Text", props: { text: "Hidden target" } } } } },
+    ] });
+    mocks.getDraft.mockResolvedValue({ ...draft, doc: transitionDoc });
+    renderAt("/p/journey/cjm");
+    expect(await screen.findByText("→ Success")).toBeTruthy();
+    expect(screen.getByText("динамический переход")).toBeTruthy();
+    expect(screen.queryByText("→ Secret")).toBeNull();
   });
 
   it("omits the description block when the document has no description", async () => {

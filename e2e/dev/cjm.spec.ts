@@ -67,3 +67,33 @@ test("checkout CJM supports direct load and rejects an unknown version", async (
   await page.goto("/p/no-such-proto/v/1");
   await expect(page.getByRole("heading", { name: "Прототип не найден" })).toBeVisible();
 });
+
+test("settings CJM connects measured tile centers and labels authored transitions", async ({ page }) => {
+  await page.goto("/p/settings/cjm");
+
+  const metadata = page.getByLabel("Метаданные CJM");
+  await expect(metadata.getByText("3 экрана", { exact: true })).toBeVisible();
+  await expect(metadata.getByText("Shadcn", { exact: true })).toBeVisible();
+  await expect(page.getByText("→ О приложении", { exact: true })).toBeVisible();
+  await expect(page.getByText("→ Конфиденциальность", { exact: true })).toBeVisible();
+
+  const connectors = page.getByTestId("cjm-connector");
+  await expect(connectors).toHaveCount(2);
+  const endpoints = await connectors.evaluateAll((nodes) => nodes.map((node) => {
+    const svg = node as SVGSVGElement;
+    const source = svg.parentElement!.getBoundingClientRect();
+    const target = svg.parentElement!.nextElementSibling!.getBoundingClientRect();
+    const line = svg.querySelector('[data-testid="cjm-connector-line"]') as SVGPathElement;
+    const matrix = line.getScreenCTM()!;
+    const start = line.getPointAtLength(0).matrixTransform(matrix);
+    const end = line.getPointAtLength(line.getTotalLength()).matrixTransform(matrix);
+    return {
+      sourceDelta: Math.hypot(start.x - source.right, start.y - (source.top + source.height / 2)),
+      targetDelta: Math.hypot(end.x - target.left, end.y - (target.top + target.height / 2)),
+    };
+  }));
+  for (const endpoint of endpoints) {
+    expect(endpoint.sourceDelta).toBeLessThan(1);
+    expect(endpoint.targetDelta).toBeLessThan(1);
+  }
+});

@@ -10,6 +10,36 @@ import { buildPlayerPath } from "../player/navigation";
 import { cjm } from "../app/strings/cjm";
 import { previewNativeWidth, previewTile } from "../designSystems/deviceMetrics";
 
+export type CjmTransition =
+  | { kind: "static"; screenId: string; screenName: string }
+  | { kind: "dynamic" };
+
+/** Reads authored press bindings only. These labels never add or reorder CJM tiles. */
+export function getCjmTransitions(screen: PrototypeDoc["screens"][number], screens: PrototypeDoc["screens"]): CjmTransition[] {
+  const screenNames = new Map(screens.map((item) => [item.id, item.name]));
+  const transitions: CjmTransition[] = [];
+  const seen = new Set<string>();
+  for (const element of Object.values(screen.spec.elements)) {
+    const binding = element.on?.press;
+    if (binding === undefined) continue;
+    const actions = Array.isArray(binding) ? binding : [binding];
+    for (const action of actions) {
+      if (action.action !== "navigate") continue;
+      const target = action.params?.screenId;
+      if (typeof target === "string") {
+        const key = `static:${target}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        transitions.push({ kind: "static", screenId: target, screenName: screenNames.get(target) ?? target });
+      } else if (target !== undefined && !seen.has("dynamic")) {
+        seen.add("dynamic");
+        transitions.push({ kind: "dynamic" });
+      }
+    }
+  }
+  return transitions;
+}
+
 export function CjmFrame({ nativeWidth, nativeHeight, resetKey, children }: { nativeWidth: number; nativeHeight?: number; resetKey: string; children: ReactNode }) {
   const innerRef = useRef<HTMLDivElement>(null);
   const scale = previewTile.width / nativeWidth;
@@ -53,6 +83,7 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
     [customDefinitions, tree],
   );
   const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
+  const transitions = useMemo(() => getCjmTransitions(screen, doc.screens), [doc.screens, screen]);
   const nativeWidth = screen.canvas?.width ?? previewNativeWidth[doc.device];
   return <article className="w-[304px] rounded-[20px] bg-white p-3 shadow-sm">
     <div className="relative">
@@ -63,7 +94,15 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
       </TileErrorBoundary>
       <Link to={buildPlayerPath(routeBase, screen.id)} className="absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring" aria-label={cjm.openScreenAria(screen.name, doc.name)} />
     </div>
-    <h2 className="mt-4 font-eui-ui text-lg font-semibold">{screen.name}</h2>
+    <div className="mt-4 flex items-start justify-between gap-2">
+      <h2 className="font-eui-ui text-lg font-semibold">{screen.name}</h2>
+      {screen.stateOverrides === undefined ? null : <span className="shrink-0 rounded-full bg-eui-lilac-100 px-2 py-1 font-eui-ui text-[11px] font-medium text-eui-brand">{cjm.demoState}</span>}
+    </div>
     {screen.note ? <p className="mt-1 font-eui-ui text-sm text-eui-slate-500">{screen.note}</p> : null}
+    {transitions.length ? <ul className="mt-3 flex flex-wrap gap-2" aria-label={cjm.transitionsAria}>
+      {transitions.map((transition) => <li key={transition.kind === "static" ? `static:${transition.screenId}` : "dynamic"} className="rounded-full border border-eui-brand/20 bg-eui-lilac-100 px-2.5 py-1 font-eui-ui text-xs text-eui-brand">
+        {transition.kind === "static" ? cjm.transitionTo(transition.screenName) : cjm.dynamicTransition}
+      </li>)}
+    </ul> : null}
   </article>;
 }
