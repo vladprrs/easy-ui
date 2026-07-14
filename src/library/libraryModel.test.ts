@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogComponent, ComponentVersionSummary, DesignSystemSummary, VisualReference } from "../api/client";
-import { componentLibraryStatus, groupLibraryEntries, matchesLibraryFilter, selectionForComponent, selectionForStory, selectionKey } from "./libraryModel";
+import { applicableLibraryStatusKeys, componentLibraryStatus, groupLibraryEntries, matchesLibraryFilter, selectionForComponent, selectionForStory, selectionKey } from "./libraryModel";
 
 const systems: DesignSystemSummary[] = [
   { id: "shadcn", name: "Shadcn", description: "", builtinCatalogHash: "one", components: [] },
@@ -55,5 +55,14 @@ describe("component library status", () => {
     expect(matchesLibraryFilter(status, "visual-pending")).toBe(false);
     expect(matchesLibraryFilter(status, "blocked")).toBe(false);
     expect(matchesLibraryFilter(status, "rejected")).toBe(false);
+  });
+
+  it("offers only filters that narrow a heterogeneous component list", () => {
+    const verified = componentLibraryStatus("a", 1, [version(1, "active")], [componentReference("a", 1, "pass")]);
+    const pending = componentLibraryStatus("b", 1, [version(1, "active")], []);
+    expect(applicableLibraryStatusKeys([verified, pending])).toEqual(["verified", "visual-pending"]);
+    expect(applicableLibraryStatusKeys([verified])).toEqual([]);
+    expect(applicableLibraryStatusKeys([verified, verified])).toEqual([]);
+    expect(applicableLibraryStatusKeys([])).toEqual([]);
   });
 });

@@ -33,6 +33,7 @@ describe("LibraryPage", () => {
   });
 
   const ratingManifest = { components: [{ id: "rating", name: "Rating", designSystem: "yandex-pay", version: 3, bundleUrl: "/rating.js", bundleHash: "hash", atomicLevel: "molecule" as const, description: "Choose a rating", events: ["change"], slots: ["icon"], hostAbiVersion: 1, example: { rating: 3 } }] };
+  const badgeManifest = { id: "badge", name: "Badge", designSystem: "yandex-pay", version: 1, bundleUrl: "/badge.js", bundleHash: "badge-hash", atomicLevel: "atom" as const, description: "Show a badge", events: [], slots: [], hostAbiVersion: 1 };
 
   it("keeps registry systems and custom cards visible when Storybook is unavailable", async () => {
     vi.mocked(fetchStorybookIndex).mockResolvedValue(null);
@@ -56,22 +57,45 @@ describe("LibraryPage", () => {
 
   it("filters the custom component list by status chips", async () => {
     vi.mocked(fetchStorybookIndex).mockResolvedValue(null);
-    vi.mocked(getCatalogManifest).mockResolvedValue(ratingManifest);
+    vi.mocked(getCatalogManifest).mockResolvedValue({ components: [...ratingManifest.components, badgeManifest] });
+    vi.mocked(getComponentMeta).mockImplementation(async (id) => id === "badge"
+      ? { id: "badge", name: "Badge", designSystem: "yandex-pay", headRev: 1, updatedAt: "now", figma: null, versions: [
+        { version: 1, rev: 1, status: "active", statusReason: null, supersededBy: null, statusRev: 1, designSystem: "yandex-pay", publishedAt: "now" },
+      ] }
+      : { id: "rating", name: "Rating", designSystem: "yandex-pay", headRev: 3, updatedAt: "now", figma: null, versions: [
+        { version: 3, rev: 3, status: "deprecated", statusReason: "use v4", supersededBy: null, statusRev: 2, designSystem: "yandex-pay", publishedAt: "now" },
+      ] });
     renderLibrary();
     const switcher = await screen.findByLabelText("Дизайн-системы");
     fireEvent.click(within(switcher).getByRole("button", { name: "Yandex Pay Design System" }));
     const navigation = screen.getByRole("navigation", { name: "Компоненты" });
     expect(within(navigation).getByRole("button", { name: /Rating/ })).toBeTruthy();
-    // Wait for the lazy status load (meta latest version is deprecated → blocked, not verified).
+    // Wait for the lazy status load: Rating is blocked, while Badge is published and pending.
     await waitFor(() => expect(vi.mocked(getComponentMeta)).toHaveBeenCalled());
-    const filters = screen.getByLabelText("Фильтры статусов");
-    // Verified filter hides the deprecated component.
-    fireEvent.click(within(filters).getByRole("button", { name: "Проверен" }));
+    const filters = await screen.findByLabelText("Фильтры статусов");
+    expect(within(filters).queryByRole("button", { name: "Проверен" })).toBeNull();
+    expect(within(filters).queryByRole("button", { name: "Отклонён" })).toBeNull();
+    fireEvent.click(within(filters).getByRole("button", { name: "Опубликован" }));
     await waitFor(() => expect(within(navigation).queryByRole("button", { name: /Rating/ })).toBeNull());
-    // Switching to Blocked brings it back.
-    fireEvent.click(within(filters).getByRole("button", { name: "Проверен" }));
+    expect(within(navigation).getByRole("button", { name: /Badge/ })).toBeTruthy();
+    fireEvent.click(within(filters).getByRole("button", { name: "Опубликован" }));
     fireEvent.click(within(filters).getByRole("button", { name: "Заблокирован" }));
     expect(within(navigation).getByRole("button", { name: /Rating/ })).toBeTruthy();
+    expect(within(navigation).queryByRole("button", { name: /Badge/ })).toBeNull();
+  });
+
+  it("hides status filters for builtin stories and a uniform custom component list", async () => {
+    vi.mocked(fetchStorybookIndex).mockResolvedValue({ entries: {
+      atom: { id: "atom", title: "Shadcn/Atoms/Button", name: "Default", type: "story" },
+    } });
+    vi.mocked(getCatalogManifest).mockResolvedValue(ratingManifest);
+    renderLibrary();
+
+    const switcher = await screen.findByLabelText("Дизайн-системы");
+    expect(screen.queryByLabelText("Фильтры статусов")).toBeNull();
+    fireEvent.click(within(switcher).getByRole("button", { name: "Yandex Pay Design System" }));
+    await waitFor(() => expect(vi.mocked(getComponentMeta)).toHaveBeenCalled());
+    expect(screen.queryByLabelText("Фильтры статусов")).toBeNull();
   });
 
   it("switches sorted systems, groups known levels, and falls back to Other", async () => {
@@ -100,6 +124,12 @@ describe("LibraryPage", () => {
   it("shows a meaningful empty state when the selected system has no components", async () => {
     vi.mocked(fetchStorybookIndex).mockResolvedValue({ entries: {} });
     renderLibrary();
-    expect(await screen.findByText("В выбранной дизайн-системе пока нет компонентов. Опубликуйте компонент, и он появится здесь.")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "В этой дизайн-системе пока нет компонентов" })).toBeTruthy();
+    expect(screen.getByText(/Добавьте и опубликуйте первый пользовательский компонент через API/)).toBeTruthy();
+    expect(screen.getByText("POST /api/components")).toBeTruthy();
+    expect(screen.getByText("POST /api/components/{id}/publish")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Открыть описание API" }).getAttribute("href")).toBe("/api/openapi.json");
+    expect(screen.queryByText(/Выберите компонент слева/)).toBeNull();
+    expect(screen.queryByLabelText("Фильтры статусов")).toBeNull();
   });
 });

@@ -91,3 +91,13 @@ export function matchesLibraryFilter(status: ComponentLibraryStatus, filter: Lib
     case "rejected": return status.rejected;
   }
 }
+
+// A filter is useful only when it narrows the current component list. This also keeps lifecycle
+// controls out of builtin-only systems, whose Storybook stories do not have component statuses.
+export function applicableLibraryStatusKeys(statuses: ComponentLibraryStatus[]): LibraryStatusKey[] {
+  if (statuses.length < 2) return [];
+  return LIBRARY_STATUS_KEYS.filter((key) => {
+    const matches = statuses.filter((status) => matchesLibraryFilter(status, key)).length;
+    return matches > 0 && matches < statuses.length;
+  });
+}
