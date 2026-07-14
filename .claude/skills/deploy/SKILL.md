@@ -22,7 +22,7 @@ Without `DOKPLOY_API_KEY` the driver exits with code 2.
 
 ## Deploy (normal path)
 
-Auto-deploy is on: **any push to `main`** runs the `build-image` workflow (build image in Actions → push `ghcr.io/vladprrs/easy-ui:{latest,<sha>}` → POST the Dokploy deploy URL from the `DOKPLOY_DEPLOY_URL` Actions secret with `{"ref":"refs/heads/main"}` — without `ref` Dokploy answers "Branch Not Match" and does nothing). Dokploy then only does `docker compose pull` + `up` (`pull_policy: always`), ~1-2 min, no load on the host. The old direct GitHub→Dokploy webhook (hook id 651559498) is **disabled** — do not re-enable it: it makes Dokploy build from source on the server. So the deploy itself is:
+Auto-deploy is on: **any push to `main`** runs the `build-image` workflow (build image in Actions → push `ghcr.io/vladprrs/easy-ui:{latest,<sha>}` → call `compose.deploy` via the Dokploy API (`DOKPLOY_API_KEY` Actions secret; the refreshToken deploy-URL rejects non-GitHub payloads with "Branch Not Match")). Dokploy then only does `docker compose pull` + `up` (`pull_policy: always`), ~1-2 min, no load on the host. The old direct GitHub→Dokploy webhook (hook id 651559498) is **disabled** — do not re-enable it: it makes Dokploy build from source on the server. So the deploy itself is:
 
 ```bash
 git push origin main
@@ -74,5 +74,4 @@ No first-class rollback. Point the compose file at a known-good image tag (`ghcr
 
 - `DOKPLOY_API_KEY is not set` → create `.env` from `.env.example` (the key is in the Dokploy service owner's settings).
 - `deployment failed: ...` from watch → pull/up error on the server; read logs in Dokploy UI (API doesn't expose logPath contents). Check `docker manifest inspect ghcr.io/vladprrs/easy-ui:latest` — if the manifest is missing or the package went private, the pull fails.
-- Workflow's "Trigger Dokploy deploy" step answered `Branch Not Match` → the POST body lost `{"ref":"refs/heads/main"}`; Dokploy matches the branch from the push-payload `ref`.
 - `verify` FAIL on "health open, ready" right after deploy → server seeds on startup (healthcheck `start_period` 90 s); wait ~30 s and re-run.

@@ -43,13 +43,9 @@ jobs:
       - name: Trigger Dokploy deploy
         if: ${{ github.event_name == 'push' }}
         env:
-          DEPLOY_URL: ${{ secrets.DOKPLOY_DEPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
         run: |
-          if [ -n "$DEPLOY_URL" ]; then
-            resp=$(curl -fsS -X POST "$DEPLOY_URL" -H 'content-type: application/json' -d '{"ref":"refs/heads/main"}')
-            echo "$resp"
-            case "$resp" in *"Not Match"*|*error*) echo "deploy trigger rejected"; exit 1 ;; esac
-            echo "deploy triggered"
-          else
-            echo "DOKPLOY_DEPLOY_URL secret not set — skipping deploy trigger"
-          fi
+          curl -fsS -X POST https://dokploy.pay-offline.ru/api/compose.deploy \
+            -H "x-api-key: $DOKPLOY_API_KEY" -H 'content-type: application/json' \
+            -d '{"composeId":"CWXPcz6h6L_cyYSwG9V92","title":"auto-deploy ${{ github.sha }}"}'
+          echo "deploy triggered"
