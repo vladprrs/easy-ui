@@ -1,12 +1,16 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { getPrototypeDraft } from "../../api/client";
 import type { ComponentDefinition } from "../../catalog/definitions";
 import { DocEpochContext, PropsForm } from "./PropsForm";
 
 const definition = (props: z.ZodType): ComponentDefinition => ({ description: "test", props });
 
 describe("PropsForm", () => {
+  const assetA = `asset_${"a".repeat(64)}`;
+  const assetB = `asset_${"b".repeat(64)}`;
+
   it("commits the complete candidate and validates dynamic paths against effective state", () => {
     const onCommit = vi.fn();
     render(<PropsForm definition={definition(z.strictObject({ label: z.string(), count: z.number() }))} values={{ label: { $state: "/profile/name" }, count: 1 }} effectiveState={{ profile: { name: "Ada" } }} onCommit={onCommit} />);
@@ -20,6 +24,41 @@ describe("PropsForm", () => {
     render(<PropsForm definition={definition(z.object({ label: z.string() }))} values={{ label: { $state: "/label" } }} effectiveState={{ label: "Hello" }} onCommit={() => {}} />);
     expect(screen.getByText("динамическое значение")).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "label" }).tagName).toBe("TEXTAREA");
+  });
+
+  it("shows an $asset value in the specialized control without [object Object]", () => {
+    const onCommit = vi.fn();
+    render(<PropsForm definition={definition(z.object({ icon: z.string() }))} values={{ icon: { $asset: assetA } }} effectiveState={{}} onCommit={onCommit} />);
+    expect(screen.getAllByText(assetA)).toHaveLength(2);
+    expect(screen.queryByDisplayValue("[object Object]")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "icon" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "URL" }));
+    const url = screen.getByRole("textbox", { name: "icon" });
+    fireEvent.change(url, { target: { value: "https://example.com/icon.png" } });
+    fireEvent.blur(url);
+    expect(onCommit).toHaveBeenCalledWith({ icon: "https://example.com/icon.png" });
+  });
+
+  it("uploads into $asset and keeps the session-local file in the union list before save", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("/draft")) return new Response(JSON.stringify({
+        doc: {}, rev: 1, builtinCatalogHash: "", componentManifestHash: "", components: [],
+        assets: [{ id: assetA, sha256: "a".repeat(64), mime: "image/png", size: 1024 }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ id: assetB, url: `/api/assets/${assetB}`, sha256: "b".repeat(64), mime: "image/webp", size: 2048 }), { status: 201, headers: { "content-type": "application/json" } });
+    }));
+    await getPrototypeDraft("asset-test");
+    const onCommit = vi.fn();
+    render(<PropsForm definition={definition(z.object({ src: z.string() }))} values={{ src: { $asset: assetA } }} effectiveState={{}} onCommit={onCommit} />);
+    expect(screen.getByRole("option", { name: new RegExp(assetA) })).toBeTruthy();
+
+    const file = new File(["image"], "hero.webp", { type: "image/webp" });
+    fireEvent.change(screen.getByLabelText("Загрузить ассет"), { target: { files: [file] } });
+
+    await waitFor(() => expect(onCommit).toHaveBeenCalledWith({ src: { $asset: assetB } }));
+    expect(screen.getByRole("option", { name: /hero\.webp/ })).toBeTruthy();
+    const uploadCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/assets");
+    expect(uploadCall?.[1]).toEqual(expect.objectContaining({ method: "POST", body: expect.any(FormData) }));
   });
 
   it("does not commit invalid JSON", () => {

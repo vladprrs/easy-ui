@@ -57,6 +57,8 @@ export interface PrototypeMeta {
 }
 export interface PrototypeComponentPin { id: string; name: string; version: number; bundleUrl: string; bundleHash: string }
 export interface AssetPin { id: string; sha256: string; mime: string; size: number }
+export interface UploadedAsset extends AssetPin { url: string; width?: number; height?: number; deduplicated?: true }
+export interface EditorAsset extends AssetPin { name?: string }
 export interface PrototypeDraft {
   doc: PrototypeDoc;
   rev: number;
@@ -101,6 +103,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers: body === undefined ? headers : { "content-type": "application/json", ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (response.status === 204) return undefined as T;
+  return responseJson<T>(response);
+}
+
+async function responseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let error: ApiErrorBody = { code: "http_error", message: `Не удалось выполнить запрос к API (${response.status})` };
     try {
@@ -109,8 +116,52 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     } catch { /* Preserve the fallback for a non-JSON error response. */ }
     throw new ApiError(response.status, error);
   }
-  if (response.status === 204) return undefined as T;
   return await response.json() as T;
+}
+
+type EditorAssetSet = { draft: EditorAsset[]; local: EditorAsset[]; snapshot: EditorAsset[] };
+const editorAssetsByPrototype = new Map<string, EditorAssetSet>();
+const revisionAssetsByPrototype = new Map<string, Map<number, EditorAsset[]>>();
+const editorAssetListeners = new Set<() => void>();
+let activeEditorPrototypeId: string | null = null;
+const EMPTY_EDITOR_ASSETS: EditorAsset[] = [];
+
+function mergeEditorAssets(draft: EditorAsset[], local: EditorAsset[]): EditorAsset[] {
+  const merged = new Map(draft.map((asset) => [asset.id, asset]));
+  for (const asset of local) merged.set(asset.id, { ...merged.get(asset.id), ...asset });
+  return [...merged.values()];
+}
+
+function updateEditorAssets(prototypeId: string, patch: Partial<Pick<EditorAssetSet, "draft" | "local">>) {
+  const current = editorAssetsByPrototype.get(prototypeId) ?? { draft: [], local: [], snapshot: [] };
+  const draft = patch.draft ?? current.draft;
+  const local = patch.local ?? current.local;
+  editorAssetsByPrototype.set(prototypeId, { draft, local, snapshot: mergeEditorAssets(draft, local) });
+  editorAssetListeners.forEach((listener) => listener());
+}
+
+/** Текущий union пинов ревизии и загрузок этой SPA-сессии редактора (W5-6). */
+export const getEditorAssetsSnapshot = (): EditorAsset[] => activeEditorPrototypeId === null
+  ? EMPTY_EDITOR_ASSETS
+  : editorAssetsByPrototype.get(activeEditorPrototypeId)?.snapshot ?? EMPTY_EDITOR_ASSETS;
+export const subscribeEditorAssets = (listener: () => void) => { editorAssetListeners.add(listener); return () => editorAssetListeners.delete(listener); };
+
+function rememberDraftAssets(prototypeId: string, draft: PrototypeDraft): PrototypeDraft {
+  activeEditorPrototypeId = prototypeId;
+  updateEditorAssets(prototypeId, { draft: draft.assets ?? [] });
+  return draft;
+}
+
+/** POST-only upload: the server intentionally has no asset-collection GET endpoint. */
+export async function uploadAsset(file: File, signal?: AbortSignal): Promise<UploadedAsset> {
+  const form = new FormData();
+  form.append("file", file);
+  const uploaded = await responseJson<UploadedAsset>(await fetch("/api/assets", { method: "POST", body: form, signal }));
+  if (activeEditorPrototypeId !== null) {
+    const current = editorAssetsByPrototype.get(activeEditorPrototypeId) ?? { draft: [], local: [], snapshot: [] };
+    updateEditorAssets(activeEditorPrototypeId, { local: [...current.local.filter((asset) => asset.id !== uploaded.id), { id: uploaded.id, sha256: uploaded.sha256, mime: uploaded.mime, size: uploaded.size, name: file.name }] });
+  }
+  return uploaded;
 }
 
 const prototypePath = (id: string) => `/api/prototypes/${encodeURIComponent(id)}`;
@@ -142,7 +193,7 @@ export const listComponents = (signal?: AbortSignal) => request<ComponentSummary
 export const getComponentMeta = (id: string, signal?: AbortSignal) => request<ComponentMeta>(componentPath(id), { signal });
 export const createPrototype = (doc: PrototypeDoc, message?: string, signal?: AbortSignal) => request<{id: string; rev: 1; warnings: unknown[]}>("/api/prototypes", { method: "POST", body: { doc, message }, signal });
 export const getPrototypeMeta = (id: string, signal?: AbortSignal) => request<PrototypeMeta>(prototypePath(id), { signal });
-export const getPrototypeDraft = (id: string, signal?: AbortSignal) => request<PrototypeDraft>(`${prototypePath(id)}/draft`, { signal });
+export const getPrototypeDraft = async (id: string, signal?: AbortSignal) => rememberDraftAssets(id, await request<PrototypeDraft>(`${prototypePath(id)}/draft`, { signal }));
 // `figma` is intentionally a required argument (WF-5): the caller must pass either the provenance
 // loaded with the draft (pass-through so an editor save does not silently erase it) or an explicit
 // null meaning "the document never had one". Null is never sent to the server — the contract only
@@ -158,10 +209,21 @@ export const listPrototypeRevisions = (id: string, options: {limit?: number; bef
 };
 export const getPrototypeRevision = (id: string, rev: number, signal?: AbortSignal) => request<PrototypeRevision>(`${prototypePath(id)}/revisions/${rev}`, { signal });
 export type PrototypeRevisionFull = PrototypeRevision;
-export const getPrototypeRevisionFull = (id: string, rev: number, signal?: AbortSignal) => request<PrototypeRevisionFull>(`${prototypePath(id)}/revisions/${rev}`, { signal });
+export const getPrototypeRevisionFull = async (id: string, rev: number, signal?: AbortSignal) => {
+  const revision = await request<PrototypeRevisionFull>(`${prototypePath(id)}/revisions/${rev}`, { signal });
+  const cached = revisionAssetsByPrototype.get(id) ?? new Map<number, EditorAsset[]>();
+  cached.set(rev, revision.assets ?? []);
+  revisionAssetsByPrototype.set(id, cached);
+  return revision;
+};
 export interface ComponentVersion { version: number; rev: number; status?: ComponentStatus; statusReason?: string | null; supersededBy?: number | null; statusRev?: number; name?: string; source: string; designSystem: string; bundleHash: string; hostAbiVersion: number; events: string[]; slots: string[]; description?: string; example?: Record<string, unknown>; propsJsonSchema?: unknown; assets: { id: string; sha256: string; mime: string; size: number }[]; figma?: FigmaProvenance | null; publishedAt: string }
 export const getComponentVersion = (id: string, version: number, signal?: AbortSignal) => request<ComponentVersion>(`${componentPath(id)}/versions/${version}`, { signal });
-export const restorePrototype = (id: string, rev: number, baseRev: number, signal?: AbortSignal) => request<{rev: number}>(`${prototypePath(id)}/restore`, { method: "POST", body: { rev, baseRev }, signal });
+export const restorePrototype = async (id: string, rev: number, baseRev: number, signal?: AbortSignal) => {
+  const restored = await request<{rev: number}>(`${prototypePath(id)}/restore`, { method: "POST", body: { rev, baseRev }, signal });
+  const assets = revisionAssetsByPrototype.get(id)?.get(rev);
+  if (assets) { activeEditorPrototypeId = id; updateEditorAssets(id, { draft: assets }); }
+  return restored;
+};
 export const publishPrototype = (id: string, baseRev: number, message?: string, signal?: AbortSignal) => request<PublishPrototypeResult>(`${prototypePath(id)}/publish`, { method: "POST", body: { baseRev, message }, signal });
 export const listPrototypeVersions = (id: string, signal?: AbortSignal) => request<PrototypeVersionSummary[]>(`${prototypePath(id)}/versions`, { signal });
 export const getPrototypeVersion = (id: string, version: number, signal?: AbortSignal) => request<PrototypeVersion>(`${prototypePath(id)}/versions/${version}`, { signal });

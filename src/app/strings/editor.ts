@@ -133,4 +133,13 @@ export const editor = {
   propNumberInvalid: "Введите число",
   propUnsetOption: "— не задано —",
   propRequiredEmptyWarning: "Обязательное поле пустое",
+  assetUrlMode: "URL",
+  assetMode: "Ассет",
+  assetSelect: "Выберите ассет",
+  assetUpload: "Загрузить…",
+  assetUploadInput: "Загрузить ассет",
+  assetUploading: "Загрузка…",
+  assetUploadFailed: "Не удалось загрузить ассет",
+  assetEmpty: "В этой ревизии пока нет ассетов",
+  assetMeta: (mime: string, size: string) => `${mime} · ${size}`,
 } as const;

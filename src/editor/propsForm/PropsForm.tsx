@@ -1,6 +1,7 @@
-import { createContext, useContext, useMemo, useState, type KeyboardEvent } from "react";
+import { createContext, useContext, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type KeyboardEvent } from "react";
 import { chip, chipActive, inputBase } from "../../app/chrome";
 import { editor } from "../../app/strings/editor";
+import { getEditorAssetsSnapshot, subscribeEditorAssets, uploadAsset, type EditorAsset } from "../../api/client";
 import type { ComponentDefinition } from "../../catalog/definitions";
 import { jsonValueSchema } from "../../prototype/schema";
 import { isDynamicValue, validateElementProps } from "../../prototype/validate";
@@ -34,7 +35,57 @@ function FieldLabel({ name, required, children }: { name: string; required: bool
   return <label className="block font-eui-ui text-xs text-eui-slate-500">{name}{required ? <span aria-hidden="true"> *</span> : null}{children}</label>;
 }
 
+function isAssetDirective(value: unknown): value is { $asset: string } {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    && Object.keys(value).length === 1 && typeof (value as { $asset?: unknown }).$asset === "string";
+}
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} Б`;
+  if (size < 1024 * 1024) return `${Math.round(size / 102.4) / 10} КБ`;
+  return `${Math.round(size / (1024 * 102.4)) / 10} МБ`;
+}
+
+function AssetField({ field, value, assets, commit }: { field: PropField; value: unknown; assets: EditorAsset[]; commit: (value: unknown) => boolean }) {
+  const directive = isAssetDirective(value) ? value : null;
+  const [mode, setMode] = useState<"url" | "asset">(directive ? "asset" : "url");
+  const valueUrl = typeof value === "string" ? value : undefined;
+  const [urlDraft, setUrlDraft] = useState({ baseline: valueUrl, text: valueUrl ?? "" });
+  if (valueUrl !== undefined && valueUrl !== urlDraft.baseline) setUrlDraft({ baseline: valueUrl, text: valueUrl });
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const selected = directive ? assets.find((asset) => asset.id === directive.$asset) : undefined;
+  const choices = directive && !selected ? [{ id: directive.$asset, sha256: directive.$asset.slice(6), mime: "", size: 0 }, ...assets] : assets;
+  const onFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setUploadError(""); setUploading(true);
+    try { const asset = await uploadAsset(file); commit({ $asset: asset.id }); }
+    catch (error) { setUploadError(error instanceof Error ? error.message : editor.assetUploadFailed); }
+    finally { setUploading(false); }
+  };
+  return <div className="mt-1 space-y-2">
+    <div className="flex gap-1" role="group" aria-label={field.name}>
+      <button type="button" className={mode === "url" ? chipActive : chip} onClick={() => setMode("url")}>{editor.assetUrlMode}</button>
+      <button type="button" className={mode === "asset" ? chipActive : chip} onClick={() => setMode("asset")}>{editor.assetMode}</button>
+    </div>
+    {mode === "url" ? <input aria-label={field.name} className={controlClass} value={urlDraft.text} onChange={(event) => setUrlDraft({ baseline: valueUrl, text: event.target.value })} onBlur={() => commit(urlDraft.text)} /> : <>
+      <select aria-label={editor.assetSelect} className={`${controlClass} font-eui-ui`} value={directive?.$asset ?? ""} onChange={(event) => { if (event.target.value) commit({ $asset: event.target.value }); }}>
+        <option value="" disabled>{choices.length ? editor.assetSelect : editor.assetEmpty}</option>
+        {choices.map((asset) => <option key={asset.id} value={asset.id}>{asset.name ?? asset.id}{asset.mime ? ` — ${editor.assetMeta(asset.mime, formatBytes(asset.size))}` : ""}</option>)}
+      </select>
+      {directive ? <p className="break-all font-mono text-xs font-normal text-eui-slate-500">{selected?.name ?? directive.$asset}{selected ? <span className="mt-0.5 block font-eui-ui">{editor.assetMeta(selected.mime, formatBytes(selected.size))}</span> : null}</p> : null}
+      <button type="button" className={chip} disabled={uploading} onClick={() => fileRef.current?.click()}>{uploading ? editor.assetUploading : editor.assetUpload}</button>
+      <input ref={fileRef} type="file" aria-label={editor.assetUploadInput} className="sr-only" disabled={uploading} onChange={(event) => void onFile(event)} />
+      {uploadError ? <p role="alert" className="text-xs font-normal text-eui-magenta">{uploadError}</p> : null}
+    </>}
+  </div>;
+}
+
 export function PropsForm({ definition, values, effectiveState, onCommit, path = ["props"] }: PropsFormProps) {
+  const assets = useSyncExternalStore(subscribeEditorAssets, getEditorAssetsSnapshot, getEditorAssetsSnapshot);
   const described = useMemo(() => describePropsSchema(definition.props), [definition]);
   const fields = useMemo(() => {
     if (described === null) return null;
@@ -121,7 +172,8 @@ export function PropsForm({ definition, values, effectiveState, onCommit, path =
 
   return <div className="space-y-3">{fields.map((field) => {
     const value = values[field.name] ?? field.defaultValue;
-    const dynamic = isDynamicValue(value);
+    const assetField = field.name === "src" || isAssetDirective(value);
+    const dynamic = !assetField && isDynamicValue(value);
     const kind = dynamic ? "json" : field.control.kind;
     const draft = drafts[field.name];
     const text = draft && Object.is(draft.baseline, value) ? draft.text : (kind === "json" ? JSON.stringify(value, null, 2) : String(value ?? ""));
@@ -129,6 +181,7 @@ export function PropsForm({ definition, values, effectiveState, onCommit, path =
     const enter = (event: KeyboardEvent<HTMLInputElement>, next: () => void) => { if (event.key === "Enter") { event.preventDefault(); next(); event.currentTarget.blur(); } };
     return <div key={field.name}>
       {kind === "switch" ? <label className="flex items-center justify-between gap-3 font-eui-ui text-xs text-eui-slate-500"><span>{field.name}{field.required ? " *" : ""}</span><input type="checkbox" role="switch" checked={value === true} onChange={(event) => commit(field.name, event.target.checked)} /></label>
+        : assetField ? <div className="font-eui-ui text-xs text-eui-slate-500"><span>{field.name}{field.required ? <span aria-hidden="true"> *</span> : null}</span><AssetField key={`${docEpoch}:${field.name}:${isAssetDirective(value) ? "asset" : "url"}`} field={field} value={value} assets={assets} commit={(next) => commit(field.name, next)} /></div>
         : <FieldLabel name={field.name} required={field.required}>
           {kind === "select" ? <select aria-label={field.name} className={`${value === undefined ? chip : chipActive} mt-1 font-eui-ui`} value={value === undefined && !field.required ? "" : optionKey(value as SelectValue)} onChange={(event) => {
             if (!field.required && event.target.value === "") { commitRemove(field.name); return; }
