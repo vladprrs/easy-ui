@@ -96,4 +96,10 @@ describe("LibraryPage", () => {
     expect(within(navigation).queryByRole("button", { name: "Button" })).toBeNull();
     expect(screen.getByTitle("Превью истории").getAttribute("src")).toContain("id=wire");
   });
+
+  it("shows a meaningful empty state when the selected system has no components", async () => {
+    vi.mocked(fetchStorybookIndex).mockResolvedValue({ entries: {} });
+    renderLibrary();
+    expect(await screen.findByText("В выбранной дизайн-системе пока нет компонентов. Опубликуйте компонент, и он появится здесь.")).toBeTruthy();
+  });
 });

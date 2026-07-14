@@ -14,6 +14,7 @@ export function Layout() {
           <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/" end>{appShell.navGallery}</NavLink>
           <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/library">{appShell.navLibrary}</NavLink>
           <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/visual">{appShell.navVisual}</NavLink>
+          <a className="hover:text-eui-brand" href="/api/openapi.json">{appShell.navApiDocs}</a>
           {import.meta.env.DEV ? <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/debug">{appShell.navDebug}</NavLink> : null}
         </nav>
       </div>

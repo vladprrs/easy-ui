@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
-import { Link } from "react-router";
-import { listDesignSystems, listPrototypes, listPrototypeVersions, type PrototypeSummary, type PrototypeVersionSummary } from "../api/client";
+import { Link, useNavigate } from "react-router";
+import { createPrototype, getCatalogManifest, listDesignSystems, listPrototypes, listPrototypeVersions, type PrototypeSummary, type PrototypeVersionSummary } from "../api/client";
 import { useApi } from "../api/hooks";
-import { chip, chipActive, headingPage, pillGhost, plate } from "../app/chrome";
+import { chip, chipActive, headingPage, inputBase, pillGhost, pillPrimary, plate } from "../app/chrome";
 import { common } from "../app/strings/common";
 import { deviceNames, gallery, versionLink } from "../app/strings/gallery";
 import { useDocumentTitle } from "../app/useDocumentTitle";
+import { BUILTIN_TEMPLATE_VERSION, buildBuiltinPrototypeTemplate, buildCustomPrototypeTemplate, createPrototypeId, findCustomStarterComponent, isBuiltinDesignSystem } from "./prototypeTemplates";
 
 type VersionsState =
   | { status: "idle" | "loading"; data: PrototypeVersionSummary[] }
@@ -41,11 +42,21 @@ function VersionsMenu({ prototype }: { prototype: PrototypeSummary }) {
   </details>;
 }
 
+type CreateDialogState = {
+  name: string;
+  designSystemId: string;
+  status: "editing" | "creating";
+  error: boolean;
+};
+
 export function GalleryPage() {
   useDocumentTitle(gallery.title);
+  const navigate = useNavigate();
   const prototypes = useApi(listPrototypes, []);
   const designSystems = useApi(listDesignSystems, []);
+  const catalog = useApi(getCatalogManifest, []);
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
+  const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null);
   const systems = useMemo(() => {
     if (prototypes.status !== "ready" || designSystems.status !== "ready") return [];
     const registered = designSystems.data.designSystems.map(({ id, name }) => ({ id, name }));
@@ -64,9 +75,36 @@ export function GalleryPage() {
   const loading = prototypes.status === "loading" || designSystems.status === "loading";
   const failed = prototypes.status === "error" || designSystems.status === "error";
   const reload = () => { prototypes.reload(); designSystems.reload(); };
+  const openCreateDialog = () => {
+    const preferred = selectedSystem && systems.some((system) => system.id === selectedSystem) ? selectedSystem : systems[0]?.id ?? "";
+    setCreateDialog({ name: "", designSystemId: preferred, status: "editing", error: false });
+  };
+  const selectedCreateSystem = createDialog ? systems.find((system) => system.id === createDialog.designSystemId) : undefined;
+  const customStarter = createDialog && !isBuiltinDesignSystem(createDialog.designSystemId) && catalog.status === "ready"
+    ? findCustomStarterComponent(createDialog.designSystemId, catalog.data.components) : null;
+  const customTemplateBlocked = Boolean(createDialog && !isBuiltinDesignSystem(createDialog.designSystemId) && !customStarter);
+  const canCreate = Boolean(createDialog?.name.trim() && selectedCreateSystem && !customTemplateBlocked && createDialog.status !== "creating");
+  const submitCreate = async () => {
+    if (!createDialog || !canCreate) return;
+    const name = createDialog.name.trim();
+    const id = createPrototypeId();
+    const doc = isBuiltinDesignSystem(createDialog.designSystemId)
+      ? buildBuiltinPrototypeTemplate(createDialog.designSystemId, id, name)
+      : buildCustomPrototypeTemplate(createDialog.designSystemId, customStarter!, id, name);
+    setCreateDialog((current) => current ? { ...current, status: "creating", error: false } : null);
+    try {
+      const created = await createPrototype(doc, gallery.initialRevisionMessage(BUILTIN_TEMPLATE_VERSION));
+      await navigate(`/p/${created.id}/edit`);
+    } catch {
+      setCreateDialog((current) => current ? { ...current, status: "editing", error: true } : null);
+    }
+  };
 
   return <main className="mx-auto h-full w-full max-w-6xl p-6 font-eui-ui sm:p-8">
-    <h1 className={headingPage}>{gallery.title}</h1>
+    <div className="flex flex-wrap items-center justify-between gap-4">
+      <h1 className={headingPage}>{gallery.title}</h1>
+      {!loading && !failed ? <button type="button" className={pillPrimary} onClick={openCreateDialog}>{gallery.newPrototype}</button> : null}
+    </div>
     <p className="mt-2 text-eui-slate-500">{gallery.subtitle}</p>
     {loading ? <p className={`${plate} mt-8 text-eui-slate-500`} aria-live="polite">{gallery.loading}</p> : null}
     {failed ? <div className={`${plate} mt-8 text-eui-magenta`} role="alert"><p>{gallery.apiUnavailable}</p><button className={`${pillGhost} mt-3`} type="button" onClick={reload}>{common.retry}</button></div> : null}
@@ -96,6 +134,37 @@ export function GalleryPage() {
         </div>
       </li>)}
     </ul> : null}
-    {!loading && !failed && !visiblePrototypes.length ? <p className={`${plate} mt-8 text-eui-slate-500`}>{prototypes.status === "ready" && prototypes.data.length ? gallery.emptyFiltered : gallery.empty}</p> : null}
+    {!loading && !failed && !visiblePrototypes.length ? prototypes.status === "ready" && prototypes.data.length
+      ? <p className={`${plate} mt-8 text-eui-slate-500`}>{gallery.emptyFiltered}</p>
+      : <section className={`${plate} mt-8`}>
+        <h2 className="font-eui-display text-xl font-medium">{gallery.emptyTitle}</h2>
+        <p className="mt-2 text-eui-slate-500">{gallery.empty}</p>
+        <button type="button" className={`${pillPrimary} mt-5`} onClick={openCreateDialog}>{gallery.newPrototype}</button>
+      </section> : null}
+    {createDialog ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
+      <section role="dialog" aria-modal="true" aria-label={gallery.createDialogAria} className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+        <h2 className="font-eui-display text-2xl font-medium">{gallery.createDialogTitle}</h2>
+        <form className="mt-5 space-y-4" onSubmit={(event) => { event.preventDefault(); void submitCreate(); }}>
+          <label className="block text-sm font-medium">{gallery.nameLabel}
+            <input className={`${inputBase} mt-1.5 w-full`} name="prototype-name" autoFocus required placeholder={gallery.namePlaceholder} value={createDialog.name} disabled={createDialog.status === "creating"} onChange={(event) => setCreateDialog((current) => current ? { ...current, name: event.target.value, error: false } : null)} />
+          </label>
+          <label className="block text-sm font-medium">{gallery.systemLabelCreate}
+            <select className={`${inputBase} mt-1.5 w-full bg-white`} name="design-system" value={createDialog.designSystemId} disabled={createDialog.status === "creating"} onChange={(event) => setCreateDialog((current) => current ? { ...current, designSystemId: event.target.value, error: false } : null)}>
+              {systems.map((system) => <option key={system.id} value={system.id}>{system.name}</option>)}
+            </select>
+          </label>
+          {isBuiltinDesignSystem(createDialog.designSystemId) ? <p className="text-sm text-eui-slate-500">{gallery.builtinStarterReady}</p>
+            : catalog.status === "loading" ? <p className="text-sm text-eui-slate-500" role="status">{gallery.customStarterLoading}</p>
+              : catalog.status === "error" ? <p className="text-sm text-eui-magenta" role="alert">{gallery.customStarterUnavailable}</p>
+                : customStarter ? <p className="text-sm text-eui-slate-500">{gallery.customStarterReady(customStarter.name)}</p>
+                  : <p className="text-sm text-eui-magenta" role="alert">{gallery.customStarterMissing}</p>}
+          {createDialog.error ? <p className="text-sm text-eui-magenta" role="alert">{gallery.createFailed}</p> : null}
+          <div className="flex flex-wrap justify-end gap-2 pt-2">
+            <button type="button" className={pillGhost} disabled={createDialog.status === "creating"} onClick={() => setCreateDialog(null)}>{gallery.cancel}</button>
+            <button type="submit" className={pillPrimary} disabled={!canCreate}>{createDialog.status === "creating" ? gallery.creating : gallery.create}</button>
+          </div>
+        </form>
+      </section>
+    </div> : null}
   </main>;
 }

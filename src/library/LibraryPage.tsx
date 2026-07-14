@@ -111,7 +111,7 @@ export function LibraryPage() {
       {storybook.status === "error" || (storybook.status === "ready" && !storybook.data) ? <SourceError label={library.storybookUnavailable} retry={storybook.reload} /> : null}
       {manifest.status === "loading" ? <p className="rounded-xl bg-eui-lav p-3 text-sm text-eui-slate-500" role="status">{library.loadingCatalog}</p> : null}
       {manifest.status === "error" ? <SourceError label={library.catalogUnavailable} retry={manifest.reload} /> : null}
-      {selectedStory ? <StoryPreview story={selectedStory} /> : selectedComponent ? <ComponentMetadata component={selectedComponent} systemName={active?.system.name ?? selectedComponent.designSystem} /> : <div className="flex flex-1 items-center justify-center rounded-3xl bg-eui-lav p-6 text-eui-slate-500">{library.selectComponent}</div>}
+      {selectedStory ? <StoryPreview story={selectedStory} /> : selectedComponent ? <ComponentMetadata component={selectedComponent} systemName={active?.system.name ?? selectedComponent.designSystem} /> : <div className="flex flex-1 items-center justify-center rounded-3xl bg-eui-lav p-6 text-center text-eui-slate-500">{active && !active.stories.length && !active.components.length ? library.emptySystem : library.selectComponent}</div>}
     </section>
   </main>;
 }

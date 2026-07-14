@@ -33,6 +33,7 @@ export const appShell = {
   navGallery: "Галерея",
   navLibrary: "Библиотека",
   navVisual: "Визуальные проверки",
+  navApiDocs: "API и документация",
   navDebug: "Отладка",
   mainNavAria: "Основная навигация",
   notFoundKicker: "Ошибка 404",

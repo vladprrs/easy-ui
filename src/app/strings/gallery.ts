@@ -3,6 +3,22 @@
 export const gallery = {
   title: "Прототипы",
   subtitle: "Выберите флоу, чтобы открыть его первый экран.",
+  newPrototype: "Новый прототип",
+  createDialogAria: "Создание прототипа",
+  createDialogTitle: "Новый прототип",
+  nameLabel: "Название прототипа",
+  namePlaceholder: "Например, оформление заказа",
+  systemLabelCreate: "Дизайн-система",
+  create: "Создать прототип",
+  creating: "Создаём…",
+  cancel: "Отмена",
+  createFailed: "Не удалось создать прототип. Попробуйте ещё раз.",
+  customStarterLoading: "Проверяем стартовый компонент дизайн-системы…",
+  customStarterUnavailable: "Каталог компонентов недоступен: нельзя проверить валидный стартовый экран.",
+  customStarterMissing: "Создание недоступно: в этой дизайн-системе нет опубликованного компонента с валидным example для стартового экрана.",
+  customStarterReady: (componentName: string) => `Стартовый экран будет создан с компонентом ${componentName}.`,
+  builtinStarterReady: "Будут созданы два стартовых экрана с базовым переходом.",
+  initialRevisionMessage: (version: number) => `Стартовый шаблон v${version}`,
   loading: "Загружаем прототипы…",
   apiUnavailable: "API недоступен",
   designSystemsAria: "Дизайн-системы",
@@ -19,7 +35,8 @@ export const gallery = {
   versionsLoadFailed: "Не удалось загрузить версии.",
   noVersions: "Опубликованных версий нет.",
   emptyFiltered: "Нет прототипов с выбранной дизайн-системой.",
-  empty: "Прототипов пока нет.",
+  emptyTitle: "Создайте первый прототип",
+  empty: "Выберите дизайн-систему — мы подготовим валидные стартовые экраны.",
 } as const;
 
 export { deviceNames } from "./common";

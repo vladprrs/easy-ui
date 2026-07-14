@@ -1,10 +1,10 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listDesignSystems, listPrototypes, listPrototypeVersions } from "../api/client";
+import { createPrototype, getCatalogManifest, listDesignSystems, listPrototypes, listPrototypeVersions } from "../api/client";
 import { GalleryPage } from "./GalleryPage";
 
-vi.mock("../api/client", () => ({ listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn() }));
+vi.mock("../api/client", () => ({ createPrototype: vi.fn(), getCatalogManifest: vi.fn(), listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn() }));
 
 const summary = {
   id: "hello-world", name: "Hello World", description: "A minimal two-screen prototype.", device: "mobile" as const,
@@ -19,7 +19,7 @@ function deferred<T>() {
 }
 
 function renderGallery() {
-  const router = createMemoryRouter([{ path: "/", element: <GalleryPage /> }, { path: "/p/:id/v/:version", element: <p>Плеер версии</p> }], { initialEntries: ["/"] });
+  const router = createMemoryRouter([{ path: "/", element: <GalleryPage /> }, { path: "/p/:id/v/:version", element: <p>Плеер версии</p> }, { path: "/p/:id/edit", element: <p>Редактор нового прототипа</p> }], { initialEntries: ["/"] });
   render(<RouterProvider router={router} />);
   return router;
 }
@@ -29,6 +29,10 @@ describe("GalleryPage", () => {
     vi.mocked(listPrototypes).mockReset();
     vi.mocked(listDesignSystems).mockReset();
     vi.mocked(listPrototypeVersions).mockReset();
+    vi.mocked(createPrototype).mockReset();
+    vi.mocked(getCatalogManifest).mockReset();
+    vi.mocked(getCatalogManifest).mockResolvedValue({ components: [] });
+    vi.mocked(createPrototype).mockResolvedValue({ id: "created-prototype", rev: 1, warnings: [] });
     vi.mocked(listPrototypeVersions).mockResolvedValue([{ version: 2, rev: 3, publishedAt: "2026-07-10T00:00:00.000Z" }]);
     vi.mocked(listDesignSystems).mockResolvedValue({ designSystems: [
       { id: "shadcn", name: "Shadcn", description: "", builtinCatalogHash: "one", components: [] },
@@ -96,7 +100,7 @@ describe("GalleryPage", () => {
     renderGallery();
     expect(await screen.findByText("API недоступен")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
-    expect(await screen.findByText("Прототипов пока нет.")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Создайте первый прототип" })).toBeTruthy();
     expect(listPrototypes).toHaveBeenCalledTimes(2);
   });
 
@@ -125,5 +129,42 @@ describe("GalleryPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "classic" }));
     expect(screen.getByRole("heading", { name: "Legacy flow" })).toBeTruthy();
     expect(within(screen.getByRole("heading", { name: "Legacy flow" }).closest("li")!).getByText("classic")).toBeTruthy();
+  });
+
+  it("creates a builtin template from the empty-state CTA and opens its editor", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([]);
+    const router = renderGallery();
+    await screen.findByRole("heading", { name: "Создайте первый прототип" });
+    fireEvent.click(screen.getAllByRole("button", { name: "Новый прототип" }).at(-1)!);
+    const dialog = screen.getByRole("dialog", { name: "Создание прототипа" });
+    fireEvent.change(within(dialog).getByLabelText("Название прототипа"), { target: { value: "Новый сценарий" } });
+    fireEvent.change(within(dialog).getByLabelText("Дизайн-система"), { target: { value: "wireframe" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Создать прототип" }));
+
+    await screen.findByText("Редактор нового прототипа");
+    expect(router.state.location.pathname).toBe("/p/created-prototype/edit");
+    expect(createPrototype).toHaveBeenCalledWith(expect.objectContaining({
+      name: "Новый сценарий",
+      designSystem: "wireframe",
+      startScreen: "outline",
+      screens: expect.arrayContaining([expect.objectContaining({ id: "outline" })]),
+    }), "Стартовый шаблон v1");
+  });
+
+  it("explains why a custom design system without a valid starter cannot be created", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([]);
+    vi.mocked(listDesignSystems).mockResolvedValue({ designSystems: [
+      { id: "shadcn", name: "Shadcn", description: "", builtinCatalogHash: "one", components: [] },
+      { id: "custom-empty", name: "Custom Empty", description: "", builtinCatalogHash: "custom", components: [{ name: "NeedsProps", atomicLevel: "atom", layoutNeutral: false, description: "", events: [], slots: [] }] },
+    ] });
+    renderGallery();
+    await screen.findByRole("heading", { name: "Создайте первый прототип" });
+    fireEvent.click(screen.getAllByRole("button", { name: "Новый прототип" }).at(-1)!);
+    const dialog = screen.getByRole("dialog", { name: "Создание прототипа" });
+    fireEvent.change(within(dialog).getByLabelText("Название прототипа"), { target: { value: "Нельзя создать" } });
+    fireEvent.change(within(dialog).getByLabelText("Дизайн-система"), { target: { value: "custom-empty" } });
+    expect(within(dialog).getByText(/нет опубликованного компонента с валидным example/)).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Создать прототип" }).hasAttribute("disabled")).toBe(true);
+    expect(createPrototype).not.toHaveBeenCalled();
   });
 });
