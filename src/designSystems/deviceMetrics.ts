@@ -5,7 +5,7 @@
  * 1. `canonicalViewport` — канонический viewport прототипа: размеры капчера и
  *    валидации. Неприкосновенен: декоративный bezel/статусбар живёт вне него.
  *    Desktop — auto-height (`null`): семантика capture не меняется.
- * 2. `previewNativeWidth` / `previewTile` — размеры превью-тайлов
+ * 2. `previewNativeWidth` / `previewTileSizes` — размеры превью-тайлов
  *    (CJM, лента редактора, галерея): native-ширина рендера до масштабирования
  *    и габариты самого тайла.
  * 3. `playerDesktopMinStageHeight` — player-only минимальная высота стейджа для
@@ -41,14 +41,14 @@ export const previewNativeWidth = {
 } as const satisfies Record<DeviceKind, number>;
 
 /**
- * 2б. Габариты превью-тайла (CJM / лента редактора): ширина тайла, cap
- * высоты для auto-height экранов и fallback-высота до первого замера.
+ * 2б. Габариты CJM-превью per device: ширина тайла, cap высоты и
+ * fallback-высота до первого замера auto-height экрана.
  */
-export const previewTile = {
-  width: 280,
-  heightCap: 420,
-  fallbackHeight: 360,
-} as const;
+export const previewTileSizes = {
+  mobile: { width: 280, heightCap: 608, fallbackHeight: 360 },
+  tablet: { width: 420, heightCap: 560, fallbackHeight: 420 },
+  desktop: { width: 560, heightCap: 560, fallbackHeight: 420 },
+} as const satisfies Record<DeviceKind, { width: number; heightCap: number; fallbackHeight: number }>;
 
 /**
  * 2в. Тайл ленты редактора (W2-1): компактнее CJM-превью — cap высоты

@@ -8,7 +8,8 @@ import { splitCanvas, stripEvents, toRuntimeSpec, type RuntimeTree } from "../pr
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { buildPlayerPath } from "../player/navigation";
 import { cjm } from "../app/strings/cjm";
-import { previewNativeWidth, previewTile } from "../designSystems/deviceMetrics";
+import { previewNativeWidth, previewTileSizes } from "../designSystems/deviceMetrics";
+import type { DeviceKind } from "../designSystems/deviceMetrics";
 
 export type CjmTransition =
   | { kind: "static"; screenId: string; screenName: string }
@@ -40,22 +41,29 @@ export function getCjmTransitions(screen: PrototypeDoc["screens"][number], scree
   return transitions;
 }
 
-export function CjmFrame({ nativeWidth, nativeHeight, resetKey, children }: { nativeWidth: number; nativeHeight?: number; resetKey: string; children: ReactNode }) {
+export function CjmFrame({ device, nativeWidth, nativeHeight, resetKey, children }: { device: DeviceKind; nativeWidth: number; nativeHeight?: number; resetKey: string; children: ReactNode }) {
   const innerRef = useRef<HTMLDivElement>(null);
-  const scale = previewTile.width / nativeWidth;
-  const [measuredHeight, setMeasuredHeight] = useState<number>(previewTile.fallbackHeight);
+  const tileSize = previewTileSizes[device];
+  const scale = tileSize.width / nativeWidth;
+  const [measuredHeight, setMeasuredHeight] = useState<number>(tileSize.fallbackHeight);
+  const [autoHeightCapped, setAutoHeightCapped] = useState(false);
   useEffect(() => {
     if (nativeHeight !== undefined) return;
     const element = innerRef.current;
     if (!element) return;
     if (typeof ResizeObserver === "undefined") return;
-    const measure = () => setMeasuredHeight(Math.min(element.scrollHeight * scale, previewTile.heightCap));
+    const measure = () => {
+      const scaledHeight = element.scrollHeight * scale;
+      setMeasuredHeight(Math.min(scaledHeight, tileSize.heightCap));
+      setAutoHeightCapped(scaledHeight > tileSize.heightCap);
+    };
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [nativeHeight, resetKey, scale]);
-  const height = nativeHeight === undefined ? measuredHeight : nativeHeight * scale;
-  return <div className="overflow-hidden rounded-xl bg-background text-foreground" style={{ width: previewTile.width, height }}>
+  }, [nativeHeight, resetKey, scale, tileSize.heightCap]);
+  const height = nativeHeight === undefined ? measuredHeight : Math.min(nativeHeight * scale, tileSize.heightCap);
+  const capped = nativeHeight === undefined ? autoHeightCapped : nativeHeight * scale > tileSize.heightCap;
+  return <div className={`cjm-frame overflow-hidden rounded-xl bg-background text-foreground${capped ? " cjm-frame-capped" : ""}`} data-testid="cjm-frame" style={{ width: tileSize.width, height }}>
     <div ref={innerRef} style={{ width: nativeWidth, ...(nativeHeight === undefined ? {} : { height: nativeHeight }), transform: `scale(${scale})`, transformOrigin: "top left" }}>{children}</div>
   </div>;
 }
@@ -85,17 +93,18 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
   const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
   const transitions = useMemo(() => getCjmTransitions(screen, doc.screens), [doc.screens, screen]);
   const nativeWidth = screen.canvas?.width ?? previewNativeWidth[doc.device];
-  return <article className="w-[304px] rounded-[20px] bg-white p-3 shadow-sm">
+  const tileWidth = previewTileSizes[doc.device].width;
+  return <article className="cjm-tile rounded-[20px] bg-white p-3 shadow-sm" style={{ width: tileWidth + 24 }}>
     <div className="relative">
       <TileErrorBoundary key={`${runtimeKey}:${screen.id}`} prototypeId={doc.id} screenId={screen.id}>
         <JSONUIProvider key={`${runtimeKey}:${screen.id}`} registry={registry} handlers={handlers} initialState={initialState}>
-          <div inert>{tree ? <CjmFrame nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`}><EasyUiRuntimeProvider value={runtimeValue}><Renderer registry={registry} spec={tree.spec} /></EasyUiRuntimeProvider></CjmFrame> : <div className="flex h-64 w-[280px] items-center justify-center rounded-xl border bg-background font-eui-ui text-sm text-eui-slate-500">{cjm.noContent}</div>}</div>
+          <div inert>{tree ? <CjmFrame device={doc.device} nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`}><EasyUiRuntimeProvider value={runtimeValue}><Renderer registry={registry} spec={tree.spec} /></EasyUiRuntimeProvider></CjmFrame> : <div className="flex h-64 items-center justify-center rounded-xl border bg-background font-eui-ui text-sm text-eui-slate-500" style={{ width: tileWidth }}>{cjm.noContent}</div>}</div>
         </JSONUIProvider>
       </TileErrorBoundary>
-      <Link to={buildPlayerPath(routeBase, screen.id)} className="absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring" aria-label={cjm.openScreenAria(screen.name, doc.name)} />
+      <Link to={buildPlayerPath(routeBase, screen.id)} className="cjm-tile-link absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring" aria-label={cjm.openScreenAria(screen.name, doc.name)} />
     </div>
     <div className="mt-4 flex items-start justify-between gap-2">
-      <h2 className="font-eui-ui text-lg font-semibold">{screen.name}</h2>
+      <h2 className="min-w-0 truncate font-eui-ui text-lg font-semibold" title={screen.name}>{screen.name}</h2>
       {screen.stateOverrides === undefined ? null : <span className="shrink-0 rounded-full bg-eui-lilac-100 px-2 py-1 font-eui-ui text-[11px] font-medium text-eui-brand">{cjm.demoState}</span>}
     </div>
     {screen.note ? <p className="mt-1 font-eui-ui text-sm text-eui-slate-500">{screen.note}</p> : null}

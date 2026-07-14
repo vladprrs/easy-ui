@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canonicalViewport, editorStripTile, playerDesktopMinStageHeight, previewNativeWidth, previewTile } from "./deviceMetrics";
+import { canonicalViewport, editorStripTile, playerDesktopMinStageHeight, previewNativeWidth, previewTileSizes } from "./deviceMetrics";
 
 describe("deviceMetrics", () => {
   it("фиксирует канонический viewport капчера/валидации (mobile/tablet), desktop — auto-height", () => {
@@ -16,15 +16,19 @@ describe("deviceMetrics", () => {
     expect(previewNativeWidth.desktop).toBe(1280);
   });
 
-  it("фиксирует размеры превью-тайла", () => {
-    expect(previewTile).toEqual({ width: 280, heightCap: 420, fallbackHeight: 360 });
-    expect(previewTile.fallbackHeight).toBeLessThanOrEqual(previewTile.heightCap);
+  it("фиксирует размеры CJM-превью по типу устройства", () => {
+    expect(previewTileSizes).toEqual({
+      mobile: { width: 280, heightCap: 608, fallbackHeight: 360 },
+      tablet: { width: 420, heightCap: 560, fallbackHeight: 420 },
+      desktop: { width: 560, heightCap: 560, fallbackHeight: 420 },
+    });
+    expect(Object.values(previewTileSizes).every(({ fallbackHeight, heightCap }) => fallbackHeight <= heightCap)).toBe(true);
   });
 
   it("фиксирует размеры тайла ленты редактора (W2-1): cap ~180px, компактнее CJM-превью", () => {
     expect(editorStripTile).toEqual({ width: 280, heightCap: 180, fallbackHeight: 180 });
     expect(editorStripTile.fallbackHeight).toBeLessThanOrEqual(editorStripTile.heightCap);
-    expect(editorStripTile.heightCap).toBeLessThan(previewTile.heightCap);
+    expect(editorStripTile.heightCap).toBeLessThan(Math.min(...Object.values(previewTileSizes).map(({ heightCap }) => heightCap)));
   });
 
   it("player-only min-height — положительное число, не пересекающееся с каноническим viewport", () => {

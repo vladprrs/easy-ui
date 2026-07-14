@@ -165,3 +165,74 @@
 }
 
 button { cursor: pointer; }
+
+.cjm-frame-capped {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 44px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 44px), transparent 100%);
+}
+
+@media print {
+  @page { size: landscape; margin: 12mm; }
+
+  html,
+  body {
+    background: #fff !important;
+  }
+
+  .cjm-root {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .cjm-root > header,
+  .cjm-tile-link {
+    display: none !important;
+  }
+
+  .cjm-stage {
+    overflow: visible !important;
+    background: #fff !important;
+    padding: 0 !important;
+  }
+
+  .cjm-list {
+    display: block !important;
+    max-width: none !important;
+    margin-top: 8mm !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .cjm-list > li {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin: 0 0 8mm !important;
+  }
+
+  .cjm-tile {
+    box-shadow: none !important;
+    border: 1px solid #d8d0e5;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .cjm-frame-capped {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  .cjm-list > li:not(:last-child)::after {
+    content: "\2193";
+    display: block;
+    width: min-content;
+    margin: 2mm 0 0 12mm;
+    color: #844edc;
+    font: 700 24pt/1 sans-serif;
+    print-color-adjust: exact;
+  }
+
+  .cjm-connector {
+    display: none !important;
+  }
+}

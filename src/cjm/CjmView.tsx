@@ -54,7 +54,7 @@ function CjmConnector({ sourceScreenId, targetScreenId }: { sourceScreenId: stri
     <span ref={anchorRef} className="sr-only" />
     {geometry === null || geometry.width === 0 ? null : <svg
       aria-hidden="true"
-      className="pointer-events-none absolute z-10 overflow-visible"
+      className="cjm-connector pointer-events-none absolute z-10 overflow-visible"
       data-source-screen-id={sourceScreenId}
       data-target-screen-id={targetScreenId}
       data-testid="cjm-connector"
@@ -80,11 +80,11 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version }: { doc: 
   </dl>;
   // Единый хром /p/* (WF-4): навигация Плеер/Редактор живёт в сегментах хрома,
   // тело вью — только stage (описание + лента экранов).
-  return <main className="flex h-full min-h-0 flex-col">
+  return <main className="cjm-root flex h-full min-h-0 flex-col">
     <PrototypeChrome prototypeId={doc.id} prototypeName={doc.name} view="cjm" version={version} status={metadata} />
-    <div className="min-h-0 flex-1 overflow-y-auto bg-eui-lav p-6 sm:p-8">
+    <div className="cjm-stage min-h-0 flex-1 overflow-y-auto bg-eui-lav p-6 sm:p-8">
       {doc.description ? <p className="mx-auto max-w-[1600px] font-eui-ui text-eui-slate-500">{doc.description}</p> : null}
-      <ol className="mx-auto mt-8 flex max-w-[1600px] items-start gap-16 overflow-x-auto pb-8" aria-label={cjm.screensAria}>
+      <ol className="cjm-list mx-auto mt-8 flex items-start gap-16 overflow-x-auto pb-8" aria-label={cjm.screensAria}>
       {doc.screens.map((screen, index) => <li className="relative shrink-0" key={screen.id} data-screen-id={screen.id}>
         <CjmScreenTile doc={doc} screen={screen} registry={registry} handlers={runtime.handlers} runtimeKey={runtimeKey} routeBase={routeBase} customTypes={customTypes} customDefinitions={custom?.definitions} />
         {index < doc.screens.length - 1 ? <CjmConnector sourceScreenId={screen.id} targetScreenId={doc.screens[index + 1]!.id} /> : null}

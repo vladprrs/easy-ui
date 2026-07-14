@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { PrototypeDraft, PrototypeVersion } from "../api/client";
 import { prototypeDocSchema } from "../prototype/schema";
 import { routeObjects } from "../app/routes";
-import { TileErrorBoundary } from "./CjmScreenTile";
+import { CjmFrame, TileErrorBoundary } from "./CjmScreenTile";
 
 const mocks = vi.hoisted(() => ({ getDraft: vi.fn(), getVersion: vi.fn(), loadCustom: vi.fn() }));
 vi.mock("../api/client", async (original) => ({ ...(await original()), getPrototypeDraft: mocks.getDraft, getPrototypeVersion: mocks.getVersion }));
@@ -35,6 +35,27 @@ describe("CjmShell", () => {
     mocks.getDraft.mockReset().mockResolvedValue(draft);
     mocks.getVersion.mockReset().mockResolvedValue({ ...draft, version: 2, publishedAt: "2026-07-10T00:00:00Z" } satisfies PrototypeVersion);
     mocks.loadCustom.mockReset().mockResolvedValue(undefined);
+  });
+
+  it.each([
+    ["mobile", 280, 608],
+    ["tablet", 420, 560],
+    ["desktop", 560, 560],
+  ] as const)("uses the %s preview width and caps tall screens", (device, width, heightCap) => {
+    render(<CjmFrame device={device} nativeWidth={1000} nativeHeight={3000} resetKey={device}><div>Preview</div></CjmFrame>);
+    const frame = screen.getByTestId("cjm-frame");
+    expect(Number.parseFloat(frame.style.width)).toBe(width);
+    expect(Number.parseFloat(frame.style.height)).toBe(heightCap);
+    expect(frame.classList.contains("cjm-frame-capped")).toBe(true);
+  });
+
+  it("truncates a long screen name visually and preserves it in title", async () => {
+    const longName = "Очень длинное название экрана, которое не должно расширять карточку CJM";
+    mocks.getDraft.mockResolvedValue({ ...draft, doc: { ...doc, screens: [{ ...doc.screens[0]!, name: longName }] } });
+    renderAt("/p/journey/cjm");
+    const heading = await screen.findByRole("heading", { name: longName });
+    expect(heading.classList.contains("truncate")).toBe(true);
+    expect(heading.getAttribute("title")).toBe(longName);
   });
 
   it("renders ordered tiles, notes, override state, and the optional description", async () => {
