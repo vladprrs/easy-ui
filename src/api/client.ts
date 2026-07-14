@@ -56,6 +56,7 @@ export interface PrototypeMeta {
   figma?: FigmaProvenance | null;
 }
 export interface PrototypeComponentPin { id: string; name: string; version: number; bundleUrl: string; bundleHash: string }
+export interface AssetPin { id: string; sha256: string; mime: string; size: number }
 export interface PrototypeDraft {
   doc: PrototypeDoc;
   rev: number;
@@ -63,6 +64,10 @@ export interface PrototypeDraft {
   componentManifestHash: string;
   components: PrototypeComponentPin[];
   designSystemMetaVersion?: number | null;
+  // Asset pins and figma provenance of the revision (WF-5). Optional in the type because test
+  // fixtures elide them, but the server always includes both (figma is null for legacy revisions).
+  assets?: AssetPin[];
+  figma?: FigmaProvenance | null;
 }
 export interface PrototypeVersion extends PrototypeDraft { version: number; publishedAt: string }
 export interface PrototypeRevisionSummary { rev: number; message: string | null; createdAt: string }
@@ -137,7 +142,11 @@ export const getComponentMeta = (id: string, signal?: AbortSignal) => request<Co
 export const createPrototype = (doc: PrototypeDoc, message?: string, signal?: AbortSignal) => request<{id: string; rev: 1; warnings: unknown[]}>("/api/prototypes", { method: "POST", body: { doc, message }, signal });
 export const getPrototypeMeta = (id: string, signal?: AbortSignal) => request<PrototypeMeta>(prototypePath(id), { signal });
 export const getPrototypeDraft = (id: string, signal?: AbortSignal) => request<PrototypeDraft>(`${prototypePath(id)}/draft`, { signal });
-export const savePrototype = (id: string, doc: PrototypeDoc, baseRev: number, message?: string, signal?: AbortSignal) => request<SavePrototypeResult>(prototypePath(id), { method: "PUT", body: { doc, baseRev, message }, signal });
+// `figma` is intentionally a required argument (WF-5): the caller must pass either the provenance
+// loaded with the draft (pass-through so an editor save does not silently erase it) or an explicit
+// null meaning "the document never had one". Null is never sent to the server — the contract only
+// allows an optional object, and the server treats `figma: null` as a clear.
+export const savePrototype = (id: string, doc: PrototypeDoc, baseRev: number, figma: FigmaProvenance | null, message?: string, signal?: AbortSignal) => request<SavePrototypeResult>(prototypePath(id), { method: "PUT", body: { doc, baseRev, message, ...(figma ? { figma } : {}) }, signal });
 export const deletePrototype = (id: string, baseRev: number, signal?: AbortSignal) => request<void>(prototypePath(id), { method: "DELETE", body: { baseRev }, signal });
 export const listPrototypeRevisions = (id: string, options: {limit?: number; before?: number; signal?: AbortSignal} = {}) => {
   const query = new URLSearchParams();

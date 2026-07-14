@@ -60,7 +60,9 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
     if (validated.errors.length) { setIssues(normalizeIssues(validated.errors)); return; }
     setSaving(true);
     try {
-      const result = await savePrototype(state.doc.id, parsed.data, state.baseRev);
+      // Pass through the figma provenance that came with the draft so an editor save
+      // does not erase it; null (or a legacy draft without the field) omits it (WF-5).
+      const result = await savePrototype(state.doc.id, parsed.data, state.baseRev, loaded.figma ?? null);
       dispatch({ type: "saved", rev: result.rev, doc: parsed.data });
       setIssues([]);
     } catch (error) {

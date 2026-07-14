@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import type { PrototypeDraft } from "../api/client";
+import type { FigmaProvenance, PrototypeDraft } from "../api/client";
 import { routeObjects } from "../app/routes";
 import { prototypeDocSchema } from "../prototype/schema";
 
@@ -54,6 +54,27 @@ describe("EditorShell", () => {
     const body = JSON.parse(String(put[1]?.body));
     expect(body.baseRev).toBe(7);
     expect(body.doc.screens[0].spec.elements.text.props.text).toBe("After");
+    // The draft has no figma provenance, so the payload must omit the field (never figma: null).
+    expect("figma" in body).toBe(false);
+    expect(await screen.findByText("Сохранено")).toBeTruthy();
+  });
+
+  it("passes the loaded figma provenance through on save (WF-5 roundtrip)", async () => {
+    const figma: FigmaProvenance = { fileKey: "fileKEY42", nodeIds: ["10:20"], lastSyncedAt: "2026-07-13T00:00:00.000Z" };
+    const figmaDraft: PrototypeDraft = { ...draft, figma, assets: [] };
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((input, init) => {
+      if (String(input).endsWith("/draft")) return json(figmaDraft);
+      if (String(input) === "/api/prototypes/editor-demo" && init?.method === "PUT") return json({ rev: 8, warnings: [] });
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+    renderEditor();
+    await screen.findByRole("heading", { name: "Editor demo" });
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/prototypes/editor-demo", expect.objectContaining({ method: "PUT" })));
+    const put = fetchMock.mock.calls.find(([url, init]) => String(url) === "/api/prototypes/editor-demo" && init?.method === "PUT")!;
+    const body = JSON.parse(String(put[1]?.body));
+    expect(body.figma).toEqual(figma);
     expect(await screen.findByText("Сохранено")).toBeTruthy();
   });
 
