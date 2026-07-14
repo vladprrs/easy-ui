@@ -30,6 +30,70 @@ describe("ScreenView error boundary", () => {
   });
 });
 
+function renderPlayer(doc: ReturnType<typeof prototypeDocSchema.parse>, initialPath: string) {
+  const deps = { navigate: navigation.navigate, back: navigation.back, openUrl() {}, restart: navigation.restart };
+  const runtime = createPlayerRuntime(deps);
+  const actionRuntime = new EasyUiActionRuntime({ initialState: doc.state, screenIds: new Set(doc.screens.map((s) => s.id)), deps });
+  const context = { doc, registry: runtime.registry, runtime: actionRuntime, customTypes: new Set<string>(), customDefinitions: {}, onError: () => {} };
+  const router = createMemoryRouter([{
+    path: "/p/:protoId",
+    element: <JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}><Outlet context={context} /></JSONUIProvider>,
+    children: [{ path: "s/:screenId", element: <ScreenView /> }],
+  }], { initialEntries: [initialPath] });
+  return render(<RouterProvider router={router} />);
+}
+
+const mobileDoc = () => prototypeDocSchema.parse({
+  version: 1,
+  id: "stage-prototype",
+  name: "Stage prototype",
+  device: "mobile",
+  startScreen: "home",
+  state: {},
+  screens: [{
+    id: "home",
+    name: "Home",
+    spec: { root: "copy", elements: { copy: { type: "Text", props: { text: "Home screen" } } } },
+  }],
+});
+
+describe("ScreenView stage controls (W1-1)", () => {
+  it("renders zoom controls in the chrome actions slot and switches fit/actual/manual", () => {
+    renderPlayer(mobileDoc(), "/p/stage-prototype/s/home");
+    const zoomGroup = screen.getByRole("group", { name: "Масштаб" });
+    const fit = screen.getByRole("button", { name: "Вписать" });
+    const actual = screen.getByRole("button", { name: "100%" });
+    expect(zoomGroup).toBeTruthy();
+    expect(fit.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(actual);
+    expect(actual.getAttribute("aria-pressed")).toBe("true");
+    expect(fit.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Увеличить масштаб" }));
+    expect(actual.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(fit);
+    expect(fit.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("switches device via chrome controls and keeps zoom controls hidden for desktop auto-height", () => {
+    renderPlayer(mobileDoc(), "/p/stage-prototype/s/home");
+    const desktop = screen.getByRole("button", { name: "Компьютер" });
+    fireEvent.click(desktop);
+    expect(desktop.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByRole("group", { name: "Масштаб" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Телефон" }));
+    expect(screen.getByRole("group", { name: "Масштаб" })).toBeTruthy();
+  });
+
+  it("collapses and expands the screens sidebar", () => {
+    renderPlayer(mobileDoc(), "/p/stage-prototype/s/home");
+    expect(screen.getByRole("button", { name: "Home" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Свернуть список экранов" }));
+    expect(screen.queryByRole("button", { name: "Home" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Развернуть список экранов" }));
+    expect(screen.getByRole("button", { name: "Home" })).toBeTruthy();
+  });
+});
+
 describe("ScreenView canvas", () => {
   it("keeps hotspot navigation wired through the player runtime", async () => {
     navigation.navigate.mockReset();
