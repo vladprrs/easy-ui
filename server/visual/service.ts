@@ -23,7 +23,7 @@ export type RunView =
   | { kind: "running"; runId: string; referenceId: string; status: "running"; jobId: string }
   | { kind: "report"; report: RunReport };
 
-interface MemoryRun { runId: string; referenceId: string; status: "running" | VisualRunRow["status"]; jobId?: string; report?: RunReport; expiresAt?: number }
+interface MemoryRun { runId: string; referenceId: string; status: "running" | RunReport["status"]; jobId?: string; report?: RunReport; expiresAt?: number }
 
 /**
  * Orchestrates a visual-regression check: capture a candidate through the
@@ -61,9 +61,9 @@ export class VisualService {
     const refBytesPath = refAsset ? repo.assetRepo().bytesPath(refAsset.sha256) : null;
     // Reference asset missing (row gone or bytes gone) => reference_missing, no percentage.
     if (!refAsset || !refBytesPath || !Bun.file(refBytesPath).size) {
-      const row = this.terminalRow(runId, reference.id, "reference_missing", { candidateAssetId: null, diffAssetId: null, metric: null, metricOptions: null, pixelmatch: null, candidateMeta: null });
+      const row = this.terminalRow(runId, reference.id, reference.asset_id, "reference_missing", { candidateAssetId: null, diffAssetId: null, metric: null, metricOptions: null, pixelmatch: null, candidateMeta: null });
       repo.insertRun(row);
-      this.remember(runId, reference.id, repo.runReport(row, reference.asset_id));
+      this.remember(runId, reference.id, repo.runReport(row));
       return { runId };
     }
 
@@ -133,28 +133,29 @@ export class VisualService {
   private finalizeError(repo: VisualRepo, runId: string, reference: VisualReferenceRow, message: string): void {
     const meta: CandidateMeta & { error?: string } = { };
     (meta as { error?: string }).error = message;
-    const row = this.terminalRow(runId, reference.id, "error", { candidateAssetId: null, diffAssetId: null, metric: null, metricOptions: null, pixelmatch: null, candidateMeta: meta });
+    const row = this.terminalRow(runId, reference.id, reference.asset_id, "error", { candidateAssetId: null, diffAssetId: null, metric: null, metricOptions: null, pixelmatch: null, candidateMeta: meta });
     repo.insertRun(row);
-    this.remember(runId, reference.id, repo.runReport(row, reference.asset_id));
+    this.remember(runId, reference.id, repo.runReport(row));
   }
 
   private finalizeCaptured(repo: VisualRepo, runId: string, reference: VisualReferenceRow, status: VisualRunRow["status"], candidateAssetId: string | null, candidateMeta: CandidateMeta | null, diffAssetId: string | null, pm: { metric: string; options: Record<string, unknown>; diffPixels: number; totalPixels: number; diffPercent: number } | null): void {
-    const row = this.terminalRow(runId, reference.id, status, {
+    const row = this.terminalRow(runId, reference.id, reference.asset_id, status, {
       candidateAssetId, diffAssetId,
       metric: pm?.metric ?? null, metricOptions: pm?.options ?? null,
       pixelmatch: pm ? { diffPixels: pm.diffPixels, totalPixels: pm.totalPixels, diffPercent: pm.diffPercent } : null,
       candidateMeta,
     });
     repo.insertRun(row);
-    this.remember(runId, reference.id, repo.runReport(row, reference.asset_id));
+    this.remember(runId, reference.id, repo.runReport(row));
   }
 
-  private terminalRow(runId: string, referenceId: string, status: VisualRunRow["status"], parts: {
+  private terminalRow(runId: string, referenceId: string, referenceAssetId: string, status: VisualRunRow["status"], parts: {
     candidateAssetId: string | null; diffAssetId: string | null; metric: string | null; metricOptions: Record<string, unknown> | null;
     pixelmatch: { diffPixels: number; totalPixels: number; diffPercent: number } | null; candidateMeta: CandidateMeta | null;
   }): VisualRunRow {
     return {
       id: runId, reference_id: referenceId,
+      reference_asset_id: referenceAssetId,
       candidate_asset_id: parts.candidateAssetId, diff_asset_id: parts.diffAssetId,
       metric: parts.metric, metric_options_json: parts.metricOptions ? JSON.stringify(parts.metricOptions) : null,
       diff_pixels: parts.pixelmatch?.diffPixels ?? null, total_pixels: parts.pixelmatch?.totalPixels ?? null, diff_percent: parts.pixelmatch?.diffPercent ?? null,
@@ -176,8 +177,7 @@ export class VisualService {
     const repo = this.repo();
     const row = repo.getRun(runId);
     if (!row) return null;
-    const reference = repo.getReference(row.reference_id);
-    return { kind: "report", report: repo.runReport(row, reference?.asset_id ?? null) };
+    return { kind: "report", report: repo.runReport(row) };
   }
 
   private reap(): void {

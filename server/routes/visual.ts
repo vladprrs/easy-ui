@@ -8,7 +8,7 @@ import type { VisualService } from "../visual/service";
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
- * Visual regression routes. PUT/GET only touch the DB (via VisualRepo); the
+ * Visual regression routes. PUT/GET/DELETE only touch the DB (via VisualRepo); the
  * check flow and run polling require the singleton {@link VisualService} that
  * owns candidate capture + diff orchestration.
  */
@@ -22,8 +22,9 @@ export async function routeVisual(request: Request, db: Database, dataDir: strin
     }
     const id = segments[1]!;
     if (segments.length === 2) {
-      if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
-      return getReference(repo, id);
+      if (request.method === "GET") return getReference(repo, id);
+      if (request.method === "DELETE") return deleteReference(repo, id);
+      throw new ApiError(405, "method_not_allowed", "Method not allowed");
     }
     if (segments.length === 3 && segments[2] === "check") {
       if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
@@ -62,8 +63,13 @@ function listReferences(request: Request, repo: VisualRepo): Response {
 function getReference(repo: VisualRepo, id: string): Response {
   const row = repo.getReference(id);
   if (!row) throw new ApiError(404, "reference_not_found", "Visual reference not found");
-  const runs = repo.listRuns(id).map((run) => repo.runReport(run, row.asset_id));
+  const runs = repo.listRuns(id).map((run) => repo.runReport(run));
   return json({ ...repo.referencePublic(row), runs }, 200, noStore);
+}
+
+function deleteReference(repo: VisualRepo, id: string): Response {
+  if (!repo.deleteReference(id)) throw new ApiError(404, "reference_not_found", "Visual reference not found");
+  return new Response(null, { status: 204, headers: noStore });
 }
 
 async function checkReference(request: Request, id: string, service?: VisualService): Promise<Response> {
@@ -90,6 +96,5 @@ function getRun(db: Database, dataDir: string, runId: string, service?: VisualSe
   const repo = new VisualRepo(db, dataDir);
   const row = repo.getRun(runId);
   if (!row) throw new ApiError(404, "run_not_found", "Visual run not found");
-  const reference = repo.getReference(row.reference_id);
-  return json(repo.runReport(row, reference?.asset_id ?? null), 200, noStore);
+  return json(repo.runReport(row), 200, noStore);
 }

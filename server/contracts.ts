@@ -201,11 +201,12 @@ const evidenceAssetSchema = z.object({ assetId: z.string(), url: z.string(), sha
 
 export const runReportSchema = z.object({
   runId: z.string(), referenceId: z.string(),
-  status: z.enum(["pass", "fail", "error", "reference_missing"]),
+  status: z.enum(["pass", "fail", "error", "reference_missing", "reference_unknown"]),
   createdAt: z.string(),
   metric: z.string().nullable(), metricOptions: z.record(z.string(), z.unknown()).nullable(),
   diffPixels: z.number().nullable(), totalPixels: z.number().nullable(), diffPercent: z.number().nullable(),
   metrics: z.object({ "exact-rgba": metricResultSchema.optional(), "pixelmatch-v1": metricResultSchema.optional() }),
+  referenceStatus: z.enum(["known", "unknown"]),
   reference: evidenceAssetSchema.nullable(), candidate: evidenceAssetSchema.nullable(),
   diff: z.object({ assetId: z.string(), url: z.string() }).nullable(),
   candidateMeta: z.record(z.string(), z.unknown()).nullable(),
@@ -240,6 +241,14 @@ export const getVisualReferenceContract = registerContract({
   path: "/api/visual-references/{id}",
   summary: "Fetch a visual reference with its full run history.",
   responseSchema: referencePublicSchema.extend({ runs: z.array(runReportSchema) }),
+  errors: [{ status: 404, code: "reference_not_found" }],
+});
+
+export const deleteVisualReferenceContract = registerContract({
+  method: "DELETE",
+  path: "/api/visual-references/{id}",
+  summary: "Tombstone an active visual reference while retaining its runs and evidence.",
+  status: 204,
   errors: [{ status: 404, code: "reference_not_found" }],
 });
 

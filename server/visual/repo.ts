@@ -8,6 +8,7 @@ export interface VisualReferenceRow {
   asset_id: string;
   note: string | null;
   created_at: string;
+  deleted_at: string | null;
 }
 
 export type RunStatus = "pass" | "fail" | "error" | "reference_missing";
@@ -15,6 +16,7 @@ export type RunStatus = "pass" | "fail" | "error" | "reference_missing";
 export interface VisualRunRow {
   id: string;
   reference_id: string;
+  reference_asset_id: string | null;
   candidate_asset_id: string | null;
   diff_asset_id: string | null;
   metric: string | null;
@@ -40,7 +42,7 @@ export interface CandidateMeta {
 export interface RunReport {
   runId: string;
   referenceId: string;
-  status: RunStatus;
+  status: RunStatus | "reference_unknown";
   createdAt: string;
   metric: string | null;
   metricOptions: Record<string, unknown> | null;
@@ -48,6 +50,7 @@ export interface RunReport {
   totalPixels: number | null;
   diffPercent: number | null;
   metrics: { "exact-rgba"?: MetricResult; "pixelmatch-v1"?: MetricResult };
+  referenceStatus: "known" | "unknown";
   reference: EvidenceAsset | null;
   candidate: EvidenceAsset | null;
   diff: { assetId: string; url: string } | null;
@@ -81,9 +84,9 @@ export class VisualRepo {
   upsertReference(fingerprint: Fingerprint, assetId: string, note: string | null): VisualReferenceRow {
     const json = fingerprintJson(fingerprint);
     const id = fingerprintId(json);
-    const existing = this.getReference(id);
+    const existing = this.getReference(id, true);
     if (existing) {
-      this.db.query("UPDATE visual_references SET asset_id=?, note=? WHERE id=?").run(assetId, note, id);
+      this.db.query("UPDATE visual_references SET asset_id=?, note=?, deleted_at=NULL WHERE id=?").run(assetId, note, id);
     } else {
       this.db.query("INSERT INTO visual_references (id,fingerprint_json,asset_id,note,created_at) VALUES (?,?,?,?,?)")
         .run(id, json, assetId, note, new Date().toISOString());
@@ -91,12 +94,12 @@ export class VisualRepo {
     return this.getReference(id)!;
   }
 
-  getReference(id: string): VisualReferenceRow | null {
-    return this.db.query("SELECT * FROM visual_references WHERE id=?").get(id) as VisualReferenceRow | null;
+  getReference(id: string, includeDeleted = false): VisualReferenceRow | null {
+    return this.db.query(`SELECT * FROM visual_references WHERE id=?${includeDeleted ? "" : " AND deleted_at IS NULL"}`).get(id) as VisualReferenceRow | null;
   }
 
   listReferences(filter: { scope?: string; prototypeId?: string; componentId?: string }): VisualReferenceRow[] {
-    const rows = this.db.query("SELECT * FROM visual_references ORDER BY created_at DESC, id DESC").all() as VisualReferenceRow[];
+    const rows = this.db.query("SELECT * FROM visual_references WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC").all() as VisualReferenceRow[];
     return rows.filter((row) => {
       if (!filter.scope && !filter.prototypeId && !filter.componentId) return true;
       let fp: Record<string, unknown>;
@@ -108,11 +111,16 @@ export class VisualRepo {
     });
   }
 
+  deleteReference(id: string): boolean {
+    const result = this.db.query("UPDATE visual_references SET deleted_at=? WHERE id=? AND deleted_at IS NULL").run(new Date().toISOString(), id);
+    return result.changes === 1;
+  }
+
   insertRun(row: VisualRunRow): void {
     this.db.query(`INSERT INTO visual_runs
-      (id,reference_id,candidate_asset_id,diff_asset_id,metric,metric_options_json,diff_pixels,total_pixels,diff_percent,status,candidate_meta_json,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(row.id, row.reference_id, row.candidate_asset_id, row.diff_asset_id, row.metric, row.metric_options_json,
+      (id,reference_id,reference_asset_id,candidate_asset_id,diff_asset_id,metric,metric_options_json,diff_pixels,total_pixels,diff_percent,status,candidate_meta_json,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(row.id, row.reference_id, row.reference_asset_id, row.candidate_asset_id, row.diff_asset_id, row.metric, row.metric_options_json,
         row.diff_pixels, row.total_pixels, row.diff_percent, row.status, row.candidate_meta_json, row.created_at);
   }
 
@@ -132,12 +140,13 @@ export class VisualRepo {
   }
 
   /** Assemble the honest evidence report for a run row (evidence guard §E.6). */
-  runReport(row: VisualRunRow, referenceAssetId: string | null): RunReport {
+  runReport(row: VisualRunRow): RunReport {
+    const referenceKnown = row.reference_asset_id !== null;
     const meta: (Record<string, unknown> & { exactRgba?: MetricResult }) | null = row.candidate_meta_json ? JSON.parse(row.candidate_meta_json) : null;
     const options = row.metric_options_json ? JSON.parse(row.metric_options_json) as Record<string, unknown> : null;
     const metrics: RunReport["metrics"] = {};
-    if (meta?.exactRgba) metrics["exact-rgba"] = meta.exactRgba;
-    if (row.metric === "pixelmatch-v1" && row.diff_pixels !== null && row.total_pixels !== null && row.diff_percent !== null) {
+    if (referenceKnown && meta?.exactRgba) metrics["exact-rgba"] = meta.exactRgba;
+    if (referenceKnown && row.metric === "pixelmatch-v1" && row.diff_pixels !== null && row.total_pixels !== null && row.diff_percent !== null) {
       metrics["pixelmatch-v1"] = { diffPixels: row.diff_pixels, totalPixels: row.total_pixels, diffPercent: row.diff_percent };
     }
     const candidateMeta: CandidateMeta | null = meta ? { ...meta } as CandidateMeta : null;
@@ -145,17 +154,18 @@ export class VisualRepo {
     return {
       runId: row.id,
       referenceId: row.reference_id,
-      status: row.status,
+      status: referenceKnown ? row.status : "reference_unknown",
       createdAt: row.created_at,
-      metric: row.metric,
-      metricOptions: options,
-      diffPixels: row.diff_pixels,
-      totalPixels: row.total_pixels,
-      diffPercent: row.diff_percent,
+      metric: referenceKnown ? row.metric : null,
+      metricOptions: referenceKnown ? options : null,
+      diffPixels: referenceKnown ? row.diff_pixels : null,
+      totalPixels: referenceKnown ? row.total_pixels : null,
+      diffPercent: referenceKnown ? row.diff_percent : null,
       metrics,
-      reference: this.evidenceAsset(referenceAssetId),
+      referenceStatus: referenceKnown ? "known" : "unknown",
+      reference: this.evidenceAsset(row.reference_asset_id),
       candidate: this.evidenceAsset(row.candidate_asset_id),
-      diff: row.diff_asset_id ? { assetId: row.diff_asset_id, url: `/api/assets/${row.diff_asset_id}` } : null,
+      diff: referenceKnown && row.diff_asset_id ? { assetId: row.diff_asset_id, url: `/api/assets/${row.diff_asset_id}` } : null,
       candidateMeta,
     };
   }
@@ -163,7 +173,9 @@ export class VisualRepo {
   referencePublic(row: VisualReferenceRow): VisualReferencePublic {
     const asset = this.assets.publicById(row.asset_id);
     const runs = this.listRuns(row.id);
-    const lastRun = runs[0] ? this.runReport(runs[0], row.asset_id) : null;
+    // A pass/fail against an older baseline must not verify the newly-upserted active baseline.
+    const matchingRun = runs.find((run) => run.reference_asset_id === row.asset_id);
+    const lastRun = matchingRun ? this.runReport(matchingRun) : null;
     return {
       id: row.id,
       fingerprint: JSON.parse(row.fingerprint_json),

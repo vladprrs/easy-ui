@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { RunReport, VisualReference } from "./api";
-import { describeFingerprint, evidenceDenominator, formatPercent, referenceScope, statusLabel, statusTone } from "./visualModel";
+import { describeFingerprint, evidenceDenominator, formatPercent, parseThresholdPercent, referenceScope, statusLabel, statusTone } from "./visualModel";
 
 describe("visualModel", () => {
   it("labels every run status", () => {
     expect(statusLabel("pass")).toBe("Пройдено");
     expect(statusLabel("reference_missing")).toBe("Нет эталона");
+    expect(statusLabel("reference_unknown")).toBe("Эталон прогона неизвестен");
     expect(statusLabel("running")).toBe("Выполняется…");
-    for (const s of ["pass", "fail", "error", "reference_missing", "running"] as const) expect(statusTone(s)).toBeTruthy();
+    for (const s of ["pass", "fail", "error", "reference_missing", "reference_unknown", "running"] as const) expect(statusTone(s)).toBeTruthy();
   });
 
   it("never fabricates a percentage", () => {
@@ -15,6 +16,15 @@ describe("visualModel", () => {
     expect(formatPercent(undefined)).toBe("—");
     expect(formatPercent(Number.NaN)).toBe("—");
     expect(formatPercent(6.6639)).toBe("6.6639%");
+  });
+
+  it("validates the percent threshold without silently coercing invalid input", () => {
+    expect(parseThresholdPercent("0")).toBe(0);
+    expect(parseThresholdPercent("0,25")).toBe(0.25);
+    expect(parseThresholdPercent("100")).toBe(100);
+    expect(parseThresholdPercent("")).toBeNull();
+    expect(parseThresholdPercent("wat")).toBeNull();
+    expect(parseThresholdPercent("100.1")).toBeNull();
   });
 
   it("describes prototype and component fingerprints", () => {

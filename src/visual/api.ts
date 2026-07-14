@@ -7,7 +7,7 @@ import { ApiError, type ApiErrorBody } from "../api/client";
 
 export interface MetricResult { diffPixels: number; totalPixels: number; diffPercent: number }
 export interface EvidenceAsset { assetId: string; url: string; sha256: string; width: number | null; height: number | null; mime: string }
-export type RunStatus = "pass" | "fail" | "error" | "reference_missing" | "running";
+export type RunStatus = "pass" | "fail" | "error" | "reference_missing" | "reference_unknown" | "running";
 
 export interface RunReport {
   runId: string;
@@ -21,6 +21,7 @@ export interface RunReport {
   totalPixels?: number | null;
   diffPercent?: number | null;
   metrics?: { "exact-rgba"?: MetricResult; "pixelmatch-v1"?: MetricResult };
+  referenceStatus?: "known" | "unknown";
   reference?: EvidenceAsset | null;
   candidate?: EvidenceAsset | null;
   diff?: { assetId: string; url: string } | null;
@@ -68,8 +69,40 @@ export const checkVisualReference = (id: string, threshold?: number) =>
 export const getVisualRun = (runId: string, signal?: AbortSignal) =>
   request<RunReport>(`/api/visual-runs/${encodeURIComponent(runId)}`, { signal });
 
-export async function uploadPngAsset(file: File): Promise<AssetPublic> {
-  const form = new FormData();
-  form.append("file", file);
-  return request<AssetPublic>("/api/assets", { method: "POST", body: form });
+export const deleteVisualReference = (id: string) =>
+  request<void>(`/api/visual-references/${encodeURIComponent(id)}`, { method: "DELETE" });
+
+export interface ScreenshotJobResult {
+  imageUrl: string;
+  assetId: string;
+  width: number;
+  height: number;
+  consoleErrors: string[];
+  pageErrors: string[];
 }
+
+export interface ScreenshotJob {
+  status: "queued" | "running" | "done" | "error";
+  result?: ScreenshotJobResult;
+  error?: { code: string; message: string };
+}
+
+interface CaptureOptions {
+  viewport: { width: number; height: number };
+  deviceScaleFactor: number;
+  theme: "light" | "dark";
+  waitForFonts: boolean;
+}
+
+export const enqueuePrototypeScreenshot = (prototypeId: string, screenId: string, target: { rev: number } | { version: number }, options: CaptureOptions) =>
+  request<{ jobId: string }>(`/api/prototypes/${encodeURIComponent(prototypeId)}/screens/${encodeURIComponent(screenId)}/screenshot`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...target, ...options }),
+  });
+
+export const enqueueComponentScreenshot = (componentId: string, version: number, options: CaptureOptions) =>
+  request<{ jobId: string }>(`/api/components/${encodeURIComponent(componentId)}/versions/${version}/screenshot`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(options),
+  });
+
+export const getScreenshotJob = (jobId: string, signal?: AbortSignal) =>
+  request<ScreenshotJob>(`/api/screenshot-jobs/${encodeURIComponent(jobId)}`, { signal });

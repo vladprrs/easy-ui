@@ -18,6 +18,7 @@ export const visual = {
   loadingReference: "Загружаем эталон…",
   referenceUnavailable: "Эталон недоступен.",
   thresholdLabel: "Порог, %",
+  thresholdInvalid: "Введите число от 0 до 100 процентов.",
   check: "Проверить",
   checking: "Проверяем…",
   runNowHint: "Прогонов ещё не было — запустите проверку, чтобы захватить кандидата.",
@@ -28,19 +29,47 @@ export const visual = {
   frameCandidate: "Кандидат",
   frameDiff: "Дифф",
   frameUnavailable: "Недоступно",
+  referenceUnknown: "Эталон прогона неизвестен",
   screenshotAlt: (title: string) => `Скриншот: ${title}`,
   evidenceDiffPixels: "Пиксели диффа / знаменатель",
   evidenceMetricOptions: "Параметры метрики",
   evidenceCandidateMeta: "Метаданные кандидата",
-  uploadReference: "+ Загрузить эталон",
+  captureReference: "+ Снять эталон",
   newReference: "Новый эталон",
   close: "Закрыть",
   optionPrototypeScreen: "Экран прототипа",
   optionComponent: "Компонент",
+  modeLabel: "Режим",
+  prototypeLabel: "Прототип",
+  selectPrototype: "Выберите прототип",
+  snapshotLabel: "Ревизия или версия",
+  revisionOption: (revision: number) => `Ревизия ${revision}`,
+  versionOption: (version: number, revision: number) => `Версия ${version} · ревизия ${revision}`,
+  screenLabel: "Экран",
+  componentLabel: "Компонент",
+  selectComponent: "Выберите компонент",
+  versionLabel: "Версия",
+  componentVersionOption: (version: number) => `Версия ${version}`,
+  scaleLabel: "Масштаб",
+  themeLabel: "Тема",
+  themeLight: "Светлая",
+  themeDark: "Тёмная",
+  viewportValue: (width: number, height: number) => `Размер: ${width}×${height} — определён автоматически`,
+  viewportUnavailable: "Для этого desktop-экрана нет канонической высоты. Добавьте canvas или сначала используйте существующий эталон.",
+  noteLabel: "Заметка",
   notePlaceholder: "заметка (необязательно)",
-  choosePngFirst: "Сначала выберите PNG-файл",
-  uploading: "Загрузка…",
-  saveReference: "Сохранить эталон",
+  loadingCaptureOptions: "Загружаем варианты…",
+  captureBaseline: "Снять эталон",
+  capturing: "Снимаем эталон…",
+  captureQueued: "Снимок ждёт в очереди…",
+  captureRunning: "Снимок создаётся…",
+  captureFailed: "Не удалось снять эталон.",
+  captureMissingResult: "Задание завершилось без результата.",
+  stopWaiting: "Перестать ждать",
+  waitingStopped: "Ожидание остановлено. Задание продолжает выполняться на сервере.",
+  resumeWaiting: "Продолжить ожидание",
+  deleteReference: "Удалить эталон",
+  deleteConfirm: "Удалить активный эталон? История прогонов сохранится.",
 } as const;
 
 export const runStatusLabel = (status: RunStatus): string => {
@@ -49,6 +78,7 @@ export const runStatusLabel = (status: RunStatus): string => {
     case "fail": return "Расхождение";
     case "error": return "Ошибка";
     case "reference_missing": return "Нет эталона";
+    case "reference_unknown": return "Эталон прогона неизвестен";
     case "running": return "Выполняется…";
   }
 };

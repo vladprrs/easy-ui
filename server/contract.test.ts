@@ -134,6 +134,8 @@ function orderedCases(): [string, Case][] {
     // Deletions last (CAS on the final head revisions)
     ["DELETE /api/prototypes/{id}/share/{shareId}", { run: () => call("DELETE", `/api/prototypes/contract-proto/share/${state.shareId}`), expected: ok(204) }],
     ["DELETE /api/prototypes/{id}/share/{shareId}", { run: () => call("DELETE", `/api/prototypes/contract-proto/share/${state.shareId}`), expected: err(404, "share_not_found") }],
+    ["DELETE /api/visual-references/{id}", { run: () => call("DELETE", `/api/visual-references/${state.referenceId}`), expected: ok(204) }],
+    ["DELETE /api/visual-references/{id}", { run: () => call("DELETE", `/api/visual-references/${state.referenceId}`), expected: err(404, "reference_not_found") }],
     ["DELETE /api/components/{id}", { run: () => call("DELETE", "/api/components/contract-stars", { baseRev: 3 }), expected: ok(204) }],
     ["DELETE /api/prototypes/{id}", { run: () => call("DELETE", "/api/prototypes/contract-proto", { baseRev: 3 }), expected: ok(204) }],
   ];

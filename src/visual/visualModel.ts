@@ -12,6 +12,7 @@ export function statusTone(status: RunStatus): string {
     case "fail": return "bg-eui-magenta/15 text-eui-magenta";
     case "error": return "bg-white text-eui-magenta";
     case "reference_missing": return "bg-white text-eui-slate-500";
+    case "reference_unknown": return "bg-white text-eui-slate-500";
     case "running": return "bg-eui-lav text-eui-slate-500";
   }
 }
@@ -20,6 +21,13 @@ export function statusTone(status: RunStatus): string {
 export function formatPercent(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
   return `${value.toFixed(4)}%`;
+}
+
+/** Parse the percent-based server contract without coercing blank/garbage input to zero. */
+export function parseThresholdPercent(value: string): number | null {
+  if (!value.trim()) return null;
+  const parsed = Number(value.replace(",", "."));
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 100 ? parsed : null;
 }
 
 export function describeFingerprint(fingerprint: Record<string, unknown> | undefined): string {

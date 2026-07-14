@@ -215,6 +215,44 @@ const migrations = [
       expires_at TEXT NOT NULL)`);
     db.run(`CREATE INDEX share_sessions_grant ON share_sessions (grant_id, expires_at)`);
   },
+  (db: Database) => {
+    // v11 (W5-4): preserve the exact baseline used by every new visual run and retain run
+    // history when an active reference is removed. Existing runs deliberately receive NULL:
+    // the current reference asset may have changed since they ran, so backfilling it would
+    // manufacture evidence. References are tombstoned via deleted_at; the rebuilt FK is
+    // RESTRICT as a second guard against accidentally deleting their historical runs.
+    db.run("ALTER TABLE visual_references ADD COLUMN deleted_at TEXT");
+    db.run("DROP INDEX visual_runs_reference");
+    db.run("ALTER TABLE visual_runs RENAME TO _visual_runs_v10");
+    db.run(`CREATE TABLE visual_runs (
+      id TEXT PRIMARY KEY,
+      reference_id TEXT NOT NULL,
+      reference_asset_id TEXT,
+      candidate_asset_id TEXT,
+      diff_asset_id TEXT,
+      metric TEXT,
+      metric_options_json TEXT,
+      diff_pixels INTEGER,
+      total_pixels INTEGER,
+      diff_percent REAL,
+      status TEXT NOT NULL CHECK(status IN ('pass','fail','error','reference_missing')),
+      candidate_meta_json TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (reference_id) REFERENCES visual_references(id) ON DELETE RESTRICT,
+      FOREIGN KEY (reference_asset_id) REFERENCES assets(id) ON DELETE RESTRICT,
+      FOREIGN KEY (candidate_asset_id) REFERENCES assets(id) ON DELETE RESTRICT,
+      FOREIGN KEY (diff_asset_id) REFERENCES assets(id) ON DELETE RESTRICT)`);
+    db.run(`INSERT INTO visual_runs
+      (id,reference_id,reference_asset_id,candidate_asset_id,diff_asset_id,metric,metric_options_json,
+       diff_pixels,total_pixels,diff_percent,status,candidate_meta_json,created_at)
+      SELECT id,reference_id,NULL,candidate_asset_id,diff_asset_id,metric,metric_options_json,
+       diff_pixels,total_pixels,diff_percent,status,candidate_meta_json,created_at
+      FROM _visual_runs_v10`);
+    db.run("DROP TABLE _visual_runs_v10");
+    db.run(`CREATE INDEX visual_runs_reference ON visual_runs (reference_id, created_at, id)`);
+    const violations = db.query("PRAGMA foreign_key_check").all();
+    if (violations.length) throw new Error(`v11 rebuild left foreign-key violations: ${JSON.stringify(violations)}`);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {
