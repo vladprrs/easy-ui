@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { z } from "zod";
 import { createPlayerRuntime } from "./runtime";
 
@@ -7,16 +9,16 @@ const deps = { navigate: () => {}, back: () => {}, openUrl: () => {}, restart: (
 describe("createPlayerRuntime custom manifest", () => {
   it("resolves the wireframe Button instead of the shadcn Button", () => {
     const runtime = createPlayerRuntime(deps, undefined, "wireframe");
-    const rendered = (runtime.registry.Button as unknown as (props: Record<string, unknown>) => { type: unknown; props: { className: string } })({
+    const rendered = renderToStaticMarkup(createElement(runtime.registry.Button, {
       element: { type: "Button", props: { label: "Continue", disabled: false } },
       children: undefined,
       emit: () => undefined,
       on: () => ({ shouldPreventDefault: false, bound: false, emit: () => undefined }),
-    });
+    }));
 
-    expect(rendered.type).toBe("button");
-    expect(rendered.props.className).toContain("border-dashed");
-    expect(rendered.props.className).toContain("font-mono");
+    expect(rendered).toContain("<button");
+    expect(rendered).toContain("border-dashed");
+    expect(rendered).toContain("font-mono");
   });
 
   it("falls back to an empty builtin catalog for a system without provider", () => {

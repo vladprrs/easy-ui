@@ -10,7 +10,7 @@ export type RawActionBinding = unknown;
 export interface ElementMetadata {
   /** Component type of the element. */
   type: string;
-  /** Raw (unresolved) `on` bindings for a custom element, moved out of props. */
+  /** Raw (unresolved) authored `on` bindings. */
   on?: Record<string, RawActionBinding>;
   /** `repeat.key` of the nearest repeat ancestor, when any (for `$itemKey`). */
   repeatKey?: string;
@@ -20,8 +20,8 @@ export interface ElementMetadata {
 
 /**
  * A runtime tree is the atomic pairing of the library `spec` (with custom
- * `on` bindings and `$eui*` side-channel stripped out of props except the
- * string `__euiKey`) and a `metadata` map keyed by element key. All structural
+ * `on` bindings and the `$eui*` side-channel stripped out of props except
+ * the string `__euiKey`) and a `metadata` map keyed by element key. All structural
  * transforms operate on the whole tree so spec and metadata never drift.
  */
 export interface RuntimeTree {
@@ -30,7 +30,7 @@ export interface RuntimeTree {
 }
 
 export interface ToRuntimeSpecOptions {
-  /** Element types treated as custom components (their `on` moves to metadata). */
+  /** Element types treated as custom components (their `on` is removed from the runtime spec). */
   customTypes?: ReadonlySet<string>;
 }
 
@@ -65,15 +65,16 @@ function adaptProp(value: unknown): unknown {
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, adaptProp(item)]));
 }
 
-/** String key injected into a custom element's props so the adapter can find its metadata. */
+/** String key injected into every element's props for runtime metadata and DOM correlation. */
 export const EUI_KEY_PROP = "__euiKey";
 
 /**
- * Builds the runtime tree from a prototype screen spec. Custom elements (types
- * in `options.customTypes`) have their `on` bindings moved into `metadata` and
- * receive only a string `__euiKey` in props; builtin elements keep `on` in the
- * spec for native (payloadless) handling. Without `customTypes` no element is
- * treated as custom (legacy behavior).
+ * Builds the runtime tree from a prototype screen spec. Every element receives
+ * a string `__euiKey` and keeps its authored `on` in metadata so player-only
+ * features can correlate RuntimeTree semantics with the production DOM.
+ * Custom elements (types in `options.customTypes`) additionally have `on`
+ * removed from the spec and dispatched by the custom runtime adapter; builtin
+ * elements keep `on` in the spec for native (payloadless) handling.
  */
 export function toRuntimeSpec(spec: PrototypeSpec, options: ToRuntimeSpecOptions = {}): RuntimeTree {
   const customTypes = options.customTypes ?? new Set<string>();
@@ -107,17 +108,13 @@ export function toRuntimeSpec(spec: PrototypeSpec, options: ToRuntimeSpecOptions
     const props = adaptProp(element.props) as Record<string, unknown>;
     const bare = { ...element };
     delete (bare as { slot?: unknown }).slot;
-    if (!isCustom) {
-      metadata[key] = { type: element.type };
-      return [key, { ...bare, props }];
-    }
     const meta: ElementMetadata = { type: element.type };
     if (element.on && Object.keys(element.on).length) meta.on = element.on as Record<string, RawActionBinding>;
     const repeatKey = repeatKeyOf.get(key);
-    if (repeatKey !== undefined) meta.repeatKey = repeatKey;
+    if (isCustom && repeatKey !== undefined) meta.repeatKey = repeatKey;
     // Named-slot child map: index-of-position in element.children per slot ("default" when no slot).
     const children = element.children ?? [];
-    if (children.some((childKey) => slotOf(childKey) !== undefined)) {
+    if (isCustom && children.some((childKey) => slotOf(childKey) !== undefined)) {
       const slotIndices: Record<string, number[]> = {};
       children.forEach((childKey, index) => {
         const slotName = slotOf(childKey) ?? "default";
@@ -127,7 +124,7 @@ export function toRuntimeSpec(spec: PrototypeSpec, options: ToRuntimeSpecOptions
     }
     metadata[key] = meta;
     const runtimeElement = { ...bare, props: { ...props, [EUI_KEY_PROP]: key } };
-    delete (runtimeElement as { on?: unknown }).on;
+    if (isCustom) delete (runtimeElement as { on?: unknown }).on;
     return [key, runtimeElement];
   })) as Spec["elements"];
 
@@ -137,7 +134,7 @@ export function toRuntimeSpec(spec: PrototypeSpec, options: ToRuntimeSpecOptions
 /**
  * Removes all `on` bindings from both the spec and metadata, yielding an inert
  * tree that cannot dispatch actions (used by the editor's non-interactive
- * canvas). Custom `on` lives in metadata; builtin `on` lives in the spec.
+ * canvas). Authored `on` lives in metadata; builtin `on` additionally lives in the spec.
  */
 export function stripEvents(tree: RuntimeTree): RuntimeTree {
   const elements = Object.fromEntries(Object.entries(tree.spec.elements).map(([key, element]) => {

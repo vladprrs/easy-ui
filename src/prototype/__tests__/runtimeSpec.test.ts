@@ -18,7 +18,7 @@ describe("toRuntimeSpec RuntimeTree", () => {
     },
   };
 
-  it("moves custom on into metadata, injects only a string __euiKey, and records repeatKey", () => {
+  it("keeps authored events in metadata, injects a string __euiKey for builtin and custom elements, and records custom repeatKey", () => {
     const { spec: runtime, metadata } = toRuntimeSpec(spec, { customTypes: new Set(["MyCard", "Cards"]) });
     // Custom element: on stripped from spec, __euiKey injected, raw on in metadata.
     expect(runtime.elements.card?.on).toBeUndefined();
@@ -26,18 +26,19 @@ describe("toRuntimeSpec RuntimeTree", () => {
     expect(typeof runtime.elements.card?.props[EUI_KEY_PROP]).toBe("string");
     expect(metadata.card?.on?.press).toEqual({ action: "navigate", params: { screenId: "next" } });
     expect(metadata.card?.repeatKey).toBe("id");
-    // Builtin element (Hotspot): on stays in spec, no __euiKey.
+    // Builtin element (Hotspot): on stays in spec and is also available as metadata.
     expect(runtime.elements.hs?.on).toEqual({ press: { action: "back" } });
-    expect(runtime.elements.hs?.props[EUI_KEY_PROP]).toBeUndefined();
+    expect(runtime.elements.hs?.props[EUI_KEY_PROP]).toBe("hs");
+    expect(metadata.hs?.on?.press).toEqual({ action: "back" });
     // The raw $item binding survives unresolved into metadata's element props.
     expect(runtime.elements.card?.props.title).toEqual({ $item: "title" });
   });
 
-  it("does not treat any type as custom without customTypes (legacy passthrough)", () => {
+  it("keeps elements native without customTypes while still producing runtime markers and metadata", () => {
     const { spec: runtime, metadata } = toRuntimeSpec(spec);
     expect(runtime.elements.card?.on).toEqual({ press: { action: "navigate", params: { screenId: "next" } } });
-    expect(runtime.elements.card?.props[EUI_KEY_PROP]).toBeUndefined();
-    expect(metadata.card?.on).toBeUndefined();
+    expect(runtime.elements.card?.props[EUI_KEY_PROP]).toBe("card");
+    expect(metadata.card?.on?.press).toEqual({ action: "navigate", params: { screenId: "next" } });
   });
 
   it("stripEvents removes on from both spec and metadata", () => {
@@ -45,6 +46,8 @@ describe("toRuntimeSpec RuntimeTree", () => {
     const inert = stripEvents(tree);
     expect(inert.spec.elements.hs?.on).toBeUndefined();
     expect(inert.metadata.card?.on).toBeUndefined();
+    expect(inert.metadata.hs?.on).toBeUndefined();
+    expect(inert.spec.elements.hs?.props[EUI_KEY_PROP]).toBe("hs");
   });
 
   it("splitCanvas removes Hotspots and rebuilds metadata consistently", () => {
@@ -68,6 +71,7 @@ describe("toRuntimeSpec", () => {
     });
 
     expect(toRuntimeSpec(spec).spec.elements.text?.props).toEqual({
+      [EUI_KEY_PROP]: "text",
       top: { $cond: { $state: "/ready" }, $then: false, $else: 0 },
       nested: { value: { $cond: true, $then: "yes", $else: "no" } },
       array: [{ $cond: false, $then: 1, $else: 2 }],
@@ -106,13 +110,13 @@ describe("toRuntimeSpec", () => {
     };
     const runtime = toRuntimeSpec(spec);
     expect(runtime.spec.elements.list?.repeat).toEqual({ statePath: "/items", key: "id" });
-    expect(runtime.spec.elements.item?.props).toEqual({ label: { $item: "label" } });
+    expect(runtime.spec.elements.item?.props).toEqual({ label: { $item: "label" }, [EUI_KEY_PROP]: "item" });
   });
 
   it("resolves an $asset directive to its /api/assets URL", () => {
     const id = `asset_${"a".repeat(64)}`;
     const runtime = toRuntimeSpec(specWith({ src: { $asset: id }, nested: { icon: { $asset: id } } }));
-    expect(runtime.spec.elements.text?.props).toEqual({ src: `/api/assets/${id}`, nested: { icon: `/api/assets/${id}` } });
+    expect(runtime.spec.elements.text?.props).toEqual({ src: `/api/assets/${id}`, nested: { icon: `/api/assets/${id}` }, [EUI_KEY_PROP]: "text" });
   });
 
   it("leaves an $asset lookalike (extra keys) untouched", () => {
@@ -126,7 +130,7 @@ describe("toRuntimeSpec", () => {
       binding: { $bindState: "/name" },
       template: { $template: "Hello ${/name}" },
     };
-    expect(toRuntimeSpec(specWith(props)).spec.elements.text?.props).toEqual(props);
+    expect(toRuntimeSpec(specWith(props)).spec.elements.text?.props).toEqual({ ...props, [EUI_KEY_PROP]: "text" });
   });
 
   it("builds a slotIndices map on a custom parent and strips the slot field from the spec", () => {

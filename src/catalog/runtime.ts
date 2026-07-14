@@ -1,9 +1,10 @@
-import { defineRegistry, type Components } from "@json-render/react";
-import type { ComponentType } from "react";
+import { defineRegistry, type ComponentRegistry, type ComponentRenderProps, type Components } from "@json-render/react";
+import { createElement, type ComponentType } from "react";
 import { createCatalog } from "./catalog";
 import type { ComponentDefinition } from "./definitions";
 import { resolveBuiltinSystem } from "../designSystems";
 import { wrapCustomComponent, type EasyUIComponentProps } from "../player/easyUiRuntime";
+import { EUI_KEY_PROP } from "../prototype/runtimeSpec";
 
 const builtinCatalogs = new Map<string, ReturnType<typeof createCatalog>>();
 
@@ -26,6 +27,29 @@ export interface PlayerRuntimeDeps {
 export interface CustomPlayerRuntime {
   definitions: Record<string, ComponentDefinition>;
   components: Record<string, ComponentType>;
+}
+
+/** Stable production DOM attribute used to correlate rendered nodes with RuntimeTree metadata. */
+export const EUI_KEY_ATTRIBUTE = "data-eui-key";
+
+/**
+ * `@json-render/react` only emits its `data-jr-key` wrapper while devtools are
+ * active. Decorate every registry renderer with our own display:contents
+ * marker so builtin and custom elements remain discoverable in production
+ * without introducing a layout box (capture pixels stay unchanged).
+ */
+function decorateElementMarkers(registry: ComponentRegistry): ComponentRegistry {
+  return Object.fromEntries(Object.entries(registry).map(([name, Component]) => {
+    const MarkedComponent = (props: ComponentRenderProps) => {
+      const key = props.element.props?.[EUI_KEY_PROP];
+      const rendered = createElement(Component, props);
+      return typeof key === "string"
+        ? createElement("span", { [EUI_KEY_ATTRIBUTE]: key, style: { display: "contents" } }, rendered)
+        : rendered;
+    };
+    MarkedComponent.displayName = `EasyUiElementMarker(${name})`;
+    return [name, MarkedComponent];
+  }));
 }
 
 export function createPlayerRuntime(deps: PlayerRuntimeDeps, custom?: CustomPlayerRuntime, designSystemId = "shadcn") {
@@ -61,5 +85,5 @@ export function createPlayerRuntime(deps: PlayerRuntimeDeps, custom?: CustomPlay
   // not use it, so provide a stable no-op setter. Built-in state actions are
   // intercepted and handled directly by JSONUIProvider.
   const handlers = result.handlers(() => () => undefined, () => ({}));
-  return { registry: result.registry, handlers, executeAction: result.executeAction };
+  return { registry: decorateElementMarkers(result.registry), handlers, executeAction: result.executeAction };
 }

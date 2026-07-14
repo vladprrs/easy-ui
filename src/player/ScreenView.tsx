@@ -76,10 +76,11 @@ export function ScreenView() {
   const [device, setDevice] = useState(doc.device);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [hotkeysVisible, setHotkeysVisible] = useState(false);
-  const [noteVisible, setNoteVisible] = useState(false);
+  // Заметка привязана к экрану, для которого её открыли: смена экрана закрывает
+  // её без эффекта (react-hooks/set-state-in-effect).
+  const [noteScreenId, setNoteScreenId] = useState<string | null>(null);
   const stageZoom = useStageZoom();
   const screen = doc.screens.find((item) => item.id === screenId);
-  useEffect(() => setNoteVisible(false), [screenId]);
   useDocumentTitle(screen
     ? playerDocumentTitle(doc.name, screen.name, version === undefined ? undefined : Number(version))
     : player.screenMissingTitle);
@@ -219,18 +220,18 @@ export function ScreenView() {
       <Link className={pillGhost} to={presentPath}>{player.present}</Link>
       <button type="button" onClick={navigation.back} disabled={navigation.flowDepth === 0} className={`${pillGhost} disabled:opacity-50`}>{player.back}</button>
       <button type="button" onClick={navigation.restart} className={pillGhost}>{player.restart}</button>
-      {screen?.note ? <button type="button" aria-expanded={noteVisible} aria-controls="player-screen-note" onClick={() => setNoteVisible((visible) => !visible)} className={pillGhost}>{player.note}</button> : null}
+      {screen?.note ? <button type="button" aria-expanded={noteScreenId === screenId} aria-controls="player-screen-note" onClick={() => setNoteScreenId((open) => open === screenId ? null : screenId ?? null)} className={pillGhost}>{player.note}</button> : null}
       {inspector.enabled && <button type="button" aria-pressed={inspector.visible} onClick={inspector.toggle} className={pillGhost}>{inspectorStrings.title}</button>}
     </>}
   />;
   if (!screen) return <main className="flex h-dvh min-h-0 flex-col">{chrome}<div className="flex min-h-0 flex-1 items-start justify-center bg-eui-graphite p-8 text-white"><section role="alert" className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h2 className="font-eui-display text-2xl font-bold">{player.screenMissingTitle}</h2><p className="mt-2 text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">{common.backToGallery}</Link></section></div></main>;
 
-  const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} />;
+  const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} misclickHighlights />;
 
   return <main className="flex h-dvh min-h-0 flex-col">
     {hotkeysVisible && <PlayerHotkeysHelp onClose={() => setHotkeysVisible(false)} />}
     {chrome}
-    {noteVisible && screen.note ? <section id="player-screen-note" aria-label={player.notePanelAria} className="border-b border-eui-brand/20 bg-eui-lilac-50 px-4 py-3 text-eui-ink sm:px-6">
+    {noteScreenId === screenId && screen.note ? <section id="player-screen-note" aria-label={player.notePanelAria} className="border-b border-eui-brand/20 bg-eui-lilac-50 px-4 py-3 text-eui-ink sm:px-6">
       <p className="whitespace-pre-wrap font-eui-ui text-sm">{screen.note}</p>
     </section> : null}
     {isNonLatest && currentPublished && latestPublished ? <div role="status" data-testid="non-latest-version-banner" className="flex flex-wrap items-center gap-2 border-b border-eui-brand/20 bg-eui-lilac-100 px-4 py-2 font-eui-ui text-sm text-eui-ink sm:px-6">
