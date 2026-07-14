@@ -8,7 +8,8 @@ import { usePlayerNavigation } from "./navigation";
 import { splitCanvas, toRuntimeSpec } from "../prototype/runtimeSpec";
 import { CanvasLayers } from "./CanvasLayers";
 import { EasyUiRuntimeProvider } from "./easyUiRuntime";
-import { pillGhostOnDark } from "../app/chrome";
+import { pillGhost, pillGhostOnDark } from "../app/chrome";
+import { PrototypeChrome } from "../app/PrototypeChrome";
 import { player, playerDocumentTitle } from "../app/strings/player";
 import { common } from "../app/strings/common";
 import { useDocumentTitle } from "../app/useDocumentTitle";
@@ -53,7 +54,19 @@ export function ScreenView() {
     return { content: tree.spec, hotspots: [] };
   }, [screenCanvas, tree]);
   useEffect(() => { runtime.setScreenSpec(specs?.content ?? null); return () => runtime.setScreenSpec(null); }, [runtime, specs]);
-  if (!screen) return <main className="flex h-full items-start justify-center bg-eui-graphite p-8 text-white"><section className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h1 className="font-eui-display text-2xl font-bold">{player.screenMissingTitle}</h1><p className="mt-2 text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">{common.backToGallery}</Link></section></main>;
+  const numericVersion = version === undefined ? undefined : Number(version);
+  // Единый хром /p/* (WF-4): вью поставляет только слоты, тело вью — stage.
+  const chrome = <PrototypeChrome
+    prototypeId={doc.id}
+    prototypeName={doc.name}
+    view="player"
+    version={numericVersion}
+    actions={<>
+      <button type="button" onClick={navigation.back} disabled={navigation.flowDepth === 0} className={`${pillGhost} disabled:opacity-50`}>{player.back}</button>
+      <button type="button" onClick={navigation.restart} className={pillGhost}>{player.restart}</button>
+    </>}
+  />;
+  if (!screen) return <main className="flex h-full min-h-0 flex-col">{chrome}<div className="flex min-h-0 flex-1 items-start justify-center bg-eui-graphite p-8 text-white"><section role="alert" className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h2 className="font-eui-display text-2xl font-bold">{player.screenMissingTitle}</h2><p className="mt-2 text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">{common.backToGallery}</Link></section></div></main>;
 
   const rendered = <EasyUiRuntimeProvider value={{ metadata: tree!.metadata, runtime, definitions: customDefinitions, onError }}>
     {screen.canvas
@@ -61,18 +74,9 @@ export function ScreenView() {
       : <Renderer registry={registry} spec={specs!.content!} />}
   </EasyUiRuntimeProvider>;
 
-  return <main className="flex h-full min-h-0 flex-col bg-eui-graphite text-white">
-    <header className="flex items-center gap-4 border-b border-white/15 px-6 py-3 font-eui-ui">
-      <Link className="text-sm text-eui-ondark-2 hover:text-white" to="/">{player.backToGallery}</Link>
-      <h1 className="font-eui-display font-medium text-white">{doc.name}</h1>
-      {version === undefined ? null : <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-white">v{version}</span>}
-      <div className="ml-auto flex gap-2">
-        <button type="button" onClick={navigation.back} disabled={navigation.flowDepth === 0} className={`${pillGhostOnDark} disabled:opacity-50`}>{player.back}</button>
-        <button type="button" onClick={navigation.restart} className={pillGhostOnDark}>{player.restart}</button>
-        <Link className={pillGhostOnDark} to={`${version === undefined ? `/p/${doc.id}` : `/p/${doc.id}/v/${version}`}/cjm`}>CJM</Link>
-      </div>
-    </header>
-    <div className="flex min-h-0 flex-1">
+  return <main className="flex h-full min-h-0 flex-col">
+    {chrome}
+    <div className="flex min-h-0 flex-1 bg-eui-graphite text-white">
       <ScreensSidebar doc={doc} currentScreen={screen.id} />
       <DeviceFrame defaultDevice={doc.device} canvas={screen.canvas}>
         <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>{rendered}</ScreenErrorBoundary>

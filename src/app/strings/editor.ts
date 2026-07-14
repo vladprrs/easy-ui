@@ -4,7 +4,6 @@
 export const editorDocumentTitle = (docName: string) => `${docName} · Редактор`;
 
 export const editor = {
-  backToCjm: "← Назад к CJM",
   dirtyAria: "Есть несохранённые изменения",
   saving: "Сохранение…",
   notSaved: "Не сохранено",

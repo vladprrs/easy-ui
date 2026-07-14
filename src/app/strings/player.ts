@@ -18,7 +18,6 @@ export const playerDocumentTitle = (docName: string, screenName: string, version
   version === undefined ? `${docName} · ${screenName}` : `${docName} v${version} · ${screenName}`;
 
 export const player = {
-  backToGallery: "← Галерея",
   back: "Назад",
   restart: "Начать сначала",
   screensAria: "Экраны",

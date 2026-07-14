@@ -38,7 +38,7 @@ test("checkout CJM opens from gallery and preserves player history semantics", a
   await expect(page).toHaveURL(/\/p\/checkout\/cjm$/);
   await expect(page.getByRole("list", { name: "Экраны CJM" })).toBeVisible();
 
-  await page.getByRole("link", { name: "Открыть плеер" }).click();
+  await page.getByRole("link", { name: "Плеер", exact: true }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/catalog$/);
   await page.getByRole("link", { name: "CJM", exact: true }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/cjm$/);

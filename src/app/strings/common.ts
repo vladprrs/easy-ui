@@ -41,6 +41,18 @@ export const appShell = {
   notFoundCta: "В галерею",
 } as const;
 
+// Единый хром прототипа /p/* (WF-4): крошка, сегменты вью, version/draft-бейджи.
+export const prototypeChrome = {
+  breadcrumbAria: "Хлебные крошки",
+  gallery: "Галерея",
+  viewsAria: "Разделы прототипа",
+  player: "Плеер",
+  cjm: "CJM",
+  editor: "Редактор",
+  draftBadge: "черновик",
+  versionBadge: (version: number) => `v${version}`,
+} as const;
+
 export interface ApiErrorDetails {
   /** Оригинальное серверное сообщение — используется как fallback-дополнение. */
   message?: string;

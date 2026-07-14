@@ -5,8 +5,6 @@ export const cjmDocumentTitle = (docName: string, version?: number) =>
   version === undefined ? `${docName} · CJM` : `${docName} v${version} · CJM`;
 
 export const cjm = {
-  edit: "Редактировать",
-  openPlayer: "Открыть плеер",
   screensAria: "Экраны CJM",
   tileErrorTitle: "Экран не удалось отобразить",
   noContent: "Нет содержимого",

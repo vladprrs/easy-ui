@@ -44,13 +44,16 @@ describe("CjmShell", () => {
     expect(screen.getByText("From cart to success")).toBeTruthy();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     expect(screen.getByRole("link", { name: "Открыть экран «Cart» прототипа «Checkout journey» в плеере" }).getAttribute("href")).toBe("/p/journey/s/cart");
-    expect(screen.getByRole("link", { name: "Открыть плеер" }).getAttribute("href")).toBe("/p/journey");
+    expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey");
     expect(document.title).toBe("Checkout journey · CJM — easy-ui");
   });
 
   it("keeps published tile links version-aware", async () => {
     renderAt("/p/journey/v/2/cjm");
     expect((await screen.findByRole("link", { name: "Открыть экран «Success» прототипа «Checkout journey» в плеере" })).getAttribute("href")).toBe("/p/journey/v/2/s/success");
+    // PrototypeChrome version policy (WF-4): player keeps /v/N, editor goes to the draft.
+    expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey/v/2");
+    expect(screen.getByRole("link", { name: /Редактор/ }).getAttribute("href")).toBe("/p/journey/edit");
     expect(document.title).toBe("Checkout journey v2 · CJM — easy-ui");
   });
 
