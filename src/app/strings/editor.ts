@@ -68,6 +68,7 @@ export const editor = {
   // Инспектор редактора
   inspectorAria: "Инспектор",
   sectionElement: "Элемент",
+  sectionEvents: "События",
   sectionScreen: "Экран",
   sectionPrototype: "Прототип",
   screenMissing: "Экран не найден.",

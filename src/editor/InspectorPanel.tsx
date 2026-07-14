@@ -4,7 +4,7 @@ import { inputBase, kicker } from "../app/chrome";
 import { deviceNames } from "../app/strings/common";
 import { editor } from "../app/strings/editor";
 import type { ComponentDefinition } from "../catalog/definitions";
-import { jsonValueSchema, type JsonValue } from "../prototype/schema";
+import { jsonValueSchema, type JsonValue, type PrototypeDoc } from "../prototype/schema";
 import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "../prototype/stateOverrides";
 import type { EditorAction, EditorState } from "./editorReducer";
 import { ElementTree, getElementPath } from "./ElementTree";
@@ -15,6 +15,33 @@ const overridesSchema = z.record(z.string(), jsonValueSchema);
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return <section className="border-b border-eui-ink/10 p-4 last:border-b-0"><h2 className={`${kicker} mb-3 font-eui-ui`}>{title}</h2>{children}</section>;
+}
+
+function formatParamValue(value: unknown) {
+  if (typeof value === "string") return value;
+  const json = JSON.stringify(value);
+  const text = json ?? String(value);
+  return text.length > 80 ? `${text.slice(0, 77)}…` : text;
+}
+
+function formatAction(action: { action: string; params?: Record<string, unknown> }, screenNames: Map<string, string>) {
+  const params = action.params ?? {};
+  if (action.action === "navigate" && typeof params.screenId === "string") return `navigate(${screenNames.get(params.screenId) ?? params.screenId})`;
+  if (action.action === "openUrl" && typeof params.url === "string") return `openUrl(${params.url})`;
+  const summary = Object.entries(params).map(([key, value]) => `${key}: ${formatParamValue(value)}`).join(", ");
+  return `${action.action}(${summary})`;
+}
+
+function ElementEvents({ on, screenNames }: { on: NonNullable<PrototypeDoc["screens"][number]["spec"]["elements"][string]["on"]>; screenNames: Map<string, string> }) {
+  return <div className="mt-4 border-t border-eui-ink/10 pt-4">
+    <h3 className={`${kicker} mb-3 font-eui-ui`}>{editor.sectionEvents}</h3>
+    <ul className="space-y-2 break-words font-eui-ui text-xs text-eui-ink">
+      {Object.entries(on).map(([eventName, handler]) => {
+        const actions = Array.isArray(handler) ? handler : [handler];
+        return <li key={eventName}>{`${eventName} → ${actions.map((action) => formatAction(action, screenNames)).join(", ")}`}</li>;
+      })}
+    </ul>
+  </div>;
 }
 
 function BlurText({ label, value, multiline, onCommit }: { label: string; value: string; multiline?: boolean; onCommit: (value: string) => void }) {
@@ -74,6 +101,7 @@ export function InspectorPanel({ state, definitions, dispatch }: { state: Editor
   const effectiveState = mergeScreenState(state.doc.state, screen.stateOverrides);
   const elementPath = ["screens", screenIndex, "spec", "elements", elementKey ?? "", "props"];
   const breadcrumbKeys = elementKey ? getElementPath(screen.spec, elementKey) : [];
+  const screenNames = new Map(state.doc.screens.map((item) => [item.id, item.name]));
 
   return <aside className="w-90 shrink-0 overflow-y-auto border-l border-eui-ink/10 bg-white" aria-label={editor.inspectorAria}>
     <Section title={editor.sectionElement}>
@@ -88,6 +116,7 @@ export function InspectorPanel({ state, definitions, dispatch }: { state: Editor
         <p className="mb-3 font-eui-ui text-sm"><span className="text-eui-slate-500">{editor.typeLabel}</span> <strong>{element.type}</strong></p>
         {definition ? <PropsForm definition={definition} values={element.props} effectiveState={effectiveState} path={elementPath} onCommit={(props) => dispatch({ type: "set-element-props", screenId: screen.id, elementKey: elementKey!, props })} />
           : <JsonEditor label="Props (JSON)" value={element.props} onCommit={(props) => dispatch({ type: "set-element-props", screenId: screen.id, elementKey: elementKey!, props })} />}
+        {element.on && Object.keys(element.on).length ? <ElementEvents on={element.on} screenNames={screenNames} /> : null}
       </div> : <p className="mt-3 font-eui-ui text-sm text-eui-slate-500">{editor.selectElementHint}</p>}
     </Section>
     <Section title={editor.sectionScreen}><div className="space-y-3">
