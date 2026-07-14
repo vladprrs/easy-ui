@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { createPrototype, getCatalogManifest, listDesignSystems, listPrototypes, listPrototypeVersions, type PrototypeSummary, type PrototypeVersionSummary } from "../api/client";
 import { useApi } from "../api/hooks";
 import { chip, chipActive, headingPage, inputBase, pillGhost, pillPrimary, plate } from "../app/chrome";
@@ -7,6 +7,26 @@ import { common } from "../app/strings/common";
 import { deviceNames, gallery, versionLink } from "../app/strings/gallery";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { BUILTIN_TEMPLATE_VERSION, buildBuiltinPrototypeTemplate, buildCustomPrototypeTemplate, createPrototypeId, findCustomStarterComponent, isBuiltinDesignSystem } from "./prototypeTemplates";
+import { GalleryPreview, GALLERY_PREVIEWS_ENABLED } from "./GalleryPreview";
+
+export type GallerySort = "updated" | "name";
+
+export function filterAndSortPrototypes(prototypes: PrototypeSummary[], systemId: string | null, query: string, sort: GallerySort): PrototypeSummary[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase("ru");
+  const filtered = prototypes
+    .filter((prototype) => systemId === null || (prototype.designSystem ?? "shadcn") === systemId)
+    .filter((prototype) => !normalizedQuery || prototype.name.toLocaleLowerCase("ru").includes(normalizedQuery));
+  return [...filtered].sort(sort === "name"
+      ? (left, right) => left.name.localeCompare(right.name, "ru", { numeric: true, sensitivity: "base" })
+      : (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.name.localeCompare(right.name, "ru", { numeric: true, sensitivity: "base" }));
+}
+
+const updatedAtFormatter = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+
+export function formatGalleryUpdatedAt(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? value : updatedAtFormatter.format(date);
+}
 
 type VersionsState =
   | { status: "idle" | "loading"; data: PrototypeVersionSummary[] }
@@ -52,10 +72,13 @@ type CreateDialogState = {
 export function GalleryPage() {
   useDocumentTitle(gallery.title);
   const navigate = useNavigate();
+  const location = useLocation();
   const prototypes = useApi(listPrototypes, []);
   const designSystems = useApi(listDesignSystems, []);
   const catalog = useApi(getCatalogManifest, []);
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<GallerySort>("updated");
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null);
   const systems = useMemo(() => {
     if (prototypes.status !== "ready" || designSystems.status !== "ready") return [];
@@ -69,9 +92,10 @@ export function GalleryPage() {
     return [...registered, ...legacy];
   }, [designSystems, prototypes]);
   const systemNames = useMemo(() => new Map(systems.map(({ id, name }) => [id, name])), [systems]);
-  const visiblePrototypes = prototypes.status === "ready"
-    ? prototypes.data.filter((prototype) => selectedSystem === null || (prototype.designSystem ?? "shadcn") === selectedSystem)
-    : [];
+  const visiblePrototypes = useMemo(() => prototypes.status === "ready"
+    ? filterAndSortPrototypes(prototypes.data, selectedSystem, query, sort)
+    : [], [prototypes, query, selectedSystem, sort]);
+  const previewsEnabled = GALLERY_PREVIEWS_ENABLED && new URLSearchParams(location.search).get("galleryPreviews") !== "off";
   const loading = prototypes.status === "loading" || designSystems.status === "loading";
   const failed = prototypes.status === "error" || designSystems.status === "error";
   const reload = () => { prototypes.reload(); designSystems.reload(); };
@@ -100,7 +124,7 @@ export function GalleryPage() {
     }
   };
 
-  return <main className="mx-auto h-full w-full max-w-6xl p-6 font-eui-ui sm:p-8">
+  return <main className="mx-auto h-full w-full max-w-6xl p-6 font-eui-ui sm:p-8" data-gallery-ready={!loading && !failed ? "true" : "false"}>
     <div className="flex flex-wrap items-center justify-between gap-4">
       <h1 className={headingPage}>{gallery.title}</h1>
       {!loading && !failed ? <button type="button" className={pillPrimary} onClick={openCreateDialog}>{gallery.newPrototype}</button> : null}
@@ -112,19 +136,32 @@ export function GalleryPage() {
       <button type="button" aria-pressed={selectedSystem === null} className={selectedSystem === null ? chipActive : chip} onClick={() => setSelectedSystem(null)}>{gallery.allSystems}</button>
       {systems.map((system) => <button type="button" key={system.id} aria-pressed={selectedSystem === system.id} className={selectedSystem === system.id ? chipActive : chip} onClick={() => setSelectedSystem(system.id)}>{system.name}</button>)}
     </div> : null}
+    {!loading && !failed && prototypes.status === "ready" && prototypes.data.length ? <div className="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+      <label className="min-w-0 text-sm font-medium">{gallery.searchLabel}
+        <input type="search" className={`${inputBase} mt-1.5 w-full`} value={query} placeholder={gallery.searchPlaceholder} onChange={(event) => setQuery(event.target.value)} />
+      </label>
+      <label className="text-sm font-medium">{gallery.sortLabel}
+        <select className={`${inputBase} mt-1.5 w-full bg-white sm:w-56`} value={sort} onChange={(event) => setSort(event.target.value as GallerySort)}>
+          <option value="updated">{gallery.sortUpdated}</option>
+          <option value="name">{gallery.sortName}</option>
+        </select>
+      </label>
+    </div> : null}
     {!loading && !failed && visiblePrototypes.length ? <ul className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-      {visiblePrototypes.map((prototype) => <li className="relative flex flex-col rounded-3xl bg-eui-lav p-6 transition-shadow focus-within:shadow-lg hover:shadow-lg" key={prototype.id}>
-        <h2 className="font-eui-display text-xl font-medium">
+      {visiblePrototypes.map((prototype) => <li className="relative flex min-w-0 flex-col rounded-3xl bg-eui-lav p-6 transition-shadow focus-within:shadow-lg hover:shadow-lg" key={prototype.id}>
+        <h2 className="min-w-0 font-eui-display text-xl font-medium [overflow-wrap:anywhere]">
           <Link
             className="after:absolute after:inset-0 after:rounded-3xl after:content-[''] focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-eui-brand"
             to={`/p/${prototype.id}`}
           >{prototype.name}</Link>
         </h2>
-        <p className="mt-2 min-h-10 text-sm text-eui-slate-500">{prototype.description ?? gallery.noDescription}</p>
-        <dl className="mt-5 grid grid-cols-3 gap-3 text-sm">
+        <p className="mt-2 min-h-10 break-words text-sm text-eui-slate-500 [overflow-wrap:anywhere]">{prototype.description ?? gallery.noDescription}</p>
+        {previewsEnabled && isBuiltinDesignSystem(prototype.designSystem ?? "shadcn") ? <GalleryPreview prototypeId={prototype.id} /> : null}
+        <dl className="mt-5 grid min-w-0 grid-cols-2 gap-3 text-sm xl:grid-cols-4">
           <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.deviceLabel}</dt><dd className="inline-flex rounded-full bg-white px-2.5 py-1 text-xs font-medium">{deviceNames[prototype.device]}</dd></div>
           <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.screensLabel}</dt><dd className="inline-flex rounded-full bg-white px-2.5 py-1 text-xs font-medium">{prototype.screenCount}</dd></div>
-          <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.systemLabel}</dt><dd className="inline-flex rounded-full bg-eui-lilac-200 px-2.5 py-1 text-xs font-medium">{systemNames.get(prototype.designSystem ?? "shadcn") ?? prototype.designSystem ?? "shadcn"}</dd></div>
+          <div className="flex min-w-0 flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.systemLabel}</dt><dd className="inline-flex max-w-full break-all rounded-full bg-eui-lilac-200 px-2.5 py-1 text-xs font-medium">{systemNames.get(prototype.designSystem ?? "shadcn") ?? prototype.designSystem ?? "shadcn"}</dd></div>
+          <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.updatedLabel}</dt><dd className="text-xs font-medium"><time dateTime={prototype.updatedAt}>{formatGalleryUpdatedAt(prototype.updatedAt)}</time></dd></div>
         </dl>
         <div className="relative z-10 mt-5 flex flex-wrap gap-2">
           <Link className={`${pillGhost} bg-white`} to={`/p/${prototype.id}/present`}>{gallery.presentLink}</Link>
@@ -135,7 +172,7 @@ export function GalleryPage() {
       </li>)}
     </ul> : null}
     {!loading && !failed && !visiblePrototypes.length ? prototypes.status === "ready" && prototypes.data.length
-      ? <p className={`${plate} mt-8 text-eui-slate-500`}>{gallery.emptyFiltered}</p>
+      ? <p className={`${plate} mt-8 text-eui-slate-500`}>{query.trim() ? gallery.emptySearch : gallery.emptyFiltered}</p>
       : <section className={`${plate} mt-8`}>
         <h2 className="font-eui-display text-xl font-medium">{gallery.emptyTitle}</h2>
         <p className="mt-2 text-eui-slate-500">{gallery.empty}</p>

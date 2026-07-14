@@ -1,15 +1,32 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPrototype, getCatalogManifest, listDesignSystems, listPrototypes, listPrototypeVersions } from "../api/client";
+import { createPrototype, getCatalogManifest, getPrototypeDraft, listDesignSystems, listPrototypes, listPrototypeVersions } from "../api/client";
 import { GalleryPage } from "./GalleryPage";
 
-vi.mock("../api/client", () => ({ createPrototype: vi.fn(), getCatalogManifest: vi.fn(), listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn() }));
+vi.mock("../api/client", () => ({ createPrototype: vi.fn(), getCatalogManifest: vi.fn(), getPrototypeDraft: vi.fn(), listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn() }));
 
 const summary = {
   id: "hello-world", name: "Hello World", description: "A minimal two-screen prototype.", device: "mobile" as const,
   screenCount: 2, headRev: 3, latestVersion: 2, updatedAt: "2026-07-10T00:00:00.000Z",
 };
+
+const draft = {
+  doc: {
+    version: 1 as const, id: summary.id, name: summary.name, description: summary.description, designSystem: "shadcn", device: "mobile" as const,
+    startScreen: "welcome", state: {}, screens: [{ id: "welcome", name: "Welcome", spec: { root: "copy", elements: { copy: { type: "Text", props: { text: "Preview" } } } } }],
+  },
+  rev: 3, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [],
+};
+
+type IntersectionCallback = ConstructorParameters<typeof IntersectionObserver>[0];
+let intersectionObservers: { callback: IntersectionCallback; element: Element | null }[] = [];
+
+function intersect(element: Element, isIntersecting: boolean) {
+  const observer = intersectionObservers.find((candidate) => candidate.element === element);
+  if (!observer) throw new Error("Element is not observed");
+  observer.callback([{ isIntersecting, target: element } as IntersectionObserverEntry], {} as IntersectionObserver);
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -31,6 +48,23 @@ describe("GalleryPage", () => {
     vi.mocked(listPrototypeVersions).mockReset();
     vi.mocked(createPrototype).mockReset();
     vi.mocked(getCatalogManifest).mockReset();
+    vi.mocked(getPrototypeDraft).mockReset();
+    vi.mocked(getPrototypeDraft).mockResolvedValue(draft);
+    intersectionObservers = [];
+    vi.stubGlobal("IntersectionObserver", class {
+      readonly root = null;
+      readonly rootMargin = "0px";
+      readonly thresholds = [0];
+      private record: { callback: IntersectionCallback; element: Element | null };
+      constructor(callback: IntersectionCallback) {
+        this.record = { callback, element: null };
+        intersectionObservers.push(this.record);
+      }
+      observe(element: Element) { this.record.element = element; }
+      unobserve() {}
+      disconnect() {}
+      takeRecords() { return []; }
+    });
     vi.mocked(getCatalogManifest).mockResolvedValue({ components: [] });
     vi.mocked(createPrototype).mockResolvedValue({ id: "created-prototype", rev: 1, warnings: [] });
     vi.mocked(listPrototypeVersions).mockResolvedValue([{ version: 2, rev: 3, publishedAt: "2026-07-10T00:00:00.000Z" }]);
@@ -50,12 +84,68 @@ describe("GalleryPage", () => {
     expect(screen.getByRole("heading", { name: "Hello World" })).toBeTruthy();
     expect(screen.getByText("Телефон")).toBeTruthy();
     expect(screen.getByText("2")).toBeTruthy();
+    expect(screen.getByText("10 июл. 2026 г.")).toBeTruthy();
     const draftLink = screen.getByRole("link", { name: "Hello World" });
     expect(within(screen.getByRole("heading", { name: "Hello World" }).closest("li")!).getByText("Shadcn")).toBeTruthy();
     expect(draftLink.getAttribute("href")).toBe("/p/hello-world");
     expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/hello-world/cjm");
     fireEvent.click(screen.getByText("Версии…"));
     expect((await screen.findByRole("link", { name: "Версия v2" })).getAttribute("href")).toBe("/p/hello-world/v/2");
+  });
+
+  it("loads a preview only after intersection and unmounts it offscreen", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([summary]);
+    renderGallery();
+    const card = (await screen.findByRole("heading", { name: "Hello World" })).closest("li")!;
+    const previewRoot = card.querySelector("[data-gallery-preview]")!;
+    expect(getPrototypeDraft).not.toHaveBeenCalled();
+    await waitFor(() => expect(intersectionObservers.some((candidate) => candidate.element === previewRoot)).toBe(true));
+
+    await act(async () => intersect(previewRoot, true));
+    expect(await screen.findByTestId("gallery-preview-hello-world")).toBeTruthy();
+    expect(getPrototypeDraft).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("gallery-preview-hello-world").querySelector("[inert]")).not.toBeNull();
+
+    await act(async () => intersect(previewRoot, false));
+    expect(screen.queryByTestId("gallery-preview-hello-world")).toBeNull();
+    expect(previewRoot.getAttribute("data-gallery-preview-mounted")).toBe("false");
+  });
+
+  it("limits concurrent preview document loads to four", async () => {
+    const requests = Array.from({ length: 5 }, () => deferred<typeof draft>());
+    let requestIndex = 0;
+    vi.mocked(getPrototypeDraft).mockImplementation(() => requests[requestIndex++]!.promise);
+    vi.mocked(listPrototypes).mockResolvedValue(Array.from({ length: 5 }, (_, index) => ({
+      ...summary, id: `prototype-${index}`, name: `Prototype ${index}`,
+    })));
+    renderGallery();
+    await screen.findByRole("heading", { name: "Prototype 4" });
+    const previewRoots = Array.from(document.querySelectorAll("[data-gallery-preview]"));
+    await waitFor(() => expect(intersectionObservers.filter(({ element }) => previewRoots.includes(element!))).toHaveLength(5));
+
+    await act(async () => { for (const root of previewRoots) intersect(root, true); });
+    await waitFor(() => expect(getPrototypeDraft).toHaveBeenCalledTimes(4));
+    await act(async () => requests[0]!.resolve(draft));
+    await waitFor(() => expect(getPrototypeDraft).toHaveBeenCalledTimes(5));
+    await act(async () => { for (const request of requests.slice(1)) request.resolve(draft); });
+  });
+
+  it("searches by name and sorts by updated date or name", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([
+      { ...summary, id: "zulu", name: "Зебра", updatedAt: "2026-07-12T00:00:00.000Z" },
+      { ...summary, id: "alpha", name: "Альфа", updatedAt: "2026-07-01T00:00:00.000Z" },
+    ]);
+    renderGallery();
+    await screen.findByRole("heading", { name: "Альфа" });
+    expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Зебра", "Альфа"]);
+
+    fireEvent.change(screen.getByLabelText("Сортировка"), { target: { value: "name" } });
+    expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Альфа", "Зебра"]);
+    fireEvent.change(screen.getByLabelText("Поиск по названию"), { target: { value: "зеб" } });
+    expect(screen.getByRole("heading", { name: "Зебра" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Альфа" })).toBeNull();
+    fireEvent.change(screen.getByLabelText("Поиск по названию"), { target: { value: "нет такого" } });
+    expect(screen.getByText("По вашему запросу ничего не найдено.")).toBeTruthy();
   });
 
   it("stretches the card link over a non-interactive layer and keeps actions separately focusable", async () => {
