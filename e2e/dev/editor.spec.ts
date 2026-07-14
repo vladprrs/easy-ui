@@ -53,7 +53,7 @@ async function cleanup(request: APIRequestContext) {
 // The dev project is serial and api.spec.ts mutates hello-world, so this test owns a unique prototype.
 test.describe("prototype editor", () => {
   test.beforeAll(async ({ request }) => {
-    const created = await request.post(`${api}/prototypes`, { data: { doc } });
+    const created = await request.post(`${api}/prototypes`, { data: { doc, message: "Initial E2E revision" } });
     expect(created.status()).toBe(201);
   });
 
@@ -62,6 +62,7 @@ test.describe("prototype editor", () => {
   });
 
   test("edits text, saves and publishes it, then opens the immutable player version", async ({ page }) => {
+    test.setTimeout(60_000);
     await page.setViewportSize({ width: 760, height: 800 });
     await page.goto(`/p/${prototypeId}/edit`);
 
@@ -110,5 +111,27 @@ test.describe("prototype editor", () => {
 
     await page.goto(`/p/${prototypeId}/edit`);
     await expect(canvas.getByText(updatedText, { exact: true })).toBeVisible();
+
+    // W3-2: dirty restore явно подтверждается, затем editor полностью rebейзится
+    // на новую server head и следующий save использует её rev без 409.
+    const updatedBox = await canvas.getByText(updatedText, { exact: true }).boundingBox();
+    expect(updatedBox).not.toBeNull();
+    await page.mouse.click(updatedBox!.x + updatedBox!.width / 2, updatedBox!.y + updatedBox!.height / 2);
+    await inspector.getByLabel("text", { exact: true }).fill("Unsaved text to discard");
+    await inspector.getByLabel("text", { exact: true }).press("Enter");
+    await expect(page.getByText("Не сохранено", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "История", exact: true }).click();
+    const history = page.getByRole("region", { name: "История прототипа" });
+    await expect(history.getByText("Initial E2E revision", { exact: true })).toBeVisible();
+    await history.getByText("Initial E2E revision", { exact: true }).locator("..").locator("..").getByRole("button", { name: "Восстановить" }).click();
+    const restoreDialog = page.getByRole("dialog", { name: "Подтверждение восстановления" });
+    await expect(restoreDialog).toContainText("Текущие несохранённые правки будут отброшены");
+    await restoreDialog.getByRole("button", { name: "Восстановить", exact: true }).click();
+    await expect(canvas.getByText(initialText, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Отменить правку/ })).toBeDisabled();
+    const saveAfterRestore = page.waitForResponse((response) => response.url().endsWith(`/api/prototypes/${prototypeId}`) && response.request().method() === "PUT");
+    await page.getByRole("button", { name: "Сохранить", exact: true }).click();
+    expect((await saveAfterRestore).status()).toBe(200);
+    await expect(page.getByText("Сохранено", { exact: true })).toBeVisible();
   });
 });

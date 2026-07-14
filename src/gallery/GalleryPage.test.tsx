@@ -1,10 +1,10 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listDesignSystems, listPrototypes } from "../api/client";
+import { listDesignSystems, listPrototypes, listPrototypeVersions } from "../api/client";
 import { GalleryPage } from "./GalleryPage";
 
-vi.mock("../api/client", () => ({ listDesignSystems: vi.fn(), listPrototypes: vi.fn() }));
+vi.mock("../api/client", () => ({ listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn() }));
 
 const summary = {
   id: "hello-world", name: "Hello World", description: "A minimal two-screen prototype.", device: "mobile" as const,
@@ -19,14 +19,17 @@ function deferred<T>() {
 }
 
 function renderGallery() {
-  const router = createMemoryRouter([{ path: "/", element: <GalleryPage /> }], { initialEntries: ["/"] });
+  const router = createMemoryRouter([{ path: "/", element: <GalleryPage /> }, { path: "/p/:id/v/:version", element: <p>Плеер версии</p> }], { initialEntries: ["/"] });
   render(<RouterProvider router={router} />);
+  return router;
 }
 
 describe("GalleryPage", () => {
   beforeEach(() => {
     vi.mocked(listPrototypes).mockReset();
     vi.mocked(listDesignSystems).mockReset();
+    vi.mocked(listPrototypeVersions).mockReset();
+    vi.mocked(listPrototypeVersions).mockResolvedValue([{ version: 2, rev: 3, publishedAt: "2026-07-10T00:00:00.000Z" }]);
     vi.mocked(listDesignSystems).mockResolvedValue({ designSystems: [
       { id: "shadcn", name: "Shadcn", description: "", builtinCatalogHash: "one", components: [] },
       { id: "wireframe", name: "Wireframe", description: "", builtinCatalogHash: "two", components: [] },
@@ -46,9 +49,9 @@ describe("GalleryPage", () => {
     const draftLink = screen.getByRole("link", { name: "Hello World" });
     expect(within(screen.getByRole("heading", { name: "Hello World" }).closest("li")!).getByText("Shadcn")).toBeTruthy();
     expect(draftLink.getAttribute("href")).toBe("/p/hello-world");
-    expect(screen.getByRole("link", { name: "Версия v2" }).getAttribute("href")).toBe("/p/hello-world/v/2");
     expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/hello-world/cjm");
-    expect(screen.getByRole("link", { name: "CJM v2" }).getAttribute("href")).toBe("/p/hello-world/v/2/cjm");
+    fireEvent.click(screen.getByText("Версии…"));
+    expect((await screen.findByRole("link", { name: "Версия v2" })).getAttribute("href")).toBe("/p/hello-world/v/2");
   });
 
   it("stretches the card link over a non-interactive layer and keeps actions separately focusable", async () => {
@@ -66,12 +69,26 @@ describe("GalleryPage", () => {
     }
     // Actions sit above the stretched link with their own tab stops.
     const actions = within(card).getAllByRole("link").filter((link) => link !== cardLink);
-    expect(actions.map((link) => link.textContent)).toEqual(["Презентация", "CJM", "Редактор", "Версия v2", "CJM v2"]);
+    expect(actions.map((link) => link.textContent)).toEqual(["Презентация", "CJM", "Редактор"]);
     // Кнопка «Презентация» (W1-2) ведёт на present-маршрут вне Layout/PrototypeChrome.
     expect(within(card).getByRole("link", { name: "Презентация" }).getAttribute("href")).toBe("/p/hello-world/present");
     const actionsRow = actions[0]!.parentElement!;
     expect(actionsRow.className).toContain("relative");
     expect(actionsRow.className).toContain("z-10");
+    expect(within(card).getByText("Версии…").closest("details")?.className).toContain("relative");
+  });
+
+  it("opens any published version from the card versions menu", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([summary]);
+    vi.mocked(listPrototypeVersions).mockResolvedValue([
+      { version: 3, rev: 5, publishedAt: "2026-07-12T00:00:00.000Z" },
+      { version: 2, rev: 3, publishedAt: "2026-07-10T00:00:00.000Z" },
+    ]);
+    const router = renderGallery();
+    await screen.findByRole("heading", { name: "Hello World" });
+    fireEvent.click(screen.getByText("Версии…"));
+    fireEvent.click(await screen.findByRole("link", { name: "Версия v3" }));
+    expect(router.state.location.pathname).toBe("/p/hello-world/v/3");
   });
 
   it("shows an API error and retries", async () => {

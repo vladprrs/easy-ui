@@ -146,6 +146,50 @@ describe("EditorView (W2-2: защита правок + undo/redo)", () => {
     expect((screen.getByRole("textbox", { name: "text" }) as HTMLInputElement).value).toBe("Before");
   });
 
+  it("shows revision messages and requires confirmation before a dirty restore, then fully rebases for the next save", async () => {
+    const restoredDoc = structuredClone(doc);
+    restoredDoc.name = "Restored editor";
+    restoredDoc.screens[0]!.spec.elements["text"]!.props.text = "From revision two";
+    const requests: { url: string; body?: { baseRev?: number; rev?: number } }[] = [];
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) as { baseRev?: number; rev?: number } : undefined;
+      requests.push({ url, body });
+      if (url === "/api/prototypes/editor-demo/revisions?limit=100") return json([
+        { rev: 7, message: "Latest checkpoint", createdAt: "2026-07-14T12:00:00.000Z" },
+        { rev: 2, message: "Before redesign", createdAt: "2026-07-13T10:00:00.000Z" },
+      ]);
+      if (url === "/api/prototypes/editor-demo/versions") return json([{ version: 1, rev: 2, publishedAt: "2026-07-13T11:00:00.000Z" }]);
+      if (url === "/api/prototypes/editor-demo/revisions/2") return json({ ...draft, rev: 2, doc: restoredDoc, message: "Before redesign", createdAt: "2026-07-13T10:00:00.000Z", figma: null });
+      if (url === "/api/prototypes/editor-demo/restore" && init?.method === "POST") return json({ rev: 8 });
+      if (url === "/api/prototypes/editor-demo" && init?.method === "PUT") return json({ rev: 9, warnings: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    renderView();
+    await screen.findByRole("heading", { name: "Editor demo" });
+    editText("Unsaved local text");
+
+    fireEvent.click(screen.getByRole("button", { name: "История" }));
+    const history = await screen.findByRole("region", { name: "История прототипа" });
+    expect(history.textContent).toContain("Before redesign");
+    expect(history.textContent).toContain("v1");
+    fireEvent.click(within(screen.getByText("Before redesign").closest("li")!).getByRole("button", { name: "Восстановить" }));
+
+    const confirm = await screen.findByRole("dialog", { name: "Подтверждение восстановления" });
+    expect(confirm.textContent).toContain("Текущие несохранённые правки будут отброшены");
+    expect(requests.some((request) => request.url.endsWith("/restore"))).toBe(false);
+    fireEvent.click(within(confirm).getByRole("button", { name: "Восстановить" }));
+
+    expect(await screen.findByRole("heading", { name: "Restored editor" })).toBeTruthy();
+    expect(screen.getByText("Сохранено")).toBeTruthy();
+    expect((screen.getByRole("button", { name: /Отменить правку/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /Вернуть правку/ }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Сохранить$/ }));
+    await waitFor(() => expect(requests.some((request) => request.url === "/api/prototypes/editor-demo" && request.body?.baseRev === 8)).toBe(true));
+    expect(requests.find((request) => request.url.endsWith("/restore"))?.body).toEqual({ rev: 2, baseRev: 7 });
+  });
+
   it("shows the 409 conflict dialog with a three-way diff and overwrites with the fresh rev (W2-4)", async () => {
     const remoteDoc = structuredClone(doc);
     remoteDoc.screens[0]!.spec.elements["text"]!.props.text = "Remote";

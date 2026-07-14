@@ -1,11 +1,45 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import { Link } from "react-router";
-import { listDesignSystems, listPrototypes } from "../api/client";
+import { listDesignSystems, listPrototypes, listPrototypeVersions, type PrototypeSummary, type PrototypeVersionSummary } from "../api/client";
 import { useApi } from "../api/hooks";
 import { chip, chipActive, headingPage, pillGhost, plate } from "../app/chrome";
 import { common } from "../app/strings/common";
-import { cjmVersionLink, deviceNames, gallery, versionLink } from "../app/strings/gallery";
+import { deviceNames, gallery, versionLink } from "../app/strings/gallery";
 import { useDocumentTitle } from "../app/useDocumentTitle";
+
+type VersionsState =
+  | { status: "idle" | "loading"; data: PrototypeVersionSummary[] }
+  | { status: "ready"; data: PrototypeVersionSummary[] }
+  | { status: "error"; data: PrototypeVersionSummary[] };
+
+function VersionsMenu({ prototype }: { prototype: PrototypeSummary }) {
+  const [versions, setVersions] = useState<VersionsState>({ status: "idle", data: [] });
+  const controllerRef = useRef<AbortController | null>(null);
+  useEffect(() => () => controllerRef.current?.abort(), []);
+
+  const load = () => {
+    if (versions.status !== "idle" && versions.status !== "error") return;
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setVersions((current) => ({ status: "loading", data: current.data }));
+    void listPrototypeVersions(prototype.id, controller.signal).then(
+      (data) => { if (!controller.signal.aborted) setVersions({ status: "ready", data }); },
+      () => { if (!controller.signal.aborted) setVersions((current) => ({ status: "error", data: current.data })); },
+    );
+  };
+  const onToggle = (event: SyntheticEvent<HTMLDetailsElement>) => { if (event.currentTarget.open) load(); };
+
+  return <details className="relative" onToggle={onToggle}>
+    <summary className={`${pillGhost} cursor-pointer list-none bg-white`}>{gallery.versionsMenu}</summary>
+    <div aria-label={gallery.versionsMenuAria(prototype.name)} className="absolute right-0 z-20 mt-2 w-52 rounded-2xl border border-eui-ink/10 bg-white p-2 shadow-xl">
+      {versions.status === "idle" || versions.status === "loading" ? <p className="px-2 py-1 text-xs text-eui-slate-500" aria-live="polite">{gallery.versionsLoading}</p> : null}
+      {versions.status === "error" ? <><p role="alert" className="px-2 py-1 text-xs text-eui-magenta">{gallery.versionsLoadFailed}</p><button type="button" className={`${pillGhost} mt-1`} onClick={load}>{common.retry}</button></> : null}
+      {versions.status === "ready" && !versions.data.length ? <p className="px-2 py-1 text-xs text-eui-slate-500">{gallery.noVersions}</p> : null}
+      {versions.status === "ready" ? <ul className="space-y-1">{versions.data.map((version) => <li key={version.version}><Link className="block rounded-xl px-3 py-2 text-sm hover:bg-eui-lav focus-visible:outline-2 focus-visible:outline-eui-brand" to={`/p/${prototype.id}/v/${version.version}`}>{versionLink(version.version)}</Link></li>)}</ul> : null}
+    </div>
+  </details>;
+}
 
 export function GalleryPage() {
   useDocumentTitle(gallery.title);
@@ -58,10 +92,7 @@ export function GalleryPage() {
           <Link className={`${pillGhost} bg-white`} to={`/p/${prototype.id}/present`}>{gallery.presentLink}</Link>
           <Link className={pillGhost} to={`/p/${prototype.id}/cjm`}>CJM</Link>
           <Link className={pillGhost} to={`/p/${prototype.id}/edit`}>{gallery.editorLink}</Link>
-          {prototype.latestVersion !== null ? <>
-            <Link className={`${pillGhost} bg-white`} to={`/p/${prototype.id}/v/${prototype.latestVersion}`}>{versionLink(prototype.latestVersion)}</Link>
-            <Link className={pillGhost} to={`/p/${prototype.id}/v/${prototype.latestVersion}/cjm`}>{cjmVersionLink(prototype.latestVersion)}</Link>
-          </> : null}
+          {prototype.latestVersion !== null ? <VersionsMenu prototype={prototype} /> : null}
         </div>
       </li>)}
     </ul> : null}

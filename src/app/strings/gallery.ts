@@ -13,6 +13,11 @@ export const gallery = {
   systemLabel: "Система",
   editorLink: "Редактор",
   presentLink: "Презентация",
+  versionsMenu: "Версии…",
+  versionsMenuAria: (name: string) => `Опубликованные версии «${name}»`,
+  versionsLoading: "Загружаем версии…",
+  versionsLoadFailed: "Не удалось загрузить версии.",
+  noVersions: "Опубликованных версий нет.",
   emptyFiltered: "Нет прототипов с выбранной дизайн-системой.",
   empty: "Прототипов пока нет.",
 } as const;

@@ -56,6 +56,20 @@ describe("editorReducer", () => {
     expect(saved.past).toHaveLength(1);
   });
 
+  it("fully rebases after restore: clears history, resets selection and bumps form epochs", () => {
+    let state = editorReducer(initial(), setText("Changed"));
+    state = editorReducer(state, { type: "undo" });
+    state = editorReducer(state, { type: "redo" });
+    const restoredDoc = { ...doc, startScreen: "two", name: "Restored" };
+    const rebased = editorReducer(state, { type: "rebase", rev: 12, doc: restoredDoc });
+    expect(rebased).toMatchObject({ baseRev: 12, dirty: false, past: [], future: [], selection: { screenId: "two", elementKey: null } });
+    expect(rebased.doc).toBe(restoredDoc);
+    expect(rebased.savedDoc).toBe(restoredDoc);
+    expect(rebased.docEpoch).toBe(state.docEpoch + 1);
+    expect(rebased.stateEpoch).toBe(state.stateEpoch + 1);
+    expect(editorReducer(rebased, { type: "undo" })).toBe(rebased);
+  });
+
   it("undoes and redoes authored doc snapshots without touching selection or baseRev", () => {
     let state = editorReducer(initial(), setText("A"));
     state = editorReducer(state, { type: "select-screen", screenId: "two" });

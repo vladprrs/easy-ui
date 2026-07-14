@@ -71,7 +71,7 @@ export interface PrototypeDraft {
 }
 export interface PrototypeVersion extends PrototypeDraft { version: number; publishedAt: string }
 export interface PrototypeRevisionSummary { rev: number; message: string | null; createdAt: string }
-export interface PrototypeRevision { rev: number; doc: PrototypeDoc; components: PrototypeComponentPin[]; message: string | null; createdAt: string; designSystemMetaVersion?: number | null }
+export interface PrototypeRevision extends PrototypeDraft { message: string | null; createdAt: string }
 export interface SavePrototypeResult { rev: number; warnings: unknown[] }
 export interface PublishPrototypeResult { version: number; rev: number; screens: { id: string; url: string }[] }
 
@@ -157,7 +157,7 @@ export const listPrototypeRevisions = (id: string, options: {limit?: number; bef
   return request<PrototypeRevisionSummary[]>(`${prototypePath(id)}/revisions${suffix}`, { signal: options.signal });
 };
 export const getPrototypeRevision = (id: string, rev: number, signal?: AbortSignal) => request<PrototypeRevision>(`${prototypePath(id)}/revisions/${rev}`, { signal });
-export interface PrototypeRevisionFull extends PrototypeRevision { builtinCatalogHash: string; componentManifestHash: string }
+export type PrototypeRevisionFull = PrototypeRevision;
 export const getPrototypeRevisionFull = (id: string, rev: number, signal?: AbortSignal) => request<PrototypeRevisionFull>(`${prototypePath(id)}/revisions/${rev}`, { signal });
 export interface ComponentVersion { version: number; rev: number; status?: ComponentStatus; statusReason?: string | null; supersededBy?: number | null; statusRev?: number; name?: string; source: string; designSystem: string; bundleHash: string; hostAbiVersion: number; events: string[]; slots: string[]; description?: string; example?: Record<string, unknown>; propsJsonSchema?: unknown; assets: { id: string; sha256: string; mime: string; size: number }[]; figma?: FigmaProvenance | null; publishedAt: string }
 export const getComponentVersion = (id: string, version: number, signal?: AbortSignal) => request<ComponentVersion>(`${componentPath(id)}/versions/${version}`, { signal });

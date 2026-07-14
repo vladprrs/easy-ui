@@ -22,8 +22,7 @@ export type EditorState = {
   past: PrototypeDoc[];
   future: PrototypeDoc[];
   /**
-   * Epoch authored-документа: меняется на undo/redo (restore и conflict-rebase
-   * пересоздают стейт целиком через remount). PropsForm сбрасывает локальные
+   * Epoch authored-документа: меняется на undo/redo/rebase. PropsForm сбрасывает локальные
    * черновики полей при смене epoch.
    */
   docEpoch: number;
@@ -51,7 +50,12 @@ export type EditorAction =
   | { type: "set-doc-meta"; patch: DocMetaPatch }
   | { type: "undo" }
   | { type: "redo" }
-  | { type: "saved"; rev: number; doc: PrototypeDoc };
+  | { type: "saved"; rev: number; doc: PrototypeDoc }
+  | { type: "rebase"; rev: number; doc: PrototypeDoc };
+
+function initialScreenId(doc: PrototypeDoc): string {
+  return doc.screens.some((screen) => screen.id === doc.startScreen) ? doc.startScreen : doc.screens[0]!.id;
+}
 
 /** Отличается ли runtime-состояние (doc.state / stateOverrides экранов) между документами. */
 function runtimeStateChanged(a: PrototypeDoc, b: PrototypeDoc): boolean {
@@ -129,5 +133,20 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       // Save — новый checkpoint (doc заменяется нормализованным parsed.data);
       // история сохраняется: undo после save возможен и честно вернёт dirty.
       return { ...state, doc: action.doc, savedDoc: action.doc, baseRev: action.rev, dirty: false };
+    case "rebase":
+      // Restore/conflict-rebase — единый новый baseline. Ни один authored-снапшот
+      // от прежней head не должен пережить смену серверной ревизии.
+      return {
+        ...state,
+        doc: action.doc,
+        savedDoc: action.doc,
+        baseRev: action.rev,
+        dirty: false,
+        past: [],
+        future: [],
+        docEpoch: state.docEpoch + 1,
+        stateEpoch: state.stateEpoch + 1,
+        selection: { screenId: initialScreenId(action.doc), elementKey: null },
+      };
   }
 }
