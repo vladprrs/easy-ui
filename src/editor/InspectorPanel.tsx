@@ -7,7 +7,7 @@ import type { ComponentDefinition } from "../catalog/definitions";
 import { jsonValueSchema, type JsonValue } from "../prototype/schema";
 import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "../prototype/stateOverrides";
 import type { EditorAction, EditorState } from "./editorReducer";
-import { ElementTree } from "./ElementTree";
+import { ElementTree, getElementPath } from "./ElementTree";
 import { PropsForm } from "./propsForm/PropsForm";
 
 const inputClass = `${inputBase} mt-1 w-full bg-white`;
@@ -73,11 +73,19 @@ export function InspectorPanel({ state, definitions, dispatch }: { state: Editor
   const definition = element ? definitions[element.type] : undefined;
   const effectiveState = mergeScreenState(state.doc.state, screen.stateOverrides);
   const elementPath = ["screens", screenIndex, "spec", "elements", elementKey ?? "", "props"];
+  const breadcrumbKeys = elementKey ? getElementPath(screen.spec, elementKey) : [];
 
   return <aside className="w-90 shrink-0 overflow-y-auto border-l border-eui-ink/10 bg-white" aria-label={editor.inspectorAria}>
     <Section title={editor.sectionElement}>
-      <ElementTree spec={screen.spec} selectedKey={elementKey} onSelect={(key) => dispatch({ type: "select-element", elementKey: key })} />
-      {element ? <div className="mt-4 border-t border-eui-ink/10 pt-4"><p className="mb-3 font-eui-ui text-sm"><span className="text-eui-slate-500">{editor.typeLabel}</span> <strong>{element.type}</strong></p>
+      <ElementTree key={screen.id} spec={screen.spec} selectedKey={elementKey} onSelect={(key) => dispatch({ type: "select-element", elementKey: key })} />
+      {element ? <div className="mt-4 border-t border-eui-ink/10 pt-4">
+        <nav aria-label={editor.elementBreadcrumbsAria} className="mb-3 flex flex-wrap items-center gap-1 font-eui-ui text-xs text-eui-slate-500">
+          <button type="button" className="rounded px-1 py-0.5 hover:bg-eui-lilac-100 hover:text-eui-ink" onClick={() => dispatch({ type: "select-element", elementKey: null })}>{editor.screenBreadcrumb}</button>
+          {breadcrumbKeys.map((key) => <span key={key} className="contents"><span aria-hidden="true">›</span>{key === elementKey
+            ? <span aria-current="page" className="px-1 py-0.5 font-medium text-eui-ink">{screen.spec.elements[key]!.type}</span>
+            : <button type="button" className="rounded px-1 py-0.5 hover:bg-eui-lilac-100 hover:text-eui-ink" onClick={() => dispatch({ type: "select-element", elementKey: key })}>{screen.spec.elements[key]!.type}</button>}</span>)}
+        </nav>
+        <p className="mb-3 font-eui-ui text-sm"><span className="text-eui-slate-500">{editor.typeLabel}</span> <strong>{element.type}</strong></p>
         {definition ? <PropsForm definition={definition} values={element.props} effectiveState={effectiveState} path={elementPath} onCommit={(props) => dispatch({ type: "set-element-props", screenId: screen.id, elementKey: elementKey!, props })} />
           : <JsonEditor label="Props (JSON)" value={element.props} onCommit={(props) => dispatch({ type: "set-element-props", screenId: screen.id, elementKey: elementKey!, props })} />}
       </div> : <p className="mt-3 font-eui-ui text-sm text-eui-slate-500">{editor.selectElementHint}</p>}

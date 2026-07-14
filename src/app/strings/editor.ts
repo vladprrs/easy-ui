@@ -88,6 +88,10 @@ export const editor = {
   expectObject: "Ожидается JSON-объект",
   emptyScreen: "На экране пока нет элементов.",
   orphans: (count: number) => `Вне дерева (${count})`,
+  expandElement: (type: string) => `Развернуть ${type}`,
+  collapseElement: (type: string) => `Свернуть ${type}`,
+  elementBreadcrumbsAria: "Предки элемента",
+  screenBreadcrumb: "Экран",
   overridesDepthError: (limit: number) => `Глубина stateOverrides не должна превышать ${limit}`,
   forbiddenKeyError: (key: string) => `Ключ «${key}» запрещён`,
   // Форма пропов (W2-3)
