@@ -45,6 +45,77 @@ describe("PropsForm", () => {
     expect(input.value).toBe("Base"); // undo/redo (смена epoch) сбрасывает черновик к значению документа
   });
 
+  it("removes an optional number prop when the field is cleared (W2-3: no silent 0)", () => {
+    const onCommit = vi.fn();
+    render(<PropsForm definition={definition(z.object({ width: z.number().optional() }))} values={{ width: 320 }} effectiveState={{}} onCommit={onCommit} />);
+    const input = screen.getByLabelText("width");
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+    expect(onCommit).toHaveBeenCalledWith({});
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows an error and does not commit when a required number field is cleared", () => {
+    const onCommit = vi.fn();
+    render(<PropsForm definition={definition(z.strictObject({ count: z.number() }))} values={{ count: 1 }} effectiveState={{}} onCommit={onCommit} />);
+    const input = screen.getByLabelText("count");
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+    expect(screen.getByRole("alert").textContent).toContain("Поле обязательное — укажите число");
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("shows an error and does not commit non-finite numeric input", () => {
+    const onCommit = vi.fn();
+    render(<PropsForm definition={definition(z.strictObject({ count: z.number() }))} values={{ count: 1 }} effectiveState={{}} onCommit={onCommit} />);
+    const input = screen.getByLabelText("count") as HTMLInputElement;
+    // jsdom (как и браузеры) санитизирует невалидный ввод input[type=number] в "" —
+    // снимаем type, чтобы дотянуться до NaN-ветки commitNumber напрямую.
+    input.type = "text";
+    fireEvent.change(input, { target: { value: "abc" } });
+    fireEvent.blur(input);
+    expect(screen.getByRole("alert").textContent).toContain("Введите число");
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("offers «не задано» for an optional enum and removes the prop when selected", () => {
+    const onCommit = vi.fn();
+    render(<PropsForm definition={definition(z.object({ variant: z.enum(["a", "b"]).optional() }))} values={{ variant: "a" }} effectiveState={{}} onCommit={onCommit} />);
+    const select = screen.getByLabelText("variant") as HTMLSelectElement;
+    expect(screen.getByRole("option", { name: "— не задано —" })).toBeTruthy();
+    fireEvent.change(select, { target: { value: "" } });
+    expect(onCommit).toHaveBeenCalledWith({});
+  });
+
+  it("does not offer «не задано» for a required enum", () => {
+    render(<PropsForm definition={definition(z.strictObject({ variant: z.enum(["a", "b"]) }))} values={{ variant: "a" }} effectiveState={{}} onCommit={() => {}} />);
+    expect(screen.queryByRole("option", { name: "— не задано —" })).toBeNull();
+  });
+
+  it("commits an empty required string when the schema allows it, with a warning", () => {
+    const onCommit = vi.fn();
+    render(<PropsForm definition={definition(z.strictObject({ label: z.string() }))} values={{ label: "x" }} effectiveState={{}} onCommit={onCommit} />);
+    const input = screen.getByLabelText("label");
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+    expect(onCommit).toHaveBeenCalledWith({ label: "" });
+    expect(screen.getByRole("status").textContent).toContain("Обязательное поле пустое");
+    fireEvent.change(input, { target: { value: "y" } });
+    fireEvent.blur(input);
+    expect(screen.queryByRole("status")).toBeNull(); // предупреждение снимается после непустого коммита
+  });
+
+  it("shows a validation error (not a warning) for an empty string when minLength forbids it", () => {
+    const onCommit = vi.fn();
+    render(<PropsForm definition={definition(z.strictObject({ label: z.string().min(1) }))} values={{ label: "x" }} effectiveState={{}} onCommit={onCommit} />);
+    const input = screen.getByLabelText("label");
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
   it("edits and stores the input side of a ZodPipe", () => {
     const onCommit = vi.fn();
     render(<PropsForm definition={definition(z.object({ amount: z.string().pipe(z.coerce.number()) }))} values={{ amount: "12" }} effectiveState={{}} onCommit={onCommit} />);

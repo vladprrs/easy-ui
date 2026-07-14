@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, useState, type KeyboardEvent } from "react";
 import { chip, chipActive, inputBase } from "../../app/chrome";
+import { editor } from "../../app/strings/editor";
 import type { ComponentDefinition } from "../../catalog/definitions";
 import { jsonValueSchema } from "../../prototype/schema";
 import { isDynamicValue, validateElementProps } from "../../prototype/validate";
@@ -43,15 +44,16 @@ export function PropsForm({ definition, values, effectiveState, onCommit, path =
   const docEpoch = useContext(DocEpochContext);
   const [drafts, setDrafts] = useState<Record<string, { baseline: unknown; text: string }>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [warnings, setWarnings] = useState<Record<string, string>>({});
   const [epochSeen, setEpochSeen] = useState(docEpoch);
   if (epochSeen !== docEpoch) { // reset-on-change во время рендера (React-паттерн), см. DocEpochContext
     setEpochSeen(docEpoch);
     setDrafts({});
     setErrors({});
+    setWarnings({});
   }
 
-  const commit = (name: string, value: unknown) => {
-    const candidate = { ...values, [name]: value };
+  const commitCandidate = (name: string, candidate: Record<string, unknown>): boolean => {
     const result = validateElementProps({ definition, props: candidate, state: effectiveState, path });
     if (result.errors.length) {
       const byField: Record<string, string> = {};
@@ -61,10 +63,50 @@ export function PropsForm({ definition, values, effectiveState, onCommit, path =
         byField[field] = byField[field] ? `${byField[field]}; ${error.message}` : error.message;
       }
       setErrors(byField);
-      return;
+      return false;
     }
     setErrors({});
     onCommit(candidate);
+    return true;
+  };
+
+  const commit = (name: string, value: unknown) => commitCandidate(name, { ...values, [name]: value });
+
+  /** Удаляет проп из spec (optional-поле очищено / выбрано «не задано»). */
+  const commitRemove = (name: string) => {
+    const candidate = { ...values };
+    delete candidate[name];
+    return commitCandidate(name, candidate);
+  };
+
+  const setFieldWarning = (name: string, message: string | null) => setWarnings((current) => {
+    const next = { ...current };
+    if (message === null) delete next[name];
+    else next[name] = message;
+    return next;
+  });
+
+  /**
+   * Семантика числового поля (W2-3): пустой ввод — удаление optional-пропа либо
+   * ошибка для required (0 не подставляется, `Number('') === 0`); нечисловой /
+   * бесконечный ввод — ошибка без коммита.
+   */
+  const commitNumber = (field: PropField, text: string) => {
+    const trimmed = text.trim();
+    if (trimmed === "") {
+      if (field.required) { setErrors((current) => ({ ...current, [field.name]: editor.propNumberRequired })); return; }
+      commitRemove(field.name);
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) { setErrors((current) => ({ ...current, [field.name]: editor.propNumberInvalid })); return; }
+    commit(field.name, parsed);
+  };
+
+  /** Пустая required-строка коммитится, если схема позволяет, но с предупреждением (W2-3). */
+  const commitText = (field: PropField, text: string) => {
+    const committed = commit(field.name, text);
+    setFieldWarning(field.name, committed && field.required && text === "" ? editor.propRequiredEmptyWarning : null);
   };
 
   const commitJson = (name: string, text: string) => {
@@ -88,15 +130,20 @@ export function PropsForm({ definition, values, effectiveState, onCommit, path =
     return <div key={field.name}>
       {kind === "switch" ? <label className="flex items-center justify-between gap-3 font-eui-ui text-xs text-eui-slate-500"><span>{field.name}{field.required ? " *" : ""}</span><input type="checkbox" role="switch" checked={value === true} onChange={(event) => commit(field.name, event.target.checked)} /></label>
         : <FieldLabel name={field.name} required={field.required}>
-          {kind === "select" ? <select aria-label={field.name} className={`${value === undefined ? chip : chipActive} mt-1 font-eui-ui`} value={optionKey(value as SelectValue)} onChange={(event) => {
+          {kind === "select" ? <select aria-label={field.name} className={`${value === undefined ? chip : chipActive} mt-1 font-eui-ui`} value={value === undefined && !field.required ? "" : optionKey(value as SelectValue)} onChange={(event) => {
+            if (!field.required && event.target.value === "") { commitRemove(field.name); return; }
             const option = field.control.kind === "select" ? field.control.options.find((item) => optionKey(item) === event.target.value) : undefined;
             commit(field.name, option);
-          }}>{field.control.kind === "select" ? field.control.options.map((option) => <option key={optionKey(option)} value={optionKey(option)}>{String(option)}</option>) : null}</select> : null}
-          {kind === "text" ? <input aria-label={field.name} className={controlClass} value={text} onChange={(event) => setText(event.target.value)} onBlur={() => commit(field.name, text)} onKeyDown={(event) => enter(event, () => commit(field.name, text))} /> : null}
-          {kind === "number" ? <input aria-label={field.name} type="number" className={controlClass} value={text} onChange={(event) => setText(event.target.value)} onBlur={() => commit(field.name, Number(text))} onKeyDown={(event) => enter(event, () => commit(field.name, Number(text)))} /> : null}
+          }}>
+            {field.required ? null : <option value="">{editor.propUnsetOption}</option>}
+            {field.control.kind === "select" ? field.control.options.map((option) => <option key={optionKey(option)} value={optionKey(option)}>{String(option)}</option>) : null}
+          </select> : null}
+          {kind === "text" ? <input aria-label={field.name} className={controlClass} value={text} onChange={(event) => setText(event.target.value)} onBlur={() => commitText(field, text)} onKeyDown={(event) => enter(event, () => commitText(field, text))} /> : null}
+          {kind === "number" ? <input aria-label={field.name} type="number" className={controlClass} value={text} onChange={(event) => setText(event.target.value)} onBlur={() => commitNumber(field, text)} onKeyDown={(event) => enter(event, () => commitNumber(field, text))} /> : null}
           {kind === "json" ? <><span className="mt-1 block text-xs font-normal text-eui-slate-500">{dynamic ? "динамическое значение" : "JSON"}</span><textarea aria-label={field.name} className={`${controlClass} min-h-24 font-mono`} value={text} onChange={(event) => setText(event.target.value)} onBlur={() => commitJson(field.name, text)} /></> : null}
         </FieldLabel>}
       {errors[field.name] ? <p role="alert" className="mt-1 text-xs text-eui-magenta">{errors[field.name]}</p> : null}
+      {!errors[field.name] && warnings[field.name] ? <p role="status" className="mt-1 text-xs text-eui-orange">{warnings[field.name]}</p> : null}
     </div>;
   })}</div>;
 }

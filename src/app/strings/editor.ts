@@ -59,4 +59,9 @@ export const editor = {
   orphans: (count: number) => `Вне дерева (${count})`,
   overridesDepthError: (limit: number) => `Глубина stateOverrides не должна превышать ${limit}`,
   forbiddenKeyError: (key: string) => `Ключ «${key}» запрещён`,
+  // Форма пропов (W2-3)
+  propNumberRequired: "Поле обязательное — укажите число",
+  propNumberInvalid: "Введите число",
+  propUnsetOption: "— не задано —",
+  propRequiredEmptyWarning: "Обязательное поле пустое",
 } as const;
