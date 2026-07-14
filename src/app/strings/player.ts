@@ -68,11 +68,9 @@ export const present = {
 
 export const inspector = {
   title: "Инспектор",
-  collapsedButton: (count: number) => `Инспектор (${count})`,
   panelAria: "Инспектор взаимодействий",
   filterAria: "Фильтр записей",
   clear: "Очистить",
-  collapse: "Свернуть инспектор",
   entriesAria: "Записи инспектора",
   empty: "Записей пока нет — повзаимодействуйте с прототипом.",
   payloadInvalid: "payload не прошёл валидацию",

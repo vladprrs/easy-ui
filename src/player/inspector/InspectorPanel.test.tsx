@@ -41,12 +41,23 @@ describe("InspectorPanel", () => {
     expect(within(panel).getByText("Записей пока нет — повзаимодействуйте с прототипом.")).toBeTruthy();
   });
 
-  it("collapses to a floating toggle and expands back", () => {
-    render(<InspectorPanel log={new InspectorLog()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Свернуть инспектор" }));
-    expect(screen.queryByRole("complementary", { name: "Инспектор взаимодействий" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /Инспектор \(/ }));
-    expect(screen.getByRole("complementary", { name: "Инспектор взаимодействий" })).toBeTruthy();
+  it("shows font status separately without adding FONT events to the ledger", () => {
+    const listeners = new Map<string, EventListener>();
+    const fontSet = {
+      *[Symbol.iterator]() { yield { family: "Inter", status: "loaded" }; },
+      addEventListener: (type: string, listener: EventListener) => listeners.set(type, listener),
+      removeEventListener: (type: string) => listeners.delete(type),
+    };
+    const previous = Object.getOwnPropertyDescriptor(document, "fonts");
+    Object.defineProperty(document, "fonts", { configurable: true, value: fontSet });
+    const log = new InspectorLog();
+    render(<InspectorPanel log={log} />);
+    expect(screen.getByRole("region", { name: "Статусы шрифтов" }).textContent).toContain("Inter");
+    listeners.get("loadingdone")?.(new Event("loadingdone"));
+    expect(log.getSnapshot()).toHaveLength(0);
+    expect(screen.getByLabelText("Фильтр записей").textContent).not.toContain("font-status");
+    if (previous) Object.defineProperty(document, "fonts", previous);
+    else delete (document as { fonts?: unknown }).fonts;
   });
 });
 
@@ -75,9 +86,47 @@ describe("player integration (?debug=1)", () => {
     });
   });
 
+  it("toggles only panel visibility/logger sink and preserves flow state and accumulated log", async () => {
+    renderAt("/p/hello-world/s/welcome?debug=1");
+    const input = await screen.findByLabelText("Name") as HTMLInputElement;
+    const actions = screen.getByTestId("chrome-actions");
+    const toggle = within(actions).getByRole("button", { name: "Инспектор" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.change(input, { target: { value: "Lin" } });
+    const panel = screen.getByRole("complementary", { name: "Инспектор взаимодействий" });
+    await waitFor(() => expect(within(panel).getAllByRole("listitem")[0]!.textContent).toContain('"Lin"'));
+
+    fireEvent.click(toggle);
+    expect(screen.queryByRole("complementary", { name: "Инспектор взаимодействий" })).toBeNull();
+    expect(input.value).toBe("Lin");
+    fireEvent.change(input, { target: { value: "Mia" } });
+    expect(input.value).toBe("Mia");
+
+    fireEvent.click(toggle);
+    const reopened = screen.getByRole("complementary", { name: "Инспектор взаимодействий" });
+    expect(within(reopened).getAllByRole("listitem")).toHaveLength(1);
+    expect(reopened.textContent).toContain('"Lin"');
+    expect(reopened.textContent).not.toContain('"Mia"');
+  });
+
+  it("records non-bubbling image errors through the capture-phase listener", async () => {
+    renderAt("/p/hello-world/s/welcome?debug=1");
+    const panel = await screen.findByRole("complementary", { name: "Инспектор взаимодействий" });
+    const image = document.createElement("img");
+    image.src = "/broken.png";
+    image.alt = "Broken preview";
+    document.body.append(image);
+    image.dispatchEvent(new Event("error", { bubbles: false }));
+    await waitFor(() => expect(panel.textContent).toContain("img-error"));
+    expect(panel.textContent).toContain("broken.png");
+    image.remove();
+  });
+
   it("does not render the panel without the debug flag", async () => {
     renderAt("/p/hello-world/s/welcome");
     await screen.findByLabelText("Name");
     expect(screen.queryByRole("complementary", { name: "Инспектор взаимодействий" })).toBeNull();
+    expect(within(screen.getByTestId("chrome-actions")).queryByRole("button", { name: "Инспектор" })).toBeNull();
   });
 });

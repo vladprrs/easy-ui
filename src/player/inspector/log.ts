@@ -1,6 +1,6 @@
 // Interaction inspector log model (plan H.1, feedback §12): a ring buffer of the
-// latest 50 runtime records (events, actions with state diffs, runtime errors and
-// font statuses) with a subscribe/snapshot contract for useSyncExternalStore.
+// latest 50 runtime records (events, actions with state diffs and runtime errors)
+// with a subscribe/snapshot contract for useSyncExternalStore.
 
 export const INSPECTOR_LOG_CAPACITY = 50;
 
@@ -37,17 +37,10 @@ export interface InspectorRuntimeErrorRecord {
   detail?: Record<string, unknown>;
 }
 
-export interface InspectorFontStatusRecord {
-  kind: "font-status";
-  family: string;
-  status: string;
-}
-
 export type InspectorRecord =
   | InspectorEventRecord
   | InspectorActionRecord
-  | InspectorRuntimeErrorRecord
-  | InspectorFontStatusRecord;
+  | InspectorRuntimeErrorRecord;
 
 export type InspectorEntry = InspectorRecord & { id: number; time: number };
 
@@ -56,7 +49,30 @@ export interface InspectorLogger {
   logEvent(record: Omit<InspectorEventRecord, "kind">): void;
   logAction(record: Omit<InspectorActionRecord, "kind">): void;
   logRuntimeError(message: string, detail?: Record<string, unknown>): void;
-  logFontStatus(family: string, status: string): void;
+}
+
+/**
+ * Stable write-side logger owned by a player session. The panel only connects
+ * or disconnects its log; the action runtime and store keep the same instance.
+ */
+export class InspectorLoggerSink implements InspectorLogger {
+  private target: InspectorLogger | null = null;
+
+  connect(target: InspectorLogger | null): void {
+    this.target = target;
+  }
+
+  logEvent(record: Omit<InspectorEventRecord, "kind">): void {
+    this.target?.logEvent(record);
+  }
+
+  logAction(record: Omit<InspectorActionRecord, "kind">): void {
+    this.target?.logAction(record);
+  }
+
+  logRuntimeError(message: string, detail?: Record<string, unknown>): void {
+    this.target?.logRuntimeError(message, detail);
+  }
 }
 
 /**
@@ -104,9 +120,5 @@ export class InspectorLog implements InspectorLogger {
 
   logRuntimeError(message: string, detail?: Record<string, unknown>): void {
     this.append({ kind: "runtime-error", message, ...(detail ? { detail } : {}) });
-  }
-
-  logFontStatus(family: string, status: string): void {
-    this.append({ kind: "font-status", family, status });
   }
 }

@@ -52,11 +52,16 @@ test("?debug=1 survives all transitions; sidebar browse is replace outside flowD
   const chromeBack = chromeActions.getByRole("button", { name: "Назад" });
   const sidebar = page.getByRole("complementary", { name: "Экраны" });
 
-  // Инспектор (?debug=1) открыт поверх правого края хрома (перекрытие — тема
-  // W1-7): сворачиваем панель, чтобы кликать по кнопкам хрома.
+  // Reload сохраняет query-флаг и открывает панель; её toggle живёт в actions-слоте.
   const inspectorPanel = page.getByRole("complementary", { name: "Инспектор взаимодействий" });
   await expect(inspectorPanel).toBeVisible();
-  await inspectorPanel.getByRole("button", { name: "Свернуть инспектор" }).click();
+  await page.reload();
+  await expect(page).toHaveURL(/\/p\/checkout\/s\/catalog\?debug=1$/);
+  await expect(inspectorPanel).toBeVisible();
+  const inspectorToggle = chromeActions.getByRole("button", { name: "Инспектор" });
+  await expect(inspectorToggle).toHaveAttribute("aria-pressed", "true");
+  await inspectorToggle.click();
+  await expect(inspectorPanel).toHaveCount(0);
 
   // browse с глубины 0: flowDepth не растёт — Back прототипа не реагирует.
   await sidebar.getByRole("button", { name: "Товар" }).click();
@@ -76,13 +81,10 @@ test("?debug=1 survives all transitions; sidebar browse is replace outside flowD
   await chromeBack.click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/product\?debug=1$/);
 
-  // restart сохраняет query; инспектор (?debug=1) активен. Свёрнутая пилюля
-  // инспектора перекрывает кнопку хрома (перекрытие чинит W1-7) — активируем
-  // с клавиатуры.
-  await chromeActions.getByRole("button", { name: "Начать сначала" }).focus();
-  await page.keyboard.press("Enter");
+  // restart сохраняет query; инспектор (?debug=1) остаётся доступен в хроме.
+  await chromeActions.getByRole("button", { name: "Начать сначала" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/catalog\?debug=1$/);
-  await expect(page.getByRole("complementary", { name: "Инспектор взаимодействий" }).or(page.getByRole("button", { name: /Инспектор/ }))).toBeVisible();
+  await expect(chromeActions.getByRole("button", { name: "Инспектор" })).toBeVisible();
 });
 
 test("player hotkeys browse outside flowDepth, toggle zoom, show help, and restart with query", async ({ page }) => {

@@ -8,10 +8,11 @@ import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { ScreenSurface } from "./ScreenSurface";
 import { chip, chipActive, pillGhost, pillGhostOnDark } from "../app/chrome";
 import { PrototypeChrome } from "../app/PrototypeChrome";
-import { player, playerDocumentTitle, playerHotkeys } from "../app/strings/player";
+import { inspector as inspectorStrings, player, playerDocumentTitle, playerHotkeys } from "../app/strings/player";
 import { common, deviceNames } from "../app/strings/common";
 import { canonicalViewport } from "../designSystems/deviceMetrics";
 import { useDocumentTitle } from "../app/useDocumentTitle";
+import { InspectorPanel } from "./inspector/InspectorPanel";
 
 export class ScreenErrorBoundary extends Component<{
   prototypeId: string;
@@ -66,7 +67,7 @@ export function PlayerHotkeysHelp({ onClose, present = false }: { onClose: () =>
 }
 
 export function ScreenView() {
-  const { doc, registry, runtime, customTypes, customDefinitions, onError } = useOutletContext<PlayerOutletContext>();
+  const { doc, registry, runtime, customTypes, customDefinitions, onError, inspector } = useOutletContext<PlayerOutletContext>();
   const { screenId } = useParams();
   const { version } = useParams();
   const navigation = usePlayerNavigation();
@@ -144,6 +145,7 @@ export function ScreenView() {
       <Link className={pillGhost} to={presentPath}>{player.present}</Link>
       <button type="button" onClick={navigation.back} disabled={navigation.flowDepth === 0} className={`${pillGhost} disabled:opacity-50`}>{player.back}</button>
       <button type="button" onClick={navigation.restart} className={pillGhost}>{player.restart}</button>
+      {inspector.enabled && <button type="button" aria-pressed={inspector.visible} onClick={inspector.toggle} className={pillGhost}>{inspectorStrings.title}</button>}
     </>}
   />;
   if (!screen) return <main className="flex h-dvh min-h-0 flex-col">{chrome}<div className="flex min-h-0 flex-1 items-start justify-center bg-eui-graphite p-8 text-white"><section role="alert" className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h2 className="font-eui-display text-2xl font-bold">{player.screenMissingTitle}</h2><p className="mt-2 text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">{common.backToGallery}</Link></section></div></main>;
@@ -159,6 +161,7 @@ export function ScreenView() {
       <DeviceFrame device={device} canvas={screen.canvas} zoom={zoomValue} onEffectiveScale={stageZoom.onEffectiveScale}>
         <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>{rendered}</ScreenErrorBoundary>
       </DeviceFrame>
+      {inspector.enabled && inspector.visible ? <InspectorPanel log={inspector.log} /> : null}
     </div>
   </main>;
 }

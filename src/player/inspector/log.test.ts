@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { INSPECTOR_LOG_CAPACITY, InspectorLog } from "./log";
+import { INSPECTOR_LOG_CAPACITY, InspectorLog, InspectorLoggerSink } from "./log";
 
 describe("InspectorLog", () => {
   it("appends entries with ids/timestamps and keeps only the latest 50", () => {
@@ -16,13 +16,12 @@ describe("InspectorLog", () => {
     expect(entries.every((entry) => typeof entry.time === "number")).toBe(true);
   });
 
-  it("supports every record kind", () => {
+  it("supports runtime record kinds without FONT entries", () => {
     const log = new InspectorLog();
     log.logEvent({ correlationId: "e1", elementId: "el", component: "Card", event: "press", payload: { id: "x" }, payloadValid: true });
     log.logAction({ correlationId: "e1", action: "setState", params: { statePath: "/a" }, result: { type: "state", statePath: "/a", previous: 1, next: 2 } });
     log.logRuntimeError("boom", { component: "Card" });
-    log.logFontStatus("Inter", "loaded");
-    expect(log.getSnapshot().map((entry) => entry.kind)).toEqual(["event", "action", "runtime-error", "font-status"]);
+    expect(log.getSnapshot().map((entry) => entry.kind)).toEqual(["event", "action", "runtime-error"]);
   });
 
   it("notifies subscribers on append and clear, and returns immutable snapshots", () => {
@@ -30,7 +29,7 @@ describe("InspectorLog", () => {
     const listener = vi.fn();
     const unsubscribe = log.subscribe(listener);
     const empty = log.getSnapshot();
-    log.logFontStatus("Inter", "loading");
+    log.logRuntimeError("loading");
     expect(listener).toHaveBeenCalledTimes(1);
     expect(log.getSnapshot()).not.toBe(empty);
     expect(empty).toHaveLength(0);
@@ -42,7 +41,19 @@ describe("InspectorLog", () => {
     log.clear(); // empty clear is a no-op
     expect(listener).toHaveBeenCalledTimes(2);
     unsubscribe();
-    log.logFontStatus("Inter", "loaded");
+    log.logRuntimeError("loaded");
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("connects and disconnects a logger without replacing the sink", () => {
+    const sink = new InspectorLoggerSink();
+    const log = new InspectorLog();
+    sink.connect(log);
+    sink.logRuntimeError("visible");
+    sink.connect(null);
+    sink.logRuntimeError("hidden");
+    sink.connect(log);
+    sink.logRuntimeError("visible again");
+    expect(log.getSnapshot().map((entry) => entry.kind === "runtime-error" ? entry.message : "")).toEqual(["visible", "visible again"]);
   });
 });
