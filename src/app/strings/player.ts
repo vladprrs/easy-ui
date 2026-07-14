@@ -21,6 +21,8 @@ export const player = {
   back: "Назад",
   restart: "Начать сначала",
   present: "Презентация",
+  note: "Заметка",
+  notePanelAria: "Заметка к экрану",
   screensAria: "Экраны",
   screensCollapse: "Свернуть список экранов",
   screensExpand: "Развернуть список экранов",

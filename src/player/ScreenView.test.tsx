@@ -148,6 +148,34 @@ describe("ScreenView stage controls (W1-1)", () => {
   });
 });
 
+describe("ScreenView screen note (W1-8)", () => {
+  it("shows the note toggle only for a screen with a note and reveals its plain text", () => {
+    const doc = prototypeDocSchema.parse({
+      ...mobileDoc(),
+      screens: [{
+        ...mobileDoc().screens[0],
+        note: "Первая строка\nВторая строка",
+      }],
+    });
+    renderPlayer(doc, "/p/stage-prototype/s/home");
+
+    const toggle = screen.getByRole("button", { name: "Заметка" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByLabelText("Заметка к экрану")).toBeNull();
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByLabelText("Заметка к экрану").textContent).toBe("Первая строка\nВторая строка");
+  });
+
+  it("does not show the note toggle for a screen without a note", () => {
+    renderPlayer(mobileDoc(), "/p/stage-prototype/s/home");
+
+    expect(screen.queryByRole("button", { name: "Заметка" })).toBeNull();
+  });
+});
+
 describe("ScreenView canvas", () => {
   it("keeps hotspot navigation wired through the player runtime", async () => {
     navigation.navigate.mockReset();

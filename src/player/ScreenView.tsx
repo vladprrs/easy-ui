@@ -76,8 +76,10 @@ export function ScreenView() {
   const [device, setDevice] = useState(doc.device);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [hotkeysVisible, setHotkeysVisible] = useState(false);
+  const [noteVisible, setNoteVisible] = useState(false);
   const stageZoom = useStageZoom();
   const screen = doc.screens.find((item) => item.id === screenId);
+  useEffect(() => setNoteVisible(false), [screenId]);
   useDocumentTitle(screen
     ? playerDocumentTitle(doc.name, screen.name, version === undefined ? undefined : Number(version))
     : player.screenMissingTitle);
@@ -217,6 +219,7 @@ export function ScreenView() {
       <Link className={pillGhost} to={presentPath}>{player.present}</Link>
       <button type="button" onClick={navigation.back} disabled={navigation.flowDepth === 0} className={`${pillGhost} disabled:opacity-50`}>{player.back}</button>
       <button type="button" onClick={navigation.restart} className={pillGhost}>{player.restart}</button>
+      {screen?.note ? <button type="button" aria-expanded={noteVisible} aria-controls="player-screen-note" onClick={() => setNoteVisible((visible) => !visible)} className={pillGhost}>{player.note}</button> : null}
       {inspector.enabled && <button type="button" aria-pressed={inspector.visible} onClick={inspector.toggle} className={pillGhost}>{inspectorStrings.title}</button>}
     </>}
   />;
@@ -227,6 +230,9 @@ export function ScreenView() {
   return <main className="flex h-dvh min-h-0 flex-col">
     {hotkeysVisible && <PlayerHotkeysHelp onClose={() => setHotkeysVisible(false)} />}
     {chrome}
+    {noteVisible && screen.note ? <section id="player-screen-note" aria-label={player.notePanelAria} className="border-b border-eui-brand/20 bg-eui-lilac-50 px-4 py-3 text-eui-ink sm:px-6">
+      <p className="whitespace-pre-wrap font-eui-ui text-sm">{screen.note}</p>
+    </section> : null}
     {isNonLatest && currentPublished && latestPublished ? <div role="status" data-testid="non-latest-version-banner" className="flex flex-wrap items-center gap-2 border-b border-eui-brand/20 bg-eui-lilac-100 px-4 py-2 font-eui-ui text-sm text-eui-ink sm:px-6">
       <span>{player.nonLatestVersion(numericVersion, formatPlayerDate(currentPublished.publishedAt))}</span>
       <span aria-hidden="true">·</span>
