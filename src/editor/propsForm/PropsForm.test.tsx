@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { ComponentDefinition } from "../../catalog/definitions";
-import { PropsForm } from "./PropsForm";
+import { DocEpochContext, PropsForm } from "./PropsForm";
 
 const definition = (props: z.ZodType): ComponentDefinition => ({ description: "test", props });
 
@@ -30,6 +30,19 @@ describe("PropsForm", () => {
     fireEvent.blur(textarea);
     expect(screen.getByRole("alert").textContent).toContain("Некорректный JSON");
     expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("resets field drafts when the doc epoch changes and keeps them otherwise (W2-2)", () => {
+    const form = (epoch: number) => <DocEpochContext.Provider value={epoch}>
+      <PropsForm definition={definition(z.object({ label: z.string() }))} values={{ label: "Base" }} effectiveState={{}} onCommit={() => {}} />
+    </DocEpochContext.Provider>;
+    const { rerender } = render(form(0));
+    const input = screen.getByLabelText("label") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Draft" } });
+    rerender(form(0));
+    expect(input.value).toBe("Draft"); // обычный ререндер без смены epoch не трогает черновик
+    rerender(form(1));
+    expect(input.value).toBe("Base"); // undo/redo (смена epoch) сбрасывает черновик к значению документа
   });
 
   it("edits and stores the input side of a ZodPipe", () => {

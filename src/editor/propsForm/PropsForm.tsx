@@ -1,4 +1,4 @@
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { createContext, useContext, useMemo, useState, type KeyboardEvent } from "react";
 import { chip, chipActive, inputBase } from "../../app/chrome";
 import type { ComponentDefinition } from "../../catalog/definitions";
 import { jsonValueSchema } from "../../prototype/schema";
@@ -12,6 +12,15 @@ type PropsFormProps = {
   onCommit: (values: Record<string, unknown>) => void;
   path?: (string | number)[];
 };
+
+/**
+ * Epoch authored-документа (W2-2): undo/redo (и restore/rebase через remount)
+ * меняют номер — форма сбрасывает локальные черновики полей, чтобы после отката
+ * не показывать устаревший текст, когда значение вернулось к baseline черновика.
+ * Нативный text-undo внутри сфокусированного поля при этом остаётся живым:
+ * обычные правки epoch не меняют.
+ */
+export const DocEpochContext = createContext(0);
 
 const controlClass = `${inputBase} mt-1 w-full bg-white text-eui-ink`;
 const pointerPart = (value: string) => value.replace(/~1/g, "/").replace(/~0/g, "~");
@@ -31,8 +40,15 @@ export function PropsForm({ definition, values, effectiveState, onCommit, path =
     const known = new Set(described.map((field) => field.name));
     return [...described, ...Object.keys(values).filter((name) => !known.has(name)).map((name): PropField => ({ name, required: false, nullable: true, control: { kind: "json" } }))];
   }, [described, values]);
+  const docEpoch = useContext(DocEpochContext);
   const [drafts, setDrafts] = useState<Record<string, { baseline: unknown; text: string }>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [epochSeen, setEpochSeen] = useState(docEpoch);
+  if (epochSeen !== docEpoch) { // reset-on-change во время рендера (React-паттерн), см. DocEpochContext
+    setEpochSeen(docEpoch);
+    setDrafts({});
+    setErrors({});
+  }
 
   const commit = (name: string, value: unknown) => {
     const candidate = { ...values, [name]: value };
@@ -59,7 +75,7 @@ export function PropsForm({ definition, values, effectiveState, onCommit, path =
     commit(name, json.data);
   };
 
-  if (fields === null) return <JsonWholeProps key={JSON.stringify(values)} definition={definition} values={values} effectiveState={effectiveState} path={path} onCommit={onCommit} />;
+  if (fields === null) return <JsonWholeProps key={`${docEpoch}:${JSON.stringify(values)}`} definition={definition} values={values} effectiveState={effectiveState} path={path} onCommit={onCommit} />;
 
   return <div className="space-y-3">{fields.map((field) => {
     const value = values[field.name] ?? field.defaultValue;
