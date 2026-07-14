@@ -89,14 +89,17 @@ describe("EditorShell", () => {
     renderEditor();
     await screen.findByRole("heading", { name: "Editor demo" });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
-    expect(await screen.findByText("Черновик изменён (rev 12)")).toBeTruthy();
+    // 409 → редактор сам тянет актуальный remote-драфт для diff (2-я загрузка).
+    const dialog = await screen.findByRole("dialog", { name: "Конфликт версий черновика" });
+    expect(draftLoads).toBe(2);
+    expect(dialog.textContent).toContain("Черновик изменён снаружи (rev 7)");
     fireEvent.click(screen.getByRole("button", { name: /Перезагрузить черновик/ }));
-    await waitFor(() => expect(draftLoads).toBe(2));
+    await waitFor(() => expect(draftLoads).toBe(3));
   });
 
   it.each([
-    [[{ path: ["screens", 0, "name"], message: "array path" }], "/screens/0/name"],
-    [[{ path: "/screens/0/name", message: "pointer path" }], "/screens/0/name"],
+    [[{ path: ["screens", 0, "name"], message: "array path" }], "Экран «Home» › Название"],
+    [[{ path: "/screens/0/name", message: "pointer path" }], "Экран «Home» › Название"],
   ])("renders 422 issues in either path format", async (issues, expectedPath) => {
     vi.mocked(fetch).mockImplementation((input, init) => {
       if (String(input).endsWith("/draft")) return json(draft);

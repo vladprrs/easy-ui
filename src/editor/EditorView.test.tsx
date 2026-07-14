@@ -101,6 +101,67 @@ describe("EditorView (W2-2: защита правок + undo/redo)", () => {
     expect((screen.getByRole("textbox", { name: "text" }) as HTMLInputElement).value).toBe("Before");
   });
 
+  it("shows the 409 conflict dialog with a three-way diff and overwrites with the fresh rev (W2-4)", async () => {
+    const remoteDoc = structuredClone(doc);
+    remoteDoc.screens[0]!.spec.elements["text"]!.props.text = "Remote";
+    remoteDoc.name = "Remote name";
+    const puts: { baseRev: number; doc: typeof doc }[] = [];
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/prototypes/editor-demo" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { baseRev: number; doc: typeof doc };
+        puts.push(body);
+        if (body.baseRev !== 9) return json({ error: { code: "revision_conflict", message: "conflict", currentRev: 9 } }, 409);
+        return json({ rev: 10, warnings: [] });
+      }
+      if (url === "/api/prototypes/editor-demo/draft") return json({ ...draft, doc: remoteDoc, rev: 9 });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    renderView();
+    await screen.findByRole("heading", { name: "Editor demo" });
+    editText("Local");
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Конфликт версий черновика" });
+    expect(dialog.textContent).toContain("Черновик изменён снаружи (rev 9)");
+    // Что поменяли снаружи и что поменял ты — человекочитаемые адреса.
+    expect(dialog.textContent).toContain("Название — изменено («Editor demo» → «Remote name»)");
+    expect(dialog.textContent).toContain("Экран «Home» › text › text — изменено («Before» → «Remote»)");
+    expect(dialog.textContent).toContain("Экран «Home» › text › text — изменено («Before» → «Local»)");
+
+    // «Отменить» оставляет локальные правки в редакторе.
+    fireEvent.click(screen.getByRole("button", { name: "Отменить" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Конфликт версий черновика" })).toBeNull());
+    expect((screen.getByRole("textbox", { name: "text" }) as HTMLInputElement).value).toBe("Local");
+    expect(screen.getByText("Не сохранено")).toBeTruthy();
+
+    // Повторный save → снова диалог → «Перезаписать» кладёт локальную версию с baseRev свежего rev.
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await screen.findByRole("dialog", { name: "Конфликт версий черновика" });
+    fireEvent.click(screen.getByRole("button", { name: "Перезаписать" }));
+    expect(await screen.findByText("Сохранено")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Конфликт версий черновика" })).toBeNull();
+    const last = puts[puts.length - 1]!;
+    expect(last.baseRev).toBe(9);
+    expect(last.doc.screens[0]!.spec.elements["text"]!.props["text"]).toBe("Local");
+  });
+
+  it("humanizes 422 validation addresses in document terms (W2-4)", async () => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/prototypes/editor-demo" && init?.method === "PUT") {
+        return json({ error: { code: "validation_failed", message: "Prototype document is invalid", issues: [{ path: "/screens/0/spec/elements/text/props/text", message: "must be a string" }] } }, 422);
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+    renderView();
+    await screen.findByRole("heading", { name: "Editor demo" });
+    editText("Broken");
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Экран «Home» › text › text: must be a string");
+  });
+
   it("marks the draft dirty again when undoing past a save checkpoint", async () => {
     vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input) === "/api/prototypes/editor-demo" && init?.method === "PUT") return json({ rev: 8, warnings: [] });
