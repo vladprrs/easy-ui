@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentRegistry } from "@json-render/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrototypeDoc } from "../prototype/schema";
@@ -68,7 +68,10 @@ describe("EditorCanvas", () => {
     mocks.cleanupDevtools.mockReset();
     mocks.markDevtoolsActive.mockReset().mockReturnValue(mocks.cleanupDevtools);
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
 
   it("removes event handlers from the preview spec", () => {
     renderCanvas();
@@ -122,7 +125,7 @@ describe("EditorCanvas", () => {
     expect(onSelect).toHaveBeenCalledWith(null);
   });
 
-  it("selects the deepest element containing the click", () => {
+  it("selects the closest marked element from the event path", () => {
     const doc = makeDoc();
     const onSelect = vi.fn();
     render(<EditorCanvas doc={doc} screen={doc.screens[0]} registry={registry} runtimeKey="runtime" stateEpoch={0} selectedKey={null} onSelect={onSelect} />);
@@ -135,51 +138,99 @@ describe("EditorCanvas", () => {
     parent.append(child);
     previewRoot.append(parent);
 
-    const rects = new Map<Node, DOMRect>([
-      [parent, DOMRect.fromRect({ x: 0, y: 0, width: 40, height: 40 })],
-      [child, DOMRect.fromRect({ x: 0, y: 0, width: 100, height: 100 })],
-    ]);
-    const rangeSpy = vi.spyOn(document, "createRange").mockImplementation(() => {
-      let selected: Node;
-      return {
-        selectNodeContents: (node: Node) => { selected = node; },
-        getClientRects: () => [rects.get(selected)!] as unknown as DOMRectList,
-        getBoundingClientRect: () => rects.get(selected)!,
-      } as unknown as Range;
-    });
-
-    fireEvent.click(screen.getByTestId("editor-hit-overlay"), { clientX: 10, clientY: 10 });
+    fireEvent.click(child);
     expect(onSelect).toHaveBeenCalledWith("child");
-    rangeSpy.mockRestore();
   });
 
-  it("prefers the smaller union rect at equal DOM depth", () => {
+  it("hit-tests through the inert preview when the browser retargets the event", () => {
     const doc = makeDoc();
     const onSelect = vi.fn();
     render(<EditorCanvas doc={doc} screen={doc.screens[0]} registry={registry} runtimeKey="runtime" stateEpoch={0} selectedKey={null} onSelect={onSelect} />);
+    const previewRoot = document.querySelector<HTMLElement>("[inert]")!;
+    const marker = document.createElement("span");
+    marker.dataset.jrKey = "child";
+    const node = document.createElement("div");
+    marker.append(node);
+    previewRoot.append(marker);
+    const hitTest = vi.fn(() => node);
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: hitTest });
+
+    fireEvent.click(screen.getByTestId("editor-hit-overlay"), { clientX: 10, clientY: 10 });
+    expect(onSelect).toHaveBeenCalledWith("child");
+    expect(hitTest).toHaveBeenCalledWith(10, 10);
+    expect(previewRoot.hasAttribute("inert")).toBe(true);
+    Reflect.deleteProperty(document, "elementFromPoint");
+  });
+
+  it("draws one union frame for a composition with multiple roots and a block descendant", () => {
+    const doc = makeDoc({ root: "card", elements: { card: { type: "Card", props: {} } } });
+    const view = render(<EditorCanvas doc={doc} screen={doc.screens[0]} registry={registry} runtimeKey="runtime" stateEpoch={0} selectedKey={null} onSelect={vi.fn()} />);
 
     const previewRoot = document.querySelector<HTMLElement>("[inert]")!;
-    const large = document.createElement("span");
-    large.dataset.jrKey = "large";
-    const hotspot = document.createElement("span");
-    hotspot.dataset.jrKey = "hotspot";
-    previewRoot.append(large, hotspot);
-
-    const rects = new Map<Node, DOMRect>([
-      [large, DOMRect.fromRect({ x: 0, y: 0, width: 100, height: 100 })],
-      [hotspot, DOMRect.fromRect({ x: 5, y: 5, width: 20, height: 20 })],
-    ]);
+    const card = document.createElement("span");
+    card.dataset.jrKey = "card";
+    const header = document.createElement("section");
+    const body = document.createElement("div");
+    const block = document.createElement("p");
+    body.append(block);
+    card.append(header, body);
+    previewRoot.append(card);
+    vi.spyOn(header, "getBoundingClientRect").mockReturnValue(DOMRect.fromRect({ x: 10, y: 10, width: 30, height: 20 }));
+    vi.spyOn(body, "getBoundingClientRect").mockReturnValue(DOMRect.fromRect({ x: 10, y: 30, width: 40, height: 10 }));
+    vi.spyOn(block, "getBoundingClientRect").mockReturnValue(DOMRect.fromRect({ x: 60, y: 20, width: 50, height: 40 }));
     const rangeSpy = vi.spyOn(document, "createRange").mockImplementation(() => {
-      let selected: Node;
       return {
-        selectNodeContents: (node: Node) => { selected = node; },
-        getClientRects: () => [rects.get(selected)!] as unknown as DOMRectList,
-        getBoundingClientRect: () => rects.get(selected)!,
+        selectNodeContents: vi.fn(),
+        getClientRects: () => [DOMRect.fromRect({ x: 12, y: 12, width: 10, height: 10 })] as unknown as DOMRectList,
       } as unknown as Range;
     });
 
-    fireEvent.click(screen.getByTestId("editor-hit-overlay"), { clientX: 10, clientY: 10 });
-    expect(onSelect).toHaveBeenCalledWith("hotspot");
+    view.rerender(<EditorCanvas doc={doc} screen={doc.screens[0]} registry={registry} runtimeKey="runtime" stateEpoch={0} selectedKey="card" onSelect={vi.fn()} />);
+    const frames = screen.getAllByTestId("editor-selection-frame");
+    expect(frames).toHaveLength(1);
+    expect(frames[0].style.cssText).toContain("left: 10px");
+    expect(frames[0].style.cssText).toContain("top: 10px");
+    expect(frames[0].style.cssText).toContain("width: 100px");
+    expect(frames[0].style.cssText).toContain("height: 50px");
+    rangeSpy.mockRestore();
+  });
+
+  it("measures only the hovered element once per animation frame on a large screen", () => {
+    const doc = makeDoc();
+    renderCanvas(doc);
+    const previewRoot = document.querySelector<HTMLElement>("[inert]")!;
+    let target: HTMLElement | null = null;
+    for (let index = 0; index < 400; index += 1) {
+      const marker = document.createElement("span");
+      marker.dataset.jrKey = `item-${index}`;
+      const node = document.createElement("div");
+      marker.append(node);
+      previewRoot.append(marker);
+      if (index === 237) target = node;
+    }
+
+    const callbacks = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => {
+      callbacks.set(++frameId, callback);
+      return frameId;
+    }));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn((id: number) => callbacks.delete(id)));
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue(DOMRect.fromRect({ x: 0, y: 0, width: 20, height: 20 }));
+    const rangeSpy = vi.spyOn(document, "createRange").mockReturnValue({
+      selectNodeContents: vi.fn(),
+      getClientRects: () => [] as unknown as DOMRectList,
+    } as unknown as Range);
+
+    fireEvent.mouseMove(target!);
+    fireEvent.mouseMove(target!);
+    expect(rectSpy).not.toHaveBeenCalled();
+    act(() => callbacks.get(frameId)?.(0));
+    expect(screen.getByTestId("editor-hover-frame")).toBeTruthy();
+    expect(rectSpy.mock.calls.length).toBeLessThan(10);
+    expect(rangeSpy).toHaveBeenCalledOnce();
+    rectSpy.mockRestore();
     rangeSpy.mockRestore();
   });
 });

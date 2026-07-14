@@ -11,19 +11,26 @@ import { previewNativeWidth } from "../designSystems/deviceMetrics";
 
 type Screen = PrototypeDoc["screens"][number];
 type SelectionRect = { left: number; top: number; width: number; height: number };
+const markerSelector = "span[data-jr-key]";
 
-function containsPoint(rect: DOMRect, x: number, y: number) {
-  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
-}
-
-function domDepth(element: Element, root: Element) {
-  let depth = 0;
-  let current: Element | null = element;
-  while (current && current !== root) {
-    depth += 1;
-    current = current.parentElement;
-  }
-  return depth;
+function unionNodeRect(tagged: HTMLElement, viewport: HTMLElement): SelectionRect | null {
+  const range = document.createRange();
+  range.selectNodeContents(tagged);
+  const rects = [...Array.from(range.getClientRects())];
+  for (const descendant of tagged.querySelectorAll<HTMLElement>("*")) rects.push(descendant.getBoundingClientRect());
+  const visible = rects.filter((rect) => rect.width > 0 || rect.height > 0);
+  if (!visible.length) return null;
+  const left = Math.min(...visible.map((rect) => rect.left));
+  const top = Math.min(...visible.map((rect) => rect.top));
+  const right = Math.max(...visible.map((rect) => rect.right));
+  const bottom = Math.max(...visible.map((rect) => rect.bottom));
+  const viewportRect = viewport.getBoundingClientRect();
+  return {
+    left: left - viewportRect.left + viewport.scrollLeft,
+    top: top - viewportRect.top + viewport.scrollTop,
+    width: right - left,
+    height: bottom - top,
+  };
 }
 
 export interface EditorCanvasProps {
@@ -41,7 +48,7 @@ export interface EditorCanvasProps {
   customDefinitions?: Record<string, ComponentDefinition>;
 }
 
-export function EditorFrame({ nativeWidth, nativeHeight, viewportRef, previewRootRef, children, overlay, frames }: {
+export function EditorFrame({ nativeWidth, nativeHeight, viewportRef, previewRootRef, children, overlay, frames, onClick, onMouseMove, onMouseLeave }: {
   nativeWidth: number;
   nativeHeight?: number;
   viewportRef: RefObject<HTMLDivElement | null>;
@@ -49,6 +56,9 @@ export function EditorFrame({ nativeWidth, nativeHeight, viewportRef, previewRoo
   children: ReactNode;
   overlay: ReactNode;
   frames: ReactNode;
+  onClick?: (event: MouseEvent<HTMLDivElement>) => void;
+  onMouseMove?: (event: MouseEvent<HTMLDivElement>) => void;
+  onMouseLeave?: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [availableWidth, setAvailableWidth] = useState(nativeWidth);
@@ -77,7 +87,7 @@ export function EditorFrame({ nativeWidth, nativeHeight, viewportRef, previewRoo
   }, [nativeHeight, previewRootRef]);
 
   return <div ref={hostRef} className="min-w-0 w-full">
-    <div ref={viewportRef} className="relative overflow-hidden rounded-xl border bg-background text-foreground shadow-sm" style={{ width: nativeWidth * scale, height: contentHeight * scale }}>
+    <div ref={viewportRef} className="relative overflow-hidden rounded-xl border bg-background text-foreground shadow-sm" style={{ width: nativeWidth * scale, height: contentHeight * scale }} onClick={onClick} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}>
       <div style={{ width: nativeWidth, ...(nativeHeight === undefined ? {} : { height: nativeHeight }), transform: `scale(${scale})`, transformOrigin: "top left" }}>
         <div ref={previewRootRef} inert>{children}</div>
       </div>
@@ -105,7 +115,11 @@ class EditorCanvasErrorBoundary extends Component<{ prototypeId: string; screenI
 export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stateEpoch, selectedKey, onSelect, customTypes, customDefinitions }: EditorCanvasProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const previewRootRef = useRef<HTMLDivElement>(null);
-  const [selectionRects, setSelectionRects] = useState<SelectionRect[]>([]);
+  const markerCacheRef = useRef(new Map<string, HTMLElement>());
+  const hoverFrameRef = useRef<number | null>(null);
+  const hoveredKeyRef = useRef<string | null>(null);
+  const [selectionRect, setSelectionRect] = useState<SelectionRect | null>(null);
+  const [hoverRect, setHoverRect] = useState<SelectionRect | null>(null);
 
   useEffect(() => markDevtoolsActive(), []);
 
@@ -125,68 +139,116 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
   );
   const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
 
+  const findMarker = useCallback((key: string) => {
+    const cached = markerCacheRef.current.get(key);
+    if (cached?.isConnected) return cached;
+    const marker = Array.from(previewRootRef.current?.querySelectorAll<HTMLElement>(markerSelector) ?? [])
+      .find((node) => node.dataset.jrKey === key) ?? null;
+    if (marker) markerCacheRef.current.set(key, marker);
+    return marker;
+  }, []);
+
   const measureSelection = useCallback(() => {
-    const previewRoot = previewRootRef.current;
     const viewport = viewportRef.current;
-    if (!selectedKey || !previewRoot || !viewport) {
-      setSelectionRects([]);
+    if (!selectedKey || !viewport) {
+      setSelectionRect(null);
       return;
     }
-    const tagged = Array.from(previewRoot.querySelectorAll<HTMLElement>("span[data-jr-key]"))
-      .find((element) => element.dataset.jrKey === selectedKey);
+    const tagged = findMarker(selectedKey);
     if (!tagged) {
-      setSelectionRects([]);
+      setSelectionRect(null);
       return;
     }
-    const range = document.createRange();
-    range.selectNodeContents(tagged);
-    const viewportRect = viewport.getBoundingClientRect();
-    setSelectionRects(Array.from(range.getClientRects(), (rect) => ({
-      left: rect.left - viewportRect.left + viewport.scrollLeft,
-      top: rect.top - viewportRect.top + viewport.scrollTop,
-      width: rect.width,
-      height: rect.height,
-    })));
-  }, [selectedKey]);
+    setSelectionRect(unionNodeRect(tagged, viewport));
+  }, [findMarker, selectedKey]);
 
   useLayoutEffect(() => {
+    markerCacheRef.current.clear();
+    hoveredKeyRef.current = null;
+    // Geometry belongs to the previous runtime tree and must disappear before paint.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setHoverRect(null);
+  }, [runtimeKey, screen.id, stateEpoch]);
+
+  useLayoutEffect(() => {
+    // Selection geometry is an external DOM measurement, synchronized before paint.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     measureSelection();
+    if (!selectedKey) return;
     const previewRoot = previewRootRef.current;
     const viewport = viewportRef.current;
-    if (typeof ResizeObserver === "undefined" || !previewRoot || !viewport) return;
-    const observer = new ResizeObserver(measureSelection);
-    observer.observe(previewRoot);
-    observer.observe(viewport);
-    return () => observer.disconnect();
-  }, [selectedKey, doc, screen.id, measureSelection]);
+    if (!previewRoot || !viewport) return;
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measureSelection);
+    observer?.observe(previewRoot);
+    observer?.observe(viewport);
+    viewport.addEventListener("scroll", measureSelection, { passive: true });
+    window.addEventListener("resize", measureSelection);
+    return () => {
+      observer?.disconnect();
+      viewport.removeEventListener("scroll", measureSelection);
+      window.removeEventListener("resize", measureSelection);
+    };
+  }, [measureSelection, runtimeKey, screen.id, selectedKey, stateEpoch]);
 
-  const handleHitTest = (event: MouseEvent<HTMLDivElement>) => {
+  useEffect(() => () => {
+    if (hoverFrameRef.current !== null) cancelAnimationFrame(hoverFrameRef.current);
+  }, []);
+
+  const markerFromEvent = (event: MouseEvent<HTMLDivElement>) => {
     const previewRoot = previewRootRef.current;
-    if (!previewRoot) {
-      onSelect(null);
-      return;
-    }
-
-    let best: { key: string; depth: number; area: number } | null = null;
-    for (const tagged of previewRoot.querySelectorAll<HTMLElement>("span[data-jr-key]")) {
-      const key = tagged.dataset.jrKey;
-      if (!key) continue;
-      const range = document.createRange();
-      range.selectNodeContents(tagged);
-      const clientRects = Array.from(range.getClientRects());
-      if (!clientRects.some((rect) => containsPoint(rect, event.clientX, event.clientY))) continue;
-
-      const unionRect = range.getBoundingClientRect();
-      const candidate = {
-        key,
-        depth: domDepth(tagged, previewRoot),
-        area: unionRect.width * unionRect.height,
-      };
-      if (!best || candidate.depth > best.depth || (candidate.depth === best.depth && candidate.area < best.area)) {
-        best = candidate;
+    if (!previewRoot) return null;
+    const findClosest = (items: EventTarget[]) => {
+      for (const item of items) {
+        if (!(item instanceof Element)) continue;
+        const tagged = item.matches(markerSelector) ? item : item.closest(markerSelector);
+        if (!(tagged instanceof HTMLElement) || !previewRoot.contains(tagged)) continue;
+        const key = tagged.dataset.jrKey;
+        if (!key) return null;
+        markerCacheRef.current.set(key, tagged);
+        return tagged;
       }
+      return null;
+    };
+    const fromPath = findClosest(event.nativeEvent.composedPath());
+    if (fromPath || typeof document.elementFromPoint !== "function") return fromPath;
+
+    // Native inert hit-testing retargets pointer events to the viewport. Disable
+    // it only for this synchronous lookup; the preview never receives an event.
+    const wasInert = previewRoot.hasAttribute("inert");
+    previewRoot.removeAttribute("inert");
+    try {
+      const target = document.elementFromPoint(event.clientX, event.clientY);
+      return target ? findClosest([target]) : null;
+    } finally {
+      if (wasInert) previewRoot.setAttribute("inert", "");
     }
-    onSelect(best?.key ?? null);
+  };
+
+  const handleMouseMove = (event: MouseEvent<HTMLDivElement>) => {
+    const tagged = markerFromEvent(event);
+    const key = tagged?.dataset.jrKey ?? null;
+    hoveredKeyRef.current = key;
+    if (hoverFrameRef.current !== null) cancelAnimationFrame(hoverFrameRef.current);
+    hoverFrameRef.current = requestAnimationFrame(() => {
+      hoverFrameRef.current = null;
+      const viewport = viewportRef.current;
+      const current = hoveredKeyRef.current;
+      const marker = current ? findMarker(current) : null;
+      setHoverRect(viewport && marker ? unionNodeRect(marker, viewport) : null);
+    });
+  };
+
+  const handleMouseLeave = () => {
+    hoveredKeyRef.current = null;
+    if (hoverFrameRef.current !== null) {
+      cancelAnimationFrame(hoverFrameRef.current);
+      hoverFrameRef.current = null;
+    }
+    setHoverRect(null);
+  };
+
+  const handleSelect = (event: MouseEvent<HTMLDivElement>) => {
+    onSelect(markerFromEvent(event)?.dataset.jrKey ?? hoveredKeyRef.current);
   };
 
   const rendered = !hasRoot
@@ -204,8 +266,14 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
         nativeHeight={screen.canvas?.height}
         viewportRef={viewportRef}
         previewRootRef={previewRootRef}
-        overlay={<div className="absolute inset-0 z-40 cursor-default" data-testid="editor-hit-overlay" onClick={handleHitTest} />}
-        frames={<div className="pointer-events-none absolute inset-0 z-50" aria-hidden="true">{selectionRects.map((rect, index) => <div key={index} data-testid="editor-selection-frame" className="absolute border-2 border-eui-magenta" style={rect} />)}</div>}
+        onClick={handleSelect}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+        overlay={<div className="pointer-events-none absolute inset-0 z-40 cursor-default" data-testid="editor-hit-overlay" />}
+        frames={<div className="pointer-events-none absolute inset-0 z-50" aria-hidden="true">
+          {hoverRect && <div data-testid="editor-hover-frame" className="absolute border border-eui-magenta/60" style={hoverRect} />}
+          {selectionRect && <div data-testid="editor-selection-frame" className="absolute border-2 border-eui-magenta" style={selectionRect} />}
+        </div>}
       >{rendered}</EditorFrame>
     </JSONUIProvider>
   </EditorCanvasErrorBoundary>;
