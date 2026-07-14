@@ -6,8 +6,9 @@ import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import type { PrototypeDoc } from "../prototype/schema";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { pillGhostOnDark } from "../app/chrome";
-import { player, present, presentDocumentTitle } from "../app/strings/player";
+import { player, present, presentDocumentTitle, share as shareStrings, shareDocumentTitle } from "../app/strings/player";
 import { useDocumentTitle } from "../app/useDocumentTitle";
+import type { ThemeContent } from "../api/client";
 import { EasyUiActionRuntime } from "./actionRuntime";
 import { DeviceFrame, isPlayerHelpHotkey, isPlayerHotkeyEvent, type StageZoom } from "./DeviceFrame";
 import { buildPlayerPath, FlowResetBanner, PlayerNavigationProvider, usePlayerNavigation } from "./navigation";
@@ -30,7 +31,7 @@ const fitZoom: StageZoom = { mode: "fit", zoom: 1 };
  * Выход: Esc возвращает в плеер на тот же экран. При прямом входе по ссылке
  * дополнительно показывается кнопка «Открыть в easy-ui» с тем же маршрутом.
  */
-export function PresentShell() {
+export function PresentShell({ share = false }: { share?: boolean }) {
   const { protoId, version } = useParams();
   const numericVersion = version === undefined ? undefined : Number(version);
   const navigationType = useNavigationType();
@@ -39,14 +40,14 @@ export function PresentShell() {
   const [directEntry] = useState(() => navigationType === "POP");
   return <PrototypeLoader protoId={protoId} version={numericVersion}>
     {({ loaded, custom, runtimeKey, routeBase }) => (
-      <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} routeBase={`${routeBase}/present`}>
-        <LoadedPresent key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} playerBase={routeBase} metaVersion={loaded.designSystemMetaVersion} version={numericVersion} directEntry={directEntry} />
+      <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} routeBase={`${share ? `/share/p/${encodeURIComponent(loaded.doc.id)}/v/${numericVersion}` : routeBase}/present`}>
+        <LoadedPresent key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} playerBase={routeBase} metaVersion={loaded.designSystemMetaVersion} version={numericVersion} directEntry={directEntry} share={share} />
       </PlayerNavigationProvider>
     )}
   </PrototypeLoader>;
 }
 
-function LoadedPresent({ doc, custom, runtimeKey, playerBase, metaVersion, version, directEntry }: {
+interface LoadedPresentProps {
   doc: PrototypeDoc;
   custom?: CustomPlayerRuntime | undefined;
   runtimeKey: string;
@@ -54,15 +55,29 @@ function LoadedPresent({ doc, custom, runtimeKey, playerBase, metaVersion, versi
   metaVersion: number | null | undefined;
   version: number | undefined;
   directEntry: boolean;
-}) {
+  share: boolean;
+}
+
+function LoadedPresent(props: LoadedPresentProps) {
+  // A published version with no theme pin means "no theme at publish time". The normal player
+  // still resolves latest-head themes for drafts, but scoped share must not read that mutable API.
+  if (props.share && props.metaVersion == null) return <LoadedPresentContent {...props} themeContent={null} />;
+  return <ThemedLoadedPresent {...props} />;
+}
+
+function ThemedLoadedPresent(props: LoadedPresentProps) {
+  const themeContent = useDesignSystemTheme(props.doc.designSystem, props.metaVersion);
+  return <LoadedPresentContent {...props} themeContent={themeContent} />;
+}
+
+function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, directEntry, share, themeContent }: LoadedPresentProps & { themeContent: ThemeContent | null }) {
   const { screenId } = useParams();
-  const themeContent = useDesignSystemTheme(doc.designSystem, metaVersion);
   const navigation = usePlayerNavigation();
   const routerNavigate = useNavigate();
   const [hotkeysVisible, setHotkeysVisible] = useState(false);
   const navigationRef = useRef(navigation);
   useEffect(() => { navigationRef.current = navigation; }, [navigation]);
-  useDocumentTitle(presentDocumentTitle(doc.name, version));
+  useDocumentTitle(share && version !== undefined ? shareDocumentTitle(doc.name, version) : presentDocumentTitle(doc.name, version));
 
   // eslint-disable-next-line react-hooks/refs
   const runtime = useMemo(() => createPlayerRuntime({
@@ -111,7 +126,7 @@ function LoadedPresent({ doc, custom, runtimeKey, playerBase, metaVersion, versi
       } else if (event.key.toLowerCase() === "r") {
         event.preventDefault();
         navigation.restart();
-      } else if (event.key === "Escape") {
+      } else if (event.key === "Escape" && !share) {
         event.preventDefault();
         void routerNavigate(exitPath);
       } else if (isPlayerHelpHotkey(event)) {
@@ -121,12 +136,12 @@ function LoadedPresent({ doc, custom, runtimeKey, playerBase, metaVersion, versi
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentIndex, doc.screens, exitPath, navigation, routerNavigate]);
+  }, [currentIndex, doc.screens, exitPath, navigation, routerNavigate, share]);
 
   return <JSONUIProvider key={`${runtimeKey}:${navigation.sessionNonce}`} registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
     <ThemeStyle content={themeContent} />
     <main className="flex h-dvh min-h-0 flex-col bg-eui-graphite font-eui-ui text-white">
-      {hotkeysVisible && <PlayerHotkeysHelp present onClose={() => setHotkeysVisible(false)} />}
+      {hotkeysVisible && <PlayerHotkeysHelp present canExitPresent={!share} onClose={() => setHotkeysVisible(false)} />}
       <div className="relative flex min-h-0 min-w-0 flex-1">
         {/* Компактный баннер сброса (W1-5): deep-link в середину флоу презентации. */}
         <FlowResetBanner compact />
@@ -154,7 +169,8 @@ function LoadedPresent({ doc, custom, runtimeKey, playerBase, metaVersion, versi
         </nav>
         <span className="text-xs tabular-nums text-eui-ondark-2">{present.counter(currentIndex + 1, doc.screens.length)}</span>
         <button type="button" onClick={navigation.restart} className={pillGhostOnDark}>{player.restart}</button>
-        {directEntry
+        {share ? <span className="text-xs text-eui-ondark-2">{shareStrings.viewerLabel}</span>
+          : directEntry
           ? <Link className={pillGhostOnDark} to={exitPath}>{present.openInApp}</Link>
           : <span className="text-xs text-eui-ondark-2">{present.exitHint}</span>}
       </footer>

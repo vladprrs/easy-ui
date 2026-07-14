@@ -2,11 +2,11 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { migrate } from "./migrations";
 
-test("migrations are idempotent and install the complete v9 schema",()=>{
+test("migrations are idempotent and install the complete v10 schema",()=>{
   const db=new Database(":memory:"); migrate(db); migrate(db);
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(10);
   const names=(db.query("SELECT name FROM sqlite_master WHERE type='table'").all() as {name:string}[]).map(x=>x.name);
-  expect(names).toEqual(expect.arrayContaining(["prototypes","prototype_revisions","prototype_revision_components","prototype_publishes","components","component_revisions","component_publishes","seed_log","design_systems","validation_records","assets","prototype_revision_assets","component_publish_assets","visual_references","visual_runs","design_system_versions"]));
+  expect(names).toEqual(expect.arrayContaining(["prototypes","prototype_revisions","prototype_revision_components","prototype_publishes","components","component_revisions","component_publishes","seed_log","design_systems","validation_records","assets","prototype_revision_assets","component_publish_assets","visual_references","visual_runs","design_system_versions","share_grants","share_sessions"]));
   // v8 widened the component_publishes lifecycle columns.
   const cols=(db.query("PRAGMA table_info(component_publishes)").all() as {name:string}[]).map(c=>c.name);
   expect(cols).toEqual(expect.arrayContaining(["status","status_reason","superseded_by","status_rev"]));
@@ -16,9 +16,29 @@ test("migrations are idempotent and install the complete v9 schema",()=>{
   db.close();
 });
 
+test("adds scoped-share grants and hashed sessions to a populated v9 database",()=>{
+  const db=new Database(":memory:"); migrate(db);
+  db.run("DROP TABLE share_sessions"); db.run("DROP TABLE share_grants"); db.run("PRAGMA user_version = 9");
+  db.run("INSERT INTO prototypes (id,name,device,screen_count,head_rev,design_system,created_at,updated_at) VALUES ('shared','Shared','mobile',1,1,'shadcn','now','now')");
+  db.run(`INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,created_at) VALUES ('shared',1,'{"version":1,"id":"shared","designSystem":"shadcn"}','h','now')`);
+  db.run("INSERT INTO prototype_publishes (prototype_id,version,rev,published_at) VALUES ('shared',1,1,'now')");
+
+  migrate(db);
+
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(10);
+  db.run("INSERT INTO share_grants (id,token_hash,prototype_id,version,rev,dependencies_json,created_at,expires_at) VALUES ('g','hash','shared',1,1,'{}','now','later')");
+  db.run("INSERT INTO share_sessions (id,session_hash,grant_id,created_at,expires_at) VALUES ('s','session-hash','g','now','later')");
+  db.run("DELETE FROM share_grants WHERE id='g'");
+  expect(db.query("SELECT COUNT(*) count FROM share_sessions").get()).toEqual({count:0});
+  expect(db.query("SELECT COUNT(*) count FROM prototypes").get()).toEqual({count:1});
+  db.close();
+});
+
 // Roll a fully-migrated database back below v7 (and below the v9 figma columns) for the
 // pre-v7 upgrade fixtures, so re-migration re-runs v7..v9 cleanly.
 function rollbackBelowV7(db:Database):void {
+  db.run("DROP TABLE share_sessions");
+  db.run("DROP TABLE share_grants");
   db.run("DROP TABLE design_system_versions");
   db.run("ALTER TABLE prototype_revisions DROP COLUMN design_system_meta_version");
   db.run("ALTER TABLE prototype_revisions DROP COLUMN figma_json");
@@ -37,7 +57,7 @@ test("upgrades a populated v2 database and backfills revision design systems",()
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(10);
   expect(db.query("SELECT design_system FROM component_revisions WHERE component_id='custom'").get()).toEqual({design_system:"wireframe"});
   expect(db.query("SELECT COUNT(*) count FROM design_systems").get()).toEqual({count:3});
   expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='validation_records'").get()).toEqual({name:"validation_records"});
@@ -56,7 +76,7 @@ test("adds validation_records to a populated v3 database without touching existi
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(10);
   expect(db.query("SELECT COUNT(*) count FROM validation_records").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM prototypes").get()).toEqual({count:1});
   expect(db.query("SELECT COUNT(*) count FROM components").get()).toEqual({count:1});
@@ -76,7 +96,7 @@ test("adds the v5 asset registry to a populated v4 database without touching exi
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(10);
   expect(db.query("SELECT COUNT(*) count FROM assets").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM prototypes").get()).toEqual({count:1});
   expect(db.query("SELECT COUNT(*) count FROM validation_records").get()).toEqual({count:1});
@@ -95,7 +115,7 @@ test("adds the v6 visual regression tables to a populated v5 database with FK RE
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(10);
   expect(db.query("SELECT COUNT(*) count FROM visual_references").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM assets").get()).toEqual({count:1});
   // FK RESTRICT: an asset used as a reference baseline cannot be deleted.
@@ -118,7 +138,7 @@ test("adds the v7 design-system theme versions to a populated v6 database with F
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(10);
   expect(db.query("SELECT COUNT(*) count FROM design_system_versions").get()).toEqual({count:0});
   expect((db.query("PRAGMA table_info(prototype_revisions)").all() as {name:string}[]).map(c=>c.name)).toContain("design_system_meta_version");
   // Existing rows survive and the new pin column defaults to NULL.
@@ -165,6 +185,8 @@ test("v8 strictly rebuilds component_publishes on a populated pre-status databas
   revertComponentPublishesToPreStatus(db);
   db.run("ALTER TABLE prototype_revisions DROP COLUMN figma_json");
   db.run("ALTER TABLE component_revisions DROP COLUMN figma_json");
+  db.run("DROP TABLE share_sessions");
+  db.run("DROP TABLE share_grants");
   db.run("PRAGMA user_version = 7");
   const insert=()=>{
     // A live component with active/failed/staging versions, a soft-deleted component still pinned,
@@ -187,7 +209,7 @@ test("v8 strictly rebuilds component_publishes on a populated pre-status databas
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(9);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(10);
   // No FK violations after the rebuild.
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   // Parent rows and their statuses survive; new columns default.

@@ -72,6 +72,10 @@ export const playerHotkeys = {
 export const presentDocumentTitle = (docName: string, version?: number) =>
   version === undefined ? `${docName} · Презентация` : `${docName} v${version} · Презентация`;
 
+/** document.title публичной share-презентации (W3-3). */
+export const shareDocumentTitle = (docName: string, version: number) =>
+  `${docName} v${version} · Просмотр`;
+
 // Режим презентации (W1-2): только прототип на экране + минимальная оснастка.
 export const present = {
   pagerAria: "Экраны презентации",
@@ -79,6 +83,34 @@ export const present = {
   openInApp: "Открыть в easy-ui",
   exitHint: "Esc — вернуться в плеер",
   screenDot: (name: string) => `Экран «${name}»`,
+} as const;
+
+export const share = {
+  action: "Поделиться",
+  dialogTitle: "Поделиться прототипом",
+  close: "Закрыть",
+  version: "Опубликованная версия",
+  ttl: "Срок действия",
+  ttlDay: "1 день",
+  ttlWeek: "7 дней",
+  ttlMonth: "30 дней",
+  create: "Создать ссылку",
+  creating: "Создаём…",
+  noPublishedVersions: "Сначала опубликуйте версию прототипа.",
+  createdLabel: "Новая ссылка",
+  copy: "Скопировать",
+  copied: "Скопировано",
+  qrLabel: "QR-код ссылки",
+  activeTitle: "Активные ссылки",
+  activeEmpty: "Активных ссылок пока нет.",
+  activeItem: (version: number, expires: string) => `Версия ${version} · до ${expires}`,
+  sessions: (count: number) => `активных сессий: ${count}`,
+  revoke: "Отозвать",
+  loading: "Загрузка ссылок…",
+  viewerLabel: "Защищённый просмотр",
+  loadError: "Не удалось загрузить ссылки.",
+  createError: "Не удалось создать ссылку.",
+  revokeError: "Не удалось отозвать ссылку.",
 } as const;
 
 export const inspector = {

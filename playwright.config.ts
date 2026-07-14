@@ -41,6 +41,14 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 300_000,
     },
+    {
+      // W3-3 auth-preview shares the completed production build, but owns an isolated DB.
+      // Waiting for preview health avoids a second concurrent write into dist.
+      command: `rm -rf .e2e-data/auth-preview && until ${bun} -e "const r=await fetch('http://127.0.0.1:4173/api/health').catch(()=>null);process.exit(r?.ok?0:1)"; do sleep 1; done; DATA_DIR=.e2e-data/auth-preview SERVE_DIST=dist PORT=4174 BASIC_AUTH=owner:secret PUBLIC_ORIGIN=http://127.0.0.1:4174 ${bun} server/main.ts`,
+      url: `http://${bunHost}:4174/api/health`,
+      reuseExistingServer: false,
+      timeout: 300_000,
+    },
   ],
   projects: [
     {
@@ -59,6 +67,11 @@ export default defineConfig({
       name: "preview",
       testMatch: /preview\/.*\.spec\.ts/,
       use: { baseURL: `http://${bunHost}:4173` },
+    },
+    {
+      name: "auth-preview",
+      testMatch: /share\/.*\.spec\.ts/,
+      use: { baseURL: `http://${bunHost}:4174` },
     },
   ],
 });

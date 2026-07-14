@@ -27,10 +27,21 @@
 | `POST /prototypes/:id/publish` | `{message?,baseRev}` → 201 `{version,rev,screens}` и `Location` |
 | `GET /prototypes/:id/versions` | `PrototypeVersion[]`: `{version,rev,publishedAt}` |
 | `GET /prototypes/:id/versions/:version` | `{version,rev,doc,builtinCatalogHash,componentManifestHash,components:ComponentPin[],assets:AssetPin[],publishedAt}`; immutable |
+| `POST /prototypes/:id/share` | `{version,ttlSeconds}` → 201 `{id,prototypeId,version,url,createdAt,expiresAt,activeSessions}`; bearer-token присутствует только в одноразово возвращённом `url` |
+| `GET /prototypes/:id/share` | `{shares: ShareGrant[]}` — только активные/неистёкшие grants, без bearer-token |
+| `DELETE /prototypes/:id/share/:shareId` | 204; revoke grant и всех выданных им sessions |
 
 `PUT /prototypes/:id` — это осознанный checkpoint, а не no-op. Даже если `doc` не изменился, успешный запрос с актуальным `baseRev` создаёт новую ревизию: сервер заново разрешает и фиксирует пины active custom-бандлов, текущей версии темы дизайн-системы и ассетов, а также сохраняет переданный `message`. CAS по `baseRev` действует как обычно. Сервер намеренно не дедуплицирует такие ревизии, потому что повторное сохранение выражает явное решение зафиксировать актуальное окружение документа.
 
 `ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её встроенный каталог. Дескриптор v1 включает имена, descriptions, events, slots и actions, но намеренно не включает `atomicLevel`: классификация может меняться без изменения render-совместимости. В MVP хеш диагностический — рантайм не сравнивает и не блокирует его mismatch; enforcement и таблицы совместимости оставлены на post-MVP.
+
+### Scoped share
+
+Owner-endpoints share подчиняются обычному Basic Auth. Grant всегда закреплён за опубликованной immutable version; TTL допускается от 5 минут до 30 дней. Bearer-token генерируется из 32 случайных байт (256 бит) и возвращается только при создании: в SQLite хранится исключительно SHA-256 hash. Поэтому старую ссылку нельзя восстановить из списка — можно отозвать её и создать новую.
+
+Публичный `GET /share/:token` — единственный маршрут перед BasicAuth-гейтом. Живой token обменивается на opaque server-session, после чего сервер ставит host-only cookie `HttpOnly; SameSite=Lax; Path=/` (`Secure` только при HTTPS `PUBLIC_ORIGIN`) и отвечает `303` на абсолютный tokenless URL `/share/p/:id/v/:version/present/s/:startScreen`. Token исчезает из адресной строки и не попадает в referrer.
+
+Share-cookie авторизует исключительно `GET`/`HEAD` по exact allowlist: share-present маршруты экранов, DTO выбранной version, её pinned component bundles и точные shim/asset/theme-version зависимости. Draft/list/write API, обычные `/p/*` маршруты, другие прототипы и версии не разрешены. Ответы имеют `Cache-Control: no-store`, `Vary: Cookie`, `Referrer-Policy: no-referrer`. Closure текущей SPA-сборки (Vite chunks, fonts, favicon и скопированные public-файлы) перечисляется из текущего `SERVE_DIST` на каждом запросе, не сохраняется в grant/session; уже выданная cookie поэтому продолжает работать после redeploy с новыми hash-именами. Revoke помечает grant и удаляет все его sessions немедленно.
 
 ### Матрица `designSystem` в DTO прототипов
 
@@ -431,7 +442,7 @@ ABI v2 — суперсет v1: те же specifiers резолвятся в `/a
 
 ## Deployment
 
-Production разворачивается в Dokploy из корневого `docker-compose.yml` на домене `easy-ui.pay-offline.ru`. Контейнер использует `HOST=0.0.0.0`, `PORT=8787`, `SERVE_DIST=dist`, `DATA_DIR=data`; секрет `BASIC_AUTH=user:pass` обязателен и задаётся только в окружении Dokploy. Named volume `easy-ui-data` монтируется в `/app/data`.
+Production разворачивается в Dokploy из корневого `docker-compose.yml` на домене `easy-ui.pay-offline.ru`. Контейнер использует `HOST=0.0.0.0`, `PORT=8787`, `SERVE_DIST=dist`, `DATA_DIR=data`; секрет `BASIC_AUTH=user:pass` и канонический `PUBLIC_ORIGIN=https://easy-ui.pay-offline.ru` обязательны и задаются только в окружении Dokploy. `PUBLIC_ORIGIN` содержит только scheme + host + опциональный port, без path/query/credentials. Для любого non-loopback hostname сервер требует HTTPS; явный HTTP разрешён лишь для loopback auth-preview/e2e. Именно этот origin используется в абсолютных share/QR URL и `303 Location`, поэтому он должен совпадать с внешним origin reverse proxy. Named volume `easy-ui-data` монтируется в `/app/data`.
 
 Compose healthcheck обращается без credentials к открытому `GET http://127.0.0.1:8787/api/health` и считает сервис готовым только при HTTP 200 и JSON `status: "ready"`. Для rollback следует вернуть предыдущий commit SHA и повторно развернуть compose; миграции forward-only, поэтому перед рискованными изменениями нужен backup volume.
 

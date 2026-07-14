@@ -19,11 +19,48 @@ import type { VisualService } from "./visual/service";
 import { VisualService as VisualServiceImpl } from "./visual/service";
 import { routeVisual } from "./routes/visual";
 import { routeMeta } from "./routes/meta";
+import { exchangeShareToken, protectShareResponse, routeShares } from "./routes/share";
+import { ShareRepo } from "./share/repo";
 
-export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?:string;dataDir?:string;basicAuth?:string;screenshots?:ScreenshotService;visual?:VisualService}={}):(request:Request,server?:Bun.Server<unknown>)=>Promise<Response> {
+type HandlerOptions = {ready?:()=>boolean;serveDist?:string;dataDir?:string;basicAuth?:string;publicOrigin?:URL|string;screenshots?:ScreenshotService;visual?:VisualService};
+
+function isLoopbackHostname(hostname:string):boolean {
+  return hostname==="localhost"||hostname==="::1"||hostname==="[::1]"||hostname.startsWith("127.");
+}
+
+export function resolvePublicOrigin(value:string|undefined,fallback:{host:string;port:number}):URL {
+  if(!value) {
+    if(!isLoopbackHostname(fallback.host)) throw new Error("PUBLIC_ORIGIN is required when HOST is non-loopback");
+    value=`http://${fallback.host.includes(":")?`[${fallback.host}]`:fallback.host}:${fallback.port}`;
+  }
+  let origin:URL;
+  try { origin=new URL(value); } catch { throw new Error("PUBLIC_ORIGIN must be an absolute http(s) URL"); }
+  if(origin.protocol!=="http:"&&origin.protocol!=="https:") throw new Error("PUBLIC_ORIGIN must use http or https");
+  if(origin.username||origin.password||origin.pathname!=="/"||origin.search||origin.hash) throw new Error("PUBLIC_ORIGIN must contain only scheme, host, and optional port");
+  if(!isLoopbackHostname(origin.hostname)&&origin.protocol!=="https:") throw new Error("PUBLIC_ORIGIN must use https for a non-loopback host");
+  return origin;
+}
+
+export function createHandler(db:Database,options:HandlerOptions={}):(request:Request,server?:Bun.Server<unknown>)=>Promise<Response> {
+  const publicOrigin=options.publicOrigin instanceof URL?options.publicOrigin:new URL(options.publicOrigin??"http://localhost");
+  const shares=new ShareRepo(db,{publicOrigin,serveDist:options.serveDist});
   return async (request,server)=>{
     const authEnabled=Boolean(options.basicAuth);
-    const finish=(response:Response)=>authEnabled?protectResponse(response):response;
+    let shareAuthorized=false;
+    const finish=(response:Response)=>shareAuthorized?protectShareResponse(response):authEnabled?protectResponse(response):response;
+    const requestUrl=new URL(request.url);
+    let decodedPath:string|null=null;
+    try { decodedPath=decodeURIComponent(requestUrl.pathname); } catch { /* handled by the normal router */ }
+    // Bearer-token exchange is the sole public route ahead of BasicAuth. The redirect target
+    // contains no token; every subsequent request is authorized by the opaque server session.
+    if(decodedPath!==null) {
+      const shareSegments=decodedPath.split("/").filter(Boolean);
+      if(shareSegments[0]==="share"&&shareSegments.length===2) {
+        try { return protectShareResponse(await exchangeShareToken(request,shareSegments[1]!,shares,publicOrigin)); }
+        catch(error) { return protectShareResponse(errorResponse(error)); }
+      }
+      shareAuthorized=shares.authorize(request,decodedPath);
+    }
     // Capture-session bearer: a live token from a loopback GET/HEAD on an allowlisted
     // path is the transport authorization for the worker's browser (bypasses BasicAuth).
     let captureAuthorized=false;
@@ -33,9 +70,8 @@ export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?
       const address=server?.requestIP?.(request)?.address ?? null;
       captureAuthorized=options.screenshots.sessions.authorize({token:captureToken,address,method:request.method,path});
     }
-    if(authEnabled&&!captureAuthorized) {
-      const url=new URL(request.url);
-      const health=request.method==="GET"&&url.pathname==="/api/health";
+    if(authEnabled&&!captureAuthorized&&!shareAuthorized) {
+      const health=request.method==="GET"&&requestUrl.pathname==="/api/health";
       if(!health&&!isAuthorized(request,options.basicAuth!)) return unauthorizedResponse();
     }
     const handle=async()=>{ try {
@@ -45,6 +81,7 @@ export function createHandler(db:Database,options:{ready?:()=>boolean;serveDist?
       if(segments[1]==="health"&&segments.length===2) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); const ready=options.ready?.()!==false; return json({status:ready?"ready":"starting"},ready?200:503,noStore); }
       const shot=await routeScreenshots(request,options.screenshots,segments.slice(1)); if(shot) return shot;
       const vis=await routeVisual(request,db,options.dataDir??process.env.DATA_DIR??"data",segments.slice(1),options.visual); if(vis) return vis;
+      const share=await routeShares(request,db,segments.slice(1),{publicOrigin,serveDist:options.serveDist}); if(share) return share;
       if(segments[1]==="prototypes") return await routePrototypes(request,db,segments.slice(1),options.dataDir,options.serveDist);
       if(segments[1]==="components") return await routeComponents(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data");
       if(segments[1]==="assets") return await routeAssets(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data");
@@ -68,14 +105,16 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     console.error(`Refusing to start easy-ui on non-loopback host ${JSON.stringify(host)} without BASIC_AUTH`);
     process.exit(1);
   }
+  const port=options.port??Number(process.env.PORT||8787);
+  // Validate the externally visible origin before opening/migrating the persistent database.
+  const publicOrigin=resolvePublicOrigin(process.env.PUBLIC_ORIGIN||undefined,{host,port});
   let ready=false; const db=openDatabase(options.database); failStagingPublishes(db); await verifyShimAbi(); await seedPrototypes(db); ready=true;
   const serveDist=options.serveDist ?? (process.env.SERVE_DIST || undefined);
   const dataDir=process.env.DATA_DIR??"data";
-  const port=options.port??Number(process.env.PORT||8787);
   const captureHost=host==="0.0.0.0"||host==="::"?"127.0.0.1":host;
   const screenshots=new ScreenshotServiceImpl({db,dataDir,serveDist,captureOrigin:`http://${captureHost}:${port}`,chromiumAvailable:chromiumAvailable(),runJob:spawnWorker});
   const visual=new VisualServiceImpl({db,dataDir,screenshots});
-  const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>ready,serveDist,dataDir,basicAuth,screenshots,visual})});
+  const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>ready,serveDist,dataDir,basicAuth,publicOrigin,screenshots,visual})});
   return {server,db};
 }
 

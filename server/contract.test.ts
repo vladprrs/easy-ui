@@ -60,7 +60,7 @@ type Expectation =
 interface Case { run: () => Promise<Response>; expected: Expectation }
 
 // Shared mutable fixture state threaded through the ordered execution below.
-const state: { assetId?: string; referenceId?: string; screenId?: string } = {};
+const state: { assetId?: string; referenceId?: string; screenId?: string; shareId?: string } = {};
 
 function orderedCases(): [string, Case][] {
   const ok = (status?: number, contentType?: string): Expectation => ({ kind: "success", status, contentType });
@@ -93,6 +93,9 @@ function orderedCases(): [string, Case][] {
     ["POST /api/prototypes/{id}/publish", { run: () => call("POST", "/api/prototypes/contract-proto/publish", { baseRev: 3 }), expected: ok(201) }],
     ["GET /api/prototypes/{id}/versions", { run: () => call("GET", "/api/prototypes/contract-proto/versions"), expected: ok() }],
     ["GET /api/prototypes/{id}/versions/{version}", { run: () => call("GET", "/api/prototypes/contract-proto/versions/1"), expected: ok() }],
+    ["POST /api/prototypes/{id}/share", { run: () => call("POST", "/api/prototypes/contract-proto/share", { version: 1, ttlSeconds: 3600 }), expected: ok(201) }],
+    ["GET /api/prototypes/{id}/share", { run: () => call("GET", "/api/prototypes/contract-proto/share"), expected: ok() }],
+    ["POST /api/prototypes/{id}/share", { run: () => call("POST", "/api/prototypes/contract-proto/share", { version: 1, ttlSeconds: 1 }), expected: err(422, "validation_failed") }],
     // Granular 404 codes (W0-4): prototype vs version vs revision
     ["GET /api/prototypes/{id}", { run: () => call("GET", "/api/prototypes/contract-missing"), expected: err(404, "prototype_not_found") }],
     ["GET /api/prototypes/{id}/versions/{version}", { run: () => call("GET", "/api/prototypes/contract-missing/versions/1"), expected: err(404, "prototype_not_found") }],
@@ -129,6 +132,8 @@ function orderedCases(): [string, Case][] {
     ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest"), expected: ok() }],
     ["GET /api/shims/{abi}/{file}", { run: () => call("GET", "/api/shims/v1/react.js"), expected: ok(200, "text/javascript") }],
     // Deletions last (CAS on the final head revisions)
+    ["DELETE /api/prototypes/{id}/share/{shareId}", { run: () => call("DELETE", `/api/prototypes/contract-proto/share/${state.shareId}`), expected: ok(204) }],
+    ["DELETE /api/prototypes/{id}/share/{shareId}", { run: () => call("DELETE", `/api/prototypes/contract-proto/share/${state.shareId}`), expected: err(404, "share_not_found") }],
     ["DELETE /api/components/{id}", { run: () => call("DELETE", "/api/components/contract-stars", { baseRev: 3 }), expected: ok(204) }],
     ["DELETE /api/prototypes/{id}", { run: () => call("DELETE", "/api/prototypes/contract-proto", { baseRev: 3 }), expected: ok(204) }],
   ];
@@ -168,6 +173,7 @@ describe("route contracts", () => {
       if (!parsed.success) throw new Error(`${key}: response does not match contract schema: ${parsed.error}`);
       if (key === "POST /api/assets") state.assetId = (body as { id: string }).id;
       if (key === "PUT /api/visual-references") state.referenceId = (body as { id: string }).id;
+      if (key === "POST /api/prototypes/{id}/share") state.shareId = (body as { id: string }).id;
     }
   }, 120_000);
 

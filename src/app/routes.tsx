@@ -41,6 +41,8 @@ export const routeObjects: RouteObject[] = [
   // Презентация (W1-2): вне Layout и вне PrototypeChrome — как capture.
   { path: "p/:protoId/present", element: <PresentShell />, children: presentChildren() },
   { path: "p/:protoId/v/:version/present", element: <PresentShell />, children: presentChildren() },
+  // Scoped share (W3-3): tokenless presentation route outside Layout/PrototypeChrome.
+  { path: "share/p/:protoId/v/:version/present", element: <PresentShell share />, children: presentChildren() },
   {
     element: <Layout />,
     children: [

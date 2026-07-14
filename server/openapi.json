@@ -5765,6 +5765,252 @@
         "x-easyui-validated": false
       }
     },
+    "/api/prototypes/{id}/share": {
+      "get": {
+        "operationId": "get_prototypes_id_share",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "shares": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "activeSessions": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "createdAt": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "expiresAt": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "prototypeId": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "prototypeId",
+                          "version",
+                          "createdAt",
+                          "expiresAt",
+                          "activeSessions"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "shares"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List active, unexpired share grants without disclosing their bearer tokens.",
+        "x-easyui-validated": false
+      },
+      "post": {
+        "operationId": "post_prototypes_id_share",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "ttlSeconds": {
+                    "maximum": 2592000,
+                    "minimum": 300,
+                    "type": "integer"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "version",
+                  "ttlSeconds"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "activeSessions": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "expiresAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "prototypeId": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "format": "uri",
+                      "type": "string"
+                    },
+                    "version": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "prototypeId",
+                    "version",
+                    "createdAt",
+                    "expiresAt",
+                    "activeSessions",
+                    "url"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found | version_not_found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed | version_not_renderable"
+          }
+        },
+        "summary": "Create a time-limited public share grant pinned to an immutable published version.",
+        "x-easyui-validated": true
+      }
+    },
+    "/api/prototypes/{id}/share/{shareId}": {
+      "delete": {
+        "operationId": "delete_prototypes_id_share_shareId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "shareId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No content"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "share_not_found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "Revoke a share grant and immediately invalidate all sessions minted from it.",
+        "x-easyui-validated": true
+      }
+    },
     "/api/prototypes/{id}/versions": {
       "get": {
         "operationId": "get_prototypes_id_versions",

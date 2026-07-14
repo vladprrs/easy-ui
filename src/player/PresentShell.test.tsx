@@ -116,4 +116,20 @@ describe("PresentShell (W1-2)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/v/2/present/s/details"));
   });
+
+  it("keeps scoped-share navigation tokenless and exposes no workspace exit", async () => {
+    const router = renderAt("/share/p/hello-world/v/2/present/s/welcome");
+    await screen.findByLabelText("Name");
+    expect(document.title).toBe("Hello World v2 · Просмотр — easy-ui");
+    expect(screen.queryByRole("link", { name: "Открыть в easy-ui" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Галерея" })).toBeNull();
+    expect(screen.getByText("Защищённый просмотр")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/share/p/hello-world/v/2/present/s/details"));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(router.state.location.pathname).toBe("/share/p/hello-world/v/2/present/s/details");
+    fireEvent.keyDown(window, { key: "?", shiftKey: true });
+    expect(screen.queryByText("Вернуться в плеер")).toBeNull();
+  });
 });

@@ -434,6 +434,55 @@ export const getPrototypeVersionContract = registerContract({
   errors: [errorCatalog.invalidRequest, errorCatalog.prototypeNotFound, errorCatalog.versionNotFound],
 });
 
+// --- Scoped prototype shares (W3-3) ---
+
+export const createShareRequestSchema = z.strictObject({
+  version: positiveInt,
+  ttlSeconds: z.number().int().min(5 * 60).max(30 * 24 * 60 * 60),
+});
+
+export const shareGrantSchema = z.object({
+  id: z.string(),
+  prototypeId: z.string(),
+  version: positiveInt,
+  createdAt: isoDate,
+  expiresAt: isoDate,
+  activeSessions: z.number().int().nonnegative(),
+});
+
+export const createPrototypeShareContract = registerContract({
+  method: "POST",
+  path: "/api/prototypes/{id}/share",
+  summary: "Create a time-limited public share grant pinned to an immutable published version.",
+  status: 201,
+  requestSchema: createShareRequestSchema,
+  responseSchema: shareGrantSchema.extend({ url: z.string().url() }),
+  validated: true,
+  errors: [
+    errorCatalog.prototypeNotFound,
+    errorCatalog.versionNotFound,
+    errorCatalog.validationFailed,
+    { status: 422, code: "version_not_renderable" },
+  ],
+});
+
+export const listPrototypeSharesContract = registerContract({
+  method: "GET",
+  path: "/api/prototypes/{id}/share",
+  summary: "List active, unexpired share grants without disclosing their bearer tokens.",
+  responseSchema: z.object({ shares: z.array(shareGrantSchema) }),
+  errors: [],
+});
+
+export const revokePrototypeShareContract = registerContract({
+  method: "DELETE",
+  path: "/api/prototypes/{id}/share/{shareId}",
+  summary: "Revoke a share grant and immediately invalidate all sessions minted from it.",
+  status: 204,
+  validated: true,
+  errors: [errorCatalog.validationFailed, { status: 404, code: "share_not_found" }],
+});
+
 // --- Components CRUD / publish / versions / bundle ---
 
 const componentListItemSchema = z.looseObject({

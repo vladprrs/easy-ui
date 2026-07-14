@@ -188,6 +188,33 @@ const migrations = [
     db.run("ALTER TABLE prototype_revisions ADD COLUMN figma_json TEXT");
     db.run("ALTER TABLE component_revisions ADD COLUMN figma_json TEXT");
   },
+  (db: Database) => {
+    // v10 (W3-3): scoped public shares. Raw grant/session credentials are never persisted;
+    // only SHA-256 digests are stored. A grant pins one immutable prototype publication and
+    // its complete non-static dependency closure. Renderer static files deliberately stay out
+    // of these tables and are resolved from the current deploy on every authorized request.
+    db.run(`CREATE TABLE share_grants (
+      id TEXT PRIMARY KEY,
+      token_hash TEXT UNIQUE NOT NULL,
+      prototype_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      rev INTEGER NOT NULL,
+      dependencies_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      FOREIGN KEY (prototype_id, version)
+        REFERENCES prototype_publishes(prototype_id, version) ON DELETE CASCADE)`);
+    db.run(`CREATE INDEX share_grants_prototype_active
+      ON share_grants (prototype_id, revoked_at, expires_at, created_at)`);
+    db.run(`CREATE TABLE share_sessions (
+      id TEXT PRIMARY KEY,
+      session_hash TEXT UNIQUE NOT NULL,
+      grant_id TEXT NOT NULL REFERENCES share_grants(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL)`);
+    db.run(`CREATE INDEX share_sessions_grant ON share_sessions (grant_id, expires_at)`);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {
