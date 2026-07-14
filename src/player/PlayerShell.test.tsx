@@ -5,8 +5,8 @@ import { routeObjects } from "../app/routes";
 import type { PrototypeDraft, PrototypeVersion } from "../api/client";
 import { prototypeDocSchema } from "../prototype/schema";
 
-const mocks = vi.hoisted(() => ({ getDraft: vi.fn(), getVersion: vi.fn(), loadCustom: vi.fn() }));
-vi.mock("../api/client", async (original) => ({ ...(await original()), getPrototypeDraft: mocks.getDraft, getPrototypeVersion: mocks.getVersion }));
+const mocks = vi.hoisted(() => ({ getDraft: vi.fn(), getVersion: vi.fn(), listVersions: vi.fn(), loadCustom: vi.fn() }));
+vi.mock("../api/client", async (original) => ({ ...(await original()), getPrototypeDraft: mocks.getDraft, getPrototypeVersion: mocks.getVersion, listPrototypeVersions: mocks.listVersions }));
 vi.mock("../customComponents/loader", () => ({ loadCustomComponents: mocks.loadCustom }));
 
 const hello = prototypeDocSchema.parse((await import("../../prototypes/hello-world.json")).default);
@@ -47,6 +47,7 @@ describe("PlayerShell", () => {
     vi.restoreAllMocks();
     mocks.getDraft.mockImplementation(async (id: string) => draft(id === "other" ? { ...hello, id: "other", name: "Other", state: { name: "Grace" } } : hello));
     mocks.getVersion.mockResolvedValue({ ...draft(), version: 2, publishedAt: "2026-07-10T00:00:00Z" } satisfies PrototypeVersion);
+    mocks.listVersions.mockResolvedValue([]);
     mocks.loadCustom.mockResolvedValue({ definitions: {}, components: {} });
   });
 
@@ -72,6 +73,67 @@ describe("PlayerShell", () => {
     expect(mocks.getVersion).toHaveBeenCalledWith("hello-world", 2, expect.any(AbortSignal));
     expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/hello-world/v/2/cjm");
     expect(document.title).toBe("Hello World v2 · Welcome — easy-ui");
+  });
+
+  it("shows a non-latest banner linking to the latest published version (W1-6)", async () => {
+    mocks.getDraft.mockResolvedValue(draft(hello, 3));
+    mocks.listVersions.mockResolvedValue([
+      { version: 1, rev: 1, publishedAt: "2026-07-09T00:00:00Z" },
+      { version: 2, rev: 2, publishedAt: "2026-07-10T00:00:00Z" },
+    ]);
+    mocks.getVersion.mockImplementation(async (_id: string, version: number) => ({ ...draft(hello, version), version, publishedAt: version === 1 ? "2026-07-09T00:00:00Z" : "2026-07-10T00:00:00Z" } satisfies PrototypeVersion));
+
+    const router = renderAt("/p/hello-world/v/1/s/welcome");
+
+    const banner = await screen.findByTestId("non-latest-version-banner");
+    expect(banner.textContent).toContain("Версия 1 от 9 июля 2026 г.");
+    const latest = await within(banner).findByRole("link", { name: "Открыть актуальную" });
+    expect(latest.getAttribute("href")).toBe("/p/hello-world/v/2/s/welcome");
+    fireEvent.click(latest);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/v/2/s/welcome"));
+  });
+
+  it("marks a draft newer than the latest publication (W1-6)", async () => {
+    mocks.getDraft.mockResolvedValue(draft(hello, 3));
+    mocks.listVersions.mockResolvedValue([
+      { version: 1, rev: 1, publishedAt: "2026-07-09T00:00:00Z" },
+      { version: 2, rev: 2, publishedAt: "2026-07-10T00:00:00Z" },
+    ]);
+
+    renderAt("/p/hello-world/s/welcome");
+
+    expect(await screen.findByText("есть неопубликованные изменения")).toBeTruthy();
+    const select = screen.getByRole("combobox", { name: "Версии прототипа" });
+    expect(within(select).getByRole("option", { name: "Версия 2 · 10 июля 2026 г." })).toBeTruthy();
+  });
+
+  it("switches versions preserving the screen when possible and falling back to startScreen", async () => {
+    const latestDoc = prototypeDocSchema.parse({ ...hello, screens: [hello.screens[0]] });
+    mocks.getDraft.mockResolvedValue(draft(hello, 3));
+    mocks.listVersions.mockResolvedValue([
+      { version: 1, rev: 1, publishedAt: "2026-07-09T00:00:00Z" },
+      { version: 2, rev: 2, publishedAt: "2026-07-10T00:00:00Z" },
+    ]);
+    mocks.getVersion.mockImplementation(async (_id: string, version: number) => ({
+      ...draft(version === 2 ? latestDoc : hello, version),
+      version,
+      publishedAt: version === 1 ? "2026-07-09T00:00:00Z" : "2026-07-10T00:00:00Z",
+    } satisfies PrototypeVersion));
+    const router = renderAt("/p/hello-world/v/1/s/details");
+    const select = await screen.findByRole("combobox", { name: "Версии прототипа" });
+
+    fireEvent.change(select, { target: { value: "2" } });
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/v/2/s/welcome"));
+  });
+
+  it("renders no version UI when the prototype has no publications (W1-6)", async () => {
+    renderAt("/p/hello-world/s/welcome");
+    await waitFor(() => expect(mocks.listVersions).toHaveBeenCalled());
+
+    expect(screen.queryByRole("combobox", { name: "Версии прототипа" })).toBeNull();
+    expect(screen.queryByText("есть неопубликованные изменения")).toBeNull();
+    expect(screen.queryByTestId("non-latest-version-banner")).toBeNull();
   });
 
   it("links to the draft CJM from the sidebar", async () => {

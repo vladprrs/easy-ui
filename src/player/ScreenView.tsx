@@ -1,18 +1,19 @@
 import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useOutletContext, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useOutletContext, useParams } from "react-router";
 import type { PlayerOutletContext } from "./PlayerShell";
 import { DeviceFrame, isPlayerHelpHotkey, isPlayerHotkeyEvent, useStageZoom } from "./DeviceFrame";
 import { ScreensSidebar } from "./ScreensSidebar";
-import { buildPrototypeRouteBase, FlowResetBanner, usePlayerNavigation } from "./navigation";
+import { buildPlayerPath, buildPrototypeRouteBase, documentLifetimeNonce, FlowResetBanner, type PlayerLocationState, usePlayerNavigation } from "./navigation";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { ScreenSurface } from "./ScreenSurface";
 import { chip, chipActive, pillGhost, pillGhostOnDark } from "../app/chrome";
 import { PrototypeChrome } from "../app/PrototypeChrome";
-import { inspector as inspectorStrings, player, playerDocumentTitle, playerHotkeys } from "../app/strings/player";
+import { formatPlayerDate, inspector as inspectorStrings, player, playerDocumentTitle, playerHotkeys } from "../app/strings/player";
 import { common, deviceNames } from "../app/strings/common";
 import { canonicalViewport } from "../designSystems/deviceMetrics";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { InspectorPanel } from "./inspector/InspectorPanel";
+import { getPrototypeVersion, type PrototypeDraft } from "../api/client";
 
 export class ScreenErrorBoundary extends Component<{
   prototypeId: string;
@@ -67,10 +68,11 @@ export function PlayerHotkeysHelp({ onClose, present = false }: { onClose: () =>
 }
 
 export function ScreenView() {
-  const { doc, registry, runtime, customTypes, customDefinitions, onError, inspector } = useOutletContext<PlayerOutletContext>();
+  const { doc, registry, runtime, customTypes, customDefinitions, onError, inspector, versions } = useOutletContext<PlayerOutletContext>();
   const { screenId } = useParams();
   const { version } = useParams();
   const navigation = usePlayerNavigation();
+  const routerNavigate = useNavigate();
   const [device, setDevice] = useState(doc.device);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [hotkeysVisible, setHotkeysVisible] = useState(false);
@@ -92,6 +94,59 @@ export function ScreenView() {
   // Zoom-контролы осмысленны только для фиксированного viewport (canvas-экран или
   // mobile/tablet); desktop auto-height рендерится fluid-веткой без масштаба.
   const hasFixedViewport = screenCanvas !== undefined || canonicalViewport[device] !== null;
+
+  const publishedVersions = versions?.published ?? [];
+  const latestPublished = publishedVersions.reduce<typeof publishedVersions[number] | undefined>(
+    (latest, item) => latest === undefined || item.version > latest.version ? item : latest,
+    undefined,
+  );
+  const currentPublished = numericVersion === undefined ? undefined : publishedVersions.find((item) => item.version === numericVersion);
+  const isNonLatest = numericVersion !== undefined && latestPublished !== undefined && numericVersion < latestPublished.version;
+  const hasUnpublishedChanges = latestPublished !== undefined && versions !== null && versions.draft.rev > latestPublished.rev;
+  const [loadedLatest, setLoadedLatest] = useState<{ version: number; doc: PrototypeDraft["doc"] } | null>(null);
+  const latestDoc = loadedLatest !== null && latestPublished !== undefined && loadedLatest.version === latestPublished.version
+    ? loadedLatest.doc
+    : null;
+  useEffect(() => {
+    if (!isNonLatest || latestPublished === undefined) return;
+    const controller = new AbortController();
+    void getPrototypeVersion(doc.id, latestPublished.version, controller.signal).then(
+      (loaded) => setLoadedLatest({ version: latestPublished.version, doc: loaded.doc }),
+      () => undefined,
+    );
+    return () => controller.abort();
+  }, [doc.id, isNonLatest, latestPublished]);
+
+  const targetPath = (targetDoc: PrototypeDraft["doc"], targetVersion?: number) => {
+    const targetScreen = screen && targetDoc.screens.some((item) => item.id === screen.id) ? screen.id : targetDoc.startScreen;
+    return `${buildPlayerPath(buildPrototypeRouteBase(doc.id, targetVersion), targetScreen)}${location.search}`;
+  };
+  const browseState = {
+    sessionNonce: navigation.sessionNonce,
+    flowDepth: 0,
+    entryReason: "browse",
+    documentNonce: documentLifetimeNonce,
+  } satisfies PlayerLocationState;
+  const [switchingVersion, setSwitchingVersion] = useState(false);
+  const switchVersion = async (value: string) => {
+    if (value === (numericVersion === undefined ? "draft" : String(numericVersion))) return;
+    setSwitchingVersion(true);
+    try {
+      if (value === "draft") {
+        if (versions) routerNavigate(targetPath(versions.draft.doc), { state: browseState });
+        return;
+      }
+      const targetVersion = Number(value);
+      const target = latestPublished?.version === targetVersion && latestDoc
+        ? { doc: latestDoc }
+        : await getPrototypeVersion(doc.id, targetVersion);
+      routerNavigate(targetPath(target.doc, targetVersion), { state: browseState });
+    } catch {
+      // Метаданные версий — вспомогательная навигация: основной плеер остаётся рабочим.
+    } finally {
+      setSwitchingVersion(false);
+    }
+  };
   const zoomValue = stageZoom.value;
   const toggleFitActual = stageZoom.toggleFitActual;
   const isActualSize = zoomValue.mode === "manual" && zoomValue.zoom === 1;
@@ -125,6 +180,23 @@ export function ScreenView() {
     prototypeName={doc.name}
     view="player"
     version={numericVersion}
+    status={publishedVersions.length === 0 ? undefined : <>
+      <label className="sr-only" htmlFor="player-version-select">{player.versionsAria}</label>
+      <select
+        id="player-version-select"
+        aria-label={player.versionsAria}
+        className="max-w-56 rounded-full border border-eui-ink/15 bg-white px-3 py-1 text-sm text-eui-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand"
+        value={numericVersion === undefined ? "draft" : String(numericVersion)}
+        disabled={switchingVersion}
+        onChange={(event) => { void switchVersion(event.target.value); }}
+      >
+        <option value="draft">{player.draftVersion}</option>
+        {[...publishedVersions].sort((a, b) => b.version - a.version).map((item) => (
+          <option key={item.version} value={item.version}>{player.publishedVersion(item.version, formatPlayerDate(item.publishedAt))}</option>
+        ))}
+      </select>
+      {hasUnpublishedChanges ? <span className="text-xs text-eui-magenta">{player.unpublishedChanges}</span> : null}
+    </>}
     actions={<>
       {screen === undefined ? null : <>
         <div role="group" aria-label={player.deviceAria} className="flex items-center gap-1">
@@ -155,6 +227,13 @@ export function ScreenView() {
   return <main className="flex h-dvh min-h-0 flex-col">
     {hotkeysVisible && <PlayerHotkeysHelp onClose={() => setHotkeysVisible(false)} />}
     {chrome}
+    {isNonLatest && currentPublished && latestPublished ? <div role="status" data-testid="non-latest-version-banner" className="flex flex-wrap items-center gap-2 border-b border-eui-brand/20 bg-eui-lilac-100 px-4 py-2 font-eui-ui text-sm text-eui-ink sm:px-6">
+      <span>{player.nonLatestVersion(numericVersion, formatPlayerDate(currentPublished.publishedAt))}</span>
+      <span aria-hidden="true">·</span>
+      {latestDoc
+        ? <Link className="font-semibold text-eui-brand underline-offset-2 hover:underline" to={targetPath(latestDoc, latestPublished.version)} state={browseState}>{player.openLatestPublished}</Link>
+        : <span className="font-semibold text-eui-slate-500">{player.openLatestPublished}</span>}
+    </div> : null}
     <FlowResetBanner />
     <div className="flex min-h-0 flex-1 bg-eui-graphite text-white">
       <ScreensSidebar doc={doc} currentScreen={screen.id} collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((prev) => !prev)} />

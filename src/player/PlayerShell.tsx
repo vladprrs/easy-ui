@@ -1,6 +1,8 @@
 import { JSONUIProvider } from "@json-render/react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useParams, useSearchParams } from "react-router";
+import { getPrototypeDraft, listPrototypeVersions, type PrototypeDraft, type PrototypeVersionSummary } from "../api/client";
+import { useApi } from "../api/hooks";
 import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
 import type { ComponentDefinition } from "../catalog/definitions";
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
@@ -20,6 +22,10 @@ export interface PlayerOutletContext {
   customTypes: ReadonlySet<string>;
   customDefinitions: Record<string, ComponentDefinition>;
   onError: (message: string, detail?: Record<string, unknown>) => void;
+  versions: {
+    published: PrototypeVersionSummary[];
+    draft: Pick<PrototypeDraft, "doc" | "rev">;
+  } | null;
   inspector: {
     enabled: boolean;
     visible: boolean;
@@ -28,7 +34,7 @@ export interface PlayerOutletContext {
   };
 }
 
-function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; metaVersion: number | null | undefined; debug: boolean }) {
+function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; metaVersion: number | null | undefined; debug: boolean; versions: PlayerOutletContext["versions"] }) {
   const themeContent = useDesignSystemTheme(doc.designSystem, metaVersion);
   const navigation = usePlayerNavigation();
   const navigationRef = useRef(navigation);
@@ -95,15 +101,24 @@ function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug }: { doc: Pr
       customTypes,
       customDefinitions,
       onError,
+      versions,
       inspector: { enabled: debug, visible: inspectorVisible, log: inspectorSession.log, toggle: toggleInspector },
     } satisfies PlayerOutletContext} />
     {import.meta.env.DEV && import.meta.env.MODE !== "test" ? <Suspense fallback={null}><Devtools /></Suspense> : null}
   </JSONUIProvider>;
 }
 
-function ReadyPlayer({ doc, custom, runtimeKey, routeBase, metaVersion, debug }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; metaVersion: number | null | undefined; debug: boolean }) {
-  return <PlayerNavigationProvider key={runtimeKey} startScreen={doc.startScreen} routeBase={routeBase}>
-    <LoadedPlayer key={runtimeKey} doc={doc} custom={custom} runtimeKey={runtimeKey} metaVersion={metaVersion} debug={debug} />
+function ReadyPlayer({ loaded, custom, runtimeKey, routeBase, metaVersion, debug, version }: { loaded: PrototypeDraft; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; metaVersion: number | null | undefined; debug: boolean; version?: number }) {
+  const versionsState = useApi(async (signal) => {
+    const [published, draft] = await Promise.all([
+      listPrototypeVersions(loaded.doc.id, signal),
+      version === undefined ? Promise.resolve(loaded) : getPrototypeDraft(loaded.doc.id, signal),
+    ]);
+    return { published, draft: { doc: draft.doc, rev: draft.rev } };
+  }, [loaded.doc.id, loaded.rev, version]);
+  const versions = versionsState.status === "ready" ? versionsState.data : null;
+  return <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} routeBase={routeBase}>
+    <LoadedPlayer key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} metaVersion={metaVersion} debug={debug} versions={versions} />
   </PlayerNavigationProvider>;
 }
 
@@ -118,6 +133,6 @@ export function PlayerShell() {
   if (debugParam && !debug) setDebug(true); // render-time latch (never turns back off)
   const numericVersion = version === undefined ? undefined : Number(version);
   return <PrototypeLoader protoId={protoId} version={numericVersion}>
-    {({ loaded, custom, runtimeKey, routeBase }) => <ReadyPlayer doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} routeBase={routeBase} metaVersion={loaded.designSystemMetaVersion} debug={debug} />}
+    {({ loaded, custom, runtimeKey, routeBase }) => <ReadyPlayer loaded={loaded} custom={custom} runtimeKey={runtimeKey} routeBase={routeBase} metaVersion={loaded.designSystemMetaVersion} debug={debug} version={numericVersion} />}
   </PrototypeLoader>;
 }

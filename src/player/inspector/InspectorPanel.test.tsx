@@ -7,8 +7,8 @@ import { prototypeDocSchema } from "../../prototype/schema";
 import { InspectorLog } from "./log";
 import { InspectorPanel } from "./InspectorPanel";
 
-const mocks = vi.hoisted(() => ({ getDraft: vi.fn(), loadCustom: vi.fn() }));
-vi.mock("../../api/client", async (original) => ({ ...(await original()), getPrototypeDraft: mocks.getDraft }));
+const mocks = vi.hoisted(() => ({ getDraft: vi.fn(), listVersions: vi.fn(), loadCustom: vi.fn() }));
+vi.mock("../../api/client", async (original) => ({ ...(await original()), getPrototypeDraft: mocks.getDraft, listPrototypeVersions: mocks.listVersions }));
 vi.mock("../../customComponents/loader", () => ({ loadCustomComponents: mocks.loadCustom }));
 
 const hello = prototypeDocSchema.parse((await import("../../../prototypes/hello-world.json")).default);
@@ -65,6 +65,7 @@ describe("player integration (?debug=1)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     mocks.getDraft.mockResolvedValue(draft);
+    mocks.listVersions.mockResolvedValue([]);
     mocks.loadCustom.mockResolvedValue({ definitions: {}, components: {} });
   });
 

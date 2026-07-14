@@ -42,7 +42,20 @@ export const player = {
   flowResetDismiss: "Скрыть уведомление о сбросе",
   hotkeysTitle: "Горячие клавиши",
   hotkeysClose: "Закрыть подсказку",
+  versionsAria: "Версии прототипа",
+  draftVersion: "Черновик",
+  publishedVersion: (version: number, date: string) => `Версия ${version} · ${date}`,
+  unpublishedChanges: "есть неопубликованные изменения",
+  nonLatestVersion: (version: number, date: string) => `Версия ${version} от ${date}`,
+  openLatestPublished: "Открыть актуальную",
 } as const;
+
+/** Человекочитаемая дата публикации в продуктовом русском интерфейсе. */
+export const formatPlayerDate = (value: string) => new Intl.DateTimeFormat("ru-RU", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+}).format(new Date(value));
 
 export const playerHotkeys = {
   previous: "Предыдущий экран",
