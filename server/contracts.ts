@@ -721,11 +721,15 @@ export const createDesignSystemContract = registerContract({
 
 // --- Catalog manifest / shims / health ---
 
+export const catalogManifestQuerySchema = z.strictObject({ designSystem: slugString.optional() });
+
 export const catalogManifestContract = registerContract({
   method: "GET", path: "/api/catalog/manifest",
   summary: "Manifest of the latest active custom-component versions across design systems.",
-  responseSchema: z.object({ components: z.array(z.looseObject({ id: z.string(), name: z.string(), designSystem: z.string(), version: z.number(), bundleUrl: z.string(), bundleHash: z.string(), hostAbiVersion: z.number() })) }),
-  errors: [errorCatalog.methodNotAllowed],
+  query: catalogManifestQuerySchema,
+  validated: true,
+  responseSchema: z.object({ components: z.array(z.looseObject({ id: z.string(), name: z.string(), designSystem: z.string(), version: z.number(), bundleUrl: z.string(), bundleHash: z.string(), hostAbiVersion: z.number(), example: z.record(z.string(),z.unknown()).optional() })) }),
+  errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed, errorCatalog.validationFailed],
 });
 
 export const getShimContract = registerContract({

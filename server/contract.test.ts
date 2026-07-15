@@ -132,6 +132,9 @@ function orderedCases(): [string, Case][] {
     ["POST /api/components/{id}/versions/{version}/status", { run: () => call("POST", "/api/components/contract-stars/versions/1/status", { status: "deprecated", baseStatusRev: 1 }), expected: err(404, "not_found") }],
     // Catalog / shims
     ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest"), expected: ok() }],
+    ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest?designSystem=contract-ds"), expected: ok() }],
+    ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest?designSystem=missing-system"), expected: err(404, "not_found") }],
+    ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest?designSystem=Bad_slug"), expected: err(422, "validation_failed") }],
     ["GET /api/shims/{abi}/{file}", { run: () => call("GET", "/api/shims/v1/react.js"), expected: ok(200, "text/javascript") }],
     // Deletions last (CAS on the final head revisions)
     ["DELETE /api/prototypes/{id}/share/{shareId}", { run: () => call("DELETE", `/api/prototypes/contract-proto/share/${state.shareId}`), expected: ok(204) }],

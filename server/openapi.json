@@ -721,6 +721,17 @@
     "/api/catalog/manifest": {
       "get": {
         "operationId": "get_catalog_manifest",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "designSystem",
+            "required": false,
+            "schema": {
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -740,6 +751,13 @@
                           },
                           "designSystem": {
                             "type": "string"
+                          },
+                          "example": {
+                            "additionalProperties": {},
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "type": "object"
                           },
                           "hostAbiVersion": {
                             "type": "number"
@@ -777,6 +795,16 @@
             },
             "description": "Success"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
           "405": {
             "content": {
               "application/json": {
@@ -786,10 +814,20 @@
               }
             },
             "description": "method_not_allowed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
           }
         },
         "summary": "Manifest of the latest active custom-component versions across design systems.",
-        "x-easyui-validated": false
+        "x-easyui-validated": true
       }
     },
     "/api/components": {
