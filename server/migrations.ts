@@ -253,6 +253,16 @@ const migrations = [
     const violations = db.query("PRAGMA foreign_key_check").all();
     if (violations.length) throw new Error(`v11 rebuild left foreign-key violations: ${JSON.stringify(violations)}`);
   },
+  (db: Database) => {
+    // v12: reverse hard-pin lookups and stable keyset pagination for the asset registry.
+    db.run("CREATE INDEX assets_created_id ON assets (created_at DESC, id DESC)");
+    db.run("CREATE INDEX prototype_revision_assets_asset ON prototype_revision_assets (asset_id)");
+    db.run("CREATE INDEX component_publish_assets_asset ON component_publish_assets (asset_id)");
+    db.run("CREATE INDEX visual_references_asset ON visual_references (asset_id)");
+    db.run("CREATE INDEX visual_runs_reference_asset ON visual_runs (reference_asset_id)");
+    db.run("CREATE INDEX visual_runs_candidate_asset ON visual_runs (candidate_asset_id)");
+    db.run("CREATE INDEX visual_runs_diff_asset ON visual_runs (diff_asset_id)");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

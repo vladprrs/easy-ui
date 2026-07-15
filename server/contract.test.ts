@@ -80,7 +80,9 @@ function orderedCases(): [string, Case][] {
     ["GET /api/design-systems/{id}/versions/{version}", { run: () => call("GET", "/api/design-systems/contract-ds/versions/1"), expected: ok() }],
     // Assets
     ["POST /api/assets", { run: () => call("POST", "/api/assets", PNG_1X1, "image/png"), expected: ok(201) }],
+    ["GET /api/assets", { run: () => call("GET", "/api/assets?limit=50"), expected: ok() }],
     ["GET /api/assets/{id}", { run: () => call("GET", `/api/assets/${state.assetId}`), expected: ok(200, "image/png") }],
+    ["GET /api/assets/{id}/usage", { run: () => call("GET", `/api/assets/${state.assetId}/usage`), expected: ok() }],
     // Prototypes: create -> read -> save -> restore -> publish -> versions
     ["POST /api/prototypes", { run: async () => call("POST", "/api/prototypes", { doc: await helloDoc("contract-proto") }), expected: ok(201) }],
     ["GET /api/prototypes", { run: () => call("GET", "/api/prototypes"), expected: ok() }],

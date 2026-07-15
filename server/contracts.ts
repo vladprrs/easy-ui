@@ -138,6 +138,65 @@ export const getAssetContract = registerContract({
   errors: [{ status: 404, code: "asset_not_found" }],
 });
 
+const assetIdString = z.string().regex(/^asset_[0-9a-f]{64}$/);
+const assetCursorString = z.string().max(128).regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z~asset_[0-9a-f]{64}$/);
+const assetListLimit = z.string().regex(/^[1-9][0-9]*$/).default("50").transform(Number).refine((value) => value <= 200);
+
+export const listAssetsQuerySchema = z.strictObject({
+  limit: assetListLimit,
+  cursor: assetCursorString.optional(),
+});
+
+const strictAssetMetadataSchema = z.strictObject({
+  id: assetIdString,
+  sha256: z.string(),
+  mime: z.string(),
+  size: z.number().int().nonnegative(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  originalName: z.string().nullable(),
+  createdAt: z.string(),
+  url: z.string(),
+});
+
+const assetUsageCountsSchema = z.strictObject({
+  prototypes: z.number().int().nonnegative(),
+  components: z.number().int().nonnegative(),
+  visualReferences: z.number().int().nonnegative(),
+  visualRuns: z.number().int().nonnegative(),
+});
+
+export const listAssetsContract = registerContract({
+  method: "GET",
+  path: "/api/assets",
+  summary: "List assets in reverse creation order with hard-pin usage counts and keyset pagination.",
+  query: listAssetsQuerySchema,
+  validated: true,
+  responseSchema: z.strictObject({
+    assets: z.array(strictAssetMetadataSchema.extend({ usage: assetUsageCountsSchema })),
+    nextCursor: z.string().nullable(),
+  }),
+  errors: [{ status: 400, code: "invalid_cursor" }, { status: 422, code: "validation_failed" }],
+});
+
+export const assetUsageContract = registerContract({
+  method: "GET",
+  path: "/api/assets/{id}/usage",
+  summary: "List every hard pin retaining an asset, including tombstoned visual references and visual-run roles.",
+  params: z.strictObject({ id: assetIdString }),
+  validated: true,
+  responseSchema: z.strictObject({
+    asset: strictAssetMetadataSchema,
+    prototypes: z.array(z.strictObject({
+      id: z.string(), name: z.string(), revCount: z.number().int().positive(), lastRev: z.number().int().positive(), pinnedAtHead: z.boolean(),
+    })),
+    components: z.array(z.strictObject({ id: z.string(), name: z.string(), versions: z.array(z.number().int().positive()) })),
+    visualReferences: z.array(z.strictObject({ id: z.string(), deleted: z.boolean() })),
+    visualRuns: z.array(z.strictObject({ id: z.string(), referenceId: z.string(), role: z.enum(["reference", "candidate", "diff"]) })),
+  }),
+  errors: [{ status: 404, code: "asset_not_found" }, { status: 422, code: "validation_failed" }],
+});
+
 // --- Screenshots (T6) ---
 
 const viewportSchema = z.object({ width: z.number().int(), height: z.number().int() });

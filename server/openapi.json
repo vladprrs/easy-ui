@@ -61,6 +61,172 @@
   "openapi": "3.1.0",
   "paths": {
     "/api/assets": {
+      "get": {
+        "operationId": "get_assets",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/__schema0"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z~asset_[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "assets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "height": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "id": {
+                            "pattern": "^asset_[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          "mime": {
+                            "type": "string"
+                          },
+                          "originalName": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "sha256": {
+                            "type": "string"
+                          },
+                          "size": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "usage": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "components": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "prototypes": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "visualReferences": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "visualRuns": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "prototypes",
+                              "components",
+                              "visualReferences",
+                              "visualRuns"
+                            ],
+                            "type": "object"
+                          },
+                          "width": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "sha256",
+                          "mime",
+                          "size",
+                          "originalName",
+                          "createdAt",
+                          "url",
+                          "usage"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "nextCursor": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "assets",
+                    "nextCursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_cursor"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "List assets in reverse creation order with hard-pin usage counts and keyset pagination.",
+        "x-easyui-validated": true
+      },
       "post": {
         "operationId": "post_assets",
         "responses": {
@@ -164,6 +330,231 @@
         },
         "summary": "Fetch asset bytes with immutable caching and hardened, inert delivery headers.",
         "x-easyui-validated": false
+      }
+    },
+    "/api/assets/{id}/usage": {
+      "get": {
+        "operationId": "get_assets_id_usage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "asset": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "height": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "id": {
+                          "pattern": "^asset_[0-9a-f]{64}$",
+                          "type": "string"
+                        },
+                        "mime": {
+                          "type": "string"
+                        },
+                        "originalName": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "sha256": {
+                          "type": "string"
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "width": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "sha256",
+                        "mime",
+                        "size",
+                        "originalName",
+                        "createdAt",
+                        "url"
+                      ],
+                      "type": "object"
+                    },
+                    "components": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "versions": {
+                            "items": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "versions"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "prototypes": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "lastRev": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "pinnedAtHead": {
+                            "type": "boolean"
+                          },
+                          "revCount": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "revCount",
+                          "lastRev",
+                          "pinnedAtHead"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "visualReferences": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "deleted": {
+                            "type": "boolean"
+                          },
+                          "id": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "deleted"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "visualRuns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "referenceId": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "enum": [
+                              "reference",
+                              "candidate",
+                              "diff"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "referenceId",
+                          "role"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "asset",
+                    "prototypes",
+                    "components",
+                    "visualReferences",
+                    "visualRuns"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "asset_not_found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "List every hard pin retaining an asset, including tombstoned visual references and visual-run roles.",
+        "x-easyui-validated": true
       }
     },
     "/api/capabilities": {

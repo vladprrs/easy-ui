@@ -1,7 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { ApiError, immutable, json, noStore } from "../http";
 import { MAX_ASSET_BYTES } from "../assets/validate";
-import { AssetRepo, assetPublic } from "../repos/assets";
+import { AssetRepo, assetPublic, type AssetRow } from "../repos/assets";
+import { assetUsageContract, listAssetsQuerySchema, parseQuery, parseWith } from "../contracts";
 
 // Hardened delivery headers for GET /api/assets/:id. Assets (incl. un-sanitized SVG) are served
 // inert: no scripts, no navigation, same-origin only, behind the BasicAuth boundary.
@@ -37,9 +38,54 @@ async function readUpload(request: Request): Promise<{ bytes: Uint8Array; mime: 
   return { bytes, mime: request.headers.get("content-type") ?? "" };
 }
 
+const ISO_CURSOR_PART = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const ASSET_ID = /^asset_[0-9a-f]{64}$/;
+
+function cursorBefore(value: string | null): { createdAt: string; id: string } | undefined {
+  if (value === null) return undefined;
+  if (value.length > 128) throw new ApiError(400, "invalid_cursor", "Cursor is malformed");
+  const parts = value.split("~");
+  const createdAt = parts[0] ?? "";
+  const id = parts[1] ?? "";
+  if (parts.length !== 2 || !ISO_CURSOR_PART.test(createdAt) || !ASSET_ID.test(id)) {
+    throw new ApiError(400, "invalid_cursor", "Cursor is malformed");
+  }
+  try {
+    if (new Date(createdAt).toISOString() !== createdAt) throw new Error("non-canonical date");
+  } catch {
+    throw new ApiError(400, "invalid_cursor", "Cursor is malformed");
+  }
+  return { createdAt, id };
+}
+
+const assetMetadata = (row: AssetRow) => ({
+  ...assetPublic(row),
+  originalName: row.original_name,
+  createdAt: row.created_at,
+  url: `/api/assets/${row.id}`,
+});
+
 export async function routeAssets(request: Request, db: Database, segments: string[], dataDir: string): Promise<Response> {
   const repo = new AssetRepo(db, dataDir);
   if (segments.length === 1) {
+    if (request.method === "GET") {
+      const searchParams = new URL(request.url).searchParams;
+      const before = cursorBefore(searchParams.get("cursor"));
+      const { limit } = parseQuery(listAssetsQuerySchema, searchParams);
+      const page = repo.list({ limit, before });
+      return json({
+        assets: page.assets.map((row) => ({
+          ...assetMetadata(row),
+          usage: {
+            prototypes: row.prototypes,
+            components: row.components,
+            visualReferences: row.visualReferences,
+            visualRuns: row.visualRuns,
+          },
+        })),
+        nextCursor: page.nextCursor ? `${page.nextCursor.createdAt}~${page.nextCursor.id}` : null,
+      }, 200, noStore);
+    }
     if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
     const upload = await readUpload(request);
     const { asset, deduplicated } = await repo.ingest(upload.bytes, upload.mime, upload.name);
@@ -47,6 +93,13 @@ export async function routeAssets(request: Request, db: Database, segments: stri
     return json(body, deduplicated ? 200 : 201, deduplicated ? noStore : { ...noStore, location: `/api/assets/${asset.id}` });
   }
   const id = segments[1]!;
+  if (segments.length === 3 && segments[2] === "usage") {
+    if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+    parseWith(assetUsageContract.params!, { id }, "Path parameters are invalid");
+    const usage = repo.usage(id);
+    if (!usage) throw new ApiError(404, "asset_not_found", "Asset not found");
+    return json({ ...usage, asset: assetMetadata(usage.asset) }, 200, noStore);
+  }
   if (segments.length === 2) {
     if (request.method !== "GET" && request.method !== "HEAD") throw new ApiError(405, "method_not_allowed", "Method not allowed");
     const row = repo.get(id);

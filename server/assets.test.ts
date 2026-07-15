@@ -173,6 +173,125 @@ describe("GET /api/assets/:id", () => {
   });
 });
 
+describe("GET /api/assets", () => {
+  test("returns an empty first page", async () => {
+    const { db, handler } = await setup();
+    const r = await handler(new Request("http://test/api/assets"));
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ assets: [], nextCursor: null });
+    db.close();
+  });
+
+  test("paginates three limit-2 pages deterministically when created_at values are equal", async () => {
+    const { db, handler } = await setup();
+    const ids: string[] = [];
+    for (let size = 1; size <= 6; size += 1) {
+      ids.push((await (await handler(upload(png(size, size), "image/png"))).json() as { id: string }).id);
+    }
+    db.run("UPDATE assets SET created_at='2026-07-15T12:00:00.000Z'");
+    const expected = [...ids].sort().reverse();
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let pageNumber = 0; pageNumber < 3; pageNumber += 1) {
+      const query = cursor ? `?limit=2&cursor=${encodeURIComponent(cursor)}` : "?limit=2";
+      const r = await handler(new Request(`http://test/api/assets${query}`));
+      expect(r.status).toBe(200);
+      const body = await r.json() as { assets: { id: string; createdAt: string; usage: Record<string, number> }[]; nextCursor: string | null };
+      expect(body.assets.map((asset) => asset.id)).toEqual(expected.slice(pageNumber * 2, pageNumber * 2 + 2));
+      expect(body.assets.every((asset) => asset.createdAt === "2026-07-15T12:00:00.000Z")).toBe(true);
+      expect(body.assets.every((asset) => Object.values(asset.usage).every((count) => count === 0))).toBe(true);
+      seen.push(...body.assets.map((asset) => asset.id));
+      cursor = body.nextCursor;
+      expect(cursor).toBe(pageNumber < 2 ? `2026-07-15T12:00:00.000Z~${body.assets[1]!.id}` : null);
+    }
+    expect(seen).toEqual(expected);
+    db.close();
+  });
+
+  test("rejects malformed and SQL-like cursors without interpolating them", async () => {
+    const { db, handler } = await setup();
+    const cursors = [
+      "not-a-cursor",
+      `2026-07-15T12:00:00.000Z~asset_${"a".repeat(63)}`,
+      `2026-99-99T12:00:00.000Z~asset_${"a".repeat(64)}`,
+      `2026-07-15T12:00:00.000Z~asset_${"a".repeat(64)}' OR 1=1 --`,
+      "x".repeat(129),
+    ];
+    for (const cursor of cursors) {
+      const r = await handler(new Request(`http://test/api/assets?cursor=${encodeURIComponent(cursor)}`));
+      expect(r.status).toBe(400);
+      expect((await r.json() as { error: { code: string } }).error.code).toBe("invalid_cursor");
+    }
+    db.close();
+  });
+
+  test("rejects an out-of-range limit through the validated query contract", async () => {
+    const { db, handler } = await setup();
+    const r = await handler(new Request("http://test/api/assets?limit=201"));
+    expect(r.status).toBe(422);
+    expect((await r.json() as { error: { code: string } }).error.code).toBe("validation_failed");
+    db.close();
+  });
+});
+
+describe("GET /api/assets/:id/usage", () => {
+  test("reports every hard pin and retains tombstoned visual references", async () => {
+    const { db, handler } = await setup();
+    const asset = await (await handler(upload(png(17, 17), "image/png"))).json() as { id: string };
+
+    const doc = withImage(await helloDoc("usage-proto"), { $asset: asset.id });
+    expect((await handler(proto("/prototypes", "POST", { doc }))).status).toBe(201);
+
+    const source = `import { z } from "zod";\nimport type { BaseComponentProps } from "@json-render/react";\nexport const definition = { props: z.strictObject({}), events: [], slots: [], description: "Usage", example: {} };\nexport default function Usage() { return <img src="/api/assets/${asset.id}" alt="usage" />; }\n`;
+    expect((await handler(proto("/components", "POST", { id: "usage-component", name: "UsageComponent", source }))).status).toBe(201);
+    expect((await handler(proto("/components/usage-component/publish", "POST", { baseRev: 1 }))).status).toBe(201);
+
+    const fingerprint = {
+      scope: "prototype-screen", prototypeId: "usage-proto", screenId: doc.screens[0]!.id, refRevision: 1,
+      viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, theme: "light",
+    };
+    const put = await handler(proto("/visual-references", "PUT", { fingerprint, assetId: asset.id }));
+    expect(put.status).toBe(200);
+    const referenceId = (await put.json() as { id: string }).id;
+    db.run(`INSERT INTO visual_runs
+      (id,reference_id,reference_asset_id,candidate_asset_id,diff_asset_id,status,created_at)
+      VALUES ('vrun_usage',?,?,?,?,?,'2026-07-15T12:00:00.000Z')`, [referenceId, asset.id, asset.id, asset.id, "fail"]);
+    expect((await handler(proto(`/visual-references/${referenceId}`, "DELETE"))).status).toBe(204);
+
+    const list = await (await handler(new Request("http://test/api/assets"))).json() as { assets: { id: string; usage: Record<string, number> }[] };
+    expect(list.assets.find((item) => item.id === asset.id)?.usage).toEqual({ prototypes: 1, components: 1, visualReferences: 1, visualRuns: 3 });
+
+    const r = await handler(new Request(`http://test/api/assets/${asset.id}/usage`));
+    expect(r.status).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.prototypes).toEqual([{ id: "usage-proto", name: "usage-proto", revCount: 1, lastRev: 1, pinnedAtHead: true }]);
+    expect(body.components).toEqual([{ id: "usage-component", name: "UsageComponent", versions: [1] }]);
+    expect(body.visualReferences).toEqual([{ id: referenceId, deleted: true }]);
+    expect(body.visualRuns).toEqual([
+      { id: "vrun_usage", referenceId, role: "candidate" },
+      { id: "vrun_usage", referenceId, role: "diff" },
+      { id: "vrun_usage", referenceId, role: "reference" },
+    ]);
+    db.close();
+  }, 30_000);
+
+  test("returns asset_not_found for a missing asset", async () => {
+    const { db, handler } = await setup();
+    const r = await handler(new Request(`http://test/api/assets/asset_${"0".repeat(64)}/usage`));
+    expect(r.status).toBe(404);
+    expect((await r.json() as { error: { code: string } }).error.code).toBe("asset_not_found");
+    db.close();
+  });
+
+  test("validates the asset id path parameter", async () => {
+    const { db, handler } = await setup();
+    const r = await handler(new Request("http://test/api/assets/not-an-asset/usage"));
+    expect(r.status).toBe(422);
+    expect((await r.json() as { error: { code: string } }).error.code).toBe("validation_failed");
+    db.close();
+  });
+});
+
 describe("$asset references in prototypes", () => {
   test("saves a document referencing an existing asset and pins it, exposing read-back assets", async () => {
     const { db, handler } = await setup();
