@@ -28,7 +28,7 @@ node driver.mjs get prototypes
 
 ## Сценарий 1: прототип из встроенных компонентов
 
-1. Прочитать справочник каталога `reference/builtin-catalog.json` — по ключу на каждую builtin-систему (`shadcn` — 37 типов, `wireframe` — 12), внутри — типы с JSON Schema props, событиями, atomic-уровнем и примерами. Прототипу доступны только builtins его `designSystem` (плюс опубликованные в этой системе кастомные компоненты); у систем, созданных через API (например `yandex-pay`), builtins нет вообще. Props валидируются строго: неизвестный ключ = ошибка.
+1. Перед авторингом получить актуальный каталог выбранной системы: `node driver.mjs catalog shadcn [catalog.json]`. Команда объединяет встроенные типы и последние активные версии кастомных компонентов, включая schemas/examples; без файла печатает JSON в stdout. `reference/builtin-catalog.json` использовать только как локальную справку, если сервер недоступен. Прототипу доступны только builtins его `designSystem` (плюс опубликованные в этой системе кастомные компоненты); у систем, созданных через API (например `yandex-pay`), builtins нет вообще. Props валидируются строго: неизвестный ключ = ошибка.
 2. Написать документ по грамматике ниже (рабочий образец — `examples/rating-demo.json`, но замените в нём кастомный тип `RatingStars` на встроенный, если компонент не публиковали).
 3. Отправить:
 
@@ -104,7 +104,7 @@ curl -u "$EASYUI_AUTH" -X POST -H "Content-Type: image/png" --data-binary @banne
 
 Контракт TSX-модуля — named export `definition` + default plain function component (`memo`/`forwardRef` нельзя). Образцы: `examples/rating-stars.tsx` (простейший, ABI v1) и `examples/plan-picker.tsx` (typed events + named slots, ABI v2):
 
-- `definition.props` — Zod **strict** схема; `description: string` обязателен; опционально `slots?: string[]`, `example?` (обязан проходить props-схему), `atomicLevel?`, `capabilities?: {typedEvents?, namedSlots?}` (тип требует литеральные `true` — писать `{...} as const`), семантика для валидатора (`interactive?`, `accessibleLabelProps?`, `urlProps?`).
+- `definition.props` — Zod **strict** схема; `description: string` обязателен; опционально `slots?: string[]`, `example?`, `examples?`, `atomicLevel?`, `capabilities?: {typedEvents?, namedSlots?}` (тип требует литеральные `true` — писать `{...} as const`), семантика для валидатора (`interactive?`, `accessibleLabelProps?`, `urlProps?`). `examples` содержит до 8 именованных наборов props: имя — slug 1–32 символа, `default` зарезервирован; каждый input ≤16 KiB, все examples компонента вместе ≤64 KiB. Сервер сохраняет провалидированный **input**, а не результат Zod transform/default.
 - `events` — `string[]` (payload-less, legacy) **или** `Record<name, ZodSchema>` (typed payload). Typed-схема обязана детерминированно конвертироваться в JSON Schema — transform/preprocess дадут 422 `event_schema_not_serializable` на publish.
 - Компонент получает `{props, emit, slots}`; для typed/slots-компонентов импортируйте тип `EasyUIComponentProps` из `easy-ui/runtime` — `emit("choose", {id, price})` c payload (валидируется по схеме, `$`-ключи в payload запрещены), `slots.header` — ReactNode именованного слота (`children === slots.default`).
 - Импортировать можно: `react`, `react-dom`, `react/jsx-runtime`, `zod`, `@json-render/react` и `easy-ui/runtime` (последний = ABI v2; экспортирует также `token("color.text.primary")` и `Icon` для темы дизайн-системы). CSS-импорты и произвольные Tailwind-классы нельзя — стилить inline-стилями и CSS-переменными темы (`var(--border)`, `var(--eui-*)` из tokens системы).
@@ -141,6 +141,8 @@ node driver.mjs prototype examples/rating-demo.json
 
 **Пины фиксируются на момент сохранения прототипа**: последующий publish компонента не меняет уже сохранённый прототип. Чтобы подтянуть новую версию компонента — пересохранить прототип (повторный `driver.mjs prototype`).
 
+Именованные examples становятся вариантами компонента в Library и входят в контракт каталога. Использовать их для нескольких канонических состояний одного компонента; `example` остаётся одиночным legacy-примером.
+
 ## Посмотреть результат
 
 Ссылка `…/p/<id>` из вывода драйвера открывается в браузере под теми же кредами; экраны — `…/p/<id>/s/<screenId>`. Отладка интеракций — добавить `?debug=1`: inspector-панель показывает события с payload, экшены, диффы стейта и статусы шрифтов.
@@ -153,7 +155,23 @@ node driver.mjs shoot my-flow ./shots    # локальный playwright, есл
 # ./shots/<screenId>.png на каждый экран
 ```
 
-Серверные скриншоты также доступны сырым API (`POST /prototypes/:id/screens/:sid/screenshot {viewport,...}` → 202 `{jobId}` → `GET /screenshot-jobs/:jobId`; параметры theme/deviceScaleFactor/rev/version), включая скриншот одного компонента: `POST /components/:id/versions/:v/screenshot {props?, viewport}`. Visual regression (эталоны + diff) — UI `/visual` и `PUT /api/visual-references` / `POST .../check`.
+Серверные скриншоты также доступны сырым API (`POST /prototypes/:id/screens/:sid/screenshot {viewport,...}` → 202 `{jobId}` → `GET /screenshot-jobs/:jobId`; параметры theme/deviceScaleFactor/rev/version), включая скриншот одного компонента: `POST /components/:id/versions/:v/screenshot {props? | exampleName?, viewport}`.
+
+### Визуальная регрессия (evidence loop)
+
+Рабочий цикл: создать эталоны → внести правку → опубликовать компонент → пересохранить прототип, чтобы обновить пины → проверить кандидата.
+
+```bash
+node driver.mjs baseline my-flow ./baseline-png
+# правка → component/publish → повторный `prototype my-flow.json`
+node driver.mjs check my-flow --threshold 0.1
+```
+
+`baseline` снимает все экраны одной ревизии и одним атомарным PUT заменяет весь набор. Каждое пере-baseline создаёт новое поколение; частичного обновления нет, и у прототипа активна только одна конфигурация viewport/theme/dsf. При гонке поколений драйвер не повторяет запись автоматически. Если capture оборвался или браузер сообщил ошибки, baseline не коммитится, но уже созданные PNG-ассеты остаются орфанными до будущей очистки.
+
+Viewport выбирается для каждого экрана так: `--viewport` → `screen.canvas` (округление и clamp) → canonical device (`mobile 390×844`, `tablet 834×1112`) → desktop `1280×800`. Соблюдать лимит 20 Mpx с учётом `dsf²`.
+
+`check` последовательно сравнивает каждый member активного набора с текущей draft-ревизией и завершается с non-zero при любом несовпадении/ошибке. `--json` даёт машинный результат.
 
 ## Инспекция и удаление
 
@@ -161,7 +179,17 @@ node driver.mjs shoot my-flow ./shots    # локальный playwright, есл
 node driver.mjs get prototypes            # список (id, headRev, latestVersion, ...)
 node driver.mjs get components my-comp    # один ресурс: headRev, versions
 node driver.mjs get design-systems        # реестр систем (builtins + созданные через API)
+node driver.mjs get assets                # ассеты и счётчики hard-pin usage
+node driver.mjs get assets asset_<sha256> # все удерживающие hard pins и visual-run роли
 node driver.mjs delete prototypes my-flow # hard delete (prototypes) / soft (components)
+```
+
+Ревью изменений между immutable-ревизиями:
+
+```bash
+node driver.mjs diff my-flow              # head против head-1
+node driver.mjs diff my-flow 2            # head против rev 2
+node driver.mjs diff my-flow 1 3 --json   # rev 3 против rev 1, полный JSON
 ```
 
 Удаление компонента — soft: он исчезает из списка и недоступен новым сохранениям, но опубликованные bundle и пины существующих прототипов продолжают работать.
