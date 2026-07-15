@@ -62,7 +62,7 @@ function isJsonSafe(value:unknown):boolean {
   return false;
 }
 
-export function definitionMeta(definition:{events?:readonly string[]|Record<string,z.ZodType>;slots?:string[];capabilities?:ComponentCapabilities;description:string;example?:Record<string,unknown>;atomicLevel?:AtomicLevel;interactive?:boolean;accessibleLabelProps?:string[];urlProps?:string[];props:z.ZodType}):DefinitionMeta {
+export function definitionMeta(definition:{events?:readonly string[]|Record<string,z.ZodType>;slots?:string[];capabilities?:ComponentCapabilities;description:string;example?:Record<string,unknown>;examples?:Record<string,Record<string,unknown>>;atomicLevel?:AtomicLevel;interactive?:boolean;accessibleLabelProps?:string[];urlProps?:string[];props:z.ZodType}):DefinitionMeta {
   let propsJsonSchema:unknown;
   try { propsJsonSchema=z.toJSONSchema(definition.props); } catch { /* best effort metadata */ }
   const {events,eventPayloadSchemas}=normalizeEvents(definition.events as Parameters<typeof normalizeEvents>[0]);
@@ -79,5 +79,6 @@ export function definitionMeta(definition:{events?:readonly string[]|Record<stri
     }
   }
   const capabilities=definition.capabilities&&typeof definition.capabilities==="object"?definition.capabilities:undefined;
-  return {events,slots:definition.slots??[],description:definition.description,...(eventPayloads?{eventPayloads}:{}),...(capabilities?{capabilities}:{}),...(definition.example?{example:definition.example}:{}),...(definition.atomicLevel?{atomicLevel:definition.atomicLevel}:{}),...(definition.interactive!==undefined?{interactive:definition.interactive}:{}),...(definition.accessibleLabelProps?{accessibleLabelProps:definition.accessibleLabelProps}:{}),...(definition.urlProps?{urlProps:definition.urlProps}:{}),...(propsJsonSchema?{propsJsonSchema}:{})};
+  const examples=definition.examples?Object.fromEntries(Object.entries(definition.examples).sort(([a],[b])=>a.localeCompare(b))):undefined;
+  return {events,slots:definition.slots??[],description:definition.description,...(eventPayloads?{eventPayloads}:{}),...(capabilities?{capabilities}:{}),...(definition.example?{example:definition.example}:{}),...(examples?{examples}:{}),...(definition.atomicLevel?{atomicLevel:definition.atomicLevel}:{}),...(definition.interactive!==undefined?{interactive:definition.interactive}:{}),...(definition.accessibleLabelProps?{accessibleLabelProps:definition.accessibleLabelProps}:{}),...(definition.urlProps?{urlProps:definition.urlProps}:{}),...(propsJsonSchema?{propsJsonSchema}:{})};
 }

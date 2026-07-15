@@ -12,6 +12,7 @@ export type CustomComponentDefinition<Props extends Record<string, unknown> = Re
   capabilities?: ComponentCapabilities;
   description: string;
   example?: Props;
+  examples?: Record<string, Props>;
   atomicLevel?: AtomicLevel;
   /** Semantic-validation metadata (additive). */
   interactive?: boolean;
@@ -32,6 +33,7 @@ export type DefinitionMeta = {
   capabilities?: ComponentCapabilities;
   description: string;
   example?: Record<string, unknown>;
+  examples?: Record<string, Record<string, unknown>>;
   propsJsonSchema?: unknown;
   atomicLevel?: AtomicLevel;
   /** Semantic-validation metadata (additive; mirrors the definition fields). */

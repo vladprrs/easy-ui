@@ -153,7 +153,17 @@ export function buildComponentDefinitionSchema(): JsonObject {
       },
       description: { type: "string" },
       example: { type: "object", $comment: "Example props used by Library previews and component capture." },
+      examples: {
+        type: "object",
+        propertyNames: { pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", maxLength: 32, not: { const: "default" } },
+        maxProperties: 8,
+        additionalProperties: { type: "object" },
+        $comment: "Named example props. Canonical JSON is limited to 16 KiB per example and 64 KiB per component.",
+      },
       atomicLevel: { enum: [...atomicLevels] },
+      interactive: { type: "boolean" },
+      accessibleLabelProps: { type: "array", items: { type: "string" } },
+      urlProps: { type: "array", items: { type: "string" } },
     },
   };
 }

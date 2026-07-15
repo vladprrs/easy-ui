@@ -43,8 +43,10 @@ export async function routeScreenshots(request: Request, service: ScreenshotServ
     const versionNumber = optionalPositiveInt(Number(segments[3]), "version");
     if (versionNumber === undefined) throw new ApiError(400, "invalid_request", "version must be a positive integer");
     const b = body(await readJson(request));
+    if (Object.hasOwn(b, "props") && Object.hasOwn(b, "exampleName")) throw new ApiError(400, "invalid_request", "props and exampleName are mutually exclusive");
     if (b.props !== undefined && !isObject(b.props)) throw new ApiError(422, "invalid_props", "props must be a JSON object");
-    const result = service.enqueueComponent(segments[1]!, versionNumber, { props: b.props as Record<string, unknown> | undefined, viewport: b.viewport, deviceScaleFactor: b.deviceScaleFactor, theme: typeof b.theme === "string" ? b.theme : undefined, waitForFonts: b.waitForFonts !== false });
+    if (b.exampleName !== undefined && typeof b.exampleName !== "string") throw new ApiError(400, "invalid_request", "exampleName must be a string");
+    const result = service.enqueueComponent(segments[1]!, versionNumber, { props: b.props as Record<string, unknown> | undefined, exampleName: b.exampleName as string | undefined, viewport: b.viewport, deviceScaleFactor: b.deviceScaleFactor, theme: typeof b.theme === "string" ? b.theme : undefined, waitForFonts: b.waitForFonts !== false });
     return json(result, 202, noStore);
   }
   return null;

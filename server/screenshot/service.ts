@@ -151,17 +151,18 @@ export class ScreenshotService {
     return {jobId,expected};
   }
 
-  enqueueComponent(id: string, version: number, opts: { props?: Record<string, unknown>; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean }): { jobId: string } {
+  enqueueComponent(id: string, version: number, opts: { props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean }): { jobId: string } {
     const {jobId}=this.enqueueComponentFrozen(id,version,opts); return {jobId};
   }
 
-  private enqueueComponentFrozen(id: string, version: number, opts: { props?: Record<string, unknown>; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean }): FrozenEnqueue {
+  private enqueueComponentFrozen(id: string, version: number, opts: { props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean }): FrozenEnqueue {
     this.requireAvailable();
     const { viewport, dsf } = validateViewport(opts.viewport, opts.deviceScaleFactor);
     this.guardQueue();
     const repo = new ComponentRepo(this.deps.db);
-    const dto = repo.version(id, version) as { version: number; bundleHash: string; designSystem: string; propsJsonSchema?: unknown; assets: { id: string }[] };
-    const props = opts.props ?? {};
+    const dto = repo.version(id, version) as { version: number; bundleHash: string; designSystem: string; propsJsonSchema?: unknown; examples?: Record<string,Record<string,unknown>>; assets: { id: string }[] };
+    let props=opts.props??{};
+    if(opts.exampleName!==undefined){const examples=dto.examples??Object.create(null) as Record<string,Record<string,unknown>>;if(!Object.hasOwn(examples,opts.exampleName))throw new ApiError(422,"unknown_example",`Unknown component example: ${opts.exampleName}`);props=examples[opts.exampleName]!;}
     validatePropsAgainstSchema(props, dto.propsJsonSchema);
     const propsHash = propsHashOf(props);
     const theme = opts.theme === "dark" ? "dark" : "light";
