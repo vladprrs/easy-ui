@@ -23,6 +23,7 @@
 | `DELETE /prototypes/:id` | `{baseRev}` → 204; hard delete с каскадом ревизий |
 | `GET /prototypes/:id/revisions?limit&before` | `{rev,message:string|null,createdAt}[]`; `limit` по умолчанию 20, максимум 100 |
 | `GET /prototypes/:id/revisions/:rev` | `{rev,doc,components:ComponentPin[],assets:AssetPin[],message:string|null,createdAt}` |
+| `GET /prototypes/:id/revisions/:rev/diff?against=n` | Структурный diff ревизий; без `against` сравнивает с `rev-1` |
 | `POST /prototypes/:id/restore` | `{rev,baseRev}` → `{rev}` (номер новой head-ревизии) |
 | `POST /prototypes/:id/publish` | `{message?,baseRev}` → 201 `{version,rev,screens}` и `Location` |
 | `GET /prototypes/:id/versions` | `PrototypeVersion[]`: `{version,rev,publishedAt}` |
@@ -34,6 +35,43 @@
 `PUT /prototypes/:id` — это осознанный checkpoint, а не no-op. Даже если `doc` не изменился, успешный запрос с актуальным `baseRev` создаёт новую ревизию: сервер заново разрешает и фиксирует пины active custom-бандлов, текущей версии темы дизайн-системы и ассетов, а также сохраняет переданный `message`. CAS по `baseRev` действует как обычно. Сервер намеренно не дедуплицирует такие ревизии, потому что повторное сохранение выражает явное решение зафиксировать актуальное окружение документа.
 
 `ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её встроенный каталог. Дескриптор v1 включает имена, descriptions, events, slots и actions, но намеренно не включает `atomicLevel`: классификация может меняться без изменения render-совместимости. В MVP хеш диагностический — рантайм не сравнивает и не блокирует его mismatch; enforcement и таблицы совместимости оставлены на post-MVP.
+
+### Diff ревизий
+
+`GET /prototypes/:id/revisions/:rev/diff?against=<rev>` сравнивает две разные существующие ревизии; `against` по умолчанию равен `rev-1`. Для ревизии 1 параметр обязателен. Одинаковые номера и отсутствие `against` у rev 1 дают `400 invalid_request`; отсутствующий прототип или ревизия — `404 prototype_not_found` / `revision_not_found`.
+
+Ответ имеет следующую форму; пустые секции и пустые дочерние `added`/`removed`/`changed` либо element-поля опускаются, а map-диффы представлены entry-массивами, поэтому ключи вроде `__proto__` не теряются:
+
+```jsonc
+{
+  "prototypeId": "checkout",
+  "from": {"rev": 1, "message": V, "createdAt": "..."},
+  "to": {"rev": 2, "message": V, "createdAt": "..."},
+  "doc": [{"key": "name|description|device|designSystem|startScreen", "from": V, "to": V}],
+  "state": {"added": [{"key": "...", "value": V}], "removed": ["..."], "changed": [{"key": "...", "from": V, "to": V}]},
+  "screens": {
+    "added": [{"id": "...", "name": "...", "elementCount": 1}],
+    "removed": [{"id": "...", "name": "..."}],
+    "changed": [{
+      "id": "...",
+      "meta": [{"key": "name|note|canvas|root", "from": V, "to": V}],
+      "stateOverrides": {"added": [], "removed": [], "changed": []},
+      "elements": {
+        "added": [{"id": "...", "type": "..."}], "removed": [{"id": "...", "type": "..."}],
+        "changed": [{"id": "...", "type": {"from": "...", "to": "..."}, "props": {"added": [], "removed": [], "changed": []}, "children": {"from": V, "to": V}, "on": {"added": [], "removed": [], "changed": []}, "visible": {"from": V, "to": V}, "repeat": {"from": V, "to": V}, "slot": {"from": V, "to": V}}]
+      }
+    }]
+  },
+  "screenOrder": {"from": ["..."], "to": ["..."]},
+  "pins": {"components": {"added": [{"id": "...", "version": 1}], "removed": [], "changed": [{"id": "...", "from": 1, "to": 2}]}, "assets": {"added": ["asset_..."], "removed": []}},
+  "renderInputs": [{"key": "builtinCatalogHash|componentManifestHash|designSystemMetaVersion", "from": V, "to": V}],
+  "summary": {"screensAdded": 0, "screensRemoved": 0, "screensChanged": 1, "staticElementsAdded": 0, "staticElementsRemoved": 0, "staticElementsChanged": 1, "identical": false, "docIdentical": false, "truncated": false, "omittedSections": []}
+}
+```
+
+Здесь `V` — ровно одна из форм `{"value":<JSON>}`, `{"truncated":{"preview":"…","chars":n}}` или `{"missing":true}`. `missing` отличает отсутствующее optional-поле от JSON `null`. Изменённый `screenOrder` выдаётся только до 100 записей; более длинный заменяется `{"omitted":true}`. Общий бюджет — 500 leaf-изменений и жёсткий предел сериализованного ответа 256 KiB. Недоверенные строки и значения ограничиваются, а при исчерпании бюджета целые секции заменяются `{"omitted":true}`; точный список находится в `summary.omittedSections`, факт усечения — в `summary.truncated`.
+
+`docIdentical` сравнивает только нормализованные документы: порядок ключей объектов незначим, порядок массивов значим. `identical` дополнительно требует равенства component/asset pins и `renderInputs`. Оба флага вычисляются до усечения; `message`, `createdAt` и `figma` — metadata ревизии и намеренно не участвуют ни в одном флаге. Capture-session не включает diff-URL в `allowedUrls`, поэтому `X-EasyUI-Capture` не даёт доступ к этому endpoint.
 
 ### Scoped share
 
@@ -110,7 +148,7 @@ Meta-ответы прототипов и компонентов additively не
 | `POST /components/:id/restore` | `{rev,baseRev}` → `{rev}` |
 | `POST /components/:id/publish` | `{message?,baseRev}` → 201 `{version,hostAbiVersion,warnings}` и `Location` |
 | `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,statusReason:string\|null,supersededBy:number\|null,statusRev,designSystem,publishedAt}` |
-| `GET /components/:id/versions/:version` | Метадата версии **любого статуса**: `{version,rev,status,statusReason,supersededBy,statusRev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,propsJsonSchema?,atomicLevel?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; immutable |
+| `GET /components/:id/versions/:version` | Метадата версии **любого статуса**: `{version,rev,status,statusReason,supersededBy,statusRev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; immutable |
 | `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); отдаётся при статусе `active\|deprecated\|superseded`, иначе `404 bundle_unavailable`; immutable |
 | `POST /components/:id/versions/:version/status` | `{status, reason?, supersededBy?, baseStatusRev}` → 200 `{status, statusRev}`; см. [Статусы версий](#статусы-версий-компонентов) |
 
@@ -212,9 +250,11 @@ Production-миграция выполняется по явному manifest с
 | Метод и путь | Ответ |
 |---|---|
 | `GET /health` | `{status:"ready"}` после миграций, seed и ABI-проверки; до готовности 503 `starting` |
-| `GET /catalog/manifest` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,eventPayloads?,capabilities?,slots,description,example?,propsJsonSchema?,atomicLevel?}]}` — последняя active-версия каждого неудалённого компонента для каждой системы |
+| `GET /catalog/manifest?designSystem=<slug>` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?}]}` — последняя active-версия каждого неудалённого компонента для каждой системы или только указанной системы |
 | `GET /shims/v1/:name.js` | ESM-шим host ABI v1; immutable |
 | `GET /shims/v2/:name.js` | ESM-шим host ABI v2 (v1 + `easy-ui-runtime.js`); immutable |
+
+Без `designSystem` manifest охватывает все системы. Для фильтра действует явная матрица: malformed slug → `422 validation_failed`; корректный, но незарегистрированный slug → `404 not_found`; зарегистрированная система без active custom-компонентов → `200 {"components":[]}`.
 
 ### Ассеты
 
@@ -223,7 +263,13 @@ Content-addressed реестр бинарных ассетов (изображе
 | Метод и путь | Тело / ответ |
 |---|---|
 | `POST /assets` | Raw body с `Content-Type` (или `multipart/form-data` с ровно одним файлом). Новый ассет → 201 `{id,url,sha256,mime,size,width?,height?}` и `Location`; существующий sha256 → 200 с тем же телом и `deduplicated:true` |
+| `GET /assets?limit=&cursor=` | `{assets:[AssetWithUsage],nextCursor:string|null}` в обратном порядке создания; `limit` по умолчанию 50, диапазон 1–200 |
 | `GET /assets/:id` | Байты ассета; корректный `Content-Type`, immutable cache и жёсткие inert-заголовки (см. ниже). Неизвестный `id` → `404 asset_not_found` |
+| `GET /assets/:id/usage` | Ассет и все удерживающие его hard pins; неизвестный `id` → `404 asset_not_found` |
+
+Cursor — каноническая строка `<ISO-8601>~<asset_id>`, например `2026-07-15T12:34:56.789Z~asset_<64 hex>`, длиной не более 128 символов. Неканоническая дата, неверный asset ID или иная грамматика дают `400 invalid_cursor`; неизвестные query-поля, нецелый/нулевой/отрицательный `limit` и `limit>200` — `422 validation_failed`. `AssetWithUsage` содержит `{id,sha256,mime,size,width?,height?,originalName:string|null,createdAt,url,usage:{prototypes,components,visualReferences,visualRuns}}`.
+
+`GET /assets/:id/usage` возвращает `{asset,prototypes:[{id,name,revCount,lastRev,pinnedAtHead}],components:[{id,name,versions:number[]}],visualReferences:[{id,deleted}],visualRuns:[{id,referenceId,role:"reference"|"candidate"|"diff"}]}`. Это полный список только **hard pins**: ревизий прототипов, публикаций компонентов, visual references (включая tombstone) и трёх ролей visual runs. Семантические ссылки в theme assets и Figma `referenceScreenshots` endpoint не индексирует и не показывает.
 
 Приём: реальный тип определяется по magic-байтам и обязан совпадать с заявленным `Content-Type` — иначе `422 asset_type_mismatch`; неподдерживаемый заявленный тип — `422 unsupported_asset_type`. Допустимы `image/png`, `image/jpeg`, `image/webp`, `image/gif`, `image/svg+xml`, `font/woff2`, `font/ttf`, `font/otf`. Лимит размера — 5 MiB (`413 asset_too_large`). Для растров декодируются размеры из заголовков (png/jpeg/webp/gif) и применяется лимит 16 Mpx (`413 asset_too_large`, decompression-bomb guard). SVG в v1 не санитизируется — вместо этого отдаётся инертно.
 
@@ -244,14 +290,18 @@ Content-addressed реестр бинарных ассетов (изображе
 | Метод и путь | Тело / ответ |
 |---|---|
 | `POST /prototypes/:id/screens/:screenId/screenshot` | `{rev?\|version?, viewport{width,height}, deviceScaleFactor?, theme?, waitForFonts?}` → `202 {jobId}` |
-| `POST /components/:id/versions/:version/screenshot` | `{props?, viewport, deviceScaleFactor?, theme?, waitForFonts?}` → `202 {jobId}` (props валидируются) |
+| `POST /components/:id/versions/:version/screenshot` | `{props?\|exampleName?, viewport, deviceScaleFactor?, theme?, waitForFonts?}` → `202 {jobId}`; `props` и `exampleName` взаимоисключающие |
 | `GET /screenshot-jobs/:jobId` | `{status: queued\|running\|done\|error, result?, error?}` |
 
 `result` (при `done`): `{imageUrl, assetId, width, height, consoleErrors, pageErrors, rendererBuild, browserVersion, componentPins?|bundleHash?}`.
 
+Для component screenshot `exampleName` выбирается строго из `definition.examples`: неизвестное имя или отсутствие `examples` → `422 unknown_example`, одновременные `props` и `exampleName` → `400 invalid_request`. После выбора набор проходит обычную валидацию props и участвует в `propsHash`.
+
 **Границы (bounds).** `width ∈ [64,2000]`, `height ∈ [64,4000]`, `deviceScaleFactor ∈ {1,2,3}`, `width×height×dsf² ≤ 20 Mpx` — иначе `422 invalid_viewport`. PNG подчиняется лимитам ассетов (5 MiB / 16 Mpx). Пул concurrency 1, очередь ≤5 (`429 queue_full`), hard deadline job 60 s, TTL результата 10 минут (PNG остаётся в ассетах). Jobs хранятся в памяти.
 
-**Snapshot цели при enqueue.** POST атомарно резолвит цель в `expected` (`prototype`: `{rev, componentManifestHash, builtinCatalogHash, dsMetaVersion, rendererBuild}`; `component`: `{componentId, version, bundleHash, propsHash, dsMetaVersion, rendererBuild}`) и сохраняет в job. Queued job не может «уехать» на более поздний head. Capture-shell (`/capture/:id/s/:screen`, `/capture/component/:id/:version`) выставляет discriminated `window.__EUI_CAPTURE_READY__` той же формы; worker строго канонически сравнивает с `expected` и падает при mismatch/`status:"error"` (быстрый fail вместо таймаута; readiness poll 20 s). Хеши добавлены в revision DTO additively.
+**Snapshot цели при enqueue.** POST атомарно резолвит цель в `expected` (`prototype`: `{prototypeInstanceId,rev,componentManifestHash,builtinCatalogHash,dsMetaVersion,rendererBuild}`; `component`: `{componentId,version,bundleHash,propsHash,dsMetaVersion,rendererBuild}`) и сохраняет в job. Queued job не может «уехать» на более поздний head. Capture-shell (`/capture/:id/s/:screen`, `/capture/component/:id/:version`) выставляет discriminated `window.__EUI_CAPTURE_READY__` той же формы; worker строго канонически сравнивает с `expected` и падает при mismatch/`status:"error"` (быстрый fail вместо таймаута; readiness poll 20 s). Хеши добавлены в revision DTO additively.
+
+Прямой component capture понимает только следующую грамматику. Bootstrap props от screenshot-worker всегда приоритетны. `?example=<name>` выбирает own-key из `examples` без fallback; неизвестное имя — capture error. `?props=example` без `example` выбирает legacy `definition.example`, а при его отсутствии падает. Любое другое значение `props`, а также повтор любого из параметров — ошибка. Без селекторов используются `{}`.
 
 **Session-auth капчера.** При dequeue минтится одноразовая (в рамках job) capture-session: `{token(32B), kind, allowedUrls (точный immutable snapshot), expected, props?}`, TTL = deadline 60 s + 30 s, revoke в `finally`. Worker шлёт `X-EasyUI-Capture: <token>` только на loopback capture-origin (инжект в `context.route` по exact origin). Сервер принимает токен как транспортную авторизацию (обходит BasicAuth) только при: `server.requestIP()` ∈ loopback (`127.0.0.1`/`::1`/`::ffff:127.0.0.1`), метод GET/HEAD, нормализованный decoded-путь ∈ `allowedUrls`. `allowedUrls`: capture-route, revision/version/draft endpoint, pinned bundle URLs, pinned `/api/assets/:id` (из документа и компонентов), `/api/shims/`, транзитивная статика SPA из Vite-манифеста (js/css/`/fonts/*`/index; fallback — префиксы `/assets/`, `/fonts/`). Bootstrap (`__EUI_CAPTURE_BOOTSTRAP__`, включая произвольные `props` компонента) доставляется через `page.addInitScript` — page-JS не нуждается в токене.
 
@@ -265,16 +315,42 @@ Content-addressed реестр бинарных ассетов (изображе
 
 | Метод и путь | Тело / ответ |
 |---|---|
+| `PUT /visual-baselines/prototypes/:id` | Атомарная замена полного baseline-set: `{rev,prototypeInstanceId,baseGeneration,members:[{screenId,viewport,deviceScaleFactor,theme,assetId}]}` → `{generation,rev,members:[{…,referenceId}]}` |
+| `GET /visual-baselines/prototypes/:id` | Последний set: `{generation,rev,prototypeInstanceId,createdAt,members:[{screenId,viewport,deviceScaleFactor,theme,referenceId}]}` |
 | `PUT /visual-references` | `{fingerprint, assetId, note?}` → `200 reference`; upsert по канону fingerprint. Ассет обязан существовать и быть `image/png` (иначе `422`). |
 | `GET /visual-references?scope=&prototypeId=&componentId=` | `{references:[reference]}` — каждая с `lastRun`. |
 | `GET /visual-references/:id` | `reference` + `runs:[report]` (полная история). |
 | `DELETE /visual-references/:id` | `204`; soft-delete активного reference без удаления runs. Повторный DELETE → `404 reference_not_found`. |
-| `POST /visual-references/:id/check` | `{threshold?}` → `202 {runId, jobId?}`. Капчер кандидата + diff-run. `jobId` отсутствует при `reference_missing`. |
+| `POST /visual-references/:id/check` | `{threshold?,rev?,version?}` → `202 {runId, jobId?}`. Капчер кандидата + diff-run. `jobId` отсутствует при `reference_missing`. |
 | `GET /visual-runs/:runId` | `running`-плейсхолдер `{runId, referenceId, status:"running", jobId}` **или** терминальный evidence-отчёт. |
 
+### Baseline-sets
+
+Baseline прототипа — журнал поколений, а не набор независимо мутируемых references. Каждый PUT с корректным CAS создаёт `generation = previous+1` и атомарно заменяет весь membership; GET возвращает последнее committed-поколение. В v1 у прототипа ровно **одна активная конфигурация**: смена theme/viewport/dsf заменяет предыдущую, независимых профилей нет. `members` обязаны покрывать каждый экран выбранной ревизии ровно один раз, то есть на экран приходится одна surface-конфигурация. Старые references tombstone'ятся, но их runs и evidence сохраняются.
+
+CAS двухмерный: `prototypeInstanceId` защищает от delete/recreate того же slug, `baseGeneration` — от параллельного rebaseline (`null` допустим только до первого поколения). Клиент сначала читает `prototypeInstanceId` из draft/meta и текущий generation из baseline GET, затем передаёт оба в PUT. Generic `PUT /visual-references` и `DELETE /visual-references/:id` для reference из последнего committed set запрещены с `409 baseline_managed`; менять управляемые references можно только заменой полного set.
+
+Матрица baseline API:
+
+| Операция | Статус и code |
+|---|---|
+| PUT, прототип/ревизия отсутствует | `404 prototype_not_found` / `404 revision_not_found` |
+| GET, прототип/set отсутствует | `404 prototype_not_found` / `404 baseline_not_found` |
+| stale instance/generation или конкурентный commit | `409 instance_conflict` / `409 generation_conflict` (`currentGeneration` при известном текущем поколении) |
+| неполный, лишний или дублирующий membership | `422 incomplete_baseline` |
+| размеры вне `64..2000 × 64..4000`, dsf не 1/2/3 или более 20 Mpx с учётом dsf² | `422 invalid_viewport` |
+| asset отсутствует / не PNG | `422 asset_not_found` / `422 invalid_reference_asset` |
+| неверная строгая форма тела | `422 validation_failed` |
+
+Транзакционный abort не оставляет частичного поколения или активного membership. Однако PNG уже загружаются в content-addressed registry до PUT: сбой capture, browser errors, гонка CAS или иной abort оставляют orphan PNG без baseline-пина; автоматического GC сейчас нет.
+
 **Fingerprint** (`server/visual/fingerprint.ts`). Канонический JSON поверхности; ключи детерминированно сортируются, `undefined`-опционалы отбрасываются, так что семантически равные fingerprint'ы хэшируются одинаково. `fingerprint_json` — UNIQUE-колонка; `id = "vref_" + sha256(fingerprint_json)`. Поля:
-- `scope: "prototype-screen"` → `{prototypeId, screenId, refRevision}`; `scope: "component"` → `{componentId, refVersion}`;
+- `scope: "prototype-screen"` → `{prototypeId, prototypeInstanceId?, screenId, refRevision}`; `scope: "component"` → `{componentId, refVersion}`;
 - общие: `viewport{width,height}`, `deviceScaleFactor ∈ {1,2,3}`, `theme ∈ {light,dark}`, опциональные `propsHash?`, `stateHash?`.
+
+**Check target.** В теле check `rev` разрешён только для `prototype-screen`, `version` — только для `component`; без override используется `refRevision`/`refVersion`. Неверная комбинация и любой check fingerprint'а с `propsHash` или `stateHash` дают `422 invalid_candidate_target`: воспроизводимого capture-рецепта для hash-bearing surfaces нет. Остальные ошибки: `404 reference_not_found|prototype_not_found|screen_not_found|revision_not_found|version_not_found`, `409 instance_conflict`, `422 invalid_threshold|invalid_viewport`, `429 queue_full`, `501 screenshot_unavailable`.
+
+`candidateMeta` — discriminated union по `kind:"prototype"|"component"` и `outcome:"captured"|"capture_failed"`. Общая часть: `{requestedTarget:{rev|version},resolvedTarget:{rev|version},expected,browser:{browserVersion,rendererBuild,consoleErrors,pageErrors}|null,error?}`; `browser:null` означает сбой до получения browser evidence. Для совместимости сохраняются top-level aliases: у прототипа `rev`, `pins?`, `rendererBuild?`, `browserVersion?`; у компонента `version`, `bundleHash?`, `rendererBuild?`, `browserVersion?`.
 
 **Метрики (честно).** За один прогон считаются **обе**: `exact-rgba` (полное попиксельное равенство RGBA, `diffPixels/totalPixels`) и `pixelmatch-v1` (все options — `threshold`, `includeAA` — в `metric_options_json`). Никакого «AE». Первичная метрика прогона (колонки `metric`/`diff_pixels`/`total_pixels`/`diff_percent`) — `pixelmatch-v1`; `exact-rgba` кладётся в `candidate_meta_json.exactRgba`; отчёт отдаёт обе под `metrics`. `pass` при `pixelmatch diffPercent ≤ threshold` (по умолчанию 0), иначе `fail`.
 
@@ -296,7 +372,7 @@ Content-addressed реестр бинарных ассетов (изображе
 | `Verified` | `Published` **и** последний visual-run reference'а этой active-версии (`fingerprint {scope:"component", componentId, refVersion}`) = `pass` |
 | `Visual pending` | `Published` и **не** `Verified` |
 
-`Rejected`/`Blocked` описывают **последнюю** версию, даже если более старая `active`-версия сохраняет компонент в манифесте — поэтому manifest-запись может читаться как blocked/rejected. Фильтры-чипы объединяются по OR; пока статус компонента не загружен, он не скрывается. Живое превью карточки — iframe на `/capture/component/:id/:version?props=example` (при наличии `example` в манифесте, иначе meta-карточка). Figma-бейдж на карточке/в списке — при `figma` на head-ревизии (тултип `fileKey` + число `nodeIds`).
+`Rejected`/`Blocked` описывают **последнюю** версию, даже если более старая `active`-версия сохраняет компонент в манифесте — поэтому manifest-запись может читаться как blocked/rejected. Фильтры-чипы объединяются по OR; пока статус компонента не загружен, он не скрывается. Живое превью карточки показывает чип `default` для legacy `example` (`?props=example`) и сортированные чипы `examples` (`?example=<name>`); без обоих остаётся meta-карточка. Figma-бейдж на карточке/в списке — при `figma` на head-ревизии (тултип `fileKey` + число `nodeIds`).
 
 ## Ошибки и ограничения HTTP
 
@@ -325,7 +401,7 @@ Content-addressed реестр бинарных ассетов (изображе
 
 - `GET /api/openapi.json` — OpenAPI 3.1-документ. Отдаётся закоммиченный артефакт `server/openapi.json`, сгенерированный из реестра контрактов `server/contracts.ts` командой `npm run generate:openapi`. Дрифт ловится в `npm run verify` (`verify:openapi`) и contract-тестом. Операции несут расширение `x-easyui-validated`: `true` — handler валидирует вход по схемам контракта (`parseWith`/`parseQuery`), `false` — контракт документационный, handler валидирует вход самостоятельно.
 - `GET /api/schemas/prototype-document.json` — JSON Schema (draft 2020-12) формата документа прототипа, производная от `prototypeDocSchema`. Директивы props (`$state`, `$bindState`, `$template`, `$cond`, `$asset`) и param sources событий (`$event`, `$elementId`, `$itemIndex`, `$itemKey`) описаны в `$defs` как `anyOf` с `$comment` — их семантика enforce'ится валидатором `src/prototype/validate.ts`, а не самой схемой.
-- `GET /api/schemas/component-definition.json` — JSON Schema контракта `definition` кастомного компонента (props/events/slots/capabilities/description/example/atomicLevel).
+- `GET /api/schemas/component-definition.json` — JSON Schema контракта `definition` кастомного компонента (props/events/slots/capabilities/description/example/examples/atomicLevel и прочая metadata).
 - `GET /api/capabilities` — фичи и лимиты инстанса:
 
 ```json
@@ -346,9 +422,17 @@ Content-addressed реестр бинарных ассетов (изображе
 
 **Правило**: каждый новый endpoint обязан регистрироваться в `server/contracts.ts` (`registerContract`) — contract-тест `server/contract.test.ts` требует покрытия каждого контракта, а drift-check заставит перегенерировать `server/openapi.json`.
 
+**Известное ограничение генератора OpenAPI:** numeric path-параметры (`rev`, `version` и подобные) публикуются в схеме как строки, хотя handler преобразует и проверяет их как положительные целые. Это ограничение артефакта генерации, а не runtime API.
+
 ## Контракт кастомного компонента
 
-Модуль TSX экспортирует named `definition` и default plain function component. `definition.props` — Zod-схема; допустимы `events`, `slots?: string[]`, `capabilities?`, обязательный `description: string`, `example?: Record<string, unknown>` и `atomicLevel?: "atom" | "molecule" | "organism" | "template" | "page"`. `DefinitionMeta`, сохранённый для published-версии, содержит нормализованные `events`, `slots`, `description` и опциональные `eventPayloads`, `capabilities`, `example`, `propsJsonSchema`, `atomicLevel`; те же метаданные входят в manifest. Если example задан, он обязан проходить props-схему. У custom-компонента уровень опционален для ABI v1 backward compatibility, но publish без него возвращает warning `Atomic design level is not provided; component will be classified as Other` и Library классифицирует компонент как `Other`. Default получает `BaseComponentProps` — объект `{props, emit}`. `memo` и `forwardRef` не поддерживаются.
+Модуль TSX экспортирует named `definition` и default plain function component. `definition.props` — Zod-схема; допустимы `events`, `slots?: string[]`, `capabilities?`, обязательный `description: string`, legacy `example?: Record<string, unknown>`, именованные `examples?: Record<string, Record<string, unknown>>` и `atomicLevel?: "atom" | "molecule" | "organism" | "template" | "page"`. `DefinitionMeta`, сохранённый для published-версии, содержит нормализованные `events`, `slots`, `description` и опциональные `eventPayloads`, `capabilities`, `example`, `examples`, `propsJsonSchema`, `atomicLevel`; те же метаданные входят в version DTO и manifest. У custom-компонента уровень опционален для ABI v1 backward compatibility, но publish без него возвращает warning `Atomic design level is not provided; component will be classified as Other` и Library классифицирует компонент как `Other`. Default получает `BaseComponentProps` — объект `{props, emit}`. `memo` и `forwardRef` не поддерживаются.
+
+#### Named examples
+
+Имена в `definition.examples` — slug'и `^[a-z0-9]+(?:-[a-z0-9]+)*$` длиной 1–32; имя `default` зарезервировано, максимум 8 наборов. Каждый набор обязан быть plain-JSON объектом с конечными числами, без циклов, функций, BigInt, sparse/custom arrays и ключей с префиксом `$` или `__eui` на любой глубине. Лимит канонического JSON — 16 KiB на набор и 64 KiB на всю карту компонента.
+
+Каждый набор проверяется `definition.props.parse`, но сохраняется и публикуется именно исходный **input**, а не результат Zod transform/default; ключи examples сортируются. Legacy `definition.example` остаётся отдельным полем и также должен проходить props-схему. Named examples не повышают `hostAbiVersion`; каждый из них участвует в advisory SSR smoke.
 
 #### Typed event payloads (`events` + `capabilities`)
 
