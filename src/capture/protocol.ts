@@ -9,6 +9,7 @@
 
 export interface PrototypeExpected {
   kind: "prototype";
+  prototypeInstanceId: string;
   rev: number;
   componentManifestHash: string;
   builtinCatalogHash: string;
@@ -31,6 +32,7 @@ export type CaptureExpected = PrototypeExpected | ComponentExpected;
 export interface PrototypeReady {
   status: "ready";
   kind: "prototype";
+  prototypeInstanceId: string;
   revision: number;
   componentManifestHash: string;
   builtinCatalogHash: string;

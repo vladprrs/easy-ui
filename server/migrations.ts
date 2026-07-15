@@ -263,6 +263,37 @@ const migrations = [
     db.run("CREATE INDEX visual_runs_candidate_asset ON visual_runs (candidate_asset_id)");
     db.run("CREATE INDEX visual_runs_diff_asset ON visual_runs (diff_asset_id)");
   },
+  (db: Database) => {
+    // v13: immutable prototype incarnation + atomic visual baseline sets. SQLite cannot
+    // add NOT NULL to an existing column, so populated databases follow the required
+    // nullable -> per-row UUID -> table rebuild sequence.
+    db.run("ALTER TABLE prototypes ADD COLUMN instance_id TEXT");
+    const rows = db.query("SELECT id FROM prototypes WHERE instance_id IS NULL ORDER BY id").all() as { id: string }[];
+    const backfill = db.query("UPDATE prototypes SET instance_id=? WHERE id=?");
+    for (const row of rows) backfill.run(crypto.randomUUID(), row.id);
+    db.run("PRAGMA legacy_alter_table = ON");
+    db.run("ALTER TABLE prototypes RENAME TO _prototypes_v12");
+    db.run(`CREATE TABLE prototypes (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
+      device TEXT NOT NULL, screen_count INTEGER NOT NULL,
+      head_rev INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      design_system TEXT NOT NULL DEFAULT 'shadcn', instance_id TEXT NOT NULL)`);
+    db.run(`INSERT INTO prototypes
+      (id,name,description,device,screen_count,head_rev,created_at,updated_at,design_system,instance_id)
+      SELECT id,name,description,device,screen_count,head_rev,created_at,updated_at,design_system,instance_id
+      FROM _prototypes_v12`);
+    db.run("DROP TABLE _prototypes_v12");
+    db.run("PRAGMA legacy_alter_table = OFF");
+    db.run(`CREATE TABLE visual_baseline_sets (
+      id TEXT PRIMARY KEY,
+      prototype_id TEXT NOT NULL,
+      prototype_instance_id TEXT NOT NULL,
+      generation INTEGER NOT NULL,
+      rev INTEGER NOT NULL,
+      members_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(prototype_id, generation))`);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {
@@ -300,10 +331,30 @@ export function migrate(db: Database): void {
   db.run("PRAGMA journal_mode = WAL");
   const current = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
   if (current < migrations.length) {
-    db.transaction(() => {
-      for (let index = current; index < migrations.length; index += 1) migrations[index](db);
-      db.run(`PRAGMA user_version = ${migrations.length}`);
-    })();
+    // The v13 prototypes rebuild must temporarily disable FK rewriting/cascades. PRAGMA
+    // foreign_keys is a no-op inside a transaction, so finish older migrations first and
+    // run v13 in its own explicit transaction with a post-rebuild FK audit.
+    const v13Index = 12;
+    if (current < v13Index) {
+      db.transaction(() => {
+        for (let index = current; index < Math.min(v13Index, migrations.length); index += 1) migrations[index](db);
+        db.run(`PRAGMA user_version = ${Math.min(v13Index, migrations.length)}`);
+      })();
+    }
+    const afterOlder = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
+    if (afterOlder === v13Index && migrations.length > v13Index) {
+      db.run("PRAGMA foreign_keys = OFF");
+      try {
+        db.transaction(() => {
+          migrations[v13Index](db);
+          db.run(`PRAGMA user_version = ${migrations.length}`);
+        })();
+      } finally {
+        db.run("PRAGMA foreign_keys = ON");
+      }
+      const violations = db.query("PRAGMA foreign_key_check").all();
+      if (violations.length) throw new Error(`v13 rebuild left foreign-key violations: ${JSON.stringify(violations)}`);
+    }
   }
   assertRegistryIntegrity(db);
   assertBuiltinNamesDoNotCollide(db);

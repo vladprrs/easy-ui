@@ -60,7 +60,7 @@ type Expectation =
 interface Case { run: () => Promise<Response>; expected: Expectation }
 
 // Shared mutable fixture state threaded through the ordered execution below.
-const state: { assetId?: string; referenceId?: string; screenId?: string; shareId?: string } = {};
+const state: { assetId?: string; referenceId?: string; screenId?: string; screenIds?:string[]; shareId?: string; prototypeInstanceId?:string } = {};
 
 function orderedCases(): [string, Case][] {
   const ok = (status?: number, contentType?: string): Expectation => ({ kind: "success", status, contentType });
@@ -88,6 +88,8 @@ function orderedCases(): [string, Case][] {
     ["GET /api/prototypes", { run: () => call("GET", "/api/prototypes"), expected: ok() }],
     ["GET /api/prototypes/{id}", { run: () => call("GET", "/api/prototypes/contract-proto"), expected: ok() }],
     ["GET /api/prototypes/{id}/draft", { run: () => call("GET", "/api/prototypes/contract-proto/draft"), expected: ok() }],
+    ["PUT /api/visual-baselines/prototypes/{id}", {run:()=>call("PUT","/api/visual-baselines/prototypes/contract-proto",{rev:1,prototypeInstanceId:state.prototypeInstanceId,baseGeneration:null,members:state.screenIds!.map(screenId=>({screenId,viewport:{width:320,height:480},deviceScaleFactor:1,theme:"light",assetId:state.assetId}))}),expected:ok()}],
+    ["GET /api/visual-baselines/prototypes/{id}", {run:()=>call("GET","/api/visual-baselines/prototypes/contract-proto"),expected:ok()}],
     ["PUT /api/prototypes/{id}", { run: async () => call("PUT", "/api/prototypes/contract-proto", { doc: await helloDoc("contract-proto"), baseRev: 1, message: "save" }), expected: ok() }],
     ["GET /api/prototypes/{id}/revisions", { run: () => call("GET", "/api/prototypes/contract-proto/revisions?limit=10"), expected: ok() }],
     ["GET /api/prototypes/{id}/revisions/{rev}", { run: () => call("GET", "/api/prototypes/contract-proto/revisions/1"), expected: ok() }],
@@ -148,7 +150,7 @@ function orderedCases(): [string, Case][] {
 
 describe("route contracts", () => {
   test("every registered contract has a coverage case, and responses match their schemas", async () => {
-    state.screenId = (await helloDoc("x")).screens[0]!.id;
+    state.screenIds=(await helloDoc("x")).screens.map(screen=>screen.id); state.screenId=state.screenIds[0]!;
     const contracts = new Map(listContracts().map((contract) => [contractKey(contract), contract]));
     const cases = orderedCases();
     const covered = new Set(cases.map(([key]) => key));
@@ -179,6 +181,7 @@ describe("route contracts", () => {
       const parsed = contract.responseSchema ? contract.responseSchema.safeParse(body) : { success: true as const, error: undefined };
       if (!parsed.success) throw new Error(`${key}: response does not match contract schema: ${parsed.error}`);
       if (key === "POST /api/assets") state.assetId = (body as { id: string }).id;
+      if (key === "GET /api/prototypes/{id}/draft") state.prototypeInstanceId=(body as {prototypeInstanceId:string}).prototypeInstanceId;
       if (key === "PUT /api/visual-references") state.referenceId = (body as { id: string }).id;
       if (key === "POST /api/prototypes/{id}/share") state.shareId = (body as { id: string }).id;
     }

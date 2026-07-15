@@ -4,6 +4,7 @@ import { parseWith } from "../contracts";
 import { fingerprintSchema } from "../visual/fingerprint";
 import { VisualRepo } from "../visual/repo";
 import type { VisualService } from "../visual/service";
+import { routeVisualBaselines } from "./visualBaselines";
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -13,6 +14,7 @@ const isObject = (value: unknown): value is Record<string, unknown> => typeof va
  * owns candidate capture + diff orchestration.
  */
 export async function routeVisual(request: Request, db: Database, dataDir: string, segments: string[], service?: VisualService): Promise<Response | null> {
+  const baseline=await routeVisualBaselines(request,db,dataDir,segments); if(baseline) return baseline;
   if (segments[0] === "visual-references") {
     const repo = new VisualRepo(db, dataDir);
     if (segments.length === 1) {
@@ -48,7 +50,7 @@ async function putReference(request: Request, repo: VisualRepo): Promise<Respons
   const asset = repo.assetRepo().get(raw.assetId);
   if (!asset) throw new ApiError(422, "asset_not_found", "Reference asset does not exist");
   if (asset.mime !== "image/png") throw new ApiError(422, "invalid_reference_asset", "Reference asset must be a PNG");
-  const row = repo.upsertReference(fingerprint, raw.assetId, (raw.note as string | undefined) ?? null);
+  const row = repo.upsertReferenceGeneric(fingerprint, raw.assetId, (raw.note as string | undefined) ?? null);
   return json(repo.referencePublic(row), 200, noStore);
 }
 
@@ -68,22 +70,24 @@ function getReference(repo: VisualRepo, id: string): Response {
 }
 
 function deleteReference(repo: VisualRepo, id: string): Response {
-  if (!repo.deleteReference(id)) throw new ApiError(404, "reference_not_found", "Visual reference not found");
+  if (!repo.deleteReferenceGeneric(id)) throw new ApiError(404, "reference_not_found", "Visual reference not found");
   return new Response(null, { status: 204, headers: noStore });
 }
 
 async function checkReference(request: Request, id: string, service?: VisualService): Promise<Response> {
   if (!service) throw new ApiError(501, "screenshot_unavailable", "Visual checks require the screenshot pipeline (SERVE_DIST + chromium)");
-  let threshold: number | undefined;
+  let threshold: number | undefined,rev:number|undefined,version:number|undefined;
   const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType === "application/json") {
     const raw = await readJson(request);
-    if (raw !== null && isObject(raw) && raw.threshold !== undefined) {
-      if (typeof raw.threshold !== "number") throw new ApiError(400, "invalid_request", "threshold must be a number");
-      threshold = raw.threshold;
+    if (raw !== null && isObject(raw)) {
+      if(Object.keys(raw).some(key=>!["threshold","rev","version"].includes(key))) throw new ApiError(422,"invalid_candidate_target","Check body contains unsupported fields");
+      if(raw.threshold!==undefined) threshold=raw.threshold as number;
+      for(const key of ["rev","version"] as const) if(raw[key]!==undefined&&(typeof raw[key]!=="number"||!Number.isInteger(raw[key])||(raw[key] as number)<1)) throw new ApiError(422,"invalid_candidate_target",`${key} must be a positive integer`);
+      rev=raw.rev as number|undefined; version=raw.version as number|undefined;
     }
   }
-  const result = service.check(id, { threshold });
+  const result = service.check(id, { threshold,rev,version });
   return json(result, 202, noStore);
 }
 

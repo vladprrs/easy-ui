@@ -39,8 +39,8 @@ export function buildLaunchArgs(denyPort, capturePort) {
   ];
 }
 
-function readyToExpected(ready) {
-  if (ready.kind === "prototype") return { kind: "prototype", rev: ready.revision, componentManifestHash: ready.componentManifestHash, builtinCatalogHash: ready.builtinCatalogHash, dsMetaVersion: ready.dsMetaVersion, rendererBuild: ready.rendererBuild };
+export function readyToExpected(ready) {
+  if (ready.kind === "prototype") return { kind: "prototype", prototypeInstanceId: ready.prototypeInstanceId, rev: ready.revision, componentManifestHash: ready.componentManifestHash, builtinCatalogHash: ready.builtinCatalogHash, dsMetaVersion: ready.dsMetaVersion, rendererBuild: ready.rendererBuild };
   return { kind: "component", componentId: ready.componentId, version: ready.version, bundleHash: ready.bundleHash, propsHash: ready.propsHash, dsMetaVersion: ready.dsMetaVersion, rendererBuild: ready.rendererBuild };
 }
 

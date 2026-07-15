@@ -78,6 +78,10 @@ export interface ScreenshotServiceDeps {
   captureOrigin: string; chromiumAvailable: boolean; runJob: RunJob;
   sessions?: CaptureSessionStore; now?: () => number;
 }
+export type FrozenEnqueue = { jobId:string; expected:CaptureExpected };
+export type FrozenTarget =
+  | {kind:"prototype";id:string;screenId:string;rev?:number;version?:number}
+  | {kind:"component";id:string;version:number;props?:Record<string,unknown>};
 
 /**
  * In-memory screenshot job pipeline: bounds-validated enqueue with an atomic
@@ -110,6 +114,16 @@ export class ScreenshotService {
   }
 
   enqueuePrototype(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean }): { jobId: string } {
+    const {jobId}=this.enqueueWithExpected({kind:"prototype",id,screenId,rev:opts.rev,version:opts.version},opts); return {jobId};
+  }
+
+  enqueueWithExpected(target:FrozenTarget,opts:{viewport:unknown;deviceScaleFactor?:unknown;theme?:string;waitForFonts?:boolean}):FrozenEnqueue {
+    return target.kind==="prototype"
+      ? this.enqueuePrototypeFrozen(target.id,target.screenId,{...opts,rev:target.rev,version:target.version})
+      : this.enqueueComponentFrozen(target.id,target.version,{...opts,props:target.props});
+  }
+
+  private enqueuePrototypeFrozen(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean }): FrozenEnqueue {
     this.requireAvailable();
     const { viewport, dsf } = validateViewport(opts.viewport, opts.deviceScaleFactor);
     this.guardQueue();
@@ -119,7 +133,7 @@ export class ScreenshotService {
     const full = repo.revision(id, snap.rev);
     const componentPins = full.components.map((p) => ({ id: p.id, version: p.version, bundleHash: p.bundleHash }));
     const theme = opts.theme === "dark" ? "dark" : "light";
-    const expected: CaptureExpected = { kind: "prototype", rev: snap.rev, componentManifestHash: full.componentManifestHash, builtinCatalogHash: full.builtinCatalogHash, dsMetaVersion: full.designSystemMetaVersion ?? null, rendererBuild: this.rendererBuild };
+    const expected: CaptureExpected = { kind: "prototype", prototypeInstanceId:full.prototypeInstanceId, rev: snap.rev, componentManifestHash: full.componentManifestHash, builtinCatalogHash: full.builtinCatalogHash, dsMetaVersion: full.designSystemMetaVersion ?? null, rendererBuild: this.rendererBuild };
     const allowedUrls = this.prototypeAllowedUrls(
       id,
       screenId,
@@ -127,15 +141,21 @@ export class ScreenshotService {
       full.assets.map((a) => a.id),
       (full.doc as { designSystem?: string }).designSystem,
       full.designSystemMetaVersion ?? null,
+      opts.version !== undefined ? `/api/prototypes/${id}/versions/${opts.version}` : `/api/prototypes/${id}/revisions/${snap.rev}`,
     );
     const query = new URLSearchParams();
     if (opts.version !== undefined) query.set("version", String(opts.version)); else query.set("rev", String(snap.rev));
     query.set("theme", theme); query.set("dsf", String(dsf));
     const captureUrl = `/capture/${encodeURIComponent(id)}/s/${encodeURIComponent(screenId)}?${query}`;
-    return this.push({ kind: "prototype", expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins });
+    const {jobId}=this.push({ kind: "prototype", expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins });
+    return {jobId,expected};
   }
 
   enqueueComponent(id: string, version: number, opts: { props?: Record<string, unknown>; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean }): { jobId: string } {
+    const {jobId}=this.enqueueComponentFrozen(id,version,opts); return {jobId};
+  }
+
+  private enqueueComponentFrozen(id: string, version: number, opts: { props?: Record<string, unknown>; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean }): FrozenEnqueue {
     this.requireAvailable();
     const { viewport, dsf } = validateViewport(opts.viewport, opts.deviceScaleFactor);
     this.guardQueue();
@@ -149,7 +169,8 @@ export class ScreenshotService {
     const allowedUrls = this.componentAllowedUrls(id, version, dto.assets.map((a) => a.id), dto.designSystem);
     const query = new URLSearchParams({ theme, dsf: String(dsf) });
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/${version}?${query}`;
-    return this.push({ kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false });
+    const {jobId}=this.push({ kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false });
+    return {jobId,expected};
   }
 
   private prototypeAllowedUrls(
@@ -159,6 +180,7 @@ export class ScreenshotService {
     docAssetIds: string[],
     designSystem?: string,
     designSystemMetaVersion?: number | null,
+    snapshotUrl?: string,
   ): string[] {
     const set = new Set<string>();
     set.add(`/capture/${id}/s/${screenId}`);
@@ -170,14 +192,13 @@ export class ScreenshotService {
         : getDesignSystemVersion(this.deps.db, designSystem, designSystemMetaVersion);
       for (const assetId of themeAssetIds(content)) set.add(`/api/assets/${assetId}`);
     }
-    set.add(`/api/prototypes/${id}/draft`);
-    set.add(`/api/prototypes/${id}/revisions`);
-    // draft/revision/version endpoints (shell may hit any depending on selector)
+    // enqueuePrototype always freezes the selector into the capture URL, so the shell
+    // needs exactly one immutable DTO endpoint rather than broad prototype read access.
+    if(snapshotUrl) set.add(snapshotUrl);
     for (const p of pins) set.add(`/api/components/${p.id}/versions/${p.version}/bundle.js`);
     for (const assetId of docAssetIds) set.add(`/api/assets/${assetId}`);
     const componentRepo = new ComponentRepo(this.deps.db);
     for (const p of pins) for (const a of componentRepo.assets(p.id, p.version)) set.add(`/api/assets/${a.id}`);
-    set.add("/api/prototypes/"); // revisions/:rev and versions/:v (GET-only, transitive read)
     set.add("/api/shims/");
     for (const s of buildStaticAllowedUrls(this.deps.serveDist)) set.add(s);
     return [...set];

@@ -12,7 +12,7 @@ const doc = prototypeDocSchema.parse({
 });
 
 vi.mock("../api/client", () => ({
-  getPrototypeDraft: vi.fn(async () => ({ doc, rev: 3, componentManifestHash: "m", builtinCatalogHash: "b", components: [] })),
+  getPrototypeDraft: vi.fn(async () => ({ doc, rev: 3, prototypeInstanceId:"capture-instance", componentManifestHash: "m", builtinCatalogHash: "b", components: [] })),
   getPrototypeRevisionFull: vi.fn(),
   getPrototypeVersion: vi.fn(),
   getComponentMeta: vi.fn(async () => ({ id: "widget", name: "Widget", designSystem: "shadcn", headRev: 1, versions: [], updatedAt: "" })),
@@ -35,6 +35,7 @@ describe("capture shell", () => {
     await waitFor(() => expect(window.__EUI_CAPTURE_READY__).toBeDefined());
     expect(window.__EUI_CAPTURE_READY__).toMatchObject({
       status: "ready", kind: "prototype", revision: 3,
+      prototypeInstanceId:"capture-instance",
       componentManifestHash: "m", builtinCatalogHash: "b", dsMetaVersion: null, rendererBuild: null,
     });
     expect(document.querySelector("#eui-capture-surface")).not.toBeNull();

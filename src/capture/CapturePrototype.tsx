@@ -16,6 +16,7 @@ import type { CaptureReady } from "./protocol";
 interface LoadedPrototype {
   doc: PrototypeDoc;
   rev: number;
+  prototypeInstanceId: string;
   componentManifestHash: string;
   builtinCatalogHash: string;
   components: PrototypeComponentPin[];
@@ -35,8 +36,9 @@ async function loadPrototype(id: string, rev: number | undefined, version: numbe
     : rev !== undefined ? await getPrototypeRevisionFull(id, rev, signal)
     : await getPrototypeDraft(id, signal);
   const dsMetaVersion = base.designSystemMetaVersion ?? null;
+  if(!base.prototypeInstanceId) throw new Error("Prototype response is missing prototypeInstanceId");
   const theme = await loadTheme(base.doc.designSystem, dsMetaVersion, signal);
-  return { doc: base.doc, rev: base.rev, componentManifestHash: base.componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components: base.components, dsMetaVersion, theme };
+  return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId, componentManifestHash: base.componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components: base.components, dsMetaVersion, theme };
 }
 
 function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPrototype; custom?: CustomPlayerRuntime; screenId: string }) {
@@ -50,6 +52,7 @@ function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPr
   usePublishError(screen ? null : `Screen not found: ${screenId}`);
   usePublishOnSettle(ref, (): CaptureReady => ({
     status: "ready", kind: "prototype", revision: loaded.rev,
+    prototypeInstanceId: loaded.prototypeInstanceId,
     componentManifestHash: loaded.componentManifestHash, builtinCatalogHash: loaded.builtinCatalogHash,
     dsMetaVersion: loaded.dsMetaVersion, rendererBuild: bootstrapRendererBuild(),
   }));

@@ -68,12 +68,23 @@ describe("screenshot job API", () => {
     expect((await h(req("/prototypes", "POST", { doc: await helloDoc("snap") }))).status).toBe(201);
     const service = makeService(db, dir);
     const { jobId } = service.enqueuePrototype("snap", "welcome", { viewport: { width: 390, height: 844 } });
-    expect(service.peek(jobId)?.expected).toMatchObject({ kind: "prototype", rev: 1 });
+    expect(service.peek(jobId)?.expected).toMatchObject({ kind: "prototype", rev: 1, prototypeInstanceId:expect.any(String) });
+    expect(service.peek(jobId)?.allowedUrls).toContain("/api/prototypes/snap/revisions/1");
+    expect(service.peek(jobId)?.allowedUrls).not.toContain("/api/prototypes/");
     // Save a new revision; the queued job's frozen expected.rev must stay 1.
     const saved = await h(req("/prototypes/snap", "PUT", { doc: await helloDoc("snap"), baseRev: 1, message: "second" }));
     expect(saved.status).toBe(200);
     const expected = service.peek(jobId)?.expected;
     expect(expected).toMatchObject({ kind: "prototype", rev: 1 });
+  });
+
+  test("public screenshot HTTP response never exposes the frozen expected snapshot",async()=>{
+    const {db,dir,handler:h}=await setup();
+    expect((await h(req("/prototypes","POST",{doc:await helloDoc("public-shape")}))).status).toBe(201);
+    const service=makeService(db,dir);const handler=createHandler(db,{dataDir:dir,screenshots:service});
+    const response=await handler(req("/prototypes/public-shape/screens/welcome/screenshot","POST",{viewport:{width:390,height:844}}));
+    expect(response.status).toBe(202);const body=await response.json() as Record<string,unknown>;
+    expect(Object.keys(body)).toEqual(["jobId"]);expect(body.expected).toBeUndefined();
   });
 
   test("done result ingests the PNG into the asset registry", async () => {
@@ -96,7 +107,7 @@ describe("screenshot job API", () => {
 
 describe("capture-session store", () => {
   const allowed = ["/capture/p/s/welcome", "/api/assets/", "/index.html"];
-  const expected = { kind: "prototype", rev: 1, componentManifestHash: "h", builtinCatalogHash: "b", dsMetaVersion: null, rendererBuild: null } as const;
+  const expected = { kind: "prototype", prototypeInstanceId:"instance-test", rev: 1, componentManifestHash: "h", builtinCatalogHash: "b", dsMetaVersion: null, rendererBuild: null } as const;
 
   test("authorizes only loopback GET/HEAD on an allowlisted path with a live token", () => {
     const store = new CaptureSessionStore();

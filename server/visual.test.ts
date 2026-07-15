@@ -6,6 +6,7 @@ import { openDatabase } from "./db";
 import { createHandler } from "./main";
 import { prototypeDocSchema } from "../src/prototype/schema";
 import { AssetRepo } from "./repos/assets";
+import { PrototypeRepo } from "./repos/prototypes";
 import { ScreenshotService, type RunJob } from "./screenshot/service";
 import { VisualService } from "./visual/service";
 import { fingerprintId, fingerprintJson, parseFingerprint } from "./visual/fingerprint";
@@ -252,6 +253,60 @@ describe("visual check full cycle", () => {
     const report = await waitReport(service, runId);
     expect(report.status).toBe("pass");
     expect(report.totalPixels).toBe(36);
+  });
+
+  test("prototype candidate rev override and default target are frozen into metadata",async()=>{
+    const png=makePng(4,4,white);const {db,dir,handler,referenceId}=await prepare("override-proto",png);
+    expect((await handler(req("/prototypes/override-proto","PUT",{doc:await helloDoc("override-proto"),baseRev:1}))).status).toBe(200);
+    const screenshots=makeScreenshots(db,dir,candidateRunJob(png));const service=new VisualService({db,dataDir:dir,screenshots,runDiff:inProcessDiff});
+    const overridden=await waitReport(service,service.check(referenceId,{rev:2}).runId);
+    expect(overridden.candidateMeta).toMatchObject({kind:"prototype",outcome:"captured",requestedTarget:{rev:2},resolvedTarget:{rev:2},rev:2,browser:{browserVersion:"test/1"}});
+    expect((overridden.candidateMeta as {expected?:unknown}|null)?.expected).toMatchObject({kind:"prototype",rev:2,prototypeInstanceId:expect.any(String)});
+    const defaulted=await waitReport(service,service.check(referenceId,{}).runId);
+    expect(defaulted.candidateMeta).toMatchObject({requestedTarget:{rev:1},resolvedTarget:{rev:1},rev:1});
+    expect(()=>service.check(referenceId,{version:1})).toThrow();
+  });
+
+  test("component version override uses version only and preserves legacy aliases",async()=>{
+    const {db,dir}=await setup();
+    db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('visual-component','VisualComponent',2,'shadcn','now','now')");
+    for(const rev of [1,2]) db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('visual-component',?,'source','shadcn','now')",[rev]);
+    for(const version of [1,2]) db.run("INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at) VALUES ('visual-component',?,?, 'active','js','{}',?,?,1,'now')",[version,version,`source-${version}`,`bundle-${version}`]);
+    const baseline=(await new AssetRepo(db,dir).ingest(makePng(4,4,white),"image/png")).asset;
+    const handler=createHandler(db,{dataDir:dir});const put=await handler(req("/visual-references","PUT",{fingerprint:{scope:"component",componentId:"visual-component",refVersion:1,viewport:{width:320,height:480},deviceScaleFactor:1,theme:"light"},assetId:baseline.id}));const {id}=await put.json() as {id:string};
+    const screenshots=makeScreenshots(db,dir,candidateRunJob(makePng(4,4,white)));const service=new VisualService({db,dataDir:dir,screenshots,runDiff:inProcessDiff});
+    const report=await waitReport(service,service.check(id,{version:2}).runId);
+    expect(report.candidateMeta).toMatchObject({kind:"component",outcome:"captured",requestedTarget:{version:2},resolvedTarget:{version:2},version:2,bundleHash:"bundle-2",rendererBuild:expect.anything(),browserVersion:"test/1"});
+    expect(()=>service.check(id,{rev:1})).toThrow();
+  });
+
+  test("hash-bearing references are never checked and invalid screenshot viewport stays typed",async()=>{
+    const png=makePng(4,4,white);const {db,dir,handler}=await prepare("hash-target",png);const asset=(await new AssetRepo(db,dir).ingest(png,"image/png")).asset;
+    const hashPut=await handler(req("/visual-references","PUT",{fingerprint:{...protoFingerprint("hash-target"),propsHash:"aa"},assetId:asset.id}));const hashId=(await hashPut.json() as {id:string}).id;
+    const service=new VisualService({db,dataDir:dir,screenshots:makeScreenshots(db,dir,candidateRunJob(png)),runDiff:inProcessDiff});
+    try{service.check(hashId,{});throw new Error("expected rejection");}catch(error){expect((error as {code:string}).code).toBe("invalid_candidate_target");}
+    const invalidPut=await handler(req("/visual-references","PUT",{fingerprint:{...protoFingerprint("hash-target"),viewport:{width:10,height:844}},assetId:asset.id}));const invalidId=(await invalidPut.json() as {id:string}).id;
+    try{service.check(invalidId,{});throw new Error("expected rejection");}catch(error){expect((error as {code:string}).code).toBe("invalid_viewport");}
+  });
+
+  test("capture errors/timeouts keep requested target with browser null; browser diagnostics force error",async()=>{
+    const png=makePng(4,4,white);const {db,dir,referenceId}=await prepare("candidate-errors",png);
+    const failedShots=makeScreenshots(db,dir,async()=>({ok:false,error:"navigation failed"}));const failedService=new VisualService({db,dataDir:dir,screenshots:failedShots,runDiff:inProcessDiff});
+    const failed=await waitReport(failedService,failedService.check(referenceId,{rev:1}).runId);expect(failed.status).toBe("error");expect(failed.candidateMeta).toMatchObject({kind:"prototype",outcome:"capture_failed",requestedTarget:{rev:1},resolvedTarget:{rev:1},browser:null,error:"navigation failed",rev:1});
+    const timeoutShots=makeScreenshots(db,dir,()=>new Promise(()=>{}));let clock=0;const timeoutService=new VisualService({db,dataDir:dir,screenshots:timeoutShots,runDiff:inProcessDiff,now:()=>{clock+=100_000;return clock;}});
+    const timed=await waitReport(timeoutService,timeoutService.check(referenceId,{rev:1}).runId);expect(timed.candidateMeta).toMatchObject({outcome:"capture_failed",requestedTarget:{rev:1},browser:null});
+    const browserShots=makeScreenshots(db,dir,async()=>{const b=Buffer.from(png);return{ok:true,pngBase64:b.toString("base64"),width:4,height:4,consoleErrors:["boom".repeat(300)],pageErrors:["page boom"],browserVersion:"test/2"};});const browserService=new VisualService({db,dataDir:dir,screenshots:browserShots,runDiff:inProcessDiff});
+    const browser=await waitReport(browserService,browserService.check(referenceId,{}).runId);expect(browser.status).toBe("error");expect(browser.diffPercent).toBeNull();expect(browser.candidateMeta).toMatchObject({outcome:"captured",browser:{browserVersion:"test/2",pageErrors:["page boom"]},rev:1,browserVersion:"test/2"});const diagnostics=(browser.candidateMeta as {browser?:{consoleErrors:string[]}|null}|null)?.browser?.consoleErrors??[];expect(diagnostics[0]!.length).toBeLessThanOrEqual(500);
+  });
+
+  test("queued check cannot capture a delete/recreated prototype incarnation",async()=>{
+    const png=makePng(4,4,white);const {db,dir,handler}=await prepare("aba-check",png);const draft=await (await handler(req("/prototypes/aba-check/draft"))).json() as {prototypeInstanceId:string};const asset=(await new AssetRepo(db,dir).ingest(png,"image/png")).asset;
+    const put=await handler(req("/visual-references","PUT",{fingerprint:{...protoFingerprint("aba-check"),prototypeInstanceId:draft.prototypeInstanceId},assetId:asset.id}));const referenceId=(await put.json() as {id:string}).id;
+    let release!:()=>void;const blocked=new Promise<void>(resolve=>{release=resolve;});let calls=0;
+    const runJob:RunJob=async(job)=>{calls+=1;if(calls===1) await blocked;const current=db.query("SELECT instance_id FROM prototypes WHERE id='aba-check'").get() as {instance_id:string};if(job.expected.kind==="prototype"&&job.expected.prototypeInstanceId!==current.instance_id)return{ok:false,error:"readiness mismatch: prototype instance changed"};const b=Buffer.from(png);return{ok:true,pngBase64:b.toString("base64"),width:4,height:4,consoleErrors:[],pageErrors:[],browserVersion:"test/1"};};
+    const screenshots=makeScreenshots(db,dir,runJob);screenshots.enqueuePrototype("aba-check","welcome",{viewport:{width:390,height:844}});const service=new VisualService({db,dataDir:dir,screenshots,runDiff:inProcessDiff});const {runId}=service.check(referenceId,{});
+    new PrototypeRepo(db).delete("aba-check",1);new PrototypeRepo(db).create(await helloDoc("aba-check"));release();
+    const report=await waitReport(service,runId);expect(report.status).toBe("error");expect(report.candidate).toBeNull();expect(report.diff).toBeNull();expect(report.diffPercent).toBeNull();expect(report.candidateMeta).toMatchObject({outcome:"capture_failed",browser:null,expected:{prototypeInstanceId:draft.prototypeInstanceId}});
   });
 });
 

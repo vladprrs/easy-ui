@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { AssetRepo, type AssetPublic } from "../repos/assets";
 import { fingerprintId, fingerprintJson, type Fingerprint } from "./fingerprint";
+import { ApiError } from "../http";
 
 export interface VisualReferenceRow {
   id: string;
@@ -37,6 +38,13 @@ export interface CandidateMeta {
   bundleHash?: string;
   rendererBuild?: string | null;
   browserVersion?: string;
+  kind?: "prototype" | "component";
+  outcome?: "captured" | "capture_failed";
+  requestedTarget?: { rev?: number; version?: number };
+  resolvedTarget?: { rev?: number; version?: number };
+  expected?: unknown;
+  browser?: { browserVersion: string; rendererBuild: string | null; consoleErrors: string[]; pageErrors: string[] } | null;
+  error?: string;
 }
 
 export interface RunReport {
@@ -81,7 +89,8 @@ export class VisualRepo {
 
   assetRepo(): AssetRepo { return this.assets; }
 
-  upsertReference(fingerprint: Fingerprint, assetId: string, note: string | null): VisualReferenceRow {
+  /** Internal privileged mutation used by the atomic baseline-set transaction. */
+  upsertReferencePrivileged(fingerprint: Fingerprint, assetId: string, note: string | null): VisualReferenceRow {
     const json = fingerprintJson(fingerprint);
     const id = fingerprintId(json);
     const existing = this.getReference(id, true);
@@ -92,6 +101,30 @@ export class VisualRepo {
         .run(id, json, assetId, note, new Date().toISOString());
     }
     return this.getReference(id)!;
+  }
+
+  private latestManagedIds(): Set<string> {
+    const latestByPrototype = this.db.query(`SELECT s.members_json FROM visual_baseline_sets s
+      WHERE s.generation=(SELECT MAX(x.generation) FROM visual_baseline_sets x WHERE x.prototype_id=s.prototype_id)`).all() as {members_json:string}[];
+    return new Set(latestByPrototype.flatMap((set) => (JSON.parse(set.members_json) as {referenceId:string}[]).map((member) => member.referenceId)));
+  }
+
+  private assertNotManaged(id: string): void {
+    if (this.latestManagedIds().has(id)) throw new ApiError(409, "baseline_managed", "Visual reference is managed by a committed baseline set");
+  }
+
+  upsertReferenceGeneric(fingerprint: Fingerprint, assetId: string, note: string | null): VisualReferenceRow {
+    let began=false;
+    try {
+      this.db.run("BEGIN IMMEDIATE"); began=true;
+      this.assertNotManaged(fingerprintId(fingerprintJson(fingerprint)));
+      const row=this.upsertReferencePrivileged(fingerprint,assetId,note);
+      this.db.run("COMMIT"); began=false;
+      return row;
+    } catch(error) {
+      if(began) this.db.run("ROLLBACK");
+      throw error;
+    }
   }
 
   getReference(id: string, includeDeleted = false): VisualReferenceRow | null {
@@ -114,6 +147,20 @@ export class VisualRepo {
   deleteReference(id: string): boolean {
     const result = this.db.query("UPDATE visual_references SET deleted_at=? WHERE id=? AND deleted_at IS NULL").run(new Date().toISOString(), id);
     return result.changes === 1;
+  }
+
+  deleteReferenceGeneric(id:string):boolean {
+    let began=false;
+    try {
+      this.db.run("BEGIN IMMEDIATE"); began=true;
+      this.assertNotManaged(id);
+      const deleted=this.deleteReference(id);
+      this.db.run("COMMIT"); began=false;
+      return deleted;
+    } catch(error) {
+      if(began) this.db.run("ROLLBACK");
+      throw error;
+    }
   }
 
   insertRun(row: VisualRunRow): void {

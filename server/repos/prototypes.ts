@@ -13,7 +13,7 @@ export type ResolvedPin = Pin & { status: string };
 export type BundleReadiness = { resolvedPins: ResolvedPin[]; bundles: boolean; bundleStatus: "ready" | "failed"; warnings: { code: string; message: string }[]; errors: { code: string; message: string }[] };
 // Statuses that still render (K adds deprecated/superseded later; tolerated ahead of that migration).
 const RENDERABLE_PIN_STATUS = new Set(["active", "deprecated", "superseded"]);
-type PrototypeRow = { id:string; name:string; description:string|null; device:string; screen_count:number; head_rev:number; design_system:string; created_at:string; updated_at:string };
+type PrototypeRow = { id:string; name:string; description:string|null; device:string; screen_count:number; head_rev:number; design_system:string; instance_id:string; created_at:string; updated_at:string };
 type RevisionRow = { rev:number; doc:string; builtin_catalog_hash:string; design_system_meta_version:number|null; figma_json:string|null; message:string|null; created_at:string };
 
 const now = () => new Date().toISOString();
@@ -120,8 +120,8 @@ export class PrototypeRepo {
     return this.db.transaction(() => {
       if (this.db.query("SELECT 1 ok FROM prototypes WHERE id=?").get(doc.id)) throw new ApiError(409,"already_exists","Prototype already exists");
       const at=now();
-      this.db.query(`INSERT INTO prototypes (id,name,description,device,screen_count,head_rev,design_system,created_at,updated_at)
-        VALUES (?,?,?,?,?,1,?,?,?)`).run(doc.id,doc.name,doc.description??null,doc.device,doc.screens.length,doc.designSystem,at,at);
+      this.db.query(`INSERT INTO prototypes (id,name,description,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at)
+        VALUES (?,?,?,?,?,1,?,?,?,?)`).run(doc.id,doc.name,doc.description??null,doc.device,doc.screens.length,doc.designSystem,crypto.randomUUID(),at,at);
       this.insertRevision(doc.id,1,doc,message??null,at,undefined,figmaJson);
       this.insertPins(doc.id,1,pins);
       this.insertAssetPins(doc.id,1,assetIds);
@@ -184,7 +184,16 @@ export class PrototypeRepo {
       return {version,rev:head.head_rev};
     })();
   }
-  delete(id:string,baseRev:number): void { this.db.transaction(()=>{this.cas(id,baseRev);this.db.query("DELETE FROM prototypes WHERE id=?").run(id);})(); }
+  delete(id:string,baseRev:number): void { this.db.transaction(()=>{
+    this.cas(id,baseRev);
+    const sets=this.db.query("SELECT members_json FROM visual_baseline_sets WHERE prototype_id=?").all(id) as {members_json:string}[];
+    const references=new Set<string>();
+    for(const set of sets) for(const member of JSON.parse(set.members_json) as {referenceId:string}[]) references.add(member.referenceId);
+    const tombstone=this.db.query("UPDATE visual_references SET deleted_at=? WHERE id=? AND deleted_at IS NULL");
+    const at=now(); for(const referenceId of references) tombstone.run(at,referenceId);
+    this.db.query("DELETE FROM visual_baseline_sets WHERE prototype_id=?").run(id);
+    this.db.query("DELETE FROM prototypes WHERE id=?").run(id);
+  })(); }
   list() {
     return (this.db.query(`SELECT p.*, (SELECT MAX(version) FROM prototype_publishes x WHERE x.prototype_id=p.id) latest_version
       FROM prototypes p ORDER BY p.updated_at DESC,p.id`).all() as (PrototypeRow&{latest_version:number|null})[]).map(r=>({id:r.id,name:r.name,description:r.description??undefined,device:r.device,designSystem:r.design_system,screenCount:r.screen_count,headRev:r.head_rev,latestVersion:r.latest_version,updatedAt:r.updated_at}));
@@ -194,6 +203,7 @@ export class PrototypeRepo {
     const publishedVersion=latest?.version??null;
     return {
       id:r.id,name:r.name,designSystem:r.design_system,headRev:r.head_rev,
+      prototypeInstanceId:r.instance_id,
       latestVersion:publishedVersion,versions,updatedAt:r.updated_at,
       draftRevision:r.head_rev,
       validatedRevision:latestValidatedRev(this.db,"prototype",id),
@@ -202,10 +212,10 @@ export class PrototypeRepo {
       figma:parseFigmaStored(this.revisionRow(id,r.head_rev).figma_json),
     };
   }
-  draft(id:string) { const r=this.row(id); const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev); return {doc:parseStoredPrototypeDoc(x.doc,id,x.rev),rev:x.rev,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,r.head_rev),designSystemMetaVersion:x.design_system_meta_version,figma:parseFigmaStored(x.figma_json)}; }
+  draft(id:string) { const r=this.row(id); const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev); return {doc:parseStoredPrototypeDoc(x.doc,id,x.rev),rev:x.rev,prototypeInstanceId:r.instance_id,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,r.head_rev),designSystemMetaVersion:x.design_system_meta_version,figma:parseFigmaStored(x.figma_json)}; }
   revisions(id:string,limit:number,before?:number) { this.row(id); const sql=`SELECT rev,message,created_at FROM prototype_revisions WHERE prototype_id=? ${before!==undefined?"AND rev < ?":""} ORDER BY rev DESC LIMIT ?`; const rows=(before!==undefined?this.db.query(sql).all(id,before,limit):this.db.query(sql).all(id,limit)) as {rev:number;message:string|null;created_at:string}[]; return rows.map(r=>({rev:r.rev,message:r.message,createdAt:r.created_at})); }
   private revisionRow(id:string,rev:number): RevisionRow { const r=this.db.query("SELECT rev,doc,builtin_catalog_hash,design_system_meta_version,figma_json,message,created_at FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,rev) as RevisionRow|null; if(!r) throw new ApiError(404,"revision_not_found","Prototype revision not found"); return r; }
-  revision(id:string,rev:number) { this.row(id); const r=this.revisionRow(id,rev); const components=this.pins(id,rev); return {rev:r.rev,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,rev),designSystemMetaVersion:r.design_system_meta_version,figma:parseFigmaStored(r.figma_json),message:r.message,createdAt:r.created_at}; }
+  revision(id:string,rev:number) { const proto=this.row(id); const r=this.revisionRow(id,rev); const components=this.pins(id,rev); return {rev:r.rev,prototypeInstanceId:proto.instance_id,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,rev),designSystemMetaVersion:r.design_system_meta_version,figma:parseFigmaStored(r.figma_json),message:r.message,createdAt:r.created_at}; }
   versions(id:string) { this.row(id); return (this.db.query("SELECT version,rev,published_at FROM prototype_publishes WHERE prototype_id=? ORDER BY version").all(id) as {version:number;rev:number;published_at:string}[]).map(r=>({version:r.version,rev:r.rev,publishedAt:r.published_at})); }
-  version(id:string,version:number) { this.row(id); const p=this.db.query("SELECT rev,published_at FROM prototype_publishes WHERE prototype_id=? AND version=?").get(id,version) as {rev:number;published_at:string}|null; if(!p) throw new ApiError(404,"version_not_found","Prototype version not found"); const r=this.revisionRow(id,p.rev); const components=this.pins(id,p.rev); return {version,rev:p.rev,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,p.rev),designSystemMetaVersion:r.design_system_meta_version,figma:parseFigmaStored(r.figma_json),publishedAt:p.published_at}; }
+  version(id:string,version:number) { const proto=this.row(id); const p=this.db.query("SELECT rev,published_at FROM prototype_publishes WHERE prototype_id=? AND version=?").get(id,version) as {rev:number;published_at:string}|null; if(!p) throw new ApiError(404,"version_not_found","Prototype version not found"); const r=this.revisionRow(id,p.rev); const components=this.pins(id,p.rev); return {version,rev:p.rev,prototypeInstanceId:proto.instance_id,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,p.rev),designSystemMetaVersion:r.design_system_meta_version,figma:parseFigmaStored(r.figma_json),publishedAt:p.published_at}; }
 }

@@ -47,6 +47,7 @@ export interface FigmaProvenance { fileKey: string; nodeIds: string[]; reference
 export interface PrototypeVersionSummary { version: number; rev: number; publishedAt: string }
 export interface PrototypeMeta {
   id: string;
+  prototypeInstanceId?: string;
   name: string;
   designSystem: string;
   headRev: number;
@@ -62,6 +63,7 @@ export interface EditorAsset extends AssetPin { name?: string }
 export interface PrototypeDraft {
   doc: PrototypeDoc;
   rev: number;
+  prototypeInstanceId?: string;
   builtinCatalogHash: string;
   componentManifestHash: string;
   components: PrototypeComponentPin[];

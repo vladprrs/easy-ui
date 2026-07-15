@@ -4540,6 +4540,9 @@
                     "name": {
                       "type": "string"
                     },
+                    "prototypeInstanceId": {
+                      "type": "string"
+                    },
                     "publishedVersion": {
                       "anyOf": [
                         {
@@ -4612,6 +4615,7 @@
                   },
                   "required": [
                     "id",
+                    "prototypeInstanceId",
                     "name",
                     "designSystem",
                     "headRev",
@@ -5268,6 +5272,9 @@
                         }
                       ]
                     },
+                    "prototypeInstanceId": {
+                      "type": "string"
+                    },
                     "rev": {
                       "type": "number"
                     }
@@ -5277,6 +5284,7 @@
                     "rev",
                     "builtinCatalogHash",
                     "componentManifestHash",
+                    "prototypeInstanceId",
                     "components",
                     "assets",
                     "designSystemMetaVersion",
@@ -5810,6 +5818,9 @@
                         }
                       ]
                     },
+                    "prototypeInstanceId": {
+                      "type": "string"
+                    },
                     "rev": {
                       "type": "number"
                     }
@@ -5819,6 +5830,7 @@
                     "rev",
                     "builtinCatalogHash",
                     "componentManifestHash",
+                    "prototypeInstanceId",
                     "components",
                     "assets",
                     "designSystemMetaVersion",
@@ -6666,6 +6678,9 @@
                         }
                       ]
                     },
+                    "prototypeInstanceId": {
+                      "type": "string"
+                    },
                     "publishedAt": {
                       "type": "string"
                     },
@@ -6681,6 +6696,7 @@
                     "rev",
                     "builtinCatalogHash",
                     "componentManifestHash",
+                    "prototypeInstanceId",
                     "components",
                     "assets",
                     "designSystemMetaVersion",
@@ -7023,6 +7039,380 @@
         "x-easyui-validated": false
       }
     },
+    "/api/visual-baselines/prototypes/{id}": {
+      "get": {
+        "operationId": "get_visual_baselines_prototypes_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "generation": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "members": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "deviceScaleFactor": {
+                            "anyOf": [
+                              {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              {
+                                "const": 2,
+                                "type": "number"
+                              },
+                              {
+                                "const": 3,
+                                "type": "number"
+                              }
+                            ]
+                          },
+                          "referenceId": {
+                            "type": "string"
+                          },
+                          "screenId": {
+                            "type": "string"
+                          },
+                          "theme": {
+                            "enum": [
+                              "light",
+                              "dark"
+                            ],
+                            "type": "string"
+                          },
+                          "viewport": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "height": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              "width": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "width",
+                              "height"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "screenId",
+                          "viewport",
+                          "deviceScaleFactor",
+                          "theme",
+                          "referenceId"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "prototypeInstanceId": {
+                      "type": "string"
+                    },
+                    "rev": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "generation",
+                    "rev",
+                    "members",
+                    "prototypeInstanceId",
+                    "createdAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found | baseline_not_found"
+          }
+        },
+        "summary": "Read the latest committed visual baseline set for a prototype.",
+        "x-easyui-validated": false
+      },
+      "put": {
+        "operationId": "put_visual_baselines_prototypes_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "baseGeneration": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "members": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "assetId": {
+                          "type": "string"
+                        },
+                        "deviceScaleFactor": {
+                          "anyOf": [
+                            {
+                              "const": 1,
+                              "type": "number"
+                            },
+                            {
+                              "const": 2,
+                              "type": "number"
+                            },
+                            {
+                              "const": 3,
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "screenId": {
+                          "type": "string"
+                        },
+                        "theme": {
+                          "enum": [
+                            "light",
+                            "dark"
+                          ],
+                          "type": "string"
+                        },
+                        "viewport": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "height": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
+                            "width": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "width",
+                            "height"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "screenId",
+                        "viewport",
+                        "deviceScaleFactor",
+                        "theme",
+                        "assetId"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "prototypeInstanceId": {
+                    "type": "string"
+                  },
+                  "rev": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "rev",
+                  "prototypeInstanceId",
+                  "baseGeneration",
+                  "members"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "generation": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "members": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "deviceScaleFactor": {
+                            "anyOf": [
+                              {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              {
+                                "const": 2,
+                                "type": "number"
+                              },
+                              {
+                                "const": 3,
+                                "type": "number"
+                              }
+                            ]
+                          },
+                          "referenceId": {
+                            "type": "string"
+                          },
+                          "screenId": {
+                            "type": "string"
+                          },
+                          "theme": {
+                            "enum": [
+                              "light",
+                              "dark"
+                            ],
+                            "type": "string"
+                          },
+                          "viewport": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "height": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              "width": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "width",
+                              "height"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "screenId",
+                          "viewport",
+                          "deviceScaleFactor",
+                          "theme",
+                          "referenceId"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "rev": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "generation",
+                    "rev",
+                    "members"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found | revision_not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "instance_conflict | generation_conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "incomplete_baseline | invalid_viewport | asset_not_found | invalid_reference_asset | validation_failed"
+          }
+        },
+        "summary": "Atomically replace the complete committed visual baseline set for a prototype (generation CAS).",
+        "x-easyui-validated": true
+      }
+    },
     "/api/visual-references": {
       "get": {
         "operationId": "get_visual_references",
@@ -7127,6 +7517,43 @@
                         "mime"
                       ],
                       "type": "object"
+                    },
+                    "__schema2": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "browserVersion": {
+                          "type": "string"
+                        },
+                        "consoleErrors": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "pageErrors": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "rendererBuild": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "browserVersion",
+                        "rendererBuild",
+                        "consoleErrors",
+                        "pageErrors"
+                      ],
+                      "type": "object"
                     }
                   },
                   "additionalProperties": false,
@@ -7201,11 +7628,294 @@
                                   "candidateMeta": {
                                     "anyOf": [
                                       {
-                                        "additionalProperties": {},
-                                        "propertyNames": {
-                                          "type": "string"
-                                        },
-                                        "type": "object"
+                                        "anyOf": [
+                                          {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "browser": {
+                                                "anyOf": [
+                                                  {
+                                                    "$ref": "#/$defs/__schema2"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "browserVersion": {
+                                                "type": "string"
+                                              },
+                                              "error": {
+                                                "type": "string"
+                                              },
+                                              "expected": {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "builtinCatalogHash": {
+                                                    "type": "string"
+                                                  },
+                                                  "componentManifestHash": {
+                                                    "type": "string"
+                                                  },
+                                                  "dsMetaVersion": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "number"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "kind": {
+                                                    "const": "prototype",
+                                                    "type": "string"
+                                                  },
+                                                  "prototypeInstanceId": {
+                                                    "type": "string"
+                                                  },
+                                                  "rendererBuild": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "rev": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind",
+                                                  "prototypeInstanceId",
+                                                  "rev",
+                                                  "componentManifestHash",
+                                                  "builtinCatalogHash",
+                                                  "dsMetaVersion",
+                                                  "rendererBuild"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "kind": {
+                                                "const": "prototype",
+                                                "type": "string"
+                                              },
+                                              "outcome": {
+                                                "enum": [
+                                                  "captured",
+                                                  "capture_failed"
+                                                ],
+                                                "type": "string"
+                                              },
+                                              "pins": {
+                                                "items": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "bundleHash": {
+                                                      "type": "string"
+                                                    },
+                                                    "id": {
+                                                      "type": "string"
+                                                    },
+                                                    "version": {
+                                                      "type": "number"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "id",
+                                                    "version",
+                                                    "bundleHash"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "type": "array"
+                                              },
+                                              "rendererBuild": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "requestedTarget": {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "rev": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "rev"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "resolvedTarget": {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "rev": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "rev"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "rev": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "outcome",
+                                              "requestedTarget",
+                                              "resolvedTarget",
+                                              "expected",
+                                              "browser",
+                                              "rev"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "browser": {
+                                                "anyOf": [
+                                                  {
+                                                    "$ref": "#/$defs/__schema2"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "browserVersion": {
+                                                "type": "string"
+                                              },
+                                              "bundleHash": {
+                                                "type": "string"
+                                              },
+                                              "error": {
+                                                "type": "string"
+                                              },
+                                              "expected": {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "bundleHash": {
+                                                    "type": "string"
+                                                  },
+                                                  "componentId": {
+                                                    "type": "string"
+                                                  },
+                                                  "dsMetaVersion": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "number"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "kind": {
+                                                    "const": "component",
+                                                    "type": "string"
+                                                  },
+                                                  "propsHash": {
+                                                    "type": "string"
+                                                  },
+                                                  "rendererBuild": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "version": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind",
+                                                  "componentId",
+                                                  "version",
+                                                  "bundleHash",
+                                                  "propsHash",
+                                                  "dsMetaVersion",
+                                                  "rendererBuild"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "kind": {
+                                                "const": "component",
+                                                "type": "string"
+                                              },
+                                              "outcome": {
+                                                "enum": [
+                                                  "captured",
+                                                  "capture_failed"
+                                                ],
+                                                "type": "string"
+                                              },
+                                              "rendererBuild": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "requestedTarget": {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "version": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "version"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "resolvedTarget": {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "version": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "version"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "version": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "outcome",
+                                              "requestedTarget",
+                                              "resolvedTarget",
+                                              "expected",
+                                              "browser",
+                                              "version"
+                                            ],
+                                            "type": "object"
+                                          }
+                                        ]
                                       },
                                       {
                                         "type": "null"
@@ -7463,6 +8173,9 @@
                           "prototypeId": {
                             "type": "string"
                           },
+                          "prototypeInstanceId": {
+                            "type": "string"
+                          },
                           "refRevision": {
                             "exclusiveMinimum": 0,
                             "maximum": 9007199254740991,
@@ -7631,6 +8344,43 @@
                         "mime"
                       ],
                       "type": "object"
+                    },
+                    "__schema2": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "browserVersion": {
+                          "type": "string"
+                        },
+                        "consoleErrors": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "pageErrors": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "rendererBuild": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "browserVersion",
+                        "rendererBuild",
+                        "consoleErrors",
+                        "pageErrors"
+                      ],
+                      "type": "object"
                     }
                   },
                   "additionalProperties": false,
@@ -7701,11 +8451,294 @@
                             "candidateMeta": {
                               "anyOf": [
                                 {
-                                  "additionalProperties": {},
-                                  "propertyNames": {
-                                    "type": "string"
-                                  },
-                                  "type": "object"
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "browser": {
+                                          "anyOf": [
+                                            {
+                                              "$ref": "#/$defs/__schema2"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "browserVersion": {
+                                          "type": "string"
+                                        },
+                                        "error": {
+                                          "type": "string"
+                                        },
+                                        "expected": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "builtinCatalogHash": {
+                                              "type": "string"
+                                            },
+                                            "componentManifestHash": {
+                                              "type": "string"
+                                            },
+                                            "dsMetaVersion": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "number"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "kind": {
+                                              "const": "prototype",
+                                              "type": "string"
+                                            },
+                                            "prototypeInstanceId": {
+                                              "type": "string"
+                                            },
+                                            "rendererBuild": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "rev": {
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "prototypeInstanceId",
+                                            "rev",
+                                            "componentManifestHash",
+                                            "builtinCatalogHash",
+                                            "dsMetaVersion",
+                                            "rendererBuild"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "kind": {
+                                          "const": "prototype",
+                                          "type": "string"
+                                        },
+                                        "outcome": {
+                                          "enum": [
+                                            "captured",
+                                            "capture_failed"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "pins": {
+                                          "items": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "bundleHash": {
+                                                "type": "string"
+                                              },
+                                              "id": {
+                                                "type": "string"
+                                              },
+                                              "version": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "id",
+                                              "version",
+                                              "bundleHash"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "type": "array"
+                                        },
+                                        "rendererBuild": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "requestedTarget": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "rev": {
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": [
+                                            "rev"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "resolvedTarget": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "rev": {
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": [
+                                            "rev"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "rev": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "outcome",
+                                        "requestedTarget",
+                                        "resolvedTarget",
+                                        "expected",
+                                        "browser",
+                                        "rev"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "browser": {
+                                          "anyOf": [
+                                            {
+                                              "$ref": "#/$defs/__schema2"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "browserVersion": {
+                                          "type": "string"
+                                        },
+                                        "bundleHash": {
+                                          "type": "string"
+                                        },
+                                        "error": {
+                                          "type": "string"
+                                        },
+                                        "expected": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "bundleHash": {
+                                              "type": "string"
+                                            },
+                                            "componentId": {
+                                              "type": "string"
+                                            },
+                                            "dsMetaVersion": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "number"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "kind": {
+                                              "const": "component",
+                                              "type": "string"
+                                            },
+                                            "propsHash": {
+                                              "type": "string"
+                                            },
+                                            "rendererBuild": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "version": {
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "componentId",
+                                            "version",
+                                            "bundleHash",
+                                            "propsHash",
+                                            "dsMetaVersion",
+                                            "rendererBuild"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "kind": {
+                                          "const": "component",
+                                          "type": "string"
+                                        },
+                                        "outcome": {
+                                          "enum": [
+                                            "captured",
+                                            "capture_failed"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "rendererBuild": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "requestedTarget": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "version": {
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": [
+                                            "version"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "resolvedTarget": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "version": {
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": [
+                                            "version"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "version": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "outcome",
+                                        "requestedTarget",
+                                        "resolvedTarget",
+                                        "expected",
+                                        "browser",
+                                        "version"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
                                 },
                                 {
                                   "type": "null"
@@ -7887,6 +8920,16 @@
             },
             "description": "Success"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "baseline_managed"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -7928,6 +8971,16 @@
               }
             },
             "description": "reference_not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "baseline_managed"
           }
         },
         "summary": "Tombstone an active visual reference while retaining its runs and evidence.",
@@ -7967,11 +9020,294 @@
                         "candidateMeta": {
                           "anyOf": [
                             {
-                              "additionalProperties": {},
-                              "propertyNames": {
-                                "type": "string"
-                              },
-                              "type": "object"
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "browser": {
+                                      "anyOf": [
+                                        {
+                                          "$ref": "#/$defs/__schema3"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "browserVersion": {
+                                      "type": "string"
+                                    },
+                                    "error": {
+                                      "type": "string"
+                                    },
+                                    "expected": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "builtinCatalogHash": {
+                                          "type": "string"
+                                        },
+                                        "componentManifestHash": {
+                                          "type": "string"
+                                        },
+                                        "dsMetaVersion": {
+                                          "anyOf": [
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "kind": {
+                                          "const": "prototype",
+                                          "type": "string"
+                                        },
+                                        "prototypeInstanceId": {
+                                          "type": "string"
+                                        },
+                                        "rendererBuild": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "rev": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "prototypeInstanceId",
+                                        "rev",
+                                        "componentManifestHash",
+                                        "builtinCatalogHash",
+                                        "dsMetaVersion",
+                                        "rendererBuild"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "kind": {
+                                      "const": "prototype",
+                                      "type": "string"
+                                    },
+                                    "outcome": {
+                                      "enum": [
+                                        "captured",
+                                        "capture_failed"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "pins": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "bundleHash": {
+                                            "type": "string"
+                                          },
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "version": {
+                                            "type": "number"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "version",
+                                          "bundleHash"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "rendererBuild": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "requestedTarget": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "rev": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "rev"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "resolvedTarget": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "rev": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "rev"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "rev": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "outcome",
+                                    "requestedTarget",
+                                    "resolvedTarget",
+                                    "expected",
+                                    "browser",
+                                    "rev"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "browser": {
+                                      "anyOf": [
+                                        {
+                                          "$ref": "#/$defs/__schema3"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "browserVersion": {
+                                      "type": "string"
+                                    },
+                                    "bundleHash": {
+                                      "type": "string"
+                                    },
+                                    "error": {
+                                      "type": "string"
+                                    },
+                                    "expected": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "bundleHash": {
+                                          "type": "string"
+                                        },
+                                        "componentId": {
+                                          "type": "string"
+                                        },
+                                        "dsMetaVersion": {
+                                          "anyOf": [
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "kind": {
+                                          "const": "component",
+                                          "type": "string"
+                                        },
+                                        "propsHash": {
+                                          "type": "string"
+                                        },
+                                        "rendererBuild": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "version": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "componentId",
+                                        "version",
+                                        "bundleHash",
+                                        "propsHash",
+                                        "dsMetaVersion",
+                                        "rendererBuild"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "kind": {
+                                      "const": "component",
+                                      "type": "string"
+                                    },
+                                    "outcome": {
+                                      "enum": [
+                                        "captured",
+                                        "capture_failed"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "rendererBuild": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "requestedTarget": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "version": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "version"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "resolvedTarget": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "version": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "version"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "version": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "outcome",
+                                    "requestedTarget",
+                                    "resolvedTarget",
+                                    "expected",
+                                    "browser",
+                                    "version"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
                             },
                             {
                               "type": "null"
@@ -8188,6 +9524,43 @@
                         "mime"
                       ],
                       "type": "object"
+                    },
+                    "__schema3": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "browserVersion": {
+                          "type": "string"
+                        },
+                        "consoleErrors": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "pageErrors": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "rendererBuild": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "browserVersion",
+                        "rendererBuild",
+                        "consoleErrors",
+                        "pageErrors"
+                      ],
+                      "type": "object"
                     }
                   },
                   "additionalProperties": false,
@@ -8314,11 +9687,22 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
+                  "rev": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
                   "threshold": {
                     "maximum": 100,
                     "minimum": 0,
                     "type": "number"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
                   }
                 },
                 "type": "object"
@@ -8358,7 +9742,17 @@
                 }
               }
             },
-            "description": "reference_not_found"
+            "description": "reference_not_found | prototype_not_found | screen_not_found | revision_not_found | version_not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "instance_conflict"
           },
           "422": {
             "content": {
@@ -8368,7 +9762,17 @@
                 }
               }
             },
-            "description": "invalid_threshold"
+            "description": "invalid_candidate_target | invalid_threshold | invalid_viewport"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "queue_full"
           },
           "501": {
             "content": {
@@ -8469,6 +9873,43 @@
                         "mime"
                       ],
                       "type": "object"
+                    },
+                    "__schema2": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "browserVersion": {
+                          "type": "string"
+                        },
+                        "consoleErrors": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "pageErrors": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "rendererBuild": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "browserVersion",
+                        "rendererBuild",
+                        "consoleErrors",
+                        "pageErrors"
+                      ],
+                      "type": "object"
                     }
                   },
                   "anyOf": [
@@ -8488,11 +9929,294 @@
                         "candidateMeta": {
                           "anyOf": [
                             {
-                              "additionalProperties": {},
-                              "propertyNames": {
-                                "type": "string"
-                              },
-                              "type": "object"
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "browser": {
+                                      "anyOf": [
+                                        {
+                                          "$ref": "#/$defs/__schema2"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "browserVersion": {
+                                      "type": "string"
+                                    },
+                                    "error": {
+                                      "type": "string"
+                                    },
+                                    "expected": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "builtinCatalogHash": {
+                                          "type": "string"
+                                        },
+                                        "componentManifestHash": {
+                                          "type": "string"
+                                        },
+                                        "dsMetaVersion": {
+                                          "anyOf": [
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "kind": {
+                                          "const": "prototype",
+                                          "type": "string"
+                                        },
+                                        "prototypeInstanceId": {
+                                          "type": "string"
+                                        },
+                                        "rendererBuild": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "rev": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "prototypeInstanceId",
+                                        "rev",
+                                        "componentManifestHash",
+                                        "builtinCatalogHash",
+                                        "dsMetaVersion",
+                                        "rendererBuild"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "kind": {
+                                      "const": "prototype",
+                                      "type": "string"
+                                    },
+                                    "outcome": {
+                                      "enum": [
+                                        "captured",
+                                        "capture_failed"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "pins": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "bundleHash": {
+                                            "type": "string"
+                                          },
+                                          "id": {
+                                            "type": "string"
+                                          },
+                                          "version": {
+                                            "type": "number"
+                                          }
+                                        },
+                                        "required": [
+                                          "id",
+                                          "version",
+                                          "bundleHash"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "rendererBuild": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "requestedTarget": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "rev": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "rev"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "resolvedTarget": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "rev": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "rev"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "rev": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "outcome",
+                                    "requestedTarget",
+                                    "resolvedTarget",
+                                    "expected",
+                                    "browser",
+                                    "rev"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "browser": {
+                                      "anyOf": [
+                                        {
+                                          "$ref": "#/$defs/__schema2"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "browserVersion": {
+                                      "type": "string"
+                                    },
+                                    "bundleHash": {
+                                      "type": "string"
+                                    },
+                                    "error": {
+                                      "type": "string"
+                                    },
+                                    "expected": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "bundleHash": {
+                                          "type": "string"
+                                        },
+                                        "componentId": {
+                                          "type": "string"
+                                        },
+                                        "dsMetaVersion": {
+                                          "anyOf": [
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "kind": {
+                                          "const": "component",
+                                          "type": "string"
+                                        },
+                                        "propsHash": {
+                                          "type": "string"
+                                        },
+                                        "rendererBuild": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "version": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "kind",
+                                        "componentId",
+                                        "version",
+                                        "bundleHash",
+                                        "propsHash",
+                                        "dsMetaVersion",
+                                        "rendererBuild"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "kind": {
+                                      "const": "component",
+                                      "type": "string"
+                                    },
+                                    "outcome": {
+                                      "enum": [
+                                        "captured",
+                                        "capture_failed"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "rendererBuild": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "requestedTarget": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "version": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "version"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "resolvedTarget": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "version": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "version"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "version": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "outcome",
+                                    "requestedTarget",
+                                    "resolvedTarget",
+                                    "expected",
+                                    "browser",
+                                    "version"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
                             },
                             {
                               "type": "null"

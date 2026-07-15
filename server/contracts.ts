@@ -251,12 +251,19 @@ const deviceScaleSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 const hashSchema = z.string().regex(/^[0-9a-f]+$/);
 
 export const fingerprintContractSchema = z.discriminatedUnion("scope", [
-  z.object({ scope: z.literal("prototype-screen"), prototypeId: z.string(), screenId: z.string(), refRevision: z.number().int().positive(), viewport: viewportPositiveSchema, deviceScaleFactor: deviceScaleSchema, theme: z.enum(["light", "dark"]), propsHash: hashSchema.optional(), stateHash: hashSchema.optional() }),
+  z.object({ scope: z.literal("prototype-screen"), prototypeId: z.string(), prototypeInstanceId:z.string().optional(), screenId: z.string(), refRevision: z.number().int().positive(), viewport: viewportPositiveSchema, deviceScaleFactor: deviceScaleSchema, theme: z.enum(["light", "dark"]), propsHash: hashSchema.optional(), stateHash: hashSchema.optional() }),
   z.object({ scope: z.literal("component"), componentId: z.string(), refVersion: z.number().int().positive(), viewport: viewportPositiveSchema, deviceScaleFactor: deviceScaleSchema, theme: z.enum(["light", "dark"]), propsHash: hashSchema.optional(), stateHash: hashSchema.optional() }),
 ]);
 
 const metricResultSchema = z.object({ diffPixels: z.number(), totalPixels: z.number(), diffPercent: z.number() });
 const evidenceAssetSchema = z.object({ assetId: z.string(), url: z.string(), sha256: z.string(), width: z.number().nullable(), height: z.number().nullable(), mime: z.string() });
+const captureBrowserSchema=z.strictObject({browserVersion:z.string(),rendererBuild:z.string().nullable(),consoleErrors:z.array(z.string()),pageErrors:z.array(z.string())});
+const prototypeExpectedSchema=z.strictObject({kind:z.literal("prototype"),prototypeInstanceId:z.string(),rev:z.number(),componentManifestHash:z.string(),builtinCatalogHash:z.string(),dsMetaVersion:z.number().nullable(),rendererBuild:z.string().nullable()});
+const componentExpectedSchema=z.strictObject({kind:z.literal("component"),componentId:z.string(),version:z.number(),bundleHash:z.string(),propsHash:z.string(),dsMetaVersion:z.number().nullable(),rendererBuild:z.string().nullable()});
+const candidateMetaSchema=z.union([
+  z.strictObject({kind:z.literal("prototype"),outcome:z.enum(["captured","capture_failed"]),requestedTarget:z.strictObject({rev:z.number()}),resolvedTarget:z.strictObject({rev:z.number()}),expected:prototypeExpectedSchema,browser:captureBrowserSchema.nullable(),error:z.string().optional(),rev:z.number(),pins:z.array(z.strictObject({id:z.string(),version:z.number(),bundleHash:z.string()})).optional(),rendererBuild:z.string().nullable().optional(),browserVersion:z.string().optional()}),
+  z.strictObject({kind:z.literal("component"),outcome:z.enum(["captured","capture_failed"]),requestedTarget:z.strictObject({version:z.number()}),resolvedTarget:z.strictObject({version:z.number()}),expected:componentExpectedSchema,browser:captureBrowserSchema.nullable(),error:z.string().optional(),version:z.number(),bundleHash:z.string().optional(),rendererBuild:z.string().nullable().optional(),browserVersion:z.string().optional()}),
+]);
 
 export const runReportSchema = z.object({
   runId: z.string(), referenceId: z.string(),
@@ -268,7 +275,7 @@ export const runReportSchema = z.object({
   referenceStatus: z.enum(["known", "unknown"]),
   reference: evidenceAssetSchema.nullable(), candidate: evidenceAssetSchema.nullable(),
   diff: z.object({ assetId: z.string(), url: z.string() }).nullable(),
-  candidateMeta: z.record(z.string(), z.unknown()).nullable(),
+  candidateMeta: candidateMetaSchema.nullable(),
 });
 
 export const referencePublicSchema = z.object({
@@ -283,7 +290,7 @@ export const putVisualReferenceContract = registerContract({
   summary: "Upsert a visual reference by canonical fingerprint (asset must exist and be a PNG).",
   requestSchema: z.object({ fingerprint: fingerprintContractSchema, assetId: z.string(), note: z.string().optional() }),
   responseSchema: referencePublicSchema,
-  errors: [{ status: 422, code: "asset_not_found" }, { status: 422, code: "invalid_reference_asset" }, { status: 422, code: "validation_failed" }],
+  errors: [{status:409,code:"baseline_managed"},{ status: 422, code: "asset_not_found" }, { status: 422, code: "invalid_reference_asset" }, { status: 422, code: "validation_failed" }],
 });
 
 export const listVisualReferencesContract = registerContract({
@@ -308,7 +315,7 @@ export const deleteVisualReferenceContract = registerContract({
   path: "/api/visual-references/{id}",
   summary: "Tombstone an active visual reference while retaining its runs and evidence.",
   status: 204,
-  errors: [{ status: 404, code: "reference_not_found" }],
+  errors: [{ status: 404, code: "reference_not_found" },{status:409,code:"baseline_managed"}],
 });
 
 export const checkVisualReferenceContract = registerContract({
@@ -316,9 +323,27 @@ export const checkVisualReferenceContract = registerContract({
   path: "/api/visual-references/{id}/check",
   summary: "Capture a candidate for the reference fingerprint and enqueue an honest diff run.",
   status: 202,
-  requestSchema: z.object({ threshold: z.number().min(0).max(100).optional() }),
+  requestSchema: z.strictObject({ threshold: z.number().min(0).max(100).optional(),rev:z.number().int().positive().optional(),version:z.number().int().positive().optional() }),
   responseSchema: z.object({ runId: z.string(), jobId: z.string().optional() }),
-  errors: [{ status: 404, code: "reference_not_found" }, { status: 422, code: "invalid_threshold" }, { status: 501, code: "screenshot_unavailable" }],
+  errors: [
+    { status: 404, code: "reference_not_found" },{status:404,code:"prototype_not_found"},{status:404,code:"screen_not_found"},{status:404,code:"revision_not_found"},{status:404,code:"version_not_found"},
+    {status:409,code:"instance_conflict"},{status:422,code:"invalid_candidate_target"},{ status: 422, code: "invalid_threshold" },{status:422,code:"invalid_viewport"},{status:429,code:"queue_full"},{ status: 501, code: "screenshot_unavailable" },
+  ],
+});
+
+const baselineViewportSchema=z.strictObject({width:z.number().int(),height:z.number().int()});
+const baselineMemberSchema=z.strictObject({screenId:z.string(),viewport:baselineViewportSchema,deviceScaleFactor:deviceScaleSchema,theme:z.enum(["light","dark"]),referenceId:z.string()});
+const baselineResponseCore=z.strictObject({generation:z.number().int().positive(),rev:z.number().int().positive(),members:z.array(baselineMemberSchema)});
+export const putVisualBaselineContract=registerContract({
+  method:"PUT",path:"/api/visual-baselines/prototypes/{id}",summary:"Atomically replace the complete committed visual baseline set for a prototype (generation CAS).",
+  requestSchema:z.strictObject({rev:z.number().int().positive(),prototypeInstanceId:z.string(),baseGeneration:z.number().int().positive().nullable(),members:z.array(z.strictObject({screenId:z.string(),viewport:baselineViewportSchema,deviceScaleFactor:deviceScaleSchema,theme:z.enum(["light","dark"]),assetId:z.string()}))}),
+  responseSchema:baselineResponseCore,validated:true,
+  errors:[{status:404,code:"prototype_not_found"},{status:404,code:"revision_not_found"},{status:409,code:"instance_conflict"},{status:409,code:"generation_conflict"},{status:422,code:"incomplete_baseline"},{status:422,code:"invalid_viewport"},{status:422,code:"asset_not_found"},{status:422,code:"invalid_reference_asset"},{status:422,code:"validation_failed"}],
+});
+export const getVisualBaselineContract=registerContract({
+  method:"GET",path:"/api/visual-baselines/prototypes/{id}",summary:"Read the latest committed visual baseline set for a prototype.",
+  responseSchema:baselineResponseCore.extend({prototypeInstanceId:z.string(),createdAt:z.string()}),
+  errors:[{status:404,code:"prototype_not_found"},{status:404,code:"baseline_not_found"}],
 });
 
 // --- Design-system theme versions (T8) ---
@@ -416,7 +441,7 @@ export const getPrototypeContract = registerContract({
   method: "GET", path: "/api/prototypes/{id}",
   summary: "Prototype lifecycle meta: head/draft revision, validated revision, published versions, renderable.",
   responseSchema: z.looseObject({
-    id: z.string(), name: z.string(), designSystem: z.string(), headRev: z.number(),
+    id: z.string(), prototypeInstanceId:z.string(), name: z.string(), designSystem: z.string(), headRev: z.number(),
     latestVersion: z.number().nullable(), versions: z.array(z.looseObject({ version: z.number(), rev: z.number(), publishedAt: isoDate })),
     updatedAt: isoDate, draftRevision: z.number(), validatedRevision: z.number().nullable(),
     publishedVersion: z.number().nullable(), renderable: renderableSchema, figma: figmaResponseSchema,
@@ -443,6 +468,7 @@ export const deletePrototypeContract = registerContract({
 const prototypeRevisionCoreSchema = z.looseObject({
   doc: z.looseObject({ id: z.string(), version: z.literal(1), screens: z.array(z.unknown()) }),
   rev: z.number(), builtinCatalogHash: z.string(), componentManifestHash: z.string(),
+  prototypeInstanceId:z.string(),
   components: z.array(z.looseObject({ id: z.string(), version: z.number() })),
   assets: z.array(assetPublicSchema.omit({ width: true, height: true })),
   designSystemMetaVersion: z.number().nullable(),

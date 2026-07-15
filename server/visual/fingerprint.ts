@@ -28,6 +28,7 @@ export const fingerprintSchema = z.discriminatedUnion("scope", [
   z.strictObject({
     scope: z.literal("prototype-screen"),
     prototypeId: z.string().min(1),
+    prototypeInstanceId: z.string().min(1).optional(),
     screenId: z.string().min(1),
     refRevision: z.number().int().positive(),
     ...baseFields,
