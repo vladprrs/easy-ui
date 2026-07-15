@@ -10,6 +10,7 @@ import { collectAndValidateAssetRefs, snapshotDefinitions } from "../validation"
 import { headScreenUrl, renderStatus, versionScreenUrl } from "./renderStatus";
 import { recordValidation } from "../validationRecords";
 import { parseFigmaInput } from "../figma";
+import { diffPrototypeDocs } from "../../src/prototype/revisionDiff";
 
 const headScreens = (doc:PrototypeDoc) => doc.screens.map(s=>({id:s.id,url:headScreenUrl(doc.id,s.id)}));
 
@@ -61,6 +62,19 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
   if(tail[0]==="draft"&&tail.length===1) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); return json(repo.draft(id),200,noStore); }
   if(tail[0]==="revisions") {
     if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed");
+    if(tail.length===3&&tail[2]==="diff") {
+      const rev=integer(Number(tail[1]),"rev"); const u=new URL(request.url); const againstRaw=u.searchParams.get("against");
+      if(againstRaw===null&&rev===1) throw new ApiError(400,"invalid_request","against is required for revision 1");
+      const against=againstRaw===null?rev-1:integer(Number(againstRaw),"against");
+      if(against===rev) throw new ApiError(400,"invalid_request","against must differ from rev");
+      const toDto=repo.revision(id,rev); const fromDto=repo.revision(id,against);
+      // The schema parser used by ordinary revision reads can discard an own
+      // `__proto__` key. Diff needs the already-validated row's original JSON so
+      // adversarial map keys remain observable; pins and render inputs stay DTO-backed.
+      const rawDoc=(revision:number) => JSON.parse((db.query("SELECT doc FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,revision) as {doc:string}).doc);
+      const to={...toDto,doc:rawDoc(rev)}; const from={...fromDto,doc:rawDoc(against)};
+      return json(diffPrototypeDocs(from,to),200,noStore);
+    }
     if(tail.length===2) return json(repo.revision(id,integer(Number(tail[1]),"rev")),200,noStore);
     const u=new URL(request.url); const limitRaw=u.searchParams.get("limit"); const beforeRaw=u.searchParams.get("before"); const limit=limitRaw===null?20:integer(Number(limitRaw),"limit"); if(limit>100) throw new ApiError(400,"invalid_request","limit must not exceed 100"); const before=beforeRaw===null?undefined:integer(Number(beforeRaw),"before"); return json(repo.revisions(id,limit,before),200,noStore);
   }
