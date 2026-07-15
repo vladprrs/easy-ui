@@ -79,6 +79,47 @@ A child element may carry `slot: "<slug>"` to route it into a named region of it
 - `repeat` on a custom component with named slots is a validation error: a repeated element hands the library a single repeated-children node, so positional slot routing does not apply. `repeat` is allowed on a child *inside* a slot.
 - Legacy custom components (without `capabilities.namedSlots`) receive their children unchanged, exactly as before.
 
+## Spacing & layout contract v1
+
+Layout-aware component definitions use the standard spacing props `gap`, `padding`, `paddingX`, and `paddingY`. Each declared prop is an enum over all or part of the canonical token scale:
+
+`none | xs | sm | md | lg | xl | 2xl | 3xl | 4xl`
+
+The concrete pixel value is resolved by the selected design system and pinned theme. `none` always means zero. Omitting a spacing prop preserves that component's own default; omission is not equivalent to `none`.
+
+The normative prop semantics are:
+
+- `padding` applies to all four sides.
+- `paddingX` applies to the logical inline axis and overrides `padding` on that axis.
+- `paddingY` applies to the logical block axis and overrides `padding` on that axis.
+- `gap` is the space between children in `flow.slot`, along the direction selected by `flow.direction`.
+
+All axes are logical axes, so inline/block behavior follows writing direction. Components advertise support through additive definition metadata:
+
+```ts
+layout?: {
+  version: 1;
+  spacing?: ("gap" | "padding" | "paddingX" | "paddingY")[];
+  spacer?: true;
+  flow?: {
+    kind: "flex";
+    direction:
+      | "vertical"
+      | "horizontal"
+      | {
+          prop: string;
+          vertical: (string | number | boolean | null)[];
+          horizontal: (string | number | boolean | null)[];
+          none?: (string | number | boolean | null)[];
+        };
+    wrap?: { prop: string; enabled: (string | number | boolean | null)[] };
+    slot?: string; // defaults to "default"
+  };
+};
+```
+
+`spacing` names the supported standard props. `spacer: true` identifies a dedicated spacer element and cannot be combined with spacing props or slots. `flow` describes a flex flow whose `gap` applies to its selected slot; a static direction can be declared directly, while a prop-driven direction maps accepted prop values to vertical, horizontal, or no-flow domains. Unmapped or dynamic values have unknown direction rather than an inferred one.
+
 ## Events and actions
 
 An event name must be declared by its component definition. Its value is one action or a sequential array. Params contain static JSON literals only.

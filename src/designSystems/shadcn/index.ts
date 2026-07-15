@@ -7,6 +7,7 @@ import { createFixtures } from "../fixtures";
 import type { DesignSystem } from "../types";
 import { shadcnAtomicLevels, shadcnLayoutNeutral } from "./atomicLevels";
 import { ShadcnImage } from "./image";
+import { shadcnLayouts } from "./layout";
 import { shadcnFixtureOverrides } from "./overrides";
 
 export const sourceComponentDefinitions = {
@@ -19,10 +20,11 @@ const classifiedDefinitions = Object.fromEntries(
     ...definition,
     atomicLevel: shadcnAtomicLevels[name as keyof typeof shadcnAtomicLevels],
     ...(shadcnLayoutNeutral.has(name) ? { layoutNeutral: true } : {}),
+    ...(name in shadcnLayouts ? { layout: shadcnLayouts[name as keyof typeof shadcnLayouts] } : {}),
   }]),
 ) as unknown as {
   [Name in keyof typeof sourceComponentDefinitions]:
-    (typeof sourceComponentDefinitions)[Name] & Pick<ComponentDefinition, "atomicLevel" | "layoutNeutral">;
+    (typeof sourceComponentDefinitions)[Name] & Pick<ComponentDefinition, "atomicLevel" | "layoutNeutral" | "layout">;
 };
 
 export const componentDefinitions = normalizeDefinitions(classifiedDefinitions);

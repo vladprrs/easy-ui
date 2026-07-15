@@ -12,7 +12,7 @@ export function Box({ props, children }: BaseComponentProps<Props<"Box">>) {
 }
 
 export function Stack({ props, children }: BaseComponentProps<Props<"Stack">>) {
-  const gap = { sm: "gap-2", md: "gap-4", lg: "gap-6" }[props.gap];
+  const gap = { none: "gap-0", xs: "gap-1", sm: "gap-2", md: "gap-4", lg: "gap-6", xl: "gap-8", "2xl": "gap-12", "3xl": "gap-16", "4xl": "gap-20" }[props.gap];
   return <div className={`flex flex-col ${gap}`}>{children}</div>;
 }
 

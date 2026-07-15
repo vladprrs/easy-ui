@@ -30,6 +30,12 @@ describe("theme serialization", () => {
     expect(css).toContain("font-style: italic;");
   });
 
+  it("leaves the --eui-space-* namespace exclusively to SurfaceSpacingScope", () => {
+    const css = serializeThemeCss({ tokens: { "space.md": "20px", "color.primary": "red" }, fonts: [], icons: [] });
+    expect(css).not.toContain("--eui-space-md");
+    expect(css).toContain("--eui-color-primary");
+  });
+
   it("escapes dangerous characters in string token values", () => {
     // Grammar bans ;{}<> but backslashes/quotes are still escaped as CSS hex sequences.
     expect(cssEscapeString('a"b\\c')).toBe("a\\22 b\\5c c");

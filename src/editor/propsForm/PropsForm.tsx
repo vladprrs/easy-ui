@@ -5,7 +5,7 @@ import { getEditorAssetsSnapshot, subscribeEditorAssets, uploadAsset, type Edito
 import type { ComponentDefinition } from "../../catalog/definitions";
 import { jsonValueSchema } from "../../prototype/schema";
 import { isDynamicValue, validateElementProps } from "../../prototype/validate";
-import { describePropsSchema, type PropField, type SelectValue } from "./introspect";
+import { describePropsSchema, type PropField, type SelectValue } from "../../catalog/zodIntrospect";
 
 type PropsFormProps = {
   definition: ComponentDefinition;

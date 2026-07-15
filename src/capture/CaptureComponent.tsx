@@ -6,6 +6,7 @@ import { loadCustomComponents } from "../customComponents/loader";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { ThemeStyle } from "../designSystems/theme";
+import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 import { CaptureSurface } from "./CaptureSurface";
 import { CaptureStyle, useCaptureTheme, usePublishError } from "./CaptureChrome";
 import { bootstrapRendererBuild, publishReady, readBootstrap, settleSurface } from "./readiness";
@@ -87,10 +88,12 @@ function LoadedComponentCapture({ loaded, custom }: { loaded: LoadedComponent; c
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return <div ref={ref} id="eui-capture-surface" className="bg-background text-foreground inline-block">
-    <ThemeStyle content={loaded.theme} />
-    <CaptureSurface designSystem={version.designSystem} custom={custom} tree={tree} initialState={{}} screenIds={new Set()} />
-  </div>;
+  return <SurfaceSpacingScope systemId={version.designSystem} themeTokens={loaded.theme?.tokens}>
+    <div ref={ref} id="eui-capture-surface" className="bg-background text-foreground inline-block">
+      <ThemeStyle content={loaded.theme} />
+      <CaptureSurface designSystem={version.designSystem} custom={custom} tree={tree} initialState={{}} screenIds={new Set()} />
+    </div>
+  </SurfaceSpacingScope>;
 }
 
 function WithComponent({ loaded }: { loaded: LoadedComponent }) {

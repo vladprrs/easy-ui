@@ -1,7 +1,8 @@
 import { z } from "zod";
-import type { AtomicLevel } from "../designSystems/types";
+import { layoutSpacingProps, spaceTokens, type AtomicLevel, type ComponentLayout, type LayoutJsonScalar } from "../designSystems/types";
+import { isJsonScalar, zodObjectShape, zodScalarValues } from "./zodIntrospect";
 
-/** Capabilities a custom definition may opt into. Both require host ABI v2. */
+/** Capabilities a custom definition may opt into. Both require host ABI v2 or newer. */
 export type ComponentCapabilities = {
   typedEvents?: true;
   namedSlots?: true;
@@ -28,6 +29,7 @@ export type ComponentDefinition = {
   example?: Record<string, unknown>;
   atomicLevel?: AtomicLevel;
   layoutNeutral?: boolean;
+  layout?: ComponentLayout;
   /**
    * Semantic-validation metadata (additive; drives `validatePrototype` warnings).
    * Custom definitions declare these; builtin values live in `builtinSemantics.ts`.
@@ -97,9 +99,74 @@ export function normalizeSchema(schema: z.ZodType): z.ZodType {
 
 export function normalizeDefinitions<T extends Record<string, ComponentDefinition>>(definitions: T): T {
   return Object.fromEntries(
-    Object.entries(definitions).map(([name, definition]) => [
-      name,
-      { ...definition, props: normalizeSchema(definition.props) },
-    ]),
+    Object.entries(definitions).map(([name, definition]) => {
+      if (definition.layout) validateLayout(name, definition);
+      return [name, { ...definition, props: normalizeSchema(definition.props) }];
+    }),
   ) as T;
+}
+
+const scalarKey = (value: LayoutJsonScalar) => `${value === null ? "null" : typeof value}:${String(value)}`;
+
+function validateDomain(name: string, label: string, values: unknown, schema: z.ZodType): LayoutJsonScalar[] {
+  if (!Array.isArray(values) || values.length === 0) throw new Error(`${name}.layout ${label} must be a non-empty array`);
+  if (!values.every(isJsonScalar)) throw new Error(`${name}.layout ${label} must contain JSON-safe scalars`);
+  const typed = values as LayoutJsonScalar[];
+  if (new Set(typed.map(scalarKey)).size !== typed.length) throw new Error(`${name}.layout ${label} must contain unique values`);
+  for (const value of typed) if (!schema.safeParse(value).success) throw new Error(`${name}.layout ${label} value ${JSON.stringify(value)} is not accepted by its prop schema`);
+  return typed;
+}
+
+function validateLayout(name: string, definition: ComponentDefinition): void {
+  const layout = definition.layout!;
+  if (layout.version !== 1) throw new Error(`${name}.layout version must be 1`);
+  const spacing = layout.spacing ?? [];
+  if (!layout.spacer && spacing.length === 0) throw new Error(`${name}.layout requires spacing or spacer`);
+  if (new Set(spacing).size !== spacing.length) throw new Error(`${name}.layout spacing contains duplicates`);
+  if (spacing.some((prop) => !(layoutSpacingProps as readonly string[]).includes(prop))) throw new Error(`${name}.layout spacing contains an unknown prop`);
+  if (layout.spacer && ((definition.slots?.length ?? 0) > 0 || spacing.length > 0)) throw new Error(`${name}.layout spacer is incompatible with slots and spacing`);
+  if (layout.spacer) return;
+
+  const shape = zodObjectShape(definition.props);
+  if (!shape) throw new Error(`${name}.layout requires an object props schema`);
+  for (const prop of spacing) {
+    const schema = shape[prop];
+    if (!schema) throw new Error(`${name}.layout spacing prop ${prop} is missing from props`);
+    const values = zodScalarValues(schema);
+    if (!values || values.some((value) => typeof value !== "string" || !(spaceTokens as readonly string[]).includes(value))) {
+      throw new Error(`${name}.layout spacing prop ${prop} must be an enum subset of the canonical space scale`);
+    }
+  }
+
+  const flow = layout.flow;
+  if (!flow) return;
+  if (flow.kind !== "flex") throw new Error(`${name}.layout flow kind must be flex`);
+  if (!spacing.includes("gap")) throw new Error(`${name}.layout flow requires gap spacing`);
+  const slot = flow.slot ?? "default";
+  if (slot !== "default" && !definition.slots?.includes(slot)) throw new Error(`${name}.layout flow slot ${slot} is not declared`);
+  if (typeof flow.direction === "object") {
+    const directionSchema = shape[flow.direction.prop];
+    if (!directionSchema) throw new Error(`${name}.layout direction prop ${flow.direction.prop} is missing from props`);
+    const groups = [
+      validateDomain(name, "direction.vertical", flow.direction.vertical, directionSchema),
+      validateDomain(name, "direction.horizontal", flow.direction.horizontal, directionSchema),
+      ...(flow.direction.none === undefined ? [] : [validateDomain(name, "direction.none", flow.direction.none, directionSchema)]),
+    ];
+    const seen = new Set<string>();
+    for (const group of groups) for (const value of group) {
+      const key = scalarKey(value);
+      if (seen.has(key)) throw new Error(`${name}.layout direction domains must be pairwise disjoint`);
+      seen.add(key);
+    }
+    if (flow.wrap) {
+      if (flow.direction.prop === flow.wrap.prop) throw new Error(`${name}.layout direction and wrap props must differ`);
+      const wrapSchema = shape[flow.wrap.prop];
+      if (!wrapSchema) throw new Error(`${name}.layout wrap prop ${flow.wrap.prop} is missing from props`);
+      validateDomain(name, "wrap.enabled", flow.wrap.enabled, wrapSchema);
+    }
+  } else if (flow.wrap) {
+    const wrapSchema = shape[flow.wrap.prop];
+    if (!wrapSchema) throw new Error(`${name}.layout wrap prop ${flow.wrap.prop} is missing from props`);
+    validateDomain(name, "wrap.enabled", flow.wrap.enabled, wrapSchema);
+  }
 }

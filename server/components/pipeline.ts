@@ -8,7 +8,7 @@ import type { AtomicLevel } from "../../src/designSystems/types";
 /** Marker prefix on a definitionMeta error signalling a non-serializable event schema (→ 422). */
 export const EVENT_SCHEMA_NOT_SERIALIZABLE = "event_schema_not_serializable";
 
-// Register a Bun virtual module so components that `import { token, Icon } from "easy-ui/runtime"`
+// Register per-specifier Bun virtual modules for server-side extraction.
 // evaluate during extraction / importPublished. In the browser the specifier is externalized and
 // served from /api/shims/v2/easy-ui-runtime.js; this stub only satisfies server-side evaluation.
 try {
@@ -16,6 +16,7 @@ try {
     name: "easy-ui-runtime",
     setup(build) {
       build.module("easy-ui/runtime", () => ({ loader: "object", exports: { token: () => "", Icon: () => null } }));
+      build.module("easy-ui/runtime/v3", () => ({ loader: "object", exports: { token: () => "", space: (key: string) => `var(--eui-space-${key})`, Icon: () => null } }));
     },
   });
 } catch { /* plugin already registered or unavailable */ }

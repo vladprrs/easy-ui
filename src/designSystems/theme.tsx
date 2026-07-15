@@ -52,7 +52,9 @@ export function iconRegistry(content: ThemeContent): Record<string, EasyUiShared
 
 /** Serializes a validated theme into a stylesheet: :root custom properties + @font-face rules. */
 export function serializeThemeCss(content: ThemeContent): string {
-  const declarations = Object.entries(content.tokens).map(([key, value]) => `${tokenCssVar(key)}: ${tokenValueCss(value)};`);
+  const declarations = Object.entries(content.tokens)
+    .filter(([key]) => !key.startsWith("space."))
+    .map(([key, value]) => `${tokenCssVar(key)}: ${tokenValueCss(value)};`);
   const root = declarations.length ? `:root{${declarations.join("")}}` : "";
   const fonts = content.fonts.map((font) => {
     const parts = [`font-family: "${cssEscapeString(font.family)}";`, `src: url("${assetUrl(font.src)}");`];

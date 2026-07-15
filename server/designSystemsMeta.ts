@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { ApiError } from "./http";
+import { spaceTokens } from "../src/designSystems/types";
 
 // --- Grammar (F.2) ---------------------------------------------------------
 //
@@ -28,6 +29,32 @@ const tokenValueSchema = z.union([
 ]);
 
 export const tokensSchema = z.record(tokenKeySchema, tokenValueSchema);
+
+const absolutePx = /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?px$/;
+
+export function spaceTokenIssues(tokens: Record<string, unknown>): { path: string[]; message: string }[] {
+  const keys = Object.keys(tokens).filter((key) => key.startsWith("space."));
+  if (keys.length === 0) return [];
+  const issues: { path: string[]; message: string }[] = [];
+  for (const token of spaceTokens) {
+    const key = `space.${token}`;
+    const value = tokens[key];
+    if (typeof value !== "string" || !absolutePx.test(value)) issues.push({ path: [key], message: "must be a non-negative absolute px string" });
+  }
+  for (const key of keys) {
+    if (!(spaceTokens as readonly string[]).includes(key.slice("space.".length))) issues.push({ path: [key], message: "unknown spacing token" });
+  }
+  if (tokens["space.none"] !== "0px") issues.push({ path: ["space.none"], message: "must equal 0px" });
+  if (issues.length === 0) {
+    const values = spaceTokens.map((token) => Number((tokens[`space.${token}`] as string).slice(0, -2)));
+    for (let index = 1; index < values.length; index += 1) {
+      if (values[index]! < values[index - 1]!) {
+        issues.push({ path: [`space.${spaceTokens[index]}`], message: "spacing scale must be monotonic" });
+      }
+    }
+  }
+  return issues;
+}
 
 const assetIdSchema = z.string().regex(ASSET_ID_RE, "must be an asset id (asset_<64 hex>)");
 const familySchema = z
@@ -79,6 +106,9 @@ export const themePatchSchema = z.strictObject({
   fonts: fontsSchema.optional(),
   icons: iconsSchema.optional(),
   baseVersion: z.number().int().min(0),
+}).superRefine((patch, context) => {
+  if (!patch.tokens || !Object.keys(patch.tokens).some((key) => key.startsWith("space."))) return;
+  for (const issue of spaceTokenIssues(patch.tokens)) context.addIssue({ code: "custom", path: ["tokens", ...issue.path], message: issue.message });
 });
 export type ThemePatch = z.infer<typeof themePatchSchema>;
 

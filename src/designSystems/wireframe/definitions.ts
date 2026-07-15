@@ -12,12 +12,13 @@ export const wireframeSourceDefinitions = {
     layoutNeutral: true,
   },
   Stack: {
-    props: z.strictObject({ gap: z.enum(["sm", "md", "lg"]).default("md") }),
+    props: z.strictObject({ gap: z.enum(["none", "xs", "sm", "md", "lg", "xl", "2xl", "3xl", "4xl"]).default("md") }),
     slots: ["default"],
     description: "Vertical layout for wireframe elements.",
     example: { gap: "md" },
     atomicLevel: "atom",
     layoutNeutral: true,
+    layout: { version: 1, spacing: ["gap"], flow: { kind: "flex", direction: "vertical" } },
   },
   Grid: {
     props: z.strictObject({ columns: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).default(2) }),

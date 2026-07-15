@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { ABI_V1 } from "../shims/abi-v1";
 import { EASY_UI_RUNTIME_FILE } from "../shims/abi-v2";
+import { EASY_UI_RUNTIME_V3_FILE } from "../shims/abi-v3";
 import { getDesignSystemVersion } from "../designSystems";
 import { ApiError } from "../http";
 import { PrototypeRepo } from "../repos/prototypes";
@@ -109,7 +110,8 @@ export class ShareRepo {
     }
     for (const abi of abiVersions) {
       for (const name of Object.keys(ABI_V1)) resources.add(`/api/shims/v${abi}/${name}.js`);
-      if (abi >= 2) resources.add(`/api/shims/v${abi}/${EASY_UI_RUNTIME_FILE}`);
+      if (abi === 2) resources.add(`/api/shims/v2/${EASY_UI_RUNTIME_FILE}`);
+      if (abi === 3) resources.add(`/api/shims/v3/${EASY_UI_RUNTIME_V3_FILE}`);
     }
 
     const metaVersion = published.designSystemMetaVersion;

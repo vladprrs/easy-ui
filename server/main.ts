@@ -89,7 +89,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
       if(segments[1]==="assets") return await routeAssets(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data");
       if(segments[1]==="design-systems") return await routeDesignSystems(request,db,segments.slice(1));
       if(segments[1]==="catalog"&&segments[2]==="manifest"&&segments.length===3) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); const {designSystem}=parseQuery(catalogManifestQuerySchema,url.searchParams); if(designSystem!==undefined&&!getRegisteredDesignSystem(db,designSystem)) throw new ApiError(404,"not_found","Design system not found"); return json({components:catalogManifest(db,designSystem)},200,noStore); }
-      if(segments[1]==="shims"&&(segments[2]==="v1"||segments[2]==="v2")) return routeShims(request,segments.slice(1));
+      if(segments[1]==="shims"&&(segments[2]==="v1"||segments[2]==="v2"||segments[2]==="v3")) return routeShims(request,segments.slice(1));
       const meta=routeMeta(request,db,segments.slice(1)); if(meta) return meta;
       throw new ApiError(404,"not_found","API route not found");
     }

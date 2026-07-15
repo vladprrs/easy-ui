@@ -8,6 +8,7 @@ import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { canonicalViewport } from "../designSystems/deviceMetrics";
 import { ThemeStyle } from "../designSystems/theme";
+import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 import { CaptureSurface } from "./CaptureSurface";
 import { CaptureStyle, useCaptureTheme, usePublishError, usePublishOnSettle } from "./CaptureChrome";
 import { bootstrapRendererBuild } from "./readiness";
@@ -62,10 +63,12 @@ function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPr
   const style = screen.canvas
     ? { width: screen.canvas.width, height: screen.canvas.height }
     : size ? { width: size.width, height: size.height } : { width: "100%" as const };
-  return <div ref={ref} id="eui-capture-surface" className="bg-background text-foreground" style={style}>
-    <ThemeStyle content={loaded.theme} />
-    <CaptureSurface designSystem={doc.designSystem} custom={custom} tree={tree} initialState={doc.state} screenIds={screenIds} canvas={screen.canvas} />
-  </div>;
+  return <SurfaceSpacingScope systemId={doc.designSystem} themeTokens={loaded.theme?.tokens}>
+    <div ref={ref} id="eui-capture-surface" className="bg-background text-foreground" style={style}>
+      <ThemeStyle content={loaded.theme} />
+      <CaptureSurface designSystem={doc.designSystem} custom={custom} tree={tree} initialState={doc.state} screenIds={screenIds} canvas={screen.canvas} />
+    </div>
+  </SurfaceSpacingScope>;
 }
 
 function WithCustom({ loaded, screenId }: { loaded: LoadedPrototype; screenId: string }) {

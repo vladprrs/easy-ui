@@ -53,7 +53,9 @@ describe("capture shell", () => {
       prototypeInstanceId:"capture-instance",
       componentManifestHash: "m", builtinCatalogHash: "b", dsMetaVersion: null, rendererBuild: null,
     });
-    expect(document.querySelector("#eui-capture-surface")).not.toBeNull();
+    const surface = document.querySelector<HTMLElement>("#eui-capture-surface");
+    expect(surface).not.toBeNull();
+    expect(surface!.style.getPropertyValue("--eui-space-md")).toBe("12px");
     expect(screen.queryByRole("navigation")).toBeNull();
     expect(screen.queryByRole("banner")).toBeNull();
   });

@@ -82,4 +82,16 @@ describe("shims v2 endpoint", () => {
     expect((await handler(req("/shims/v1/easy-ui-runtime.js"))).status).toBe(404);
     db.close();
   });
+
+  test("serves ABI v3 standard and runtime shims", async () => {
+    const { db, handler } = await setup();
+    expect((await handler(req("/shims/v3/react.js"))).status).toBe(200);
+    const runtime = await handler(req("/shims/v3/easy-ui-runtime.js"));
+    expect(runtime.status).toBe(200);
+    const source = await runtime.text();
+    expect(source).toContain("export function token");
+    expect(source).toContain("export function space");
+    expect(source).toContain("var(--eui-space-");
+    db.close();
+  });
 });

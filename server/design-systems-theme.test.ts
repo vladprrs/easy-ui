@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { openDatabase } from "./db";
 import { createHandler } from "./main";
 import { PrototypeRepo } from "./repos/prototypes";
+import { insertDesignSystemVersion } from "./designSystems";
 import { prototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
 
 const dirs: string[] = [];
@@ -29,6 +30,10 @@ const woff2 = (): Bytes => { const b = new Uint8Array(16); b.set([0x77, 0x4f, 0x
 
 const upload = (bytes: Bytes, mime: string) => new Request("http://test/api/assets", { method: "POST", headers: { "content-type": mime }, body: bytes });
 const req = (url: string, method = "GET", value?: unknown) => new Request(`http://test/api${url}`, { method, headers: value ? { "content-type": "application/json" } : undefined, body: value ? JSON.stringify(value) : undefined });
+const fullSpace = {
+  "space.none": "0px", "space.xs": "4px", "space.sm": "8px", "space.md": "12px", "space.lg": "16px",
+  "space.xl": "24px", "space.2xl": "32px", "space.3xl": "48px", "space.4xl": "64px",
+};
 
 async function uploadAsset(handler: (r: Request) => Promise<Response>, bytes: Bytes, mime: string): Promise<string> {
   return (await (await handler(upload(bytes, mime))).json() as { id: string }).id;
@@ -75,6 +80,41 @@ describe("PATCH /api/design-systems/:id — theme grammar", () => {
     expect(bad.status).toBe(422);
     const badVal = await handler(req("/design-systems/custom-b", "PATCH", { tokens: { "color.a": "x{y}" }, baseVersion: 0 }));
     expect(badVal.status).toBe(422);
+    db.close();
+  });
+
+  test("validates complete absolute-px, zero-origin, monotonic spacing scales", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "space-validation");
+    expect((await handler(req("/design-systems/space-validation", "PATCH", { tokens: fullSpace, baseVersion: 0 }))).status).toBe(200);
+    for (const [index, tokens] of [
+      { "space.md": "12px" },
+      { ...fullSpace, "space.none": "1px" },
+      { ...fullSpace, "space.md": "1rem" },
+      { ...fullSpace, "space.md": "20px" },
+    ].entries()) {
+      const response = await handler(req("/design-systems/space-validation", "PATCH", { tokens, baseVersion: 1 }));
+      expect(response.status, `invalid scale ${index}`).toBe(422);
+    }
+    db.close();
+  });
+
+  test("grandfathers malformed spacing unless PATCH explicitly touches space.*", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "legacy-space");
+    insertDesignSystemVersion(db, "legacy-space", 1, { tokens: { "space.md": "broken" }, fonts: [], icons: [] }, new Date().toISOString());
+
+    let response = await handler(req("/design-systems/legacy-space", "PATCH", { fonts: [], baseVersion: 1 }));
+    expect(response.status).toBe(200);
+    expect((await response.json() as { tokens: unknown }).tokens).toEqual({ "space.md": "broken" });
+    response = await handler(req("/design-systems/legacy-space", "PATCH", { icons: [], baseVersion: 2 }));
+    expect(response.status).toBe(200);
+    response = await handler(req("/design-systems/legacy-space", "PATCH", { tokens: { "color.brand": "red" }, baseVersion: 3 }));
+    expect(response.status).toBe(200);
+    response = await handler(req("/design-systems/legacy-space", "PATCH", { tokens: { "space.md": "20px" }, baseVersion: 4 }));
+    expect(response.status).toBe(422);
+    response = await handler(req("/design-systems/legacy-space", "PATCH", { tokens: { ...fullSpace, "space.md": "20px", "space.lg": "24px", "space.xl": "32px", "space.2xl": "40px", "space.3xl": "56px", "space.4xl": "72px" }, baseVersion: 4 }));
+    expect(response.status).toBe(200);
     db.close();
   });
 

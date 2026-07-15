@@ -38,3 +38,4 @@ data/
 
 # local prod data snapshots
 .backups/
+.w0-data/
