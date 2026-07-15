@@ -1,11 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  getComponentMeta, getPrototypeMeta, getPrototypeRevision, getPrototypeVersion, listComponents,
+  ApiError, getComponentMeta, getPrototypeMeta, getPrototypeRevision, getPrototypeVersion, listComponents,
   listPrototypeRevisions, listPrototypes,
 } from "../api/client";
 import {
-  enqueueComponentScreenshot, enqueuePrototypeScreenshot, getScreenshotJob, getVisualReference,
+  deleteVisualReference, enqueueComponentScreenshot, enqueuePrototypeScreenshot, getScreenshotJob, getVisualReference,
   listVisualReferences, putVisualReference,
 } from "./api";
 import { VisualPage } from "./VisualPage";
@@ -99,6 +99,34 @@ describe("VisualPage reference capture", () => {
       viewport: { width: 390, height: 844 },
     }), "asset_png", undefined));
     expect(enqueuePrototypeScreenshot).toHaveBeenCalledWith("checkout", "welcome", { rev: 2 }, expect.objectContaining({ viewport: { width: 390, height: 844 } }));
+  });
+
+  it("explains a baseline-managed conflict when PUT cannot create a generic reference", async () => {
+    vi.mocked(enqueuePrototypeScreenshot).mockResolvedValue({ jobId: "shot_managed" });
+    vi.mocked(getScreenshotJob).mockResolvedValue({ status: "done", result: { imageUrl: "/asset", assetId: "asset_png", width: 390, height: 844, consoleErrors: [], pageErrors: [] } });
+    vi.mocked(putVisualReference).mockRejectedValue(new ApiError(409, { code: "baseline_managed", message: "raw server error" }));
+    render(<VisualPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "+ Снять эталон" }));
+    await screen.findByLabelText("Экран");
+    const capture = screen.getByRole("button", { name: "Снять эталон" }) as HTMLButtonElement;
+    await waitFor(() => expect(capture.disabled).toBe(false));
+    fireEvent.click(capture);
+
+    expect(await screen.findByText("Этот reference управляется baseline-набором и не может быть изменён отдельно.")).toBeTruthy();
+    expect(screen.queryByText("raw server error")).toBeNull();
+  });
+
+  it("explains a baseline-managed conflict when DELETE cannot remove a generic reference", async () => {
+    const reference = { id: "vref_managed", fingerprint: { scope: "prototype-screen", prototypeId: "checkout", screenId: "welcome", refRevision: 2 }, note: null, createdAt: "now", asset: null, lastRun: null };
+    vi.mocked(listVisualReferences).mockResolvedValue({ references: [reference] });
+    vi.mocked(getVisualReference).mockResolvedValue({ ...reference, runs: [] });
+    vi.mocked(deleteVisualReference).mockRejectedValue(new ApiError(409, { code: "baseline_managed", message: "raw delete error" }));
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    render(<VisualPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Удалить эталон" }));
+
+    expect(await screen.findByText("Этот reference управляется baseline-набором и не может быть изменён отдельно.")).toBeTruthy();
+    expect(screen.queryByText("raw delete error")).toBeNull();
   });
 
   it("stops polling without cancelling the component screenshot job", async () => {

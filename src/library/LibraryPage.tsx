@@ -119,7 +119,7 @@ export function LibraryPage() {
       {storybook.status === "error" || (storybook.status === "ready" && !storybook.data) ? <SourceError label={library.storybookUnavailable} retry={storybook.reload} /> : null}
       {manifest.status === "loading" ? <p className="rounded-xl bg-eui-lav p-3 text-sm text-eui-slate-500" role="status">{library.loadingCatalog}</p> : null}
       {manifest.status === "error" ? <SourceError label={library.catalogUnavailable} retry={manifest.reload} /> : null}
-      {selectedStory ? <StoryPreview story={selectedStory} /> : selectedComponent ? <ComponentMetadata component={selectedComponent} systemName={active?.system.name ?? selectedComponent.designSystem} /> : active && !active.stories.length && !active.components.length ? <EmptySystem /> : <div className="flex flex-1 items-center justify-center rounded-3xl bg-eui-lav p-6 text-center text-eui-slate-500">{library.selectComponent}</div>}
+      {selectedStory ? <StoryPreview story={selectedStory} /> : selectedComponent ? <ComponentMetadata key={`${selectedComponent.id}@${selectedComponent.version}`} component={selectedComponent} systemName={active?.system.name ?? selectedComponent.designSystem} /> : active && !active.stories.length && !active.components.length ? <EmptySystem /> : <div className="flex flex-1 items-center justify-center rounded-3xl bg-eui-lav p-6 text-center text-eui-slate-500">{library.selectComponent}</div>}
     </section>
   </main>;
 }
@@ -168,12 +168,21 @@ function ComponentMetadata({ component, systemName }: { component: CatalogCompon
   const version = meta.status === "ready" ? meta.data.versions.find((entry) => entry.version === component.version) : undefined;
   const badge = version ? componentStatusBadge(version.status, version.statusReason) : null;
   const figma = meta.status === "ready" ? meta.data.figma ?? null : null;
-  const previewUrl = component.example ? `/capture/component/${encodeURIComponent(component.id)}/${component.version}?props=example` : null;
+  const variants = useMemo(() => [
+    ...(component.example ? ["default"] : []),
+    ...Object.keys(component.examples ?? {}).sort(),
+  ], [component.example, component.examples]);
+  const [selectedVariant, setSelectedVariant] = useState<string | null>(() => variants[0] ?? null);
+  const previewUrl = selectedVariant === null ? null
+    : `/capture/component/${encodeURIComponent(component.id)}/${component.version}?${selectedVariant === "default" ? "props=example" : `example=${encodeURIComponent(selectedVariant)}`}`;
   return <article className="max-w-2xl rounded-3xl bg-eui-lav p-6">
     <div className="flex items-center gap-2"><p className={kicker}>{library.customBadge}</p>{badge ? <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${badge.className}`} title={badge.title}>{badge.label}</span> : null}{figma ? <FigmaBadge figma={figma} /> : null}</div>
     <h2 className="mt-2 font-eui-display text-2xl font-medium">{component.name}</h2>
+    {variants.length ? <div className="mt-4 flex flex-wrap gap-2" aria-label={library.previewVariantsAria}>
+      {variants.map((variant) => <button type="button" key={variant} aria-pressed={selectedVariant === variant} className={selectedVariant === variant ? chipActive : chip} onClick={() => setSelectedVariant(variant)}>{variant}</button>)}
+    </div> : null}
     {previewUrl
-      ? <iframe className="mt-4 h-64 w-full overflow-hidden rounded-2xl border border-eui-ink/10 bg-background" title={library.previewTitle(component.name)} src={previewUrl} />
+      ? <iframe className="mt-3 h-64 w-full overflow-hidden rounded-2xl border border-eui-ink/10 bg-background" title={library.previewTitle(component.name)} src={previewUrl} />
       : <p className="mt-4 rounded-2xl bg-eui-lilac-100/50 p-4 text-sm text-eui-slate-500">{library.noExampleProps}</p>}
     <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
       <Metadata label={library.metaSystem} value={systemName} /><Metadata label={library.metaAtomicLevel} value={levelSection(atomicLevelLabel(component.atomicLevel))} /><Metadata label={library.metaVersion} value={`v${component.version}`} />

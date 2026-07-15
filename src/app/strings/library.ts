@@ -28,6 +28,7 @@ export const library = {
   customSectionSuffix: "пользовательские",
   linkedToFigma: "Связан с Figma",
   previewTitle: (componentName: string) => `Превью компонента ${componentName}`,
+  previewVariantsAria: "Варианты превью",
   noExampleProps: "Example-props не заданы, поэтому живое превью недоступно.",
   metaSystem: "Система",
   metaAtomicLevel: "Атомарный уровень",

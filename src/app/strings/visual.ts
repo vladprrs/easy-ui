@@ -70,6 +70,7 @@ export const visual = {
   resumeWaiting: "Продолжить ожидание",
   deleteReference: "Удалить эталон",
   deleteConfirm: "Удалить активный эталон? История прогонов сохранится.",
+  baselineManaged: "Этот reference управляется baseline-набором и не может быть изменён отдельно.",
 } as const;
 
 export const runStatusLabel = (status: RunStatus): string => {

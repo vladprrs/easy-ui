@@ -27,6 +27,10 @@ const errorText = (caught: unknown): string => caught instanceof ApiError
   ? formatApiError(caught.code, { message: caught.message, status: caught.status })
   : caught instanceof Error ? caught.message : String(caught);
 
+const referenceMutationErrorText = (caught: unknown): string => caught instanceof ApiError && caught.status === 409 && caught.code === "baseline_managed"
+  ? visual.baselineManaged
+  : errorText(caught);
+
 export function VisualPage() {
   useDocumentTitle(visual.title);
   const [scope, setScope] = useState<string | null>(null);
@@ -92,7 +96,7 @@ function ReferenceDetail({ id, onChanged, onDeleted }: { id: string; onChanged: 
     if (!window.confirm(visual.deleteConfirm)) return;
     setBusy(true); setError(null);
     try { await deleteVisualReference(id); onDeleted(); }
-    catch (caught) { setError(errorText(caught)); }
+    catch (caught) { setError(referenceMutationErrorText(caught)); }
     finally { setBusy(false); }
   };
 
@@ -278,7 +282,7 @@ function CaptureReference({ onCreated }: { onCreated: (id: string) => void }) {
         await delay(500);
       }
     } catch (caught) {
-      if (pollingGeneration.current === generation) { setError(errorText(caught)); setProgress(null); }
+      if (pollingGeneration.current === generation) { setError(referenceMutationErrorText(caught)); setProgress(null); }
     } finally {
       if (pollingGeneration.current === generation) setBusy(false);
     }

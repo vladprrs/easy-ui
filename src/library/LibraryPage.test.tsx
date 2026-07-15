@@ -32,7 +32,7 @@ describe("LibraryPage", () => {
     ] });
   });
 
-  const ratingManifest = { components: [{ id: "rating", name: "Rating", designSystem: "yandex-pay", version: 3, bundleUrl: "/rating.js", bundleHash: "hash", atomicLevel: "molecule" as const, description: "Choose a rating", events: ["change"], slots: ["icon"], hostAbiVersion: 1, example: { rating: 3 } }] };
+  const ratingManifest = { components: [{ id: "rating", name: "Rating", designSystem: "yandex-pay", version: 3, bundleUrl: "/rating.js", bundleHash: "hash", atomicLevel: "molecule" as const, description: "Choose a rating", events: ["change"], slots: ["icon"], hostAbiVersion: 1, example: { rating: 3 }, examples: { wide: { rating: 5 }, compact: { rating: 1 } } }] };
   const badgeManifest = { id: "badge", name: "Badge", designSystem: "yandex-pay", version: 1, bundleUrl: "/badge.js", bundleHash: "badge-hash", atomicLevel: "atom" as const, description: "Show a badge", events: [], slots: [], hostAbiVersion: 1 };
 
   it("keeps registry systems and custom cards visible when Storybook is unavailable", async () => {
@@ -82,6 +82,57 @@ describe("LibraryPage", () => {
     fireEvent.click(within(filters).getByRole("button", { name: "Заблокирован" }));
     expect(within(navigation).getByRole("button", { name: /Rating/ })).toBeTruthy();
     expect(within(navigation).queryByRole("button", { name: /Badge/ })).toBeNull();
+  });
+
+  it("shows sorted preview variants, updates the URL, and resets selection for another component", async () => {
+    vi.mocked(fetchStorybookIndex).mockResolvedValue(null);
+    const badgeWithDefault = { ...badgeManifest, example: { text: "new" } };
+    vi.mocked(getCatalogManifest).mockResolvedValue({ components: [...ratingManifest.components, badgeWithDefault] });
+    vi.mocked(getComponentMeta).mockImplementation(async (id) => ({
+      id, name: id === "rating" ? "Rating" : "Badge", designSystem: "yandex-pay", headRev: id === "rating" ? 3 : 1, updatedAt: "now", figma: null,
+      versions: [{ version: id === "rating" ? 3 : 1, rev: id === "rating" ? 3 : 1, status: "active", statusReason: null, supersededBy: null, statusRev: 1, designSystem: "yandex-pay", publishedAt: "now" }],
+    }));
+    renderLibrary();
+    const switcher = await screen.findByLabelText("Дизайн-системы");
+    fireEvent.click(within(switcher).getByRole("button", { name: "Yandex Pay Design System" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rating" }));
+
+    const variants = screen.getByLabelText("Варианты превью");
+    expect(within(variants).getAllByRole("button").map((button) => button.textContent)).toEqual(["default", "compact", "wide"]);
+    expect(screen.getByTitle("Превью компонента Rating").getAttribute("src")).toBe("/capture/component/rating/3?props=example");
+    fireEvent.click(within(variants).getByRole("button", { name: "wide" }));
+    expect(screen.getByTitle("Превью компонента Rating").getAttribute("src")).toBe("/capture/component/rating/3?example=wide");
+
+    fireEvent.click(screen.getByRole("button", { name: "Badge" }));
+    await waitFor(() => expect(screen.getByTitle("Превью компонента Badge").getAttribute("src")).toBe("/capture/component/badge/1?props=example"));
+    expect(within(screen.getByLabelText("Варианты превью")).getAllByRole("button").map((button) => button.textContent)).toEqual(["default"]);
+  });
+
+  it("uses the no-example fallback when neither legacy nor named examples exist", async () => {
+    vi.mocked(fetchStorybookIndex).mockResolvedValue(null);
+    vi.mocked(getCatalogManifest).mockResolvedValue({ components: [badgeManifest] });
+    renderLibrary();
+    fireEvent.click(within(await screen.findByLabelText("Дизайн-системы")).getByRole("button", { name: "Yandex Pay Design System" }));
+    expect(screen.getByText("Example-props не заданы, поэтому живое превью недоступно.")).toBeTruthy();
+    expect(screen.queryByLabelText("Варианты превью")).toBeNull();
+  });
+
+  it("resets the selected variant when the component version changes", async () => {
+    vi.mocked(fetchStorybookIndex).mockResolvedValue(null);
+    const v3 = ratingManifest.components[0];
+    const v4 = { ...v3, designSystem: "shadcn", version: 4, bundleHash: "hash-v4" };
+    vi.mocked(getCatalogManifest).mockResolvedValue({ components: [v4, v3] });
+    vi.mocked(getComponentMeta).mockResolvedValue({ id: "rating", name: "Rating", designSystem: "shadcn", headRev: 4, updatedAt: "now", figma: null, versions: [] });
+    renderLibrary();
+
+    const switcher = await screen.findByLabelText("Дизайн-системы");
+    const variants = await screen.findByLabelText("Варианты превью");
+    fireEvent.click(within(variants).getByRole("button", { name: "wide" }));
+    expect(screen.getByTitle("Превью компонента Rating").getAttribute("src")).toBe("/capture/component/rating/4?example=wide");
+    fireEvent.click(within(switcher).getByRole("button", { name: "Yandex Pay Design System" }));
+
+    await waitFor(() => expect(screen.getByTitle("Превью компонента Rating").getAttribute("src")).toBe("/capture/component/rating/3?props=example"));
+    expect(within(screen.getByLabelText("Варианты превью")).getByRole("button", { name: "default" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("hides status filters for builtin stories and a uniform custom component list", async () => {
