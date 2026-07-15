@@ -759,6 +759,20 @@
                             },
                             "type": "object"
                           },
+                          "examples": {
+                            "additionalProperties": {
+                              "additionalProperties": {},
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "propertyNames": {
+                              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                              "type": "string"
+                            },
+                            "type": "object"
+                          },
                           "hostAbiVersion": {
                             "type": "number"
                           },
@@ -2258,6 +2272,20 @@
                       },
                       "type": "array"
                     },
+                    "examples": {
+                      "additionalProperties": {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "propertyNames": {
+                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
                     "figma": {
                       "anyOf": [
                         {
@@ -2446,23 +2474,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "properties": {
-                  "deviceScaleFactor": {
-                    "maximum": 9007199254740991,
-                    "minimum": -9007199254740991,
-                    "type": "integer"
-                  },
-                  "props": {
+                "$defs": {
+                  "__schema0": {
                     "additionalProperties": {},
                     "propertyNames": {
                       "type": "string"
                     },
                     "type": "object"
                   },
-                  "theme": {
+                  "__schema1": {
                     "type": "string"
                   },
-                  "viewport": {
+                  "__schema2": {
                     "properties": {
                       "height": {
                         "maximum": 9007199254740991,
@@ -2481,8 +2504,36 @@
                     ],
                     "type": "object"
                   },
-                  "waitForFonts": {
+                  "__schema3": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "__schema4": {
+                    "type": "string"
+                  },
+                  "__schema5": {
                     "type": "boolean"
+                  }
+                },
+                "properties": {
+                  "deviceScaleFactor": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "exampleName": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "props": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "theme": {
+                    "$ref": "#/$defs/__schema4"
+                  },
+                  "viewport": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "waitForFonts": {
+                    "$ref": "#/$defs/__schema5"
                   }
                 },
                 "required": [
@@ -2514,6 +2565,16 @@
             },
             "description": "Success"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -2532,7 +2593,7 @@
                 }
               }
             },
-            "description": "invalid_props | invalid_viewport (viewport/dsf bounds violated)"
+            "description": "invalid_props | unknown_example | invalid_viewport (viewport/dsf bounds violated)"
           },
           "429": {
             "content": {
@@ -2555,7 +2616,7 @@
             "description": "screenshot_unavailable (no SERVE_DIST or chromium)"
           }
         },
-        "summary": "Enqueue a published-component screenshot job with optional props.",
+        "summary": "Enqueue a published-component screenshot job with optional props or a named example.",
         "x-easyui-validated": false
       }
     },
@@ -5866,6 +5927,829 @@
           }
         },
         "summary": "Read a specific immutable revision.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/prototypes/{id}/revisions/{rev}/diff": {
+      "get": {
+        "operationId": "get_prototypes_id_revisions_rev_diff",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rev",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "against",
+            "required": false,
+            "schema": {
+              "pattern": "^[1-9][0-9]*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "maxLength": 160,
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "value": {
+                              "$ref": "#/$defs/__schema2"
+                            }
+                          },
+                          "required": [
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "truncated": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "chars": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991,
+                                  "type": "integer"
+                                },
+                                "preview": {
+                                  "maxLength": 120,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "preview",
+                                "chars"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "truncated"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "missing": {
+                              "const": true,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "missing"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "__schema2": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "items": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "__schema3": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "omitted": {
+                          "const": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "omitted"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema4": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "added": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "key": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "value": {
+                                "$ref": "#/$defs/__schema1"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "value"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "changed": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "from": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "key": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "to": {
+                                "$ref": "#/$defs/__schema1"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "from",
+                              "to"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "removed": {
+                          "items": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "__schema5": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "from": {
+                          "$ref": "#/$defs/__schema1"
+                        },
+                        "to": {
+                          "$ref": "#/$defs/__schema1"
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "doc": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "from": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "key": {
+                                "enum": [
+                                  "name",
+                                  "description",
+                                  "device",
+                                  "designSystem",
+                                  "startScreen"
+                                ],
+                                "type": "string"
+                              },
+                              "to": {
+                                "$ref": "#/$defs/__schema1"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "from",
+                              "to"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "$ref": "#/$defs/__schema3"
+                        }
+                      ]
+                    },
+                    "from": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "$ref": "#/$defs/__schema1"
+                        },
+                        "rev": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "rev",
+                        "message",
+                        "createdAt"
+                      ],
+                      "type": "object"
+                    },
+                    "pins": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "assets": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "added": {
+                                  "items": {
+                                    "$ref": "#/$defs/__schema0"
+                                  },
+                                  "type": "array"
+                                },
+                                "removed": {
+                                  "items": {
+                                    "$ref": "#/$defs/__schema0"
+                                  },
+                                  "type": "array"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "components": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "added": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "$ref": "#/$defs/__schema0"
+                                      },
+                                      "version": {
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991,
+                                        "type": "integer"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "version"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                },
+                                "changed": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "from": {
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991,
+                                        "type": "integer"
+                                      },
+                                      "id": {
+                                        "$ref": "#/$defs/__schema0"
+                                      },
+                                      "to": {
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991,
+                                        "type": "integer"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "from",
+                                      "to"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                },
+                                "removed": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "$ref": "#/$defs/__schema0"
+                                      },
+                                      "version": {
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991,
+                                        "type": "integer"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "version"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                }
+                              },
+                              "type": "object"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "$ref": "#/$defs/__schema3"
+                        }
+                      ]
+                    },
+                    "prototypeId": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "renderInputs": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "from": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "key": {
+                                "enum": [
+                                  "builtinCatalogHash",
+                                  "componentManifestHash",
+                                  "designSystemMetaVersion"
+                                ],
+                                "type": "string"
+                              },
+                              "to": {
+                                "$ref": "#/$defs/__schema1"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "from",
+                              "to"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "$ref": "#/$defs/__schema3"
+                        }
+                      ]
+                    },
+                    "screenOrder": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "from": {
+                              "items": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "maxItems": 100,
+                              "type": "array"
+                            },
+                            "to": {
+                              "items": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "maxItems": 100,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "from",
+                            "to"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "$ref": "#/$defs/__schema3"
+                        }
+                      ]
+                    },
+                    "screens": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "added": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "elementCount": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "id": {
+                                    "$ref": "#/$defs/__schema0"
+                                  },
+                                  "name": {
+                                    "$ref": "#/$defs/__schema0"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "name",
+                                  "elementCount"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "changed": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "elements": {
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "added": {
+                                            "items": {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "id": {
+                                                  "$ref": "#/$defs/__schema0"
+                                                },
+                                                "type": {
+                                                  "$ref": "#/$defs/__schema0"
+                                                }
+                                              },
+                                              "required": [
+                                                "id",
+                                                "type"
+                                              ],
+                                              "type": "object"
+                                            },
+                                            "type": "array"
+                                          },
+                                          "changed": {
+                                            "items": {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "children": {
+                                                  "$ref": "#/$defs/__schema5"
+                                                },
+                                                "id": {
+                                                  "$ref": "#/$defs/__schema0"
+                                                },
+                                                "on": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "added": {
+                                                      "items": {
+                                                        "$ref": "#/$defs/__schema0"
+                                                      },
+                                                      "type": "array"
+                                                    },
+                                                    "changed": {
+                                                      "items": {
+                                                        "$ref": "#/$defs/__schema0"
+                                                      },
+                                                      "type": "array"
+                                                    },
+                                                    "removed": {
+                                                      "items": {
+                                                        "$ref": "#/$defs/__schema0"
+                                                      },
+                                                      "type": "array"
+                                                    }
+                                                  },
+                                                  "type": "object"
+                                                },
+                                                "props": {
+                                                  "anyOf": [
+                                                    {
+                                                      "$ref": "#/$defs/__schema4"
+                                                    },
+                                                    {
+                                                      "$ref": "#/$defs/__schema3"
+                                                    }
+                                                  ]
+                                                },
+                                                "repeat": {
+                                                  "$ref": "#/$defs/__schema5"
+                                                },
+                                                "slot": {
+                                                  "$ref": "#/$defs/__schema5"
+                                                },
+                                                "type": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "from": {
+                                                      "$ref": "#/$defs/__schema0"
+                                                    },
+                                                    "to": {
+                                                      "$ref": "#/$defs/__schema0"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "from",
+                                                    "to"
+                                                  ],
+                                                  "type": "object"
+                                                },
+                                                "visible": {
+                                                  "$ref": "#/$defs/__schema5"
+                                                }
+                                              },
+                                              "required": [
+                                                "id"
+                                              ],
+                                              "type": "object"
+                                            },
+                                            "type": "array"
+                                          },
+                                          "removed": {
+                                            "items": {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "id": {
+                                                  "$ref": "#/$defs/__schema0"
+                                                },
+                                                "type": {
+                                                  "$ref": "#/$defs/__schema0"
+                                                }
+                                              },
+                                              "required": [
+                                                "id",
+                                                "type"
+                                              ],
+                                              "type": "object"
+                                            },
+                                            "type": "array"
+                                          }
+                                        },
+                                        "type": "object"
+                                      },
+                                      {
+                                        "$ref": "#/$defs/__schema3"
+                                      }
+                                    ]
+                                  },
+                                  "id": {
+                                    "$ref": "#/$defs/__schema0"
+                                  },
+                                  "meta": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "from": {
+                                          "$ref": "#/$defs/__schema1"
+                                        },
+                                        "key": {
+                                          "enum": [
+                                            "name",
+                                            "note",
+                                            "canvas",
+                                            "root"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "to": {
+                                          "$ref": "#/$defs/__schema1"
+                                        }
+                                      },
+                                      "required": [
+                                        "key",
+                                        "from",
+                                        "to"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "stateOverrides": {
+                                    "$ref": "#/$defs/__schema4"
+                                  }
+                                },
+                                "required": [
+                                  "id"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "removed": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "id": {
+                                    "$ref": "#/$defs/__schema0"
+                                  },
+                                  "name": {
+                                    "$ref": "#/$defs/__schema0"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "name"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "$ref": "#/$defs/__schema3"
+                        }
+                      ]
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/__schema4"
+                        },
+                        {
+                          "$ref": "#/$defs/__schema3"
+                        }
+                      ]
+                    },
+                    "summary": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "docIdentical": {
+                          "type": "boolean"
+                        },
+                        "identical": {
+                          "type": "boolean"
+                        },
+                        "omittedSections": {
+                          "items": {
+                            "enum": [
+                              "props",
+                              "elements",
+                              "screens",
+                              "state",
+                              "doc",
+                              "pins",
+                              "renderInputs",
+                              "screenOrder"
+                            ],
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "screensAdded": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "screensChanged": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "screensRemoved": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "staticElementsAdded": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "staticElementsChanged": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "staticElementsRemoved": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "truncated": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "screensAdded",
+                        "screensRemoved",
+                        "screensChanged",
+                        "staticElementsAdded",
+                        "staticElementsRemoved",
+                        "staticElementsChanged",
+                        "identical",
+                        "docIdentical",
+                        "truncated",
+                        "omittedSections"
+                      ],
+                      "type": "object"
+                    },
+                    "to": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "createdAt": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "$ref": "#/$defs/__schema1"
+                        },
+                        "rev": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "rev",
+                        "message",
+                        "createdAt"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "prototypeId",
+                    "from",
+                    "to",
+                    "summary"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found | revision_not_found"
+          }
+        },
+        "summary": "Compare two immutable prototype revisions, including document, pin and render-input changes.",
         "x-easyui-validated": false
       }
     },

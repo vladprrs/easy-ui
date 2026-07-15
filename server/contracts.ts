@@ -208,6 +208,11 @@ const screenshotErrors = [
 
 export const jobAcceptedSchema = z.object({ jobId: z.string() });
 
+const componentExamplesSchema = z.record(
+  z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  z.record(z.string(), z.unknown()),
+);
+
 export const prototypeScreenshotContract = registerContract({
   method: "POST",
   path: "/api/prototypes/{id}/screens/{screenId}/screenshot",
@@ -221,11 +226,12 @@ export const prototypeScreenshotContract = registerContract({
 export const componentScreenshotContract = registerContract({
   method: "POST",
   path: "/api/components/{id}/versions/{version}/screenshot",
-  summary: "Enqueue a published-component screenshot job with optional props.",
+  summary: "Enqueue a published-component screenshot job with optional props or a named example.",
   status: 202,
-  requestSchema: z.object({ props: z.record(z.string(), z.unknown()).optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional() }),
+  requestSchema: z.object({ props: z.record(z.string(), z.unknown()).optional(), exampleName: z.string().optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional() })
+    .refine((value) => !(value.props !== undefined && value.exampleName !== undefined), { message: "props and exampleName are mutually exclusive" }),
   responseSchema: jobAcceptedSchema,
-  errors: [{ status: 404, code: "not_found" }, { status: 422, code: "invalid_props" }, ...screenshotErrors],
+  errors: [{ status: 400, code: "invalid_request" }, { status: 404, code: "not_found" }, { status: 422, code: "invalid_props" }, { status: 422, code: "unknown_example" }, ...screenshotErrors],
 });
 
 export const screenshotJobResultSchema = z.object({
@@ -497,6 +503,96 @@ export const getPrototypeRevisionContract = registerContract({
   errors: [errorCatalog.invalidRequest, errorCatalog.prototypeNotFound, errorCatalog.revisionNotFound],
 });
 
+const diffJsonSchema = z.json();
+const boundedDiffString = z.string().max(160);
+const diffValueSchema = z.union([
+  z.strictObject({ value: diffJsonSchema }),
+  z.strictObject({ truncated: z.strictObject({ preview: z.string().max(120), chars: z.number().int().positive() }) }),
+  z.strictObject({ missing: z.literal(true) }),
+]);
+const omittedSchema = z.strictObject({ omitted: z.literal(true) });
+const diffFieldSchema = z.strictObject({ key: boundedDiffString, from: diffValueSchema, to: diffValueSchema });
+const docDiffFieldSchema = diffFieldSchema.extend({ key: z.enum(["name", "description", "device", "designSystem", "startScreen"]) });
+const screenMetaDiffFieldSchema = diffFieldSchema.extend({ key: z.enum(["name", "note", "canvas", "root"]) });
+const renderInputDiffFieldSchema = diffFieldSchema.extend({ key: z.enum(["builtinCatalogHash", "componentManifestHash", "designSystemMetaVersion"]) });
+const diffMapSchema = z.strictObject({
+  added: z.array(z.strictObject({ key: boundedDiffString, value: diffValueSchema })).optional(),
+  removed: z.array(boundedDiffString).optional(),
+  changed: z.array(diffFieldSchema).optional(),
+});
+const namedSetDiffSchema = z.strictObject({
+  added: z.array(boundedDiffString).optional(),
+  removed: z.array(boundedDiffString).optional(),
+  changed: z.array(boundedDiffString).optional(),
+});
+const elementValueDiffSchema = z.strictObject({ from: diffValueSchema, to: diffValueSchema });
+const elementChangedSchema = z.strictObject({
+  id: boundedDiffString,
+  type: z.strictObject({ from: boundedDiffString, to: boundedDiffString }).optional(),
+  props: z.union([diffMapSchema, omittedSchema]).optional(),
+  children: elementValueDiffSchema.optional(),
+  on: namedSetDiffSchema.optional(),
+  visible: elementValueDiffSchema.optional(),
+  repeat: elementValueDiffSchema.optional(),
+  slot: elementValueDiffSchema.optional(),
+});
+const elementsDiffSchema = z.union([
+  z.strictObject({
+    added: z.array(z.strictObject({ id: boundedDiffString, type: boundedDiffString })).optional(),
+    removed: z.array(z.strictObject({ id: boundedDiffString, type: boundedDiffString })).optional(),
+    changed: z.array(elementChangedSchema).optional(),
+  }),
+  omittedSchema,
+]);
+const screensDiffSchema = z.union([
+  z.strictObject({
+    added: z.array(z.strictObject({ id: boundedDiffString, name: boundedDiffString, elementCount: z.number().int().nonnegative() })).optional(),
+    removed: z.array(z.strictObject({ id: boundedDiffString, name: boundedDiffString })).optional(),
+    changed: z.array(z.strictObject({
+      id: boundedDiffString,
+      meta: z.array(screenMetaDiffFieldSchema).optional(),
+      stateOverrides: diffMapSchema.optional(),
+      elements: elementsDiffSchema.optional(),
+    })).optional(),
+  }),
+  omittedSchema,
+]);
+const pinsDiffSchema = z.strictObject({
+  components: z.strictObject({
+    added: z.array(z.strictObject({ id: boundedDiffString, version: z.number().int().positive() })).optional(),
+    removed: z.array(z.strictObject({ id: boundedDiffString, version: z.number().int().positive() })).optional(),
+    changed: z.array(z.strictObject({ id: boundedDiffString, from: z.number().int().positive(), to: z.number().int().positive() })).optional(),
+  }).optional(),
+  assets: z.strictObject({ added: z.array(boundedDiffString).optional(), removed: z.array(boundedDiffString).optional() }).optional(),
+});
+
+export const prototypeRevisionDiffQuerySchema = z.strictObject({ against: positiveIntFromString.optional() });
+
+export const prototypeRevisionDiffContract = registerContract({
+  method: "GET",
+  path: "/api/prototypes/{id}/revisions/{rev}/diff",
+  summary: "Compare two immutable prototype revisions, including document, pin and render-input changes.",
+  query: prototypeRevisionDiffQuerySchema,
+  responseSchema: z.strictObject({
+    prototypeId: boundedDiffString,
+    from: z.strictObject({ rev: z.number().int().positive(), message: diffValueSchema, createdAt: z.string() }),
+    to: z.strictObject({ rev: z.number().int().positive(), message: diffValueSchema, createdAt: z.string() }),
+    doc: z.union([z.array(docDiffFieldSchema), omittedSchema]).optional(),
+    state: z.union([diffMapSchema, omittedSchema]).optional(),
+    screens: screensDiffSchema.optional(),
+    screenOrder: z.union([z.strictObject({ from: z.array(boundedDiffString).max(100), to: z.array(boundedDiffString).max(100) }), omittedSchema]).optional(),
+    pins: z.union([pinsDiffSchema, omittedSchema]).optional(),
+    renderInputs: z.union([z.array(renderInputDiffFieldSchema), omittedSchema]).optional(),
+    summary: z.strictObject({
+      screensAdded: z.number().int().nonnegative(), screensRemoved: z.number().int().nonnegative(), screensChanged: z.number().int().nonnegative(),
+      staticElementsAdded: z.number().int().nonnegative(), staticElementsRemoved: z.number().int().nonnegative(), staticElementsChanged: z.number().int().nonnegative(),
+      identical: z.boolean(), docIdentical: z.boolean(), truncated: z.boolean(),
+      omittedSections: z.array(z.enum(["props", "elements", "screens", "state", "doc", "pins", "renderInputs", "screenOrder"])),
+    }),
+  }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.prototypeNotFound, errorCatalog.revisionNotFound],
+});
+
 export const restorePrototypeContract = registerContract({
   method: "POST", path: "/api/prototypes/{id}/restore",
   summary: "Restore an older revision as a new head revision (copies component/asset pins).",
@@ -687,6 +783,7 @@ export const getComponentVersionContract = registerContract({
   responseSchema: z.looseObject({
     version: z.number(), rev: z.number(), source: z.string(), designSystem: z.string(),
     events: z.array(z.string()), slots: z.array(z.string()), description: z.string(),
+    examples: componentExamplesSchema.optional(),
     bundleHash: z.string(), hostAbiVersion: z.number(),
     assets: z.array(assetPublicSchema.omit({ width: true, height: true })), figma: figmaResponseSchema, publishedAt: isoDate,
   }),
@@ -754,7 +851,7 @@ export const catalogManifestContract = registerContract({
   summary: "Manifest of the latest active custom-component versions across design systems.",
   query: catalogManifestQuerySchema,
   validated: true,
-  responseSchema: z.object({ components: z.array(z.looseObject({ id: z.string(), name: z.string(), designSystem: z.string(), version: z.number(), bundleUrl: z.string(), bundleHash: z.string(), hostAbiVersion: z.number(), example: z.record(z.string(),z.unknown()).optional() })) }),
+  responseSchema: z.object({ components: z.array(z.looseObject({ id: z.string(), name: z.string(), designSystem: z.string(), version: z.number(), bundleUrl: z.string(), bundleHash: z.string(), hostAbiVersion: z.number(), example: z.record(z.string(),z.unknown()).optional(), examples: componentExamplesSchema.optional() })) }),
   errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed, errorCatalog.validationFailed],
 });
 
