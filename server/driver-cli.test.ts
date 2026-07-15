@@ -118,7 +118,7 @@ describe("author driver CLI", () => {
 
   test("get assets lists assets and routes an id to usage", async () => {
     const { api } = await setup();
-    const upload = await fetch(`${api}/assets`, { method: "POST", headers: { "content-type": "image/png" }, body: png() });
+    const upload = await fetch(`${api}/assets`, { method: "POST", headers: { "content-type": "image/png" }, body: new Blob([png() as BlobPart]) });
     expect(upload.status).toBe(201);
     const asset = await upload.json() as { id: string };
     const list = await run(api, ["get", "assets"]);
