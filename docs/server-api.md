@@ -79,6 +79,8 @@ Owner-endpoints share подчиняются обычному Basic Auth. Grant 
 
 Публичный `GET /share/:token` — единственный маршрут перед BasicAuth-гейтом. Живой token обменивается на opaque server-session, после чего сервер ставит host-only cookie `HttpOnly; SameSite=Lax; Path=/` (`Secure` только при HTTPS `PUBLIC_ORIGIN`) и отвечает `303` на абсолютный tokenless URL `/share/p/:id/v/:version/present/s/:startScreen`. Token исчезает из адресной строки и не попадает в referrer.
 
+Если запрос обмена содержит ровно один параметр `mobile` со строгим значением `0` или `1`, сервер переносит его в `Location` ответа `303`. Это позволяет форсировать режим мобильного плеера на принимающем устройстве; дубликаты, другие значения и все остальные query-параметры не переносятся.
+
 Share-cookie авторизует исключительно `GET`/`HEAD` по exact allowlist: share-present маршруты экранов, DTO выбранной version, её pinned component bundles и точные shim/asset/theme-version зависимости. Draft/list/write API, обычные `/p/*` маршруты, другие прототипы и версии не разрешены. Ответы имеют `Cache-Control: no-store`, `Vary: Cookie`, `Referrer-Policy: no-referrer`. Closure текущей SPA-сборки (Vite chunks, fonts, favicon и скопированные public-файлы) перечисляется из текущего `SERVE_DIST` на каждом запросе, не сохраняется в grant/session; уже выданная cookie поэтому продолжает работать после redeploy с новыми hash-именами. Revoke помечает grant и удаляет все его sessions немедленно.
 
 ### Матрица `designSystem` в DTO прототипов

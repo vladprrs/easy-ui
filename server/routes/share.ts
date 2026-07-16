@@ -33,11 +33,24 @@ export async function exchangeShareToken(
 ): Promise<Response> {
   if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
   const exchanged = repo.exchange(token);
+  const mobileValues = new URL(request.url).searchParams.getAll("mobile");
+  let location = exchanged.location;
+  if (mobileValues.length === 1 && (mobileValues[0] === "0" || mobileValues[0] === "1")) {
+    let locationWasAbsolute = true;
+    try {
+      new URL(location);
+    } catch {
+      locationWasAbsolute = false;
+    }
+    const locationUrl = new URL(location, publicOrigin.origin);
+    locationUrl.searchParams.set("mobile", mobileValues[0]);
+    location = locationWasAbsolute ? locationUrl.toString() : `${locationUrl.pathname}${locationUrl.search}`;
+  }
   return new Response(null, {
     status: 303,
     headers: {
       ...shareResponseHeaders,
-      location: exchanged.location,
+      location,
       "set-cookie": shareCookie(exchanged.session, publicOrigin.protocol === "https:"),
     },
   });

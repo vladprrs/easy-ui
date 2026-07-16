@@ -122,6 +122,29 @@ describe("scoped share", () => {
     db.close();
   });
 
+  test("forwards only one exact mobile override through the token exchange redirect", async () => {
+    const { db, handler } = await fixture();
+    const grant = await createGrant(handler);
+    const token = grant.url.split("/").at(-1)!;
+    const location = "http://127.0.0.1:4199/share/p/hello-world/v/1/present/s/welcome";
+    const cases = [
+      ["?mobile=0", `${location}?mobile=0`],
+      ["?mobile=1", `${location}?mobile=1`],
+      ["?mobile=1&mobile=0", location],
+      ["?mobile=yes", location],
+      ["?mobile=%0A", location],
+      ["?mobile=1&foo=bar", `${location}?mobile=1`],
+      ["", location],
+    ] as const;
+
+    for (const [query, expectedLocation] of cases) {
+      const response = await handler(new Request(`http://local/share/${token}${query}`));
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe(expectedLocation);
+    }
+    db.close();
+  });
+
   test("sets Secure only for HTTPS public origins", async () => {
     const { db, dist } = await fixture();
     const handler = createHandler(db, { basicAuth: "owner:secret", serveDist: dist, publicOrigin: "https://share.example" });
