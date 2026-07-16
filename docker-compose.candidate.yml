@@ -1,0 +1,20 @@
+# Candidate-drill override (находка R3-3, план B.4):
+# запуск SHA-тега кандидата на восстановленной КОПИИ volume, без затрагивания прод-данных.
+#
+#   CANDIDATE_SHA=<git sha> docker compose \
+#     -f docker-compose.yml -f docker-compose.candidate.yml -p easy-ui-drill up -d
+#
+# Volume easy-ui-drill-data наполняется заранее restore-скриптом из snapshot'а
+# (easy-ui.db + -wal + -shm — одна единица). Порт публикуется локально для верификации.
+services:
+  easy-ui:
+    image: ghcr.io/vladprrs/easy-ui:${CANDIDATE_SHA:?CANDIDATE_SHA (git sha тег кандидата) обязателен}
+    pull_policy: always
+    restart: "no"
+    ports:
+      - "127.0.0.1:18787:8787"
+    volumes:
+      - easy-ui-drill-data:/app/data
+
+volumes:
+  easy-ui-drill-data:

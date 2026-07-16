@@ -10,7 +10,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: build-image-main
+  group: build-image-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -27,13 +27,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # main → latest+SHA; любая другая ветка (workflow_dispatch) → только SHA-тег
+      # (candidate image для restore-drill, находка R3-3). Деплой — только push в main.
+      - name: Compute image tags
+        id: tags
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "tags=ghcr.io/vladprrs/easy-ui:latest,ghcr.io/vladprrs/easy-ui:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=ghcr.io/vladprrs/easy-ui:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/vladprrs/easy-ui:latest
-            ghcr.io/vladprrs/easy-ui:${{ github.sha }}
+          tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           labels: |
@@ -41,7 +50,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Trigger Dokploy deploy
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         env:
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
         run: |
