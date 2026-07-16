@@ -1,6 +1,6 @@
 import { useEffect, useInsertionEffect, useState } from "react";
 import { getDesignSystemById, getDesignSystemVersion, type ThemeContent } from "../api/client";
-import type { EasyUiSharedIcon, EasyUiSharedTokens } from "../customComponents/shared";
+import { ensureEasyUiShared, type EasyUiSharedIcon, type EasyUiSharedTokens } from "../customComponents/shared";
 
 // Delivery of a versioned design-system theme (F.4): tokens become CSS custom properties, fonts
 // become @font-face rules, and both tokens and the icon registry are mirrored into the shared
@@ -65,25 +65,99 @@ export function serializeThemeCss(content: ThemeContent): string {
   return `${root}${fonts}`;
 }
 
-/**
- * Renders a `<style data-eui-theme>` tag and mirrors the theme into the shared runtime snapshot.
- * The style tag is committed to the DOM before the surface's settle effect runs, so `document.fonts`
- * reflects the injected @font-face. The snapshot is populated in an insertion effect and restored on
- * cleanup so unmount leaves no stale tokens/icons behind.
- */
-export function ThemeStyle({ content }: { content: ThemeContent | null }) {
-  useInsertionEffect(() => {
-    if (typeof globalThis === "undefined") return;
-    const shared = (globalThis.__easyUiShared ??= {} as unknown as NonNullable<typeof globalThis.__easyUiShared>);
-    const prevTokens = shared.tokens;
-    const prevIcons = shared.icons;
-    shared.tokens = content ? flattenTokens(content) : {};
-    shared.icons = content ? iconRegistry(content) : {};
-    return () => { shared.tokens = prevTokens; shared.icons = prevIcons; };
-  }, [content]);
+interface ThemeOwner { order: number; content: ThemeContent | null }
+interface ThemeManagerState {
+  nextOrder: number;
+  owners: Map<symbol, ThemeOwner>;
+  style: HTMLStyleElement | null;
+  baseline: {
+    tokens: EasyUiSharedTokens | undefined;
+    icons: Record<string, EasyUiSharedIcon> | undefined;
+    hadTokens: boolean;
+    hadIcons: boolean;
+  } | null;
+}
 
-  if (!content) return null;
-  return <style data-eui-theme>{serializeThemeCss(content)}</style>;
+const themeManagerKey = Symbol.for("easy-ui.theme-manager.v1");
+type GlobalWithThemeManager = typeof globalThis & { [themeManagerKey]?: ThemeManagerState };
+
+function themeManager(): ThemeManagerState {
+  const host = globalThis as GlobalWithThemeManager;
+  return host[themeManagerKey] ?? (host[themeManagerKey] = { nextOrder: 0, owners: new Map(), style: null, baseline: null });
+}
+
+function allocateThemeOwner(): { id: symbol; order: number } {
+  const manager = themeManager();
+  return { id: Symbol("easy-ui-theme-owner"), order: ++manager.nextOrder };
+}
+
+function applyActiveTheme(manager: ThemeManagerState) {
+  const shared = ensureEasyUiShared();
+  const active = [...manager.owners.values()]
+    .filter((owner): owner is ThemeOwner & { content: ThemeContent } => owner.content !== null)
+    .reduce<(ThemeOwner & { content: ThemeContent }) | null>((winner, owner) => !winner || owner.order > winner.order ? owner : winner, null);
+
+  if (!active) {
+    manager.style?.remove();
+    manager.style = null;
+    if (manager.baseline) {
+      if (manager.baseline.hadTokens) shared.tokens = manager.baseline.tokens;
+      else delete shared.tokens;
+      if (manager.baseline.hadIcons) shared.icons = manager.baseline.icons;
+      else delete shared.icons;
+    }
+    if (manager.owners.size === 0) manager.baseline = null;
+    return;
+  }
+
+  if (!manager.style || !manager.style.isConnected) {
+    manager.style = document.createElement("style");
+    manager.style.dataset.euiTheme = "";
+    document.head.append(manager.style);
+  }
+  manager.style.textContent = serializeThemeCss(active.content);
+  shared.tokens = flattenTokens(active.content);
+  shared.icons = iconRegistry(active.content);
+}
+
+function registerThemeOwner(id: symbol, order: number) {
+  const manager = themeManager();
+  if (manager.owners.size === 0 && manager.baseline === null) {
+    const shared = ensureEasyUiShared();
+    manager.baseline = {
+      tokens: shared.tokens,
+      icons: shared.icons,
+      hadTokens: Object.hasOwn(shared, "tokens"),
+      hadIcons: Object.hasOwn(shared, "icons"),
+    };
+  }
+  manager.owners.set(id, { order, content: null });
+  applyActiveTheme(manager);
+}
+
+function updateThemeOwner(id: symbol, content: ThemeContent | null) {
+  const manager = themeManager();
+  const owner = manager.owners.get(id);
+  if (!owner) return;
+  owner.content = content;
+  applyActiveTheme(manager);
+}
+
+function unregisterThemeOwner(id: symbol) {
+  const manager = themeManager();
+  manager.owners.delete(id);
+  applyActiveTheme(manager);
+}
+
+/** Thin owner client for the document-wide, single-active-theme manager. */
+export function ThemeStyle({ content }: { content: ThemeContent | null }) {
+  const [owner] = useState(allocateThemeOwner);
+  useInsertionEffect(() => {
+    registerThemeOwner(owner.id, owner.order);
+    return () => unregisterThemeOwner(owner.id);
+  }, [owner]);
+  useInsertionEffect(() => updateThemeOwner(owner.id, content), [content, owner]);
+  return null;
 }
 
 /** Fetches the theme content for a system: the pinned version, or the latest for head (metaVersion null). */

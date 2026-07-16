@@ -91,7 +91,7 @@ export type AtomicLevel = "atom" | "molecule" | "organism" | "template" | "page"
 export interface ComponentSummary { id: string; name: string; designSystem: string; headRev: number; latestVersion: number | null; updatedAt: string }
 export type ComponentStatus = "staging" | "active" | "failed" | "rejected" | "deprecated" | "superseded" | "archived";
 export interface ComponentVersionSummary { version: number; rev: number; status: ComponentStatus; statusReason: string | null; supersededBy: number | null; statusRev: number; designSystem: string; publishedAt: string }
-export interface ComponentMeta { id: string; name: string; designSystem: string; headRev: number; versions: ComponentVersionSummary[]; updatedAt: string; figma?: FigmaProvenance | null }
+export interface ComponentMeta { id: string; name: string; designSystem: string; headRev: number; publishedVersion?: number | null; versions: ComponentVersionSummary[]; updatedAt: string; figma?: FigmaProvenance | null }
 export interface ComponentStatusResult { status: ComponentStatus; statusRev: number }
 export const setComponentVersionStatus = (id: string, version: number, change: { status: ComponentStatus; reason?: string; supersededBy?: number; baseStatusRev: number }, signal?: AbortSignal) =>
   request<ComponentStatusResult>(`${componentPath(id)}/versions/${version}/status`, { method: "POST", body: change, signal });

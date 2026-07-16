@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ComponentDefinition } from "../catalog/definitions";
 import { normalizeEvents, type ComponentCapabilities } from "../catalog/normalize";
 import { atomicLevels } from "../designSystems/types";
+import { ensureEasyUiShared } from "./shared";
 
 export interface CustomComponentRef {
   id: string;
@@ -19,7 +20,19 @@ export interface LoadedCustomComponents {
 
 type ImportModule = (url: string) => Promise<unknown>;
 const moduleCache = new Map<string, Promise<unknown>>();
+const transportCache = new Map<string, Promise<unknown>>();
+const reloadRequired = new Set<string>();
+const retryNumbers = new Map<string, number>();
 const dynamicImport: ImportModule = (url) => import(/* @vite-ignore */ url);
+
+export class FullDocumentReloadRequiredError extends Error {
+  readonly code = "EASY_UI_FULL_DOCUMENT_RELOAD_REQUIRED";
+
+  constructor(url: string, options?: ErrorOptions) {
+    super(`A full-document reload is required to retry ${url}`, options);
+    this.name = "FullDocumentReloadRequiredError";
+  }
+}
 
 function validateBundleUrl(url: string) {
   if (!url.startsWith("/api/") || url.startsWith("//") || url.includes("\\")) {
@@ -32,18 +45,14 @@ function validateBundleUrl(url: string) {
 }
 
 export async function loadCustomComponents(refs: CustomComponentRef[], importModule: ImportModule = dynamicImport): Promise<LoadedCustomComponents> {
-  await import("./shared");
+  ensureEasyUiShared();
   const definitions: Record<string, ComponentDefinition> = {};
   const components: Record<string, ComponentType> = {};
 
   await Promise.all(refs.map(async (ref) => {
     try {
       validateBundleUrl(ref.bundleUrl);
-      let pending = moduleCache.get(ref.bundleUrl);
-      if (!pending) {
-        pending = importModule(ref.bundleUrl);
-        moduleCache.set(ref.bundleUrl, pending);
-      }
+      const pending = importBundle(ref.bundleUrl, importModule);
       const value = await pending;
       if (!value || typeof value !== "object") throw new Error("module did not export an object");
       const module = value as Record<string, unknown>;
@@ -73,6 +82,9 @@ export async function loadCustomComponents(refs: CustomComponentRef[], importMod
       };
       components[ref.name] = module.default as ComponentType;
     } catch (error) {
+      if (error instanceof FullDocumentReloadRequiredError) {
+        throw new FullDocumentReloadRequiredError(ref.bundleUrl, { cause: error });
+      }
       const reason = error instanceof Error ? error.message : String(error);
       throw new Error(`Custom component ${ref.name} v${ref.version}: ${reason}`, { cause: error });
     }
@@ -80,6 +92,44 @@ export async function loadCustomComponents(refs: CustomComponentRef[], importMod
   return { definitions, components };
 }
 
+function importBundle(url: string, importModule: ImportModule): Promise<unknown> {
+  if (reloadRequired.has(url)) return Promise.reject(new FullDocumentReloadRequiredError(url));
+  const cached = transportCache.get(url);
+  if (cached) return cached;
+
+  const operation = cachedImport(url, importModule).catch(async () => {
+    const retryNumber = (retryNumbers.get(url) ?? 0) + 1;
+    retryNumbers.set(url, retryNumber);
+    const retryUrl = `${url}${url.includes("?") ? "&" : "?"}retry=${retryNumber}`;
+    try {
+      return await cachedImport(retryUrl, importModule);
+    } catch (retryError) {
+      reloadRequired.add(url);
+      throw new FullDocumentReloadRequiredError(url, { cause: retryError });
+    }
+  });
+  transportCache.set(url, operation);
+  void operation.catch(() => {
+    if (transportCache.get(url) === operation) transportCache.delete(url);
+  });
+  return operation;
+}
+
+function cachedImport(url: string, importModule: ImportModule): Promise<unknown> {
+  const cached = moduleCache.get(url);
+  if (cached) return cached;
+  const pending = importModule(url);
+  moduleCache.set(url, pending);
+  void pending.catch(() => {
+    // A newer request may already have replaced this entry; never delete it.
+    if (moduleCache.get(url) === pending) moduleCache.delete(url);
+  });
+  return pending;
+}
+
 export function clearCustomComponentCacheForTests() {
   moduleCache.clear();
+  transportCache.clear();
+  reloadRequired.clear();
+  retryNumbers.clear();
 }

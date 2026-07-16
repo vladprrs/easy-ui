@@ -1,12 +1,26 @@
 import { render, cleanup } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { StrictMode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ThemeContent } from "../api/client";
 import { cssEscapeString, flattenTokens, iconRegistry, serializeThemeCss, ThemeStyle, tokenCssVar } from "./theme";
 
 // cleanup() unmounts, which triggers ThemeStyle's insertion-effect cleanup to restore the prior
 // runtime snapshot — so we must not delete the shared global (that would pollute other test files
 // sharing the worker realm).
-afterEach(() => { cleanup(); });
+afterEach(() => {
+  cleanup();
+  if (globalThis.__easyUiShared) {
+    delete globalThis.__easyUiShared.tokens;
+    delete globalThis.__easyUiShared.icons;
+  }
+});
+
+const token = (key: string) => {
+  const tokens = globalThis.__easyUiShared?.tokens ?? {};
+  return Object.hasOwn(tokens, key) ? String(tokens[key]) : "";
+};
+const activeCss = () => document.head.querySelector<HTMLStyleElement>("style[data-eui-theme]")?.textContent ?? "";
+const colorTheme = (color: string): ThemeContent => ({ tokens: { "color.primary": color }, fonts: [], icons: [] });
 
 const theme: ThemeContent = {
   tokens: { "color.primary": "#123456", "spacing.lg": 24, "font.family": "Inter, sans-serif" },
@@ -53,8 +67,8 @@ describe("theme serialization", () => {
 
 describe("ThemeStyle runtime snapshot", () => {
   it("populates __easyUiShared.tokens/icons and injects a data-eui-theme style", () => {
-    const { container } = render(<ThemeStyle content={theme} />);
-    const style = container.querySelector("style[data-eui-theme]");
+    render(<ThemeStyle content={theme} />);
+    const style = document.head.querySelector("style[data-eui-theme]");
     expect(style).not.toBeNull();
     expect(style!.textContent).toContain("--eui-color-primary");
     expect(globalThis.__easyUiShared?.tokens).toEqual(flattenTokens(theme));
@@ -71,8 +85,89 @@ describe("ThemeStyle runtime snapshot", () => {
   });
 
   it("renders nothing and clears the snapshot when content is null", () => {
-    const { container } = render(<ThemeStyle content={null} />);
-    expect(container.querySelector("style[data-eui-theme]")).toBeNull();
-    expect(globalThis.__easyUiShared?.tokens).toEqual({});
+    render(<ThemeStyle content={null} />);
+    expect(document.head.querySelector("style[data-eui-theme]")).toBeNull();
+    expect(globalThis.__easyUiShared?.tokens).toBeUndefined();
+  });
+
+  it("keeps the later non-empty owner active through a non-LIFO unmount", () => {
+    const a = render(<ThemeStyle content={colorTheme("A")} />);
+    const b = render(<ThemeStyle content={colorTheme("B")} />);
+    expect(document.head.querySelectorAll("style[data-eui-theme]")).toHaveLength(1);
+    expect(activeCss()).toContain("--eui-color-primary: B");
+    expect(token("color.primary")).toBe("B");
+    a.unmount();
+    expect(activeCss()).toContain("--eui-color-primary: B");
+    expect(token("color.primary")).toBe("B");
+    b.unmount();
+  });
+
+  it("uses registration order for opposite content resolve orders", () => {
+    const first = render(<><ThemeStyle content={null} /><ThemeStyle content={null} /></>);
+    first.rerender(<><ThemeStyle content={null} /><ThemeStyle content={colorTheme("B")} /></>);
+    first.rerender(<><ThemeStyle content={colorTheme("A")} /><ThemeStyle content={colorTheme("B")} /></>);
+    expect(activeCss()).toContain("--eui-color-primary: B");
+    expect(token("color.primary")).toBe("B");
+    first.unmount();
+
+    const second = render(<><ThemeStyle content={null} /><ThemeStyle content={null} /></>);
+    second.rerender(<><ThemeStyle content={colorTheme("A")} /><ThemeStyle content={null} /></>);
+    second.rerender(<><ThemeStyle content={colorTheme("A")} /><ThemeStyle content={colorTheme("B")} /></>);
+    expect(activeCss()).toContain("--eui-color-primary: B");
+    expect(token("color.primary")).toBe("B");
+  });
+
+  it("updates content without changing owner priority and falls back when content becomes null", () => {
+    const view = render(<><ThemeStyle content={colorTheme("A")} /><ThemeStyle content={colorTheme("B")} /></>);
+    view.rerender(<><ThemeStyle content={colorTheme("A2")} /><ThemeStyle content={colorTheme("B2")} /></>);
+    expect(activeCss()).toContain("--eui-color-primary: B2");
+    expect(token("color.primary")).toBe("B2");
+    view.rerender(<><ThemeStyle content={colorTheme("A2")} /><ThemeStyle content={null} /></>);
+    expect(activeCss()).toContain("--eui-color-primary: A2");
+    expect(token("color.primary")).toBe("A2");
+  });
+
+  it("is stable under StrictMode effect replay", () => {
+    const view = render(<StrictMode><ThemeStyle content={colorTheme("strict")} /></StrictMode>);
+    expect(document.head.querySelectorAll("style[data-eui-theme]")).toHaveLength(1);
+    expect(token("color.primary")).toBe("strict");
+    view.unmount();
+    expect(document.head.querySelector("style[data-eui-theme]")).toBeNull();
+  });
+
+  it("reuses the manager across module reloads", async () => {
+    const oldOwner = render(<ThemeStyle content={colorTheme("old")} />);
+    vi.resetModules();
+    const { ThemeStyle: ReloadedThemeStyle } = await import("./theme");
+    const newOwner = render(<ReloadedThemeStyle content={colorTheme("new")} />);
+    expect(document.head.querySelectorAll("style[data-eui-theme]")).toHaveLength(1);
+    expect(token("color.primary")).toBe("new");
+    newOwner.unmount();
+    expect(token("color.primary")).toBe("old");
+    oldOwner.unmount();
+  });
+
+  it("restores an exact pre-manager baseline after the last owner unmounts", () => {
+    const shared = globalThis.__easyUiShared!;
+    const baselineTokens = { baseline: "yes" };
+    const baselineIcons = { baseline: { assetUrl: "/baseline.svg" } };
+    shared.tokens = baselineTokens;
+    shared.icons = baselineIcons;
+    const a = render(<ThemeStyle content={colorTheme("A")} />);
+    const b = render(<ThemeStyle content={colorTheme("B")} />);
+    a.unmount();
+    b.unmount();
+    expect(shared.tokens).toBe(baselineTokens);
+    expect(shared.icons).toBe(baselineIcons);
+  });
+
+  it("repairs a partial shared global when the theme effect runs before a later shared import", async () => {
+    globalThis.__easyUiShared = { tokens: { baseline: "yes" } } as unknown as typeof globalThis.__easyUiShared;
+    const view = render(<ThemeStyle content={null} />);
+    expect(globalThis.__easyUiShared?.react).toBeDefined();
+    expect(globalThis.__easyUiShared?.tokens).toEqual({ baseline: "yes" });
+    const { ensureEasyUiShared } = await import("../customComponents/shared");
+    expect(ensureEasyUiShared()).toMatchObject({ react: expect.any(Object), zod: expect.any(Object), tokens: { baseline: "yes" } });
+    view.unmount();
   });
 });
