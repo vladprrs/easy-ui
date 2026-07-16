@@ -139,13 +139,13 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         const clientAddress=server?.requestIP?.(request)?.address??"direct";
         const auth=await routeAuth(request,db,segments.slice(1),{principal,publicOrigin,clientAddress,limiter}); if(auth) return finish(auth);
         const users=await routeUsers(request,db,segments.slice(1),principal); if(users) return finish(users);
-        const shot=await routeScreenshots(request,options.screenshots,segments.slice(1)); if(shot) return finish(shot);
-        const vis=await routeVisual(request,db,options.dataDir??process.env.DATA_DIR??"data",segments.slice(1),options.visual); if(vis) return finish(vis);
-        const share=await routeShares(request,db,segments.slice(1),{publicOrigin,serveDist:options.serveDist}); if(share) return finish(share);
-        if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),options.dataDir,options.serveDist));
-        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data"));
-        if(segments[1]==="assets") return finish(await routeAssets(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data"));
-        if(segments[1]==="design-systems") return finish(await routeDesignSystems(request,db,segments.slice(1)));
+        const shot=await routeScreenshots(request,db,options.screenshots,segments.slice(1),principal); if(shot) return finish(shot);
+        const vis=await routeVisual(request,db,options.dataDir??process.env.DATA_DIR??"data",segments.slice(1),principal,options.visual); if(vis) return finish(vis);
+        const share=await routeShares(request,db,segments.slice(1),principal,{publicOrigin,serveDist:options.serveDist}); if(share) return finish(share);
+        if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),principal,options.dataDir,options.serveDist));
+        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
+        if(segments[1]==="assets") return finish(await routeAssets(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
+        if(segments[1]==="design-systems") return finish(await routeDesignSystems(request,db,segments.slice(1),principal));
         if(segments[1]==="catalog"&&segments[2]==="manifest"&&segments.length===3) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); const {designSystem}=parseQuery(catalogManifestQuerySchema,requestUrl.searchParams); if(designSystem!==undefined&&!getRegisteredDesignSystem(db,designSystem)) throw new ApiError(404,"not_found","Design system not found"); return finish(json({components:catalogManifest(db,designSystem)},200,noStore)); }
         if(segments[1]==="shims"&&(segments[2]==="v1"||segments[2]==="v2"||segments[2]==="v3")) return finish(routeShims(request,segments.slice(1)));
         const meta=routeMeta(request,db,segments.slice(1)); if(meta) return finish(meta);

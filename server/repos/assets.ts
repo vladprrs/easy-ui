@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { ApiError } from "../http";
 import { MAX_ASSET_BYTES, validateAsset } from "../assets/validate";
+import type { Principal } from "../auth";
 
 export type AssetRow = {
   id: string;
@@ -54,7 +55,22 @@ export class AssetRepo {
   publicById(id: string): AssetPublic | null { const row = this.get(id); return row ? toPublic(row) : null; }
   exists(id: string): boolean { return Boolean(this.db.query("SELECT 1 ok FROM assets WHERE id=?").get(id)); }
 
-  list({ limit, before }: { limit: number; before?: AssetCursor }): { assets: ListedAsset[]; nextCursor: AssetCursor | null } {
+  private visiblePrototypeIds(principal:Principal):Set<string>{
+    if(principal.kind==="capture") return new Set((this.db.query("SELECT id FROM prototypes").all() as {id:string}[]).map(x=>x.id));
+    const scoped=principal.kind==="share"?principal.scope.prototypeId:""; const user=principal.kind==="user"?principal.userId:"";
+    return new Set((this.db.query("SELECT id FROM prototypes WHERE status='published' OR owner_id=? OR id=?").all(user,scoped) as {id:string}[]).map(x=>x.id));
+  }
+  reachable(id:string,principal:Principal):boolean{
+    if(principal.kind==="user"&&principal.isAdmin) return this.exists(id);
+    if(this.db.query("SELECT 1 ok FROM component_publish_assets WHERE asset_id=? LIMIT 1").get(id)) return true;
+    const visible=this.visiblePrototypeIds(principal);
+    const prototypeRows=this.db.query("SELECT prototype_id id FROM prototype_revision_assets WHERE asset_id=?").all(id) as {id:string}[];
+    if(prototypeRows.some(x=>visible.has(x.id))) return true;
+    const refs=this.db.query(`SELECT fingerprint_json json FROM visual_references vr WHERE vr.asset_id=? OR EXISTS (
+      SELECT 1 FROM visual_runs run WHERE run.reference_id=vr.id AND (run.reference_asset_id=? OR run.candidate_asset_id=? OR run.diff_asset_id=?))`).all(id,id,id,id) as {json:string}[];
+    return refs.some(({json})=>{try{const fp=JSON.parse(json) as {scope?:string;prototypeId?:string};return fp.scope==="component"||(fp.prototypeId!==undefined&&visible.has(fp.prototypeId));}catch{return false;}});
+  }
+  list({ limit, before, principal }: { limit: number; before?: AssetCursor; principal?:Principal }): { assets: ListedAsset[]; nextCursor: AssetCursor | null } {
     const sql = `SELECT a.*,
       (SELECT COUNT(DISTINCT pra.prototype_id) FROM prototype_revision_assets pra WHERE pra.asset_id=a.id) prototypes,
       (SELECT COUNT(DISTINCT cpa.component_id) FROM component_publish_assets cpa WHERE cpa.asset_id=a.id) components,
@@ -66,26 +82,29 @@ export class AssetRepo {
       ${before ? "WHERE (a.created_at, a.id) < (?, ?)" : ""}
       ORDER BY a.created_at DESC, a.id DESC
       LIMIT ?`;
-    const rows = (before
-      ? this.db.query(sql).all(before.createdAt, before.id, limit + 1)
-      : this.db.query(sql).all(limit + 1)) as ListedAsset[];
+    const fetchLimit=principal?100000:limit+1;
+    let rows = (before
+      ? this.db.query(sql).all(before.createdAt, before.id, fetchLimit)
+      : this.db.query(sql).all(fetchLimit)) as ListedAsset[];
+    if(principal) rows=rows.filter(row=>this.reachable(row.id,principal));
     const hasMore = rows.length > limit;
     const assets = rows.slice(0, limit);
     const last = hasMore ? assets.at(-1) : undefined;
     return { assets, nextCursor: last ? { createdAt: last.created_at, id: last.id } : null };
   }
 
-  usage(id: string): AssetUsage | null {
+  usage(id: string,principal?:Principal): AssetUsage | null {
     const asset = this.get(id);
     if (!asset) return null;
 
-    const prototypes = this.db.query(`SELECT p.id,p.name,COUNT(*) revCount,MAX(pra.rev) lastRev,
+    let prototypes = this.db.query(`SELECT p.id,p.name,COUNT(*) revCount,MAX(pra.rev) lastRev,
       MAX(CASE WHEN pra.rev=p.head_rev THEN 1 ELSE 0 END) pinnedAtHead
       FROM prototype_revision_assets pra
       JOIN prototypes p ON p.id=pra.prototype_id
       WHERE pra.asset_id=?
       GROUP BY p.id,p.name,p.head_rev
       ORDER BY p.id`).all(id) as { id: string; name: string; revCount: number; lastRev: number; pinnedAtHead: number }[];
+    if(principal){const visible=this.visiblePrototypeIds(principal);prototypes=prototypes.filter(row=>visible.has(row.id));}
 
     const componentRows = this.db.query(`SELECT c.id,c.name,cpa.version
       FROM component_publish_assets cpa
@@ -99,22 +118,23 @@ export class AssetRepo {
       else components.push({ id: row.id, name: row.name, versions: [row.version] });
     }
 
-    const visualReferences = this.db.query(`SELECT id,deleted_at IS NOT NULL deleted
-      FROM visual_references WHERE asset_id=? ORDER BY id`).all(id) as { id: string; deleted: number }[];
-    const visualRuns = this.db.query(`SELECT id,reference_id referenceId,'reference' role
-        FROM visual_runs WHERE reference_asset_id=?
-      UNION ALL SELECT id,reference_id referenceId,'candidate' role
-        FROM visual_runs WHERE candidate_asset_id=?
-      UNION ALL SELECT id,reference_id referenceId,'diff' role
-        FROM visual_runs WHERE diff_asset_id=?
-      ORDER BY id,role`).all(id, id, id) as AssetUsage["visualRuns"];
+    let visualReferencesRaw = this.db.query(`SELECT id,deleted_at IS NOT NULL deleted,fingerprint_json json
+      FROM visual_references WHERE asset_id=? ORDER BY id`).all(id) as { id: string; deleted: number;json:string }[];
+    let visualRuns = this.db.query(`SELECT run.id,run.reference_id referenceId,'reference' role,vr.fingerprint_json json
+        FROM visual_runs run JOIN visual_references vr ON vr.id=run.reference_id WHERE run.reference_asset_id=?
+      UNION ALL SELECT run.id,run.reference_id referenceId,'candidate' role,vr.fingerprint_json json
+        FROM visual_runs run JOIN visual_references vr ON vr.id=run.reference_id WHERE run.candidate_asset_id=?
+      UNION ALL SELECT run.id,run.reference_id referenceId,'diff' role,vr.fingerprint_json json
+        FROM visual_runs run JOIN visual_references vr ON vr.id=run.reference_id WHERE run.diff_asset_id=?
+      `).all(id, id, id) as (AssetUsage["visualRuns"][number]&{json:string})[];
+    if(principal){const visible=this.visiblePrototypeIds(principal);const ok=(json:string)=>{try{const fp=JSON.parse(json) as {scope?:string;prototypeId?:string};return fp.scope==="component"||!!fp.prototypeId&&visible.has(fp.prototypeId);}catch{return false;}};visualReferencesRaw=visualReferencesRaw.filter(x=>ok(x.json));visualRuns=visualRuns.filter(x=>ok((x as typeof x&{json:string}).json));}
 
     return {
       asset,
       prototypes: prototypes.map((row) => ({ ...row, pinnedAtHead: row.pinnedAtHead === 1 })),
       components,
-      visualReferences: visualReferences.map((row) => ({ id: row.id, deleted: row.deleted === 1 })),
-      visualRuns,
+      visualReferences: visualReferencesRaw.map((row) => ({ id: row.id, deleted: row.deleted === 1 })),
+      visualRuns: visualRuns.map(({id,referenceId,role})=>({id,referenceId,role})).sort((a,b)=>a.id.localeCompare(b.id)||a.role.localeCompare(b.role)),
     };
   }
 

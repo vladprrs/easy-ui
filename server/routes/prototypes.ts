@@ -11,6 +11,9 @@ import { headScreenUrl, renderStatus, versionScreenUrl } from "./renderStatus";
 import { recordValidation } from "../validationRecords";
 import { parseFigmaInput } from "../figma";
 import { diffPrototypeDocs } from "../../src/prototype/revisionDiff";
+import type { Principal } from "../auth";
+import { requirePrototypeOwner, requirePrototypeRead, requireUser } from "../authorization";
+import { writeAuditEvent } from "../audit";
 
 const headScreens = (doc:PrototypeDoc) => doc.screens.map(s=>({id:s.id,url:headScreenUrl(doc.id,s.id)}));
 
@@ -44,24 +47,25 @@ function recordPrototypeValidation(db:Database,id:string,rev:number,issues:{path
   recordValidation(db,{resourceType:"prototype",resourceId:id,rev,catalogHash:row?.hash??"",ok,issues});
 }
 
-export async function routePrototypes(request:Request,db:Database,segments:string[],dataDir=process.env.DATA_DIR||"data",serveDist?:string):Promise<Response> {
+export async function routePrototypes(request:Request,db:Database,segments:string[],principal:Principal,dataDir=process.env.DATA_DIR||"data",serveDist?:string):Promise<Response> {
   const repo=new PrototypeRepo(db);
   if(segments.length===1) {
-    if(request.method==="GET") return json(repo.list(),200,noStore);
-    if(request.method==="POST") { const b=objectBody(await readJson(request)); const doc=parseDoc(b.doc); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions); const assetIds=collectAndValidateAssetRefs(db,doc); const figma=parseFigmaInput(db,b.figma,"figma"); const result=repo.create(doc,message(b),snapshot.pins,assetIds,figma); recordPrototypeValidation(db,doc.id,result.rev,warnings); return json({...result,warnings,screens:headScreens(doc)},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(result.id)}`}); }
+    if(request.method==="GET") return json(repo.list(principal),200,noStore);
+    if(request.method==="POST") { const actor=requireUser(principal); const b=objectBody(await readJson(request)); const doc=parseDoc(b.doc); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions); const assetIds=collectAndValidateAssetRefs(db,doc); const figma=parseFigmaInput(db,b.figma,"figma"); const result=repo.create(doc,message(b),snapshot.pins,assetIds,figma,actor.userId); db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,doc.id,result.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:doc.id,detail:{rev:result.rev}}); recordPrototypeValidation(db,doc.id,result.rev,warnings); return json({...result,warnings,screens:headScreens(doc)},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(result.id)}`}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }
   const id=segments[1]!; const tail=segments.slice(2);
   if(!tail.length) {
-    if(request.method==="GET") return json(repo.meta(id),200,noStore);
-    if(request.method==="PUT") { const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions); const assetIds=collectAndValidateAssetRefs(db,doc); const figma=parseFigmaInput(db,b.figma,"figma"); const saved=repo.save(id,doc,base,message(b),snapshot.pins,assetIds,figma); recordPrototypeValidation(db,id,saved.rev,warnings); return json({...saved,warnings,screens:headScreens(doc)},200,noStore); }
-    if(request.method==="DELETE") { const b=objectBody(await readJson(request)); repo.delete(id,baseRev(b)); return new Response(null,{status:204,headers:noStore}); }
+    if(request.method==="GET") return json(repo.meta(id,principal),200,noStore);
+    if(request.method==="PUT") { const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions); const assetIds=collectAndValidateAssetRefs(db,doc); const figma=parseFigmaInput(db,b.figma,"figma"); const saved=repo.save(id,doc,base,message(b),snapshot.pins,assetIds,figma); db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,saved.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}}); recordPrototypeValidation(db,id,saved.rev,warnings); return json({...saved,warnings,screens:headScreens(doc)},200,noStore); }
+    if(request.method==="DELETE") { requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); repo.delete(id,baseRev(b)); return new Response(null,{status:204,headers:noStore}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }
-  if(tail[0]==="screens"&&tail.length===3&&tail[2]==="render-status") { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); return renderStatus(request,db,id,tail[1]!,{serveDist}); }
-  if(tail[0]==="draft"&&tail.length===1) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); return json(repo.draft(id),200,noStore); }
+  if(tail[0]==="screens"&&tail.length===3&&tail[2]==="render-status") { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); requirePrototypeRead(db,id,principal); return renderStatus(request,db,id,tail[1]!,{serveDist}); }
+  if(tail[0]==="draft"&&tail.length===1) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); return json(repo.draft(id,principal),200,noStore); }
   if(tail[0]==="revisions") {
     if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed");
+    requirePrototypeOwner(db,id,principal);
     if(tail.length===3&&tail[2]==="diff") {
       const rev=integer(Number(tail[1]),"rev"); const u=new URL(request.url); const againstRaw=u.searchParams.get("against");
       if(againstRaw===null&&rev===1) throw new ApiError(400,"invalid_request","against is required for revision 1");
@@ -80,19 +84,23 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
   }
   if(tail[0]==="restore"&&tail.length===1) {
     if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed");
+    const actor=requirePrototypeOwner(db,id,principal);
     const b=objectBody(await readJson(request)); const result=repo.restore(id,integer(b.rev,"rev"),baseRev(b));
     // Re-validate the restored document against the live catalog and record the result.
     const draft=repo.draft(id); let ok=true; let issues:{path:string;message:string}[]=[];
     try { const snapshot=await snapshotDefinitions(db,draft.doc,dataDir); const validation=validatePrototype(draft.doc,{definitions:snapshot.definitions}); ok=validation.errors.length===0; issues=[...validation.errors,...validation.warnings]; }
     catch(error) { ok=false; issues=[{path:"/",message:error instanceof ApiError?error.message:"Restored document failed validation"}]; }
     recordPrototypeValidation(db,id,result.rev,issues,ok);
+    db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,result.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:result.rev,restore:true}});
     return json(result,200,noStore);
   }
-  if(tail[0]==="publish"&&tail.length===1) { if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed"); const b=objectBody(await readJson(request)); const result=repo.publish(id,baseRev(b),message(b)); const published=repo.version(id,result.version); return json({...result,screens:published.doc.screens.map(s=>({id:s.id,url:versionScreenUrl(id,result.version,s.id)}))},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(id)}/versions/${result.version}`}); }
+  if(tail[0]==="publish"&&tail.length===1) { if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed"); const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); const result=repo.publish(id,baseRev(b),message(b)); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.version.published",subjectType:"prototype",subjectId:id,detail:result}); const published=repo.version(id,result.version); return json({...result,screens:published.doc.screens.map(s=>({id:s.id,url:versionScreenUrl(id,result.version,s.id)}))},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(id)}/versions/${result.version}`}); }
+  if(tail[0]==="status"&&tail.length===1) { if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed"); const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); if(b.status!=="private"&&b.status!=="published"&&b.status!=="archived") throw new ApiError(422,"validation_failed","Invalid prototype status",{issues:[{path:["status"],message:"must be private, published, or archived"}]}); const result=repo.setStatus(id,b.status); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.status.changed",subjectType:"prototype",subjectId:id,detail:result}); return json(result,200,noStore); }
   if(tail[0]==="versions") {
     if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed");
+    requirePrototypeRead(db,id,principal);
     if(tail.length===1) return json(repo.versions(id),200,noStore);
-    if(tail.length===2) return json(repo.version(id,integer(Number(tail[1]),"version")),200,immutable);
+    if(tail.length===2) return json(repo.version(id,integer(Number(tail[1]),"version"),principal),200,immutable);
   }
   throw new ApiError(404,"not_found","API route not found");
 }

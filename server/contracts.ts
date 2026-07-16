@@ -506,6 +506,7 @@ const casBody = { baseRev: positiveInt, message: z.string().optional() };
 const prototypeListItemSchema = z.looseObject({
   id: z.string(), name: z.string(), designSystem: z.string(), device: z.string(),
   screenCount: z.number(), headRev: z.number(), latestVersion: z.number().nullable(), updatedAt: isoDate,
+  status:z.enum(["private","published","archived"]),owner:z.strictObject({id:z.string(),name:z.string()}),
 });
 
 export const listPrototypesContract = registerContract({
@@ -533,7 +534,8 @@ export const getPrototypeContract = registerContract({
     id: z.string(), prototypeInstanceId:z.string(), name: z.string(), designSystem: z.string(), headRev: z.number(),
     latestVersion: z.number().nullable(), versions: z.array(z.looseObject({ version: z.number(), rev: z.number(), publishedAt: isoDate })),
     updatedAt: isoDate, draftRevision: z.number(), validatedRevision: z.number().nullable(),
-    publishedVersion: z.number().nullable(), renderable: renderableSchema, figma: figmaResponseSchema,
+    publishedVersion: z.number().nullable(), renderable: renderableSchema, figma: figmaResponseSchema.optional(),
+    status:z.enum(["private","published","archived"]),owner:z.strictObject({id:z.string(),name:z.string()}),
   }),
   errors: [errorCatalog.prototypeNotFound],
 });
@@ -561,7 +563,7 @@ const prototypeRevisionCoreSchema = z.looseObject({
   components: z.array(z.looseObject({ id: z.string(), version: z.number() })),
   assets: z.array(assetPublicSchema.omit({ width: true, height: true })),
   designSystemMetaVersion: z.number().nullable(),
-  figma: figmaResponseSchema,
+  figma: figmaResponseSchema.optional(),
 });
 
 export const getPrototypeDraftContract = registerContract({
@@ -691,6 +693,12 @@ export const publishPrototypeContract = registerContract({
   requestSchema: z.object(casBody),
   responseSchema: z.looseObject({ version: z.number(), rev: z.number(), screens: z.array(screenUrlSchema) }),
   errors: [errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, errorCatalog.validationFailed],
+});
+
+export const setPrototypeStatusContract = registerContract({
+  method:"POST",path:"/api/prototypes/{id}/status",summary:"Change prototype visibility using the server-enforced lifecycle graph.",
+  requestSchema:z.strictObject({status:z.enum(["private","published","archived"])}),responseSchema:z.strictObject({status:z.enum(["private","published","archived"])}),
+  errors:[{status:403,code:"forbidden"},{status:404,code:"prototype_not_found"},{status:409,code:"prototype_not_renderable"},{status:422,code:"invalid_transition"}],
 });
 
 export const listPrototypeVersionsContract = registerContract({

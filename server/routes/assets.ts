@@ -3,6 +3,8 @@ import { ApiError, immutable, json, noStore } from "../http";
 import { MAX_ASSET_BYTES } from "../assets/validate";
 import { AssetRepo, assetPublic, type AssetRow } from "../repos/assets";
 import { assetUsageContract, listAssetsQuerySchema, parseQuery, parseWith } from "../contracts";
+import type { Principal } from "../auth";
+import { requireUser } from "../authorization";
 
 // Hardened delivery headers for GET /api/assets/:id. Assets (incl. un-sanitized SVG) are served
 // inert: no scripts, no navigation, same-origin only, behind the BasicAuth boundary.
@@ -65,28 +67,23 @@ const assetMetadata = (row: AssetRow) => ({
   url: `/api/assets/${row.id}`,
 });
 
-export async function routeAssets(request: Request, db: Database, segments: string[], dataDir: string): Promise<Response> {
+export async function routeAssets(request: Request, db: Database, segments: string[], principal:Principal,dataDir: string): Promise<Response> {
   const repo = new AssetRepo(db, dataDir);
   if (segments.length === 1) {
     if (request.method === "GET") {
       const searchParams = new URL(request.url).searchParams;
       const before = cursorBefore(searchParams.get("cursor"));
       const { limit } = parseQuery(listAssetsQuerySchema, searchParams);
-      const page = repo.list({ limit, before });
+      const page = repo.list({ limit, before,principal });
       return json({
-        assets: page.assets.map((row) => ({
-          ...assetMetadata(row),
-          usage: {
-            prototypes: row.prototypes,
-            components: row.components,
-            visualReferences: row.visualReferences,
-            visualRuns: row.visualRuns,
-          },
-        })),
+        assets: page.assets.map((row) => { const usage=repo.usage(row.id,principal)!; return ({
+          ...assetMetadata(row), usage:{prototypes:usage.prototypes.length,components:usage.components.length,visualReferences:usage.visualReferences.length,visualRuns:usage.visualRuns.length},
+        });}),
         nextCursor: page.nextCursor ? `${page.nextCursor.createdAt}~${page.nextCursor.id}` : null,
       }, 200, noStore);
     }
     if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+    requireUser(principal);
     const upload = await readUpload(request);
     const { asset, deduplicated } = await repo.ingest(upload.bytes, upload.mime, upload.name);
     const body = { ...assetPublic(asset), url: `/api/assets/${asset.id}`, ...(deduplicated ? { deduplicated: true } : {}) };
@@ -96,7 +93,8 @@ export async function routeAssets(request: Request, db: Database, segments: stri
   if (segments.length === 3 && segments[2] === "usage") {
     if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
     parseWith(assetUsageContract.params!, { id }, "Path parameters are invalid");
-    const usage = repo.usage(id);
+    if(!repo.reachable(id,principal)) throw new ApiError(404,"asset_not_found","Asset not found");
+    const usage = repo.usage(id,principal);
     if (!usage) throw new ApiError(404, "asset_not_found", "Asset not found");
     return json({ ...usage, asset: assetMetadata(usage.asset) }, 200, noStore);
   }

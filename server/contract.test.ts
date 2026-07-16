@@ -102,6 +102,7 @@ function orderedCases(): [string, Case][] {
     ["GET /api/prototypes/{id}/revisions/{rev}", { run: () => call("GET", "/api/prototypes/contract-proto/revisions/1"), expected: ok() }],
     ["GET /api/prototypes/{id}/revisions/{rev}/diff", { run: () => call("GET", "/api/prototypes/contract-proto/revisions/2/diff?against=1"), expected: ok() }],
     ["POST /api/prototypes/{id}/restore", { run: () => call("POST", "/api/prototypes/contract-proto/restore", { rev: 1, baseRev: 2 }), expected: ok() }],
+    ["POST /api/prototypes/{id}/status", { run: () => call("POST", "/api/prototypes/contract-proto/status", { status: "published" }), expected: ok() }],
     ["POST /api/prototypes/{id}/publish", { run: () => call("POST", "/api/prototypes/contract-proto/publish", { baseRev: 3 }), expected: ok(201) }],
     ["GET /api/prototypes/{id}/versions", { run: () => call("GET", "/api/prototypes/contract-proto/versions"), expected: ok() }],
     ["GET /api/prototypes/{id}/versions/{version}", { run: () => call("GET", "/api/prototypes/contract-proto/versions/1"), expected: ok() }],

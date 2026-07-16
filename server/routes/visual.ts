@@ -5,6 +5,9 @@ import { fingerprintSchema } from "../visual/fingerprint";
 import { VisualRepo } from "../visual/repo";
 import type { VisualService } from "../visual/service";
 import { routeVisualBaselines } from "./visualBaselines";
+import type {Principal} from "../auth";
+import {requirePrototypeOwner,requirePrototypeRead,requireResourceOwner} from "../authorization";
+import type {Fingerprint} from "../visual/fingerprint";
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -13,38 +16,44 @@ const isObject = (value: unknown): value is Record<string, unknown> => typeof va
  * check flow and run polling require the singleton {@link VisualService} that
  * owns candidate capture + diff orchestration.
  */
-export async function routeVisual(request: Request, db: Database, dataDir: string, segments: string[], service?: VisualService): Promise<Response | null> {
-  const baseline=await routeVisualBaselines(request,db,dataDir,segments); if(baseline) return baseline;
+export async function routeVisual(request: Request, db: Database, dataDir: string, segments: string[], principal:Principal, service?: VisualService): Promise<Response | null> {
+  const baseline=await routeVisualBaselines(request,db,dataDir,segments,principal); if(baseline) return baseline;
   if (segments[0] === "visual-references") {
     const repo = new VisualRepo(db, dataDir);
     if (segments.length === 1) {
-      if (request.method === "PUT") return await putReference(request, repo);
-      if (request.method === "GET") return listReferences(request, repo);
+      if (request.method === "PUT") return await putReference(request, db,repo,principal);
+      if (request.method === "GET") return listReferences(request,db,repo,principal);
       throw new ApiError(405, "method_not_allowed", "Method not allowed");
     }
     const id = segments[1]!;
     if (segments.length === 2) {
-      if (request.method === "GET") return getReference(repo, id);
-      if (request.method === "DELETE") return deleteReference(repo, id);
+      if (request.method === "GET") return getReference(db,repo,id,principal);
+      if (request.method === "DELETE") return deleteReference(db,repo,id,principal);
       throw new ApiError(405, "method_not_allowed", "Method not allowed");
     }
     if (segments.length === 3 && segments[2] === "check") {
       if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
-      return await checkReference(request, id, service);
+      assertReferenceMutation(db,repo,id,principal); return await checkReference(request, id, service);
     }
     throw new ApiError(404, "not_found", "API route not found");
   }
   if (segments[0] === "visual-runs" && segments.length === 2) {
     if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
-    return getRun(db, dataDir, segments[1]!, service);
+    return getRun(db, dataDir, segments[1]!, principal,service);
   }
   return null;
 }
 
-async function putReference(request: Request, repo: VisualRepo): Promise<Response> {
+function assertFingerprintRead(db:Database,fp:Record<string,unknown>,principal:Principal):void { if(principal.kind==="user"&&principal.isAdmin)return; if(fp.scope==="prototype-screen"&&typeof fp.prototypeId==="string") requirePrototypeRead(db,fp.prototypeId,principal); }
+function assertFingerprintMutation(db:Database,fp:Record<string,unknown>,principal:Principal):void { if(principal.kind==="user"&&principal.isAdmin)return; if(fp.scope==="prototype-screen"&&typeof fp.prototypeId==="string") requirePrototypeOwner(db,fp.prototypeId,principal); else if(fp.scope==="component"&&typeof fp.componentId==="string") requireResourceOwner(db,"components",fp.componentId,principal); else throw new ApiError(422,"invalid_fingerprint","Fingerprint target is invalid"); }
+function referenceFingerprint(repo:VisualRepo,id:string):Record<string,unknown>{const row=repo.getReference(id,true);if(!row)throw new ApiError(404,"reference_not_found","Visual reference not found");return JSON.parse(row.fingerprint_json) as Record<string,unknown>;}
+function assertReferenceMutation(db:Database,repo:VisualRepo,id:string,principal:Principal):void{assertFingerprintMutation(db,referenceFingerprint(repo,id),principal);}
+
+async function putReference(request: Request, db:Database,repo: VisualRepo,principal:Principal): Promise<Response> {
   const raw = await readJson(request);
   if (!isObject(raw)) throw new ApiError(400, "invalid_request", "Request body must be an object");
   const fingerprint = parseWith(fingerprintSchema, raw.fingerprint, "Fingerprint is invalid");
+  assertFingerprintMutation(db,fingerprint as Fingerprint & Record<string,unknown>,principal);
   if (typeof raw.assetId !== "string" || !raw.assetId) throw new ApiError(400, "invalid_request", "assetId is required");
   if (raw.note !== undefined && typeof raw.note !== "string") throw new ApiError(400, "invalid_request", "note must be a string");
   const asset = repo.assetRepo().get(raw.assetId);
@@ -54,22 +63,24 @@ async function putReference(request: Request, repo: VisualRepo): Promise<Respons
   return json(repo.referencePublic(row), 200, noStore);
 }
 
-function listReferences(request: Request, repo: VisualRepo): Response {
+function listReferences(request: Request,db:Database, repo: VisualRepo,principal:Principal): Response {
   const url = new URL(request.url);
   const scope = url.searchParams.get("scope") ?? undefined;
   if (scope !== undefined && scope !== "prototype-screen" && scope !== "component") throw new ApiError(400, "invalid_request", "scope must be prototype-screen or component");
-  const rows = repo.listReferences({ scope, prototypeId: url.searchParams.get("prototypeId") ?? undefined, componentId: url.searchParams.get("componentId") ?? undefined });
+  const rows = repo.listReferences({ scope, prototypeId: url.searchParams.get("prototypeId") ?? undefined, componentId: url.searchParams.get("componentId") ?? undefined }).filter(row=>{try{assertFingerprintRead(db,JSON.parse(row.fingerprint_json) as Record<string,unknown>,principal);return true;}catch{return false;}});
   return json({ references: rows.map((row) => repo.referencePublic(row)) }, 200, noStore);
 }
 
-function getReference(repo: VisualRepo, id: string): Response {
+function getReference(db:Database,repo: VisualRepo, id: string,principal:Principal): Response {
   const row = repo.getReference(id);
   if (!row) throw new ApiError(404, "reference_not_found", "Visual reference not found");
+  assertFingerprintRead(db,JSON.parse(row.fingerprint_json) as Record<string,unknown>,principal);
   const runs = repo.listRuns(id).map((run) => repo.runReport(run));
   return json({ ...repo.referencePublic(row), runs }, 200, noStore);
 }
 
-function deleteReference(repo: VisualRepo, id: string): Response {
+function deleteReference(db:Database,repo: VisualRepo, id: string,principal:Principal): Response {
+  assertReferenceMutation(db,repo,id,principal);
   if (!repo.deleteReferenceGeneric(id)) throw new ApiError(404, "reference_not_found", "Visual reference not found");
   return new Response(null, { status: 204, headers: noStore });
 }
@@ -91,14 +102,15 @@ async function checkReference(request: Request, id: string, service?: VisualServ
   return json(result, 202, noStore);
 }
 
-function getRun(db: Database, dataDir: string, runId: string, service?: VisualService): Response {
+function getRun(db: Database, dataDir: string, runId: string, principal:Principal,service?: VisualService): Response {
   if (service) {
     const view = service.get(runId);
     if (!view) throw new ApiError(404, "run_not_found", "Visual run not found");
-    return json(view.kind === "running" ? { runId: view.runId, referenceId: view.referenceId, status: view.status, jobId: view.jobId } : view.report, 200, noStore);
+    const repo=new VisualRepo(db,dataDir); const referenceId=view.kind==="running"?view.referenceId:view.report.referenceId; assertFingerprintRead(db,referenceFingerprint(repo,referenceId),principal); return json(view.kind === "running" ? { runId: view.runId, referenceId: view.referenceId, status: view.status, jobId: view.jobId } : view.report, 200, noStore);
   }
   const repo = new VisualRepo(db, dataDir);
   const row = repo.getRun(runId);
   if (!row) throw new ApiError(404, "run_not_found", "Visual run not found");
+  assertFingerprintRead(db,referenceFingerprint(repo,row.reference_id),principal);
   return json(repo.runReport(row), 200, noStore);
 }

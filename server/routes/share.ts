@@ -3,6 +3,9 @@ import { z } from "zod";
 import { createShareRequestSchema, parseWith } from "../contracts";
 import { ApiError, json, noStore, readJson } from "../http";
 import { MAX_SHARE_TTL_SECONDS, MIN_SHARE_TTL_SECONDS, SHARE_COOKIE, ShareRepo } from "../share/repo";
+import type { Principal } from "../auth";
+import { requirePrototypeOwner } from "../authorization";
+import { writeAuditEvent } from "../audit";
 
 export const shareResponseHeaders = {
   "cache-control": "no-store",
@@ -63,17 +66,19 @@ export async function routeShares(
   request: Request,
   db: Database,
   segments: string[],
+  principal: Principal,
   options: { publicOrigin: URL; serveDist?: string },
 ): Promise<Response | null> {
   if (segments[0] !== "prototypes" || segments[2] !== "share") return null;
   const prototypeId = segments[1];
   if (!prototypeId) return null;
+  const actor = requirePrototypeOwner(db, prototypeId, principal);
   const repo = new ShareRepo(db, options);
   if (segments.length === 3) {
     if (request.method === "GET") return json({ shares: repo.list(prototypeId) }, 200, noStore);
     if (request.method === "POST") {
       const input = parseWith(createShareRequestSchema, await readJson(request));
-      return json(repo.create(prototypeId, input.version, input.ttlSeconds), 201, noStore);
+      const result=repo.create(prototypeId, input.version, input.ttlSeconds); writeAuditEvent(db,{actorId:actor.userId,action:"share.created",subjectType:"prototype",subjectId:prototypeId,detail:{grantId:result.id,version:result.version}}); return json(result, 201, noStore);
     }
     throw new ApiError(405, "method_not_allowed", "Method not allowed");
   }
@@ -81,6 +86,7 @@ export async function routeShares(
     if (request.method !== "DELETE") throw new ApiError(405, "method_not_allowed", "Method not allowed");
     const grantId = parseWith(shareIdSchema, segments[3], "Share id is invalid");
     repo.revoke(prototypeId, grantId);
+    writeAuditEvent(db,{actorId:actor.userId,action:"share.revoked",subjectType:"prototype",subjectId:prototypeId,detail:{grantId}});
     return new Response(null, { status: 204, headers: noStore });
   }
   return null;

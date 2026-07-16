@@ -11,6 +11,7 @@ export function createTestHandler(db: Database, options: HandlerOptions = {}): R
     db.query("INSERT INTO users (id,name,password_hash,is_admin,created_at) VALUES (?,?,?,?,?)")
       .run(BOOTSTRAP_ADMIN_ID, "Test Admin", "test-only-unusable-password-hash", 1, new Date().toISOString());
   }
+  for(const table of ["prototypes","components","design_systems"]) db.query(`UPDATE ${table} SET owner_id=? WHERE owner_id IS NULL`).run(BOOTSTRAP_ADMIN_ID);
   const session = new UserRepo(db).createSession(BOOTSTRAP_ADMIN_ID);
   const secure = new URL(options.publicOrigin?.toString() ?? "http://localhost").protocol === "https:";
   const cookieName = secure ? "__Host-easyui_session" : "easyui_session";

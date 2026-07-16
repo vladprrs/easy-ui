@@ -5477,8 +5477,32 @@
                       "name": {
                         "type": "string"
                       },
+                      "owner": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name"
+                        ],
+                        "type": "object"
+                      },
                       "screenCount": {
                         "type": "number"
+                      },
+                      "status": {
+                        "enum": [
+                          "private",
+                          "published",
+                          "archived"
+                        ],
+                        "type": "string"
                       },
                       "updatedAt": {
                         "type": "string"
@@ -5492,7 +5516,9 @@
                       "screenCount",
                       "headRev",
                       "latestVersion",
-                      "updatedAt"
+                      "updatedAt",
+                      "status",
+                      "owner"
                     ],
                     "type": "object"
                   },
@@ -6158,6 +6184,22 @@
                     "name": {
                       "type": "string"
                     },
+                    "owner": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
                     "prototypeInstanceId": {
                       "type": "string"
                     },
@@ -6193,6 +6235,14 @@
                         "published"
                       ],
                       "type": "object"
+                    },
+                    "status": {
+                      "enum": [
+                        "private",
+                        "published",
+                        "archived"
+                      ],
+                      "type": "string"
                     },
                     "updatedAt": {
                       "$ref": "#/$defs/__schema0"
@@ -6244,7 +6294,8 @@
                     "validatedRevision",
                     "publishedVersion",
                     "renderable",
-                    "figma"
+                    "status",
+                    "owner"
                   ],
                   "type": "object"
                 }
@@ -6930,8 +6981,7 @@
                     "prototypeInstanceId",
                     "components",
                     "assets",
-                    "designSystemMetaVersion",
-                    "figma"
+                    "designSystemMetaVersion"
                   ],
                   "type": "object"
                 }
@@ -7477,7 +7527,6 @@
                     "components",
                     "assets",
                     "designSystemMetaVersion",
-                    "figma",
                     "message",
                     "createdAt"
                   ],
@@ -8932,6 +8981,113 @@
         "x-easyui-validated": true
       }
     },
+    "/api/prototypes/{id}/status": {
+      "post": {
+        "operationId": "post_prototypes_id_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "private",
+                      "published",
+                      "archived"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "private",
+                        "published",
+                        "archived"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_renderable"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_transition"
+          }
+        },
+        "summary": "Change prototype visibility using the server-enforced lifecycle graph.",
+        "x-easyui-validated": false
+      }
+    },
     "/api/prototypes/{id}/versions": {
       "get": {
         "operationId": "get_prototypes_id_versions",
@@ -9180,7 +9336,6 @@
                     "components",
                     "assets",
                     "designSystemMetaVersion",
-                    "figma",
                     "version",
                     "publishedAt"
                   ],

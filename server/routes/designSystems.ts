@@ -4,6 +4,8 @@ import {catalogDefinitionDescriptor,getDesignSystemVersion,getLatestDesignSystem
 import {parseThemePatch,validateThemeAssets,type ThemeContent} from "../designSystemsMeta";
 import {ApiError,json,noStore,readJson} from "../http";
 import {resolveSpacingScale} from "../../src/designSystems/spacingScale";
+import type {Principal} from "../auth";
+import {requireResourceOwner,requireUser} from "../authorization";
 
 function summary(db:Database,system:RegisteredDesignSystem) {
   const theme=getLatestDesignSystemContent(db,system.id);
@@ -55,7 +57,7 @@ async function patchTheme(request:Request,db:Database,system:RegisteredDesignSys
   return json(summary(db,getRegisteredDesignSystem(db,system.id)!),200,noStore);
 }
 
-export async function routeDesignSystems(request:Request,db:Database,segments:string[]):Promise<Response> {
+export async function routeDesignSystems(request:Request,db:Database,segments:string[],principal:Principal):Promise<Response> {
   // segments: ["design-systems", id?, "versions"?, v?]
   if(segments.length>=3) {
     if(segments.length===4&&segments[2]==="versions") {
@@ -74,11 +76,12 @@ export async function routeDesignSystems(request:Request,db:Database,segments:st
     return json({designSystems:listRegisteredDesignSystems(db).map((s)=>summary(db,s))},200,noStore);
   }
   if(request.method==="POST"&&!id) {
+    const actor=requireUser(principal);
     const input=validate(await readObjectBody(request)); const at=new Date().toISOString();
-    try { db.query("INSERT INTO design_systems (id,name,description,builtin_provider,created_at,updated_at) VALUES (?,?,?,NULL,?,?)").run(input.id,input.name,input.description,at,at); }
+    try { db.query("INSERT INTO design_systems (id,name,description,builtin_provider,created_at,updated_at,owner_id) VALUES (?,?,?,NULL,?,?,?)").run(input.id,input.name,input.description,at,at,actor.userId); }
     catch(error) { if(String(error).includes("UNIQUE constraint failed")) throw new ApiError(409,"already_exists","Design system already exists"); throw error; }
     return json(summary(db,getRegisteredDesignSystem(db,input.id)!),201,{...noStore,location:`/api/design-systems/${input.id}`});
   }
-  if(request.method==="PATCH"&&id) { const system=getRegisteredDesignSystem(db,id); if(!system) throw new ApiError(404,"not_found","Design system not found"); return patchTheme(request,db,system); }
+  if(request.method==="PATCH"&&id) { requireResourceOwner(db,"design_systems",id,principal); const system=getRegisteredDesignSystem(db,id); if(!system) throw new ApiError(404,"not_found","Design system not found"); return patchTheme(request,db,system); }
   throw new ApiError(405,"method_not_allowed","Method not allowed");
 }
