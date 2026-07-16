@@ -120,6 +120,58 @@ layout?: {
 
 `spacing` names the supported standard props. `spacer: true` identifies a dedicated spacer element and cannot be combined with spacing props or slots. `flow` describes a flex flow whose `gap` applies to its selected slot; a static direction can be declared directly, while a prop-driven direction maps accepted prop values to vertical, horizontal, or no-flow domains. Unmapped or dynamic values have unknown direction rather than an inferred one.
 
+## Overlay host primitive
+
+`Overlay` is a host primitive available to every registered design system through the separate `hostPrimitives` discovery section. It is not a builtin or custom component, is never included in `components`, component pins, or the component manifest, and reserves the component name `Overlay`.
+
+Its grammar is:
+
+```json
+{
+  "type": "Overlay",
+  "props": {
+    "placement": "top | bottom | center | top-left | top-right | bottom-left | bottom-right",
+    "inset": "none | xs | sm | md | lg | xl | 2xl | 3xl | 4xl",
+    "scrim": false
+  },
+  "children": ["overlay-content"]
+}
+```
+
+`placement` is required. `inset` defaults to `md` and is resolved through the selected design system's pinned spacing scale. `scrim` defaults to `false`. `top` and `bottom` stretch across the StageViewport minus the horizontal inset; `center` and the four corner placements shrink to fit, up to the available width. The default slot is the only slot. The primitive has atomic level `atom` and is layout-neutral.
+
+An Overlay is viewport-sticky: it is anchored to the native-coordinate `StageViewport`, inside the same transform chain as screen content, and does not move relative to that viewport when a `ContentScroller` scrolls. Its inset is applied before preview transforms, so it scales with the content. It may contain normal builtin, host-independent custom, or repeated content. Anchoring to an element or to scrolling content is not supported in v1.
+
+The placement rules are structural and enforced during validation:
+
+- Overlay must be a direct child of the screen root. It is not allowed below `repeat`, `Hotspot`, or another Overlay; `Hotspot` is not allowed inside Overlay.
+- More than one root Overlay is allowed; document order is stacking order.
+- On a canvas screen Overlay is the third ordered canvas layer: content, then hotspots, then overlays.
+- On a desktop screen without `canvas`, Overlay is invalid because the desktop flow viewport has automatic height and no normative bottom anchor. Mobile/tablet flow and canvas screens on every device are supported. The player also disables and resets a desktop preview override that would bypass this rule.
+- `scrim: true` adds a full-StageViewport, `aria-hidden` backdrop below the Overlay content and blocks pointer events through it. Without a scrim, only Overlay content receives pointer events. Drawer and Dialog remain the primitives for modal interaction.
+
+### Overlay surface truth table
+
+The four relevant boxes are distinct: `ClipViewport` provides outer clipping or preview scrolling; `StageViewport` is the native-coordinate Overlay anchor; `ContentScroller` owns content scrolling; and the Overlay portal root is mounted into the StageViewport supplied by each surface. No wrapper is inserted around legacy flow content.
+
+| # | Surface | StageViewport (DOM node) | Width / height | ContentScroller | Overflow | Capture behavior | Overlay after scrolling |
+|---|---|---|---|---|---|---|---|
+| 1 | Player, mobile/tablet flow | Transformed native div in `DeviceFrame` | 390×844 / 834×1112 | Outer `DeviceFrame` page scroller; no in-stage content scroller | Frame card clips | Not a capture surface | Fixed to stage edges; moves with the whole stage during page scroll |
+| 2 | Player, canvas (any device) | Same transformed native div; `CanvasLayers` uses the same box | `canvas.width` × `canvas.height` | Outer `DeviceFrame` scroller | Frame card clips | — | Third `CanvasLayers` layer above hotspots; moves with canvas |
+| 3 | Player, desktop flow without canvas | **Forbidden by validation**; desktop preview control is disabled and an existing override is reset | — | — | — | — | — |
+| 4 | Present | The same `DeviceFrame` nodes as rows 1–2; uses `doc.device` with no preview override | As rows 1–2 | `DeviceFrame` scroller | As row 1 | — | As rows 1–2 |
+| 5 | Capture, mobile/tablet flow | Native `#eui-capture-surface`, without transform | Canonical device viewport | No in-surface scroller | No surface overflow rule | Worker captures this element; Overlay remains inside its bounds | Fixed to capture-surface edges; excess content does not move it |
+| 6 | Capture, canvas | `#eui-capture-surface` is the canvas box | `canvas.width` × `canvas.height` | None | None | As row 5 | Third `CanvasLayers` layer |
+| 7 | Capture, desktop flow | **Forbidden by validation**; the auto-height surface has no normative bottom anchor | — | — | — | Such a document cannot be saved for capture | — |
+| 8 | Editor, main canvas | Transformed `div[data-eui-stage-viewport="editor"]` | Native width; canvas or measured auto height | Outer editor section | Stage viewport clips | — | Portal child in the transformed stage; inset scales; the inert stage and Overlay move together |
+| 9 | Editor screen strip | Transformed `div[data-eui-stage-viewport="editor-strip"]` | Native width; preview height capped at 180 | Horizontal strip list | Tile clips | — | Same transform/inert behavior as row 8; bottom Overlay may be clipped in the fidelity thumbnail |
+| 10 | CJM tile | Transformed `div[data-eui-stage-viewport="cjm"]` | Native width; device-specific capped height | CJM stage/list scrollers | Frame clips | — | Portal remains inside the transformed inert stage |
+| 11 | Gallery preview | Inner transformed `div[data-eui-stage-viewport="gallery"]` inside the gallery scale transform | Native width; effective scale is device scale × gallery scale; height capped at 200 | None | Outer preview clips | — | Static inert preview; Overlay shares both transforms with content |
+| 12 | Storybook | For specs with Overlay only, relative `div[data-eui-stage-viewport="story"]`; other stories keep the bare Renderer path | 390×844 | Storybook canvas | Host box does not add clipping or scrolling | — | Anchored inside the fixed story host box |
+| 13 | Tablet canvas | Uses the corresponding canvas nodes from rows 2, 6, and 8–11; tablet does not create a separate branch | Canvas dimensions | As corresponding surface | As corresponding surface | As corresponding surface | As corresponding canvas surface |
+
+Across all supported surfaces, `stageHostRef` points to the StageViewport or a direct relative container with identical geometry. Overlay stays in the stage's native coordinate system and inert subtree where applicable. The split order is host primitives before canvas; presentation trees use the split results, while action runtime evaluates the original complete spec. The story host is created only for specs containing Overlay.
+
 ## Events and actions
 
 An event name must be declared by its component definition. Its value is one action or a sequential array. Params contain static JSON literals only.

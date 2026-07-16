@@ -13,7 +13,58 @@
    "3xl": "48px",
    "4xl": "64px"
   },
-  "hostPrimitives": [],
+  "hostPrimitives": [
+   {
+    "name": "Overlay",
+    "description": "Viewport-anchored content rendered into the current stage host.",
+    "atomicLevel": "atom",
+    "layoutNeutral": true,
+    "propsJsonSchema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "placement": {
+       "type": "string",
+       "enum": [
+        "top",
+        "bottom",
+        "center",
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right"
+       ]
+      },
+      "inset": {
+       "default": "md",
+       "type": "string",
+       "enum": [
+        "none",
+        "xs",
+        "sm",
+        "md",
+        "lg",
+        "xl",
+        "2xl",
+        "3xl",
+        "4xl"
+       ]
+      },
+      "scrim": {
+       "default": false,
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "placement"
+     ],
+     "additionalProperties": false
+    },
+    "slots": [
+     "default"
+    ]
+   }
+  ],
   "components": {
    "Card": {
     "description": "Container card for content sections. Use for forms/content boxes, NOT for page headers.",
@@ -2026,7 +2077,58 @@
    "3xl": "64px",
    "4xl": "80px"
   },
-  "hostPrimitives": [],
+  "hostPrimitives": [
+   {
+    "name": "Overlay",
+    "description": "Viewport-anchored content rendered into the current stage host.",
+    "atomicLevel": "atom",
+    "layoutNeutral": true,
+    "propsJsonSchema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "placement": {
+       "type": "string",
+       "enum": [
+        "top",
+        "bottom",
+        "center",
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right"
+       ]
+      },
+      "inset": {
+       "default": "md",
+       "type": "string",
+       "enum": [
+        "none",
+        "xs",
+        "sm",
+        "md",
+        "lg",
+        "xl",
+        "2xl",
+        "3xl",
+        "4xl"
+       ]
+      },
+      "scrim": {
+       "default": false,
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "placement"
+     ],
+     "additionalProperties": false
+    },
+    "slots": [
+     "default"
+    ]
+   }
+  ],
   "components": {
    "Box": {
     "description": "Dashed wireframe container for grouping content.",

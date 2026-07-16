@@ -37,6 +37,23 @@ describe("render-status endpoint", () => {
     db.close();
   });
 
+  test("keeps a revision rendered green when its recorded builtin hash predates Overlay exposure", async () => {
+    const { db, handler } = await setup("dist");
+    const doc = await helloDoc("rs-old-builtin-hash");
+    expect((await handler(req("/prototypes", "POST", { doc }))).status).toBe(201);
+    db.query("UPDATE prototype_revisions SET builtin_catalog_hash=? WHERE prototype_id=? AND rev=1")
+      .run("pre-overlay-render-contract-hash", "rs-old-builtin-hash");
+    db.query("UPDATE validation_records SET catalog_hash=? WHERE resource_type='prototype' AND resource_id=? AND rev=1")
+      .run("pre-overlay-render-contract-hash", "rs-old-builtin-hash");
+    const screen = doc.screens[0]!.id;
+    const body = await (await handler(req(`/prototypes/rs-old-builtin-hash/screens/${screen}/render-status`))).json() as {
+      renderable: boolean; status: { document: boolean; bundles: boolean }; errors: { code: string }[];
+    };
+    expect(body).toMatchObject({ renderable: true, status: { document: true, bundles: true } });
+    expect(body.errors).toEqual([]);
+    db.close();
+  });
+
   test("flags route_not_ready when the SPA is not served by this process", async () => {
     const { db, handler } = await setup();
     await handler(req("/prototypes", "POST", { doc: await helloDoc("rs-route") }));

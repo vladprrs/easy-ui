@@ -1,6 +1,8 @@
 import type { Database } from "bun:sqlite";
 import type { ComponentDefinition } from "../src/catalog/normalize";
+import { hostPrimitiveDefinitions } from "../src/catalog/hostPrimitives/definitions";
 import { designSystems } from "../src/designSystems";
+import { z } from "zod";
 import type { ThemeContent } from "./designSystemsMeta";
 import { ApiError } from "./http";
 
@@ -11,6 +13,23 @@ export interface RegisteredDesignSystem {
   builtinProvider:string|null;
   definitions:Record<string,ComponentDefinition>;
 }
+
+/** Portable discovery/hash descriptor derived from the runtime definition source. */
+export function catalogDefinitionDescriptor(name:string,definition:ComponentDefinition) {
+  return {
+    name,
+    atomicLevel:definition.atomicLevel,
+    layoutNeutral:definition.layoutNeutral??false,
+    layout:definition.layout,
+    description:definition.description,
+    events:definition.events??[],
+    slots:definition.slots??[],
+    propsJsonSchema:z.toJSONSchema(definition.props,{io:"input"}),
+  };
+}
+
+export const hostPrimitiveDescriptors=Object.entries(hostPrimitiveDefinitions)
+  .map(([name,definition])=>catalogDefinitionDescriptor(name,definition));
 
 type Row={id:string;name:string;description:string;builtin_provider:string|null};
 function fromRow(row:Row):RegisteredDesignSystem {

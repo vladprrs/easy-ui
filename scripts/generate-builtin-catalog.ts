@@ -4,12 +4,12 @@
 import { z } from "zod";
 import { designSystems } from "../src/designSystems";
 import { resolveSpacingScale } from "../src/designSystems/spacingScale";
+import { hostPrimitiveDefinitions } from "../src/catalog/hostPrimitives/definitions";
 
-const out: Record<string, unknown> = {};
-for (const system of Object.values(designSystems)) {
-  const components: Record<string, unknown> = {};
-  for (const [name, definition] of Object.entries(system.definitions)) {
-    components[name] = {
+function serializeDefinitions(definitions: typeof hostPrimitiveDefinitions | (typeof designSystems)[keyof typeof designSystems]["definitions"]) {
+  const result: Record<string, unknown> = {};
+  for (const [name, definition] of Object.entries(definitions)) {
+    result[name] = {
       description: definition.description,
       ...(definition.atomicLevel ? { atomicLevel: definition.atomicLevel } : {}),
       layoutNeutral: definition.layoutNeutral ?? false,
@@ -20,11 +20,22 @@ for (const system of Object.values(designSystems)) {
       ...(definition.example ? { example: definition.example } : {}),
     };
   }
+  return result;
+}
+
+function serializeHostPrimitives() {
+  const definitions = serializeDefinitions(hostPrimitiveDefinitions);
+  return Object.entries(definitions).map(([name, descriptor]) => ({ name, ...(descriptor as Record<string, unknown>) }));
+}
+
+const out: Record<string, unknown> = {};
+for (const system of Object.values(designSystems)) {
+  const components = serializeDefinitions(system.definitions);
   out[system.id] = {
     name: system.name,
     description: system.description,
     resolvedSpaceScale: resolveSpacingScale(system.id),
-    hostPrimitives: [],
+    hostPrimitives: serializeHostPrimitives(),
     components,
   };
 }

@@ -72,9 +72,31 @@ describe("host primitive API lifecycle", () => {
 
     const manifest = await (await handler(request("/catalog/manifest?designSystem=shadcn"))).json() as { components: { name: string }[] };
     expect(manifest.components.some((component) => component.name === "Overlay")).toBeFalse();
-    const summary = await (await handler(request("/design-systems/shadcn"))).json() as { hostPrimitives: unknown[] };
-    expect(summary.hostPrimitives).toEqual([]);
-    expect(JSON.stringify(summary)).not.toContain('"Overlay"');
+    expect((await handler(request("/design-systems", "POST", { id: "custom-host", name: "Custom host", description: "Custom design system" }))).status).toBe(201);
+    const discovery = await (await handler(request("/design-systems"))).json() as {
+      designSystems: { id: string; components: { name: string }[]; hostPrimitives: Record<string,unknown>[] }[];
+    };
+    expect(discovery.designSystems.length).toBeGreaterThanOrEqual(4);
+    for (const system of discovery.designSystems) {
+      expect(system.hostPrimitives).toEqual([expect.objectContaining({
+        name: "Overlay",
+        description: "Viewport-anchored content rendered into the current stage host.",
+        atomicLevel: "atom",
+        layoutNeutral: true,
+        slots: ["default"],
+        propsJsonSchema: expect.objectContaining({
+          type: "object",
+          properties: expect.objectContaining({
+            placement: expect.objectContaining({ enum: ["top", "bottom", "center", "top-left", "top-right", "bottom-left", "bottom-right"] }),
+            inset: expect.objectContaining({ default: "md" }),
+            scrim: expect.objectContaining({ default: false }),
+          }),
+        }),
+      })]);
+      expect(system.components.some((component) => component.name === "Overlay")).toBeFalse();
+      const detail = await (await handler(request(`/design-systems/${system.id}`))).json() as typeof system;
+      expect(detail.hostPrimitives).toEqual(system.hostPrimitives);
+    }
     db.close();
   });
 

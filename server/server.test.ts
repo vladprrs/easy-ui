@@ -37,7 +37,7 @@ describe("prototype API", () => {
           id: "shadcn",
           builtinCatalogHash: expect.any(String),
           resolvedSpaceScale: expect.objectContaining({ none: "0px", md: "12px", "4xl": "64px" }),
-          hostPrimitives: [],
+          hostPrimitives: [expect.objectContaining({ name: "Overlay" })],
           components: expect.arrayContaining([
             expect.objectContaining({
               name: "Button",
@@ -50,7 +50,7 @@ describe("prototype API", () => {
           ]),
         }),
         expect.objectContaining({ id: "wireframe" }),
-        expect.objectContaining({ id: "yandex-pay", components: [], hostPrimitives: [] }),
+        expect.objectContaining({ id: "yandex-pay", components: [], hostPrimitives: [expect.objectContaining({ name: "Overlay" })] }),
       ]),
     );
     expect(JSON.stringify(value)).not.toContain("_def");

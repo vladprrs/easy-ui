@@ -1,13 +1,19 @@
 import { expect, test } from "bun:test";
 import { z } from "zod";
-import { builtinCatalogHash, builtinCatalogHashFor, emptyComponentManifestHash } from "./builtinHash";
+import { builtinCatalogHash, builtinCatalogHashFor, emptyComponentManifestHash, RENDER_CONTRACT_VERSION } from "./builtinHash";
 import type { ComponentDefinition } from "../src/catalog/normalize";
 import { canonicalSpacingScale } from "../src/designSystems/spacingScale";
 
 test("shadcn builtin hash is stable for the current render contract",()=>{
+  expect(RENDER_CONTRACT_VERSION).toBe(2);
   expect(builtinCatalogHash).toMatch(/^[a-f0-9]{64}$/);
   expect(builtinCatalogHashFor("shadcn")).toBe(builtinCatalogHash);
   expect(builtinCatalogHashFor("wireframe")).toMatch(/^[a-f0-9]{64}$/);
+});
+
+test("exposing Overlay changes the builtin compatibility hash",()=>{
+  const beforeOverlay=builtinCatalogHashFor("shadcn",undefined,canonicalSpacingScale,{});
+  expect(builtinCatalogHash).not.toBe(beforeOverlay);
 });
 
 test("resolved spacing scale participates in the compatibility hash",()=>{

@@ -1,7 +1,6 @@
 import type {Database} from "bun:sqlite";
-import {z} from "zod";
 import {builtinCatalogHashFor} from "../builtinHash";
-import {getDesignSystemVersion,getLatestDesignSystemContent,getRegisteredDesignSystem,insertDesignSystemVersion,latestDesignSystemMetaVersion,listRegisteredDesignSystems,type RegisteredDesignSystem} from "../designSystems";
+import {catalogDefinitionDescriptor,getDesignSystemVersion,getLatestDesignSystemContent,getRegisteredDesignSystem,hostPrimitiveDescriptors,insertDesignSystemVersion,latestDesignSystemMetaVersion,listRegisteredDesignSystems,type RegisteredDesignSystem} from "../designSystems";
 import {parseThemePatch,validateThemeAssets,type ThemeContent} from "../designSystemsMeta";
 import {ApiError,json,noStore,readJson} from "../http";
 import {resolveSpacingScale} from "../../src/designSystems/spacingScale";
@@ -13,12 +12,8 @@ function summary(db:Database,system:RegisteredDesignSystem) {
     id:system.id,name:system.name,description:system.description,
     builtinCatalogHash:builtinCatalogHashFor(system.id,system.definitions,resolvedSpaceScale),
     resolvedSpaceScale,
-    components:Object.entries(system.definitions).map(([name,definition])=>({
-      name,atomicLevel:definition.atomicLevel,layoutNeutral:definition.layoutNeutral??false,layout:definition.layout,
-      description:definition.description,events:definition.events??[],slots:definition.slots??[],
-      propsJsonSchema:z.toJSONSchema(definition.props,{io:"input"}),
-    })),
-    hostPrimitives:[],
+    components:Object.entries(system.definitions).map(([name,definition])=>catalogDefinitionDescriptor(name,definition)),
+    hostPrimitives:hostPrimitiveDescriptors,
     latestMetaVersion:theme.latestMetaVersion,
     tokens:theme.tokens,fonts:theme.fonts,icons:theme.icons,
   };
