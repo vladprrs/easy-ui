@@ -14,6 +14,7 @@ import { DeviceFrame, isPlayerHelpHotkey, isPlayerHotkeyEvent, type StageZoom } 
 import { FluidStage } from "./FluidStage";
 import { useMobilePresent } from "./mobilePresent";
 import { buildPlayerPath, FlowResetBanner, PlayerNavigationProvider, usePlayerNavigation } from "./navigation";
+import { PresentHud } from "./PresentHud";
 import { PrototypeLoader } from "./PrototypeLoader";
 import { PlayerHotkeysHelp, ScreenErrorBoundary } from "./ScreenView";
 import { ScreenSurface } from "./ScreenSurface";
@@ -79,6 +80,7 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
   const navigation = usePlayerNavigation();
   const routerNavigate = useNavigate();
   const [hotkeysVisible, setHotkeysVisible] = useState(false);
+  const [hudOpen, setHudOpen] = useState(false);
   const navigationRef = useRef(navigation);
   useEffect(() => { navigationRef.current = navigation; }, [navigation]);
   useDocumentTitle(share && version !== undefined ? shareDocumentTitle(doc.name, version) : presentDocumentTitle(doc.name, version));
@@ -130,9 +132,17 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
       } else if (event.key.toLowerCase() === "r") {
         event.preventDefault();
         navigation.restart();
-      } else if (event.key === "Escape" && !share) {
-        event.preventDefault();
-        void routerNavigate(exitPath);
+      } else if (event.key === "Escape") {
+        if (hotkeysVisible) {
+          event.preventDefault();
+          setHotkeysVisible(false);
+        } else if (hudOpen) {
+          event.preventDefault();
+          setHudOpen(false);
+        } else if (!share) {
+          event.preventDefault();
+          void routerNavigate(exitPath);
+        }
       } else if (isPlayerHelpHotkey(event)) {
         event.preventDefault();
         setHotkeysVisible((visible) => !visible);
@@ -140,7 +150,7 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentIndex, doc.screens, exitPath, navigation, routerNavigate, share]);
+  }, [currentIndex, doc.screens, exitPath, hotkeysVisible, hudOpen, navigation, routerNavigate, share]);
 
   const content = screen && tree
     ? <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>
@@ -165,6 +175,7 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
         </FluidStage> : <DeviceFrame device={doc.device} canvas={screen?.canvas} zoom={fitZoom} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}>
           {content}
         </DeviceFrame>}
+        {mobile && <PresentHud open={hudOpen} onOpenChange={setHudOpen} navigation={navigation} current={currentIndex + 1} total={doc.screens.length} exitPath={exitPath} directEntry={directEntry} share={share} />}
       </div>
       {!mobile && <footer className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 px-4 py-2.5">
         <nav aria-label={present.pagerAria} className="flex max-w-full flex-wrap items-center justify-center gap-1.5">

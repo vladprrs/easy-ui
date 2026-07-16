@@ -43,7 +43,7 @@ function matchMedia(matches: boolean): typeof window.matchMedia {
   })) as typeof window.matchMedia;
 }
 
-describe("PresentShell (W1-2)", () => {
+describe("PresentShell (W2-1)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.stubGlobal("matchMedia", matchMedia(false));
@@ -78,6 +78,8 @@ describe("PresentShell (W1-2)", () => {
     expect(document.querySelector("[data-eui-stage-viewport='present-fluid']")).not.toBeNull();
     expect(document.querySelector("[data-eui-stage-viewport='player']")).toBeNull();
     expect(document.querySelector("footer")).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Открыть управление презентацией" }));
+    expect(screen.getByRole("link", { name: "Открыть в easy-ui" }).getAttribute("href")).toBe("/p/hello-world/s/welcome?mobile=1");
   });
 
   it("keeps the desktop frame and footer for ?mobile=0", async () => {
@@ -86,6 +88,7 @@ describe("PresentShell (W1-2)", () => {
     expect(document.querySelector("[data-eui-stage-viewport='player']")).not.toBeNull();
     expect(document.querySelector("[data-eui-stage-viewport='present-fluid']")).toBeNull();
     expect(screen.getByRole("navigation", { name: "Экраны презентации" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Открыть управление презентацией" })).toBeNull();
   });
 
   it("runs the interactive flow and restart resets state", async () => {
@@ -130,6 +133,27 @@ describe("PresentShell (W1-2)", () => {
     fireEvent.keyDown(window, { key: "?", shiftKey: true });
     expect(screen.getByRole("dialog", { name: "Горячие клавиши" })).toBeTruthy();
     expect(screen.getByText("Вернуться в плеер")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Горячие клавиши" })).toBeNull();
+    expect(router.state.location.pathname).toBe("/p/hello-world/present/s/welcome");
+  });
+
+  it("closes the mobile HUD on the first Escape and exits on the second", async () => {
+    const router = renderAt("/p/hello-world/s/welcome?mobile=1");
+    await screen.findByLabelText("Name");
+    fireEvent.click(within(screen.getByTestId("chrome-actions")).getByRole("link", { name: "Презентация" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/present/s/welcome"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Открыть управление презентацией" }));
+    expect(screen.getByRole("link", { name: "Вернуться в плеер" }).getAttribute("href")).toBe("/p/hello-world/s/welcome?mobile=1");
+    const locationBeforeEscape = `${router.state.location.pathname}${router.state.location.search}`;
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Управление презентацией" })).toBeNull();
+    expect(`${router.state.location.pathname}${router.state.location.search}`).toBe(locationBeforeEscape);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/s/welcome"));
+    expect(router.state.location.search).toBe("?mobile=1");
   });
 
   it("enters from the player chrome action and Esc returns to the player at the same screen", async () => {
@@ -172,15 +196,19 @@ describe("PresentShell (W1-2)", () => {
   });
 
   it("keeps scoped-share navigation tokenless and exposes no workspace exit", async () => {
-    const router = renderAt("/share/p/hello-world/v/2/present/s/welcome");
+    const router = renderAt("/share/p/hello-world/v/2/present/s/welcome?mobile=1");
     await screen.findByLabelText("Name");
     expect(document.title).toBe("Hello World v2 · Просмотр — easy-ui");
     expect(screen.queryByRole("link", { name: "Открыть в easy-ui" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Галерея" })).toBeNull();
-    expect(screen.getByText("Защищённый просмотр")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Открыть управление презентацией" }));
+    expect(screen.queryByRole("link")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/share/p/hello-world/v/2/present/s/details"));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(router.state.location.pathname).toBe("/share/p/hello-world/v/2/present/s/details");
+    expect(screen.queryByRole("dialog", { name: "Управление презентацией" })).toBeNull();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(router.state.location.pathname).toBe("/share/p/hello-world/v/2/present/s/details");
     fireEvent.keyDown(window, { key: "?", shiftKey: true });

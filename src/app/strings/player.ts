@@ -86,6 +86,14 @@ export const present = {
   screenDot: (name: string) => `Экран «${name}»`,
 } as const;
 
+// Мини-HUD мобильной презентации (W2-1).
+export const presentHud = {
+  fabAria: "Открыть управление презентацией",
+  panelAria: "Управление презентацией",
+  close: "Закрыть управление презентацией",
+  returnToPlayer: "Вернуться в плеер",
+} as const;
+
 export const share = {
   action: "Поделиться",
   dialogTitle: "Поделиться прототипом",
