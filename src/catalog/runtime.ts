@@ -70,16 +70,18 @@ export function createPlayerRuntime(deps: PlayerRuntimeDeps, custom?: CustomPlay
     if (definitionKeys.length !== componentKeys.length || definitionKeys.some((key, index) => key !== componentKeys[index])) {
       throw new Error("Custom definition and component keys must match");
     }
-    const runtimeCatalog = createCatalog({ ...system.definitions, ...custom.definitions, ...hostPrimitiveDefinitions });
+    // B1-B2 compatibility order: host types are the fallback, live builtins win
+    // name collisions (notably wireframe Image), and custom definitions remain last.
+    const runtimeCatalog = createCatalog({ ...hostPrimitiveDefinitions, ...system.definitions, ...custom.definitions });
     // Custom components are wrapped with the event adapter so they receive
     // emit(name, payload?)/on()/slots and route dispatch through the runtime.
     const wrappedCustom = Object.fromEntries(Object.entries(custom.components).map(([name, component]) =>
       [name, wrapCustomComponent(name, component as ComponentType<EasyUIComponentProps>)]));
-    const runtimeComponents = { ...builtinComponents, ...wrappedCustom, ...hostPrimitiveComponents } as Components<typeof runtimeCatalog>;
+    const runtimeComponents = { ...hostPrimitiveComponents, ...builtinComponents, ...wrappedCustom } as Components<typeof runtimeCatalog>;
     result = defineRegistry(runtimeCatalog, { components: runtimeComponents, actions });
   } else {
-    const runtimeCatalog = getBuiltinCatalog(system.id, { ...system.definitions, ...hostPrimitiveDefinitions });
-    result = defineRegistry(runtimeCatalog, { components: { ...builtinComponents, ...hostPrimitiveComponents } as Components<typeof runtimeCatalog>, actions });
+    const runtimeCatalog = getBuiltinCatalog(system.id, { ...hostPrimitiveDefinitions, ...system.definitions });
+    result = defineRegistry(runtimeCatalog, { components: { ...hostPrimitiveComponents, ...builtinComponents } as Components<typeof runtimeCatalog>, actions });
   }
 
   // In @json-render/react 0.19.0 `handlers` is a factory, not a handler map.

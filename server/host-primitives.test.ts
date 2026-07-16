@@ -78,7 +78,8 @@ describe("host primitive API lifecycle", () => {
     };
     expect(discovery.designSystems.length).toBeGreaterThanOrEqual(4);
     for (const system of discovery.designSystems) {
-      expect(system.hostPrimitives).toEqual([expect.objectContaining({
+      expect(system.hostPrimitives).toHaveLength(3);
+      expect(system.hostPrimitives).toEqual(expect.arrayContaining([expect.objectContaining({
         name: "Overlay",
         description: "Viewport-anchored content rendered into the current stage host.",
         atomicLevel: "atom",
@@ -92,7 +93,7 @@ describe("host primitive API lifecycle", () => {
             scrim: expect.objectContaining({ default: false }),
           }),
         }),
-      })]);
+      }), expect.objectContaining({ name: "Image" }), expect.objectContaining({ name: "Hotspot" })]));
       expect(system.components.some((component) => component.name === "Overlay")).toBeFalse();
       const detail = await (await handler(request(`/design-systems/${system.id}`))).json() as typeof system;
       expect(detail.hostPrimitives).toEqual(system.hostPrimitives);
@@ -105,6 +106,11 @@ describe("host primitive API lifecycle", () => {
     const source = await Bun.file(resolve("server/fixtures/rating-stars.tsx")).text();
     const create = await handler(request("/components", "POST", { id: "overlay", name: "Overlay", source }));
     expect(create.status).toBe(409);
+    for (const name of ["Image", "Hotspot"]) {
+      const response = await handler(request("/components", "POST", { id: `host-${name.toLowerCase()}`, name, source }));
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: { code: "already_exists" } });
+    }
 
     new ComponentRepo(db).create("legacy-overlay", "Overlay", source);
     const update = await handler(request("/components/legacy-overlay", "PUT", { baseRev: 1, source: source.replace("five-star", "changed") }));
@@ -114,6 +120,23 @@ describe("host primitive API lifecycle", () => {
     for (const response of [create, update, publish]) {
       expect(await response.json()).toMatchObject({ error: { code: "already_exists" } });
     }
+    db.close();
+  });
+
+  test("saves host Image and flow Hotspot in a custom-only design system without pins", async () => {
+    const { db, handler } = await setup();
+    expect((await handler(request("/design-systems", "POST", { id: "host-only", name: "Host only", description: "Host content only" }))).status).toBe(201);
+    const doc = prototypeDocSchema.parse({
+      version: 1, id: "host-content", name: "Host content", designSystem: "host-only", device: "desktop", startScreen: "image", state: {},
+      screens: [
+        { id: "image", name: "Image", spec: { root: "image", elements: { image: { type: "Image", props: { src: "/images/host.png", alt: "Host", objectFit: "cover" } } } } },
+        { id: "hotspot", name: "Hotspot", spec: { root: "hotspot", elements: { hotspot: { type: "Hotspot", props: { x: 0, y: 0, width: 20, height: 20, ariaLabel: "Open" } } } } },
+      ],
+    });
+    expect((await handler(request("/prototypes", "POST", { doc }))).status).toBe(201);
+    const saved = await (await handler(request("/prototypes/host-content/draft"))).json() as { components: unknown[]; componentManifestHash: string };
+    expect(saved.components).toEqual([]);
+    expect(saved.componentManifestHash).toBe(emptyComponentManifestHash);
     db.close();
   });
 });

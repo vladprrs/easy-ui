@@ -63,5 +63,6 @@ export async function snapshotDefinitions(db:Database,doc:PrototypeDoc,dataDir:s
     custom[name]={...raw,events,...(eventPayloadSchemas?{eventPayloadSchemas}:{})} as ComponentDefinition;
     pins.push({id:row.id,name:row.name,version:row.version,bundleHash:row.bundleHash,sourcePath:path});
   }
-  return {definitions:{...builtin,...hostPrimitiveDefinitions,...normalizeDefinitions(custom)},pins};
+  // Transitional B1-B2 order: host fallback first, then live builtins, then custom.
+  return {definitions:{...hostPrimitiveDefinitions,...builtin,...normalizeDefinitions(custom)},pins};
 }

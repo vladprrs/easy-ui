@@ -4,14 +4,16 @@ import { describe, expect, it } from "vitest";
 import { createPlayerRuntime } from "../runtime";
 import { HostStageSurface } from "./HostStageSurface";
 import { Overlay } from "./Overlay";
-import { hostPrimitiveDefinitions, hostPrimitiveNames } from ".";
+import { extractionPrimitiveNames, hostContentTypeNames, hostPrimitiveDefinitions, hostPrimitiveNames } from ".";
 
 const noopDeps = { navigate() {}, back() {}, openUrl() {}, restart() {} };
 const eventHandle = () => ({ shouldPreventDefault: false, emit() {} });
 
 describe("Overlay host primitive", () => {
   it("is merged into provider-backed and custom-only runtime registries", () => {
-    expect(hostPrimitiveNames).toEqual(new Set(["Overlay"]));
+    expect(extractionPrimitiveNames).toEqual(new Set(["Overlay"]));
+    expect(hostContentTypeNames).toEqual(new Set(["Image", "Hotspot"]));
+    expect(hostPrimitiveNames).toEqual(new Set(["Overlay", "Image", "Hotspot"]));
     expect(hostPrimitiveDefinitions.Overlay).toMatchObject({ slots: ["default"], atomicLevel: "atom", layoutNeutral: true });
     expect(hostPrimitiveDefinitions.Overlay.props.parse({ placement: "top" })).toEqual({ placement: "top", inset: "md", scrim: false });
     expect(createPlayerRuntime(noopDeps, undefined, "shadcn").registry.Overlay).toBeDefined();

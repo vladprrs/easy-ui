@@ -16,6 +16,13 @@ const doc = prototypeDocSchema.parse({
   screens: [{ id: "home", name: "Home", spec: { root: "text", elements: { text: { type: "Text", props: { text: "Before" } } } } }],
 });
 const draft: PrototypeDraft = { doc, rev: 7, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] };
+const hostDoc = prototypeDocSchema.parse({
+  version: 1, id: "editor-host", name: "Editor host", designSystem: "custom-only", device: "mobile", startScreen: "home", state: {},
+  screens: [{ id: "home", name: "Home", canvas: { width: 390, height: 844 }, spec: { root: "image", elements: {
+    image: { type: "Image", props: { src: "/images/editor.png", alt: "Editor host image", objectFit: "cover" } },
+    hotspot: { type: "Hotspot", props: { x: 1, y: 2, width: 30, height: 40, ariaLabel: "Editor host hotspot" } },
+  } } }],
+});
 const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
 const isEditorGuard = (input: RequestInfo | URL) => String(input).includes("/revisions?limit=1");
 
@@ -80,6 +87,17 @@ describe("EditorShell", () => {
     // The draft has no figma provenance, so the payload must omit the field (never figma: null).
     expect("figma" in body).toBe(false);
     expect(await screen.findByText("Сохранено")).toBeTruthy();
+  });
+
+  it("renders host Image and canvas-split Hotspot in the editor", async () => {
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (isEditorGuard(input)) return json([]);
+      if (String(input) === "/api/prototypes/editor-host/draft") return json({ ...draft, doc: hostDoc });
+      return Promise.reject(new Error(`Unexpected request: ${String(input)}`));
+    });
+    renderEditor("editor-host");
+    expect((await screen.findAllByRole("img", { name: "Editor host image" })).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "Editor host hotspot" }).length).toBeGreaterThan(0);
   });
 
   it("passes the loaded figma provenance through on save (WF-5 roundtrip)", async () => {

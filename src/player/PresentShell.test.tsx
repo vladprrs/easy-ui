@@ -24,6 +24,14 @@ const presentOverlayDoc = prototypeDocSchema.parse({
   } }],
 });
 
+const presentHostDoc = prototypeDocSchema.parse({
+  version: 1, id: "present-host", name: "Present host", designSystem: "custom-only", device: "mobile", startScreen: "main", state: {},
+  screens: [{ id: "main", name: "Main", canvas: { width: 390, height: 844 }, spec: { root: "image", elements: {
+    image: { type: "Image", props: { src: "/images/present.png", alt: "Present host image", objectFit: "cover" } },
+    hotspot: { type: "Hotspot", props: { x: 1, y: 2, width: 30, height: 40, ariaLabel: "Present host hotspot" } },
+  } } }],
+});
+
 function renderAt(path: string) {
   const router = createMemoryRouter(routeObjects, { initialEntries: [path] });
   render(<RouterProvider router={router} />);
@@ -193,6 +201,13 @@ describe("PresentShell (W2-1)", () => {
     expect(stage.querySelector("[data-eui-host-primitive='Overlay']")).not.toBeNull();
     expect(stage.querySelector("[data-eui-overlay-scrim]")).not.toBeNull();
     expect(stage.style.getPropertyValue("--eui-space-md")).toBe("12px");
+  });
+
+  it("renders host Image and canvas-split Hotspot in present", async () => {
+    mocks.getDraft.mockResolvedValue({ ...draft(), doc: presentHostDoc });
+    renderAt("/p/present-host/present/s/main");
+    expect(await screen.findByRole("img", { name: "Present host image" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Present host hotspot" })).toBeTruthy();
   });
 
   it("keeps scoped-share navigation tokenless and exposes no workspace exit", async () => {

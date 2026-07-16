@@ -1,5 +1,6 @@
 /**
- * Static semantic metadata for builtin (design-system) components, consumed by
+ * Static name-based semantic metadata for builtin components and the host
+ * content types Image/Hotspot, consumed by
  * `validatePrototype` to emit accessibility / composition / URL warnings.
  *
  * Custom components declare `interactive` / `accessibleLabelProps` / `urlProps`
@@ -30,6 +31,7 @@ export type BuiltinSemantics = {
 export const BUILTIN_SEMANTICS: Record<string, BuiltinSemantics> = {
   // Pure action triggers / value controls: dead without a handler or a two-way binding.
   Button: { interactive: true, accessibleLabelProps: ["label"] },
+  // Host content type; kept name-based so it has identical semantics without a DS binding.
   Hotspot: { interactive: true, accessibleLabelProps: ["ariaLabel"] },
   Input: { interactive: true, accessibleLabelProps: ["label"] },
   Textarea: { interactive: true, accessibleLabelProps: ["label"] },
@@ -47,6 +49,7 @@ export const BUILTIN_SEMANTICS: Record<string, BuiltinSemantics> = {
   ButtonGroup: { interactive: true, selfDriven: true },
   Pagination: { interactive: true, selfDriven: true },
   // Non-interactive components that nonetheless carry URL props.
+  // Host content type; kept name-based so URL diagnostics work in custom-only catalogs.
   Image: { urlProps: ["src"] },
   Avatar: { urlProps: ["src"] },
 };

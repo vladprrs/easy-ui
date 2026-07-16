@@ -100,8 +100,8 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
     const { content: withoutHostPrimitives, hostPrimitives } = splitHostPrimitives(tree);
     const overlays = hostPrimitives.map((item) => item.spec);
     if (!screen.canvas) return { content: withoutHostPrimitives?.spec ?? null, hotspots: [], overlays };
-    const { content } = withoutHostPrimitives ? splitCanvas(withoutHostPrimitives) : { content: null };
-    return { content: content?.spec ?? null, hotspots: [], overlays };
+    const { content, hotspots } = withoutHostPrimitives ? splitCanvas(withoutHostPrimitives) : { content: null, hotspots: [] };
+    return { content: content?.spec ?? null, hotspots: hotspots.map((item) => item.spec), overlays };
   }, [screen.canvas, tree]);
   const runtimeValue = useMemo<EasyUiRuntimeValue>(
     () => ({ metadata: tree?.metadata ?? {}, runtime: null, definitions: customDefinitions ?? {} }),

@@ -235,7 +235,9 @@ export function validatePrototype(
   errors.push(...validateOverlayRules(doc));
   let definitions = options?.definitions;
   if (!definitions) definitions = resolveBuiltinSystem(doc.designSystem).definitions;
-  definitions = { ...definitions, ...hostPrimitiveDefinitions };
+  // Host definitions are fallbacks during B1-B2. Live builtin definitions must
+  // continue to win the Image collision until builtin retirement in B3.
+  definitions = { ...hostPrimitiveDefinitions, ...definitions };
   // A type is "custom" when it is not part of the design system's builtin allowlist:
   // its events are dispatched by our adapter (which understands param sources/$if),
   // whereas builtin events are dispatched by the library and must stay payloadless.
@@ -356,7 +358,6 @@ export function validatePrototype(
       if (element.visible !== undefined) checkCondition(element.visible, [...ep, "visible"], errors, warnings, effectiveState, elementInsideRepeat);
       for (const child of element.children ?? []) parents.set(child, (parents.get(child) ?? 0) + 1);
       if (element.type === "Hotspot") {
-        if (!screen.canvas) issue(errors, ep, "Hotspot requires a screen canvas");
         if (elementInsideRepeat) issue(errors, ep, "Hotspot is not allowed inside a repeat subtree");
         const p = element.props;
         for (const name of ["x", "y", "width", "height"] as const) if (isDynamicValue(p[name])) issue(errors, [...ep, "props", name], "Hotspot coordinates must be static");

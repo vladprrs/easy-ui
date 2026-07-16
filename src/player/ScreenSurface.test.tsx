@@ -241,4 +241,24 @@ describe("ScreenSurface Overlay stage integration", () => {
     expect(screen.queryByText("Top overlay")).toBeNull();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("desktop flow"));
   });
+
+  it("keeps host Image and Hotspot in desktop flow for a custom-only catalog", () => {
+    const Flow = ({ children }: EasyUIComponentProps) => <div data-testid="flow">{children}</div>;
+    const custom: CustomPlayerRuntime = {
+      definitions: { Flow: { props: z.strictObject({}), slots: ["default"], description: "Flow" } },
+      components: { Flow: Flow as never },
+    };
+    renderSurface({
+      root: "flow",
+      elements: {
+        flow: { type: "Flow", props: {}, children: ["image", "hotspot"] },
+        image: { type: "Image", props: { src: "/images/flow.png", alt: "Flow image", objectFit: "cover" } },
+        hotspot: { type: "Hotspot", props: { x: 0, y: 0, width: 20, height: 20, ariaLabel: "Flow hotspot" } },
+      },
+    }, { custom, misclickHighlights: false });
+
+    expect(screen.getByRole("img", { name: "Flow image" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Flow hotspot" })).toBeTruthy();
+    expect(screen.getByTestId("flow")).toBeTruthy();
+  });
 });

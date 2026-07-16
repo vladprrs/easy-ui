@@ -1,6 +1,6 @@
 import type { Spec } from "@json-render/core";
 import type { PrototypeDoc } from "./schema";
-import { hostPrimitiveNames } from "../catalog/hostPrimitives/definitions";
+import { extractionPrimitiveNames } from "../catalog/hostPrimitives/definitions";
 
 type PrototypeSpec = PrototypeDoc["screens"][number]["spec"];
 type JsonObject = Record<string, unknown>;
@@ -197,7 +197,7 @@ export function splitHostPrimitives(tree: RuntimeTree): { content: RuntimeTree |
     visited.add(key);
     const element = spec.elements[key];
     if (!element) return;
-    if (hostPrimitiveNames.has(element.type)) roots.push(key);
+    if (extractionPrimitiveNames.has(element.type)) roots.push(key);
     for (const child of element.children ?? []) findRoots(child);
   };
   findRoots(spec.root);

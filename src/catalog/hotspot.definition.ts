@@ -1,13 +1,2 @@
-import { z } from "zod";
-
-export const hotspotDefinition = {
-  props: z.strictObject({
-    x: z.number(),
-    y: z.number(),
-    width: z.number().positive(),
-    height: z.number().positive(),
-    ariaLabel: z.string().min(1),
-  }),
-  events: ["press"],
-  description: "Transparent, keyboard-accessible absolute-positioned action area.",
-};
+// Compatibility re-export until builtin design-system sources are removed in B3.
+export { hotspotDefinition } from "./hostPrimitives/content/hotspot.definition";

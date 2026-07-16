@@ -22,6 +22,14 @@ const doc = prototypeDocSchema.parse({
 });
 const draft: PrototypeDraft = { doc, rev: 4, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [], designSystemMetaVersion: 1 };
 
+const hostDoc = prototypeDocSchema.parse({
+  version: 1, id: "journey", name: "Host journey", designSystem: "custom-only", device: "mobile", startScreen: "cart", state: {},
+  screens: [{ id: "cart", name: "Cart", canvas: { width: 390, height: 844 }, spec: { root: "image", elements: {
+    image: { type: "Image", props: { src: "/images/cjm.png", alt: "CJM host image", objectFit: "cover" } },
+    hotspot: { type: "Hotspot", props: { x: 1, y: 2, width: 30, height: 40, ariaLabel: "CJM host hotspot" } },
+  } } }],
+});
+
 afterEach(cleanup);
 
 function renderAt(path: string) {
@@ -106,6 +114,13 @@ describe("CjmShell", () => {
     expect(stage.closest("[inert]")).not.toBeNull();
     expect(mocks.getThemeVersion).toHaveBeenCalledWith("shadcn", 1, expect.any(AbortSignal));
     expect(mocks.getLatestTheme).not.toHaveBeenCalled();
+  });
+
+  it("renders host Image and canvas-split Hotspot in CJM", async () => {
+    mocks.getDraft.mockResolvedValue({ ...draft, doc: hostDoc, designSystemMetaVersion: null });
+    renderAt("/p/journey/cjm");
+    expect(await screen.findByRole("img", { name: "CJM host image" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "CJM host hotspot" })).toBeTruthy();
   });
 
   it("labels static and dynamic authored navigate transitions without creating edges", async () => {

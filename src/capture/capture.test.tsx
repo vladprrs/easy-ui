@@ -26,6 +26,14 @@ const overlayCaptureDoc = prototypeDocSchema.parse({
   } }],
 });
 
+const hostCaptureDoc = prototypeDocSchema.parse({
+  version: 1, id: "cap-host", name: "Capture host", designSystem: "custom-only", device: "mobile", startScreen: "welcome", state: {},
+  screens: [{ id: "welcome", name: "Welcome", canvas: { width: 390, height: 844 }, spec: { root: "image", elements: {
+    image: { type: "Image", props: { src: "/images/capture.png", alt: "Capture host image", objectFit: "cover" } },
+    hotspot: { type: "Hotspot", props: { x: 1, y: 2, width: 30, height: 40, ariaLabel: "Capture host hotspot" } },
+  } } }],
+});
+
 vi.mock("../api/client", () => ({
   getPrototypeDraft: vi.fn(async () => ({ doc, rev: 3, prototypeInstanceId:"capture-instance", componentManifestHash: "m", builtinCatalogHash: "b", components: [] })),
   getPrototypeRevisionFull: vi.fn(),
@@ -104,6 +112,14 @@ describe("capture shell", () => {
     expect(surface.style.height).toBe("480px");
     expect(surface.querySelector("[data-eui-canvas-layer='overlay']")).not.toBeNull();
     expect(surface.querySelectorAll("[data-eui-host-primitive='Overlay']")).toHaveLength(2);
+  });
+
+  it("renders host Image and canvas-split Hotspot in capture", async () => {
+    vi.mocked(getPrototypeDraft).mockResolvedValueOnce({ doc: hostCaptureDoc, rev: 6, prototypeInstanceId: "capture-host-instance", componentManifestHash: "m", builtinCatalogHash: "b", components: [] });
+    const router = createMemoryRouter([{ path: "/capture/:protoId/s/:screenId", element: <CapturePrototype /> }], { initialEntries: ["/capture/cap-host/s/welcome"] });
+    render(<RouterProvider router={router} />);
+    expect(await screen.findByRole("img", { name: "Capture host image" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Capture host hotspot" })).toBeTruthy();
   });
 
   it("publishes a component readiness object with a props hash", async () => {

@@ -2,12 +2,13 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { ComponentDefinition } from "../src/catalog/definitions";
 import { prototypeActionSchemas } from "../src/catalog/actions";
-import { hostPrimitiveDefinitions } from "../src/catalog/hostPrimitives/definitions";
+import { extractionPrimitiveDefinitions, hostPrimitiveDefinitions } from "../src/catalog/hostPrimitives/definitions";
 import { getDesignSystem } from "../src/designSystems";
 import { resolveSpacingScale } from "../src/designSystems/spacingScale";
 import type { SpaceToken } from "../src/designSystems/types";
 
-export const RENDER_CONTRACT_VERSION = 2;
+export const RENDER_CONTRACT_VERSION = 3;
+const LEGACY_RENDER_CONTRACT_VERSION = 2;
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -17,11 +18,12 @@ function canonical(value: unknown): string {
 
 // Compatibility detector for all builtin inputs that can affect validation or rendering.
 // It deliberately hashes portable input JSON Schemas rather than unstable Zod internals.
-export function builtinCatalogHashFor(
+function calculateBuiltinCatalogHash(
   systemId: string,
-  definitions?: Record<string, ComponentDefinition>,
-  resolvedSpaceScale: Record<SpaceToken, string> = resolveSpacingScale(systemId),
-  hostDefinitions: Record<string, ComponentDefinition> = hostPrimitiveDefinitions,
+  definitions: Record<string, ComponentDefinition> | undefined,
+  resolvedSpaceScale: Record<SpaceToken, string>,
+  hostDefinitions: Record<string, ComponentDefinition>,
+  renderContractVersion: number,
 ): string {
   const descriptors = (source: Record<string, ComponentDefinition>) =>
     (Object.entries(source) as [string,ComponentDefinition][]).sort(([a],[b]) => a.localeCompare(b)).map(([name, d]) => ({
@@ -35,13 +37,36 @@ export function builtinCatalogHashFor(
       layout: d.layout ?? null,
     }));
   const descriptor = {
-    renderContractVersion: RENDER_CONTRACT_VERSION,
+    renderContractVersion,
     actions: Object.keys(prototypeActionSchemas).sort(),
     definitions: descriptors(definitions??getDesignSystem(systemId).definitions),
     hostPrimitives: descriptors(hostDefinitions),
     resolvedSpaceScale,
   };
   return createHash("sha256").update(canonical(descriptor)).digest("hex");
+}
+
+/**
+ * Hash for newly written revisions. Contract v3 adds host content types to the
+ * portable render inputs. Stored revision hashes are immutable database values:
+ * callers must never recompute or rewrite them during reads or migrations.
+ */
+export function builtinCatalogHashFor(
+  systemId: string,
+  definitions?: Record<string, ComponentDefinition>,
+  resolvedSpaceScale: Record<SpaceToken, string> = resolveSpacingScale(systemId),
+  hostDefinitions: Record<string, ComponentDefinition> = hostPrimitiveDefinitions,
+): string {
+  return calculateBuiltinCatalogHash(systemId, definitions, resolvedSpaceScale, hostDefinitions, RENDER_CONTRACT_VERSION);
+}
+
+/** Reproduces the B0/B1-precutover v2 value for compatibility diagnostics only. */
+export function legacyBuiltinCatalogHashFor(
+  systemId: string,
+  definitions?: Record<string, ComponentDefinition>,
+  resolvedSpaceScale: Record<SpaceToken, string> = resolveSpacingScale(systemId),
+): string {
+  return calculateBuiltinCatalogHash(systemId, definitions, resolvedSpaceScale, extractionPrimitiveDefinitions, LEGACY_RENDER_CONTRACT_VERSION);
 }
 
 export const builtinCatalogHash = builtinCatalogHashFor("shadcn");

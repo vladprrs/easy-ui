@@ -99,6 +99,24 @@ describe("toRuntimeSpec RuntimeTree", () => {
     expect(canvasSplit.hotspots[0]!.metadata.hotspot).toBeDefined();
     expect(hostSplit.hostPrimitives[0]!.metadata.label).toBeDefined();
   });
+
+  it("extracts only Overlay and leaves host Image and Hotspot in ordinary flow content", () => {
+    const authored: Spec = {
+      root: "root",
+      elements: {
+        root: { type: "Stack", props: {}, children: ["image", "hotspot", "overlay"] },
+        image: { type: "Image", props: { src: "/images/hero.png", alt: "Hero" } },
+        hotspot: { type: "Hotspot", props: { x: 0, y: 0, width: 20, height: 20, ariaLabel: "Open" } },
+        overlay: { type: "Overlay", props: { placement: "center" } },
+      },
+    };
+
+    const split = splitHostPrimitives(toRuntimeSpec(authored));
+    expect(split.content?.spec.elements.root?.children).toEqual(["image", "hotspot"]);
+    expect(split.content?.spec.elements.image).toBeDefined();
+    expect(split.content?.spec.elements.hotspot).toBeDefined();
+    expect(split.hostPrimitives.map((item) => item.spec.root)).toEqual(["overlay"]);
+  });
 });
 
 describe("toRuntimeSpec", () => {

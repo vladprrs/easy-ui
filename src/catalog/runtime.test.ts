@@ -21,6 +21,20 @@ describe("createPlayerRuntime custom manifest", () => {
     expect(rendered).toContain("font-mono");
   });
 
+  it("keeps the live wireframe Image renderer over the host Image fallback", () => {
+    const runtime = createPlayerRuntime(deps, undefined, "wireframe");
+    const rendered = renderToStaticMarkup(createElement(runtime.registry.Image, {
+      element: { type: "Image", props: { alt: "Legacy image", label: "WIREFRAME" } },
+      children: undefined,
+      emit: () => undefined,
+      on: () => ({ shouldPreventDefault: false, bound: false, emit: () => undefined }),
+    }));
+
+    expect(rendered).toContain("WIREFRAME");
+    expect(rendered).toContain("border-dashed");
+    expect(rendered).not.toContain("<img");
+  });
+
   it("falls back to an empty builtin catalog for a system without provider", () => {
     const runtime = createPlayerRuntime(deps, undefined, "missing");
     expect(runtime.registry).toBeDefined();

@@ -11,6 +11,13 @@ vi.mock("../customComponents/loader", () => ({ loadCustomComponents: mocks.loadC
 
 const hello = prototypeDocSchema.parse((await import("../../prototypes/hello-world.json")).default);
 const draft = (doc = hello, rev = 1): PrototypeDraft => ({ doc, rev, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] });
+const hostDoc = prototypeDocSchema.parse({
+  version: 1, id: "player-host", name: "Player host", designSystem: "custom-only", device: "mobile", startScreen: "main", state: {},
+  screens: [{ id: "main", name: "Main", canvas: { width: 390, height: 844 }, spec: { root: "image", elements: {
+    image: { type: "Image", props: { src: "/images/player.png", alt: "Player host image", objectFit: "cover" } },
+    hotspot: { type: "Hotspot", props: { x: 1, y: 2, width: 30, height: 40, ariaLabel: "Player host hotspot" } },
+  } } }],
+});
 
 function renderAt(path: string) {
   const router = createMemoryRouter(routeObjects, { initialEntries: [path] });
@@ -85,11 +92,18 @@ describe("PlayerShell", () => {
     expect((await screen.findByLabelText("Name") as HTMLInputElement).value).toBe("Lin");
   });
 
+  it("renders host Image and canvas-split Hotspot in the player", async () => {
+    mocks.getDraft.mockResolvedValue(draft(hostDoc));
+    renderAt("/p/player-host/s/main");
+    expect(await screen.findByRole("img", { name: "Player host image" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Player host hotspot" })).toBeTruthy();
+  });
+
   it("loads a version and navigates under its version-aware route base", async () => {
     const router = renderAt("/p/hello-world/v/2");
     await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/v/2/s/welcome"));
     expect(mocks.getVersion).toHaveBeenCalledWith("hello-world", 2, expect.any(AbortSignal));
-    expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/hello-world/v/2/cjm");
+    expect((await screen.findByRole("link", { name: "CJM" })).getAttribute("href")).toBe("/p/hello-world/v/2/cjm");
     expect(document.title).toBe("Hello World v2 · Welcome — easy-ui");
   });
 

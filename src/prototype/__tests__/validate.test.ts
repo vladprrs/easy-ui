@@ -108,7 +108,16 @@ describe("prototype v1 validation", () => {
   it("rejects an $asset with a malformed id", () => { const d=clone(); d.screens[0].spec.elements.greeting={type:"Image",props:{src:{$asset:"asset_nothex"},alt:"x"}}; expectInvalid(d,/\$asset must be an asset id/); });
   it("rejects an $asset directive inside action params", () => { const d=clone(); d.screens[0].spec.elements.next.on.press={action:"setState",params:{statePath:"/x",value:{$asset:`asset_${"a".repeat(64)}`}}}; expectInvalid(d,/static literals/); });
   it("requires preventDefault for Link navigation", () => { const d=clone(); d.screens[0].spec.elements.next={type:"Link",props:{label:"Details",href:"https://example.com"},on:{press:{action:"navigate",params:{screenId:"details"}}}}; expectInvalid(d,/preventDefault/); });
-  it("rejects Hotspot without canvas", () => { const d=clone(); d.screens[0].spec.elements.next={type:"Hotspot",props:{x:0,y:0,width:10,height:10,ariaLabel:"Next"}}; expectInvalid(d,/requires a screen canvas/); });
+  it("accepts host Hotspot without canvas as ordinary flow content", () => { const d=clone(); d.screens[0].spec.elements.next={type:"Hotspot",props:{x:0,y:0,width:10,height:10,ariaLabel:"Next"}}; expect(messages(d)).toEqual([]); });
+  it("accepts host content types without a design-system binding", () => {
+    const doc = prototypeDocSchema.parse({
+      version: 1, id: "host-only", name: "Host only", designSystem: "custom-only", device: "desktop", startScreen: "main", state: {},
+      screens: [{ id: "main", name: "Main", spec: { root: "image", elements: {
+        image: { type: "Image", props: { src: "/images/host.png", alt: "Host", objectFit: "cover" } },
+      } } }],
+    });
+    expect(validatePrototype(doc, { definitions: {} }).errors).toEqual([]);
+  });
   it("rejects Hotspot outside canvas", () => { const d=clone(); d.screens[0].canvas={width:100,height:100}; d.screens[0].spec.elements.next={type:"Hotspot",props:{x:95,y:0,width:10,height:10,ariaLabel:"Next"}}; expectInvalid(d,/outside canvas bounds/); });
   it("rejects an unknown $cond operator", () => { const d=clone(); d.screens[0].spec.elements.greeting.props.text={$cond:{if:{$state:"/name",contains:"A"},then:"yes",else:"no"}}; expectInvalid(d,/unknown condition operator/); });
   it("rejects a non-numeric ordering operand", () => { const d=clone(); d.screens[0].spec.elements.greeting.props.text={$cond:{if:{$state:"/name",gt:"10"},then:"yes",else:"no"}}; expectInvalid(d,/gt operand must be a number/); });

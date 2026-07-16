@@ -112,13 +112,13 @@ describe("author driver CLI", () => {
       designSystem: { id: "shadcn", resolvedSpaceScale: { none: "0px", md: "12px", "4xl": "64px" } },
       custom: [],
       builtins: expect.arrayContaining([expect.objectContaining({ name: "Button", layoutNeutral: false, propsJsonSchema: expect.objectContaining({ type: "object" }), events: expect.any(Array), slots: expect.any(Array) })]),
-      hostPrimitives: [expect.objectContaining({
+      hostPrimitives: expect.arrayContaining([expect.objectContaining({
         name: "Overlay",
         atomicLevel: "atom",
         layoutNeutral: true,
         slots: ["default"],
         propsJsonSchema: expect.objectContaining({ type: "object" }),
-      })],
+      }), expect.objectContaining({ name: "Image" }), expect.objectContaining({ name: "Hotspot" })]),
     });
     const missing = await run(api, ["catalog", "missing-system"]);
     expect(missing.exitCode).toBe(1);

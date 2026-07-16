@@ -55,4 +55,17 @@ describe("GalleryPreviewErrorBoundary", () => {
     expect(mocks.getThemeVersion).toHaveBeenCalledWith("shadcn", 1, expect.any(AbortSignal));
     expect(mocks.getLatestTheme).not.toHaveBeenCalled();
   });
+
+  it("renders host Image and canvas-split Hotspot for a custom-only prototype", () => {
+    const doc = prototypeDocSchema.parse({
+      version: 1, id: "gallery-host", name: "Gallery host", designSystem: "custom-only", device: "mobile", startScreen: "home", state: {},
+      screens: [{ id: "home", name: "Home", canvas: { width: 390, height: 844 }, spec: { root: "image", elements: {
+        image: { type: "Image", props: { src: "/images/gallery.png", alt: "Gallery host image", objectFit: "cover" } },
+        hotspot: { type: "Hotspot", props: { x: 4, y: 5, width: 30, height: 40, ariaLabel: "Gallery host hotspot" } },
+      } } }],
+    });
+    render(<GalleryPreviewFrame draft={{ doc, rev: 1, builtinCatalogHash: "host", componentManifestHash: "empty", components: [] }} manageTheme={false} />);
+    expect(screen.getByRole("img", { name: "Gallery host image" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Gallery host hotspot" })).toBeTruthy();
+  });
 });
