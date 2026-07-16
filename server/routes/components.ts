@@ -3,7 +3,7 @@ import { z } from "zod";
 import { DEFAULT_DESIGN_SYSTEM_ID, designSystems } from "../../src/designSystems";
 import { compileComponent, typecheckComponent } from "../components/compile";
 import { extractDefinition } from "../components/extract-subprocess";
-import { EVENT_SCHEMA_NOT_SERIALIZABLE, importPublished, materializeSource, sha256 } from "../components/pipeline";
+import { EVENT_SCHEMA_NOT_SERIALIZABLE, importPublished, materializeClientSource, materializeSource, sha256 } from "../components/pipeline";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
 import { ComponentRepo } from "../repos/components";
 import { requireRegisteredDesignSystem } from "../designSystems";
@@ -34,7 +34,7 @@ export async function publishComponent(db:Database,repo:ComponentRepo,id:string,
   const revision=repo.source(id); const path=await materializeSource(dataDir,id,revision.rev,revision.source);
   // Validate /api/assets/asset_<sha256> literals in source before staging so a dangling ref fails fast.
   const assetIds=collectAndValidateComponentAssetRefs(db,revision.source);
-  const extracted=await checkSource(revision.source,path,true); await typecheckComponent(path); const compiled=await compileComponent(path,{capabilities:extracted.meta!.capabilities});
+  const extracted=await checkSource(revision.source,path,true); await typecheckComponent(path); let clientPath=path;if(extracted.serverOnly?.conformanceProps===true)try{clientPath=await materializeClientSource(dataDir,id,revision.rev,revision.source,true);}catch(error){bad(error instanceof Error?error.message:String(error));}const compiled=await compileComponent(clientPath,{capabilities:extracted.meta!.capabilities});
   const staged=repo.stage(id,baseRev,{compiledJs:compiled.compiledJs,bundleHash:compiled.bundleHash,sourceHash:sha256(revision.source),meta:extracted.meta!},message);
   // stage() persists host_abi_version=1; update to the computed ABI (max of imports/capabilities).
   if(compiled.hostAbiVersion!==1) db.query("UPDATE component_publishes SET host_abi_version=? WHERE component_id=? AND version=?").run(compiled.hostAbiVersion,id,staged.version);

@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { z } from "zod";
 import type { ComponentCapabilities, DefinitionMeta } from "./types";
 import { normalizeEvents } from "../../src/catalog/normalize";
-import type { AtomicLevel } from "../../src/designSystems/types";
+import type { AtomicLevel, ComponentLayout } from "../../src/designSystems/types";
 
 /** Marker prefix on a definitionMeta error signalling a non-serializable event schema (→ 422). */
 export const EVENT_SCHEMA_NOT_SERIALIZABLE = "event_schema_not_serializable";
@@ -40,6 +40,30 @@ export async function materializeSource(dataDir:string,id:string,rev:number,sour
   return path;
 }
 
+/** Removes publish-conformance-only metadata before browser bundling and bundle hashing. */
+export async function materializeClientSource(dataDir:string,id:string,rev:number,source:string,requireConformanceStrip=false):Promise<string> {
+  const ts=(await import("typescript")).default;
+  const file=ts.createSourceFile(`${id}.tsx`,source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let removed=false;
+  const statements=file.statements.map((statement)=>{
+    if(!ts.isVariableStatement(statement)||!statement.modifiers?.some((modifier)=>modifier.kind===ts.SyntaxKind.ExportKeyword)) return statement;
+    const declarations=statement.declarationList.declarations.map((declaration)=>{
+      if(!ts.isIdentifier(declaration.name)||declaration.name.text!=="definition"||!declaration.initializer||!ts.isObjectLiteralExpression(declaration.initializer)) return declaration;
+      const properties=declaration.initializer.properties.filter((property)=>{
+        const name=property.name;
+        const serverOnly=name!==undefined&&((ts.isIdentifier(name)&&name.text==="conformanceProps")||(ts.isStringLiteral(name)&&name.text==="conformanceProps"));
+        if(serverOnly) removed=true;
+        return !serverOnly;
+      });
+      return ts.factory.updateVariableDeclaration(declaration,declaration.name,declaration.exclamationToken,declaration.type,ts.factory.updateObjectLiteralExpression(declaration.initializer,properties));
+    });
+    return ts.factory.updateVariableStatement(statement,statement.modifiers,ts.factory.updateVariableDeclarationList(statement.declarationList,declarations));
+  });
+  if(requireConformanceStrip&&!removed) throw new Error("definition.conformanceProps must be declared directly on the exported definition object so it can be removed from the client bundle");
+  const clientSource=removed?ts.createPrinter().printFile(ts.factory.updateSourceFile(file,statements)):source;
+  return materializeSource(dataDir,`${id}-client`,rev,clientSource);
+}
+
 export async function importPublished(id:string,rev:number,path:string) {
   const key=`${id}@${rev}`;
   let promise=imported.get(key);
@@ -63,9 +87,9 @@ function isJsonSafe(value:unknown):boolean {
   return false;
 }
 
-export function definitionMeta(definition:{events?:readonly string[]|Record<string,z.ZodType>;slots?:string[];capabilities?:ComponentCapabilities;description:string;example?:Record<string,unknown>;examples?:Record<string,Record<string,unknown>>;atomicLevel?:AtomicLevel;interactive?:boolean;accessibleLabelProps?:string[];urlProps?:string[];props:z.ZodType}):DefinitionMeta {
+export function definitionMeta(definition:{events?:readonly string[]|Record<string,z.ZodType>;slots?:string[];capabilities?:ComponentCapabilities;description:string;example?:Record<string,unknown>;examples?:Record<string,Record<string,unknown>>;atomicLevel?:AtomicLevel;layoutNeutral?:boolean;layout?:ComponentLayout;interactive?:boolean;accessibleLabelProps?:string[];urlProps?:string[];props:z.ZodType}):DefinitionMeta {
   let propsJsonSchema:unknown;
-  try { propsJsonSchema=z.toJSONSchema(definition.props); } catch { /* best effort metadata */ }
+  try { propsJsonSchema=z.toJSONSchema(definition.props,{io:"input"}); } catch { /* best effort metadata */ }
   const {events,eventPayloadSchemas}=normalizeEvents(definition.events as Parameters<typeof normalizeEvents>[0]);
   // Fail-closed: every typed-event schema must serialize to a deterministic, JSON-safe JSON Schema.
   let eventPayloads:Record<string,unknown>|undefined;
@@ -81,5 +105,5 @@ export function definitionMeta(definition:{events?:readonly string[]|Record<stri
   }
   const capabilities=definition.capabilities&&typeof definition.capabilities==="object"?definition.capabilities:undefined;
   const examples=definition.examples?Object.fromEntries(Object.entries(definition.examples).sort(([a],[b])=>a.localeCompare(b))):undefined;
-  return {events,slots:definition.slots??[],description:definition.description,...(eventPayloads?{eventPayloads}:{}),...(capabilities?{capabilities}:{}),...(definition.example?{example:definition.example}:{}),...(examples?{examples}:{}),...(definition.atomicLevel?{atomicLevel:definition.atomicLevel}:{}),...(definition.interactive!==undefined?{interactive:definition.interactive}:{}),...(definition.accessibleLabelProps?{accessibleLabelProps:definition.accessibleLabelProps}:{}),...(definition.urlProps?{urlProps:definition.urlProps}:{}),...(propsJsonSchema?{propsJsonSchema}:{})};
+  return {events,slots:definition.slots??[],description:definition.description,...(eventPayloads?{eventPayloads}:{}),...(capabilities?{capabilities}:{}),...(definition.example?{example:definition.example}:{}),...(examples?{examples}:{}),...(definition.atomicLevel?{atomicLevel:definition.atomicLevel}:{}),...(definition.layoutNeutral?{layoutNeutral:true as const}:{}),...(definition.layout?{layout:definition.layout}:{}),...(definition.interactive!==undefined?{interactive:definition.interactive}:{}),...(definition.accessibleLabelProps?{accessibleLabelProps:definition.accessibleLabelProps}:{}),...(definition.urlProps?{urlProps:definition.urlProps}:{}),...(propsJsonSchema?{propsJsonSchema}:{})};
 }

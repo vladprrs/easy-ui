@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { z } from "zod";
-import type { AtomicLevel } from "../../src/designSystems/types";
+import type { AtomicLevel, ComponentLayout } from "../../src/designSystems/types";
 
 export type ComponentCapabilities = { typedEvents?: true; namedSlots?: true };
 
@@ -13,7 +13,11 @@ export type CustomComponentDefinition<Props extends Record<string, unknown> = Re
   description: string;
   example?: Props;
   examples?: Record<string, Props>;
+  /** Server-only props used for publish-time layout-neutral conformance. */
+  conformanceProps?: Record<string, unknown>;
   atomicLevel?: AtomicLevel;
+  layoutNeutral?: true;
+  layout?: ComponentLayout;
   /** Semantic-validation metadata (additive). */
   interactive?: boolean;
   accessibleLabelProps?: string[];
@@ -36,6 +40,8 @@ export type DefinitionMeta = {
   examples?: Record<string, Record<string, unknown>>;
   propsJsonSchema?: unknown;
   atomicLevel?: AtomicLevel;
+  layoutNeutral?: true;
+  layout?: ComponentLayout;
   /** Semantic-validation metadata (additive; mirrors the definition fields). */
   interactive?: boolean;
   accessibleLabelProps?: string[];

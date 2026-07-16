@@ -66,6 +66,7 @@ export async function loadCustomComponents(refs: CustomComponentRef[], importMod
         ...(definition.example && typeof definition.example === "object" ? { example: definition.example as Record<string, unknown> } : {}),
         ...(definition.atomicLevel ? { atomicLevel: definition.atomicLevel as ComponentDefinition["atomicLevel"] } : {}),
         ...(typeof definition.layoutNeutral === "boolean" ? { layoutNeutral: definition.layoutNeutral } : {}),
+        ...(definition.layout && typeof definition.layout === "object" ? { layout: definition.layout as ComponentDefinition["layout"] } : {}),
         ...(typeof definition.interactive === "boolean" ? { interactive: definition.interactive } : {}),
         ...(Array.isArray(definition.accessibleLabelProps) ? { accessibleLabelProps: definition.accessibleLabelProps as string[] } : {}),
         ...(Array.isArray(definition.urlProps) ? { urlProps: definition.urlProps as string[] } : {}),
