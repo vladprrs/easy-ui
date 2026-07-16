@@ -17,6 +17,23 @@ export interface ApiErrorBody {
   currentVersion?: number;
 }
 
+export interface AuthUser {
+  userId: string;
+  name: string;
+  isAdmin: boolean;
+}
+
+export interface UserSummary {
+  id: string;
+  name: string;
+  isAdmin: boolean;
+  createdAt: string;
+}
+
+export interface LoginInput { name: string; password: string; next?: string }
+export interface LoginResult { user: AuthUser; next?: string }
+export interface CreateUserInput { name: string; password: string; isAdmin?: boolean }
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -137,6 +154,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const { body, headers, ...init } = options;
   const response = await fetch(path, {
     ...init,
+    credentials: init.credentials ?? "same-origin",
     headers: body === undefined ? headers : { "content-type": "application/json", ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -151,10 +169,40 @@ async function responseJson<T>(response: Response): Promise<T> {
       const value = await response.json() as { error?: Partial<ApiErrorBody> };
       if (value.error && typeof value.error.code === "string" && typeof value.error.message === "string") error = value.error as ApiErrorBody;
     } catch { /* Preserve the fallback for a non-JSON error response. */ }
+    if (response.status === 401) redirectUnauthorizedRequest();
     throw new ApiError(response.status, error);
   }
   return await response.json() as T;
 }
+
+/** Нормализует только same-origin relative path, пригодный для auth redirect. */
+export function validateNextPath(next: string | null | undefined, origin = globalThis.location?.origin): string | null {
+  if (!next || !origin || !next.startsWith("/") || next.startsWith("//") || next.includes("\\")) return null;
+  try {
+    const resolved = new URL(next, origin);
+    return resolved.origin === origin ? `${resolved.pathname}${resolved.search}${resolved.hash}` : null;
+  } catch {
+    return null;
+  }
+}
+
+export function loginRedirectForLocation(location: Pick<Location, "origin" | "pathname" | "search" | "hash">): string | null {
+  if (location.pathname === "/login" || location.pathname === "/share" || location.pathname.startsWith("/share/")) return null;
+  const next = validateNextPath(`${location.pathname}${location.search}${location.hash}`, location.origin);
+  return next ? `/login?${new URLSearchParams({ next }).toString()}` : "/login";
+}
+
+function redirectUnauthorizedRequest(): void {
+  if (typeof globalThis.location === "undefined") return;
+  const target = loginRedirectForLocation(globalThis.location);
+  if (target) globalThis.location.assign(target);
+}
+
+export const login = (input: LoginInput, signal?: AbortSignal) => request<LoginResult>("/api/auth/login", { method: "POST", body: input, signal });
+export const logout = (signal?: AbortSignal) => request<void>("/api/auth/logout", { method: "POST", signal });
+export const getMe = (signal?: AbortSignal) => request<AuthUser>("/api/auth/me", { signal });
+export const listUsers = (signal?: AbortSignal) => request<{ users: UserSummary[] }>("/api/users", { signal });
+export const createUser = (input: CreateUserInput, signal?: AbortSignal) => request<UserSummary>("/api/users", { method: "POST", body: input, signal });
 
 type EditorAssetSet = { draft: EditorAsset[]; local: EditorAsset[]; snapshot: EditorAsset[] };
 const editorAssetsByPrototype = new Map<string, EditorAssetSet>();

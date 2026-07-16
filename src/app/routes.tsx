@@ -15,6 +15,7 @@ import { EditorShell } from "../editor/EditorShell";
 import { headingPage, kicker, pillPrimary } from "./chrome";
 import { appShell } from "./strings/common";
 import { useDocumentTitle } from "./useDocumentTitle";
+import { LoginPage, UsersPage } from "../auth";
 
 function NotFound() {
   useDocumentTitle(appShell.notFoundTitle);
@@ -37,6 +38,7 @@ const presentChildren = (): RouteObject[] => [
 ];
 
 export const routeObjects: RouteObject[] = [
+  { path: "login", element: <LoginPage /> },
   { path: "capture/:protoId/s/:screenId", element: <CapturePrototype /> },
   { path: "capture/component/:id/:version", element: <CaptureComponent /> },
   // Презентация (W1-2): вне Layout и вне PrototypeChrome — как capture.
@@ -52,6 +54,7 @@ export const routeObjects: RouteObject[] = [
       { path: "library/c/:componentId", element: <ComponentPage /> },
       { path: "visual", element: <VisualPage /> },
       { path: "debug", element: <SmokeSpec /> },
+      { path: "users", element: <UsersPage /> },
       {
         path: "p/:protoId",
         element: <PlayerShell />,
