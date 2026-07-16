@@ -122,12 +122,12 @@ export class PrototypeRepo {
     return this.db.query(`SELECT a.id,a.sha256,a.mime,a.size FROM prototype_revision_assets pra
       JOIN assets a ON a.id=pra.asset_id WHERE pra.prototype_id=? AND pra.rev=? ORDER BY a.id`).all(id,rev) as {id:string;sha256:string;mime:string;size:number}[];
   }
-  create(doc: PrototypeDoc, message?: string,pins:ComponentPin[]=[],assetIds:string[]=[],figmaJson:string|null=null): {id:string;rev:1} {
+  create(doc: PrototypeDoc, message?: string,pins:ComponentPin[]=[],assetIds:string[]=[],figmaJson:string|null=null,ownerId:string|null=null): {id:string;rev:1} {
     return this.db.transaction(() => {
       if (this.db.query("SELECT 1 ok FROM prototypes WHERE id=?").get(doc.id)) throw new ApiError(409,"already_exists","Prototype already exists");
       const at=now();
-      this.db.query(`INSERT INTO prototypes (id,name,description,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at)
-        VALUES (?,?,?,?,?,1,?,?,?,?)`).run(doc.id,doc.name,doc.description??null,doc.device,doc.screens.length,doc.designSystem,crypto.randomUUID(),at,at);
+      this.db.query(`INSERT INTO prototypes (id,name,description,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at,owner_id)
+        VALUES (?,?,?,?,?,1,?,?,?,?,?)`).run(doc.id,doc.name,doc.description??null,doc.device,doc.screens.length,doc.designSystem,crypto.randomUUID(),at,at,ownerId);
       this.insertRevision(doc.id,1,doc,message??null,at,undefined,figmaJson);
       this.insertPins(doc.id,1,pins);
       this.insertAssetPins(doc.id,1,assetIds);

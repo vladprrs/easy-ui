@@ -1,7 +1,7 @@
 export type ErrorDetails = { issues?: unknown[]; warnings?: unknown[]; currentRev?: number; currentVersion?: number; currentStatusRev?: number; currentGeneration?: number | null };
 
 export class ApiError extends Error {
-  constructor(public status: 400|404|405|409|413|415|422|429|501, public code: string, message: string, public details: ErrorDetails = {}) { super(message); }
+  constructor(public status: 400|401|403|404|405|409|413|415|422|429|501, public code: string, message: string, public details: ErrorDetails = {}) { super(message); }
 }
 
 // RFC 6901 JSON Pointer. Array paths are escaped segment-by-segment (~ -> ~0, / -> ~1);

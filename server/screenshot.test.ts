@@ -1,3 +1,4 @@
+import { createTestHandler } from "./test-auth";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -19,7 +20,7 @@ async function setup() {
   const dir = await mkdtemp(resolve(process.cwd(), ".screenshot-test-"));
   dirs.push(dir);
   const db = openDatabase(":memory:");
-  const handler = createHandler(db, { dataDir: dir });
+  const handler = createTestHandler(db, { dataDir: dir });
   return { dir, db, handler };
 }
 const req = (url: string, method = "GET", value?: unknown) =>
@@ -41,7 +42,7 @@ describe("screenshot job API", () => {
   test("bounds are rejected with 422", async () => {
     const { db, dir } = await setup();
     const service = makeService(db, dir);
-    const handler = createHandler(db, { dataDir: dir, screenshots: service });
+    const handler = createTestHandler(db, { dataDir: dir, screenshots: service });
     expect((await handler(req("/prototypes", "POST", { doc: await helloDoc("b1") }))).status).toBe(201);
     const bad = async (viewport: unknown, dsf?: number) => (await handler(req("/prototypes/b1/screens/welcome/screenshot", "POST", { viewport, deviceScaleFactor: dsf }))).status;
     expect(await bad({ width: 10, height: 844 })).toBe(422); // width too small
@@ -54,7 +55,7 @@ describe("screenshot job API", () => {
   test("queue caps at 5 with 429 beyond it", async () => {
     const { db, dir } = await setup();
     const service = makeService(db, dir);
-    const handler = createHandler(db, { dataDir: dir, screenshots: service });
+    const handler = createTestHandler(db, { dataDir: dir, screenshots: service });
     expect((await handler(req("/prototypes", "POST", { doc: await helloDoc("q1") }))).status).toBe(201);
     const enqueue = () => handler(req("/prototypes/q1/screens/welcome/screenshot", "POST", { viewport: { width: 390, height: 844 } }));
     for (let i = 0; i < 6; i++) expect((await enqueue()).status).toBe(202); // 1 running + 5 queued
@@ -81,7 +82,7 @@ describe("screenshot job API", () => {
   test("public screenshot HTTP response never exposes the frozen expected snapshot",async()=>{
     const {db,dir,handler:h}=await setup();
     expect((await h(req("/prototypes","POST",{doc:await helloDoc("public-shape")}))).status).toBe(201);
-    const service=makeService(db,dir);const handler=createHandler(db,{dataDir:dir,screenshots:service});
+    const service=makeService(db,dir);const handler=createTestHandler(db,{dataDir:dir,screenshots:service});
     const response=await handler(req("/prototypes/public-shape/screens/welcome/screenshot","POST",{viewport:{width:390,height:844}}));
     expect(response.status).toBe(202);const body=await response.json() as Record<string,unknown>;
     expect(Object.keys(body)).toEqual(["jobId"]);expect(body.expected).toBeUndefined();
@@ -115,7 +116,7 @@ describe("screenshot job API", () => {
       return { ok:true, geometry:{ rects:[{key:"root",instance:0,domIndex:0,x:1.25,y:2.5,width:10,height:0,layoutContext:null}], truncated:false, total:1 }, consoleErrors:[], pageErrors:[], browserVersion:"test/geometry" };
     };
     const service = makeService(db, dir, runJob);
-    const handler = createHandler(db, { dataDir:dir, screenshots:service });
+    const handler = createTestHandler(db, { dataDir:dir, screenshots:service });
     const accepted = await handler(req("/prototypes/geometry/screens/welcome/screenshot", "POST", { probe:"geometry", viewport:{width:390,height:844}, deviceScaleFactor:2 }));
     expect(accepted.status).toBe(202);
     const {jobId} = await accepted.json() as {jobId:string};
@@ -129,7 +130,7 @@ describe("screenshot job API", () => {
   test("rejects unknown probe modes", async () => {
     const { db, dir, handler:h } = await setup();
     expect((await h(req("/prototypes", "POST", { doc:await helloDoc("bad-probe") }))).status).toBe(201);
-    const handler=createHandler(db,{dataDir:dir,screenshots:makeService(db,dir)});
+    const handler=createTestHandler(db,{dataDir:dir,screenshots:makeService(db,dir)});
     const response=await handler(req("/prototypes/bad-probe/screens/welcome/screenshot","POST",{probe:"pixels",viewport:{width:390,height:844}}));
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({error:{code:"invalid_request"}});

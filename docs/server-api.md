@@ -1,6 +1,44 @@
 # Bun Server API
 
-Локальный Bun-сервер — единственный источник данных для галереи и плеера. Он хранит прототипы и пользовательские React-компоненты в SQLite, раздаёт API, а при `SERVE_DIST=dist` также SPA и Storybook-статику. Сервер слушает только `127.0.0.1`.
+Локальный Bun-сервер — единственный источник данных для галереи и плеера. Он хранит прототипы и пользовательские React-компоненты в SQLite, раздаёт API, а при `SERVE_DIST=dist` также SPA и Storybook-статику.
+
+## Auth, сессии и принципалы
+
+Именованные аккаунты используют парольные hash’и Argon2id (`Bun.password`) и opaque cookie-сессии. В SQLite хранится только SHA-256 digest токена. Сессия живёт 30 дней; сервер удаляет протухшие записи и оставляет не более 10 активных сессий на пользователя. Cookie называется `easyui_session` в HTTP dev-режиме и `__Host-easyui_session` при HTTPS; атрибуты: host-only, `Path=/`, `HttpOnly`, `SameSite=Lax`, а при HTTPS также `Secure`. Все session-API ответы имеют `Vary: Cookie` и `Cache-Control: private, no-store`. Ответ приложения `401` — JSON без `WWW-Authenticate`.
+
+Bootstrap выполняется в порядке migrate → admin/backfill → seed. `ADMIN_NAME` и `ADMIN_PASSWORD` создают или обновляют стабильного администратора `user_admin`; изменение bootstrap-пароля отзывает его сессии. В той же транзакции пустые `owner_id` прототипов, компонентов и дизайн-систем получают admin-владельца. Запуск без администратора запрещён; для non-loopback bind администратор должен уже существовать или быть задан обеими переменными. `LEGACY_BASIC_AUTH` — опциональный внешний compatibility-барьер поверх cookie-сессий, а не аккаунт приложения. Health, share exchange/share scope и capture scope обходят этот внешний барьер.
+
+Сервер один раз на запрос выбирает принципал в path-aware порядке: `Capture(scope)` → `Share(scope)` → `User {userId,name,isAdmin}` → `Anonymous`. Capture/share учитываются только когда их credential валиден и текущий `GET`/`HEAD` входит в exact scope. Поэтому валидная share-cookie для другого пути и невалидный capture bearer не перекрывают рабочую user-сессию.
+
+Все unsafe-методы требуют same-origin `Origin`, независимо от типа тела (включая multipart). Login ограничивает длину имени/пароля, валидирует `next` как относительный same-origin путь, rate-limit’ится и выполняет dummy Argon2 verify для неизвестного имени.
+
+| Endpoint / ресурс | Anonymous | User | Share(scope) | Capture(scope) |
+|---|---:|---:|---:|---:|
+| `GET /api/health` | да | да | да | да |
+| `POST /api/auth/login` | да | да | только как anonymous-route | только как anonymous-route |
+| `POST /api/auth/logout`, `GET /api/auth/me` | нет | да | нет | нет |
+| `POST /api/users`, `GET /api/users` | нет | только admin | нет | нет |
+| `GET /share/:token` | да | да | да | да |
+| Scoped immutable GET/HEAD | нет | да | exact share scope | exact capture scope |
+| Остальной API | нет | да | нет | нет |
+| `index.html`, hashed chunks, favicon, fonts, SPA route fallback | да | да | в scope сборки | в scope сборки |
+| Прочая статика, включая `dist/storybook` | нет | да | нет | нет |
+
+Неавторизованный `/share/p/**` обрабатывается до SPA fallback и возвращает 404. Это сохраняет revoke-семантику share-ссылки.
+
+Endpoints auth (здесь и далее API-пути могут быть показаны без общего `/api`):
+
+| Метод и путь | Тело / ответ |
+|---|---|
+| `POST /auth/login` | `{name,password,next?}` → `{user:{userId,name,isAdmin},next?}` + session cookie |
+| `POST /auth/logout` | revoke текущей сессии, очистка cookie, 204 |
+| `GET /auth/me` | `{userId,name,isAdmin}` |
+| `POST /users` | admin-only `{name,password,isAdmin?}` → 201 `{id,name,isAdmin,createdAt}` |
+| `GET /users` | admin-only `{users:[...]}` |
+
+## Trust boundary и threat model
+
+Все аккаунты считаются доверенными операторами. Пользовательский TSX исполняется publish-pipeline с правами серверного процесса и исполняется same-origin в браузерах всех пользователей. Песочницы нет. Разделение владельцев и приватность защищают от случайного просмотра и ошибочных действий, но не от злонамеренного коллеги с аккаунтом. Same-origin вредоносный компонент может читать данные и выполнять мутации от лица открывшего его пользователя; cookie/Origin-защита не меняет эту границу доверия.
 
 ## Модель версий
 

@@ -32,6 +32,13 @@ interface GrantRow {
   expires_at: string;
 }
 
+export interface ShareAuthorizationScope {
+  grantId: string;
+  prototypeId: string;
+  version: number;
+  allowedUrls: string[];
+}
+
 export interface ShareGrantPublic {
   id: string;
   prototypeId: string;
@@ -193,19 +200,22 @@ export class ShareRepo {
     return { session, location: new URL(path, this.options.publicOrigin).toString(), expiresAt: row.expires_at };
   }
 
-  authorize(request: Request, decodedPath: string): boolean {
-    if (request.method !== "GET" && request.method !== "HEAD") return false;
+  authorizeScope(request: Request, decodedPath: string): ShareAuthorizationScope | null {
+    if (request.method !== "GET" && request.method !== "HEAD") return null;
     const session = readShareCookie(request);
-    if (!session) return false;
+    if (!session) return null;
     const at = nowIso(this.now());
     const row = this.db.query(`SELECT g.id,g.prototype_id,g.version,g.rev,g.dependencies_json,g.created_at,g.expires_at
       FROM share_sessions s JOIN share_grants g ON g.id=s.grant_id
       WHERE s.session_hash=? AND s.expires_at>? AND g.expires_at>? AND g.revoked_at IS NULL`).get(digest(session), at, at) as GrantRow | null;
-    if (!row) return false;
+    if (!row) return null;
     const dependencies = parseDependencies(row);
-    if (matchAllowed(decodedPath, [...dependencies.routes, ...dependencies.resources])) return true;
+    const allowedUrls = [...dependencies.routes, ...dependencies.resources, ...buildShareStaticAllowedUrls(this.options.serveDist)];
+    if (matchAllowed(decodedPath, allowedUrls)) return { grantId: row.id, prototypeId: row.prototype_id, version: row.version, allowedUrls };
     // Deliberately recomputed for every request: an existing cookie follows the current deploy's
     // Vite hashes/public files after a redeploy instead of retaining build-A filenames.
-    return matchAllowed(decodedPath, buildShareStaticAllowedUrls(this.options.serveDist));
+    return null;
   }
+
+  authorize(request: Request, decodedPath: string): boolean { return this.authorizeScope(request, decodedPath) !== null; }
 }

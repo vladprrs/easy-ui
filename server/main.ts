@@ -3,14 +3,14 @@ import { openDatabase } from "./db";
 import { ApiError, errorResponse, json, noStore } from "./http";
 import { routePrototypes } from "./routes/prototypes";
 import { seedPrototypes } from "./seed";
-import { serveStatic } from "./static";
+import { resolveStaticRequest, serveResolvedStatic } from "./static";
 import { routeComponents, catalogManifest } from "./routes/components";
 import { routeAssets } from "./routes/assets";
 import { routeDesignSystems } from "./routes/designSystems";
 import { routeShims } from "./routes/shims";
 import { failStagingPublishes } from "./repos/components";
 import { verifyShimAbi } from "./shims/abi-v1";
-import { isAuthorized, protectResponse, unauthorizedResponse } from "./auth";
+import { applicationUnauthorizedResponse, isLegacyBasicAuthorized, legacyBasicUnauthorizedResponse, protectLegacyBasicResponse, protectSessionResponse, resolvePrincipal, resolveSessionUser, type CapturePrincipal, type SharePrincipal } from "./auth";
 import type { ScreenshotService } from "./screenshot/service";
 import { ScreenshotService as ScreenshotServiceImpl } from "./screenshot/service";
 import { chromiumAvailable, spawnWorker } from "./screenshot/worker-runner";
@@ -23,11 +23,26 @@ import { exchangeShareToken, protectShareResponse, routeShares } from "./routes/
 import { ShareRepo } from "./share/repo";
 import { catalogManifestQuerySchema, parseQuery } from "./contracts";
 import { getRegisteredDesignSystem } from "./designSystems";
+import { LoginRateLimiter, routeAuth } from "./routes/auth";
+import { routeUsers } from "./routes/users";
+import { assertOwnersPresent, ensureBootstrapAdmin } from "./users";
 
-type HandlerOptions = {ready?:()=>boolean;serveDist?:string;dataDir?:string;basicAuth?:string;publicOrigin?:URL|string;screenshots?:ScreenshotService;visual?:VisualService};
+export type HandlerOptions = {
+  ready?: () => boolean;
+  serveDist?: string;
+  dataDir?: string;
+  /** Optional reverse-proxy compatibility barrier; application auth remains cookie-based. */
+  legacyBasicAuth?: string;
+  /** @deprecated test/backward-compatible alias for legacyBasicAuth. */
+  basicAuth?: string;
+  publicOrigin?: URL | string;
+  screenshots?: ScreenshotService;
+  visual?: VisualService;
+  loginRateLimiter?: LoginRateLimiter;
+};
 
-function isLoopbackHostname(hostname:string):boolean {
-  return hostname==="localhost"||hostname==="::1"||hostname==="[::1]"||hostname.startsWith("127.");
+export function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "::1" || hostname === "[::1]" || hostname.startsWith("127.");
 }
 
 export function resolvePublicOrigin(value:string|undefined,fallback:{host:string;port:number}):URL {
@@ -43,81 +58,126 @@ export function resolvePublicOrigin(value:string|undefined,fallback:{host:string
   return origin;
 }
 
+function isUnsafe(method: string): boolean { return method !== "GET" && method !== "HEAD" && method !== "OPTIONS"; }
+
+function enforceOrigin(request: Request, publicOrigin: URL): void {
+  if (!isUnsafe(request.method)) return;
+  const value = request.headers.get("origin");
+  if (!value) throw new ApiError(403, "origin_required", "Origin header is required");
+  let origin: URL;
+  try { origin = new URL(value); } catch { throw new ApiError(403, "origin_mismatch", "Origin is not allowed"); }
+  const requestOrigin = new URL(request.url).origin;
+  if (origin.origin !== requestOrigin && origin.origin !== publicOrigin.origin) throw new ApiError(403, "origin_mismatch", "Origin is not allowed");
+}
+
+const isHealth = (request: Request, path: string): boolean => request.method === "GET" && path === "/api/health";
+const isLogin = (request: Request, path: string): boolean => request.method === "POST" && path === "/api/auth/login";
+
 export function createHandler(db:Database,options:HandlerOptions={}):(request:Request,server?:Bun.Server<unknown>)=>Promise<Response> {
   const publicOrigin=options.publicOrigin instanceof URL?options.publicOrigin:new URL(options.publicOrigin??"http://localhost");
   const shares=new ShareRepo(db,{publicOrigin,serveDist:options.serveDist});
+  const limiter=options.loginRateLimiter??new LoginRateLimiter();
+  const legacyBasicAuth=options.legacyBasicAuth??options.basicAuth;
   return async (request,server)=>{
-    const authEnabled=Boolean(options.basicAuth);
-    let shareAuthorized=false;
-    const finish=(response:Response)=>shareAuthorized?protectShareResponse(response):authEnabled?protectResponse(response):response;
     const requestUrl=new URL(request.url);
-    let decodedPath:string|null=null;
-    try { decodedPath=decodeURIComponent(requestUrl.pathname); } catch { /* handled by the normal router */ }
-    // Bearer-token exchange is the sole public route ahead of BasicAuth. The redirect target
-    // contains no token; every subsequent request is authorized by the opaque server session.
-    if(decodedPath!==null) {
-      const shareSegments=decodedPath.split("/").filter(Boolean);
-      if(shareSegments[0]==="share"&&shareSegments.length===2) {
-        try { return protectShareResponse(await exchangeShareToken(request,shareSegments[1]!,shares,publicOrigin)); }
-        catch(error) { return protectShareResponse(errorResponse(error)); }
-      }
-      shareAuthorized=shares.authorize(request,decodedPath);
-    }
-    // Capture-session bearer: a live token from a loopback GET/HEAD on an allowlisted
-    // path is the transport authorization for the worker's browser (bypasses BasicAuth).
-    let captureAuthorized=false;
+    let decodedPath:string;
+    try { decodedPath=decodeURIComponent(requestUrl.pathname); }
+    catch { return errorResponse(new ApiError(400,"invalid_path","Malformed URL encoding")); }
+    const shareSegments=decodedPath.split("/").filter(Boolean);
+    const shareExchange=shareSegments[0]==="share"&&shareSegments.length===2;
+
+    const shareScope=shares.authorizeScope(request,decodedPath);
+    const sharePrincipal:SharePrincipal|undefined=shareScope?{kind:"share",scope:shareScope}:undefined;
+
+    let capturePrincipal:CapturePrincipal|undefined;
     const captureToken=request.headers.get("x-easyui-capture");
     if(captureToken&&options.screenshots) {
-      const p=new URL(request.url).pathname; let path:string; try { path=decodeURIComponent(p); } catch { path=p; }
-      const address=server?.requestIP?.(request)?.address ?? null;
-      captureAuthorized=options.screenshots.sessions.authorize({token:captureToken,address,method:request.method,path});
+      const address=server?.requestIP?.(request)?.address??null;
+      if(options.screenshots.sessions.authorize({token:captureToken,address,method:request.method,path:decodedPath})) {
+        const session=options.screenshots.sessions.get(captureToken);
+        if(session) capturePrincipal={kind:"capture",scope:{token:captureToken,allowedUrls:session.allowedUrls}};
+      }
     }
-    if(authEnabled&&!captureAuthorized&&!shareAuthorized) {
-      const health=request.method==="GET"&&requestUrl.pathname==="/api/health";
-      if(!health&&!isAuthorized(request,options.basicAuth!)) return unauthorizedResponse();
+    const user=resolveSessionUser(db,request,publicOrigin.protocol==="https:");
+    const principal=resolvePrincipal({capture:capturePrincipal,share:sharePrincipal,user});
+
+    const legacyBypass=isHealth(request,decodedPath)||shareExchange||principal.kind==="share"||principal.kind==="capture";
+    if(legacyBasicAuth&&!legacyBypass&&!isLegacyBasicAuthorized(request,legacyBasicAuth)) return legacyBasicUnauthorizedResponse();
+
+    let staticResolution=null;
+    try {
+      enforceOrigin(request,publicOrigin);
+      if(options.serveDist&&!decodedPath.startsWith("/api/")) staticResolution=await resolveStaticRequest(request,options.serveDist);
+    } catch(error) {
+      const response=errorResponse(error);
+      return decodedPath.startsWith("/api/")?protectSessionResponse(response):response;
     }
-    const handle=async()=>{ try {
-    const url=new URL(request.url); let segments:string[];
-    try { segments=url.pathname.split("/").filter(Boolean).map(decodeURIComponent); } catch { throw new ApiError(400,"invalid_path","Malformed URL encoding"); }
-    if(segments[0]==="api") {
-      if(segments[1]==="health"&&segments.length===2) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); const ready=options.ready?.()!==false; return json({status:ready?"ready":"starting"},ready?200:503,noStore); }
-      const shot=await routeScreenshots(request,options.screenshots,segments.slice(1)); if(shot) return shot;
-      const vis=await routeVisual(request,db,options.dataDir??process.env.DATA_DIR??"data",segments.slice(1),options.visual); if(vis) return vis;
-      const share=await routeShares(request,db,segments.slice(1),{publicOrigin,serveDist:options.serveDist}); if(share) return share;
-      if(segments[1]==="prototypes") return await routePrototypes(request,db,segments.slice(1),options.dataDir,options.serveDist);
-      if(segments[1]==="components") return await routeComponents(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data");
-      if(segments[1]==="assets") return await routeAssets(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data");
-      if(segments[1]==="design-systems") return await routeDesignSystems(request,db,segments.slice(1));
-      if(segments[1]==="catalog"&&segments[2]==="manifest"&&segments.length===3) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); const {designSystem}=parseQuery(catalogManifestQuerySchema,url.searchParams); if(designSystem!==undefined&&!getRegisteredDesignSystem(db,designSystem)) throw new ApiError(404,"not_found","Design system not found"); return json({components:catalogManifest(db,designSystem)},200,noStore); }
-      if(segments[1]==="shims"&&(segments[2]==="v1"||segments[2]==="v2"||segments[2]==="v3")) return routeShims(request,segments.slice(1));
-      const meta=routeMeta(request,db,segments.slice(1)); if(meta) return meta;
-      throw new ApiError(404,"not_found","API route not found");
+
+    const anonymousAllowed=isHealth(request,decodedPath)||isLogin(request,decodedPath)||shareExchange||Boolean(staticResolution?.public);
+    if(principal.kind==="anonymous"&&(decodedPath==="/share/p"||decodedPath.startsWith("/share/p/"))) return errorResponse(new ApiError(404,"not_found","Route not found"));
+    if(principal.kind==="anonymous"&&!anonymousAllowed) {
+      return applicationUnauthorizedResponse();
     }
-    if(options.serveDist) return await serveStatic(request,options.serveDist);
-    throw new ApiError(404,"not_found","Route not found");
-  } catch(error) { return errorResponse(error); } };
-    return finish(await handle());
+
+    const finish=(response:Response):Response=>{
+      let result=response;
+      if(principal.kind==="share") result=protectShareResponse(result);
+      else if(decodedPath.startsWith("/api/")) result=protectSessionResponse(result);
+      if(legacyBasicAuth&&!legacyBypass) result=protectLegacyBasicResponse(result);
+      return result;
+    };
+
+    try {
+      if(shareExchange) return protectShareResponse(await exchangeShareToken(request,shareSegments[1]!,shares,publicOrigin));
+      const segments=decodedPath.split("/").filter(Boolean);
+      if(segments[0]==="api") {
+        if(segments[1]==="health"&&segments.length===2) {
+          if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed");
+          const ready=options.ready?.()!==false;
+          return finish(json({status:ready?"ready":"starting"},ready?200:503,noStore));
+        }
+        const clientAddress=server?.requestIP?.(request)?.address??"direct";
+        const auth=await routeAuth(request,db,segments.slice(1),{principal,publicOrigin,clientAddress,limiter}); if(auth) return finish(auth);
+        const users=await routeUsers(request,db,segments.slice(1),principal); if(users) return finish(users);
+        const shot=await routeScreenshots(request,options.screenshots,segments.slice(1)); if(shot) return finish(shot);
+        const vis=await routeVisual(request,db,options.dataDir??process.env.DATA_DIR??"data",segments.slice(1),options.visual); if(vis) return finish(vis);
+        const share=await routeShares(request,db,segments.slice(1),{publicOrigin,serveDist:options.serveDist}); if(share) return finish(share);
+        if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),options.dataDir,options.serveDist));
+        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data"));
+        if(segments[1]==="assets") return finish(await routeAssets(request,db,segments.slice(1),options.dataDir??process.env.DATA_DIR??"data"));
+        if(segments[1]==="design-systems") return finish(await routeDesignSystems(request,db,segments.slice(1)));
+        if(segments[1]==="catalog"&&segments[2]==="manifest"&&segments.length===3) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); const {designSystem}=parseQuery(catalogManifestQuerySchema,requestUrl.searchParams); if(designSystem!==undefined&&!getRegisteredDesignSystem(db,designSystem)) throw new ApiError(404,"not_found","Design system not found"); return finish(json({components:catalogManifest(db,designSystem)},200,noStore)); }
+        if(segments[1]==="shims"&&(segments[2]==="v1"||segments[2]==="v2"||segments[2]==="v3")) return finish(routeShims(request,segments.slice(1)));
+        const meta=routeMeta(request,db,segments.slice(1)); if(meta) return finish(meta);
+        throw new ApiError(404,"not_found","API route not found");
+      }
+      if(staticResolution) return finish(await serveResolvedStatic(request,staticResolution));
+      throw new ApiError(404,"not_found","Route not found");
+    } catch(error) { return finish(errorResponse(error)); }
   };
 }
 
 export async function startServer(options:{port?:number;database?:string;serveDist?:string;host?:string}={}) {
   const host=options.host??process.env.HOST??"127.0.0.1";
-  const basicAuth=process.env.BASIC_AUTH||undefined;
-  if(host!=="127.0.0.1"&&host!=="localhost"&&!basicAuth) {
-    console.error(`Refusing to start easy-ui on non-loopback host ${JSON.stringify(host)} without BASIC_AUTH`);
-    process.exit(1);
-  }
   const port=options.port??Number(process.env.PORT||8787);
-  // Validate the externally visible origin before opening/migrating the persistent database.
   const publicOrigin=resolvePublicOrigin(process.env.PUBLIC_ORIGIN||undefined,{host,port});
-  let ready=false; const db=openDatabase(options.database); failStagingPublishes(db); await verifyShimAbi(); await seedPrototypes(db); ready=true;
-  const serveDist=options.serveDist ?? (process.env.SERVE_DIST || undefined);
-  const dataDir=process.env.DATA_DIR??"data";
-  const captureHost=host==="0.0.0.0"||host==="::"?"127.0.0.1":host;
-  const screenshots=new ScreenshotServiceImpl({db,dataDir,serveDist,captureOrigin:`http://${captureHost}:${port}`,chromiumAvailable:chromiumAvailable(),runJob:spawnWorker});
-  const visual=new VisualServiceImpl({db,dataDir,screenshots});
-  const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>ready,serveDist,dataDir,basicAuth,publicOrigin,screenshots,visual})});
-  return {server,db};
+  const db=openDatabase(options.database);
+  try {
+    const admin=await ensureBootstrapAdmin(db);
+    if(!admin) throw new Error(isLoopbackHostname(host)?"At least one admin is required; set ADMIN_NAME and ADMIN_PASSWORD":"Refusing to start on a non-loopback host without an existing admin or ADMIN_NAME/ADMIN_PASSWORD");
+    assertOwnersPresent(db);
+    failStagingPublishes(db);
+    await verifyShimAbi();
+    const dataDir=process.env.DATA_DIR??"data";
+    await seedPrototypes(db,undefined,dataDir,admin.id);
+    assertOwnersPresent(db);
+    const serveDist=options.serveDist??(process.env.SERVE_DIST||undefined);
+    const captureHost=host==="0.0.0.0"||host==="::"?"127.0.0.1":host;
+    const screenshots=new ScreenshotServiceImpl({db,dataDir,serveDist,captureOrigin:`http://${captureHost}:${port}`,chromiumAvailable:chromiumAvailable(),runJob:spawnWorker});
+    const visual=new VisualServiceImpl({db,dataDir,screenshots});
+    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,legacyBasicAuth:process.env.LEGACY_BASIC_AUTH||undefined,publicOrigin,screenshots,visual})});
+    return {server,db};
+  } catch(error) { db.close(); throw error; }
 }
 
 if(import.meta.main) { const {server}=await startServer(); console.log(`easy-ui server listening on http://${server.hostname}:${server.port}`); }

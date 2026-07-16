@@ -1,8 +1,8 @@
+import { createTestHandler } from "./test-auth";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { openDatabase } from "./db";
-import { createHandler } from "./main";
 import { PrototypeRepo } from "./repos/prototypes";
 import { insertDesignSystemVersion } from "./designSystems";
 import { prototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
@@ -14,7 +14,7 @@ async function setup() {
   const dir = await mkdtemp(resolve(process.cwd(), ".ds-theme-test-"));
   dirs.push(dir);
   const db = openDatabase(":memory:");
-  return { dir, db, handler: createHandler(db, { dataDir: dir }) };
+  return { dir, db, handler: createTestHandler(db, { dataDir: dir }) };
 }
 
 type Bytes = Uint8Array<ArrayBuffer>;

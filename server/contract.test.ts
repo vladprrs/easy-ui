@@ -1,3 +1,4 @@
+import { createTestHandler } from "./test-auth";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -10,8 +11,8 @@ import { MAX_ASSET_BYTES } from "./assets/validate";
 import { capabilitiesResponseSchema, listContracts, type RouteContract } from "./contracts";
 import { openDatabase } from "./db";
 import { MAX_JSON_BODY_BYTES } from "./http";
-import { createHandler } from "./main";
 import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "./screenshot/service";
+import { UserRepo } from "./users";
 
 // Contract test (plan §G): every registered route contract is exercised through
 // createHandler — happy-path where the fixture is cheap, otherwise the typed error
@@ -26,7 +27,8 @@ let handler: (request: Request) => Promise<Response>;
 beforeAll(async () => {
   dir = await mkdtemp(resolve(process.cwd(), ".contract-test-"));
   db = openDatabase(":memory:");
-  handler = createHandler(db, { dataDir: dir }) as (request: Request) => Promise<Response>;
+  handler = createTestHandler(db, { dataDir: dir }) as (request: Request) => Promise<Response>;
+  await new UserRepo(db).create({ name: "Login Fixture", password: "contract password", actorId: "user_admin" });
 });
 afterAll(async () => {
   db.close();
@@ -60,7 +62,7 @@ type Expectation =
 interface Case { run: () => Promise<Response>; expected: Expectation }
 
 // Shared mutable fixture state threaded through the ordered execution below.
-const state: { assetId?: string; referenceId?: string; screenId?: string; screenIds?:string[]; shareId?: string; prototypeInstanceId?:string } = {};
+const state: { assetId?: string; referenceId?: string; screenId?: string; screenIds?:string[]; shareId?: string; prototypeInstanceId?:string; loginCookie?:string } = {};
 
 function orderedCases(): [string, Case][] {
   const ok = (status?: number, contentType?: string): Expectation => ({ kind: "success", status, contentType });
@@ -72,6 +74,11 @@ function orderedCases(): [string, Case][] {
     ["GET /api/schemas/prototype-document.json", { run: () => call("GET", "/api/schemas/prototype-document.json"), expected: ok() }],
     ["GET /api/schemas/component-definition.json", { run: () => call("GET", "/api/schemas/component-definition.json"), expected: ok() }],
     ["GET /api/capabilities", { run: () => call("GET", "/api/capabilities"), expected: ok() }],
+    // Named users and cookie sessions
+    ["POST /api/users", { run: () => call("POST", "/api/users", { name: "Contract Operator", password: "operator password", isAdmin: false }), expected: ok(201) }],
+    ["GET /api/users", { run: () => call("GET", "/api/users"), expected: ok() }],
+    ["POST /api/auth/login", { run: () => call("POST", "/api/auth/login", { name: "Login Fixture", password: "contract password" }), expected: ok() }],
+    ["GET /api/auth/me", { run: () => call("GET", "/api/auth/me"), expected: ok() }],
     // Design systems
     ["POST /api/design-systems", { run: () => call("POST", "/api/design-systems", { id: "contract-ds", name: "Contract DS", description: "Contract test system" }), expected: ok(201) }],
     ["GET /api/design-systems", { run: () => call("GET", "/api/design-systems"), expected: ok() }],
@@ -146,6 +153,7 @@ function orderedCases(): [string, Case][] {
     ["DELETE /api/visual-references/{id}", { run: () => call("DELETE", `/api/visual-references/${state.referenceId}`), expected: err(404, "reference_not_found") }],
     ["DELETE /api/components/{id}", { run: () => call("DELETE", "/api/components/contract-stars", { baseRev: 3 }), expected: ok(204) }],
     ["DELETE /api/prototypes/{id}", { run: () => call("DELETE", "/api/prototypes/contract-proto", { baseRev: 3 }), expected: ok(204) }],
+    ["POST /api/auth/logout", { run: () => handler(new Request("http://test/api/auth/logout", { method: "POST", headers: { origin: "http://test", cookie: state.loginCookie! } })), expected: ok(204) }],
   ];
 }
 
@@ -185,6 +193,7 @@ describe("route contracts", () => {
       if (key === "GET /api/prototypes/{id}/draft") state.prototypeInstanceId=(body as {prototypeInstanceId:string}).prototypeInstanceId;
       if (key === "PUT /api/visual-references") state.referenceId = (body as { id: string }).id;
       if (key === "POST /api/prototypes/{id}/share") state.shareId = (body as { id: string }).id;
+      if (key === "POST /api/auth/login") state.loginCookie = response.headers.get("set-cookie")!.split(";", 1)[0]!;
     }
   }, 120_000);
 

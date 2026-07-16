@@ -2,11 +2,11 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { migrate } from "./migrations";
 
-test("migrations upgrade a fresh v0 database to latest and a v13 database is idempotent",()=>{
+test("migrations upgrade a fresh v0 database to latest and a v14 database is idempotent",()=>{
   const db=new Database(":memory:"); migrate(db);
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
   const names=(db.query("SELECT name FROM sqlite_master WHERE type='table'").all() as {name:string}[]).map(x=>x.name);
-  expect(names).toEqual(expect.arrayContaining(["prototypes","prototype_revisions","prototype_revision_components","prototype_publishes","components","component_revisions","component_publishes","seed_log","design_systems","validation_records","assets","prototype_revision_assets","component_publish_assets","visual_references","visual_runs","visual_baseline_sets","design_system_versions","share_grants","share_sessions"]));
+  expect(names).toEqual(expect.arrayContaining(["prototypes","prototype_revisions","prototype_revision_components","prototype_publishes","components","component_revisions","component_publishes","seed_log","design_systems","validation_records","assets","prototype_revision_assets","component_publish_assets","visual_references","visual_runs","visual_baseline_sets","design_system_versions","share_grants","share_sessions","users","user_sessions","audit_events"]));
   // v8 widened the component_publishes lifecycle columns.
   const cols=(db.query("PRAGMA table_info(component_publishes)").all() as {name:string}[]).map(c=>c.name);
   expect(cols).toEqual(expect.arrayContaining(["status","status_reason","superseded_by","status_rev"]));
@@ -19,7 +19,7 @@ test("migrations upgrade a fresh v0 database to latest and a v13 database is ide
   expect(instance?.notnull).toBe(1);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   migrate(db);
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   db.close();
 });
@@ -34,7 +34,7 @@ test("adds scoped-share grants and hashed sessions to a populated v9 database",(
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
   db.run("INSERT INTO share_grants (id,token_hash,prototype_id,version,rev,dependencies_json,created_at,expires_at) VALUES ('g','hash','shared',1,1,'{}','now','later')");
   db.run("INSERT INTO share_sessions (id,session_hash,grant_id,created_at,expires_at) VALUES ('s','session-hash','g','now','later')");
   db.run("DELETE FROM share_grants WHERE id='g'");
@@ -74,6 +74,7 @@ function rollbackV12(db:Database):void {
 }
 
 function rollbackV13(db:Database):void {
+  rollbackV14(db);
   const has=(db.query("PRAGMA table_info(prototypes)").all() as {name:string}[]).some(c=>c.name==="instance_id");
   if(!has) return;
   db.run("PRAGMA foreign_keys = OFF");
@@ -91,6 +92,31 @@ function rollbackV13(db:Database):void {
   db.run("PRAGMA legacy_alter_table = OFF");
   db.run("PRAGMA foreign_keys = ON");
 }
+
+function rollbackV14(db:Database):void {
+  const has=(db.query("SELECT 1 ok FROM sqlite_master WHERE type='table' AND name='users'").get());
+  if(!has) return;
+  db.run("ALTER TABLE prototypes DROP COLUMN status");
+  db.run("ALTER TABLE prototypes DROP COLUMN owner_id");
+  db.run("ALTER TABLE components DROP COLUMN owner_id");
+  db.run("ALTER TABLE design_systems DROP COLUMN owner_id");
+  db.run("DROP TABLE audit_events");
+  db.run("DROP TABLE user_sessions");
+  db.run("DROP TABLE users");
+}
+
+test("v14 adds users, sessions, owners and publishes populated legacy prototypes",()=>{
+  const db=new Database(":memory:"); migrate(db); rollbackV14(db); db.run("PRAGMA user_version = 13");
+  db.run("INSERT INTO prototypes (id,name,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at) VALUES ('legacy-v14','Legacy','desktop',1,1,'shadcn','instance','now','now')");
+  db.run(`INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,created_at) VALUES ('legacy-v14',1,'{"version":1,"id":"legacy-v14","designSystem":"shadcn"}','h','now')`);
+  migrate(db);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
+  expect(db.query("SELECT owner_id,status FROM prototypes WHERE id='legacy-v14'").get()).toEqual({owner_id:null,status:"published"});
+  expect(db.query("SELECT name FROM sqlite_master WHERE type='index' AND name='user_sessions_user'").get()).toEqual({name:"user_sessions_user"});
+  expect(db.query("SELECT actor_id,subject_id FROM audit_events WHERE action='migration.applied'").get()).toEqual({actor_id:"system",subject_id:"v14"});
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  db.close();
+});
 
 test("v13 backfills a distinct immutable instance id per populated prototype and preserves rows",()=>{
   const db=new Database(":memory:"); migrate(db); rollbackV13(db); db.run("PRAGMA user_version = 12");
@@ -121,7 +147,7 @@ test("a failed migration preserves the last successful version and retry applies
 
   db.run("DROP TABLE visual_baseline_sets");
   migrate(db);
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
   expect(db.query("SELECT instance_id FROM prototypes WHERE id='retry'").get()).toEqual({instance_id:expect.any(String)});
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   db.close();
@@ -136,7 +162,7 @@ test("v11 preserves populated visual history and leaves legacy baseline evidence
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
   expect(db.query("SELECT reference_asset_id FROM visual_runs WHERE id='vrun_legacy'").get()).toEqual({reference_asset_id:null});
   expect(db.query("SELECT deleted_at FROM visual_references WHERE id='vref_legacy'").get()).toEqual({deleted_at:null});
   expect(()=>db.run("DELETE FROM visual_references WHERE id='vref_legacy'")).toThrow();
@@ -161,7 +187,7 @@ test("v12 adds asset listing and reverse hard-pin indexes to a populated v11 dat
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
   const indexes=(db.query("SELECT name FROM sqlite_master WHERE type='index'").all() as {name:string}[]).map((row)=>row.name);
   expect(indexes).toEqual(expect.arrayContaining([...V12_INDEXES]));
   expect(db.query("SELECT asset_id FROM prototype_revision_assets WHERE prototype_id='p_index'").get()).toEqual({asset_id:"asset_populated"});
@@ -196,7 +222,7 @@ test("upgrades a populated v2 database and backfills revision design systems",()
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
   expect(db.query("SELECT design_system FROM component_revisions WHERE component_id='custom'").get()).toEqual({design_system:"wireframe"});
   expect(db.query("SELECT COUNT(*) count FROM design_systems").get()).toEqual({count:3});
   expect(db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='validation_records'").get()).toEqual({name:"validation_records"});
@@ -215,7 +241,7 @@ test("adds validation_records to a populated v3 database without touching existi
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
   expect(db.query("SELECT COUNT(*) count FROM validation_records").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM prototypes").get()).toEqual({count:1});
   expect(db.query("SELECT COUNT(*) count FROM components").get()).toEqual({count:1});
@@ -235,7 +261,7 @@ test("adds the v5 asset registry to a populated v4 database without touching exi
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
   expect(db.query("SELECT COUNT(*) count FROM assets").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM prototypes").get()).toEqual({count:1});
   expect(db.query("SELECT COUNT(*) count FROM validation_records").get()).toEqual({count:1});
@@ -254,7 +280,7 @@ test("adds the v6 visual regression tables to a populated v5 database with FK RE
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
   expect(db.query("SELECT COUNT(*) count FROM visual_references").get()).toEqual({count:0});
   expect(db.query("SELECT COUNT(*) count FROM assets").get()).toEqual({count:1});
   // FK RESTRICT: an asset used as a reference baseline cannot be deleted.
@@ -277,7 +303,7 @@ test("adds the v7 design-system theme versions to a populated v6 database with F
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
   expect(db.query("SELECT COUNT(*) count FROM design_system_versions").get()).toEqual({count:0});
   expect((db.query("PRAGMA table_info(prototype_revisions)").all() as {name:string}[]).map(c=>c.name)).toContain("design_system_meta_version");
   // Existing rows survive and the new pin column defaults to NULL.
@@ -349,7 +375,7 @@ test("v8 strictly rebuilds component_publishes on a populated pre-status databas
 
   migrate(db);
 
-  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(14);
   // No FK violations after the rebuild.
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   // Parent rows and their statuses survive; new columns default.
@@ -409,6 +435,6 @@ test("startup audit rejects component and prototype head mismatches",()=>{
 
 test("startup audit rejects an unknown builtin provider",()=>{
   const db=new Database(":memory:"); migrate(db);
-  db.run("INSERT INTO design_systems VALUES ('bad','Bad','Bad provider','unknown','now','now')");
+  db.run("INSERT INTO design_systems (id,name,description,builtin_provider,created_at,updated_at) VALUES ('bad','Bad','Bad provider','unknown','now','now')");
   expect(()=>migrate(db)).toThrow("Unknown builtin provider for design system bad: unknown"); db.close();
 });

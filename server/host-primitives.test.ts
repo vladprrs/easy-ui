@@ -1,10 +1,10 @@
+import { createTestHandler } from "./test-auth";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { prototypeDocSchema } from "../src/prototype/schema";
 import { emptyComponentManifestHash } from "./builtinHash";
 import { openDatabase } from "./db";
-import { createHandler } from "./main";
 import { ComponentRepo } from "./repos/components";
 
 const dirs: string[] = [];
@@ -14,7 +14,7 @@ async function setup() {
   const dir = await mkdtemp(resolve(process.cwd(), ".host-primitives-test-"));
   dirs.push(dir);
   const db = openDatabase(":memory:");
-  return { db, handler: createHandler(db, { dataDir: dir }) };
+  return { db, handler: createTestHandler(db, { dataDir: dir }) };
 }
 
 const request = (url: string, method = "GET", value?: unknown) => new Request(`http://test/api${url}`, {

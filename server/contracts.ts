@@ -68,6 +68,27 @@ export function parseQuery<T>(schema: z.ZodType<T>, searchParams: URLSearchParam
   return parseWith(schema, raw, "Query parameters are invalid");
 }
 
+// --- Named users and cookie sessions (A1-1) ---
+
+export const userPublicSchema = z.strictObject({ id: z.string(), name: z.string(), isAdmin: z.boolean(), createdAt: z.string() });
+export const authUserSchema = z.strictObject({ userId: z.string(), name: z.string(), isAdmin: z.boolean() });
+export const loginRequestSchema = z.strictObject({
+  name: z.string().trim().min(1).max(64),
+  password: z.string().min(1).max(256),
+  next: z.string().max(2048).optional(),
+});
+export const createUserRequestSchema = z.strictObject({
+  name: z.string().trim().min(1).max(64),
+  password: z.string().min(8).max(256),
+  isAdmin: z.boolean().optional().default(false),
+});
+
+export const loginContract = registerContract({ method: "POST", path: "/api/auth/login", summary: "Create a named-user cookie session.", requestSchema: loginRequestSchema, responseSchema: z.strictObject({ user: authUserSchema, next: z.string().optional() }), validated: true, errors: [{ status: 401, code: "invalid_credentials" }, { status: 429, code: "rate_limited" }, { status: 422, code: "validation_failed" }] });
+export const logoutContract = registerContract({ method: "POST", path: "/api/auth/logout", summary: "Revoke the current cookie session.", status: 204, validated: true, errors: [] });
+export const meContract = registerContract({ method: "GET", path: "/api/auth/me", summary: "Return the current named user.", responseSchema: authUserSchema, validated: true, errors: [{ status: 401, code: "unauthorized" }] });
+export const createUserContract = registerContract({ method: "POST", path: "/api/users", summary: "Create a user (admin only).", status: 201, requestSchema: createUserRequestSchema, responseSchema: userPublicSchema, validated: true, errors: [{ status: 401, code: "unauthorized" }, { status: 403, code: "forbidden" }, { status: 409, code: "already_exists" }, { status: 422, code: "validation_failed" }] });
+export const listUsersContract = registerContract({ method: "GET", path: "/api/users", summary: "List users (admin only).", responseSchema: z.strictObject({ users: z.array(userPublicSchema) }), validated: true, errors: [{ status: 401, code: "unauthorized" }, { status: 403, code: "forbidden" }] });
+
 // --- Contracts registered by this task (T1) ---
 
 const positiveIntFromString = z.string().regex(/^[1-9][0-9]*$/, "must be a positive integer").transform(Number);

@@ -1,3 +1,4 @@
+import { createTestHandler } from "./test-auth";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -97,7 +98,7 @@ describe("migration v6", () => {
 describe("PUT /api/visual-references upsert", () => {
   test("requires an existing PNG asset and upserts by fingerprint preserving runs", async () => {
     const { db, dir } = await setup();
-    const handler = createHandler(db, { dataDir: dir });
+    const handler = createTestHandler(db, { dataDir: dir });
     const assets = new AssetRepo(db, dir);
     const a1 = (await assets.ingest(makePng(4, 4, white), "image/png")).asset;
     const a2 = (await assets.ingest(makePng(4, 4, [0, 0, 0, 255]), "image/png")).asset;
@@ -129,7 +130,7 @@ describe("PUT /api/visual-references upsert", () => {
 
   test("rejects a non-PNG reference asset", async () => {
     const { db, dir } = await setup();
-    const handler = createHandler(db, { dataDir: dir });
+    const handler = createTestHandler(db, { dataDir: dir });
     const gif = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 1, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0x21, 0xf9, 4, 0, 0, 0, 0, 0, 0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 1, 0, 0x3b]);
     const asset = (await new AssetRepo(db, dir).ingest(gif, "image/gif")).asset;
     const res = await handler(req("/visual-references", "PUT", { fingerprint: protoFingerprint("p"), assetId: asset.id }));
@@ -141,7 +142,7 @@ describe("PUT /api/visual-references upsert", () => {
 describe("visual check full cycle", () => {
   async function prepare(protoId: string, referencePng: Uint8Array) {
     const { db, dir } = await setup();
-    const handler = createHandler(db, { dataDir: dir });
+    const handler = createTestHandler(db, { dataDir: dir });
     expect((await handler(req("/prototypes", "POST", { doc: await helloDoc(protoId) }))).status).toBe(201);
     const refAsset = (await new AssetRepo(db, dir).ingest(referencePng, "image/png")).asset;
     const put = await handler(req("/visual-references", "PUT", { fingerprint: protoFingerprint(protoId), assetId: refAsset.id }));
@@ -226,7 +227,7 @@ describe("visual check full cycle", () => {
     const { db, dir, handler, referenceId } = await prepare("vthresh", reference);
     const screenshots = makeScreenshots(db, dir, candidateRunJob(candidate));
     const service = new VisualService({ db, dataDir: dir, screenshots, runDiff: inProcessDiff });
-    const handlerWithVisual = createHandler(db, { dataDir: dir, visual: service });
+    const handlerWithVisual = createTestHandler(db, { dataDir: dir, visual: service });
     const invalid = await handlerWithVisual(req(`/visual-references/${referenceId}/check`, "POST", { threshold: 100.1 }));
     expect(invalid.status).toBe(422);
     expect((await invalid.json() as { error: { code: string } }).error.code).toBe("invalid_threshold");
@@ -273,7 +274,7 @@ describe("visual check full cycle", () => {
     for(const rev of [1,2]) db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('visual-component',?,'source','shadcn','now')",[rev]);
     for(const version of [1,2]) db.run("INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at) VALUES ('visual-component',?,?, 'active','js','{}',?,?,1,'now')",[version,version,`source-${version}`,`bundle-${version}`]);
     const baseline=(await new AssetRepo(db,dir).ingest(makePng(4,4,white),"image/png")).asset;
-    const handler=createHandler(db,{dataDir:dir});const put=await handler(req("/visual-references","PUT",{fingerprint:{scope:"component",componentId:"visual-component",refVersion:1,viewport:{width:320,height:480},deviceScaleFactor:1,theme:"light"},assetId:baseline.id}));const {id}=await put.json() as {id:string};
+    const handler=createTestHandler(db,{dataDir:dir});const put=await handler(req("/visual-references","PUT",{fingerprint:{scope:"component",componentId:"visual-component",refVersion:1,viewport:{width:320,height:480},deviceScaleFactor:1,theme:"light"},assetId:baseline.id}));const {id}=await put.json() as {id:string};
     const screenshots=makeScreenshots(db,dir,candidateRunJob(makePng(4,4,white)));const service=new VisualService({db,dataDir:dir,screenshots,runDiff:inProcessDiff});
     const report=await waitReport(service,service.check(id,{version:2}).runId);
     expect(report.candidateMeta).toMatchObject({kind:"component",outcome:"captured",requestedTarget:{version:2},resolvedTarget:{version:2},version:2,bundleHash:"bundle-2",rendererBuild:expect.anything(),browserVersion:"test/1"});
@@ -313,7 +314,7 @@ describe("visual check full cycle", () => {
 describe("DELETE /api/visual-references/:id retention", () => {
   test("reports a migrated run with no proven baseline as reference_unknown", async () => {
     const { db, dir } = await setup();
-    const handler = createHandler(db, { dataDir: dir });
+    const handler = createTestHandler(db, { dataDir: dir });
     const baseline = (await new AssetRepo(db, dir).ingest(makePng(4, 4, white), "image/png")).asset;
     const put = await handler(req("/visual-references", "PUT", { fingerprint: protoFingerprint("legacy"), assetId: baseline.id }));
     const { id } = await put.json() as { id: string };
@@ -330,7 +331,7 @@ describe("DELETE /api/visual-references/:id retention", () => {
 
   test("tombstones the active reference without deleting runs and allows a later revival", async () => {
     const { db, dir } = await setup();
-    const handler = createHandler(db, { dataDir: dir });
+    const handler = createTestHandler(db, { dataDir: dir });
     const assets = new AssetRepo(db, dir);
     const baseline = (await assets.ingest(makePng(4, 4, white), "image/png")).asset;
     const put = await handler(req("/visual-references", "PUT", { fingerprint: protoFingerprint("retained"), assetId: baseline.id }));
@@ -358,7 +359,7 @@ describe("DELETE /api/visual-references/:id retention", () => {
 describe("check availability", () => {
   test("501 when no visual service is wired", async () => {
     const { db, dir } = await setup();
-    const handler = createHandler(db, { dataDir: dir });
+    const handler = createTestHandler(db, { dataDir: dir });
     const assets = new AssetRepo(db, dir);
     const asset = (await assets.ingest(makePng(4, 4, white), "image/png")).asset;
     const put = await handler(req("/visual-references", "PUT", { fingerprint: protoFingerprint("p"), assetId: asset.id }));

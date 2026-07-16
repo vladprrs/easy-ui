@@ -1,8 +1,8 @@
+import { createTestHandler } from "./test-auth";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { openDatabase } from "./db";
-import { createHandler } from "./main";
 import { prototypeDocSchema } from "../src/prototype/schema";
 
 const dirs: string[] = [];
@@ -12,7 +12,7 @@ async function setup(serveDist?: string) {
   const dir = await mkdtemp(resolve(process.cwd(), ".render-status-test-"));
   dirs.push(dir);
   const db = openDatabase(":memory:");
-  return { dir, db, handler: createHandler(db, { dataDir: dir, serveDist }) };
+  return { dir, db, handler: createTestHandler(db, { dataDir: dir, serveDist }) };
 }
 const req = (url: string, method = "GET", value?: unknown) =>
   new Request(`http://test/api${url}`, { method, headers: value ? { "content-type": "application/json" } : undefined, body: value ? JSON.stringify(value) : undefined });

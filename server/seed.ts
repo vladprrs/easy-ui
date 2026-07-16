@@ -84,7 +84,7 @@ function upgradeCheckout(db: Database, doc: PrototypeDoc, assetIds: string[]): v
   })();
 }
 
-export async function seedPrototypes(db: Database, dir = resolve("prototypes"), dataDir = process.env.DATA_DIR ?? "data"): Promise<void> {
+export async function seedPrototypes(db: Database, dir = resolve("prototypes"), dataDir = process.env.DATA_DIR ?? "data", ownerId: string | null = null): Promise<void> {
   // Seed documents may use builtins from their own design system; custom components are not supported in seeds.
   let files: string[];
   try { files = (await readdir(dir)).filter((f) => f.endsWith(".json")).sort(); }
@@ -105,7 +105,7 @@ export async function seedPrototypes(db: Database, dir = resolve("prototypes"), 
     try {
       if (needsUpgrade) { upgradeCheckout(db, doc, assetIds); continue; }
       db.transaction(() => {
-        new PrototypeRepo(db).create(doc, "Initial seed", [], assetIds);
+        new PrototypeRepo(db).create(doc, "Initial seed", [], assetIds, null, ownerId);
         logSeed(db, fileId);
         // Fresh databases get the v2 checkout content directly: mark base seed and upgrade
         // atomically so restarts never save a second revision.

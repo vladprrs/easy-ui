@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { prototypeDocSchema } from "../src/prototype/schema";
 import { openDatabase } from "./db";
 import { createHandler, resolvePublicOrigin } from "./main";
+import { createTestHandler } from "./test-auth";
 
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
@@ -21,25 +22,27 @@ async function fixture() {
   await writeFile(resolve(dist, "assets/app-A.js"), "export const build='A'");
   await writeFile(resolve(dist, ".vite/manifest.json"), JSON.stringify({ index: { file: "assets/app-A.js", isEntry: true } }));
   const db = openDatabase(":memory:");
-  const handler = createHandler(db, {
+  const options = {
     basicAuth: "owner:secret",
     serveDist: dist,
     publicOrigin: "http://127.0.0.1:4199",
-  });
+  } as const;
+  const handler = createHandler(db, options);
+  const owner = createTestHandler(db, options);
   const doc = prototypeDocSchema.parse(await Bun.file("prototypes/hello-world.json").json());
-  let response = await handler(new Request("http://local/api/prototypes", {
+  let response = await owner(new Request("http://local/api/prototypes", {
     method: "POST",
     headers: { authorization: credentials, "content-type": "application/json" },
     body: JSON.stringify({ doc }),
   }));
   expect(response.status).toBe(201);
-  response = await handler(new Request("http://local/api/prototypes/hello-world/publish", {
+  response = await owner(new Request("http://local/api/prototypes/hello-world/publish", {
     method: "POST",
     headers: { authorization: credentials, "content-type": "application/json" },
     body: JSON.stringify({ baseRev: 1 }),
   }));
   expect(response.status).toBe(201);
-  return { db, dist, handler };
+  return { db, dist, handler, owner };
 }
 
 async function createGrant(handler: ReturnType<typeof createHandler>) {
@@ -54,8 +57,8 @@ async function createGrant(handler: ReturnType<typeof createHandler>) {
 
 describe("scoped share", () => {
   test("exchanges a hashed bearer token before BasicAuth and restricts the cookie to the pinned closure", async () => {
-    const { db, handler } = await fixture();
-    const grant = await createGrant(handler);
+    const { db, handler, owner } = await fixture();
+    const grant = await createGrant(owner);
     expect(grant.url).toMatch(/^http:\/\/127\.0\.0\.1:4199\/share\/[A-Za-z0-9_-]{43}$/);
     const token = grant.url.split("/").at(-1)!;
     const stored = db.query("SELECT token_hash,dependencies_json FROM share_grants WHERE id=?").get(grant.id) as { token_hash: string; dependencies_json: string };
@@ -93,7 +96,10 @@ describe("scoped share", () => {
     expect((await shared("/p/hello-world/v/1/present/s/welcome")).status).toBe(401);
     expect((await shared("/api/prototypes/hello-world/versions/1", "POST")).status).toBe(401);
 
-    response = await handler(new Request(`http://local/api/prototypes/hello-world/share/${grant.id}`, {
+    // A valid share cookie that does not match this path must not shadow a valid user session.
+    expect((await owner(new Request("http://local/api/prototypes", { headers: { cookie, authorization: credentials } }))).status).toBe(200);
+
+    response = await owner(new Request(`http://local/api/prototypes/hello-world/share/${grant.id}`, {
       method: "DELETE",
       headers: { authorization: credentials },
     }));
@@ -105,8 +111,8 @@ describe("scoped share", () => {
   });
 
   test("resolves exact renderer static files from the current build for an already-issued cookie", async () => {
-    const { db, dist, handler } = await fixture();
-    const grant = await createGrant(handler);
+    const { db, dist, handler, owner } = await fixture();
+    const grant = await createGrant(owner);
     const token = grant.url.split("/").at(-1)!;
     const exchange = await handler(new Request(`http://local/share/${token}`));
     const cookie = exchange.headers.get("set-cookie")!.split(";", 1)[0]!;
@@ -123,8 +129,8 @@ describe("scoped share", () => {
   });
 
   test("forwards only one exact mobile override through the token exchange redirect", async () => {
-    const { db, handler } = await fixture();
-    const grant = await createGrant(handler);
+    const { db, handler, owner } = await fixture();
+    const grant = await createGrant(owner);
     const token = grant.url.split("/").at(-1)!;
     const location = "http://127.0.0.1:4199/share/p/hello-world/v/1/present/s/welcome";
     const cases = [
@@ -146,9 +152,9 @@ describe("scoped share", () => {
   });
 
   test("sets Secure only for HTTPS public origins", async () => {
-    const { db, dist } = await fixture();
+    const { db, dist, owner } = await fixture();
     const handler = createHandler(db, { basicAuth: "owner:secret", serveDist: dist, publicOrigin: "https://share.example" });
-    const grant = await createGrant(handler);
+    const grant = await createGrant(owner);
     const token = grant.url.split("/").at(-1)!;
     const response = await handler(new Request(`http://local/share/${token}`));
     expect(response.headers.get("set-cookie")).toContain("; Secure");

@@ -294,6 +294,31 @@ const migrations = [
       created_at TEXT NOT NULL,
       UNIQUE(prototype_id, generation))`);
   },
+  (db: Database) => {
+    // v14: named users, hashed cookie sessions, resource ownership/visibility and audit trail.
+    db.run(`CREATE TABLE users (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      password_hash TEXT NOT NULL,
+      is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1)),
+      created_at TEXT NOT NULL)`);
+    db.run(`CREATE TABLE user_sessions (
+      id TEXT PRIMARY KEY, session_hash TEXT UNIQUE NOT NULL,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL, expires_at TEXT NOT NULL)`);
+    db.run("CREATE INDEX user_sessions_user ON user_sessions(user_id, expires_at)");
+    db.run("ALTER TABLE prototypes ADD COLUMN owner_id TEXT REFERENCES users(id)");
+    db.run(`ALTER TABLE prototypes ADD COLUMN status TEXT NOT NULL DEFAULT 'private'
+      CHECK(status IN ('private','published','archived'))`);
+    db.run("UPDATE prototypes SET status='published'");
+    db.run("ALTER TABLE components ADD COLUMN owner_id TEXT REFERENCES users(id)");
+    db.run("ALTER TABLE design_systems ADD COLUMN owner_id TEXT REFERENCES users(id)");
+    db.run(`CREATE TABLE audit_events (
+      id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_id TEXT NOT NULL,
+      action TEXT NOT NULL, subject_type TEXT NOT NULL, subject_id TEXT NOT NULL,
+      detail TEXT)`);
+    db.query(`INSERT INTO audit_events (id,at,actor_id,action,subject_type,subject_id,detail)
+      VALUES (?,?,?,?,?,?,?)`).run(`audit_${crypto.randomUUID()}`, new Date().toISOString(), "system", "migration.applied", "migration", "v14", null);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

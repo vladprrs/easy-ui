@@ -1,9 +1,10 @@
+import { createTestHandler } from "./test-auth";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { openDatabase } from "./db";
-import { createHandler, startServer } from "./main";
+import { startServer } from "./main";
 import { seedPrototypes } from "./seed";
 import { prototypeDocSchema } from "../src/prototype/schema";
 import { Database } from "bun:sqlite";
@@ -26,10 +27,10 @@ async function body(response: Response): Promise<unknown> {
 describe("prototype API", () => {
   test("supports the DB-backed Registry API and strict error semantics", async () => {
     const db = openDatabase(":memory:");
-    const base = start(createHandler(db));
+    const base = start(createTestHandler(db));
     let response = await fetch(`${base}/api/design-systems`);
     expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     const value = (await body(response)) as { designSystems: unknown[] };
     expect(value.designSystems).toEqual(
       expect.arrayContaining([
@@ -61,7 +62,7 @@ describe("prototype API", () => {
     response = await fetch(`${base}/api/design-systems`, {method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:"product-ui",name:"Product UI",description:"Product components"})});
     expect(response.status).toBe(201);
     expect(response.headers.get("location")).toBe("/api/design-systems/product-ui");
-    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(await body(response)).toMatchObject({id:"product-ui",components:[]});
     for(const id of ["product-ui","shadcn"]) {
       response=await fetch(`${base}/api/design-systems`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id,name:"Duplicate",description:"Duplicate system"})});
@@ -83,9 +84,9 @@ describe("prototype API", () => {
   test("keeps API-created systems across a database restart",async()=>{
     const dir=await mkdtemp(resolve(tmpdir(),"easy-ui-registry-")); dirs.push(dir);
     const file=resolve(dir,"registry.db"); let db=openDatabase(file);
-    let response=await createHandler(db)(new Request("http://local/api/design-systems",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:"persistent",name:"Persistent",description:"Survives restart"})}));
+    let response=await createTestHandler(db)(new Request("http://local/api/design-systems",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:"persistent",name:"Persistent",description:"Survives restart"})}));
     expect(response.status).toBe(201); db.close(); db=openDatabase(file);
-    response=await createHandler(db)(new Request("http://local/api/design-systems/persistent"));
+    response=await createTestHandler(db)(new Request("http://local/api/design-systems/persistent"));
     expect(response.status).toBe(200); expect(await body(response)).toMatchObject({id:"persistent",name:"Persistent"}); db.close();
   });
 
@@ -104,7 +105,7 @@ describe("prototype API", () => {
 
   test("keeps list and meta design system aligned with the head draft through save and restore", async () => {
     const db = openDatabase(":memory:");
-    const base = start(createHandler(db));
+    const base = start(createTestHandler(db));
     const original = prototypeDocSchema.parse(await Bun.file(resolve("prototypes/hello-world.json")).json()),
       shadcn = { ...original, id: "systems", name: "Systems" },
       wireframe = {
@@ -165,7 +166,7 @@ describe("prototype API", () => {
     const dir = await mkdtemp(resolve(process.cwd(), ".easy-ui-components-"));
     dirs.push(dir);
     const db = openDatabase(":memory:");
-    const base = start(createHandler(db, { dataDir: dir }));
+    const base = start(createTestHandler(db, { dataDir: dir }));
     const source = (await Bun.file(resolve("server/fixtures/rating-stars.tsx")).text()).replaceAll("RatingStars", "WireRating");
     let response = await fetch(`${base}/api/components`, {
       method: "POST",
@@ -251,7 +252,7 @@ describe("prototype API", () => {
 
   test("rejects component types outside the document design system", async () => {
     const db = openDatabase(":memory:");
-    const base = start(createHandler(db));
+    const base = start(createTestHandler(db));
     const doc = {
       version: 1,
       id: "bad-wire",
@@ -295,14 +296,14 @@ describe("prototype API", () => {
     const dbFile = resolve(dir, "easy.db");
     const db = openDatabase(dbFile);
     await seedPrototypes(db, resolve("prototypes"));
-    let base = start(createHandler(db));
+    let base = start(createTestHandler(db));
     let response = await fetch(`${base}/api/health`);
     expect(response.status).toBe(200);
     expect(await body(response)).toEqual({ status: "ready" });
     response = await fetch(`${base}/api/prototypes`);
     const seeded = await body(response);
     expect(seeded).toHaveLength(6);
-    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     const original = prototypeDocSchema.parse(await Bun.file(resolve("prototypes/hello-world.json")).json());
     response = await fetch(`${base}/api/prototypes/hello-world`, {
       method: "PUT",
@@ -372,10 +373,10 @@ describe("prototype API", () => {
     expect(response.status).toBe(409);
     expect(((await body(response)) as { error: { currentVersion: number } }).error.currentVersion).toBe(1);
     response = await fetch(`${base}/api/prototypes/hello-world/versions`);
-    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(await body(response)).toHaveLength(1);
     response = await fetch(`${base}/api/prototypes/hello-world/versions/1`);
-    expect(response.headers.get("cache-control")).toContain("immutable");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(await body(response)).toMatchObject({
       version: 1,
       rev: 3,
@@ -393,7 +394,7 @@ describe("prototype API", () => {
     db.close();
     const reopened = openDatabase(dbFile);
     await seedPrototypes(reopened, resolve("prototypes"));
-    base = start(createHandler(reopened));
+    base = start(createTestHandler(reopened));
     const after = (await body(await fetch(`${base}/api/prototypes`))) as {
       id: string;
     }[];
@@ -403,7 +404,7 @@ describe("prototype API", () => {
 
   test("enforces media type and body limit", async () => {
     const db = openDatabase(":memory:");
-    const base = start(createHandler(db));
+    const base = start(createTestHandler(db));
     let r = await fetch(`${base}/api/prototypes`, {
       method: "POST",
       body: "{}",
@@ -426,7 +427,7 @@ test("static serving is contained and the SPA fallback ignores Accept", async ()
   await writeFile(resolve(dir, "index.html"), "<main>SPA</main>");
   await writeFile(resolve(dir, "assets/app.js"), "ok");
   const db = openDatabase(":memory:");
-  const base = start(createHandler(db, { serveDist: dir }));
+  const base = start(createTestHandler(db, { serveDist: dir }));
   let r = await fetch(`${base}/dashboard`, {
     headers: { accept: "text/html" },
   });

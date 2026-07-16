@@ -20,7 +20,7 @@
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "preview": "vite preview",
-    "server:dev": "bun --watch server/main.ts",
+    "server:dev": "ADMIN_NAME=admin ADMIN_PASSWORD=easy-ui-dev-password bun --watch server/main.ts",
     "server:test": "bun test server",
     "server:typecheck": "tsc --noEmit -p server/tsconfig.json",
     "serve": "SERVE_DIST=dist PORT=4173 bun server/main.ts",

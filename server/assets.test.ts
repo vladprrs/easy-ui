@@ -1,8 +1,8 @@
+import { createTestHandler } from "./test-auth";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { openDatabase } from "./db";
-import { createHandler } from "./main";
 import { prototypeDocSchema } from "../src/prototype/schema";
 
 const dirs: string[] = [];
@@ -12,7 +12,7 @@ async function setup() {
   const dir = await mkdtemp(resolve(process.cwd(), ".assets-test-"));
   dirs.push(dir);
   const db = openDatabase(":memory:");
-  return { dir, db, handler: createHandler(db, { dataDir: dir }) };
+  return { dir, db, handler: createTestHandler(db, { dataDir: dir }) };
 }
 
 // --- Minimal, header-accurate byte fixtures (the validator decodes headers, not full images). ---
@@ -155,7 +155,7 @@ describe("GET /api/assets/:id", () => {
     const r = await handler(new Request(`http://test/api/assets/${id}`));
     expect(r.status).toBe(200);
     expect(r.headers.get("content-type")).toBe("image/png");
-    expect(r.headers.get("cache-control")).toContain("immutable");
+    expect(r.headers.get("cache-control")).toBe("private, no-store");
     expect(r.headers.get("content-security-policy")).toBe("default-src 'none'; style-src 'unsafe-inline'; sandbox");
     expect(r.headers.get("x-content-type-options")).toBe("nosniff");
     expect(r.headers.get("cross-origin-resource-policy")).toBe("same-origin");

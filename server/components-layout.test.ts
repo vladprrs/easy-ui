@@ -1,15 +1,15 @@
+import { createTestHandler } from "./test-auth";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { z } from "zod";
 import { openDatabase } from "./db";
-import { createHandler } from "./main";
 import { catalogManifest } from "./routes/components";
 import { clearCustomComponentCacheForTests, loadCustomComponents } from "../src/customComponents/loader";
 
 const dirs:string[]=[];
 afterEach(async()=>{for(const dir of dirs.splice(0)) await rm(dir,{recursive:true,force:true});});
-async function setup(){const dir=await mkdtemp(resolve(process.cwd(),".components-layout-test-"));dirs.push(dir);const db=openDatabase(":memory:");return {db,handler:createHandler(db,{dataDir:dir})};}
+async function setup(){const dir=await mkdtemp(resolve(process.cwd(),".components-layout-test-"));dirs.push(dir);const db=openDatabase(":memory:");return {db,handler:createTestHandler(db,{dataDir:dir})};}
 const request=(url:string,method="GET",body?:unknown)=>new Request(`http://test/api${url}`,{method,headers:body?{"content-type":"application/json"}:undefined,body:body?JSON.stringify(body):undefined});
 const props=`z.strictObject({gap:z.enum(["none","sm","md"]).default("md"),padding:z.enum(["none","sm","md"]).default("none"),direction:z.enum(["vertical","horizontal","none"]).default("vertical"),wrap:z.boolean().default(false)})`;
 const fullLayout=`{version:1 as const,spacing:["gap","padding"] as ("gap"|"padding")[],flow:{kind:"flex" as const,direction:{prop:"direction",vertical:["vertical"],horizontal:["horizontal"],none:["none"]},wrap:{prop:"wrap",enabled:[true]},slot:"default"}}`;
