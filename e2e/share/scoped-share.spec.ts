@@ -1,6 +1,11 @@
 import { expect, request as playwrightRequest, test } from "@playwright/test";
 
 const ownerCredentials = { username: "owner", password: "secret" };
+const mobileContextOptions = {
+  viewport: { width: 390, height: 844 },
+  isMobile: true,
+  hasTouch: true,
+} as const;
 
 test("owner creates, sees QR, and revokes a share from the player action slot", async ({ browser, baseURL }) => {
   expect(baseURL).toBeTruthy();
@@ -102,5 +107,50 @@ test("scoped share exchanges token, renders all resources, denies foreign scope,
   await expect(page.getByText("Unauthorized")).toBeVisible();
 
   await shareContext.close();
+  await owner.dispose();
+});
+
+test("scoped share preserves mobile overrides through the 303 exchange", async ({ browser, baseURL }) => {
+  expect(baseURL).toBeTruthy();
+  const owner = await playwrightRequest.newContext({ baseURL, httpCredentials: ownerCredentials });
+  const meta = await (await owner.get("/api/prototypes/hello-world")).json() as { headRev: number; latestVersion: number | null };
+  let version = meta.latestVersion;
+  if (version === null) {
+    const published = await owner.post("/api/prototypes/hello-world/publish", {
+      data: { baseRev: meta.headRev, message: "Mobile share override e2e" },
+    });
+    expect(published.status()).toBe(201);
+    version = (await published.json() as { version: number }).version;
+  }
+
+  for (const mobile of ["1", "0"] as const) {
+    const created = await owner.post("/api/prototypes/hello-world/share", { data: { version, ttlSeconds: 3600 } });
+    expect(created.status()).toBe(201);
+    const grant = await created.json() as { id: string; url: string };
+    const context = await browser.newContext({ baseURL, ...mobileContextOptions });
+    const page = await context.newPage();
+    let exchangeLocation: string | undefined;
+    page.on("response", (response) => {
+      if (response.status() === 303 && response.url().startsWith(grant.url)) {
+        exchangeLocation = response.headers().location;
+      }
+    });
+
+    const finalResponse = await page.goto(`${grant.url}?mobile=${mobile}`);
+    expect(finalResponse?.ok()).toBeTruthy();
+    expect(exchangeLocation).toContain(`mobile=${mobile}`);
+    await expect(page).toHaveURL(new RegExp(`/share/p/hello-world/v/${version}/present/s/welcome\\?mobile=${mobile}$`));
+    if (mobile === "1") {
+      await expect(page.locator('[data-eui-stage-viewport="present-fluid"]')).toBeVisible();
+      await expect(page.locator("footer")).toHaveCount(0);
+    } else {
+      await expect(page.getByRole("region", { name: "Превью прототипа на устройстве" })).toBeVisible();
+      await expect(page.locator('[data-eui-stage-viewport="player"]')).toBeVisible();
+      await expect(page.locator("footer")).toBeVisible();
+    }
+
+    await context.close();
+    await owner.delete(`/api/prototypes/hello-world/share/${grant.id}`);
+  }
   await owner.dispose();
 });
