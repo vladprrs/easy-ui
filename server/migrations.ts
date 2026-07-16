@@ -330,32 +330,33 @@ export function migrate(db: Database): void {
   db.run("PRAGMA foreign_keys = ON");
   db.run("PRAGMA journal_mode = WAL");
   const current = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
-  if (current < migrations.length) {
+  for (let index = current; index < migrations.length; index += 1) {
     // The v13 prototypes rebuild must temporarily disable FK rewriting/cascades. PRAGMA
-    // foreign_keys is a no-op inside a transaction, so finish older migrations first and
-    // run v13 in its own explicit transaction with a post-rebuild FK audit.
-    const v13Index = 12;
-    if (current < v13Index) {
-      db.transaction(() => {
-        for (let index = current; index < Math.min(v13Index, migrations.length); index += 1) migrations[index](db);
-        db.run(`PRAGMA user_version = ${Math.min(v13Index, migrations.length)}`);
-      })();
-    }
-    const afterOlder = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
-    if (afterOlder === v13Index && migrations.length > v13Index) {
+    // foreign_keys is a no-op inside a transaction, so only this migration gets the special
+    // connection setup. Every registered migration still owns one atomic transaction that
+    // advances user_version only after the migration (and its FK audit) succeeds.
+    const isV13 = index === 12;
+    if (isV13) {
       db.run("PRAGMA foreign_keys = OFF");
       try {
         db.transaction(() => {
-          migrations[v13Index](db);
-          db.run(`PRAGMA user_version = ${migrations.length}`);
+          migrations[index](db);
+          const violations = db.query("PRAGMA foreign_key_check").all();
+          if (violations.length) throw new Error(`v13 rebuild left foreign-key violations: ${JSON.stringify(violations)}`);
+          db.run(`PRAGMA user_version = ${index + 1}`);
         })();
       } finally {
         db.run("PRAGMA foreign_keys = ON");
       }
-      const violations = db.query("PRAGMA foreign_key_check").all();
-      if (violations.length) throw new Error(`v13 rebuild left foreign-key violations: ${JSON.stringify(violations)}`);
+    } else {
+      db.transaction(() => {
+        migrations[index](db);
+        db.run(`PRAGMA user_version = ${index + 1}`);
+      })();
     }
   }
+  const violations = db.query("PRAGMA foreign_key_check").all();
+  if (violations.length) throw new Error(`Migrations left foreign-key violations: ${JSON.stringify(violations)}`);
   assertRegistryIntegrity(db);
   assertBuiltinNamesDoNotCollide(db);
 }

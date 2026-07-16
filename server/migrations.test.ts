@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { migrate } from "./migrations";
 
-test("migrations are idempotent and install the complete v13 schema",()=>{
-  const db=new Database(":memory:"); migrate(db); migrate(db);
+test("migrations upgrade a fresh v0 database to latest and a v13 database is idempotent",()=>{
+  const db=new Database(":memory:"); migrate(db);
   expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
   const names=(db.query("SELECT name FROM sqlite_master WHERE type='table'").all() as {name:string}[]).map(x=>x.name);
   expect(names).toEqual(expect.arrayContaining(["prototypes","prototype_revisions","prototype_revision_components","prototype_publishes","components","component_revisions","component_publishes","seed_log","design_systems","validation_records","assets","prototype_revision_assets","component_publish_assets","visual_references","visual_runs","visual_baseline_sets","design_system_versions","share_grants","share_sessions"]));
@@ -17,6 +17,10 @@ test("migrations are idempotent and install the complete v13 schema",()=>{
   expect((db.query("PRAGMA table_info(visual_runs)").all() as {name:string}[]).map(c=>c.name)).toContain("reference_asset_id");
   const instance=(db.query("PRAGMA table_info(prototypes)").all() as {name:string;notnull:number}[]).find(c=>c.name==="instance_id");
   expect(instance?.notnull).toBe(1);
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  migrate(db);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   db.close();
 });
 
@@ -99,6 +103,26 @@ test("v13 backfills a distinct immutable instance id per populated prototype and
   expect(rows).toHaveLength(2); expect(rows[0]!.instance_id).not.toBe(rows[1]!.instance_id);
   expect(rows.every(row=>/^[0-9a-f-]{36}$/.test(row.instance_id))).toBe(true);
   expect((db.query("PRAGMA table_info(prototypes)").all() as {name:string;notnull:number}[]).find(c=>c.name==="instance_id")?.notnull).toBe(1);
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  db.close();
+});
+
+test("a failed migration preserves the last successful version and retry applies the remainder",()=>{
+  const db=new Database(":memory:"); migrate(db); rollbackV12(db); db.run("PRAGMA user_version = 11");
+  db.run("INSERT INTO prototypes (id,name,device,screen_count,head_rev,design_system,created_at,updated_at) VALUES ('retry','Retry','desktop',1,1,'shadcn','now','now')");
+  db.run(`INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,created_at) VALUES ('retry',1,'{"version":1,"id":"retry","designSystem":"shadcn"}','h','now')`);
+  // Force v13 to fail at its final CREATE TABLE, after v12 has committed independently.
+  db.run("CREATE TABLE visual_baseline_sets (collision TEXT)");
+
+  expect(()=>migrate(db)).toThrow();
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(12);
+  expect((db.query("PRAGMA table_info(prototypes)").all() as {name:string}[]).map(c=>c.name)).not.toContain("instance_id");
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+
+  db.run("DROP TABLE visual_baseline_sets");
+  migrate(db);
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(13);
+  expect(db.query("SELECT instance_id FROM prototypes WHERE id='retry'").get()).toEqual({instance_id:expect.any(String)});
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   db.close();
 });
