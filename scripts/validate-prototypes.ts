@@ -1,9 +1,9 @@
 import { readFile, readdir } from "node:fs/promises";
 import { basename, resolve } from "node:path";
-import { prototypeDocSchema } from "../src/prototype/schema";
+import { storedPrototypeDocSchema } from "../src/prototype/schema";
 import { validatePrototype } from "../src/prototype/validate";
 
-const directory = resolve("prototypes");
+const directory = resolve("test/fixtures");
 const files = (await readdir(directory)).filter((file) => file.endsWith(".json")).sort();
 let failed = false;
 
@@ -11,7 +11,7 @@ for (const file of files) {
   let input: unknown;
   try { input = JSON.parse(await readFile(resolve(directory, file), "utf8")); }
   catch (error) { console.error(`FAIL ${file}: ${String(error)}`); failed = true; continue; }
-  const parsed = prototypeDocSchema.safeParse(input);
+  const parsed = storedPrototypeDocSchema.safeParse(input);
   if (!parsed.success) {
     console.error(`FAIL ${file}`);
     parsed.error.issues.forEach((entry) => console.error(`  /${entry.path.join("/")}: ${entry.message}`));

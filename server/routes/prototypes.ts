@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Database } from "bun:sqlite";
 import type { ComponentDefinition } from "../../src/catalog/definitions";
 import { designSystems } from "../../src/designSystems";
-import { prototypeDocSchema, type PrototypeDoc } from "../../src/prototype/schema";
+import { inputPrototypeDocSchema, type PrototypeDoc } from "../../src/prototype/schema";
 import { validatePrototype } from "../../src/prototype/validate";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
 import { PrototypeRepo } from "../repos/prototypes";
@@ -23,7 +23,7 @@ function integer(value:unknown,name:string):number { if(typeof value!=="number"|
 function baseRev(body:Record<string,unknown>):number { if(!Object.hasOwn(body,"baseRev")) throw new ApiError(400,"base_rev_required","baseRev is required"); return integer(body.baseRev,"baseRev"); }
 function message(body:Record<string,unknown>):string|undefined { if(body.message===undefined) return; if(typeof body.message!=="string") throw new ApiError(400,"invalid_request","message must be a string"); return body.message; }
 function parseDoc(value:unknown,pathId?:string):PrototypeDoc {
-  const parsed=prototypeDocSchema.safeParse(value);
+  const parsed=inputPrototypeDocSchema.safeParse(value);
   if(!parsed.success) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:parsed.error.issues});
   if(pathId!==undefined&&parsed.data.id!==pathId) throw new ApiError(422,"validation_failed","Document id must match path id",{issues:[{path:["id"],message:"must match path id"}]});
   return parsed.data;

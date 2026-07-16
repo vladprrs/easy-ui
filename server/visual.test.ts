@@ -20,7 +20,7 @@ const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 
 async function helloDoc(id: string) {
-  const original = prototypeDocSchema.parse(await Bun.file("prototypes/hello-world.json").json());
+  const original = prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json());
   return { ...original, id, name: id };
 }
 async function setup() {
@@ -270,8 +270,8 @@ describe("visual check full cycle", () => {
 
   test("component version override uses version only and preserves legacy aliases",async()=>{
     const {db,dir}=await setup();
-    db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('visual-component','VisualComponent',2,'shadcn','now','now')");
-    for(const rev of [1,2]) db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('visual-component',?,'source','shadcn','now')",[rev]);
+    db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('visual-component','VisualComponent',2,'yandex-pay','now','now')");
+    for(const rev of [1,2]) db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('visual-component',?,'source','yandex-pay','now')",[rev]);
     for(const version of [1,2]) db.run("INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at) VALUES ('visual-component',?,?, 'active','js','{}',?,?,1,'now')",[version,version,`source-${version}`,`bundle-${version}`]);
     const baseline=(await new AssetRepo(db,dir).ingest(makePng(4,4,white),"image/png")).asset;
     const handler=createTestHandler(db,{dataDir:dir});const put=await handler(req("/visual-references","PUT",{fingerprint:{scope:"component",componentId:"visual-component",refVersion:1,viewport:{width:320,height:480},deviceScaleFactor:1,theme:"light"},assetId:baseline.id}));const {id}=await put.json() as {id:string};

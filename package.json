@@ -23,6 +23,7 @@
     "server:dev": "ADMIN_NAME=admin ADMIN_PASSWORD=easy-ui-dev-password bun --watch server/main.ts",
     "server:test": "bun test server",
     "server:typecheck": "tsc --noEmit -p server/tsconfig.json",
+    "migration:v15:report": "bun server/cli/migrationV15Report.ts",
     "serve": "SERVE_DIST=dist PORT=4173 bun server/main.ts",
     "e2e": "playwright test",
     "verify": "npm run typecheck && npm run server:typecheck && npm run lint && npm run test -- --run && npm run server:test && npm run validate:prototypes && npm run verify:openapi && npm run build && npm run check:css && npx tsx scripts/check-storybook-drift.ts --index dist/storybook/index.json"

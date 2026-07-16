@@ -27,7 +27,7 @@ const overlayDocument = (placement: "top" | "bottom") => prototypeDocSchema.pars
   version: 1,
   id: "overlay-cycle",
   name: "Overlay lifecycle",
-  designSystem: "shadcn",
+  designSystem: "yandex-pay",
   device: "mobile",
   startScreen: "main",
   state: {},
@@ -37,10 +37,9 @@ const overlayDocument = (placement: "top" | "bottom") => prototypeDocSchema.pars
     spec: {
       root: "root",
       elements: {
-        root: { type: "Stack", props: {}, children: ["body", "overlay"] },
-        body: { type: "Text", props: { text: "Body" } },
+        root: { type: "Image", props: { src: "/body.png", alt: "Body" }, children: ["overlay"] },
         overlay: { type: "Overlay", props: { placement, inset: "md", scrim: false }, children: ["notice"] },
-        notice: { type: "Text", props: { text: "Notice" } },
+        notice: { type: "Image", props: { src: "/notice.png", alt: "Notice" } },
       },
     },
   }],
@@ -70,13 +69,13 @@ describe("host primitive API lifecycle", () => {
     expect(published.components).toEqual([]);
     expect(published.componentManifestHash).toBe(emptyComponentManifestHash);
 
-    const manifest = await (await handler(request("/catalog/manifest?designSystem=shadcn"))).json() as { components: { name: string }[] };
+    const manifest = await (await handler(request("/catalog/manifest?designSystem=yandex-pay"))).json() as { components: { name: string }[] };
     expect(manifest.components.some((component) => component.name === "Overlay")).toBeFalse();
     expect((await handler(request("/design-systems", "POST", { id: "custom-host", name: "Custom host", description: "Custom design system" }))).status).toBe(201);
     const discovery = await (await handler(request("/design-systems"))).json() as {
       designSystems: { id: string; components: { name: string }[]; hostPrimitives: Record<string,unknown>[] }[];
     };
-    expect(discovery.designSystems.length).toBeGreaterThanOrEqual(4);
+    expect(discovery.designSystems.length).toBeGreaterThanOrEqual(2);
     for (const system of discovery.designSystems) {
       expect(system.hostPrimitives).toHaveLength(3);
       expect(system.hostPrimitives).toEqual(expect.arrayContaining([expect.objectContaining({
@@ -104,15 +103,15 @@ describe("host primitive API lifecycle", () => {
   test("reserves host primitive names on create, update and publish, including legacy rows", async () => {
     const { db, handler } = await setup();
     const source = await Bun.file(resolve("server/fixtures/rating-stars.tsx")).text();
-    const create = await handler(request("/components", "POST", { id: "overlay", name: "Overlay", source }));
+    const create = await handler(request("/components", "POST", {designSystem:"yandex-pay", id: "overlay", name: "Overlay", source }));
     expect(create.status).toBe(409);
     for (const name of ["Image", "Hotspot"]) {
-      const response = await handler(request("/components", "POST", { id: `host-${name.toLowerCase()}`, name, source }));
+      const response = await handler(request("/components", "POST", {designSystem:"yandex-pay", id: `host-${name.toLowerCase()}`, name, source }));
       expect(response.status).toBe(409);
       expect(await response.json()).toMatchObject({ error: { code: "already_exists" } });
     }
 
-    new ComponentRepo(db).create("legacy-overlay", "Overlay", source);
+    new ComponentRepo(db).create("legacy-overlay", "Overlay", source, "yandex-pay");
     const update = await handler(request("/components/legacy-overlay", "PUT", { baseRev: 1, source: source.replace("five-star", "changed") }));
     expect(update.status).toBe(409);
     const publish = await handler(request("/components/legacy-overlay/publish", "POST", { baseRev: 1 }));

@@ -57,7 +57,7 @@ const otf = () => { const b = new Uint8Array(16); b.set([0x4f, 0x54, 0x54, 0x4f]
 
 const upload = (bytes: Bytes, mime: string) => new Request("http://test/api/assets", { method: "POST", headers: { "content-type": mime }, body: bytes });
 const proto = (url: string, method = "GET", value?: unknown) => new Request(`http://test/api${url}`, { method, headers: value ? { "content-type": "application/json" } : undefined, body: value ? JSON.stringify(value) : undefined });
-async function helloDoc(id: string) { const o = prototypeDocSchema.parse(await Bun.file("prototypes/hello-world.json").json()); return { ...o, id, name: id }; }
+async function helloDoc(id: string) { const o = prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json()); return { ...o, id, name: id }; }
 function withImage(doc: Awaited<ReturnType<typeof helloDoc>>, src: unknown) {
   return { ...doc, screens: doc.screens.map((s, i) => i ? s : { ...s, spec: { root: "img", elements: { img: { type: "Image", props: { src, alt: "logo" } } } } }) };
 }
@@ -243,7 +243,7 @@ describe("GET /api/assets/:id/usage", () => {
     expect((await handler(proto("/prototypes", "POST", { doc }))).status).toBe(201);
 
     const source = `import { z } from "zod";\nimport type { BaseComponentProps } from "@json-render/react";\nexport const definition = { props: z.strictObject({}), events: [], slots: [], description: "Usage", example: {} };\nexport default function Usage() { return <img src="/api/assets/${asset.id}" alt="usage" />; }\n`;
-    expect((await handler(proto("/components", "POST", { id: "usage-component", name: "UsageComponent", source }))).status).toBe(201);
+    expect((await handler(proto("/components", "POST", {designSystem:"yandex-pay", id: "usage-component", name: "UsageComponent", source }))).status).toBe(201);
     expect((await handler(proto("/components/usage-component/publish", "POST", { baseRev: 1 }))).status).toBe(201);
 
     const fingerprint = {
@@ -333,7 +333,7 @@ describe("component asset pins on publish", () => {
     const { db, handler } = await setup();
     const asset = await (await handler(upload(png(16, 16), "image/png"))).json() as { id: string; sha256: string; mime: string; size: number };
     const source = `import { z } from "zod";\nimport type { BaseComponentProps } from "@json-render/react";\nexport const definition = { props: z.strictObject({}), events: [], slots: [], description: "Logo", example: {} };\nexport default function Logo() { return <img src="/api/assets/${asset.id}" alt="logo" />; }\n`;
-    expect((await handler(proto("/components", "POST", { id: "logo", name: "Logo", source }))).status).toBe(201);
+    expect((await handler(proto("/components", "POST", {designSystem:"yandex-pay", id: "logo", name: "Logo", source }))).status).toBe(201);
     expect((await handler(proto("/components/logo/publish", "POST", { baseRev: 1 }))).status).toBe(201);
     expect(db.query("SELECT asset_id FROM component_publish_assets WHERE component_id='logo' AND version=1").get()).toEqual({ asset_id: asset.id });
     const version = await (await handler(proto("/components/logo/versions/1"))).json() as { assets: { id: string; sha256: string; mime: string; size: number }[] };
@@ -344,7 +344,7 @@ describe("component asset pins on publish", () => {
   test("rejects publishing a component referencing a non-existent asset with 422", async () => {
     const { db, handler } = await setup();
     const source = `import { z } from "zod";\nimport type { BaseComponentProps } from "@json-render/react";\nexport const definition = { props: z.strictObject({}), events: [], slots: [], description: "Logo", example: {} };\nexport default function Logo() { return <img src="/api/assets/asset_${"b".repeat(64)}" alt="logo" />; }\n`;
-    expect((await handler(proto("/components", "POST", { id: "logo2", name: "Logo2", source }))).status).toBe(201);
+    expect((await handler(proto("/components", "POST", {designSystem:"yandex-pay", id: "logo2", name: "Logo2", source }))).status).toBe(201);
     const r = await handler(proto("/components/logo2/publish", "POST", { baseRev: 1 }));
     expect(r.status).toBe(422);
     expect((await r.json() as { error: { code: string } }).error.code).toBe("asset_not_found");

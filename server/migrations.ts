@@ -1,5 +1,17 @@
 import type { Database } from "bun:sqlite";
 import { designSystems } from "../src/designSystems";
+import { migrationV15Report } from "./classify";
+
+export const RETIRED_DESIGN_SYSTEM_TRIGGER_NAMES = [
+  "prototypes_reject_retired_design_system_insert",
+  "prototypes_reject_retired_design_system_update",
+  "components_reject_retired_design_system_insert",
+  "components_reject_retired_design_system_update",
+  "component_revisions_reject_retired_design_system_insert",
+  "component_revisions_reject_retired_design_system_update",
+  "prototype_revisions_reject_retired_design_system_insert",
+  "prototype_revisions_reject_retired_design_system_update",
+] as const;
 
 const migrations = [
   (db: Database) => {
@@ -319,6 +331,45 @@ const migrations = [
     db.query(`INSERT INTO audit_events (id,at,actor_id,action,subject_type,subject_id,detail)
       VALUES (?,?,?,?,?,?,?)`).run(`audit_${crypto.randomUUID()}`, new Date().toISOString(), "system", "migration.applied", "migration", "v14", null);
   },
+  (db:Database) => {
+    // v15: built-in design systems remain readable for immutable history but leave every
+    // selection/write model. Renderability is evaluated per exact revision, including grants.
+    db.run("ALTER TABLE design_systems ADD COLUMN retired INTEGER NOT NULL DEFAULT 0 CHECK(retired IN (0,1))");
+    db.run("UPDATE design_systems SET retired=1 WHERE builtin_provider IS NOT NULL");
+
+    for(const table of ["prototypes","components","component_revisions"] as const) {
+      db.run(`CREATE TRIGGER ${table}_reject_retired_design_system_insert
+        BEFORE INSERT ON ${table}
+        WHEN EXISTS (SELECT 1 FROM design_systems WHERE id=NEW.design_system AND retired=1)
+        BEGIN SELECT RAISE(ABORT,'retired design system reference'); END`);
+      db.run(`CREATE TRIGGER ${table}_reject_retired_design_system_update
+        BEFORE UPDATE OF design_system ON ${table}
+        WHEN EXISTS (SELECT 1 FROM design_systems WHERE id=NEW.design_system AND retired=1)
+        BEGIN SELECT RAISE(ABORT,'retired design system reference'); END`);
+    }
+    db.run(`CREATE TRIGGER prototype_revisions_reject_retired_design_system_insert
+      BEFORE INSERT ON prototype_revisions
+      WHEN EXISTS (
+        SELECT 1 FROM prototypes p JOIN design_systems ds
+          ON ds.id=COALESCE(json_extract(NEW.doc,'$.designSystem'),p.design_system)
+        WHERE p.id=NEW.prototype_id AND ds.retired=1)
+      BEGIN SELECT RAISE(ABORT,'retired design system reference'); END`);
+    db.run(`CREATE TRIGGER prototype_revisions_reject_retired_design_system_update
+      BEFORE UPDATE OF prototype_id,doc ON prototype_revisions
+      WHEN EXISTS (
+        SELECT 1 FROM prototypes p JOIN design_systems ds
+          ON ds.id=COALESCE(json_extract(NEW.doc,'$.designSystem'),p.design_system)
+        WHERE p.id=NEW.prototype_id AND ds.retired=1)
+      BEGIN SELECT RAISE(ABORT,'retired design system reference'); END`);
+
+    const impact=migrationV15Report(db);
+    const at=new Date().toISOString();
+    const archive=db.query("UPDATE prototypes SET status='archived',updated_at=? WHERE id=?");
+    for(const id of impact.prototypesToArchive) archive.run(at,id);
+    const revoke=db.query("UPDATE share_grants SET revoked_at=? WHERE id=? AND revoked_at IS NULL");
+    const deleteSessions=db.query("DELETE FROM share_sessions WHERE grant_id=?");
+    for(const id of impact.shareGrantsToRevoke) { revoke.run(at,id); deleteSessions.run(id); }
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {
@@ -337,18 +388,11 @@ function assertRegistryIntegrity(db:Database):void {
     const system=(doc&&typeof doc==="object"&&(doc as {designSystem?:unknown}).designSystem)??"shadcn";
     if(system!==head.design_system) throw new Error(`Prototype head design system mismatch: ${head.id}`);
   }
-  const providers=db.query("SELECT id,builtin_provider FROM design_systems WHERE builtin_provider IS NOT NULL").all() as {id:string;builtin_provider:string}[];
+  const providers=db.query("SELECT id,builtin_provider FROM design_systems WHERE builtin_provider IS NOT NULL AND retired=0").all() as {id:string;builtin_provider:string}[];
   for(const row of providers) if(!(row.builtin_provider in designSystems)) throw new Error(`Unknown builtin provider for design system ${row.id}: ${row.builtin_provider}`);
-}
-
-function assertBuiltinNamesDoNotCollide(db: Database): void {
-  const builtinNames = new Set(Object.values(designSystems).flatMap(system => Object.keys(system.definitions)));
-  const collisions = (db.query("SELECT name FROM components ORDER BY name").all() as { name: string }[])
-    .map(row => row.name)
-    .filter(name => builtinNames.has(name));
-  if (collisions.length) {
-    throw new Error(`Custom component names collide with registered builtin components: ${collisions.join(", ")}`);
-  }
+  const installed=new Set((db.query("SELECT name FROM sqlite_master WHERE type='trigger'").all() as {name:string}[]).map(row=>row.name));
+  const missing=RETIRED_DESIGN_SYSTEM_TRIGGER_NAMES.filter(name=>!installed.has(name));
+  if(missing.length) throw new Error(`Missing retired design-system triggers: ${missing.join(", ")}`);
 }
 
 export function migrate(db: Database): void {
@@ -383,5 +427,4 @@ export function migrate(db: Database): void {
   const violations = db.query("PRAGMA foreign_key_check").all();
   if (violations.length) throw new Error(`Migrations left foreign-key violations: ${JSON.stringify(violations)}`);
   assertRegistryIntegrity(db);
-  assertBuiltinNamesDoNotCollide(db);
 }

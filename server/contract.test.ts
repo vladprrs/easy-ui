@@ -49,7 +49,7 @@ const PNG_1X1 = Buffer.from(
 );
 
 async function helloDoc(id: string) {
-  const original = prototypeDocSchema.parse(await Bun.file("prototypes/hello-world.json").json());
+  const original = prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json());
   return { ...original, id, name: id };
 }
 
@@ -127,7 +127,7 @@ function orderedCases(): [string, Case][] {
     ["GET /api/visual-runs/{runId}", { run: () => call("GET", "/api/visual-runs/nope"), expected: err(404, "run_not_found") }],
     // Components: create/save/read happy paths; publish is exercised as its CAS error
     // envelope (activation runs typecheck + import — out of scope for a contract test)
-    ["POST /api/components", { run: () => call("POST", "/api/components", { id: "contract-stars", name: "ContractStars", source: componentSource }), expected: ok(201) }],
+    ["POST /api/components", { run: () => call("POST", "/api/components", { id: "contract-stars", name: "ContractStars", source: componentSource, designSystem:"contract-ds" }), expected: ok(201) }],
     ["GET /api/components", { run: () => call("GET", "/api/components"), expected: ok() }],
     ["GET /api/components/{id}", { run: () => call("GET", "/api/components/contract-stars"), expected: ok() }],
     ["PUT /api/components/{id}", { run: () => call("PUT", "/api/components/contract-stars", { source: componentSource + "\n// v2\n", baseRev: 1 }), expected: ok() }],
@@ -224,10 +224,10 @@ describe("route contracts", () => {
       screenshotQueue: MAX_QUEUE,
       geometryRects: GEOMETRY_RECT_LIMIT,
     });
-    expect(value.designSystems).toEqual(expect.arrayContaining(["shadcn", "wireframe"]));
+    expect(value.designSystems).toEqual(expect.arrayContaining(["contract-ds", "yandex-pay"]));
     expect(value.layoutContractVersion).toBe(1);
     expect(value.features.layoutContract).toBe(true);
-    expect(value.resolvedSpaceScales.shadcn).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
+    expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
     expect(Object.values(value.features).every((flag) => flag === true)).toBe(true);
   });
 

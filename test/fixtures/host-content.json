@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "host-content",
+  "name": "Host content fixture",
+  "designSystem": "yandex-pay",
+  "device": "desktop",
+  "startScreen": "welcome",
+  "state": {
+    "image": "/fixture.png"
+  },
+  "screens": [
+    {
+      "id": "welcome",
+      "name": "Welcome",
+      "spec": {
+        "root": "image",
+        "elements": {
+          "image": {
+            "type": "Image",
+            "props": {
+              "src": "https://example.com/fixture.png",
+              "alt": "Fixture"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

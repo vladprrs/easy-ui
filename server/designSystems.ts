@@ -11,6 +11,7 @@ export interface RegisteredDesignSystem {
   name:string;
   description:string;
   builtinProvider:string|null;
+  retired:boolean;
   definitions:Record<string,ComponentDefinition>;
 }
 
@@ -31,24 +32,24 @@ export function catalogDefinitionDescriptor(name:string,definition:ComponentDefi
 export const hostPrimitiveDescriptors=Object.entries(hostPrimitiveDefinitions)
   .map(([name,definition])=>catalogDefinitionDescriptor(name,definition));
 
-type Row={id:string;name:string;description:string;builtin_provider:string|null};
+type Row={id:string;name:string;description:string;builtin_provider:string|null;retired:number};
 function fromRow(row:Row):RegisteredDesignSystem {
   const provider=row.builtin_provider===null?null:designSystems[row.builtin_provider as keyof typeof designSystems];
-  return {id:row.id,name:row.name,description:row.description,builtinProvider:row.builtin_provider,definitions:provider?.definitions??{}};
+  return {id:row.id,name:row.name,description:row.description,builtinProvider:row.builtin_provider,retired:row.retired===1,definitions:provider?.definitions??{}};
 }
 
-export function listRegisteredDesignSystems(db:Database):RegisteredDesignSystem[] {
-  return (db.query("SELECT id,name,description,builtin_provider FROM design_systems ORDER BY id").all() as Row[]).map(fromRow);
+export function listActiveDesignSystems(db:Database):RegisteredDesignSystem[] {
+  return (db.query("SELECT id,name,description,builtin_provider,retired FROM design_systems WHERE retired=0 ORDER BY id").all() as Row[]).map(fromRow);
 }
 
-export function getRegisteredDesignSystem(db:Database,id:string):RegisteredDesignSystem|null {
-  const row=db.query("SELECT id,name,description,builtin_provider FROM design_systems WHERE id=?").get(id) as Row|null;
+export function getIncludingRetired(db:Database,id:string):RegisteredDesignSystem|null {
+  const row=db.query("SELECT id,name,description,builtin_provider,retired FROM design_systems WHERE id=?").get(id) as Row|null;
   return row?fromRow(row):null;
 }
 
-export function requireRegisteredDesignSystem(db:Database,id:string,path:(string|number)[]):RegisteredDesignSystem {
-  const system=getRegisteredDesignSystem(db,id);
-  if(!system) throw new ApiError(422,"validation_failed",`Unknown design system: ${id}`,{issues:[{path,message:`Unknown design system: ${id}`}]});
+export function requireActiveDesignSystem(db:Database,id:string,path:(string|number)[]):RegisteredDesignSystem {
+  const system=getIncludingRetired(db,id);
+  if(!system||system.retired) throw new ApiError(422,"validation_failed",`Unknown or retired design system: ${id}`,{issues:[{path,message:`Unknown or retired design system: ${id}`}]});
   return system;
 }
 

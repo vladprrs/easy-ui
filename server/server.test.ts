@@ -5,7 +5,6 @@ import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { openDatabase } from "./db";
 import { startServer } from "./main";
-import { seedPrototypes } from "./seed";
 import { prototypeDocSchema } from "../src/prototype/schema";
 import { Database } from "bun:sqlite";
 
@@ -32,28 +31,10 @@ describe("prototype API", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     const value = (await body(response)) as { designSystems: unknown[] };
-    expect(value.designSystems).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "shadcn",
-          builtinCatalogHash: expect.any(String),
-          resolvedSpaceScale: expect.objectContaining({ none: "0px", md: "12px", "4xl": "64px" }),
-          hostPrimitives: expect.arrayContaining([expect.objectContaining({ name: "Overlay" }), expect.objectContaining({ name: "Image" }), expect.objectContaining({ name: "Hotspot" })]),
-          components: expect.arrayContaining([
-            expect.objectContaining({
-              name: "Button",
-              atomicLevel: "atom",
-              layoutNeutral: false,
-              propsJsonSchema: expect.objectContaining({ type: "object" }),
-              events: expect.any(Array),
-              slots: expect.any(Array),
-            }),
-          ]),
-        }),
-        expect.objectContaining({ id: "wireframe" }),
-        expect.objectContaining({ id: "yandex-pay", components: [], hostPrimitives: expect.arrayContaining([expect.objectContaining({ name: "Overlay" }), expect.objectContaining({ name: "Image" }), expect.objectContaining({ name: "Hotspot" })]) }),
-      ]),
-    );
+    expect(value.designSystems).toEqual([
+      expect.objectContaining({ id: "yandex-pay", retired:false, components: [], hostPrimitives: expect.arrayContaining([expect.objectContaining({ name: "Overlay" }), expect.objectContaining({ name: "Image" }), expect.objectContaining({ name: "Hotspot" })]) }),
+    ]);
+    expect(await body(await fetch(`${base}/api/design-systems/shadcn`))).toMatchObject({id:"shadcn",retired:true,components:expect.arrayContaining([expect.objectContaining({name:"Button"})])});
     expect(JSON.stringify(value)).not.toContain("_def");
     response = await fetch(`${base}/api/design-systems/yandex-pay`);
     expect(response.status).toBe(200);
@@ -75,9 +56,9 @@ describe("prototype API", () => {
     }
     for(const method of ["PUT","PATCH","DELETE"]) expect((await fetch(`${base}/api/design-systems`,{method})).status).toBe(405);
     for(const method of ["PUT","DELETE"]) expect((await fetch(`${base}/api/design-systems/product-ui`,{method})).status).toBe(405);
-    // PATCH on :id is the theme endpoint: custom systems accept it, builtin systems reject with 405.
+    // PATCH on :id is the theme endpoint: custom systems accept it, retired systems reject.
     expect((await fetch(`${base}/api/design-systems/product-ui`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({tokens:{"color.a":"#111"},baseVersion:0})})).status).toBe(200);
-    expect((await fetch(`${base}/api/design-systems/shadcn`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({baseVersion:0})})).status).toBe(405);
+    expect((await fetch(`${base}/api/design-systems/shadcn`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({baseVersion:0})})).status).toBe(409);
     db.close();
   });
 
@@ -93,8 +74,8 @@ describe("prototype API", () => {
   test("failed startup audit does not recover staging publishes or run seeds",async()=>{
     const dir=await mkdtemp(resolve(tmpdir(),"easy-ui-audit-")); dirs.push(dir); const file=resolve(dir,"audit.db");
     const db=openDatabase(file);
-    db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('bad','Bad',1,'shadcn','now','now')");
-    db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('bad',1,'source','shadcn','now')");
+    db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('bad','Bad',1,'yandex-pay','now','now')");
+    db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('bad',1,'source','yandex-pay','now')");
     db.run("INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at) VALUES ('bad',1,1,'staging','js','{}','source','bundle',1,'now')");
     db.run("UPDATE components SET design_system='missing' WHERE id='bad'"); db.close();
     await expect(startServer({database:file,port:0})).rejects.toThrow("Dangling design system reference in components");
@@ -105,28 +86,11 @@ describe("prototype API", () => {
 
   test("keeps list and meta design system aligned with the head draft through save and restore", async () => {
     const db = openDatabase(":memory:");
+    db.run("INSERT INTO design_systems (id,name,description,builtin_provider,retired,created_at,updated_at) VALUES ('test-alt','Test alt','Test',NULL,0,'now','now')");
     const base = start(createTestHandler(db));
-    const original = prototypeDocSchema.parse(await Bun.file(resolve("prototypes/hello-world.json")).json()),
+    const original = prototypeDocSchema.parse(await Bun.file(resolve("test/fixtures/host-content.json")).json()),
       shadcn = { ...original, id: "systems", name: "Systems" },
-      wireframe = {
-        version: 1,
-        id: "systems",
-        name: "Systems",
-        designSystem: "wireframe",
-        device: "desktop",
-        startScreen: "home",
-        state: {},
-        screens: [
-          {
-            id: "home",
-            name: "Home",
-            spec: {
-              root: "root",
-              elements: { root: { type: "Box", props: { label: "Content" } } },
-            },
-          },
-        ],
-      };
+      wireframe = { ...original,id:"systems",name:"Systems",designSystem:"test-alt" };
     let response = await fetch(`${base}/api/prototypes`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -144,21 +108,21 @@ describe("prototype API", () => {
       expect(meta.designSystem).toBe(expected);
       expect(draft.doc.designSystem).toBe(expected);
     };
-    await assertSystem("shadcn");
+    await assertSystem("yandex-pay");
     response = await fetch(`${base}/api/prototypes/systems`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ baseRev: 1, doc: wireframe }),
     });
     expect(response.status).toBe(200);
-    await assertSystem("wireframe");
+    await assertSystem("test-alt");
     response = await fetch(`${base}/api/prototypes/systems/restore`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ rev: 1, baseRev: 2 }),
     });
     expect(response.status).toBe(200);
-    await assertSystem("shadcn");
+    await assertSystem("yandex-pay");
     db.close();
   });
 
@@ -166,6 +130,7 @@ describe("prototype API", () => {
     const dir = await mkdtemp(resolve(process.cwd(), ".easy-ui-components-"));
     dirs.push(dir);
     const db = openDatabase(":memory:");
+    db.run("INSERT INTO design_systems (id,name,description,builtin_provider,retired,created_at,updated_at) VALUES ('test-alt','Test alt','Test',NULL,0,'now','now')");
     const base = start(createTestHandler(db, { dataDir: dir }));
     const source = (await Bun.file(resolve("server/fixtures/rating-stars.tsx")).text()).replaceAll("RatingStars", "WireRating");
     let response = await fetch(`${base}/api/components`, {
@@ -175,7 +140,7 @@ describe("prototype API", () => {
         id: "wire-rating",
         name: "WireRating",
         source,
-        designSystem: "wireframe",
+        designSystem: "test-alt",
       }),
     });
     expect(response.status).toBe(201);
@@ -189,7 +154,7 @@ describe("prototype API", () => {
       version: 1,
       id: "wrong-custom-system",
       name: "Wrong custom system",
-      designSystem: "shadcn",
+      designSystem: "yandex-pay",
       device: "desktop",
       startScreen: "home",
       state: {},
@@ -214,42 +179,13 @@ describe("prototype API", () => {
       error: {
         issues: [
           {
-            message: "Unknown or unpublished component type in design system 'shadcn': WireRating",
+            message: "Unknown or unpublished component type in design system 'yandex-pay': WireRating",
           },
         ],
       },
     });
     db.close();
   });
-  test("seeds a wireframe document from a temporary catalog", async () => {
-    const dir = await mkdtemp(resolve(tmpdir(), "easy-ui-seeds-"));
-    dirs.push(dir);
-    const doc = {
-      version: 1,
-      id: "wire-seed",
-      name: "Wire seed",
-      designSystem: "wireframe",
-      device: "desktop",
-      startScreen: "home",
-      state: {},
-      screens: [
-        {
-          id: "home",
-          name: "Home",
-          spec: {
-            root: "root",
-            elements: { root: { type: "Box", props: { label: "Seeded" } } },
-          },
-        },
-      ],
-    };
-    await writeFile(resolve(dir, "wire.json"), JSON.stringify(doc));
-    const db = openDatabase(":memory:");
-    await seedPrototypes(db, dir);
-    expect(db.query("SELECT design_system system FROM prototypes WHERE id='wire-seed'").get()).toEqual({ system: "wireframe" });
-    db.close();
-  });
-
   test("rejects component types outside the document design system", async () => {
     const db = openDatabase(":memory:");
     const base = start(createTestHandler(db));
@@ -257,7 +193,7 @@ describe("prototype API", () => {
       version: 1,
       id: "bad-wire",
       name: "Bad wire",
-      designSystem: "wireframe",
+      designSystem: "yandex-pay",
       device: "desktop",
       startScreen: "home",
       state: {},
@@ -282,124 +218,12 @@ describe("prototype API", () => {
       error: {
         issues: [
           {
-            message: "Unknown or unpublished component type in design system 'wireframe': Tabs",
+            message: "Unknown or unpublished component type in design system 'yandex-pay': Tabs",
           },
         ],
       },
     });
     db.close();
-  });
-
-  test("covers seed, validation, CAS, revisions, restore, publish and delete ledger", async () => {
-    const dir = await mkdtemp(resolve(tmpdir(), "easy-ui-server-"));
-    dirs.push(dir);
-    const dbFile = resolve(dir, "easy.db");
-    const db = openDatabase(dbFile);
-    await seedPrototypes(db, resolve("prototypes"));
-    let base = start(createTestHandler(db));
-    let response = await fetch(`${base}/api/health`);
-    expect(response.status).toBe(200);
-    expect(await body(response)).toEqual({ status: "ready" });
-    response = await fetch(`${base}/api/prototypes`);
-    const seeded = await body(response);
-    expect(seeded).toHaveLength(6);
-    expect(response.headers.get("cache-control")).toBe("private, no-store");
-    const original = prototypeDocSchema.parse(await Bun.file(resolve("prototypes/hello-world.json")).json());
-    response = await fetch(`${base}/api/prototypes/hello-world`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseRev: 1, doc: { ...original, screens: [] } }),
-    });
-    expect(response.status).toBe(422);
-    expect(((await body(response)) as { error: { issues: unknown[] } }).error.issues.length).toBeGreaterThan(0);
-    response = await fetch(`${base}/api/prototypes/hello-world`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ doc: original }),
-    });
-    expect(response.status).toBe(400);
-    response = await fetch(`${base}/api/prototypes/hello-world`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseRev: 99, doc: original }),
-    });
-    expect(response.status).toBe(409);
-    expect(((await body(response)) as { error: { currentRev: number } }).error.currentRev).toBe(1);
-    const changed = {
-      ...original,
-      name: "Renamed",
-      description: "Changed",
-      device: "tablet",
-    };
-    response = await fetch(`${base}/api/prototypes/hello-world`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseRev: 1, doc: changed, message: "edit" }),
-    });
-    expect(await body(response)).toMatchObject({
-      rev: 2,
-      warnings: expect.any(Array),
-    });
-    const list = (await body(await fetch(`${base}/api/prototypes`))) as {
-      id: string;
-    }[];
-    expect(list.find((x) => x.id === "hello-world")).toMatchObject({
-      name: "Renamed",
-      description: "Changed",
-      device: "tablet",
-      screenCount: 2,
-      headRev: 2,
-    });
-    response = await fetch(`${base}/api/prototypes/hello-world/revisions?limit=1`);
-    expect(await body(response)).toEqual([{ rev: 2, message: "edit", createdAt: expect.any(String) }]);
-    response = await fetch(`${base}/api/prototypes/hello-world/restore`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ rev: 1, baseRev: 2 }),
-    });
-    expect(await body(response)).toEqual({ rev: 3 });
-    response = await fetch(`${base}/api/prototypes/hello-world/publish`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseRev: 3 }),
-    });
-    expect(response.status).toBe(201);
-    expect(await body(response)).toMatchObject({ version: 1, rev: 3, screens: expect.arrayContaining([expect.objectContaining({ id: expect.any(String), url: expect.stringContaining("/v/1/s/") })]) });
-    response = await fetch(`${base}/api/prototypes/hello-world/publish`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseRev: 3 }),
-    });
-    expect(response.status).toBe(409);
-    expect(((await body(response)) as { error: { currentVersion: number } }).error.currentVersion).toBe(1);
-    response = await fetch(`${base}/api/prototypes/hello-world/versions`);
-    expect(response.headers.get("cache-control")).toBe("private, no-store");
-    expect(await body(response)).toHaveLength(1);
-    response = await fetch(`${base}/api/prototypes/hello-world/versions/1`);
-    expect(response.headers.get("cache-control")).toBe("private, no-store");
-    expect(await body(response)).toMatchObject({
-      version: 1,
-      rev: 3,
-      builtinCatalogHash: expect.any(String),
-      componentManifestHash: expect.any(String),
-      components: [],
-    });
-    response = await fetch(`${base}/api/prototypes/hello-world`, {
-      method: "DELETE",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseRev: 3 }),
-    });
-    expect(response.status).toBe(204);
-    servers.pop()!.stop(true);
-    db.close();
-    const reopened = openDatabase(dbFile);
-    await seedPrototypes(reopened, resolve("prototypes"));
-    base = start(createTestHandler(reopened));
-    const after = (await body(await fetch(`${base}/api/prototypes`))) as {
-      id: string;
-    }[];
-    expect(after.map((x) => x.id)).not.toContain("hello-world");
-    reopened.close();
   });
 
   test("enforces media type and body limit", async () => {

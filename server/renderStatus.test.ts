@@ -18,7 +18,7 @@ const req = (url: string, method = "GET", value?: unknown) =>
   new Request(`http://test/api${url}`, { method, headers: value ? { "content-type": "application/json" } : undefined, body: value ? JSON.stringify(value) : undefined });
 const fixture = (name: string) => Bun.file(resolve("server/fixtures", name)).text();
 async function helloDoc(id: string) {
-  const original = prototypeDocSchema.parse(await Bun.file("prototypes/hello-world.json").json());
+  const original = prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json());
   return { ...original, id, name: id };
 }
 
@@ -107,7 +107,7 @@ describe("render-status endpoint", () => {
   test("reports bundle_failed when a pinned component version is not renderable", async () => {
     const { db, handler } = await setup();
     const source = await fixture("rating-stars.tsx");
-    await handler(req("/components", "POST", { id: "rating-stars", name: "RatingStars", source }));
+    await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "rating-stars", name: "RatingStars", source }));
     await handler(req("/components/rating-stars/publish", "POST", { baseRev: 1 }));
     const original = await helloDoc("rs-bundle");
     const withRating = { ...original, screens: original.screens.map((s, i) => i ? s : { ...s, spec: { root: "rating", elements: { rating: { type: "RatingStars", props: { value: 3 } } } } }) };
@@ -152,7 +152,7 @@ describe("lifecycle meta", () => {
   test("component meta exposes validated revision and renderable head after publish", async () => {
     const { db, handler } = await setup();
     const source = await fixture("rating-stars.tsx");
-    await handler(req("/components", "POST", { id: "rating-stars", name: "RatingStars", source }));
+    await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "rating-stars", name: "RatingStars", source }));
     let meta = await (await handler(req("/components/rating-stars"))).json() as { draftRevision: number; validatedRevision: number | null; publishedVersion: number | null; renderable: { head: boolean; published: boolean | null } };
     expect(meta).toMatchObject({ draftRevision: 1, validatedRevision: null, publishedVersion: null, renderable: { head: false, published: null } });
     await handler(req("/components/rating-stars/publish", "POST", { baseRev: 1 }));

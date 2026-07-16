@@ -74,7 +74,8 @@ export type PrototypeStatus = "private" | "published" | "archived";
 // Figma provenance (plan §J): an immutable per-revision link back to the source Figma file.
 export interface FigmaProvenance { fileKey: string; nodeIds: string[]; referenceScreenshots?: string[]; lastSyncedAt?: string }
 
-export interface PrototypeVersionSummary { version: number; rev: number; publishedAt: string }
+export interface PrototypeRenderError { code: "prototype_not_renderable"; message: string; issues: { path: string; message: string }[] }
+export interface PrototypeVersionSummary { version: number; rev: number; publishedAt: string; renderable?: boolean; renderError?: PrototypeRenderError | null }
 export interface PrototypeMeta {
   id: string;
   prototypeInstanceId?: string;
@@ -104,6 +105,8 @@ export interface PrototypeDraft {
   // fixtures elide them, but the server always includes both (figma is null for legacy revisions).
   assets?: AssetPin[];
   figma?: FigmaProvenance | null;
+  renderable?: boolean;
+  renderError?: PrototypeRenderError | null;
 }
 export interface PrototypeVersion extends PrototypeDraft { version: number; publishedAt: string }
 export interface PrototypeRevisionSummary { rev: number; message: string | null; createdAt: string }

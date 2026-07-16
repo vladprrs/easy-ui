@@ -13,8 +13,8 @@ afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recurs
 describe("bootstrap admin", () => {
   test("uses stable id, backfills owners, and revokes sessions when the env password changes", async () => {
     const db = openDatabase(":memory:");
-    db.run("INSERT INTO prototypes (id,name,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at) VALUES ('owned','Owned','desktop',1,1,'shadcn','instance','now','now')");
-    db.run(`INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,created_at) VALUES ('owned',1,'{"version":1,"id":"owned","designSystem":"shadcn"}','h','now')`);
+    db.run("INSERT INTO prototypes (id,name,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at) VALUES ('owned','Owned','desktop',1,1,'yandex-pay','instance','now','now')");
+    db.run(`INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,created_at) VALUES ('owned',1,'{"version":1,"id":"owned","designSystem":"yandex-pay"}','h','now')`);
     const first = await ensureBootstrapAdmin(db, { name: "Root", password: "first bootstrap password" });
     expect(first).toMatchObject({ id: "user_admin", name: "Root", isAdmin: true });
     expect(db.query("SELECT owner_id FROM prototypes WHERE id='owned'").get()).toEqual({ owner_id: "user_admin" });

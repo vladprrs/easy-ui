@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { prototypeDocSchema } from "../src/prototype/schema";
+import { inputPrototypeDocSchema } from "../src/prototype/schema";
 import { atomicLevels, layoutSpacingProps, spaceTokens } from "../src/designSystems/types";
 import { ApiError } from "./http";
 import { figmaSchema } from "./figma";
@@ -453,6 +453,7 @@ export const patchDesignSystemThemeContract = registerContract({
     { status: 404, code: "not_found" },
     { status: 405, code: "method_not_allowed", description: "builtin themes are immutable" },
     { status: 409, code: "version_conflict" },
+    { status: 409, code: "design_system_retired" },
     { status: 422, code: "validation_failed" },
   ],
 });
@@ -520,12 +521,13 @@ export const createPrototypeContract = registerContract({
   method: "POST", path: "/api/prototypes",
   summary: "Create a prototype from a document (revision 1); validates against the design-system catalog.",
   status: 201,
-  requestSchema: z.object({ doc: prototypeDocSchema, message: z.string().optional(), figma: figmaSchema.optional() }),
+  requestSchema: z.object({ doc: inputPrototypeDocSchema, message: z.string().optional(), figma: figmaSchema.optional() }),
   responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
   errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }],
 });
 
 const renderableSchema = z.object({ head: z.boolean(), published: z.boolean().nullable() });
+const prototypeRenderErrorSchema=z.object({code:z.literal("prototype_not_renderable"),message:z.string(),issues:z.array(z.object({path:z.string(),message:z.string()}))});
 
 export const getPrototypeContract = registerContract({
   method: "GET", path: "/api/prototypes/{id}",
@@ -534,7 +536,8 @@ export const getPrototypeContract = registerContract({
     id: z.string(), prototypeInstanceId:z.string(), name: z.string(), designSystem: z.string(), headRev: z.number(),
     latestVersion: z.number().nullable(), versions: z.array(z.looseObject({ version: z.number(), rev: z.number(), publishedAt: isoDate })),
     updatedAt: isoDate, draftRevision: z.number(), validatedRevision: z.number().nullable(),
-    publishedVersion: z.number().nullable(), renderable: renderableSchema, figma: figmaResponseSchema.optional(),
+    publishedVersion: z.number().nullable(), renderable: renderableSchema,
+    renderErrors:z.object({head:prototypeRenderErrorSchema.nullable(),published:prototypeRenderErrorSchema.nullable()}), figma: figmaResponseSchema.optional(),
     status:z.enum(["private","published","archived"]),owner:z.strictObject({id:z.string(),name:z.string()}),
   }),
   errors: [errorCatalog.prototypeNotFound],
@@ -543,7 +546,7 @@ export const getPrototypeContract = registerContract({
 export const savePrototypeContract = registerContract({
   method: "PUT", path: "/api/prototypes/{id}",
   summary: "Save a new head revision (CAS on baseRev); document id must match the path id.",
-  requestSchema: z.object({ doc: prototypeDocSchema, figma: figmaSchema.optional(), ...casBody }),
+  requestSchema: z.object({ doc: inputPrototypeDocSchema, figma: figmaSchema.optional(), ...casBody }),
   responseSchema: z.looseObject({ rev: z.number(), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
   errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.validationFailed],
 });
@@ -564,6 +567,7 @@ const prototypeRevisionCoreSchema = z.looseObject({
   assets: z.array(assetPublicSchema.omit({ width: true, height: true })),
   designSystemMetaVersion: z.number().nullable(),
   figma: figmaResponseSchema.optional(),
+  renderable:z.boolean(),renderError:prototypeRenderErrorSchema.nullable(),
 });
 
 export const getPrototypeDraftContract = registerContract({
@@ -704,7 +708,7 @@ export const setPrototypeStatusContract = registerContract({
 export const listPrototypeVersionsContract = registerContract({
   method: "GET", path: "/api/prototypes/{id}/versions",
   summary: "List published versions.",
-  responseSchema: z.array(z.looseObject({ version: z.number(), rev: z.number(), publishedAt: isoDate })),
+  responseSchema: z.array(z.looseObject({ version: z.number(), rev: z.number(), publishedAt: isoDate, renderable:z.boolean(), renderError:prototypeRenderErrorSchema.nullable() })),
   errors: [errorCatalog.prototypeNotFound],
 });
 

@@ -149,7 +149,7 @@ describe("ScreenView stage controls (W1-1)", () => {
   it("ignores hotkeys from a real prototype input and filtered events", async () => {
     navigation.browse.mockReset();
     navigation.restart.mockReset();
-    const doc = prototypeDocSchema.parse((await import("../../prototypes/hello-world.json")).default);
+    const doc = prototypeDocSchema.parse((await import("../../test/fixtures/hello-world.json")).default);
     renderPlayer(doc, "/p/hello-world/s/welcome");
     const input = screen.getByLabelText("Name");
     input.focus();

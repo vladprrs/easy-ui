@@ -187,7 +187,7 @@ describe("EditorShell", () => {
   });
 
   it("renders composition-demo previews inertly without losing repeat/$cond composition", async () => {
-    const compositionDoc = prototypeDocSchema.parse((await import("../../prototypes/composition-demo.json")).default);
+    const compositionDoc = prototypeDocSchema.parse((await import("../../test/fixtures/composition-demo.json")).default);
     const compositionDraft: PrototypeDraft = { doc: compositionDoc, rev: 1, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] };
     vi.mocked(fetch).mockImplementation((input) => isEditorGuard(input) ? json([]) : String(input) === "/api/prototypes/composition-demo/draft" ? json(compositionDraft) : Promise.reject(new Error(`Unexpected request: ${String(input)}`)));
     renderEditor("composition-demo");

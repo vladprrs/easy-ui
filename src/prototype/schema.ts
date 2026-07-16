@@ -57,23 +57,40 @@ const screenSchema = z.strictObject({
   spec: specSchema,
 });
 
-export const prototypeDocSchema = z.strictObject({
+const prototypeDocShape = {
   version: z.literal(1),
   id: slugSchema,
   name: z.string().min(1),
   description: z.string().optional(),
-  designSystem: slugSchema.default("shadcn"),
   device: z.enum(["mobile", "tablet", "desktop"]).default("desktop"),
   startScreen: slugSchema,
   state: z.record(z.string(), jsonValueSchema),
   screens: z.array(screenSchema).min(1),
-}).superRefine((doc, context) => {
+} as const;
+
+const refinePrototypeDoc = <T extends { screens: { id: string }[]; startScreen: string }>(doc:T, context:z.RefinementCtx) => {
   const ids = new Set<string>();
   doc.screens.forEach((screen, index) => {
     if (ids.has(screen.id)) context.addIssue({ code: "custom", path: ["screens", index, "id"], message: "screen id must be unique" });
     ids.add(screen.id);
   });
   if (!ids.has(doc.startScreen)) context.addIssue({ code: "custom", path: ["startScreen"], message: "startScreen must reference an existing screen" });
-});
+};
 
-export type PrototypeDoc = z.output<typeof prototypeDocSchema>;
+/** Strict schema for create/save inputs. New revisions must choose a design system explicitly. */
+export const inputPrototypeDocSchema = z.strictObject({
+  ...prototypeDocShape,
+  designSystem: slugSchema,
+}).superRefine(refinePrototypeDoc);
+
+/** Tolerant parser for immutable legacy rows that predate the designSystem field. */
+export const storedPrototypeDocSchema = z.strictObject({
+  ...prototypeDocShape,
+  designSystem: slugSchema.default("shadcn"),
+}).superRefine(refinePrototypeDoc);
+
+// Compatibility export for frontend-authored fixtures. Server write paths use
+// inputPrototypeDocSchema explicitly; stored reads use storedPrototypeDocSchema.
+export const prototypeDocSchema = storedPrototypeDocSchema;
+
+export type PrototypeDoc = z.output<typeof storedPrototypeDocSchema>;

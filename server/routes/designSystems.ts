@@ -1,6 +1,6 @@
 import type {Database} from "bun:sqlite";
 import {builtinCatalogHashFor} from "../builtinHash";
-import {catalogDefinitionDescriptor,getDesignSystemVersion,getLatestDesignSystemContent,getRegisteredDesignSystem,hostPrimitiveDescriptors,insertDesignSystemVersion,latestDesignSystemMetaVersion,listRegisteredDesignSystems,type RegisteredDesignSystem} from "../designSystems";
+import {catalogDefinitionDescriptor,getDesignSystemVersion,getLatestDesignSystemContent,getIncludingRetired,hostPrimitiveDescriptors,insertDesignSystemVersion,latestDesignSystemMetaVersion,listActiveDesignSystems,type RegisteredDesignSystem} from "../designSystems";
 import {parseThemePatch,validateThemeAssets,type ThemeContent} from "../designSystemsMeta";
 import {ApiError,json,noStore,readJson} from "../http";
 import {resolveSpacingScale} from "../../src/designSystems/spacingScale";
@@ -12,6 +12,7 @@ function summary(db:Database,system:RegisteredDesignSystem) {
   const resolvedSpaceScale=resolveSpacingScale(system.id,theme.tokens);
   return {
     id:system.id,name:system.name,description:system.description,
+    retired:system.retired,
     builtinCatalogHash:builtinCatalogHashFor(system.id,system.definitions,resolvedSpaceScale),
     resolvedSpaceScale,
     components:Object.entries(system.definitions).map(([name,definition])=>catalogDefinitionDescriptor(name,definition)),
@@ -54,7 +55,7 @@ async function patchTheme(request:Request,db:Database,system:RegisteredDesignSys
   validateThemeAssets(db,content);
   const version=latest+1; const at=new Date().toISOString();
   db.transaction(()=>{ insertDesignSystemVersion(db,system.id,version,content,at); db.query("UPDATE design_systems SET updated_at=? WHERE id=?").run(at,system.id); })();
-  return json(summary(db,getRegisteredDesignSystem(db,system.id)!),200,noStore);
+  return json(summary(db,getIncludingRetired(db,system.id)!),200,noStore);
 }
 
 export async function routeDesignSystems(request:Request,db:Database,segments:string[],principal:Principal):Promise<Response> {
@@ -62,7 +63,7 @@ export async function routeDesignSystems(request:Request,db:Database,segments:st
   if(segments.length>=3) {
     if(segments.length===4&&segments[2]==="versions") {
       if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed");
-      const system=getRegisteredDesignSystem(db,segments[1]!); if(!system) throw new ApiError(404,"not_found","Design system not found");
+      const system=getIncludingRetired(db,segments[1]!); if(!system) throw new ApiError(404,"not_found","Design system not found");
       const raw=segments[3]!; if(!/^[1-9][0-9]*$/.test(raw)) throw new ApiError(404,"not_found","Design system version not found");
       const content=getDesignSystemVersion(db,system.id,Number(raw));
       if(!content) throw new ApiError(404,"not_found","Design system version not found");
@@ -72,16 +73,16 @@ export async function routeDesignSystems(request:Request,db:Database,segments:st
   }
   const id=segments.length===2?segments[1]:null;
   if(request.method==="GET") {
-    if(id) { const system=getRegisteredDesignSystem(db,id); if(!system) throw new ApiError(404,"not_found","Design system not found"); return json(summary(db,system),200,noStore); }
-    return json({designSystems:listRegisteredDesignSystems(db).map((s)=>summary(db,s))},200,noStore);
+    if(id) { const system=getIncludingRetired(db,id); if(!system) throw new ApiError(404,"not_found","Design system not found"); return json(summary(db,system),200,noStore); }
+    return json({designSystems:listActiveDesignSystems(db).map((s)=>summary(db,s))},200,noStore);
   }
   if(request.method==="POST"&&!id) {
     const actor=requireUser(principal);
     const input=validate(await readObjectBody(request)); const at=new Date().toISOString();
     try { db.query("INSERT INTO design_systems (id,name,description,builtin_provider,created_at,updated_at,owner_id) VALUES (?,?,?,NULL,?,?,?)").run(input.id,input.name,input.description,at,at,actor.userId); }
     catch(error) { if(String(error).includes("UNIQUE constraint failed")) throw new ApiError(409,"already_exists","Design system already exists"); throw error; }
-    return json(summary(db,getRegisteredDesignSystem(db,input.id)!),201,{...noStore,location:`/api/design-systems/${input.id}`});
+    return json(summary(db,getIncludingRetired(db,input.id)!),201,{...noStore,location:`/api/design-systems/${input.id}`});
   }
-  if(request.method==="PATCH"&&id) { requireResourceOwner(db,"design_systems",id,principal); const system=getRegisteredDesignSystem(db,id); if(!system) throw new ApiError(404,"not_found","Design system not found"); return patchTheme(request,db,system); }
+  if(request.method==="PATCH"&&id) { requireResourceOwner(db,"design_systems",id,principal); const system=getIncludingRetired(db,id); if(!system) throw new ApiError(404,"not_found","Design system not found"); if(system.retired) throw new ApiError(409,"design_system_retired","Retired design-system themes cannot be changed"); return patchTheme(request,db,system); }
   throw new ApiError(405,"method_not_allowed","Method not allowed");
 }

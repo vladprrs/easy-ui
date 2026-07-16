@@ -19,7 +19,7 @@ async function fixture(){
   const users=new UserRepo(db),alice=users.createSession("user_alice").token,bob=users.createSession("user_bob").token;
   const handler=createHandler(db,{dataDir:dir,publicOrigin:"http://test"});
   const call=(who:"alice"|"bob",method:string,path:string,body?:unknown)=>handler(new Request(`http://test/api${path}`,{method,headers:{cookie:`easyui_session=${who==="alice"?alice:bob}`,...(body===undefined?{}:{"content-type":"application/json",origin:"http://test"})},body:body===undefined?undefined:JSON.stringify(body)}));
-  const base=prototypeDocSchema.parse(await Bun.file("prototypes/hello-world.json").json());
+  const base=prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json());
   const doc={...base,id:"owned-proto",name:"Owned proto"};
   const created=await call("alice","POST","/prototypes",{doc,figma:{fileKey:"file_1",nodeIds:["1:2"]}});expect(created.status).toBe(201);
   return {db,handler,call,doc};

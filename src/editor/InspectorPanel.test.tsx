@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import compositionRaw from "../../prototypes/composition-demo.json";
+import compositionRaw from "../../test/fixtures/composition-demo.json";
 import type { ComponentDefinition } from "../catalog/definitions";
 import { prototypeDocSchema } from "../prototype/schema";
 import { createEditorState } from "./editorReducer";

@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({ getDraft: vi.fn(), listVersions: vi.fn(), load
 vi.mock("../../api/client", async (original) => ({ ...(await original()), getPrototypeDraft: mocks.getDraft, listPrototypeVersions: mocks.listVersions }));
 vi.mock("../../customComponents/loader", () => ({ loadCustomComponents: mocks.loadCustom }));
 
-const hello = prototypeDocSchema.parse((await import("../../../prototypes/hello-world.json")).default);
+const hello = prototypeDocSchema.parse((await import("../../../test/fixtures/hello-world.json")).default);
 const draft: PrototypeDraft = { doc: hello, rev: 1, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] };
 
 afterEach(cleanup);

@@ -31,7 +31,7 @@ const figmaA = { fileKey: "abc123XYZ", nodeIds: ["1:2", "10:20"], lastSyncedAt: 
 const figmaB = { fileKey: "second-key", nodeIds: ["3:4"] };
 
 async function helloDoc(id: string) {
-  const original = prototypeDocSchema.parse(await Bun.file("prototypes/hello-world.json").json());
+  const original = prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json());
   return { ...original, id, name: id };
 }
 
@@ -88,7 +88,7 @@ describe("figma provenance — components", () => {
   test("saves, reads back, restores and publishes figma", async () => {
     const { db, handler } = await setup();
     const source = await Bun.file("server/fixtures/rating-stars.tsx").text();
-    expect((await handler(req("/components", "POST", { id: "figma-stars", name: "FigmaStars", source, figma: figmaA }))).status).toBe(201);
+    expect((await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "figma-stars", name: "FigmaStars", source, figma: figmaA }))).status).toBe(201);
 
     expect((await json(await handler(req("/components/figma-stars")))).figma).toEqual(figmaA);
     expect((await json(await handler(req("/components/figma-stars/source")))).figma).toEqual(figmaA);
@@ -112,11 +112,11 @@ describe("figma provenance — components", () => {
   test("validates component referenceScreenshots and rejects malformed figma", async () => {
     const { db, handler } = await setup();
     const source = await Bun.file("server/fixtures/rating-stars.tsx").text();
-    const missing = await handler(req("/components", "POST", { id: "figma-bad", name: "FigmaBad", source, figma: { ...figmaA, referenceScreenshots: [`asset_${"0".repeat(64)}`] } }));
+    const missing = await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "figma-bad", name: "FigmaBad", source, figma: { ...figmaA, referenceScreenshots: [`asset_${"0".repeat(64)}`] } }));
     expect(missing.status).toBe(422);
     expect((await json(missing)).error).toMatchObject({ code: "asset_not_found" });
 
-    const bad = await handler(req("/components", "POST", { id: "figma-bad2", name: "FigmaBad2", source, figma: { fileKey: "x", nodeIds: ["ok"], extra: true } }));
+    const bad = await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "figma-bad2", name: "FigmaBad2", source, figma: { fileKey: "x", nodeIds: ["ok"], extra: true } }));
     expect(bad.status).toBe(422);
     expect((await json(bad)).error).toMatchObject({ code: "validation_failed" });
     db.close();

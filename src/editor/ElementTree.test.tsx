@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import compositionRaw from "../../prototypes/composition-demo.json";
+import compositionRaw from "../../test/fixtures/composition-demo.json";
 import { customDsPrototypeDoc } from "../../e2e/dev/custom-ds.fixture";
 import { prototypeDocSchema } from "../prototype/schema";
 import { ElementTree } from "./ElementTree";

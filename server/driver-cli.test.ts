@@ -59,7 +59,7 @@ async function run(api: string, args: string[], legacyBasicAuth = "") {
 }
 
 async function fixture(id: string): Promise<PrototypeDoc> {
-  const value = prototypeDocSchema.parse(await Bun.file("prototypes/hello-world.json").json());
+  const value = prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json());
   return { ...value, id, name: "First" };
 }
 
@@ -106,12 +106,12 @@ describe("author driver CLI", () => {
 
   test("catalog emits compact server catalog and hints on an unknown system", async () => {
     const { api } = await setup();
-    const valid = await run(api, ["catalog", "shadcn"]);
+    const valid = await run(api, ["catalog", "yandex-pay"]);
     expect(valid.exitCode).toBe(0);
     expect(JSON.parse(valid.stdout)).toMatchObject({
-      designSystem: { id: "shadcn", resolvedSpaceScale: { none: "0px", md: "12px", "4xl": "64px" } },
+      designSystem: { id: "yandex-pay", resolvedSpaceScale: { none: "0px", md: "12px", "4xl": "64px" } },
       custom: [],
-      builtins: expect.arrayContaining([expect.objectContaining({ name: "Button", layoutNeutral: false, propsJsonSchema: expect.objectContaining({ type: "object" }), events: expect.any(Array), slots: expect.any(Array) })]),
+      builtins: [],
       hostPrimitives: expect.arrayContaining([expect.objectContaining({
         name: "Overlay",
         atomicLevel: "atom",

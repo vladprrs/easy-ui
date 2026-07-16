@@ -29,7 +29,7 @@ async function fixture() {
   } as const;
   const handler = createHandler(db, options);
   const owner = createTestHandler(db, options);
-  const doc = prototypeDocSchema.parse(await Bun.file("prototypes/hello-world.json").json());
+  const doc = { ...prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json()), id:"hello-world", name:"Hello world" };
   let response = await owner(new Request("http://local/api/prototypes", {
     method: "POST",
     headers: { authorization: credentials, "content-type": "application/json" },

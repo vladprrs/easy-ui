@@ -5,10 +5,10 @@ import { prototypeActionSchemas } from "../../src/catalog/actions";
 import { atomicLevels } from "../../src/designSystems/types";
 import { layoutSpacingProps, spaceTokens } from "../../src/designSystems/types";
 import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
-import { prototypeDocSchema, ASSET_ID_PATTERN } from "../../src/prototype/schema";
+import { inputPrototypeDocSchema, ASSET_ID_PATTERN } from "../../src/prototype/schema";
 import { ELEMENTS_PER_SCREEN_LIMIT, REPEAT_ELEMENT_LIMIT, REPEAT_RENDER_COST_BUDGET, TREE_DEPTH_LIMIT } from "../../src/prototype/validate";
 import { MAX_ASSET_BYTES } from "../assets/validate";
-import { listRegisteredDesignSystems } from "../designSystems";
+import { listActiveDesignSystems } from "../designSystems";
 import { getLatestDesignSystemContent } from "../designSystems";
 import { ApiError, json, MAX_JSON_BODY_BYTES, noStore } from "../http";
 import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "../screenshot/service";
@@ -29,7 +29,7 @@ export const CAPABILITY_PARAM_SOURCES = ["$event", "$elementId", "$itemIndex", "
 export const CAPABILITY_CONDITIONS = ["$and", "$or", "$state", "$item", "$index", "eq", "neq", "gt", "gte", "lt", "lte", "not"] as const;
 
 export function capabilities(db: Database): JsonObject {
-  const systems = listRegisteredDesignSystems(db);
+  const systems = listActiveDesignSystems(db);
   return {
     apiVersion: 1,
     documentVersion: 1,
@@ -79,7 +79,7 @@ const directive = (name: string, valueSchema: JsonObject, comment: string): Json
 // prototypeDocSchema -> JSON Schema, with manual annotations for the directive grammar
 // that lives in validate.ts rather than the zod schema (props are z.unknown there).
 export function buildPrototypeDocumentSchema(): JsonObject {
-  const schema = z.toJSONSchema(prototypeDocSchema, { io: "input", reused: "ref", unrepresentable: "any" }) as JsonObject;
+  const schema = z.toJSONSchema(inputPrototypeDocSchema, { io: "input", reused: "ref", unrepresentable: "any" }) as JsonObject;
   schema.$id = "/api/schemas/prototype-document.json";
   schema.title = "easy-ui prototype document";
   const defs = ((schema.$defs ??= {}) as JsonObject);

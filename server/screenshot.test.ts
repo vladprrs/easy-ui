@@ -13,7 +13,7 @@ const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 
 async function helloDoc(id: string) {
-  const original = prototypeDocSchema.parse(await Bun.file("prototypes/hello-world.json").json());
+  const original = prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json());
   return { ...original, id, name: id };
 }
 async function setup() {
@@ -199,7 +199,7 @@ describe("allowedUrls builder", () => {
     );
     db.run(
       "INSERT INTO design_system_versions (system_id,version,tokens_json,fonts_json,icons_json,created_at) VALUES (?,?,?,?,?,?)",
-      ["shadcn", 1, "{}", JSON.stringify([{ family: "YS Text", src: assetId, weight: 400 }]), "[]", "now"],
+      ["yandex-pay", 1, "{}", JSON.stringify([{ family: "YS Text", src: assetId, weight: 400 }]), "[]", "now"],
     );
     expect((await handler(req("/prototypes", "POST", { doc: await helloDoc("theme-assets") }))).status).toBe(201);
     const service = makeService(db, dir);

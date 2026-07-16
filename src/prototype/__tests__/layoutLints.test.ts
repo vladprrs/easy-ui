@@ -193,7 +193,7 @@ describe("integration fixtures", () => {
   });
 
   test("all shipped prototypes remain layout-warning-free", () => {
-    const prototypesDir = resolve(process.cwd(), "prototypes");
+    const prototypesDir = resolve(process.cwd(), "test/fixtures");
     for (const name of readdirSync(prototypesDir).filter((entry) => entry.endsWith(".json"))) {
       const parsed = prototypeDocSchema.parse(JSON.parse(readFileSync(resolve(prototypesDir, name), "utf8")));
       const result = validatePrototype(parsed, { definitions: resolveBuiltinSystem(parsed.designSystem).definitions });

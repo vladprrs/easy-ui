@@ -190,10 +190,10 @@ describe("PATCH CAS + immutability + builtin guard", () => {
     db.close();
   });
 
-  test("PATCH on a builtin system → 405", async () => {
+  test("PATCH on a retired builtin system → 409", async () => {
     const { db, handler } = await setup();
     const r = await handler(req("/design-systems/shadcn", "PATCH", { tokens: { "a.b": "1" }, baseVersion: 0 }));
-    expect(r.status).toBe(405);
+    expect(r.status).toBe(409);
     db.close();
   });
 

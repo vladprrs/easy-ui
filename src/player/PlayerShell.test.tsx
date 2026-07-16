@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({ getDraft: vi.fn(), getVersion: vi.fn(), listVe
 vi.mock("../api/client", async (original) => ({ ...(await original()), getPrototypeDraft: mocks.getDraft, getPrototypeVersion: mocks.getVersion, listPrototypeVersions: mocks.listVersions }));
 vi.mock("../customComponents/loader", () => ({ loadCustomComponents: mocks.loadCustom }));
 
-const hello = prototypeDocSchema.parse((await import("../../prototypes/hello-world.json")).default);
+const hello = prototypeDocSchema.parse((await import("../../test/fixtures/hello-world.json")).default);
 const draft = (doc = hello, rev = 1): PrototypeDraft => ({ doc, rev, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] });
 const hostDoc = prototypeDocSchema.parse({
   version: 1, id: "player-host", name: "Player host", designSystem: "custom-only", device: "mobile", startScreen: "main", state: {},

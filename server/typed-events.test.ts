@@ -14,7 +14,7 @@ const fixture = (name: string) => Bun.file(resolve("server/fixtures", name)).tex
 describe("typed event payloads + ABI v2", () => {
   test("publishes typed events with a serialized eventPayloads schema, ABI 2 via capabilities", async () => {
     const { db, handler } = await setup();
-    expect((await handler(req("/components", "POST", { id: "typed-stars", name: "TypedStars", source: await fixture("typed-events-stars.tsx") }))).status).toBe(201);
+    expect((await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "typed-stars", name: "TypedStars", source: await fixture("typed-events-stars.tsx") }))).status).toBe(201);
     const published = await handler(req("/components/typed-stars/publish", "POST", { baseRev: 1 }));
     expect(published.status).toBe(201);
     expect(await published.json()).toMatchObject({ hostAbiVersion: 2 });
@@ -34,7 +34,7 @@ describe("typed event payloads + ABI v2", () => {
 
   test("rejects a non-serializable event payload schema with event_schema_not_serializable", async () => {
     const { db, handler } = await setup();
-    const response = await handler(req("/components", "POST", { id: "bad-event", name: "BadEvent", source: await fixture("nonserializable-event.tsx") }));
+    const response = await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "bad-event", name: "BadEvent", source: await fixture("nonserializable-event.tsx") }));
     expect(response.status).toBe(422);
     expect(await response.json()).toMatchObject({ error: { code: "event_schema_not_serializable" } });
     db.close();
@@ -42,7 +42,7 @@ describe("typed event payloads + ABI v2", () => {
 
   test("computes host ABI 2 from an easy-ui/runtime import and maps shims to v2", async () => {
     const { db, handler } = await setup();
-    expect((await handler(req("/components", "POST", { id: "token-user", name: "TokenUser", source: await fixture("token-import.tsx") }))).status).toBe(201);
+    expect((await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "token-user", name: "TokenUser", source: await fixture("token-import.tsx") }))).status).toBe(201);
     const published = await handler(req("/components/token-user/publish", "POST", { baseRev: 1 }));
     expect(published.status).toBe(201);
     expect(await published.json()).toMatchObject({ hostAbiVersion: 2 });
@@ -56,7 +56,7 @@ describe("typed event payloads + ABI v2", () => {
 
   test("legacy string[] events publish as ABI 1 with no eventPayloads", async () => {
     const { db, handler } = await setup();
-    expect((await handler(req("/components", "POST", { id: "rating-stars", name: "RatingStars", source: await fixture("rating-stars.tsx") }))).status).toBe(201);
+    expect((await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "rating-stars", name: "RatingStars", source: await fixture("rating-stars.tsx") }))).status).toBe(201);
     const published = await handler(req("/components/rating-stars/publish", "POST", { baseRev: 1 }));
     expect(await published.json()).toMatchObject({ hostAbiVersion: 1 });
     const manifest = catalogManifest(db)[0] as { events: string[]; eventPayloads?: unknown; hostAbiVersion: number };

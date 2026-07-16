@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import helloDocument from "../../../prototypes/hello-world.json";
+import helloDocument from "../../../test/fixtures/hello-world.json";
 import type { ComponentDefinition } from "../../catalog/definitions";
 import { prototypeDocSchema, type PrototypeDoc } from "../schema";
 import { isDynamicValue, validateElementProps, validatePrototype } from "../validate";
@@ -351,7 +351,7 @@ describe("repeat", () => {
 });
 
 describe("repository prototypes", () => {
-  const files = import.meta.glob("../../../prototypes/*.json", { eager: true, import: "default" });
+  const files = import.meta.glob("../../../test/fixtures/*.json", { eager: true, import: "default" });
   for (const [filename, document] of Object.entries(files)) it(`${filename} is valid`, () => expect(messages(document)).toEqual([]));
   // Semantic warnings must stay calibrated: no shipped prototype gains a new warning.
   for (const [filename, document] of Object.entries(files)) it(`${filename} has no warnings`, () => {

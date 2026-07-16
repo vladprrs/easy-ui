@@ -23,7 +23,7 @@ const fixture = (name: string) => Bun.file(resolve("server/fixtures", name)).tex
 // the transition matrix across several versions.
 async function seedComponent(handler: (r: Request) => Promise<Response>, versions = 1) {
   const source = await fixture("rating-stars.tsx");
-  expect((await handler(req("/components", "POST", { id: "rating-stars", name: "RatingStars", source }))).status).toBe(201);
+  expect((await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "rating-stars", name: "RatingStars", source }))).status).toBe(201);
   expect((await handler(req("/components/rating-stars/publish", "POST", { baseRev: 1 }))).status).toBe(201);
   for (let v = 2; v <= versions; v += 1) {
     await handler(req("/components/rating-stars", "PUT", { baseRev: v - 1, source: source.replace("five-star", `five-star v${v}`) }));
@@ -146,7 +146,7 @@ describe("status-aware execution semantics", () => {
 
   test("render-status warns on deprecated pins and fails on rejected pins", async () => {
     const { db, handler } = await setup(); await seedComponent(handler);
-    const original = prototypeDocSchema.parse(await Bun.file("prototypes/hello-world.json").json());
+    const original = prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json());
     const screenId = original.screens[0]!.id;
     const doc = { ...original, id: "pinned", name: "Pinned", screens: original.screens.map((s, i) => i ? s : { ...s, spec: { root: "rating", elements: { rating: { type: "RatingStars", props: { value: 3 } } } } }) };
     expect((await handler(req("/prototypes", "POST", { doc }))).status).toBe(201);

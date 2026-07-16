@@ -12,21 +12,21 @@ const req = (url: string, method = "GET", value?: unknown) => new Request(`http:
 const fixture = (name: string) => Bun.file(resolve("server/fixtures", name)).text();
 
 async function publishPanel(handler: (r: Request) => Promise<Response>) {
-  expect((await handler(req("/components", "POST", { id: "panel", name: "NamedSlotsPanel", source: await fixture("named-slots-panel.tsx") }))).status).toBe(201);
+  expect((await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "panel", name: "NamedSlotsPanel", source: await fixture("named-slots-panel.tsx") }))).status).toBe(201);
   return handler(req("/components/panel/publish", "POST", { baseRev: 1 }));
 }
 
 const panelDoc = (slot: string) => ({
-  version: 1, id: "slotted", name: "Slotted", designSystem: "shadcn", device: "desktop", startScreen: "home", state: {},
+  version: 1, id: "slotted", name: "Slotted", designSystem: "yandex-pay", device: "desktop", startScreen: "home", state: {},
   screens: [{
     id: "home", name: "Home",
     spec: {
       root: "panel",
       elements: {
         panel: { type: "NamedSlotsPanel", props: { title: "Hi" }, children: ["h", "i", "d"] },
-        h: { type: "Text", props: { text: "Header" }, slot: "header" },
-        i: { type: "Text", props: { text: "Item" }, slot },
-        d: { type: "Text", props: { text: "Default" } },
+        h: { type: "Image", props: { src: "/header.png", alt: "Header" }, slot: "header" },
+        i: { type: "Image", props: { src: "/item.png", alt: "Item" }, slot },
+        d: { type: "Image", props: { src: "/default.png", alt: "Default" } },
       },
     },
   }],

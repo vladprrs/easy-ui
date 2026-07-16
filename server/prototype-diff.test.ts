@@ -10,7 +10,7 @@ const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir,{recursive:true,force:true}); });
 async function setup() { const dir=await mkdtemp(resolve(process.cwd(),".prototype-diff-test-")); dirs.push(dir); const db=openDatabase(":memory:"); return {db,handler:createTestHandler(db,{dataDir:dir})}; }
 const request = (path:string,method="GET",body?:unknown) => new Request(`http://test/api${path}`,{method,headers:body?{"content-type":"application/json"}:undefined,body:body?JSON.stringify(body):undefined});
-async function fixture(id:string):Promise<PrototypeDoc> { const value=prototypeDocSchema.parse(await Bun.file("prototypes/hello-world.json").json()); return {...value,id,name:"First"}; }
+async function fixture(id:string):Promise<PrototypeDoc> { const value=prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json()); return {...value,id,name:"First"}; }
 
 describe("prototype revision diff route", () => {
   test("diffs three revisions, defaults against to rev-1, and accepts explicit older revisions", async () => {
@@ -22,7 +22,7 @@ describe("prototype revision diff route", () => {
     expect((await handler(request("/prototypes/diff-three","PUT",{baseRev:2,doc:third,message:"three"}))).status).toBe(200);
     const adjacent=await (await handler(request("/prototypes/diff-three/revisions/3/diff"))).json() as any;
     expect(adjacent.from.rev).toBe(2); expect(adjacent.to.rev).toBe(3);
-    expect(adjacent.doc).toEqual([{key:"description",from:{value:first.description},to:{value:"Third"}}]);
+    expect(adjacent.doc).toEqual([{key:"description",from:{missing:true},to:{value:"Third"}}]);
     const full=await (await handler(request("/prototypes/diff-three/revisions/3/diff?against=1"))).json() as any;
     expect(full.doc.map((x:any)=>x.key)).toEqual(["name","description"]);
     expect(full.state.added).toContainEqual({key:"count",value:{value:1}});
