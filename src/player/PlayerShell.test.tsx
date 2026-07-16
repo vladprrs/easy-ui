@@ -99,6 +99,17 @@ describe("PlayerShell", () => {
     expect(screen.getByRole("button", { name: "Player host hotspot" })).toBeTruthy();
   });
 
+  it("stops archived revisions before loading component bundles", async () => {
+    mocks.getDraft.mockResolvedValue({
+      ...draft(hostDoc),
+      renderable: false,
+      components: [{ id: "retired", name: "Retired", version: 1, bundleUrl: "/api/components/retired/versions/1/bundle.js", bundleHash: "hash" }],
+    });
+    renderAt("/p/player-host");
+    expect(await screen.findByRole("heading", { name: "Прототип в архиве" })).toBeTruthy();
+    expect(mocks.loadCustom).not.toHaveBeenCalled();
+  });
+
   it("loads a version and navigates under its version-aware route base", async () => {
     const router = renderAt("/p/hello-world/v/2");
     await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/v/2/s/welcome"));

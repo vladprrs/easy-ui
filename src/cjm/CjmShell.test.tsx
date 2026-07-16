@@ -52,7 +52,7 @@ describe("CjmShell", () => {
     ["tablet", 420, 560],
     ["desktop", 560, 560],
   ] as const)("uses the %s preview width and caps tall screens", (device, width, heightCap) => {
-    render(<CjmFrame device={device} nativeWidth={1000} nativeHeight={3000} resetKey={device}><div>Preview</div></CjmFrame>);
+    render(<CjmFrame device={device} nativeWidth={1000} nativeHeight={3000} resetKey={device} designSystem="custom-only"><div>Preview</div></CjmFrame>);
     const frame = screen.getByTestId("cjm-frame");
     expect(Number.parseFloat(frame.style.width)).toBe(width);
     expect(Number.parseFloat(frame.style.height)).toBe(heightCap);
@@ -79,7 +79,7 @@ describe("CjmShell", () => {
     expect(screen.getByText("демо-состояние")).toBeTruthy();
     const metadata = screen.getByLabelText("Метаданные CJM");
     expect(within(metadata).getByText("2 экрана")).toBeTruthy();
-    expect(within(metadata).getByText("Shadcn")).toBeTruthy();
+    expect(within(metadata).getByText("shadcn")).toBeTruthy();
     await waitFor(() => expect(document.title).toBe("Checkout journey · CJM — easy-ui"));
   });
 

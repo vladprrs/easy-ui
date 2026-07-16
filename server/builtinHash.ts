@@ -3,12 +3,15 @@ import { z } from "zod";
 import type { ComponentDefinition } from "../src/catalog/definitions";
 import { prototypeActionSchemas } from "../src/catalog/actions";
 import { extractionPrimitiveDefinitions, hostPrimitiveDefinitions } from "../src/catalog/hostPrimitives/definitions";
-import { getDesignSystem } from "../src/designSystems";
 import { resolveSpacingScale } from "../src/designSystems/spacingScale";
 import type { SpaceToken } from "../src/designSystems/types";
 
 export const RENDER_CONTRACT_VERSION = 3;
 const LEGACY_RENDER_CONTRACT_VERSION = 2;
+const retiredBuiltinV2Hashes: Readonly<Record<string, string>> = Object.freeze({
+  shadcn: "5d28a8faa2c8fb2016c78f52cfdf3cda1606e37f6d0c81a692a6410ecec77e41",
+  wireframe: "790b74a019635c4807b303b582bcbb3e4a5d9b5b556b6a80b3b87df7e4b5308d",
+});
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -39,7 +42,7 @@ function calculateBuiltinCatalogHash(
   const descriptor = {
     renderContractVersion,
     actions: Object.keys(prototypeActionSchemas).sort(),
-    definitions: descriptors(definitions??getDesignSystem(systemId).definitions),
+    definitions: descriptors(definitions ?? {}),
     hostPrimitives: descriptors(hostDefinitions),
     resolvedSpaceScale,
   };
@@ -66,6 +69,7 @@ export function legacyBuiltinCatalogHashFor(
   definitions?: Record<string, ComponentDefinition>,
   resolvedSpaceScale: Record<SpaceToken, string> = resolveSpacingScale(systemId),
 ): string {
+  if (definitions === undefined && retiredBuiltinV2Hashes[systemId]) return retiredBuiltinV2Hashes[systemId];
   return calculateBuiltinCatalogHash(systemId, definitions, resolvedSpaceScale, extractionPrimitiveDefinitions, LEGACY_RENDER_CONTRACT_VERSION);
 }
 

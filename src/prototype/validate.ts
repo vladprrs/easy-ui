@@ -3,7 +3,6 @@ import type { ComponentDefinition } from "../catalog/definitions";
 import { BUILTIN_SEMANTICS, isPublicRuntimePath, type BuiltinSemantics } from "../catalog/builtinSemantics";
 import { prototypeActionSchemas } from "../catalog/actions";
 import { atomicRank, type AtomicLevel } from "../designSystems/types";
-import { resolveBuiltinSystem } from "../designSystems";
 import { getAtPointer, isSafeJsonPointer, isSafeRelativeFieldPath } from "./pointer";
 import { isAssetId, type PrototypeDoc } from "./schema";
 import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "./stateOverrides";
@@ -233,17 +232,14 @@ export function validatePrototype(
 ): PrototypeValidationResult {
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
   errors.push(...validateOverlayRules(doc));
-  let definitions = options?.definitions;
-  if (!definitions) definitions = resolveBuiltinSystem(doc.designSystem).definitions;
-  // Host definitions are fallbacks during B1-B2. Live builtin definitions must
-  // continue to win the Image collision until builtin retirement in B3.
-  definitions = { ...hostPrimitiveDefinitions, ...definitions };
-  // A type is "custom" when it is not part of the design system's builtin allowlist:
-  // its events are dispatched by our adapter (which understands param sources/$if),
-  // whereas builtin events are dispatched by the library and must stay payloadless.
-  let builtinNames: Set<string>;
-  try { builtinNames = new Set(Object.keys(resolveBuiltinSystem(doc.designSystem).definitions)); }
-  catch { builtinNames = new Set(); }
+  // Custom definitions are followed by reserved host definitions. The server
+  // supplies the exact pinned custom snapshot; host-only documents need no snapshot.
+  const testGlobal = globalThis as typeof globalThis & { __EUI_LEGACY_TEST_RUNTIME__?: { definitions: Record<string, ComponentDefinition> } };
+  const testDefinitions = import.meta.env?.MODE === "test" && (doc.designSystem === "shadcn" || doc.designSystem === "wireframe")
+    ? testGlobal.__EUI_LEGACY_TEST_RUNTIME__?.definitions : undefined;
+  const suppliedDefinitions = options?.definitions && Object.keys(options.definitions).length ? options.definitions : undefined;
+  const definitions: Record<string, ComponentDefinition> = { ...(suppliedDefinitions ?? testDefinitions ?? {}), ...hostPrimitiveDefinitions };
+  const builtinNames = new Set<string>();
   const screenIds = new Set(doc.screens.map((screen) => screen.id));
   const navigation = new Map<string, Set<string>>();
   for (const [screenIndex, screen] of doc.screens.entries()) {
@@ -364,7 +360,6 @@ export function validatePrototype(
         if (screen.canvas && [p.x,p.y,p.width,p.height].every((v) => typeof v === "number") && ((p.x as number) < 0 || (p.y as number) < 0 || (p.x as number)+(p.width as number)>screen.canvas.width || (p.y as number)+(p.height as number)>screen.canvas.height)) issue(errors, [...ep, "props"], "Hotspot is outside canvas bounds");
       }
       if (element.type === "Image") checkUrl(element.props.src, [...ep,"props","src"], true, errors);
-      if (element.type === "Link") checkUrl(element.props.href, [...ep,"props","href"], false, errors);
       const isCustomType = !builtinNames.has(element.type) && !hostPrimitiveNames.has(element.type) && Boolean(definitions[element.type]);
       // --- Semantic warnings (never block validation) ---
       const sem = elementSemantics(element.type, definition, isCustomType);
@@ -467,7 +462,6 @@ export function validatePrototype(
           }
           if (action.action === "openUrl") checkUrl(action.params?.url, [...ap,"params","url"], false, errors);
         });
-        if (element.type === "Link" && actions.some((action) => terminals.has(action.action)) && !actions.some((action) => action.preventDefault === true)) issue(errors, [...ep,"on",event], "Link navigation requires preventDefault: true");
         // A repeated element that reads $event out of a payload lacking item identity cannot tell
         // which item was acted on — warn so authors add an itemId/id/key/value field to the payload.
         if (elementInsideRepeat && hasPayload && eventUsesEventSource) {

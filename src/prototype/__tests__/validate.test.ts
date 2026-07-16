@@ -91,7 +91,7 @@ describe("prototype v1 validation", () => {
   it("rejects a children cycle", () => { const d=clone(); d.screens[0].spec.elements.next.children=["card"]; expectInvalid(d,/cycle/); });
   it("rejects an element with a second parent", () => { const d=clone(); d.screens[0].spec.elements.greeting.children=["next"]; expectInvalid(d,/more than one parent/); });
   it("rejects an unknown type", () => { const d=clone(); d.screens[0].spec.elements.next.type="Mystery"; expectInvalid(d,/unknown component type/); });
-  it("rejects an unknown nested prop", () => { const d=clone(); d.screens[0].spec.elements.name.props.checks=[{ type:"required", message:"Required", extra:true }]; expectInvalid(d,/Unrecognized key|extra/); });
+  it("uses the exact supplied custom definition for nested props", () => { const d=clone(); d.screens[0].spec.elements.name.props.checks=[{ type:"required", message:"Required", extra:true }]; expect(messages(d)).toEqual([]); });
   it("rejects an unknown event", () => { const d=clone(); d.screens[0].spec.elements.next.on.click=d.screens[0].spec.elements.next.on.press; delete d.screens[0].spec.elements.next.on.press; expectInvalid(d,/unknown event/); });
   it("rejects an unknown action", () => { const d=clone(); d.screens[0].spec.elements.next.on.press.action="launch"; expectInvalid(d,/unknown action/); });
   it("rejects invalid action params", () => { const d=clone(); d.screens[0].spec.elements.next.on.press.params={}; expectInvalid(d,/screenId|Invalid input/); });
@@ -107,7 +107,7 @@ describe("prototype v1 validation", () => {
   it("accepts an $asset directive as an Image src", () => { const d=clone(); d.screens[0].spec.elements.greeting={type:"Image",props:{src:{$asset:`asset_${"a".repeat(64)}`},alt:"x"}}; expect(messages(d)).toEqual([]); });
   it("rejects an $asset with a malformed id", () => { const d=clone(); d.screens[0].spec.elements.greeting={type:"Image",props:{src:{$asset:"asset_nothex"},alt:"x"}}; expectInvalid(d,/\$asset must be an asset id/); });
   it("rejects an $asset directive inside action params", () => { const d=clone(); d.screens[0].spec.elements.next.on.press={action:"setState",params:{statePath:"/x",value:{$asset:`asset_${"a".repeat(64)}`}}}; expectInvalid(d,/static literals/); });
-  it("requires preventDefault for Link navigation", () => { const d=clone(); d.screens[0].spec.elements.next={type:"Link",props:{label:"Details",href:"https://example.com"},on:{press:{action:"navigate",params:{screenId:"details"}}}}; expectInvalid(d,/preventDefault/); });
+  it("does not apply name-based Link semantics", () => { const d=clone(); d.screens[0].spec.elements.next={type:"Link",props:{label:"Details",href:"https://example.com"},on:{press:{action:"navigate",params:{screenId:"details"}}}}; expect(messages(d)).toEqual([]); });
   it("accepts host Hotspot without canvas as ordinary flow content", () => { const d=clone(); d.screens[0].spec.elements.next={type:"Hotspot",props:{x:0,y:0,width:10,height:10,ariaLabel:"Next"}}; expect(messages(d)).toEqual([]); });
   it("accepts host content types without a design-system binding", () => {
     const doc = prototypeDocSchema.parse({
@@ -371,16 +371,12 @@ describe("semantic warnings", () => {
     screens: opts.screens ?? [screen(elements, root)],
   });
 
-  it("warns on an interactive element with no handler and no binding, and not otherwise", () => {
-    const bare = build({ b: { type: "Button", props: { label: "Go" } } }, "b");
-    expect(warns(bare)).toContain("interactive Button has no event handler and no two-way binding");
-    const handled = build({ b: { type: "Button", props: { label: "Go" }, on: { press: { action: "back", params: {} } } } }, "b");
-    expect(warns(handled)).not.toContain("interactive Button has no event handler and no two-way binding");
-    const bound = build({ i: { type: "Input", props: { label: "Name", name: "n", value: { $bindState: "/n" } } } }, "i", { state: { n: "" } });
-    expect(warns(bound)).not.toContain("interactive Input has no event handler and no two-way binding");
-    // Self-driven controls (Tabs) are exempt even without a handler.
-    const tabs = build({ t: { type: "Tabs", props: { tabs: [{ label: "A", value: "a" }], defaultValue: "a" } } }, "t");
-    expect(warns(tabs).some((m) => m.includes("no event handler"))).toBe(false);
+  it("takes interactive semantics from a custom definition, not its name", () => {
+    const def: ComponentDefinition = { description: "Button-like", props: z.strictObject({ label: z.string() }), events: ["press"], interactive: true, accessibleLabelProps: ["label"] };
+    const bare = build({ b: { type: "Widget", props: { label: "Go" } } }, "b");
+    expect(warns(bare, { Widget: def })).toContain("interactive Widget has no event handler and no two-way binding");
+    const namedButton = build({ b: { type: "Button", props: { label: "Go" } } }, "b");
+    expect(warns(namedButton)).not.toContain("interactive Button has no event handler and no two-way binding");
   });
 
   it("warns on an interactive element without an accessible label", () => {
@@ -474,12 +470,11 @@ describe("typed events, param sources and $if validation", () => {
       .toContain("$event is only allowed on an event with a declared payload schema");
   });
 
-  it("rejects param sources and $if on a builtin element (fail closed)", () => {
-    // No definitions option → builtin shadcn Button is resolved and recognized as builtin.
+  it("does not infer builtin restrictions from a retired component name", () => {
     const builtin = validatePrototype(doc({ press: { action: "setState", params: { statePath: "/x", value: { $event: "/value" } } } }, { type: "Button" })).errors.map((e) => e.message);
-    expect(builtin).toContain("param sources are only allowed on custom component events");
+    expect(builtin).not.toContain("param sources are only allowed on custom component events");
     const cond = validatePrototype(doc({ press: { action: "setState", $if: { $event: "/ok" }, params: { statePath: "/x", value: 1 } } }, { type: "Button" })).errors.map((e) => e.message);
-    expect(cond).toContain("conditional actions ($if) are only allowed on custom component events");
+    expect(cond).not.toContain("conditional actions ($if) are only allowed on custom component events");
   });
 
   it("rejects a param source in a disallowed location (statePath is not a value/index/screenId)", () => {

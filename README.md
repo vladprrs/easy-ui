@@ -1,64 +1,39 @@
 # easy-ui
 
-easy-ui is a viewer for clickable, JSON-defined UI prototypes. It renders flows with
-[`json-render`](https://github.com/vercel-labs/json-render), provides a gallery and
-stateful player, and embeds the component catalog from Storybook in the Library page.
+easy-ui is a multi-user viewer and editor for clickable JSON-defined UI prototypes. It uses [`json-render`](https://github.com/vercel-labs/json-render), host-rendered `Image`/`Hotspot`/`Overlay`, and API-published custom React components. The Library is custom-only; Storybook and built-in component catalogs have been removed.
 
 ## Quick start
 
-Requires Node.js 24 or newer. Server commands also require Bun 1.3.14 installed at
-`~/.bun/bin`; ensure it precedes other Bun installations in `PATH`:
-
-```sh
-export PATH="$HOME/.bun/bin:$PATH"
-```
+Requires Node.js 24+ and Bun 1.3.14 at `~/.bun/bin/bun` for server commands.
 
 ```sh
 npm ci
+npm run server:dev
+# in another terminal
 npm run dev
 ```
 
-In a second terminal, start Storybook so `/library` can load the live catalog:
-
-```sh
-npm run storybook
-```
-
-Open `http://localhost:5173`.
-
-## Add a prototype
-
-Add a JSON document to `prototypes/`, with its `id` matching the filename, then run
-`npm run validate:prototypes`. The complete schema, navigation rules, state bindings,
-and author checklist are in [docs/prototype-format.md](docs/prototype-format.md).
+Open `http://localhost:5173`. Create design systems and components through the API; the declarative `e2e-starter` example lives in `test/fixtures/starter/`.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev` | Start the Vite development app |
-| `npm run storybook` | Start the live component catalog |
-| `npm run server:dev` | Start the Bun API server on 127.0.0.1:8787 |
-| `npm run server:test` | Run Bun server tests |
-| `npm run server:typecheck` | Type-check the server without Vite globals |
-| `npm run serve` | Serve `dist/` and the API with Bun on 127.0.0.1:4173 |
-| `npm test` | Run unit and component tests |
-| `npm run validate:prototypes` | Validate every prototype JSON file |
-| `npm run build` | Build the app and static Storybook into `dist/` |
-| `npm run preview` | Serve the production build locally |
-| `npm run verify` | Run all static checks, tests, validation, builds, CSS and Storybook drift checks |
-| `npm run e2e` | Run Chromium E2E tests against development and preview servers |
+| `npm run dev` | Start the Vite app |
+| `npm run server:dev` | Start the Bun API on 127.0.0.1:8787 |
+| `npm run typecheck` / `npm run server:typecheck` | Type-check browser/server code |
+| `npm test` / `npm run server:test` | Run browser/server tests |
+| `npm run validate:templates` | Strictly validate gallery and starter templates against exact definitions |
+| `npm run build` | Build the SPA into `dist/` |
+| `npm run verify` | Run the full non-E2E release gate, including CSS compatibility |
+| `npm run e2e` | Run Playwright scenarios (maintained separately) |
 
-Install the browser once before the first E2E run with
-`npx playwright install chromium`. Run `npm run verify` before `npm run e2e`, because
-the preview project tests the generated `dist/` output.
+See [docs/prototype-format.md](docs/prototype-format.md) for the document grammar and [docs/server-api.md](docs/server-api.md) for the API.
 
 ## Repository structure
 
-- `prototypes/` — prototype documents.
-- `src/player/` — session-aware prototype player and navigation; add `?debug=1` for the [interaction inspector](docs/inspector.md).
-- `src/catalog/` — json-render catalog, fixtures, and Storybook stories.
-- `src/gallery/` and `src/library/` — prototype gallery and embedded Storybook browser.
-- `scripts/` — prototype, CSS, and Storybook drift validation.
-- `e2e/` — Playwright development and production-preview scenarios.
-- `docs/` — prototype format and implementation plan.
+- `src/catalog/` — host content/extraction types, actions, and runtime composition.
+- `src/gallery/`, `src/library/` — prototype gallery and custom component library.
+- `src/player/`, `src/editor/`, `src/capture/` — authorized render surfaces.
+- `test/fixtures/` — test data and declarative starter DS/components.
+- `scripts/` — template, CSS, OpenAPI, and operational checks.

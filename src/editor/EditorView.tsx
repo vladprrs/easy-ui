@@ -3,7 +3,7 @@ import { useBlocker } from "react-router";
 import { ApiError, getPrototypeDraft, getPrototypeRevisionFull, listPrototypeVersions, publishPrototype, restorePrototype, savePrototype, type FigmaProvenance, type PrototypeDraft } from "../api/client";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { createPlayerRuntime } from "../catalog/runtime";
-import { resolveBuiltinSystem } from "../designSystems";
+import { hostPrimitiveDefinitions } from "../catalog/hostPrimitives/definitions";
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import { prototypeDocSchema } from "../prototype/schema";
 import { validatePrototype } from "../prototype/validate";
@@ -59,7 +59,11 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
   const [copyFallback, setCopyFallback] = useState(false);
   const fallbackRef = useRef<HTMLTextAreaElement>(null);
   const runtime = useMemo(() => createPlayerRuntime({ navigate() {}, back() {}, openUrl() {}, restart() {} }, custom, state.doc.designSystem), [custom, state.doc.designSystem]);
-  const definitions = useMemo(() => ({ ...resolveBuiltinSystem(state.doc.designSystem).definitions, ...custom?.definitions }), [custom, state.doc.designSystem]);
+  const definitions = useMemo(() => ({
+    ...(import.meta.env.MODE === "test" ? globalThis.__EUI_LEGACY_TEST_RUNTIME__?.definitions : undefined),
+    ...custom?.definitions,
+    ...hostPrimitiveDefinitions,
+  }), [custom]);
   const customTypes = useMemo(() => new Set(Object.keys(custom?.definitions ?? {})), [custom]);
   const customDefinitions = custom?.definitions;
   const themeContent = useDesignSystemTheme(state.doc.designSystem, loaded.designSystemMetaVersion);

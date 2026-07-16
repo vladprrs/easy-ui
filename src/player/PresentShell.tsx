@@ -42,7 +42,7 @@ export function PresentShell({ share = false }: { share?: boolean }) {
   // Латч на маунт шелла: bootstrap-replace навигации внутри презентации не
   // должен перекрасить прямой вход в «внутренний».
   const [directEntry] = useState(() => navigationType === "POP");
-  return <PrototypeLoader protoId={protoId} version={numericVersion}>
+  return <PrototypeLoader protoId={protoId} version={numericVersion} allowArchivedPlaceholder={!share}>
     {({ loaded, custom, runtimeKey, routeBase }) => (
       <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} routeBase={`${share ? `/share/p/${encodeURIComponent(loaded.doc.id)}/v/${numericVersion}` : routeBase}/present`}>
         <LoadedPresent key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} playerBase={routeBase} metaVersion={loaded.designSystemMetaVersion} version={numericVersion} directEntry={directEntry} share={share} mobile={mobile} />

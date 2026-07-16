@@ -11,7 +11,10 @@ export default tseslint.config(
     files: ["**/*.{ts,tsx}"],
     languageOptions: {
       parserOptions: {
-        projectService: { allowDefaultProject: ["scripts/*.ts"] },
+        projectService: {
+          allowDefaultProject: ["scripts/*.ts", "test/fixtures/starter/*.tsx"],
+          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 12,
+        },
       },
     },
   },

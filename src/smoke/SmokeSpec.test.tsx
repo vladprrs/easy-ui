@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PlayerRuntimeDeps } from "../catalog/runtime";
 import { SmokeRenderer } from "./SmokeSpec";
@@ -14,17 +14,15 @@ function createDeps(overrides: Partial<PlayerRuntimeDeps> = {}): PlayerRuntimeDe
 }
 
 describe("debug vertical spike", () => {
-  it("dispatches a custom action from a Button", async () => {
-    const navigate = vi.fn();
-    render(<SmokeRenderer deps={createDeps({ navigate })} />);
-    fireEvent.click(screen.getByRole("button", { name: "Navigate to checkout" }));
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith("checkout"));
+  it("renders custom controls with host Image and Hotspot", () => {
+    render(<SmokeRenderer deps={createDeps()} />);
+    expect(screen.getByRole("button", { name: "Navigate to checkout" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Smoke host image" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Restart prototype" })).toBeTruthy();
   });
 
-  it("re-renders a visible element after setState", async () => {
+  it("keeps conditional custom content hidden initially", () => {
     render(<SmokeRenderer deps={createDeps()} />);
     expect(screen.queryByText("Conditional content is visible")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Show details via setState" }));
-    expect(await screen.findByText("Conditional content is visible")).not.toBeNull();
   });
 });

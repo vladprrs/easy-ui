@@ -27,21 +27,20 @@ async function api<T>(options: PerfGalleryDatasetOptions, path: string, init: Re
   return response.status === 204 ? undefined as T : await response.json() as T;
 }
 
-function builtinDoc(index: number) {
+function hostDoc(index: number) {
   const device = (["mobile", "tablet", "desktop"] as const)[index % 3]!;
-  const designSystem = index % 2 ? "wireframe" : "shadcn";
   const id = `${PERF_GALLERY_PREFIX}${String(index).padStart(2, "0")}`;
   const longTail = index % 10 === 0 ? ` — ${"ОченьДлинноеНазваниеБезПробелов".repeat(5)}` : "";
   return {
     version: 1, id, name: `Перф-прототип ${String(index).padStart(2, "0")}${longTail}`,
     description: `Изолированная W5-3 фикстура ${index}: inert-превью стартового экрана.`,
-    designSystem, device, startScreen: "start", state: {},
+    designSystem: CUSTOM_DS_ID, device, startScreen: "start", state: {},
     screens: [{
       id: "start", name: "Стартовый экран",
-      spec: { root: "card", elements: {
-        card: { type: "Card", props: { title: `Карточка ${index}` }, children: ["copy", "action"] },
-        copy: { type: "Text", props: { text: `Содержимое превью ${index}` } },
-        action: { type: "Button", props: { label: "Продолжить" }, on: { press: { action: "restart", params: {} } } },
+      canvas: { width: 390, height: 844 },
+      spec: { root: "image", elements: {
+        image: { type: "Image", props: { src: "/design/cjm-ui/assets/mascot-laptop.png", alt: `Превью ${index}`, width: 390, height: 844, objectFit: "cover" }, children: ["action"] },
+        action: { type: "Hotspot", props: { x: 24, y: 720, width: 342, height: 80, ariaLabel: "Продолжить" }, on: { press: { action: "restart", params: {} } } },
       } },
     }],
   };
@@ -74,7 +73,7 @@ export async function cleanupPerfGalleryDataset(options: PerfGalleryDatasetOptio
 export async function createPerfGalleryDataset(options: PerfGalleryDatasetOptions): Promise<{ created: number; custom: number }> {
   await cleanupPerfGalleryDataset(options);
   await ensureCustomDesignSystem(options);
-  const documents = Array.from({ length: 30 }, (_, index) => index >= 27 ? customDoc(index) : builtinDoc(index));
+  const documents = Array.from({ length: 30 }, (_, index) => index >= 27 ? customDoc(index) : hostDoc(index));
   for (const doc of documents) await api(options, "/prototypes", { method: "POST", body: JSON.stringify({ doc, message: "W5-3 gallery perf dataset" }) });
   return { created: documents.length, custom: documents.filter((doc) => doc.designSystem === CUSTOM_DS_ID).length };
 }

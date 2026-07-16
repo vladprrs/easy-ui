@@ -15,6 +15,7 @@ vi.mock("./GalleryShareDialog", () => ({
 
 const summary: PrototypeSummary = {
   id: "hello-world", name: "Hello World", description: "A minimal two-screen prototype.", device: "mobile" as const,
+  designSystem: "shadcn",
   screenCount: 2, headRev: 3, latestVersion: 2, updatedAt: "2026-07-10T00:00:00.000Z",
   status: "private", owner: { id: "user-me", name: "Я" },
 };
@@ -74,7 +75,10 @@ describe("GalleryPage", () => {
       disconnect() {}
       takeRecords() { return []; }
     });
-    vi.mocked(getCatalogManifest).mockResolvedValue({ components: [] });
+    vi.mocked(getCatalogManifest).mockResolvedValue({ components: [
+      { id: "starter", name: "Starter", designSystem: "shadcn", version: 1, bundleUrl: "/starter.js", bundleHash: "hash", hostAbiVersion: 3, description: "", events: [], slots: [] },
+      { id: "starter-wire", name: "StarterWire", designSystem: "wireframe", version: 1, bundleUrl: "/starter-wire.js", bundleHash: "hash", hostAbiVersion: 3, description: "", events: [], slots: [] },
+    ] });
     vi.mocked(createPrototype).mockResolvedValue({ id: "created-prototype", rev: 1, warnings: [] });
     vi.mocked(setPrototypeStatus).mockImplementation(async (_id, status) => ({ status }));
     vi.mocked(listPrototypeVersions).mockResolvedValue([{ version: 2, rev: 3, publishedAt: "2026-07-10T00:00:00.000Z" }]);
@@ -291,7 +295,7 @@ describe("GalleryPage", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("текущая ревизия не отображается");
   });
 
-  it("creates a builtin template from the empty-state CTA and opens its editor", async () => {
+  it("creates a host-only template from the empty-state CTA and opens its editor", async () => {
     vi.mocked(listPrototypes).mockResolvedValue([]);
     const router = renderGallery();
     await screen.findByRole("heading", { name: "Создайте первый прототип" });
@@ -306,25 +310,22 @@ describe("GalleryPage", () => {
     expect(createPrototype).toHaveBeenCalledWith(expect.objectContaining({
       name: "Новый сценарий",
       designSystem: "wireframe",
-      startScreen: "outline",
-      screens: expect.arrayContaining([expect.objectContaining({ id: "outline" })]),
-    }), "Стартовый шаблон v1");
+      startScreen: "start",
+      screens: expect.arrayContaining([expect.objectContaining({ id: "start" })]),
+    }), "Стартовый шаблон v2");
   });
 
-  it("explains why a custom design system without a valid starter cannot be created", async () => {
+  it("offers design-system creation when no active components are usable", async () => {
     vi.mocked(listPrototypes).mockResolvedValue([]);
+    vi.mocked(getCatalogManifest).mockResolvedValue({ components: [] });
     vi.mocked(listDesignSystems).mockResolvedValue({ designSystems: [
       { id: "shadcn", name: "Shadcn", description: "", builtinCatalogHash: "one", components: [] },
       { id: "custom-empty", name: "Custom Empty", description: "", builtinCatalogHash: "custom", components: [{ name: "NeedsProps", atomicLevel: "atom", layoutNeutral: false, description: "", events: [], slots: [] }] },
     ] });
     renderGallery();
     await screen.findByRole("heading", { name: "Создайте первый прототип" });
-    fireEvent.click(screen.getAllByRole("button", { name: "Новый прототип" }).at(-1)!);
-    const dialog = screen.getByRole("dialog", { name: "Создание прототипа" });
-    fireEvent.change(within(dialog).getByLabelText("Название прототипа"), { target: { value: "Нельзя создать" } });
-    fireEvent.change(within(dialog).getByLabelText("Дизайн-система"), { target: { value: "custom-empty" } });
-    expect(within(dialog).getByText(/нет опубликованного компонента с валидным example/)).toBeTruthy();
-    expect(within(dialog).getByRole("button", { name: "Создать прототип" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("link", { name: "Создать дизайн-систему" }).getAttribute("href")).toBe("/library");
+    expect(screen.queryByRole("button", { name: "Новый прототип" })).toBeNull();
     expect(createPrototype).not.toHaveBeenCalled();
   });
 });

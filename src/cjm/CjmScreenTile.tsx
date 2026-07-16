@@ -45,7 +45,7 @@ export function getCjmTransitions(screen: PrototypeDoc["screens"][number], scree
   return transitions;
 }
 
-export function CjmFrame({ device, nativeWidth, nativeHeight, resetKey, designSystem = "shadcn", themeTokens, children }: { device: DeviceKind; nativeWidth: number; nativeHeight?: number; resetKey: string; designSystem?: string; themeTokens?: ThemeContent["tokens"]; children: ReactNode }) {
+export function CjmFrame({ device, nativeWidth, nativeHeight, resetKey, designSystem, themeTokens, children }: { device: DeviceKind; nativeWidth: number; nativeHeight?: number; resetKey: string; designSystem: string; themeTokens?: ThemeContent["tokens"]; children: ReactNode }) {
   const innerRef = useRef<HTMLDivElement>(null);
   const [stageHost, setStageHost] = useState<HTMLDivElement | null>(null);
   const stageHostRef = useMemo(() => ({ current: stageHost }), [stageHost]);

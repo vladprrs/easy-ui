@@ -8,7 +8,7 @@ import { deviceNames, gallery, versionLink } from "../app/strings/gallery";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { useAuth } from "../auth";
 import { prototypeStatusBadge } from "../library/statusBadge";
-import { BUILTIN_TEMPLATE_VERSION, buildBuiltinPrototypeTemplate, buildCustomPrototypeTemplate, createPrototypeId, findCustomStarterComponent, isBuiltinDesignSystem } from "./prototypeTemplates";
+import { TEMPLATE_VERSION, buildPrototypeTemplate, createPrototypeId, hasUsableComponents } from "./prototypeTemplates";
 import { GalleryPreview, GALLERY_PREVIEWS_ENABLED } from "./GalleryPreview";
 import { GalleryShareDialog } from "./GalleryShareDialog";
 
@@ -32,7 +32,7 @@ export function filterAndSortPrototypes(prototypes: PrototypeSummary[], filters:
       : tab === "shared"
         ? prototype.status === "published"
         : prototype.owner.id === userId && prototype.status === "archived")
-    .filter((prototype) => systemId === null || (prototype.designSystem ?? "shadcn") === systemId)
+    .filter((prototype) => systemId === null || prototype.designSystem === systemId)
     .filter((prototype) => !normalizedQuery || prototype.name.toLocaleLowerCase("ru").includes(normalizedQuery));
   return [...filtered].sort(sort === "name"
       ? (left, right) => left.name.localeCompare(right.name, "ru", { numeric: true, sensitivity: "base" })
@@ -139,39 +139,37 @@ export function GalleryPage() {
     const registered = designSystems.data.designSystems.map(({ id, name }) => ({ id, name }));
     const ids = new Set(registered.map(({ id }) => id));
     const legacy = prototypes.data
-      .map((prototype) => prototype.designSystem ?? "shadcn")
+      .flatMap((prototype) => prototype.designSystem ? [prototype.designSystem] : [])
       .filter((id) => !ids.has(id))
       .filter((id, index, values) => values.indexOf(id) === index)
       .map((id) => ({ id, name: id }));
     return [...registered, ...legacy];
   }, [designSystems, prototypes]);
   const systemNames = useMemo(() => new Map(systems.map(({ id, name }) => [id, name])), [systems]);
+  const usableSystems = useMemo(() => catalog.status === "ready"
+    ? systems.filter((system) => hasUsableComponents(system.id, catalog.data.components))
+    : [], [catalog, systems]);
   const visiblePrototypes = useMemo(() => prototypes.status === "ready"
     ? filterAndSortPrototypes(prototypes.data, { tab, userId: user?.userId ?? "", systemId: selectedSystem, query, sort })
     : [], [prototypes, query, selectedSystem, sort, tab, user?.userId]);
   const previewsEnabled = GALLERY_PREVIEWS_ENABLED && new URLSearchParams(location.search).get("galleryPreviews") !== "off";
-  const loading = authLoading || prototypes.status === "loading" || designSystems.status === "loading";
-  const failed = prototypes.status === "error" || designSystems.status === "error";
-  const reload = () => { prototypes.reload(); designSystems.reload(); };
+  const loading = authLoading || prototypes.status === "loading" || designSystems.status === "loading" || catalog.status === "loading";
+  const failed = prototypes.status === "error" || designSystems.status === "error" || catalog.status === "error";
+  const reload = () => { prototypes.reload(); designSystems.reload(); catalog.reload(); };
   const openCreateDialog = () => {
-    const preferred = selectedSystem && systems.some((system) => system.id === selectedSystem) ? selectedSystem : systems[0]?.id ?? "";
+    const preferred = selectedSystem && usableSystems.some((system) => system.id === selectedSystem) ? selectedSystem : usableSystems[0]?.id ?? "";
     setCreateDialog({ name: "", designSystemId: preferred, status: "editing", error: false });
   };
-  const selectedCreateSystem = createDialog ? systems.find((system) => system.id === createDialog.designSystemId) : undefined;
-  const customStarter = createDialog && !isBuiltinDesignSystem(createDialog.designSystemId) && catalog.status === "ready"
-    ? findCustomStarterComponent(createDialog.designSystemId, catalog.data.components) : null;
-  const customTemplateBlocked = Boolean(createDialog && !isBuiltinDesignSystem(createDialog.designSystemId) && !customStarter);
-  const canCreate = Boolean(createDialog?.name.trim() && selectedCreateSystem && !customTemplateBlocked && createDialog.status !== "creating");
+  const selectedCreateSystem = createDialog ? usableSystems.find((system) => system.id === createDialog.designSystemId) : undefined;
+  const canCreate = Boolean(createDialog?.name.trim() && selectedCreateSystem && createDialog.status !== "creating");
   const submitCreate = async () => {
     if (!createDialog || !canCreate) return;
     const name = createDialog.name.trim();
     const id = createPrototypeId();
-    const doc = isBuiltinDesignSystem(createDialog.designSystemId)
-      ? buildBuiltinPrototypeTemplate(createDialog.designSystemId, id, name)
-      : buildCustomPrototypeTemplate(createDialog.designSystemId, customStarter!, id, name);
+    const doc = buildPrototypeTemplate(createDialog.designSystemId, id, name);
     setCreateDialog((current) => current ? { ...current, status: "creating", error: false } : null);
     try {
-      const created = await createPrototype(doc, gallery.initialRevisionMessage(BUILTIN_TEMPLATE_VERSION));
+      const created = await createPrototype(doc, gallery.initialRevisionMessage(TEMPLATE_VERSION));
       await navigate(`/p/${created.id}/edit`);
     } catch {
       setCreateDialog((current) => current ? { ...current, status: "editing", error: true } : null);
@@ -181,12 +179,17 @@ export function GalleryPage() {
   return <main className="mx-auto h-full w-full max-w-6xl p-6 font-eui-ui sm:p-8" data-gallery-ready={!loading && !failed ? "true" : "false"}>
     <div className="flex flex-wrap items-center justify-between gap-4">
       <h1 className={headingPage}>{gallery.title}</h1>
-      {!loading && !failed ? <button type="button" className={pillPrimary} onClick={openCreateDialog}>{gallery.newPrototype}</button> : null}
+      {!loading && !failed && usableSystems.length ? <button type="button" className={pillPrimary} onClick={openCreateDialog}>{gallery.newPrototype}</button> : null}
     </div>
     <p className="mt-2 text-eui-slate-500">{gallery.subtitle}</p>
     {typeof location.state === "object" && location.state && "notice" in location.state && typeof location.state.notice === "string" ? <p className={`${plate} mt-5 text-sm text-eui-brand`} role="status">{location.state.notice}</p> : null}
     {loading ? <p className={`${plate} mt-8 text-eui-slate-500`} aria-live="polite">{gallery.loading}</p> : null}
     {failed ? <div className={`${plate} mt-8 text-eui-magenta`} role="alert"><p>{gallery.apiUnavailable}</p><button className={`${pillGhost} mt-3`} type="button" onClick={reload}>{common.retry}</button></div> : null}
+    {!loading && !failed && catalog.status === "ready" && !usableSystems.length ? <section className={`${plate} mt-8`}>
+      <h2 className="font-eui-display text-xl font-medium">{gallery.noUsableSystemsTitle}</h2>
+      <p className="mt-2 text-eui-slate-500">{gallery.noUsableSystemsBody}</p>
+      <Link className={`${pillPrimary} mt-5`} to="/library">{gallery.createDesignSystem}</Link>
+    </section> : null}
     {!loading && !failed ? <div className="mt-6 flex flex-wrap gap-2" aria-label={gallery.tabsAria}>
       {([['mine', gallery.tabMine], ['shared', gallery.tabShared], ['archive', gallery.tabArchive]] as const).map(([id, label]) => <button type="button" key={id} aria-pressed={tab === id} className={tab === id ? chipActive : chip} onClick={() => setTab(id)}>{label}</button>)}
     </div> : null}
@@ -217,11 +220,11 @@ export function GalleryPage() {
           >{prototype.name}</Link>
         </h2>
         <p className="mt-2 min-h-10 break-words text-sm text-eui-slate-500 [overflow-wrap:anywhere]">{prototype.description ?? gallery.noDescription}</p>
-        {previewsEnabled && isBuiltinDesignSystem(prototype.designSystem ?? "shadcn") ? <GalleryPreview prototypeId={prototype.id} /> : null}
+        {previewsEnabled && prototype.status !== "archived" ? <GalleryPreview prototypeId={prototype.id} /> : null}
         <dl className="mt-5 grid min-w-0 grid-cols-2 gap-3 text-sm xl:grid-cols-4">
           <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.deviceLabel}</dt><dd className="inline-flex rounded-full bg-white px-2.5 py-1 text-xs font-medium">{deviceNames[prototype.device]}</dd></div>
           <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.screensLabel}</dt><dd className="inline-flex rounded-full bg-white px-2.5 py-1 text-xs font-medium">{prototype.screenCount}</dd></div>
-          <div className="flex min-w-0 flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.systemLabel}</dt><dd className="inline-flex max-w-full break-all rounded-full bg-eui-lilac-200 px-2.5 py-1 text-xs font-medium">{systemNames.get(prototype.designSystem ?? "shadcn") ?? prototype.designSystem ?? "shadcn"}</dd></div>
+          <div className="flex min-w-0 flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.systemLabel}</dt><dd className="inline-flex max-w-full break-all rounded-full bg-eui-lilac-200 px-2.5 py-1 text-xs font-medium">{prototype.designSystem ? systemNames.get(prototype.designSystem) ?? prototype.designSystem : gallery.legacySystem}</dd></div>
           <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.updatedLabel}</dt><dd className="text-xs font-medium"><time dateTime={prototype.updatedAt}>{formatGalleryUpdatedAt(prototype.updatedAt)}</time></dd></div>
         </dl>
         <div className="relative z-10 mt-5 flex flex-wrap gap-2">
@@ -239,7 +242,7 @@ export function GalleryPage() {
       : <section className={`${plate} mt-8`}>
         <h2 className="font-eui-display text-xl font-medium">{gallery.emptyTitle}</h2>
         <p className="mt-2 text-eui-slate-500">{gallery.empty}</p>
-        <button type="button" className={`${pillPrimary} mt-5`} onClick={openCreateDialog}>{gallery.newPrototype}</button>
+        {usableSystems.length ? <button type="button" className={`${pillPrimary} mt-5`} onClick={openCreateDialog}>{gallery.newPrototype}</button> : null}
       </section> : null}
     {createDialog ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
       <section role="dialog" aria-modal="true" aria-label={gallery.createDialogAria} className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
@@ -250,14 +253,10 @@ export function GalleryPage() {
           </label>
           <label className="block text-sm font-medium">{gallery.systemLabelCreate}
             <select className={`${inputBase} mt-1.5 w-full bg-white`} name="design-system" value={createDialog.designSystemId} disabled={createDialog.status === "creating"} onChange={(event) => setCreateDialog((current) => current ? { ...current, designSystemId: event.target.value, error: false } : null)}>
-              {systems.map((system) => <option key={system.id} value={system.id}>{system.name}</option>)}
+              {usableSystems.map((system) => <option key={system.id} value={system.id}>{system.name}</option>)}
             </select>
           </label>
-          {isBuiltinDesignSystem(createDialog.designSystemId) ? <p className="text-sm text-eui-slate-500">{gallery.builtinStarterReady}</p>
-            : catalog.status === "loading" ? <p className="text-sm text-eui-slate-500" role="status">{gallery.customStarterLoading}</p>
-              : catalog.status === "error" ? <p className="text-sm text-eui-magenta" role="alert">{gallery.customStarterUnavailable}</p>
-                : customStarter ? <p className="text-sm text-eui-slate-500">{gallery.customStarterReady(customStarter.name)}</p>
-                  : <p className="text-sm text-eui-magenta" role="alert">{gallery.customStarterMissing}</p>}
+          <p className="text-sm text-eui-slate-500">{gallery.hostStarterReady}</p>
           {createDialog.error ? <p className="text-sm text-eui-magenta" role="alert">{gallery.createFailed}</p> : null}
           <div className="flex flex-wrap justify-end gap-2 pt-2">
             <button type="button" className={pillGhost} disabled={createDialog.status === "creating"} onClick={() => setCreateDialog(null)}>{gallery.cancel}</button>

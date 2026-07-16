@@ -13,11 +13,7 @@ export const gallery = {
   creating: "Создаём…",
   cancel: "Отмена",
   createFailed: "Не удалось создать прототип. Попробуйте ещё раз.",
-  customStarterLoading: "Проверяем стартовый компонент дизайн-системы…",
-  customStarterUnavailable: "Каталог компонентов недоступен: нельзя проверить валидный стартовый экран.",
-  customStarterMissing: "Создание недоступно: в этой дизайн-системе нет опубликованного компонента с валидным example для стартового экрана.",
-  customStarterReady: (componentName: string) => `Стартовый экран будет создан с компонентом ${componentName}.`,
-  builtinStarterReady: "Будут созданы два стартовых экрана с базовым переходом.",
+  hostStarterReady: "Стартовый экран использует только Image и Hotspot; компоненты можно добавить позже.",
   initialRevisionMessage: (version: number) => `Стартовый шаблон v${version}`,
   loading: "Загружаем прототипы…",
   apiUnavailable: "API недоступен",
@@ -62,6 +58,10 @@ export const gallery = {
   emptySearch: "По вашему запросу ничего не найдено.",
   emptyTitle: "Создайте первый прототип",
   empty: "Выберите дизайн-систему — мы подготовим валидные стартовые экраны.",
+  noUsableSystemsTitle: "Нужна дизайн-система с компонентами",
+  noUsableSystemsBody: "Создайте дизайн-систему и опубликуйте хотя бы один компонент, чтобы начать новый прототип.",
+  createDesignSystem: "Создать дизайн-систему",
+  legacySystem: "Архивная система",
 } as const;
 
 export { deviceNames } from "./common";

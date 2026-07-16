@@ -5,26 +5,32 @@ export const canonicalSpacingScale: Record<SpaceToken, string> = {
   xl: "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px",
 };
 
-export const wireframeSpacingScale: Record<SpaceToken, string> = {
+/** Frozen geometry contract for custom revisions stored in retired wireframe. */
+export const wireframeSpacingScale: Record<SpaceToken, string> = Object.freeze({
   none: "0px", xs: "4px", sm: "8px", md: "16px", lg: "24px",
   xl: "32px", "2xl": "48px", "3xl": "64px", "4xl": "80px",
-};
+});
 
 export const yandexPaySpacingScale: Record<SpaceToken, string> = {
   none: "0px", xs: "4px", sm: "8px", md: "12px", lg: "16px",
   xl: "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px",
 };
 
-export const shadcnSpacingScale: Record<SpaceToken, string> = {
+/** Frozen geometry contract for custom revisions stored in retired shadcn. */
+export const shadcnSpacingScale: Record<SpaceToken, string> = Object.freeze({
   none: "0px", xs: "4px", sm: "8px", md: "12px", lg: "16px",
   xl: "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px",
-};
+});
+
+export const legacyDesignSystemSpacingScales = Object.freeze({
+  wireframe: wireframeSpacingScale,
+  shadcn: shadcnSpacingScale,
+});
 
 const systemScales: Record<string, Record<SpaceToken, string>> = {
   canonical: canonicalSpacingScale,
-  wireframe: wireframeSpacingScale,
+  ...legacyDesignSystemSpacingScales,
   "yandex-pay": yandexPaySpacingScale,
-  shadcn: shadcnSpacingScale,
 };
 
 const pxValue = (value: unknown): number | null => {

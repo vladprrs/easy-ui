@@ -34,7 +34,7 @@ describe("prototype API", () => {
     expect(value.designSystems).toEqual([
       expect.objectContaining({ id: "yandex-pay", retired:false, components: [], hostPrimitives: expect.arrayContaining([expect.objectContaining({ name: "Overlay" }), expect.objectContaining({ name: "Image" }), expect.objectContaining({ name: "Hotspot" })]) }),
     ]);
-    expect(await body(await fetch(`${base}/api/design-systems/shadcn`))).toMatchObject({id:"shadcn",retired:true,components:expect.arrayContaining([expect.objectContaining({name:"Button"})])});
+    expect(await body(await fetch(`${base}/api/design-systems/shadcn`))).toMatchObject({id:"shadcn",retired:true,components:[]});
     expect(JSON.stringify(value)).not.toContain("_def");
     response = await fetch(`${base}/api/design-systems/yandex-pay`);
     expect(response.status).toBe(200);

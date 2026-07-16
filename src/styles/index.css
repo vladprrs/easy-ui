@@ -1,8 +1,5 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-
-@source "../../node_modules/@json-render/shadcn/dist/*.{js,mjs}";
-
 @custom-variant dark (&:is(.dark *));
 
 @font-face {

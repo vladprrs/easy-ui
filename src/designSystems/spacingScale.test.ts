@@ -9,6 +9,12 @@ describe("resolveSpacingScale", () => {
     expect(resolveSpacingScale("shadcn", {})).toEqual(shadcnSpacingScale);
   });
 
+  it("preserves custom-only retired wireframe revision geometry", () => {
+    expect(resolveSpacingScale("wireframe", {})).toEqual({
+      none: "0px", xs: "4px", sm: "8px", md: "16px", lg: "24px", xl: "32px", "2xl": "48px", "3xl": "64px", "4xl": "80px",
+    });
+  });
+
   it("merges valid theme values and synthesizes missing tokens", () => {
     expect(resolveSpacingScale("custom", { "space.md": "14px", "color.brand": "red" })).toEqual({
       ...canonicalSpacingScale, md: "14px",

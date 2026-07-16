@@ -1,0 +1,10 @@
+{
+  "id": "e2e-starter",
+  "name": "E2E Starter",
+  "description": "Declarative custom-only starter used by template validation and B4 provisioning.",
+  "components": [
+    { "id": "e2e-button", "name": "StarterButton", "source": "StarterButton.tsx" },
+    { "id": "e2e-text", "name": "StarterText", "source": "StarterText.tsx" },
+    { "id": "e2e-stack", "name": "StarterStack", "source": "StarterStack.tsx" }
+  ]
+}

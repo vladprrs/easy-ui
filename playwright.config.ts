@@ -25,12 +25,6 @@ export default defineConfig({
       timeout: 120_000,
     },
     {
-      command: `${adminEnv} npm run storybook`,
-      url: `http://${viteHost}:6006`,
-      reuseExistingServer: true,
-      timeout: 180_000,
-    },
-    {
       command: `rm -rf .e2e-data/dev && ${adminEnv} DATA_DIR=.e2e-data/dev PORT=8787 PUBLIC_ORIGIN=http://${viteHost}:5173 ${bun} server/main.ts`,
       url: `http://${bunHost}:8787/api/health`,
       reuseExistingServer: false,

@@ -1,7 +1,7 @@
 // Общий словарь product chrome (план 2026-07-13, W0-5, «Сквозные решения» п.1).
 // Локализуется только хром продукта; authored-контент прототипов, имена
-// компонентов/props и тексты Storybook-историй не трогаем.
-// Allowlist доменных терминов без перевода: CJM, Storybook, API, Basic Auth.
+// компонентов/props не трогаем.
+// Allowlist доменных терминов без перевода: CJM, API, Basic Auth.
 
 /** Русская плюрализация: forms = [1 экран, 2 экрана, 5 экранов]. */
 export function pluralRu(count: number, forms: readonly [one: string, few: string, many: string]): string {

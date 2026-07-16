@@ -3,7 +3,6 @@ import { resolve } from "node:path";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import type { ComponentDefinition } from "../../catalog/definitions";
-import { resolveBuiltinSystem } from "../../designSystems";
 import type { ComponentLayout } from "../../designSystems/types";
 import { classNamePositioningTokens, layoutLintCodes, lintPrototypeLayouts } from "../layoutLints";
 import { prototypeDocSchema, type PrototypeDoc } from "../schema";
@@ -196,7 +195,7 @@ describe("integration fixtures", () => {
     const prototypesDir = resolve(process.cwd(), "test/fixtures");
     for (const name of readdirSync(prototypesDir).filter((entry) => entry.endsWith(".json"))) {
       const parsed = prototypeDocSchema.parse(JSON.parse(readFileSync(resolve(prototypesDir, name), "utf8")));
-      const result = validatePrototype(parsed, { definitions: resolveBuiltinSystem(parsed.designSystem).definitions });
+      const result = validatePrototype(parsed, { definitions });
       expect(result.warnings.filter((issue) => issue.code?.startsWith("layout/")), name).toEqual([]);
     }
   });

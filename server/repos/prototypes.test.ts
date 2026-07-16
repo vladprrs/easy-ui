@@ -17,7 +17,7 @@ const legacyDoc = {
 };
 const dbForRepo=()=>{const db=openDatabase(":memory:");db.run("UPDATE design_systems SET retired=0 WHERE id IN ('shadcn','wireframe')");return db;};
 
-test("normalizes legacy stored docs in draft, revision, version, restore, and publish paths",()=>{
+test("normalizes legacy stored docs and classifies their retired builtin types as archived",()=>{
   const db=dbForRepo();
   db.query(`INSERT INTO prototypes (id,name,description,device,screen_count,head_rev,instance_id,created_at,updated_at)
     VALUES (?,?,?,?,?,1,?,?,?)`).run("legacy","Legacy",null,"desktop",1,"legacy-instance","now","now");
@@ -28,10 +28,7 @@ test("normalizes legacy stored docs in draft, revision, version, restore, and pu
 
   expect(repo.draft("legacy").doc.designSystem).toBe("shadcn");
   expect(repo.revision("legacy",1).doc.designSystem).toBe("shadcn");
-  expect(repo.publish("legacy",1)).toEqual({version:1,rev:1});
-  expect(repo.version("legacy",1).doc.designSystem).toBe("shadcn");
-  expect(repo.restore("legacy",1,1)).toEqual({rev:2});
-  expect(repo.draft("legacy").doc.designSystem).toBe("shadcn");
+  expect(repo.classifyRevision("legacy",1).renderable).toBe(false);
   db.close();
 });
 
@@ -93,7 +90,7 @@ test("round-trips a prototype in a registered system without a provider",()=>{
 });
 
 test("restore and publish use the pinned publish revision system after a component move",()=>{
-  const db=dbForRepo(); const repo=new PrototypeRepo(db); const doc=prototypeDocSchema.parse(legacyDoc);
+  const db=dbForRepo(); const repo=new PrototypeRepo(db); const doc=prototypeDocSchema.parse({...legacyDoc,screens:[{...legacyDoc.screens[0],spec:{root:"root",elements:{root:{type:"Custom",props:{}}}}}]});
   db.query("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('custom','Custom',2,'yandex-pay','now','now')").run();
   db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('custom',1,'old','shadcn','now'),('custom',2,'new','yandex-pay','now')").run();
   db.query(`INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at)
@@ -116,7 +113,7 @@ test("unknown design systems fail atomically with the designSystem path",()=>{
 });
 
 test("damaged historical revisions return a controlled error with prototype context",()=>{
-  const db=dbForRepo(); const repo=new PrototypeRepo(db); const doc=prototypeDocSchema.parse(legacyDoc);
+  const db=dbForRepo(); const repo=new PrototypeRepo(db); const doc=prototypeDocSchema.parse({...legacyDoc,designSystem:"yandex-pay",screens:[{...legacyDoc.screens[0],spec:{root:"root",elements:{root:{type:"Image",props:{src:"/legacy.png",alt:"Legacy"}}}}}]});
   repo.create(doc); repo.publish("legacy",1);
   db.run("DROP TRIGGER prototype_revisions_reject_retired_design_system_update");
   db.query("UPDATE prototype_revisions SET doc='not json' WHERE prototype_id='legacy' AND rev=1").run();

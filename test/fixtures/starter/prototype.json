@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "id": "e2e-starter-prototype",
+  "name": "E2E starter prototype",
+  "designSystem": "e2e-starter",
+  "device": "mobile",
+  "startScreen": "start",
+  "state": {},
+  "screens": [{
+    "id": "start",
+    "name": "Start",
+    "spec": {
+      "root": "stack",
+      "elements": {
+        "stack": { "type": "StarterStack", "props": { "gap": "md" }, "children": ["text", "button"] },
+        "text": { "type": "StarterText", "props": { "text": "Custom-only starter" } },
+        "button": { "type": "StarterButton", "props": { "label": "Continue" }, "on": { "press": { "action": "restart", "params": {} } } }
+      }
+    }
+  }]
+}

@@ -1,14 +1,10 @@
 import type { AtomicLevel, CatalogComponent, ComponentVersionSummary, DesignSystemSummary, VisualReference } from "../api/client";
 import { libraryStatusLabels } from "../app/strings/library";
-import { parseStorybookTitle, type StorybookEntry } from "./storybookIndex";
 
-export type LibrarySelection =
-  | { kind: "story"; storyId: string }
-  | { kind: "custom"; componentId: string; designSystem: string };
+export type LibrarySelection = { kind: "custom"; componentId: string; designSystem: string };
 
 export interface LibrarySystemGroup {
   system: DesignSystemSummary;
-  stories: StorybookEntry[];
   components: CatalogComponent[];
 }
 
@@ -18,29 +14,23 @@ export const atomicLevelLabel = (level?: AtomicLevel) => level
 
 export function groupLibraryEntries(
   systems: DesignSystemSummary[],
-  stories: StorybookEntry[],
   components: CatalogComponent[],
 ): LibrarySystemGroup[] {
-  const groups = systems.map((system) => ({ system, stories: [] as StorybookEntry[], components: [] as CatalogComponent[] }));
-  const aliases = new Map(groups.flatMap((group) => [group.system.id, group.system.name]
-    .map((value) => [value.toLocaleLowerCase(), group] as const)));
-  for (const story of stories) aliases.get(parseStorybookTitle(story).system.toLocaleLowerCase())?.stories.push(story);
+  const groups = systems.map((system) => ({ system, components: [] as CatalogComponent[] }));
   const byId = new Map(groups.map((group) => [group.system.id, group]));
   for (const component of components) byId.get(component.designSystem)?.components.push(component);
   for (const group of groups) {
-    group.stories.sort((a, b) => parseStorybookTitle(a).name.localeCompare(parseStorybookTitle(b).name));
     group.components.sort((a, b) => a.name.localeCompare(b.name));
   }
   return groups.sort((a, b) => a.system.name.localeCompare(b.system.name));
 }
 
-export const selectionForStory = (story: StorybookEntry): LibrarySelection => ({ kind: "story", storyId: story.id });
 export const selectionForComponent = (component: CatalogComponent): LibrarySelection => ({
   kind: "custom", componentId: component.id, designSystem: component.designSystem,
 });
 
 export function selectionKey(selection: LibrarySelection): string {
-  return selection.kind === "story" ? `story:${selection.storyId}` : `custom:${selection.componentId}:${selection.designSystem}`;
+  return `custom:${selection.componentId}:${selection.designSystem}`;
 }
 
 // --- Library status filters (plan §H.2) ---
@@ -93,7 +83,7 @@ export function matchesLibraryFilter(status: ComponentLibraryStatus, filter: Lib
 }
 
 // A filter is useful only when it narrows the current component list. This also keeps lifecycle
-// controls out of builtin-only systems, whose Storybook stories do not have component statuses.
+// controls out of uniform component lists.
 export function applicableLibraryStatusKeys(statuses: ComponentLibraryStatus[]): LibraryStatusKey[] {
   if (statuses.length < 2) return [];
   return LIBRARY_STATUS_KEYS.filter((key) => {

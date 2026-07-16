@@ -17,6 +17,11 @@ export function MissingPrototype() {
   return <main className={loaderPlate}><h1 className="text-2xl font-bold">{loader.missingTitle}</h1><p className="mt-2">{loader.missingBody}</p><Link className="mt-4 inline-block underline" to="/">{common.backToGallery}</Link></main>;
 }
 
+export function ArchivedPrototype() {
+  useDocumentTitle(loader.archivedTitle);
+  return <main className={loaderPlate} data-prototype-archived="true" role="status"><h1 className="text-2xl font-bold">{loader.archivedTitle}</h1><p className="mt-2">{loader.archivedBody}</p><Link className="mt-4 inline-block underline" to="/">{common.backToGallery}</Link></main>;
+}
+
 // version_not_found (W0-4): the prototype exists, but the requested published version does not.
 // «Открыть текущую» keeps the surface (player/CJM/screen) by stripping the /v/{version} segment.
 export function MissingVersion({ protoId, version }: { protoId: string; version: number }) {
@@ -53,6 +58,7 @@ export interface PrototypeLoaderResult {
 interface PrototypeLoaderProps {
   protoId?: string;
   version?: number;
+  allowArchivedPlaceholder?: boolean;
   children: (result: PrototypeLoaderResult) => ReactNode;
 }
 
@@ -74,7 +80,7 @@ function LoadedPrototype({ loaded, routeBase, children }: {
   return children({ loaded, custom: customState.data, runtimeKey, routeBase });
 }
 
-export function PrototypeLoader({ protoId, version, children }: PrototypeLoaderProps) {
+export function PrototypeLoader({ protoId, version, allowArchivedPlaceholder = true, children }: PrototypeLoaderProps) {
   const prototypeState = useApi(
     (signal) => version === undefined
       ? loadPrototypeDraft(protoId ?? "", signal)
@@ -93,6 +99,9 @@ export function PrototypeLoader({ protoId, version, children }: PrototypeLoaderP
     }
     return <LoadError error={prototypeState.error} retry={prototypeState.reload} />;
   }
+  // This is the single frontend renderability gate: no component bundle is
+  // requested and no runtime is created for an archived revision.
+  if (prototypeState.data.renderable === false) return allowArchivedPlaceholder ? <ArchivedPrototype /> : <MissingPrototype />;
   const revision = "version" in prototypeState.data ? `v${prototypeState.data.version}` : `r${prototypeState.data.rev}`;
   const runtimeKey = `${prototypeState.data.doc.id}:${revision}:${prototypeState.data.componentManifestHash}:${prototypeState.data.doc.designSystem}`;
   return <LoadedPrototype key={runtimeKey} loaded={prototypeState.data} routeBase={buildPrototypeRouteBase(protoId, version)}>{children}</LoadedPrototype>;

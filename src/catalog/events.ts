@@ -1,4 +1,4 @@
-import { componentDefinitions } from "./definitions";
+import { hostPrimitiveDefinitions as componentDefinitions } from "./hostPrimitives/definitions";
 
 export const componentEvents = Object.fromEntries(
   Object.entries(componentDefinitions).map(([name, rawDefinition]) => {

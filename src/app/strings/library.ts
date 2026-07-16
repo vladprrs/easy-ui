@@ -1,5 +1,4 @@
-// Строки библиотеки компонентов (W0-5). Storybook и Figma — собственные имена,
-// не переводятся; названия историй и имена компонентов — authored-контент.
+// Строки custom-only библиотеки компонентов.
 
 import { pluralRu } from "./common";
 
@@ -17,13 +16,9 @@ export const library = {
   emptySystemCreateStep: "Создайте компонент с исходником TSX:",
   emptySystemPublishStep: "Опубликуйте подготовленную версию:",
   emptySystemApiLink: "Открыть описание API",
-  loadingStorybook: "Загружаем Storybook…",
-  storybookUnavailable: "Storybook недоступен; пользовательские компоненты по-прежнему видны.",
   loadingCatalog: "Загружаем каталог пользовательских компонентов…",
   catalogUnavailable: "Каталог пользовательских компонентов недоступен.",
   selectComponent: "Выберите компонент слева, чтобы посмотреть его описание и живое превью.",
-  openInStorybook: "Открыть в Storybook",
-  storyPreviewTitle: "Превью истории",
   customBadge: "Пользовательский компонент",
   customSectionSuffix: "пользовательские",
   componentPageLink: "Страница компонента",
@@ -45,7 +40,7 @@ export const figmaBadgeTitle = (fileKey: string, nodeCount: number) =>
   `Figma ${fileKey} · ${nodeCount} ${pluralRu(nodeCount, ["узел", "узла", "узлов"])}`;
 
 // Заголовки секций по уровням Atomic Design. Ключи совпадают со структурой
-// заголовков Storybook-историй (parseStorybookTitle) и atomicLevelLabel.
+// atomicLevelLabel.
 export const levelSectionLabel: Record<string, string> = {
   Layout: "Лэйаут",
   Atoms: "Атомы",

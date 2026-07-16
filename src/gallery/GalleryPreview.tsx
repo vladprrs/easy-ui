@@ -13,6 +13,7 @@ import { HostStageSurface } from "../catalog/hostPrimitives";
 import { CanvasLayers } from "../player/CanvasLayers";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
+import { ArchivedPrototype } from "../player/PrototypeLoader";
 
 export const GALLERY_PREVIEWS_ENABLED = true;
 export const GALLERY_PREVIEW_LOAD_LIMIT = 4;
@@ -141,7 +142,8 @@ function LoadedGalleryPreview({ prototypeId }: { prototypeId: string }) {
     <ThemeStyle content={themeContent} />
     {draft.status === "error" ? <div data-gallery-preview-state="error" /> : draft.status === "loading"
       ? <div className="h-44 animate-pulse rounded-2xl bg-white/60 motion-reduce:animate-none" data-gallery-preview-state="loading" />
-      : <GalleryPreviewFrame draft={draft.data} themeContent={themeContent} manageTheme={false} />}
+      : draft.data.renderable === false ? <ArchivedPrototype />
+        : <GalleryPreviewFrame draft={draft.data} themeContent={themeContent} manageTheme={false} />}
   </>;
 }
 

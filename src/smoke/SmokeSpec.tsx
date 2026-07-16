@@ -1,114 +1,47 @@
 import type { Spec } from "@json-render/core";
 import { JSONUIProvider, Renderer } from "@json-render/react";
 import { useMemo, useState } from "react";
-import { createPlayerRuntime, type PlayerRuntimeDeps } from "../catalog/runtime";
+import { z } from "zod";
+import { createPlayerRuntime, type CustomPlayerRuntime, type PlayerRuntimeDeps } from "../catalog/runtime";
+import type { EasyUIComponentProps } from "../player/easyUiRuntime";
 import { appShell } from "../app/strings/common";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 
-// This smoke fixture intentionally exercises the default, shadcn-only catalog.
+const custom: CustomPlayerRuntime = {
+  definitions: {
+    SmokeStack: { props: z.strictObject({}), description: "Smoke stack", slots: ["default"] },
+    SmokeText: { props: z.strictObject({ text: z.string() }), description: "Smoke text" },
+    SmokeButton: { props: z.strictObject({ label: z.string() }), description: "Smoke button", events: ["press"] },
+  },
+  components: {
+    SmokeStack: ({ children }: EasyUIComponentProps) => <div className="space-y-3">{children}</div>,
+    SmokeText: ({ props }: EasyUIComponentProps<{ text: string }>) => <p>{props.text}</p>,
+    SmokeButton: ({ props, emit }: EasyUIComponentProps<{ label: string }>) => <button type="button" onClick={() => emit("press")}>{props.label}</button>,
+  } as unknown as CustomPlayerRuntime["components"],
+};
+
 export const smokeSpec = {
-  root: "card",
+  root: "stack",
   elements: {
-    card: {
-      type: "Card",
-      props: {
-        title: "Vertical spike",
-        description: "A live json-render spec with state and custom actions",
-        maxWidth: "lg",
-        centered: true,
-        className: null,
-      },
-      children: ["heading", "input", "switch", "details", "toggle", "greeting", "navigate", "hotspot"],
-    },
-    heading: { type: "Heading", props: { text: "easy-ui debug", level: "h1" }, children: [] },
-    input: {
-      type: "Input",
-      props: {
-        label: "Name",
-        name: "name",
-        type: "text",
-        placeholder: "Ada",
-        value: { $bindState: "/name" },
-        checks: null,
-        validateOn: null,
-      },
-      children: [],
-    },
-    switch: {
-      type: "Switch",
-      props: {
-        label: "Show details",
-        name: "show-details",
-        checked: { $bindState: "/showDetails" },
-        checks: null,
-        validateOn: null,
-      },
-      children: [],
-    },
-    details: {
-      type: "Text",
-      props: { text: "Conditional content is visible", variant: "default" },
-      visible: { $state: "/showDetails" },
-      children: [],
-    },
-    toggle: {
-      type: "Button",
-      props: { label: "Show details via setState", variant: "primary", disabled: false },
-      on: { press: { action: "setState", params: { statePath: "/showDetails", value: true } } },
-      children: [],
-    },
-    greeting: {
-      type: "Text",
-      props: { text: { $template: "Hello, ${/name}!" }, variant: "muted" },
-      children: [],
-    },
-    navigate: {
-      type: "Button",
-      props: { label: "Navigate to checkout", variant: "outline", disabled: false },
-      on: { press: { action: "navigate", params: { screenId: "checkout" } } },
-      children: [],
-    },
-    hotspot: {
-      type: "Hotspot",
-      props: { x: 12, y: 12, width: 44, height: 44, ariaLabel: "Restart prototype" },
-      on: { press: { action: "restart", params: {} } },
-      children: [],
-    },
+    stack: { type: "SmokeStack", props: {}, children: ["details", "toggle", "navigate", "image", "hotspot"] },
+    details: { type: "SmokeText", props: { text: "Conditional content is visible" }, visible: { $state: "/showDetails" } },
+    toggle: { type: "SmokeButton", props: { label: "Show details via setState" }, on: { press: { action: "setState", params: { statePath: "/showDetails", value: true } } } },
+    navigate: { type: "SmokeButton", props: { label: "Navigate to checkout" }, on: { press: { action: "navigate", params: { screenId: "checkout" } } } },
+    image: { type: "Image", props: { src: "/design/cjm-ui/assets/mascot-laptop.png", alt: "Smoke host image", width: 120, height: 80 } },
+    hotspot: { type: "Hotspot", props: { x: 12, y: 12, width: 44, height: 44, ariaLabel: "Restart prototype" }, on: { press: { action: "restart", params: {} } } },
   },
 } as Spec;
 
 export function SmokeRenderer({ deps }: { deps: PlayerRuntimeDeps }) {
-  const runtime = useMemo(() => createPlayerRuntime(deps), [deps]);
-  return (
-    <JSONUIProvider
-      registry={runtime.registry}
-      handlers={runtime.handlers}
-      initialState={{ name: "Ada", showDetails: false }}
-    >
-      <Renderer registry={runtime.registry} spec={smokeSpec} />
-    </JSONUIProvider>
-  );
+  const runtime = useMemo(() => createPlayerRuntime(deps, custom, "custom-only"), [deps]);
+  return <JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} initialState={{ showDetails: false }}><Renderer registry={runtime.registry} spec={smokeSpec} /></JSONUIProvider>;
 }
 
 export function SmokeSpec() {
   useDocumentTitle(appShell.navDebug);
   const [calls, setCalls] = useState<string[]>([]);
   const deps = useMemo<PlayerRuntimeDeps>(() => ({
-    navigate: (screenId) => setCalls((items) => [...items, `navigate:${screenId}`]),
-    back: () => setCalls((items) => [...items, "back"]),
-    openUrl: (url) => setCalls((items) => [...items, `openUrl:${url}`]),
-    restart: () => setCalls((items) => [...items, "restart"]),
+    navigate: (screenId) => setCalls((items) => [...items, `navigate:${screenId}`]), back: () => setCalls((items) => [...items, "back"]), openUrl: (url) => setCalls((items) => [...items, `openUrl:${url}`]), restart: () => setCalls((items) => [...items, "restart"]),
   }), []);
-
-  return (
-    <main className="mx-auto max-w-3xl px-6 py-10 sm:px-8">
-      <SmokeRenderer deps={deps} />
-      <section className="mt-8 rounded-3xl border border-eui-ink/10 bg-white p-6" aria-label="Action log">
-        <h2 className="font-eui-display text-xl font-medium">Custom action log</h2>
-        <output className="mt-2 block font-mono text-sm" aria-live="polite">
-          {calls.length ? calls.join("\n") : "No custom actions yet"}
-        </output>
-      </section>
-    </main>
-  );
+  return <main className="mx-auto max-w-3xl px-6 py-10 sm:px-8"><SmokeRenderer deps={deps} /><output className="mt-8 block font-mono text-sm" aria-live="polite">{calls.length ? calls.join("\n") : "No custom actions yet"}</output></main>;
 }

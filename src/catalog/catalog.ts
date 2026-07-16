@@ -1,7 +1,8 @@
 import { defineCatalog } from "@json-render/core";
 import { schema } from "@json-render/react";
 import { customCatalogActions } from "./actions";
-import { componentDefinitions, normalizeDefinitions, type ComponentDefinition } from "./definitions";
+import { normalizeDefinitions, type ComponentDefinition } from "./definitions";
+import { hostPrimitiveDefinitions } from "./hostPrimitives/definitions";
 
 export function createCatalog(definitions: Record<string, ComponentDefinition>) {
   return defineCatalog(schema, {
@@ -11,6 +12,6 @@ export function createCatalog(definitions: Record<string, ComponentDefinition>) 
 }
 
 export const catalog = defineCatalog(schema, {
-  components: componentDefinitions,
+  components: normalizeDefinitions(hostPrimitiveDefinitions),
   actions: customCatalogActions,
 });

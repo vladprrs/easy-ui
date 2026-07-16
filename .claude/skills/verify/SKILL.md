@@ -1,32 +1,28 @@
 ---
 name: verify
-description: Verify easy-ui changes end-to-end by driving the running app (gallery → player flows → library) with Playwright and screenshots.
+description: Verify easy-ui custom-only flows end-to-end with Playwright and screenshots.
 ---
 
 # Verify easy-ui
 
-## Build & launch
+## Build and launch
 
 - `npm ci` (Node ≥24; committed package-lock).
-- App dev server: `npm run dev` → **:5173**. Storybook: `npm run storybook` → **:6006**.
-  ⚠ This code-server workspace **ignores port flags** (`-p`, `--port`) — always detect the real port from the server log, never assume a flag worked.
-- Production check: `npm run build` then `npx vite preview` → :4173 (script `preview` also exists). SPA fallback must serve `/p/<id>/s/<screen>` deep links; `/storybook/index.json` is same-origin static.
-- Reverse proxy hosts (`*.coder`) are allowlisted via `server.allowedHosts`/`preview.allowedHosts` in vite.config.ts — if a new host is blocked, extend that list.
+- `npm run server:dev` → API :8787, then `npm run dev` → app :5173.
+- Production: `npm run build`, then `npm run serve` → API + SPA :4173.
+- This workspace may ignore port flags; use the server log as the source of truth.
 
-## Drive (surface = browser GUI)
+## Drive
 
-Playwright chromium is installed. For an ad-hoc driver script outside the repo, import from the project tree:
-`import { chromium } from '/home/coder/project/node_modules/playwright/index.mjs'`.
+Use API-created custom components or `test/fixtures/starter/`; do not assume any built-in catalog. Verify:
 
-Flows worth driving (labels are Russian — take them from `prototypes/*.json` props, don't guess):
-1. `/` gallery → card «Мобильное оформление заказа» → `/p/checkout/s/catalog`.
-2. Hotspot «Открыть карточку кроссовок» → product; «В корзину» → cart badge increments ($state); «Оформить» → form; fill input, browser Back/Forward → value must persist ($bindState); «Оплатить» → success; «Начать заново» (restart) → catalog with clean state; then several browser Backs → must **stay** on the current-session start screen (stale-history gate).
-3. `/p/settings` → Tabs, Switch toggles «Тёмная тема включена» visibility, Dialog, «Назад».
-4. `/library` → story tree from Storybook index.json, iframe preview, "Open in Storybook" link. With Storybook down it must degrade to instructions, not crash.
-5. Probes: `/p/nonexistent` and `/p/checkout/s/nonexistent` → friendly 404 page.
+1. Gallery → custom prototype → player navigation/state/restart.
+2. Player, Present, CJM, Editor and Capture render pinned custom bundles plus host `Image`/`Hotspot`/`Overlay`.
+3. An unrenderable authorized revision shows «Прототип в архиве» before component bundles load; revoked share URLs remain 404/410.
+4. Gallery archive cards show the archive badge without mounting a preview.
+5. `/library` lists only API-backed custom components and their capture previews.
+6. `/p/nonexistent` and missing screens show friendly not-found states.
 
-## Gotchas
+## Static release gate
 
-- Never `pkill -f` with a pattern that appears literally in your own command line (it kills your own shell). Kill by PID or use harness background tasks + TaskStop.
-- Backticks in long shell strings execute (command substitution) — pass long prompts/scripts via files.
-- `npm test` / typecheck are CI's job — verification here means driving the running app and capturing screenshots.
+Run `npm run verify`. It includes strict template validation, the SPA build, and the ordered CSS compatibility gate; `dist/storybook` must not exist.

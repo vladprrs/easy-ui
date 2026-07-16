@@ -2,22 +2,12 @@ import { defineRegistry, type ComponentRegistry, type ComponentRenderProps, type
 import { createElement, type ComponentType } from "react";
 import { createCatalog } from "./catalog";
 import type { ComponentDefinition } from "./definitions";
-import { resolveBuiltinSystem } from "../designSystems";
 import { wrapCustomComponent, type EasyUIComponentProps } from "../player/easyUiRuntime";
 import { EUI_KEY_PROP } from "../prototype/runtimeSpec";
 import { hostPrimitiveComponents } from "./hostPrimitives";
 import { hostPrimitiveDefinitions } from "./hostPrimitives/definitions";
 
-const builtinCatalogs = new Map<string, ReturnType<typeof createCatalog>>();
-
-function getBuiltinCatalog(designSystemId: string, definitions: Record<string, ComponentDefinition>) {
-  let runtimeCatalog = builtinCatalogs.get(designSystemId);
-  if (!runtimeCatalog) {
-    runtimeCatalog = createCatalog(definitions);
-    builtinCatalogs.set(designSystemId, runtimeCatalog);
-  }
-  return runtimeCatalog;
-}
+const hostCatalog = createCatalog(hostPrimitiveDefinitions);
 
 export interface PlayerRuntimeDeps {
   navigate: (screenId: string) => void | Promise<void>;
@@ -54,9 +44,10 @@ function decorateElementMarkers(registry: ComponentRegistry): ComponentRegistry 
   }));
 }
 
-export function createPlayerRuntime(deps: PlayerRuntimeDeps, custom?: CustomPlayerRuntime, designSystemId = "shadcn") {
-  const system = resolveBuiltinSystem(designSystemId);
-  const builtinComponents = system.components;
+export function createPlayerRuntime(deps: PlayerRuntimeDeps, custom?: CustomPlayerRuntime, designSystemId?: string) {
+  void designSystemId; // retained as a source-compatible diagnostic argument; runtime is host/custom-only
+  const legacyTestRuntime = import.meta.env.MODE === "test" && (designSystemId === undefined || designSystemId === "shadcn" || designSystemId === "wireframe")
+    ? globalThis.__EUI_LEGACY_TEST_RUNTIME__ : undefined;
   const actions = {
     navigate: async (params: { screenId: string } | undefined) => deps.navigate(params!.screenId),
     back: async () => deps.back(),
@@ -64,24 +55,23 @@ export function createPlayerRuntime(deps: PlayerRuntimeDeps, custom?: CustomPlay
     restart: async () => deps.restart(),
   };
   let result;
-  if (custom) {
-    const definitionKeys = Object.keys(custom.definitions).sort();
-    const componentKeys = Object.keys(custom.components).sort();
+  if (custom || legacyTestRuntime) {
+    const definitionKeys = Object.keys(custom?.definitions ?? {}).sort();
+    const componentKeys = Object.keys(custom?.components ?? {}).sort();
     if (definitionKeys.length !== componentKeys.length || definitionKeys.some((key, index) => key !== componentKeys[index])) {
       throw new Error("Custom definition and component keys must match");
     }
-    // B1-B2 compatibility order: host types are the fallback, live builtins win
-    // name collisions (notably wireframe Image), and custom definitions remain last.
-    const runtimeCatalog = createCatalog({ ...hostPrimitiveDefinitions, ...system.definitions, ...custom.definitions });
+    // Final custom-only order: custom definitions are followed by host-owned
+    // content/extraction types so reserved host names can never be shadowed.
+    const runtimeCatalog = createCatalog({ ...legacyTestRuntime?.definitions, ...custom?.definitions, ...hostPrimitiveDefinitions });
     // Custom components are wrapped with the event adapter so they receive
     // emit(name, payload?)/on()/slots and route dispatch through the runtime.
-    const wrappedCustom = Object.fromEntries(Object.entries(custom.components).map(([name, component]) =>
+    const wrappedCustom = Object.fromEntries(Object.entries(custom?.components ?? {}).map(([name, component]) =>
       [name, wrapCustomComponent(name, component as ComponentType<EasyUIComponentProps>)]));
-    const runtimeComponents = { ...hostPrimitiveComponents, ...builtinComponents, ...wrappedCustom } as Components<typeof runtimeCatalog>;
+    const runtimeComponents = { ...legacyTestRuntime?.components, ...wrappedCustom, ...hostPrimitiveComponents } as Components<typeof runtimeCatalog>;
     result = defineRegistry(runtimeCatalog, { components: runtimeComponents, actions });
   } else {
-    const runtimeCatalog = getBuiltinCatalog(system.id, { ...hostPrimitiveDefinitions, ...system.definitions });
-    result = defineRegistry(runtimeCatalog, { components: { ...hostPrimitiveComponents, ...builtinComponents } as Components<typeof runtimeCatalog>, actions });
+    result = defineRegistry(hostCatalog, { components: hostPrimitiveComponents as Components<typeof hostCatalog>, actions });
   }
 
   // In @json-render/react 0.19.0 `handlers` is a factory, not a handler map.

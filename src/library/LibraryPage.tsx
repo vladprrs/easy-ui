@@ -5,19 +5,17 @@ import { useApi } from "../api/hooks";
 import { chip, chipActive, headingBar, kicker, pillPrimary } from "../app/chrome";
 import { figmaBadgeTitle, levelSection, library } from "../app/strings/library";
 import { useDocumentTitle } from "../app/useDocumentTitle";
-import { applicableLibraryStatusKeys, atomicLevelLabel, componentLibraryStatus, groupLibraryEntries, libraryStatusLabel, matchesLibraryFilter, selectionForComponent, selectionForStory, selectionKey, type ComponentLibraryStatus, type LibrarySelection, type LibraryStatusKey } from "./libraryModel";
+import { applicableLibraryStatusKeys, atomicLevelLabel, componentLibraryStatus, groupLibraryEntries, libraryStatusLabel, matchesLibraryFilter, selectionForComponent, selectionKey, type ComponentLibraryStatus, type LibrarySelection, type LibraryStatusKey } from "./libraryModel";
 import { componentStatusBadge } from "./statusBadge";
-import { fetchStorybookIndex, parseStorybookTitle, type StorybookEntry } from "./storybookIndex";
 
 const levelOrder = ["Layout", "Atoms", "Molecules", "Organisms", "Templates", "Pages", "Other"];
-const fetchStories = () => fetchStorybookIndex();
 
 interface LibraryStatusEntry { status: ComponentLibraryStatus; figma: FigmaProvenance | null }
 const EMPTY_STATUS = new Map<string, LibraryStatusEntry>();
 const componentKey = (component: CatalogComponent) => selectionKey(selectionForComponent(component));
 
-function firstSelection(stories: StorybookEntry[], components: CatalogComponent[]): LibrarySelection | null {
-  return stories[0] ? selectionForStory(stories[0]) : components[0] ? selectionForComponent(components[0]) : null;
+function firstSelection(components: CatalogComponent[]): LibrarySelection | null {
+  return components[0] ? selectionForComponent(components[0]) : null;
 }
 
 // Lazily resolves the status vector + Figma link for every custom component of the active system.
@@ -39,7 +37,6 @@ async function loadLibraryStatuses(components: CatalogComponent[], signal: Abort
 export function LibraryPage() {
   useDocumentTitle(library.title);
   const registry = useApi(listDesignSystems, []);
-  const storybook = useApi(fetchStories, []);
   const manifest = useApi(getCatalogManifest, []);
   const [activeSystem, setActiveSystem] = useState<string | null>(null);
   const [selection, setSelection] = useState<LibrarySelection | null>(null);
@@ -48,11 +45,9 @@ export function LibraryPage() {
     const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next;
   }), []);
 
-  const stories = useMemo(() => storybook.status === "ready" && storybook.data
-    ? Object.values(storybook.data.entries).filter((entry) => entry.type === "story") : [], [storybook.data, storybook.status]);
   const components = useMemo(() => manifest.status === "ready" ? manifest.data.components : [], [manifest.data, manifest.status]);
   const groups = useMemo(() => registry.status === "ready"
-    ? groupLibraryEntries(registry.data.designSystems, stories, components) : [], [components, registry, stories]);
+    ? groupLibraryEntries(registry.data.designSystems, components) : [], [components, registry]);
   const active = groups.find((group) => group.system.id === activeSystem) ?? groups[0];
 
   const statusComponents = useMemo(() => active?.components ?? [], [active]);
@@ -75,20 +70,14 @@ export function LibraryPage() {
     return activeFilters.some((filter) => matchesLibraryFilter(entry.status, filter));
   }, [applicableStatusSet, filters, statusMap]);
 
-  const storyGroups = useMemo(() => active?.stories.reduce<Record<string, StorybookEntry[]>>((result, entry) => {
-    const { level } = parseStorybookTitle(entry);
-    (result[levelOrder.includes(level) ? level : "Other"] ??= []).push(entry);
-    return result;
-  }, {}) ?? {}, [active]);
   const customGroups = useMemo(() => (active?.components ?? []).filter(isVisible).reduce<Record<string, CatalogComponent[]>>((result, component) => {
     (result[atomicLevelLabel(component.atomicLevel)] ??= []).push(component);
     return result;
   }, {}) ?? {}, [active, isVisible]);
-  const available = active ? [...active.stories.map(selectionForStory), ...active.components.map(selectionForComponent)] : [];
+  const available = active ? active.components.map(selectionForComponent) : [];
   const selected = selection && available.some((item) => selectionKey(item) === selectionKey(selection))
-    ? selection : active ? firstSelection(active.stories, active.components) : null;
-  const selectedStory = selected?.kind === "story" ? active?.stories.find((story) => story.id === selected.storyId) : undefined;
-  const selectedComponent = selected?.kind === "custom" ? active?.components.find((component) => component.id === selected.componentId && component.designSystem === selected.designSystem) : undefined;
+    ? selection : active ? firstSelection(active.components) : null;
+  const selectedComponent = selected ? active?.components.find((component) => component.id === selected.componentId && component.designSystem === selected.designSystem) : undefined;
 
   return <main className="flex h-full min-h-0 flex-col lg:flex-row">
     <aside className="w-full shrink-0 border-b p-5 font-eui-ui lg:w-72 lg:border-b-0 lg:border-r">
@@ -98,7 +87,7 @@ export function LibraryPage() {
       <div className="mt-4 flex flex-wrap gap-2" aria-label={library.designSystemsAria}>
         {groups.map((group) => <button type="button" key={group.system.id} aria-pressed={active?.system.id === group.system.id} className={active?.system.id === group.system.id ? chipActive : `${chip} hover:bg-eui-lilac-100/60`} onClick={() => {
           setActiveSystem(group.system.id);
-          setSelection(firstSelection(group.stories, group.components));
+          setSelection(firstSelection(group.components));
           setFilters(new Set());
         }}>{group.system.name}</button>)}
       </div>
@@ -106,9 +95,6 @@ export function LibraryPage() {
         {applicableStatusKeys.map((key) => <button type="button" key={key} aria-pressed={filters.has(key)} className={filters.has(key) ? chipActive : `${chip} hover:bg-eui-lilac-100/60`} onClick={() => toggleFilter(key)}>{libraryStatusLabel[key]}</button>)}
       </div> : null}
       <nav className="mt-5 space-y-4" aria-label={library.componentsAria}>
-        {levelOrder.filter((level) => storyGroups[level]?.length).map((level) => <EntrySection key={`story-${level}`} title={levelSection(level)} entries={storyGroups[level].map((story) => ({
-          key: `story:${story.id}`, name: parseStorybookTitle(story).name, active: selected?.kind === "story" && selected.storyId === story.id, select: () => setSelection(selectionForStory(story)),
-        }))} />)}
         {levelOrder.filter((level) => customGroups[level]?.length).map((level) => <EntrySection key={`custom-${level}`} title={`${levelSection(level)} · ${library.customSectionSuffix}`} entries={customGroups[level].map((component) => ({
           key: `custom:${component.id}:${component.designSystem}`, name: component.name, active: selected?.kind === "custom" && selected.componentId === component.id && selected.designSystem === component.designSystem, select: () => setSelection(selectionForComponent(component)),
           badge: statusMap.get(componentKey(component))?.figma ? <FigmaDot /> : undefined,
@@ -116,11 +102,9 @@ export function LibraryPage() {
       </nav>
     </aside>
     <section className="flex min-h-0 flex-1 flex-col gap-3 p-4 font-eui-ui">
-      {storybook.status === "loading" ? <p className="rounded-xl bg-eui-lav p-3 text-sm text-eui-slate-500" role="status">{library.loadingStorybook}</p> : null}
-      {storybook.status === "error" || (storybook.status === "ready" && !storybook.data) ? <SourceError label={library.storybookUnavailable} retry={storybook.reload} /> : null}
       {manifest.status === "loading" ? <p className="rounded-xl bg-eui-lav p-3 text-sm text-eui-slate-500" role="status">{library.loadingCatalog}</p> : null}
       {manifest.status === "error" ? <SourceError label={library.catalogUnavailable} retry={manifest.reload} /> : null}
-      {selectedStory ? <StoryPreview story={selectedStory} /> : selectedComponent ? <ComponentMetadata key={`${selectedComponent.id}@${selectedComponent.version}`} component={selectedComponent} systemName={active?.system.name ?? selectedComponent.designSystem} /> : active && !active.stories.length && !active.components.length ? <EmptySystem /> : <div className="flex flex-1 items-center justify-center rounded-3xl bg-eui-lav p-6 text-center text-eui-slate-500">{library.selectComponent}</div>}
+      {selectedComponent ? <ComponentMetadata key={`${selectedComponent.id}@${selectedComponent.version}`} component={selectedComponent} systemName={active?.system.name ?? selectedComponent.designSystem} /> : active && !active.components.length ? <EmptySystem /> : <div className="flex flex-1 items-center justify-center rounded-3xl bg-eui-lav p-6 text-center text-eui-slate-500">{library.selectComponent}</div>}
     </section>
   </main>;
 }
@@ -150,12 +134,6 @@ function FigmaDot() {
 
 function EntrySection({ title, entries }: { title: string; entries: { key: string; name: string; active: boolean; select: () => void; badge?: ReactNode }[] }) {
   return <section><h2 className={kicker}>{title}</h2><ul className="mt-1 space-y-1">{entries.map((entry) => <li key={entry.key}><button type="button" className={`flex w-full items-center rounded-lg px-2 py-1 text-left text-sm ${entry.active ? "bg-eui-lilac-100 font-bold" : "text-eui-slate-500 hover:bg-eui-lilac-100/60"}`} onClick={entry.select}><span>{entry.name}</span>{entry.badge}</button></li>)}</ul></section>;
-}
-
-function StoryPreview({ story }: { story: StorybookEntry }) {
-  const parsed = parseStorybookTitle(story);
-  const iframeUrl = `/storybook/iframe.html?id=${encodeURIComponent(story.id)}&viewMode=story`;
-  return <><div className="flex items-center gap-3 text-sm"><span className="font-bold">{parsed.name} · {parsed.level}</span><a className="ml-auto text-eui-slate-500 underline hover:text-eui-brand" href={iframeUrl} target="_blank" rel="noreferrer">{library.openInStorybook}</a></div><iframe className="min-h-0 flex-1 overflow-hidden rounded-3xl border border-eui-ink/10" title={library.storyPreviewTitle} src={iframeUrl} /></>;
 }
 
 function FigmaBadge({ figma }: { figma: FigmaProvenance }) {

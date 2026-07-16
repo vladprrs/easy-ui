@@ -11,6 +11,8 @@ export const loader = {
   openCurrent: "Открыть текущую",
   toGallery: "К галерее",
   loadErrorTitle: "Не удалось загрузить прототип",
+  archivedTitle: "Прототип в архиве",
+  archivedBody: "Эта ревизия использует удалённые компоненты и больше не может быть отображена.",
 } as const;
 
 /** document.title плеера: имя прототипа (+версия) и текущий экран (W0-3). */

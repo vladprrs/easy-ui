@@ -14,6 +14,7 @@ import { CaptureSurface } from "./CaptureSurface";
 import { CaptureStyle, useCaptureTheme, usePublishError, usePublishOnSettle } from "./CaptureChrome";
 import { bootstrapRendererBuild } from "./readiness";
 import type { CaptureReady } from "./protocol";
+import { ArchivedPrototype } from "../player/PrototypeLoader";
 
 interface LoadedPrototype {
   doc: PrototypeDoc;
@@ -24,6 +25,7 @@ interface LoadedPrototype {
   components: PrototypeComponentPin[];
   dsMetaVersion: number | null;
   theme: ThemeContent | null;
+  renderable: boolean;
 }
 
 async function loadTheme(designSystem: string, metaVersion: number | null, signal: AbortSignal): Promise<ThemeContent | null> {
@@ -37,10 +39,11 @@ async function loadPrototype(id: string, rev: number | undefined, version: numbe
   const base = version !== undefined ? await getPrototypeVersion(id, version, signal)
     : rev !== undefined ? await getPrototypeRevisionFull(id, rev, signal)
     : await getPrototypeDraft(id, signal);
+  if (base.renderable === false) return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId ?? "archived", componentManifestHash: base.componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components: [], dsMetaVersion: base.designSystemMetaVersion ?? null, theme: null, renderable: false };
   const dsMetaVersion = base.designSystemMetaVersion ?? null;
   if(!base.prototypeInstanceId) throw new Error("Prototype response is missing prototypeInstanceId");
   const theme = await loadTheme(base.doc.designSystem, dsMetaVersion, signal);
-  return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId, componentManifestHash: base.componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components: base.components, dsMetaVersion, theme };
+  return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId, componentManifestHash: base.componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components: base.components, dsMetaVersion, theme, renderable: true };
 }
 
 function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPrototype; custom?: CustomPlayerRuntime; screenId: string }) {
@@ -116,6 +119,7 @@ export function CapturePrototype() {
     <CaptureStyle />
     {state.status === "loading" ? <div id="eui-capture-loading" />
       : state.status === "error" ? <div data-capture-error="load" />
-      : <WithCustom loaded={state.data} screenId={screenId ?? ""} />}
+      : state.data.renderable === false ? <ArchivedPrototype />
+        : <WithCustom loaded={state.data} screenId={screenId ?? ""} />}
   </>;
 }

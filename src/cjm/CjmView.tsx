@@ -4,7 +4,6 @@ import { cjm, cjmDocumentTitle } from "../app/strings/cjm";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { createPlayerRuntime } from "../catalog/runtime";
-import { resolveBuiltinSystem } from "../designSystems";
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import type { PrototypeDoc } from "../prototype/schema";
 import { CjmScreenTile } from "./CjmScreenTile";
@@ -75,7 +74,7 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
   const registry = useMemo(() => createCjmRegistry(runtime.registry), [runtime.registry]);
   const customTypes = useMemo(() => new Set(Object.keys(custom?.definitions ?? {})), [custom]);
   const themeContent = useDesignSystemTheme(doc.designSystem, designSystemMetaVersion);
-  const designSystemName = resolveBuiltinSystem(doc.designSystem).name;
+  const designSystemName = doc.designSystem;
   const metadata = <dl aria-label={cjm.metadataAria} className="flex flex-wrap items-center gap-2 font-eui-ui text-xs text-eui-slate-500">
     <div><dt className="sr-only">{cjm.screensLabel}</dt><dd className="rounded-full bg-eui-lilac-100 px-2.5 py-1">{cjm.screensCount(doc.screens.length)}</dd></div>
     <div><dt className="sr-only">{cjm.designSystemLabel}</dt><dd className="rounded-full bg-eui-lilac-100 px-2.5 py-1">{designSystemName}</dd></div>
