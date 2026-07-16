@@ -1,8 +1,10 @@
 import { JSONUIProvider } from "@json-render/react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
+import { HostStageSurface } from "../catalog/hostPrimitives";
 import type { PrototypeDoc } from "../prototype/schema";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { EasyUiActionRuntime } from "./actionRuntime";
@@ -141,5 +143,102 @@ describe("ScreenSurface misclick highlights", () => {
     mockRect(screen.getByRole("button", { name: "Action" }), rect(10, 20, 100, 40));
     fireEvent.click(screen.getByText("Selectable copy"));
     expect(screen.queryByTestId("misclick-highlights")).toBeNull();
+  });
+});
+
+const overlaySpec = (canvas = false): PrototypeDoc["screens"][number]["spec"] => ({
+  root: "root",
+  elements: {
+    root: { type: "Stack", props: {}, children: ["copy", "top", "corner"] },
+    copy: { type: "Text", props: { text: canvas ? "Canvas base" : "Flow base" } },
+    top: { type: "Overlay", props: { placement: "top", inset: "md", scrim: true }, children: ["top-copy"] },
+    "top-copy": { type: "Text", props: { text: "Top overlay" } },
+    corner: { type: "Overlay", props: { placement: "bottom-right", inset: "lg", scrim: false }, children: ["corner-copy"] },
+    "corner-copy": { type: "Text", props: { text: "Corner overlay" } },
+  },
+});
+
+function renderHostedSurface(spec: PrototypeDoc["screens"][number]["spec"], canvas?: { width: number; height: number }) {
+  const runtime = createPlayerRuntime(noopDeps);
+  const actionRuntime = new EasyUiActionRuntime({ initialState: {}, screenIds: new Set(["screen"]), deps: noopDeps });
+  const tree = toRuntimeSpec(spec);
+  const host = document.createElement("div");
+  host.style.position = "relative";
+  document.body.append(host);
+  const stageHostRef = createRef<HTMLElement>();
+  stageHostRef.current = host;
+  const view = render(<JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
+    <HostStageSurface stageHostRef={stageHostRef}>
+      <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={{}} onError={() => {}} tree={tree} canvas={canvas} misclickHighlights={false} />
+    </HostStageSurface>
+  </JSONUIProvider>);
+  return { ...view, host, runtime, actionRuntime, stageHostRef };
+}
+
+describe("ScreenSurface Overlay stage integration", () => {
+  it("keeps flow content unwrapped and portals ordered overlays with stretch/corner placement and scrim", () => {
+    const { container, host } = renderHostedSurface(overlaySpec());
+
+    expect(container.firstElementChild?.textContent).toBe("Flow base");
+    expect(container.querySelector("[data-eui-host-primitive='Overlay']")).toBeNull();
+    const overlays = host.querySelectorAll<HTMLElement>("[data-eui-host-primitive='Overlay']");
+    expect(overlays).toHaveLength(2);
+    expect(overlays[0]!.textContent).toContain("Top overlay");
+    expect(overlays[1]!.textContent).toContain("Corner overlay");
+    expect(overlays[0]!.querySelector("[data-eui-overlay-scrim]")).not.toBeNull();
+    const top = overlays[0]!.querySelector<HTMLElement>("[data-eui-overlay-content]")!;
+    expect(top.style.left).toContain("--eui-space-md");
+    expect(top.style.right).toContain("--eui-space-md");
+    const corner = overlays[1]!.querySelector<HTMLElement>("[data-eui-overlay-content]")!;
+    expect(corner.style.width).toBe("max-content");
+    expect(corner.style.right).toContain("--eui-space-lg");
+    expect(corner.style.bottom).toContain("--eui-space-lg");
+  });
+
+  it("uses the ordered third canvas layer and preserves content < hotspots < overlay", () => {
+    const spec = overlaySpec(true);
+    spec.elements.root!.children = ["copy", "hotspot", "top", "corner"];
+    spec.elements.hotspot = { type: "Hotspot", props: { x: 1, y: 2, width: 30, height: 40, ariaLabel: "Hit" } };
+    const { container, host } = renderHostedSurface(spec, { width: 320, height: 240 });
+
+    const canvasRoot = container.firstElementChild as HTMLElement;
+    expect(canvasRoot.children).toHaveLength(3);
+    expect(canvasRoot.children[2]!.getAttribute("data-eui-canvas-layer")).toBe("overlay");
+    expect(screen.getByText("Canvas base")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hit" })).toBeTruthy();
+    expect(host.querySelectorAll("[data-eui-host-primitive='Overlay']")).toHaveLength(2);
+  });
+
+  it("does not change the legacy absolute child's parent, computed positioning, or offsetParent", () => {
+    const spec = overlaySpec();
+    spec.elements.root!.children = ["legacy", "top", "corner"];
+    spec.elements.legacy = { type: "Stack", props: { direction: "vertical", gap: "none", className: "absolute" }, children: ["copy"] };
+    const withoutOverlay = { ...spec, elements: { ...spec.elements, root: { ...spec.elements.root!, children: ["legacy"] } } };
+    const { container, rerender, runtime, actionRuntime, stageHostRef } = renderHostedSurface(withoutOverlay);
+    const absolute = container.querySelector<HTMLElement>(".absolute")!;
+    const parent = absolute.parentElement;
+    const before = { position: getComputedStyle(absolute).position, offsetParent: absolute.offsetParent };
+    rerender(<JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
+      <HostStageSurface stageHostRef={stageHostRef}>
+        <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={{}} onError={() => {}} tree={toRuntimeSpec(spec)} misclickHighlights={false} />
+      </HostStageSurface>
+    </JSONUIProvider>);
+    const after = container.querySelector<HTMLElement>(".absolute")!;
+    expect(after.parentElement).toBe(parent);
+    expect(getComputedStyle(after).position).toBe(before.position);
+    expect(after.offsetParent).toBe(before.offsetParent);
+  });
+
+  it("warns and omits Overlay for legacy desktop-flow data", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const runtime = createPlayerRuntime(noopDeps);
+    const actionRuntime = new EasyUiActionRuntime({ initialState: {}, screenIds: new Set(["screen"]), deps: noopDeps });
+    const tree = toRuntimeSpec(overlaySpec());
+    render(<JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
+      <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={{}} onError={() => {}} tree={tree} hostPrimitivesAllowed={false} />
+    </JSONUIProvider>);
+    expect(screen.getByText("Flow base")).toBeTruthy();
+    expect(screen.queryByText("Top overlay")).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("desktop flow"));
   });
 });

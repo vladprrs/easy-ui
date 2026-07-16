@@ -42,6 +42,24 @@ function conditionalDocument(canvas: boolean) {
   });
 }
 
+function overlaySwitchDocument(id: string, device: "mobile" | "tablet", includeCanvas: boolean) {
+  const overlaySpec = (label: string) => ({
+    root: "root", elements: {
+      root: { type: "Stack", props: {}, children: ["base", "overlay"] },
+      base: { type: "Text", props: { text: `${label} base` } },
+      overlay: { type: "Overlay", props: { placement: "bottom-right", inset: "md", scrim: false }, children: ["copy"] },
+      copy: { type: "Text", props: { text: `${label} overlay` } },
+    },
+  });
+  return prototypeDocSchema.parse({
+    version: 1, id, name: id, device, startScreen: includeCanvas ? "canvas" : "flow", state: {},
+    screens: [
+      ...(includeCanvas ? [{ id: "canvas", name: "Canvas", canvas: { width: 640, height: 480 }, spec: overlaySpec(`${id} canvas`) }] : []),
+      { id: "flow", name: "Flow", spec: overlaySpec(`${id} flow`) },
+    ],
+  });
+}
+
 describe("PlayerShell", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -157,6 +175,31 @@ describe("PlayerShell", () => {
     fireEvent.change(input, { target: { value: "Changed" } });
     await router.navigate("/p/hello-world/v/2/s/welcome");
     await waitFor(() => expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Ada"));
+  });
+
+  it("resets a desktop preview override on version and document changes that land on flow Overlay", async () => {
+    const draftDoc = overlaySwitchDocument("switch", "mobile", true);
+    const versionDoc = overlaySwitchDocument("switch", "mobile", false);
+    const otherDoc = overlaySwitchDocument("other-overlay", "tablet", false);
+    mocks.getDraft.mockImplementation(async (id: string) => draft(id === "other-overlay" ? otherDoc : draftDoc));
+    mocks.getVersion.mockResolvedValue({ ...draft(versionDoc), version: 2, publishedAt: "2026-07-10T00:00:00Z" } satisfies PrototypeVersion);
+    const router = renderAt("/p/switch/s/canvas");
+    const desktop = await screen.findByRole("button", { name: "Компьютер" });
+    fireEvent.click(desktop);
+    expect(desktop.getAttribute("aria-pressed")).toBe("true");
+
+    await router.navigate("/p/switch/v/2/s/flow");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Телефон" }).getAttribute("aria-pressed")).toBe("true"));
+    expect((screen.getByRole("button", { name: "Компьютер" }) as HTMLButtonElement).disabled).toBe(true);
+
+    await router.navigate("/p/switch/s/canvas");
+    await screen.findByText("switch canvas overlay");
+    const desktopAgain = await screen.findByRole("button", { name: "Компьютер" });
+    fireEvent.click(desktopAgain);
+    expect(desktopAgain.getAttribute("aria-pressed")).toBe("true");
+    await router.navigate("/p/other-overlay/s/flow");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Планшет" }).getAttribute("aria-pressed")).toBe("true"));
+    expect((screen.getByRole("button", { name: "Компьютер" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("deep link into the middle of the flow shows the reset banner; restart returns to start (W1-5)", async () => {

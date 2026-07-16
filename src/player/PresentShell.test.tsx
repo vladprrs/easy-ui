@@ -12,6 +12,18 @@ vi.mock("../customComponents/loader", () => ({ loadCustomComponents: mocks.loadC
 const hello = prototypeDocSchema.parse((await import("../../prototypes/hello-world.json")).default);
 const draft = (): PrototypeDraft => ({ doc: hello, rev: 1, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] });
 
+const presentOverlayDoc = prototypeDocSchema.parse({
+  version: 1, id: "present-overlay", name: "Present Overlay", device: "tablet", startScreen: "main", state: {},
+  screens: [{ id: "main", name: "Main", spec: {
+    root: "root", elements: {
+      root: { type: "Stack", props: {}, children: ["base", "overlay"] },
+      base: { type: "Text", props: { text: "Present base" } },
+      overlay: { type: "Overlay", props: { placement: "top-left", inset: "sm", scrim: true }, children: ["copy"] },
+      copy: { type: "Text", props: { text: "Present overlay" } },
+    },
+  } }],
+});
+
 function renderAt(path: string) {
   const router = createMemoryRouter(routeObjects, { initialEntries: [path] });
   render(<RouterProvider router={router} />);
@@ -115,6 +127,16 @@ describe("PresentShell (W1-2)", () => {
     expect(document.title).toBe("Hello World v2 · Презентация — easy-ui");
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/v/2/present/s/details"));
+  });
+
+  it("renders Overlay in the present StageViewport with surface spacing", async () => {
+    mocks.getDraft.mockResolvedValue({ ...draft(), doc: presentOverlayDoc });
+    renderAt("/p/present-overlay/present/s/main");
+    expect(await screen.findByText("Present overlay")).toBeTruthy();
+    const stage = document.querySelector<HTMLElement>("[data-eui-stage-viewport='player']")!;
+    expect(stage.querySelector("[data-eui-host-primitive='Overlay']")).not.toBeNull();
+    expect(stage.querySelector("[data-eui-overlay-scrim]")).not.toBeNull();
+    expect(stage.style.getPropertyValue("--eui-space-md")).toBe("12px");
   });
 
   it("keeps scoped-share navigation tokenless and exposes no workspace exit", async () => {

@@ -18,6 +18,7 @@ export interface CaptureSurfaceProps {
   screenIds: ReadonlySet<string>;
   canvas?: { width: number; height: number };
   onError?: (message: string, detail?: Record<string, unknown>) => void;
+  hostPrimitivesAllowed?: boolean;
 }
 
 /**
@@ -28,13 +29,13 @@ export interface CaptureSurfaceProps {
  * The rendering itself is the shared {@link ScreenSurface} (W1-2) — the same
  * surface the player and presentation mode use with live navigation deps.
  */
-export function CaptureSurface({ designSystem, custom, tree, initialState, screenIds, canvas, onError }: CaptureSurfaceProps) {
+export function CaptureSurface({ designSystem, custom, tree, initialState, screenIds, canvas, onError, hostPrimitivesAllowed = true }: CaptureSurfaceProps) {
   const runtime = useMemo(() => createPlayerRuntime(inertDeps, custom, designSystem), [custom, designSystem]);
   const customDefinitions = useMemo<Record<string, ComponentDefinition>>(() => custom?.definitions ?? {}, [custom]);
   const report = useMemo(() => onError ?? noop, [onError]);
   const actionRuntime = useMemo(() => new EasyUiActionRuntime({ initialState, screenIds, deps: inertDeps, onError: report }), [initialState, screenIds, report]);
 
   return <JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
-    <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={customDefinitions} onError={report} tree={tree} canvas={canvas} />
+    <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={customDefinitions} onError={report} tree={tree} canvas={canvas} hostPrimitivesAllowed={hostPrimitivesAllowed} />
   </JSONUIProvider>;
 }

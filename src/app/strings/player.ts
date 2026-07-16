@@ -33,6 +33,7 @@ export const player = {
   zoomOut: "Уменьшить масштаб",
   zoomPercent: (percent: number) => `${percent}%`,
   deviceAria: "Устройство",
+  desktopOverlayUnavailable: "Desktop-превью недоступно для Overlay на экране без canvas.",
   devicePreviewAria: "Превью прототипа на устройстве",
   screenErrorTitle: "Не удалось отобразить экран",
   screenErrorContext: (prototypeId: string, screenId: string) => `Прототип: ${prototypeId} · Экран: ${screenId}`,

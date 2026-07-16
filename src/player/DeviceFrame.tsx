@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { ThemeContent } from "../api/client";
+import { HostStageSurface } from "../catalog/hostPrimitives";
 import type { PrototypeDoc } from "../prototype/schema";
 import { player } from "../app/strings/player";
 import { canonicalViewport, playerDesktopMinStageHeight } from "../designSystems/deviceMetrics";
+import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 
 type Device = PrototypeDoc["device"];
 
@@ -86,14 +89,18 @@ const frameCard = "overflow-hidden bg-background text-foreground shadow-[0_20px_
  * размер scale не влияет), фидбэк-лупа нет. Desktop (auto-height) — fluid-ветка
  * с min-height из `playerDesktopMinStageHeight`.
  */
-export function DeviceFrame({ device, canvas, zoom, onEffectiveScale, children }: {
+export function DeviceFrame({ device, canvas, zoom, onEffectiveScale, designSystem, themeTokens, children }: {
   device: Device;
   canvas?: { width: number; height: number } | undefined;
   zoom: StageZoom;
   onEffectiveScale?: ((scale: number) => void) | undefined;
+  designSystem: string;
+  themeTokens?: ThemeContent["tokens"] | undefined;
   children: ReactNode;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const [stageHost, setStageHost] = useState<HTMLDivElement | null>(null);
+  const stageHostRef = useMemo(() => ({ current: stageHost }), [stageHost]);
   const [avail, setAvail] = useState<{ width: number; height: number } | null>(null);
   useEffect(() => {
     const host = hostRef.current;
@@ -126,13 +133,15 @@ export function DeviceFrame({ device, canvas, zoom, onEffectiveScale, children }
       style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(132,78,220,0.18), transparent 70%)" }}
     >
       <div ref={hostRef} className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        <div className="h-full w-full overflow-auto">
+        <div className="h-full w-full overflow-auto" data-eui-content-scroller="player">
           {hasFixedViewport ? (
             <div className="flex w-max min-w-full min-h-full items-center justify-center" style={{ padding: stagePadding }}>
               <div className={`${frameCard} rounded-[28px]`} style={{ width: contentWidth * scale, height: contentHeight * scale }}>
-                <div style={{ width: contentWidth, height: contentHeight, transform: `scale(${scale})`, transformOrigin: "top left" }}>
-                  {children}
-                </div>
+                <SurfaceSpacingScope systemId={designSystem} themeTokens={themeTokens}>
+                  <div ref={setStageHost} data-eui-stage-viewport="player" style={{ width: contentWidth, height: contentHeight, transform: `scale(${scale})`, transformOrigin: "top left" }}>
+                    <HostStageSurface stageHostRef={stageHostRef}>{children}</HostStageSurface>
+                  </div>
+                </SurfaceSpacingScope>
               </div>
             </div>
           ) : (

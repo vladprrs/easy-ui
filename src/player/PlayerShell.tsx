@@ -1,7 +1,7 @@
 import { JSONUIProvider } from "@json-render/react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useParams, useSearchParams } from "react-router";
-import { getPrototypeDraft, listPrototypeVersions, type PrototypeDraft, type PrototypeVersionSummary } from "../api/client";
+import { getPrototypeDraft, listPrototypeVersions, type PrototypeDraft, type PrototypeVersionSummary, type ThemeContent } from "../api/client";
 import { useApi } from "../api/hooks";
 import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
 import type { ComponentDefinition } from "../catalog/definitions";
@@ -22,6 +22,7 @@ export interface PlayerOutletContext {
   customTypes: ReadonlySet<string>;
   customDefinitions: Record<string, ComponentDefinition>;
   onError: (message: string, detail?: Record<string, unknown>) => void;
+  themeContent: ThemeContent | null;
   versions: {
     published: PrototypeVersionSummary[];
     draft: Pick<PrototypeDraft, "doc" | "rev">;
@@ -101,6 +102,7 @@ function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions }:
       customTypes,
       customDefinitions,
       onError,
+      themeContent,
       versions,
       inspector: { enabled: debug, visible: inspectorVisible, log: inspectorSession.log, toggle: toggleInspector },
     } satisfies PlayerOutletContext} />

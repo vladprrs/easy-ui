@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { getComponentVersion } from "../api/client";
+import { getComponentVersion, getPrototypeDraft } from "../api/client";
 import { prototypeDocSchema } from "../prototype/schema";
 import { CapturePrototype } from "./CapturePrototype";
 import { CaptureComponent } from "./CaptureComponent";
@@ -10,6 +10,20 @@ import { CaptureComponent } from "./CaptureComponent";
 const doc = prototypeDocSchema.parse({
   version: 1, id: "cap", name: "Cap", device: "mobile", startScreen: "welcome", state: {},
   screens: [{ id: "welcome", name: "Welcome", spec: { root: "r", elements: { r: { type: "Text", props: { text: "Hi" } } } } }],
+});
+
+const overlayCaptureDoc = prototypeDocSchema.parse({
+  version: 1, id: "cap-overlay", name: "Capture Overlay", device: "mobile", startScreen: "welcome", state: {},
+  screens: [{ id: "welcome", name: "Welcome", spec: {
+    root: "root", elements: {
+      root: { type: "Stack", props: {}, children: ["base", "first", "second"] },
+      base: { type: "Text", props: { text: "Capture base" } },
+      first: { type: "Overlay", props: { placement: "bottom", inset: "md", scrim: true }, children: ["first-copy"] },
+      "first-copy": { type: "Text", props: { text: "Capture first" } },
+      second: { type: "Overlay", props: { placement: "top-right", inset: "sm", scrim: false }, children: ["second-copy"] },
+      "second-copy": { type: "Text", props: { text: "Capture second" } },
+    },
+  } }],
 });
 
 vi.mock("../api/client", () => ({
@@ -58,6 +72,38 @@ describe("capture shell", () => {
     expect(surface!.style.getPropertyValue("--eui-space-md")).toBe("12px");
     expect(screen.queryByRole("navigation")).toBeNull();
     expect(screen.queryByRole("banner")).toBeNull();
+  });
+
+  it("portals ordered Overlay layers into #eui-capture-surface", async () => {
+    vi.mocked(getPrototypeDraft).mockResolvedValueOnce({ doc: overlayCaptureDoc, rev: 4, prototypeInstanceId: "capture-overlay-instance", componentManifestHash: "m", builtinCatalogHash: "b", components: [] });
+    const router = createMemoryRouter([{ path: "/capture/:protoId/s/:screenId", element: <CapturePrototype /> }], { initialEntries: ["/capture/cap-overlay/s/welcome"] });
+    render(<RouterProvider router={router} />);
+    await screen.findByText("Capture first");
+    const surface = document.querySelector<HTMLElement>("#eui-capture-surface")!;
+    const overlays = surface.querySelectorAll<HTMLElement>("[data-eui-host-primitive='Overlay']");
+    expect(overlays).toHaveLength(2);
+    expect(overlays[0]!.textContent).toContain("Capture first");
+    expect(overlays[1]!.textContent).toContain("Capture second");
+    expect(overlays[0]!.querySelector("[data-eui-overlay-scrim]")).not.toBeNull();
+    expect(overlays[0]!.querySelector<HTMLElement>("[data-eui-overlay-content]")!.style.left).toContain("--eui-space-md");
+    expect(surface.style.position).toBe("relative");
+    expect(getComputedStyle(surface).position).toBe("relative");
+  });
+
+  it("renders capture canvas Overlay through the third ordered CanvasLayers layer", async () => {
+    const canvasDoc = prototypeDocSchema.parse({
+      ...overlayCaptureDoc,
+      screens: [{ ...overlayCaptureDoc.screens[0], canvas: { width: 640, height: 480 } }],
+    });
+    vi.mocked(getPrototypeDraft).mockResolvedValueOnce({ doc: canvasDoc, rev: 5, prototypeInstanceId: "capture-canvas-instance", componentManifestHash: "m", builtinCatalogHash: "b", components: [] });
+    const router = createMemoryRouter([{ path: "/capture/:protoId/s/:screenId", element: <CapturePrototype /> }], { initialEntries: ["/capture/cap-overlay/s/welcome"] });
+    render(<RouterProvider router={router} />);
+    await screen.findByText("Capture second");
+    const surface = document.querySelector<HTMLElement>("#eui-capture-surface")!;
+    expect(surface.style.width).toBe("640px");
+    expect(surface.style.height).toBe("480px");
+    expect(surface.querySelector("[data-eui-canvas-layer='overlay']")).not.toBeNull();
+    expect(surface.querySelectorAll("[data-eui-host-primitive='Overlay']")).toHaveLength(2);
   });
 
   it("publishes a component readiness object with a props hash", async () => {

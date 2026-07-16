@@ -170,7 +170,7 @@ function ShareDialog({ prototypeId, versions, currentVersion, onClose }: {
 }
 
 export function ScreenView() {
-  const { doc, registry, runtime, customTypes, customDefinitions, onError, inspector, versions } = useOutletContext<PlayerOutletContext>();
+  const { doc, registry, runtime, customTypes, customDefinitions, onError, themeContent, inspector, versions } = useOutletContext<PlayerOutletContext>();
   const { screenId } = useParams();
   const { version } = useParams();
   const navigation = usePlayerNavigation();
@@ -189,6 +189,13 @@ export function ScreenView() {
     : player.screenMissingTitle);
   const screenSpec = screen?.spec;
   const screenCanvas = screen?.canvas;
+  const hasOverlay = screen === undefined ? false : Object.values(screen.spec.elements).some((element) => element.type === "Overlay");
+  const blocksDesktopPreview = hasOverlay && screenCanvas === undefined;
+  const [deviceContext, setDeviceContext] = useState({ doc, screen });
+  if (deviceContext.doc !== doc || deviceContext.screen !== screen) {
+    setDeviceContext({ doc, screen });
+    if (device === "desktop" && blocksDesktopPreview && doc.device !== "desktop") setDevice(doc.device);
+  }
   // customTypes — стабильный Set из контекста загрузчика; пересчёт дерева нужен только при его замене.
   // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const tree = useMemo(() => (screenSpec ? toRuntimeSpec(screenSpec, { customTypes }) : null), [screenSpec, customTypes]);
@@ -307,7 +314,7 @@ export function ScreenView() {
       {screen === undefined ? null : <>
         <div role="group" aria-label={player.deviceAria} className="flex items-center gap-1">
           {(["mobile", "tablet", "desktop"] as const).map((item) => (
-            <button key={item} type="button" aria-pressed={device === item} onClick={() => { setDevice(item); stageZoom.fit(); }} className={device === item ? chipActive : chip}>
+            <button key={item} type="button" aria-pressed={device === item} disabled={item === "desktop" && blocksDesktopPreview} title={item === "desktop" && blocksDesktopPreview ? player.desktopOverlayUnavailable : undefined} onClick={() => { setDevice(item); stageZoom.fit(); }} className={`${device === item ? chipActive : chip} disabled:cursor-not-allowed disabled:opacity-50`}>
               {deviceNames[item]}
             </button>
           ))}
@@ -331,7 +338,7 @@ export function ScreenView() {
   const shareDialog = shareOpen ? <ShareDialog prototypeId={doc.id} versions={publishedVersions} currentVersion={numericVersion} onClose={() => setShareOpen(false)} /> : null;
   if (!screen) return <main className="flex h-dvh min-h-0 flex-col">{shareDialog}{chrome}<div className="flex min-h-0 flex-1 items-start justify-center bg-eui-graphite p-8 text-white"><section role="alert" className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h2 className="font-eui-display text-2xl font-bold">{player.screenMissingTitle}</h2><p className="mt-2 text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">{common.backToGallery}</Link></section></div></main>;
 
-  const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} misclickHighlights />;
+  const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} misclickHighlights hostPrimitivesAllowed={device !== "desktop" || screen.canvas !== undefined} />;
 
   return <main className="flex h-dvh min-h-0 flex-col">
     {shareDialog}
@@ -350,7 +357,7 @@ export function ScreenView() {
     <FlowResetBanner />
     <div className="flex min-h-0 flex-1 bg-eui-graphite text-white">
       <ScreensSidebar doc={doc} currentScreen={screen.id} collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((prev) => !prev)} />
-      <DeviceFrame device={device} canvas={screen.canvas} zoom={zoomValue} onEffectiveScale={stageZoom.onEffectiveScale}>
+      <DeviceFrame device={device} canvas={screen.canvas} zoom={zoomValue} onEffectiveScale={stageZoom.onEffectiveScale} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}>
         <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>{rendered}</ScreenErrorBoundary>
       </DeviceFrame>
       {inspector.enabled && inspector.visible ? <InspectorPanel log={inspector.log} /> : null}

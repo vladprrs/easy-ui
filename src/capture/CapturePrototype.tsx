@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useApi } from "../api/hooks";
 import { getDesignSystemById, getDesignSystemVersion, getPrototypeDraft, getPrototypeRevisionFull, getPrototypeVersion, type PrototypeComponentPin, type ThemeContent } from "../api/client";
@@ -9,6 +9,7 @@ import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { canonicalViewport } from "../designSystems/deviceMetrics";
 import { ThemeStyle } from "../designSystems/theme";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
+import { HostStageSurface } from "../catalog/hostPrimitives";
 import { CaptureSurface } from "./CaptureSurface";
 import { CaptureStyle, useCaptureTheme, usePublishError, usePublishOnSettle } from "./CaptureChrome";
 import { bootstrapRendererBuild } from "./readiness";
@@ -44,6 +45,12 @@ async function loadPrototype(id: string, rev: number | undefined, version: numbe
 
 function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPrototype; custom?: CustomPlayerRuntime; screenId: string }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const [stageHost, setStageHost] = useState<HTMLDivElement | null>(null);
+  const stageHostRef = useMemo(() => ({ current: stageHost }), [stageHost]);
+  const setSurfaceRef = useCallback((node: HTMLDivElement | null) => {
+    ref.current = node;
+    setStageHost(node);
+  }, []);
   const { doc } = loaded;
   const screen = doc.screens.find((s) => s.id === screenId);
   const customTypes = useMemo(() => new Set(Object.keys(custom?.definitions ?? {})), [custom]);
@@ -60,13 +67,18 @@ function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPr
 
   if (!screen || !tree) return <div ref={ref} data-capture-error="screen-not-found" />;
   const size = screen.canvas ?? canonicalViewport[doc.device] ?? null;
-  const style = screen.canvas
-    ? { width: screen.canvas.width, height: screen.canvas.height }
-    : size ? { width: size.width, height: size.height } : { width: "100%" as const };
+  const style = {
+    position: "relative" as const,
+    ...(screen.canvas
+      ? { width: screen.canvas.width, height: screen.canvas.height }
+      : size ? { width: size.width, height: size.height } : { width: "100%" as const }),
+  };
   return <SurfaceSpacingScope systemId={doc.designSystem} themeTokens={loaded.theme?.tokens}>
-    <div ref={ref} id="eui-capture-surface" className="bg-background text-foreground" style={style}>
+    <div ref={setSurfaceRef} id="eui-capture-surface" className="bg-background text-foreground" style={style}>
       <ThemeStyle content={loaded.theme} />
-      <CaptureSurface designSystem={doc.designSystem} custom={custom} tree={tree} initialState={doc.state} screenIds={screenIds} canvas={screen.canvas} />
+      <HostStageSurface stageHostRef={stageHostRef}>
+        <CaptureSurface designSystem={doc.designSystem} custom={custom} tree={tree} initialState={doc.state} screenIds={screenIds} canvas={screen.canvas} hostPrimitivesAllowed={doc.device !== "desktop" || screen.canvas !== undefined} />
+      </HostStageSurface>
     </div>
   </SurfaceSpacingScope>;
 }

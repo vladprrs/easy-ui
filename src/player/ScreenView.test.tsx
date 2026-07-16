@@ -43,7 +43,7 @@ function renderPlayer(doc: ReturnType<typeof prototypeDocSchema.parse>, initialP
     element: <JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}><Outlet context={context} /></JSONUIProvider>,
     children: [{ path: "s/:screenId", element: <ScreenView /> }],
   }], { initialEntries: [initialPath] });
-  return render(<RouterProvider router={router} />);
+  return { ...render(<RouterProvider router={router} />), router };
 }
 
 const mobileDoc = () => prototypeDocSchema.parse({
@@ -59,6 +59,26 @@ const mobileDoc = () => prototypeDocSchema.parse({
     spec: { root: "copy", elements: { copy: { type: "Text", props: { text: "Home screen" } } } },
   }],
 });
+
+const overlayElementSet = (label: string) => ({
+  root: "root",
+  elements: {
+    root: { type: "Stack", props: {}, children: ["base", "overlay"] },
+    base: { type: "Text", props: { text: `${label} base` } },
+    overlay: { type: "Overlay", props: { placement: "bottom", inset: "md", scrim: true }, children: ["overlay-copy"] },
+    "overlay-copy": { type: "Text", props: { text: `${label} overlay` } },
+  },
+});
+
+function overlayDoc(device: "mobile" | "tablet", withCanvasScreen = false) {
+  return prototypeDocSchema.parse({
+    version: 1, id: "overlay-prototype", name: "Overlay prototype", device, startScreen: withCanvasScreen ? "canvas" : "flow", state: {},
+    screens: [
+      ...(withCanvasScreen ? [{ id: "canvas", name: "Canvas", canvas: { width: 640, height: 480 }, spec: overlayElementSet("Canvas") }] : []),
+      { id: "flow", name: "Flow", spec: overlayElementSet("Flow") },
+    ],
+  });
+}
 
 describe("ScreenView stage controls (W1-1)", () => {
   it("renders zoom controls in the chrome actions slot and switches fit/actual/manual", () => {
@@ -221,5 +241,53 @@ describe("ScreenView canvas", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next screen" }));
 
     await waitFor(() => expect(navigation.navigate).toHaveBeenCalledWith("details"));
+  });
+});
+
+describe("ScreenView Overlay device rules and stage", () => {
+  it.each(["mobile", "tablet"] as const)("renders %s flow Overlay and disables desktop with a title", (device) => {
+    renderPlayer(overlayDoc(device), "/p/overlay-prototype/s/flow");
+    expect(screen.getByText("Flow overlay")).toBeTruthy();
+    const desktop = screen.getByRole("button", { name: "Компьютер" }) as HTMLButtonElement;
+    expect(desktop.disabled).toBe(true);
+    expect(desktop.title).toContain("Overlay");
+    fireEvent.click(desktop);
+    expect(screen.getByRole("button", { name: device === "mobile" ? "Телефон" : "Планшет" }).getAttribute("aria-pressed")).toBe("true");
+    const stage = document.querySelector<HTMLElement>("[data-eui-stage-viewport='player']")!;
+    expect(stage.querySelector("[data-eui-host-primitive='Overlay']")).not.toBeNull();
+    expect(stage.style.getPropertyValue("--eui-space-md")).toBe("12px");
+    const bottom = stage.querySelector<HTMLElement>("[data-eui-overlay-content]")!;
+    expect(bottom.style.left).toContain("--eui-space-md");
+    expect(bottom.style.right).toContain("--eui-space-md");
+    expect(bottom.style.bottom).toContain("--eui-space-md");
+  });
+
+  it("allows desktop on canvas Overlay, then resets desktop override when navigating to flow Overlay", async () => {
+    const { router } = renderPlayer(overlayDoc("mobile", true), "/p/overlay-prototype/s/canvas");
+    const desktop = screen.getByRole("button", { name: "Компьютер" }) as HTMLButtonElement;
+    expect(desktop.disabled).toBe(false);
+    fireEvent.click(desktop);
+    expect(desktop.getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector("[data-eui-canvas-layer='overlay']")).not.toBeNull();
+    expect(screen.getByText("Canvas overlay")).toBeTruthy();
+
+    await router.navigate("/p/overlay-prototype/s/flow");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Телефон" }).getAttribute("aria-pressed")).toBe("true"));
+    expect((screen.getByRole("button", { name: "Компьютер" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Flow overlay")).toBeTruthy();
+  });
+
+  it("keeps Overlay anchored to the transformed StageViewport while the player scroller moves", () => {
+    renderPlayer(overlayDoc("mobile"), "/p/overlay-prototype/s/flow");
+    const scroller = document.querySelector<HTMLElement>("[data-eui-content-scroller='player']")!;
+    const stage = document.querySelector<HTMLElement>("[data-eui-stage-viewport='player']")!;
+    const overlay = stage.querySelector<HTMLElement>("[data-eui-host-primitive='Overlay']")!;
+    const hostBefore = overlay.parentElement;
+    const bottomBefore = overlay.querySelector<HTMLElement>("[data-eui-overlay-content]")!.style.bottom;
+    scroller.scrollTop = 120;
+    fireEvent.scroll(scroller);
+    expect(overlay.parentElement).toBe(hostBefore);
+    expect(overlay.parentElement).toBe(stage);
+    expect(overlay.querySelector<HTMLElement>("[data-eui-overlay-content]")!.style.bottom).toBe(bottomBefore);
   });
 });

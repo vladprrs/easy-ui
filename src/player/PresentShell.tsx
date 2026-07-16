@@ -145,10 +145,10 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
       <div className="relative flex min-h-0 min-w-0 flex-1">
         {/* Компактный баннер сброса (W1-5): deep-link в середину флоу презентации. */}
         <FlowResetBanner compact />
-        <DeviceFrame device={doc.device} canvas={screen?.canvas} zoom={fitZoom}>
+        <DeviceFrame device={doc.device} canvas={screen?.canvas} zoom={fitZoom} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}>
           {screen && tree
             ? <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>
-                <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={customDefinitions} onError={onError} tree={tree} canvas={screen.canvas} />
+                <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={customDefinitions} onError={onError} tree={tree} canvas={screen.canvas} hostPrimitivesAllowed={doc.device !== "desktop" || screen.canvas !== undefined} />
               </ScreenErrorBoundary>
             : <section role="alert" className="m-6 rounded-2xl bg-white/10 p-6 text-eui-orange">
                 <h1 className="font-eui-display text-xl font-bold">{player.screenMissingTitle}</h1>
