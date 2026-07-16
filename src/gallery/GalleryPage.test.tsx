@@ -5,6 +5,9 @@ import { createPrototype, getCatalogManifest, getPrototypeDraft, listDesignSyste
 import { GalleryPage } from "./GalleryPage";
 
 vi.mock("../api/client", () => ({ createPrototype: vi.fn(), getCatalogManifest: vi.fn(), getPrototypeDraft: vi.fn(), listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn() }));
+vi.mock("./GalleryShareDialog", () => ({
+  GalleryShareDialog: ({ prototypeId, latestVersion, onClose }: { prototypeId: string; latestVersion: number; onClose: () => void }) => <div role="dialog" aria-label={`QR ${prototypeId} v${latestVersion}`}><button type="button" onClick={onClose}>Закрыть QR</button></div>,
+}));
 
 const summary = {
   id: "hello-world", name: "Hello World", description: "A minimal two-screen prototype.", device: "mobile" as const,
@@ -183,6 +186,25 @@ describe("GalleryPage", () => {
     fireEvent.click(screen.getByText("Версии…"));
     fireEvent.click(await screen.findByRole("link", { name: "Версия v3" }));
     expect(router.state.location.pathname).toBe("/p/hello-world/v/3");
+  });
+
+  it("opens one QR dialog for a published prototype and hides the action without versions", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([
+      summary,
+      { ...summary, id: "draft-only", name: "Draft only", latestVersion: null },
+    ]);
+    renderGallery();
+    const publishedCard = (await screen.findByRole("heading", { name: "Hello World" })).closest("li")!;
+    const draftCard = screen.getByRole("heading", { name: "Draft only" }).closest("li")!;
+
+    const qrButton = within(publishedCard).getByRole("button", { name: "QR на телефон" });
+    expect(qrButton.getAttribute("title")).toBe("QR на телефон");
+    expect(within(draftCard).queryByRole("button", { name: "QR на телефон" })).toBeNull();
+    fireEvent.click(qrButton);
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: "QR hello-world v2" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Закрыть QR" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("shows an API error and retries", async () => {

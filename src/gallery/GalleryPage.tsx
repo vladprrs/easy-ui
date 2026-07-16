@@ -8,6 +8,7 @@ import { deviceNames, gallery, versionLink } from "../app/strings/gallery";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { BUILTIN_TEMPLATE_VERSION, buildBuiltinPrototypeTemplate, buildCustomPrototypeTemplate, createPrototypeId, findCustomStarterComponent, isBuiltinDesignSystem } from "./prototypeTemplates";
 import { GalleryPreview, GALLERY_PREVIEWS_ENABLED } from "./GalleryPreview";
+import { GalleryShareDialog } from "./GalleryShareDialog";
 
 export type GallerySort = "updated" | "name";
 
@@ -80,6 +81,8 @@ export function GalleryPage() {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<GallerySort>("updated");
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null);
+  const [sharePrototypeId, setSharePrototypeId] = useState<string | null>(null);
+  const [shareLatestVersion, setShareLatestVersion] = useState<number | null>(null);
   const systems = useMemo(() => {
     if (prototypes.status !== "ready" || designSystems.status !== "ready") return [];
     const registered = designSystems.data.designSystems.map(({ id, name }) => ({ id, name }));
@@ -167,6 +170,7 @@ export function GalleryPage() {
           <Link className={`${pillGhost} bg-white`} to={`/p/${prototype.id}/present`}>{gallery.presentLink}</Link>
           <Link className={pillGhost} to={`/p/${prototype.id}/cjm`}>CJM</Link>
           <Link className={pillGhost} to={`/p/${prototype.id}/edit`}>{gallery.editorLink}</Link>
+          {prototype.latestVersion !== null ? <button type="button" className={pillGhost} title={gallery.qrOnPhone} aria-label={gallery.qrOnPhone} onClick={() => { setSharePrototypeId(prototype.id); setShareLatestVersion(prototype.latestVersion); }}>{gallery.qrOnPhone}</button> : null}
           {prototype.latestVersion !== null ? <VersionsMenu prototype={prototype} /> : null}
         </div>
       </li>)}
@@ -203,5 +207,10 @@ export function GalleryPage() {
         </form>
       </section>
     </div> : null}
+    {sharePrototypeId !== null && shareLatestVersion !== null ? <GalleryShareDialog
+      prototypeId={sharePrototypeId}
+      latestVersion={shareLatestVersion}
+      onClose={() => { setSharePrototypeId(null); setShareLatestVersion(null); }}
+    /> : null}
   </main>;
 }
