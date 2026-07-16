@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { openDatabase } from "./db";
+import { ensureBootstrapAdmin } from "./users";
 import { prototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
 import {
   assertViewportPixelBudget,
@@ -24,21 +25,28 @@ afterEach(async () => {
   for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
 });
 
-async function setup() {
+async function setup(legacyBasicAuth?: string) {
   const directory = await mkdtemp(resolve(process.cwd(), ".driver-cli-test-"));
   directories.push(directory);
   const db = openDatabase(":memory:");
   databases.push(db);
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: createTestHandler(db, { dataDir: directory }) });
+  await ensureBootstrapAdmin(db, { name: "Driver Admin", password: "driver-test-password" });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: createTestHandler(db, { dataDir: directory, legacyBasicAuth }) });
   servers.push(server);
   return { db, api: `http://127.0.0.1:${server.port}/api` };
 }
 
-async function run(api: string, args: string[]) {
+async function run(api: string, args: string[], legacyBasicAuth = "") {
   const child = Bun.spawn({
     cmd: ["node", driver, ...args],
     cwd: process.cwd(),
-    env: { ...process.env, EASYUI_API: api, EASYUI_AUTH: "" },
+    env: {
+      ...process.env,
+      EASYUI_API: api,
+      EASYUI_LEGACY_BASIC_AUTH: legacyBasicAuth,
+      EASYUI_USERNAME: "Driver Admin",
+      EASYUI_PASSWORD: "driver-test-password",
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -89,6 +97,13 @@ function png(width = 2, height = 3): Uint8Array {
 }
 
 describe("author driver CLI", () => {
+  test("logs in and reaches the API through the legacy Basic barrier", async () => {
+    const { api } = await setup("edge:secret");
+    const result = await run(api, ["get", "prototypes"], "edge:secret");
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([]);
+  });
+
   test("catalog emits compact server catalog and hints on an unknown system", async () => {
     const { api } = await setup();
     const valid = await run(api, ["catalog", "shadcn"]);

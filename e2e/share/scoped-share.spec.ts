@@ -1,6 +1,7 @@
 import { expect, request as playwrightRequest, test } from "@playwright/test";
+import { authenticatedBrowserContext, authenticatedRequest } from "../auth";
+import { AUTH_PREVIEW_LEGACY_BASIC, SHARE_PROTOTYPE_ID, SHARE_PROTOTYPE_NAME } from "./fixture";
 
-const ownerCredentials = { username: "owner", password: "secret" };
 const mobileContextOptions = {
   viewport: { width: 390, height: 844 },
   isMobile: true,
@@ -9,14 +10,14 @@ const mobileContextOptions = {
 
 test("owner creates, sees QR, and revokes a share from the player action slot", async ({ browser, baseURL }) => {
   expect(baseURL).toBeTruthy();
-  const ownerRequest = await playwrightRequest.newContext({ baseURL, httpCredentials: ownerCredentials });
-  const meta = await (await ownerRequest.get("/api/prototypes/hello-world")).json() as { headRev: number; latestVersion: number | null };
+  const ownerRequest = await authenticatedRequest(baseURL!, { legacyBasicAuth: AUTH_PREVIEW_LEGACY_BASIC });
+  const meta = await (await ownerRequest.get(`/api/prototypes/${SHARE_PROTOTYPE_ID}`)).json() as { headRev: number; latestVersion: number | null };
   if (meta.latestVersion === null) {
-    expect((await ownerRequest.post("/api/prototypes/hello-world/publish", { data: { baseRev: meta.headRev, message: "Share UI e2e" } })).status()).toBe(201);
+    expect((await ownerRequest.post(`/api/prototypes/${SHARE_PROTOTYPE_ID}/publish`, { data: { baseRev: meta.headRev, message: "Share UI e2e" } })).status()).toBe(201);
   }
-  const ownerContext = await browser.newContext({ httpCredentials: ownerCredentials });
+  const ownerContext = await authenticatedBrowserContext(browser, baseURL!, { legacyBasicAuth: AUTH_PREVIEW_LEGACY_BASIC });
   const page = await ownerContext.newPage();
-  await page.goto(`${baseURL}/p/hello-world`);
+  await page.goto(`${baseURL}/p/${SHARE_PROTOTYPE_ID}`);
   const shareAction = page.getByRole("button", { name: "Поделиться" });
   await expect(shareAction).toBeEnabled();
   await shareAction.click();
@@ -35,17 +36,17 @@ test("owner creates, sees QR, and revokes a share from the player action slot", 
 
 test("scoped share exchanges token, renders all resources, denies foreign scope, and dies on revoke", async ({ browser, baseURL }) => {
   expect(baseURL).toBeTruthy();
-  const owner = await playwrightRequest.newContext({ baseURL, httpCredentials: ownerCredentials });
-  const metaResponse = await owner.get("/api/prototypes/hello-world");
+  const owner = await authenticatedRequest(baseURL!, { legacyBasicAuth: AUTH_PREVIEW_LEGACY_BASIC });
+  const metaResponse = await owner.get(`/api/prototypes/${SHARE_PROTOTYPE_ID}`);
   expect(metaResponse.ok()).toBeTruthy();
   const meta = await metaResponse.json() as { headRev: number; latestVersion: number | null };
   let version = meta.latestVersion;
   if (version === null) {
-    const published = await owner.post("/api/prototypes/hello-world/publish", { data: { baseRev: meta.headRev, message: "Share e2e" } });
+    const published = await owner.post(`/api/prototypes/${SHARE_PROTOTYPE_ID}/publish`, { data: { baseRev: meta.headRev, message: "Share e2e" } });
     expect(published.status()).toBe(201);
     version = (await published.json() as { version: number }).version;
   }
-  const createdResponse = await owner.post("/api/prototypes/hello-world/share", { data: { version, ttlSeconds: 3600 } });
+  const createdResponse = await owner.post(`/api/prototypes/${SHARE_PROTOTYPE_ID}/share`, { data: { version, ttlSeconds: 3600 } });
   expect(createdResponse.status()).toBe(201);
   const grant = await createdResponse.json() as { id: string; url: string };
   expect(grant.url).toMatch(/^http:\/\/127\.0\.0\.1:4174\/share\/[A-Za-z0-9_-]{43}$/);
@@ -56,7 +57,7 @@ test("scoped share exchanges token, renders all resources, denies foreign scope,
   const anonymousRequest = await playwrightRequest.newContext({ baseURL });
   const exchange = await anonymousRequest.get(`/share/${token}`, { maxRedirects: 0 });
   expect(exchange.status()).toBe(303);
-  expect(exchange.headers().location).toMatch(/^http:\/\/127\.0\.0\.1:4174\/share\/p\/hello-world\/v\/\d+\/present\/s\/welcome$/);
+  expect(exchange.headers().location).toBe(`http://127.0.0.1:4174/share/p/${SHARE_PROTOTYPE_ID}/v/${version}/present/s/welcome`);
   const setCookie = exchange.headers()["set-cookie"] ?? "";
   expect(setCookie).toContain("HttpOnly");
   expect(setCookie).toContain("SameSite=Lax");
@@ -73,9 +74,9 @@ test("scoped share exchanges token, renders all resources, denies foreign scope,
   await page.goto("http://localhost:5173");
   const finalResponse = await page.goto(grant.url);
   expect(finalResponse?.ok()).toBeTruthy();
-  await expect(page).toHaveURL(new RegExp(`/share/p/hello-world/v/${version}/present/s/welcome$`));
+  await expect(page).toHaveURL(new RegExp(`/share/p/${SHARE_PROTOTYPE_ID}/v/${version}/present/s/welcome$`));
   expect(page.url()).not.toContain(token);
-  await expect(page).toHaveTitle(`Hello World v${version} · Просмотр — easy-ui`);
+  await expect(page).toHaveTitle(`${SHARE_PROTOTYPE_NAME} v${version} · Просмотр — easy-ui`);
   await expect(page.getByRole("link", { name: "Открыть в easy-ui" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Галерея" })).toHaveCount(0);
 
@@ -88,19 +89,19 @@ test("scoped share exchanges token, renders all resources, denies foreign scope,
   await expect(input).toHaveValue("Ada");
   await input.fill("Lin");
   await page.getByRole("button", { name: "Details" }).click();
-  await expect(page).toHaveURL(new RegExp(`/share/p/hello-world/v/${version}/present/s/details$`));
-  await expect(page.getByText("This is the second screen.")).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/share/p/${SHARE_PROTOTYPE_ID}/v/${version}/present/s/details$`));
+  await expect(page.getByText("Share fixture second screen.")).toBeVisible();
   expect(failedResources).toEqual([]);
 
   // BrowserContext.request shares the browser cookie jar, but gets no BasicAuth credentials.
-  expect((await shareContext.request.get(`/api/prototypes/hello-world/versions/${version}`)).status()).toBe(200);
+  expect((await shareContext.request.get(`/api/prototypes/${SHARE_PROTOTYPE_ID}/versions/${version}`)).status()).toBe(200);
   expect((await shareContext.request.get("/api/prototypes")).status()).toBe(401);
   expect((await shareContext.request.get("/api/prototypes/checkout/versions/1")).status()).toBe(401);
-  expect((await shareContext.request.get("/api/prototypes/hello-world/versions/999")).status()).toBe(401);
-  expect((await shareContext.request.get(`/p/hello-world/v/${version}/present/s/welcome`)).status()).toBe(401);
-  expect((await shareContext.request.post(`/api/prototypes/hello-world/versions/${version}`)).status()).toBe(401);
+  expect((await shareContext.request.get(`/api/prototypes/${SHARE_PROTOTYPE_ID}/versions/999`)).status()).toBe(401);
+  expect((await shareContext.request.get(`/p/${SHARE_PROTOTYPE_ID}/v/${version}/present/s/welcome`)).status()).toBe(401);
+  expect((await shareContext.request.post(`/api/prototypes/${SHARE_PROTOTYPE_ID}/versions/${version}`)).status()).toBe(401);
 
-  const revoked = await owner.delete(`/api/prototypes/hello-world/share/${grant.id}`);
+  const revoked = await owner.delete(`/api/prototypes/${SHARE_PROTOTYPE_ID}/share/${grant.id}`);
   expect(revoked.status()).toBe(204);
   const afterRevoke = await page.reload({ waitUntil: "domcontentloaded" });
   expect(afterRevoke?.status()).toBe(401);
@@ -112,11 +113,11 @@ test("scoped share exchanges token, renders all resources, denies foreign scope,
 
 test("scoped share preserves mobile overrides through the 303 exchange", async ({ browser, baseURL }) => {
   expect(baseURL).toBeTruthy();
-  const owner = await playwrightRequest.newContext({ baseURL, httpCredentials: ownerCredentials });
-  const meta = await (await owner.get("/api/prototypes/hello-world")).json() as { headRev: number; latestVersion: number | null };
+  const owner = await authenticatedRequest(baseURL!, { legacyBasicAuth: AUTH_PREVIEW_LEGACY_BASIC });
+  const meta = await (await owner.get(`/api/prototypes/${SHARE_PROTOTYPE_ID}`)).json() as { headRev: number; latestVersion: number | null };
   let version = meta.latestVersion;
   if (version === null) {
-    const published = await owner.post("/api/prototypes/hello-world/publish", {
+    const published = await owner.post(`/api/prototypes/${SHARE_PROTOTYPE_ID}/publish`, {
       data: { baseRev: meta.headRev, message: "Mobile share override e2e" },
     });
     expect(published.status()).toBe(201);
@@ -124,7 +125,7 @@ test("scoped share preserves mobile overrides through the 303 exchange", async (
   }
 
   for (const mobile of ["1", "0"] as const) {
-    const created = await owner.post("/api/prototypes/hello-world/share", { data: { version, ttlSeconds: 3600 } });
+    const created = await owner.post(`/api/prototypes/${SHARE_PROTOTYPE_ID}/share`, { data: { version, ttlSeconds: 3600 } });
     expect(created.status()).toBe(201);
     const grant = await created.json() as { id: string; url: string };
     const context = await browser.newContext({ baseURL, ...mobileContextOptions });
@@ -139,7 +140,7 @@ test("scoped share preserves mobile overrides through the 303 exchange", async (
     const finalResponse = await page.goto(`${grant.url}?mobile=${mobile}`);
     expect(finalResponse?.ok()).toBeTruthy();
     expect(exchangeLocation).toContain(`mobile=${mobile}`);
-    await expect(page).toHaveURL(new RegExp(`/share/p/hello-world/v/${version}/present/s/welcome\\?mobile=${mobile}$`));
+    await expect(page).toHaveURL(new RegExp(`/share/p/${SHARE_PROTOTYPE_ID}/v/${version}/present/s/welcome\\?mobile=${mobile}$`));
     if (mobile === "1") {
       await expect(page.locator('[data-eui-stage-viewport="present-fluid"]')).toBeVisible();
       await expect(page.locator("footer")).toHaveCount(0);
@@ -150,7 +151,7 @@ test("scoped share preserves mobile overrides through the 303 exchange", async (
     }
 
     await context.close();
-    await owner.delete(`/api/prototypes/hello-world/share/${grant.id}`);
+    await owner.delete(`/api/prototypes/${SHARE_PROTOTYPE_ID}/share/${grant.id}`);
   }
   await owner.dispose();
 });

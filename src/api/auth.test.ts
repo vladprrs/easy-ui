@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getMe, loginRedirectForLocation, validateNextPath } from "./client";
+import { getMe, listPrototypes, loginRedirectForLocation, validateNextPath } from "./client";
 
 const unauthorized = () => Promise.resolve(new Response(JSON.stringify({
   error: { code: "unauthorized", message: "Authentication required" },
@@ -17,7 +17,7 @@ describe("auth redirect on 401", () => {
     const location = locationAt("/library", "?section=atoms", "#button");
     vi.stubGlobal("location", location);
 
-    await expect(getMe()).rejects.toMatchObject({ status: 401 });
+    await expect(listPrototypes()).rejects.toMatchObject({ status: 401 });
 
     expect(location.assign).toHaveBeenCalledWith("/login?next=%2Flibrary%3Fsection%3Datoms%23button");
   });
@@ -28,6 +28,13 @@ describe("auth redirect on 401", () => {
 
     await expect(getMe()).rejects.toMatchObject({ status: 401 });
 
+    expect(location.assign).not.toHaveBeenCalled();
+  });
+
+  it("lets the auth bootstrap handle an anonymous getMe without a competing hard navigation", async () => {
+    const location = locationAt("/users");
+    vi.stubGlobal("location", location);
+    await expect(getMe()).rejects.toMatchObject({ status: 401 });
     expect(location.assign).not.toHaveBeenCalled();
   });
 

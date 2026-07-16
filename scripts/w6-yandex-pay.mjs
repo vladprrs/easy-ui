@@ -1,17 +1,16 @@
 #!/usr/bin/env node
-/* global Buffer, URL, fetch, process, setTimeout */
+/* global URL, process, setTimeout */
 
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createEasyUiClient } from "./easyui-auth.mjs";
 
 const API = (process.env.EASYUI_API ?? "http://127.0.0.1:8791/api").replace(/\/$/, "");
 const apiUrl = new URL(API);
 if (apiUrl.hostname === "easy-ui.pay-offline.ru") throw new Error("W6 harness refuses to mutate the production easy-ui host");
 
-const AUTH = process.env.EASYUI_AUTH
-  ? `Basic ${Buffer.from(process.env.EASYUI_AUTH).toString("base64")}`
-  : undefined;
+const client = createEasyUiClient({ apiBase: API });
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EXAMPLES = resolve(HERE, "../.claude/skills/author/examples");
 const SPACE = Object.freeze({ none: "0px", xs: "4px", sm: "8px", md: "12px", lg: "16px", xl: "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" });
@@ -22,9 +21,9 @@ const fail = (message) => { throw new Error(message); };
 const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 
 async function call(method, path, body) {
-  const response = await fetch(`${API}${path}`, {
+  const response = await client.request(path, {
     method,
-    headers: { ...(AUTH ? { authorization: AUTH } : {}), ...(body === undefined ? {} : { "content-type": "application/json" }) },
+    headers: { ...(body === undefined ? {} : { "content-type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();

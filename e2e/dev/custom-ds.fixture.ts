@@ -5,7 +5,7 @@ import type { APIRequestContext } from "@playwright/test";
  * W0-8 custom design system fixture, shared by e2e waves (W1/W2/W5).
  *
  * Seeds cannot contain custom components or custom design systems, so this fixture is
- * provisioned over the dev API (127.0.0.1:8787) by e2e/dev/custom-ds.setup.ts, which the
+ * provisioned through the Vite `/api` proxy by e2e/setup/dev.setup.ts, which the
  * "dev" Playwright project depends on. Every dev run starts from a wiped .e2e-data/dev,
  * so the fixture is created fresh; each step still tolerates "already exists" so the
  * setup stays re-runnable against a warm server.
@@ -34,7 +34,7 @@ export const COMPONENT_PAGE_IDS = {
   rejected: "e2e-rejected-badge",
 } as const;
 
-const DEV_API = "http://127.0.0.1:8787/api";
+const DEV_API = "/api";
 
 export const customDsPrototypeDoc = {
   version: 1,

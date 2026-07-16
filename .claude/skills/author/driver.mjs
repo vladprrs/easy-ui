@@ -4,11 +4,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createEasyUiClient } from "../../../scripts/easyui-auth.mjs";
 
 const API = (process.env.EASYUI_API ?? "https://easy-ui.pay-offline.ru/api").replace(/\/$/, "");
-const AUTH = process.env.EASYUI_AUTH
-  ? `Basic ${Buffer.from(process.env.EASYUI_AUTH).toString("base64")}`
-  : null;
+const client = createEasyUiClient({ apiBase: API });
 
 export const DESKTOP_VIEWPORT = Object.freeze({ width: 1280, height: 800 });
 export const DEVICE_VIEWPORTS = Object.freeze({
@@ -113,10 +112,9 @@ export function parseArgs(argv) {
 }
 
 async function call(method, path, body) {
-  const response = await fetch(`${API}${path}`, {
+  const response = await client.request(path, {
     method,
     headers: {
-      ...(AUTH ? { authorization: AUTH } : {}),
       ...(body !== undefined ? { "content-type": "application/json" } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -132,7 +130,7 @@ function errorCode(response) {
 }
 
 function requestFailed(step, response) {
-  const authHint = response.status === 401 ? "\nhint: set EASYUI_AUTH=user:pass" : "";
+  const authHint = response.status === 401 ? "\nhint: set EASYUI_USERNAME/EASYUI_PASSWORD and, during the transition, EASYUI_LEGACY_BASIC_AUTH" : "";
   throw new CliError(`${step} failed (${response.status}): ${JSON.stringify(response.json, null, 2)}${authHint}`);
 }
 
@@ -338,7 +336,8 @@ async function runGeometry(args) {
 
 async function downloadImage(imageUrl, outputPath) {
   const url = imageUrl.startsWith("/api/") ? `${API}${imageUrl.slice(4)}` : new URL(imageUrl, `${API}/`).toString();
-  const response = await fetch(url, { headers: AUTH ? { authorization: AUTH } : {} });
+  const path = url.startsWith(API) ? url.slice(API.length) : new URL(url).pathname.replace(/^\/api/, "");
+  const response = await client.request(path);
   if (!response.ok) throw new CliError(`download ${imageUrl} failed (${response.status})`);
   await writeFile(outputPath, Buffer.from(await response.arrayBuffer()));
 }
@@ -535,8 +534,11 @@ export async function main(argv = process.argv.slice(2)) {
     await mkdir(outputDir, { recursive: true });
     const { chromium } = await import("playwright");
     const browser = await chromium.launch();
-    const [user, ...password] = (process.env.EASYUI_AUTH ?? "").split(":");
-    const page = await browser.newPage({ viewport: { width: 480, height: 800 }, ...(AUTH ? { httpCredentials: { username: user, password: password.join(":") } } : {}) });
+    await client.login();
+    const context = await browser.newContext({ viewport: { width: 480, height: 800 }, ...(client.legacyAuthorization ? { extraHTTPHeaders: { authorization: client.legacyAuthorization } } : {}) });
+    const [name, value] = client.cookieHeader.split("=", 2);
+    await context.addCookies([{ name, value, url: API.replace(/\/api$/, "") }]);
+    const page = await context.newPage();
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
@@ -546,6 +548,7 @@ export async function main(argv = process.argv.slice(2)) {
       await page.screenshot({ path: `${outputDir}/${screen.id}.png` });
       console.log(`${outputDir}/${screen.id}.png`);
     }
+    await context.close();
     await browser.close();
     if (errors.length) throw new CliError(`browser errors:\n${errors.join("\n")}`);
   } else if (cmd === "snap") {

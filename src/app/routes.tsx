@@ -1,4 +1,4 @@
-import { Link, type RouteObject } from "react-router";
+import { Link, Outlet, type RouteObject } from "react-router";
 import { CapturePrototype } from "../capture/CapturePrototype";
 import { CaptureComponent } from "../capture/CaptureComponent";
 import { GalleryPage } from "../gallery/GalleryPage";
@@ -15,7 +15,7 @@ import { EditorShell } from "../editor/EditorShell";
 import { headingPage, kicker, pillPrimary } from "./chrome";
 import { appShell } from "./strings/common";
 import { useDocumentTitle } from "./useDocumentTitle";
-import { LoginPage, UsersPage } from "../auth";
+import { AuthProvider, LoginPage, UsersPage } from "../auth";
 
 function NotFound() {
   useDocumentTitle(appShell.notFoundTitle);
@@ -37,7 +37,11 @@ const presentChildren = (): RouteObject[] => [
   { path: "s/:screenId", element: null },
 ];
 
-export const routeObjects: RouteObject[] = [
+// AuthProvider — в корне дерева: /login и Layout делят один контекст пользователя,
+// поэтому setUser после логина виден гвардам (/users) без повторного getMe.
+export const routeObjects: RouteObject[] = [{
+  element: <AuthProvider><Outlet /></AuthProvider>,
+  children: [
   { path: "login", element: <LoginPage /> },
   { path: "capture/:protoId/s/:screenId", element: <CapturePrototype /> },
   { path: "capture/component/:id/:version", element: <CaptureComponent /> },
@@ -77,4 +81,5 @@ export const routeObjects: RouteObject[] = [
       { path: "*", element: <NotFound /> },
     ],
   },
-];
+  ],
+}];

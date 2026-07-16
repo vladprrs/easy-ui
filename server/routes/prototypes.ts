@@ -65,6 +65,7 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
   if(tail[0]==="draft"&&tail.length===1) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); return json(repo.draft(id,principal),200,noStore); }
   if(tail[0]==="revisions") {
     if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed");
+    if(tail.length===2&&principal.kind==="capture") { requirePrototypeRead(db,id,principal); return json(repo.revision(id,integer(Number(tail[1]),"rev"),principal),200,noStore); }
     requirePrototypeOwner(db,id,principal);
     if(tail.length===3&&tail[2]==="diff") {
       const rev=integer(Number(tail[1]),"rev"); const u=new URL(request.url); const againstRaw=u.searchParams.get("against");

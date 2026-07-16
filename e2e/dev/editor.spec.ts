@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 
-const api = "http://127.0.0.1:8787/api";
+const api = "/api";
 const prototypeId = `editor-e2e-${Date.now()}`;
 const screenId = "canvas-screen";
 const initialText = "Editor text before change";

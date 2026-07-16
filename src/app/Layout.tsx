@@ -1,5 +1,5 @@
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
-import { AuthProvider, useAuth } from "../auth";
+import { useAuth } from "../auth";
 import { pillGhost } from "./chrome";
 import { appShell } from "./strings/common";
 
@@ -35,5 +35,5 @@ function LayoutContent() {
 }
 
 export function Layout() {
-  return <AuthProvider><LayoutContent /></AuthProvider>;
+  return <LayoutContent />;
 }

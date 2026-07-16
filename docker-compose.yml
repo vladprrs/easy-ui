@@ -7,7 +7,10 @@ services:
     stop_grace_period: 30s
     mem_limit: 1g
     environment:
-      BASIC_AUTH: ${BASIC_AUTH:?BASIC_AUTH is required}
+      BASIC_AUTH: ${BASIC_AUTH:-}
+      LEGACY_BASIC_AUTH: ${LEGACY_BASIC_AUTH:-}
+      ADMIN_NAME: ${ADMIN_NAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required}
     expose:
       - "8787"

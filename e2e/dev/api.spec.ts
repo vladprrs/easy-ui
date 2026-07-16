@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
-const api = "http://127.0.0.1:8787/api";
+const api = "/api";
 
 test("API revisions, publishing, component bundles, and shim ABI work end to end", async ({ request, page }) => {
   const seeded = await request.get(`${api}/prototypes`);
@@ -46,7 +46,8 @@ test("API revisions, publishing, component bundles, and shim ABI work end to end
 
   const bundle = await request.get(`${api}/components/api-rating-stars/versions/1/bundle.js`);
   expect(bundle.ok()).toBeTruthy();
-  expect(bundle.headers()["cache-control"]).toContain("immutable");
+  expect(bundle.headers()["cache-control"]).toBe("private, no-store");
+  expect(bundle.headers().vary).toContain("Cookie");
   const bundleText = await bundle.text();
   const imports = [...bundleText.matchAll(/(?:from\s*|import\s*)["']([^"']+)["']/g)].map((match) => match[1]);
   expect(imports.length).toBeGreaterThan(0);

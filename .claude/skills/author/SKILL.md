@@ -15,12 +15,14 @@ easy-ui — просмотрщик кликабельных прототипов
 ## Setup
 
 ```bash
-export EASYUI_AUTH="user:pass"     # basic-auth креды инстанса (выдаёт владелец)
+export EASYUI_USERNAME="alice"             # named account
+export EASYUI_PASSWORD="account-password"
+export EASYUI_LEGACY_BASIC_AUTH="edge:secret" # только пока включён внешний compatibility-барьер
 # по умолчанию драйвер ходит на https://easy-ui.pay-offline.ru
 # другой инстанс (например локальный): export EASYUI_API="http://127.0.0.1:8787/api"
 ```
 
-Проверка доступа (список прототипов; без корректного `EASYUI_AUTH` будет 401):
+Драйвер логинится named-аккаунтом, сохраняет session cookie и добавляет `Origin` к API-запросам. Если задан `EASYUI_LEGACY_BASIC_AUTH`, Basic-заголовок отправляется и на login, и далее. Проверка доступа:
 
 ```bash
 node driver.mjs get prototypes
@@ -128,10 +130,17 @@ node driver.mjs geometry <protoId> <screenId>
 Картинки/шрифты/иконки не встраивать base64 — загружать в реестр и ссылаться `{"$asset": "<id>"}`:
 
 ```bash
-curl -u "$EASYUI_AUTH" -X POST -H "Content-Type: image/png" --data-binary @banner.png \
+curl -u "$EASYUI_LEGACY_BASIC_AUTH" -c /tmp/easyui.cookies \
+  -H "Origin: https://easy-ui.pay-offline.ru" -H "Content-Type: application/json" \
+  -d '{"name":"'"$EASYUI_USERNAME"'","password":"'"$EASYUI_PASSWORD"'"}' \
+  https://easy-ui.pay-offline.ru/api/auth/login
+curl -u "$EASYUI_LEGACY_BASIC_AUTH" -b /tmp/easyui.cookies -X POST \
+  -H "Origin: https://easy-ui.pay-offline.ru" -H "Content-Type: image/png" --data-binary @banner.png \
   https://easy-ui.pay-offline.ru/api/assets
 # {"id":"asset_<sha256>","url":"/api/assets/asset_...","sha256":"...","mime":"image/png",...}
 ```
+
+Если внешний барьер отключён, обе опции `-u` следует убрать; named login и cookie остаются обязательными.
 
 Дедуп по sha256 (повторная загрузка вернёт тот же id), лимит 5 MiB, magic-byte проверка типа (png/jpeg/webp/gif/svg/woff2/ttf/otf). Из custom TSX ассет доступен по строковому URL `/api/assets/asset_<sha256>` — такие ссылки пинуются при publish.
 
@@ -141,7 +150,7 @@ curl -u "$EASYUI_AUTH" -X POST -H "Content-Type: image/png" --data-binary @banne
 
 ### Версии и публикация прототипа
 
-Каждое сохранение — неизменяемая ревизия (драфт). Плеер показывает драфт сразу — publish не обязателен. Зафиксировать версию (v1, v2, …): `POST /prototypes/:id/publish` c `{baseRev}` — при необходимости через `curl -u "$EASYUI_AUTH"`.
+Каждое сохранение — неизменяемая ревизия (драфт). Плеер показывает драфт сразу — publish не обязателен. Зафиксировать версию (v1, v2, …): `POST /prototypes/:id/publish` c `{baseRev}` через тот же cookie jar, `Origin` и, если включён, внешний Basic-заголовок.
 
 ## Сценарий 2: кастомный компонент + прототип
 
@@ -254,7 +263,7 @@ Discovery: `GET /api/openapi.json` (полный OpenAPI 3.1), `GET /api/capabil
 
 ## Troubleshooting
 
-- `401` на любой запрос — не задан/неверен `EASYUI_AUTH` (формат строго `user:pass`, драйвер сам кодирует base64).
+- `401` на login — неверны `EASYUI_USERNAME`/`EASYUI_PASSWORD` либо, при включённом внешнем барьере, `EASYUI_LEGACY_BASIC_AUTH` (формат `user:pass`). `401` после успешного login обычно означает истёкшую/отозванную cookie-сессию.
 - `save failed (422) ... "Unrecognized key: \"bogus\""` с path `/screens/0/spec/elements/...` — prop, которого нет в схеме компонента; сверить с `reference/builtin-catalog.json` (для кастомных — со своей Zod-схемой).
 - `save failed (422) ... "Unknown or unpublished component type: X"` — тип не встроенный и не опубликован как компонент; сначала `driver.mjs component ...`.
 - `publish failed (422) ... Type check failed` (компонент) — читать вывод tsc в issue; save такие ошибки не ловит.

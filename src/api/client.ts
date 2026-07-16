@@ -155,10 +155,10 @@ export interface Capabilities {
   features: Record<string, boolean> & { layoutContract: true };
 }
 
-type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
+type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown; redirectOnUnauthorized?: boolean };
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { body, headers, ...init } = options;
+  const { body, headers, redirectOnUnauthorized = true, ...init } = options;
   const response = await fetch(path, {
     ...init,
     credentials: init.credentials ?? "same-origin",
@@ -166,17 +166,17 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (response.status === 204) return undefined as T;
-  return responseJson<T>(response);
+  return responseJson<T>(response, redirectOnUnauthorized);
 }
 
-async function responseJson<T>(response: Response): Promise<T> {
+async function responseJson<T>(response: Response, redirectOnUnauthorized = true): Promise<T> {
   if (!response.ok) {
     let error: ApiErrorBody = { code: "http_error", message: `Не удалось выполнить запрос к API (${response.status})` };
     try {
       const value = await response.json() as { error?: Partial<ApiErrorBody> };
       if (value.error && typeof value.error.code === "string" && typeof value.error.message === "string") error = value.error as ApiErrorBody;
     } catch { /* Preserve the fallback for a non-JSON error response. */ }
-    if (response.status === 401) redirectUnauthorizedRequest();
+    if (response.status === 401 && redirectOnUnauthorized) redirectUnauthorizedRequest();
     throw new ApiError(response.status, error);
   }
   return await response.json() as T;
@@ -207,7 +207,7 @@ function redirectUnauthorizedRequest(): void {
 
 export const login = (input: LoginInput, signal?: AbortSignal) => request<LoginResult>("/api/auth/login", { method: "POST", body: input, signal });
 export const logout = (signal?: AbortSignal) => request<void>("/api/auth/logout", { method: "POST", signal });
-export const getMe = (signal?: AbortSignal) => request<AuthUser>("/api/auth/me", { signal });
+export const getMe = (signal?: AbortSignal) => request<AuthUser>("/api/auth/me", { signal, redirectOnUnauthorized: false });
 export const listUsers = (signal?: AbortSignal) => request<{ users: UserSummary[] }>("/api/users", { signal });
 export const createUser = (input: CreateUserInput, signal?: AbortSignal) => request<UserSummary>("/api/users", { method: "POST", body: input, signal });
 

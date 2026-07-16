@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const api = "http://127.0.0.1:8787/api";
+const api = "/api";
 
 // Combined custom component: typed event payload (choose) + named slots (header/body).
 // Mirrors server/fixtures/typed-events-stars.tsx and named-slots-panel.tsx.

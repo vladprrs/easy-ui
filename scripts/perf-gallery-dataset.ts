@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { createEasyUiClient, easyUiCredentials, type EasyUiCredentials } from "./easyui-auth.mjs";
 
 export const PERF_GALLERY_PREFIX = "perf-gallery-";
 const CUSTOM_DS_ID = "perf-gallery-custom-ds";
@@ -9,18 +10,19 @@ type PrototypeSummary = { id: string; headRev: number };
 
 export type PerfGalleryDatasetOptions = {
   apiBase: string;
-  authorization?: string;
+  credentials?: EasyUiCredentials;
 };
 
-function headers(options: PerfGalleryDatasetOptions, json = false): HeadersInit {
-  return {
-    ...(json ? { "content-type": "application/json" } : {}),
-    ...(options.authorization ? { authorization: options.authorization } : {}),
-  };
+const clients = new Map<string, ReturnType<typeof createEasyUiClient>>();
+function client(options: PerfGalleryDatasetOptions) {
+  const key = `${options.apiBase}\0${JSON.stringify(options.credentials ?? {})}`;
+  let value = clients.get(key);
+  if (!value) { value = createEasyUiClient({ apiBase: options.apiBase, credentials: options.credentials }); clients.set(key, value); }
+  return value;
 }
 
 async function api<T>(options: PerfGalleryDatasetOptions, path: string, init: RequestInit = {}, allowed = [200, 201, 204]): Promise<T> {
-  const response = await fetch(`${options.apiBase.replace(/\/$/, "")}${path}`, { ...init, headers: { ...headers(options, init.body !== undefined), ...init.headers } });
+  const response = await client(options).request(path, { ...init, headers: { ...(init.body !== undefined ? { "content-type": "application/json" } : {}), ...init.headers } });
   if (!allowed.includes(response.status)) throw new Error(`${init.method ?? "GET"} ${path}: HTTP ${response.status} ${await response.text()}`);
   return response.status === 204 ? undefined as T : await response.json() as T;
 }
@@ -85,7 +87,7 @@ function argument(name: string, fallback?: string): string | undefined {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const action = process.argv[2];
   const apiBase = argument("--api", process.env.PERF_GALLERY_API ?? "http://127.0.0.1:4173/api")!;
-  const options = { apiBase, authorization: process.env.PERF_GALLERY_AUTH };
+  const options = { apiBase, credentials: easyUiCredentials() };
   const result = action === "seed" ? await createPerfGalleryDataset(options)
     : action === "cleanup" ? { cleaned: await cleanupPerfGalleryDataset(options) }
       : null;

@@ -26,7 +26,8 @@ export function UsersPage() {
   }, [user]);
 
   if (authLoading) return <main className="px-6 py-12 text-sm text-eui-slate-500">Загрузка…</main>;
-  if (!user?.isAdmin) return <Navigate to="/" replace />;
+  if (!user) return <Navigate to="/login?next=%2Fusers" replace />;
+  if (!user.isAdmin) return <Navigate to="/" replace />;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

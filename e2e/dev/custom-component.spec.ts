@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
-const api = "http://127.0.0.1:8787/api";
+const api = "/api";
 
 test("custom component hooks, events, state templates, and published navigation work", async ({ request, page }) => {
   const source = await readFile("server/fixtures/rating-stars.tsx", "utf8");

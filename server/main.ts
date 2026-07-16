@@ -58,6 +58,17 @@ export function resolvePublicOrigin(value:string|undefined,fallback:{host:string
   return origin;
 }
 
+export function resolveLegacyBasicAuthEnv(
+  env?: { LEGACY_BASIC_AUTH?: string; BASIC_AUTH?: string },
+  warn: (message: string) => void = console.warn,
+): string | undefined {
+  const source = env ?? process.env;
+  if (source.BASIC_AUTH) {
+    warn("[deprecated] BASIC_AUTH is a compatibility alias; migrate to LEGACY_BASIC_AUTH plus ADMIN_NAME/ADMIN_PASSWORD sessions");
+  }
+  return source.LEGACY_BASIC_AUTH || source.BASIC_AUTH || undefined;
+}
+
 function isUnsafe(method: string): boolean { return method !== "GET" && method !== "HEAD" && method !== "OPTIONS"; }
 
 function enforceOrigin(request: Request, publicOrigin: URL): void {
@@ -175,7 +186,7 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     const captureHost=host==="0.0.0.0"||host==="::"?"127.0.0.1":host;
     const screenshots=new ScreenshotServiceImpl({db,dataDir,serveDist,captureOrigin:`http://${captureHost}:${port}`,chromiumAvailable:chromiumAvailable(),runJob:spawnWorker});
     const visual=new VisualServiceImpl({db,dataDir,screenshots});
-    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,legacyBasicAuth:process.env.LEGACY_BASIC_AUTH||undefined,publicOrigin,screenshots,visual})});
+    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,legacyBasicAuth:resolveLegacyBasicAuthEnv(),publicOrigin,screenshots,visual})});
     return {server,db};
   } catch(error) { db.close(); throw error; }
 }

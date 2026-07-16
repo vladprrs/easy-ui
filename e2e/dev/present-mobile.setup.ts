@@ -1,6 +1,6 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, type APIRequestContext } from "@playwright/test";
 
-const DEV_API = "http://127.0.0.1:8787/api";
+const DEV_API = "/api";
 
 const flowOverlayDoc = {
   version: 1,
@@ -102,8 +102,8 @@ async function createFixture(request: APIRequestContext, doc: object): Promise<v
   expect(response.status(), await response.text()).toBe(201);
 }
 
-test("provision mobile presentation fixtures over the dev API", async ({ request }) => {
+export async function provisionMobilePresentationFixtures(request: APIRequestContext) {
   for (const doc of [flowOverlayDoc, canvasDoc, tabletWideDoc, modalDoc("Dialog"), modalDoc("Drawer")]) {
     await createFixture(request, doc);
   }
-});
+}

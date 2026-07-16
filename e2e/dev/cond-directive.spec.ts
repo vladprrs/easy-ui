@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const api = "http://127.0.0.1:8787/api";
+const api = "/api";
 
 test("a prototype $cond switches branches after an action", async ({ request, page }) => {
   const doc = {

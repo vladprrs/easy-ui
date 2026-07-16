@@ -3,10 +3,12 @@ import { useNavigate, useSearchParams } from "react-router";
 import { ApiError, login, validateNextPath } from "../api/client";
 import { headingPage, inputBase, kicker, pillPrimary, plate } from "../app/chrome";
 import { useDocumentTitle } from "../app/useDocumentTitle";
+import { useAuth } from "./AuthContext";
 
 export function LoginPage() {
   useDocumentTitle("Вход");
   const navigate = useNavigate();
+  const { setUser } = useAuth();
   const [searchParams] = useSearchParams();
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -20,6 +22,7 @@ export function LoginPage() {
     const next = validateNextPath(searchParams.get("next")) ?? "/";
     try {
       const result = await login({ name, password, ...(next === "/" ? {} : { next }) });
+      setUser(result.user);
       navigate(validateNextPath(result.next) ?? next, { replace: true });
     } catch (caught) {
       setError(caught instanceof ApiError && caught.status === 401

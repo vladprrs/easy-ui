@@ -2,6 +2,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, describe, expect, it } from "vitest";
 import { Layout } from "./Layout";
+import { AuthProvider } from "../auth";
 import { PrototypeChrome, type PrototypeChromeProps } from "./PrototypeChrome";
 import { appShell, prototypeChrome } from "./strings/common";
 
@@ -63,7 +64,7 @@ describe("PrototypeChrome", () => {
 
 describe("Layout app header on /p/*", () => {
   const layoutRoutes = [{
-    element: <Layout />,
+    element: <AuthProvider><Layout /></AuthProvider>,
     children: [
       { index: true, element: <p>home</p> },
       { path: "p/:protoId/cjm", element: <p>proto view</p> },

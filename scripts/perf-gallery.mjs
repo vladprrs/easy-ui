@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { chromium } from "playwright";
 import { cleanupPerfGalleryDataset, createPerfGalleryDataset } from "./perf-gallery-dataset";
+import { createEasyUiClient, easyUiCredentials } from "./easyui-auth.mjs";
 
 const VIEWPORT = { width: 1440, height: 900 };
 const NETWORK = { latencyMs: 40, downloadBytesPerSecond: 5 * 1024 * 1024 / 8, uploadBytesPerSecond: 1 * 1024 * 1024 / 8 };
@@ -42,10 +43,17 @@ async function sample(page, baseUrl, previews) {
   return await page.evaluate(() => performance.now());
 }
 
-async function coldSamples(browser, baseUrl, previews, runs) {
+async function authenticatedContext(browser, auth) {
+  const context = await browser.newContext({ viewport: VIEWPORT, ...(auth.legacyAuthorization ? { extraHTTPHeaders: { authorization: auth.legacyAuthorization } } : {}) });
+  const [name, value] = auth.cookieHeader.split("=", 2);
+  await context.addCookies([{ name, value, url: auth.origin }]);
+  return context;
+}
+
+async function coldSamples(browser, baseUrl, previews, runs, auth) {
   const samples = [];
   for (let run = 0; run < runs; run += 1) {
-    const context = await browser.newContext({ viewport: VIEWPORT });
+    const context = await authenticatedContext(browser, auth);
     const page = await context.newPage();
     await configureNetwork(context, page, true);
     samples.push(await sample(page, baseUrl, previews));
@@ -54,8 +62,8 @@ async function coldSamples(browser, baseUrl, previews, runs) {
   return samples;
 }
 
-async function warmSamples(browser, baseUrl, previews, runs) {
-  const context = await browser.newContext({ viewport: VIEWPORT });
+async function warmSamples(browser, baseUrl, previews, runs, auth) {
+  const context = await authenticatedContext(browser, auth);
   const page = await context.newPage();
   await configureNetwork(context, page, false);
   await sample(page, baseUrl, previews);
@@ -74,18 +82,20 @@ const runs = Number(argument("--runs", "5"));
 const reportPath = argument("--report", "docs/perf-gallery-report.md");
 if (!Number.isInteger(runs) || runs < 5) throw new Error("--runs must be an integer >= 5");
 const root = new URL(baseUrl);
-const authorization = process.env.PERF_GALLERY_AUTH;
-const datasetOptions = { apiBase: new URL("/api", root).href.replace(/\/$/, ""), authorization };
+const credentials = easyUiCredentials();
+const datasetOptions = { apiBase: new URL("/api", root).href.replace(/\/$/, ""), credentials };
+const browserAuth = createEasyUiClient(datasetOptions);
+await browserAuth.login();
 const browser = await chromium.launch({ headless: true });
 
 try {
   const dataset = await createPerfGalleryDataset(datasetOptions);
   // Keep variants isolated: concurrent page loads would make the shared API/server
   // the benchmark bottleneck and invalidate the baseline comparison.
-  const coldBaseline = await coldSamples(browser, baseUrl, false, runs);
-  const coldPreview = await coldSamples(browser, baseUrl, true, runs);
-  const warmBaseline = await warmSamples(browser, baseUrl, false, runs);
-  const warmPreview = await warmSamples(browser, baseUrl, true, runs);
+  const coldBaseline = await coldSamples(browser, baseUrl, false, runs, browserAuth);
+  const coldPreview = await coldSamples(browser, baseUrl, true, runs, browserAuth);
+  const warmBaseline = await warmSamples(browser, baseUrl, false, runs, browserAuth);
+  const warmPreview = await warmSamples(browser, baseUrl, true, runs, browserAuth);
   const cold = { baseline: median(coldBaseline), preview: median(coldPreview) };
   const warm = { baseline: median(warmBaseline), preview: median(warmPreview) };
   const coldDelta = degradation(cold.baseline, cold.preview);

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { openDatabase } from "./db";
-import { createHandler } from "./main";
+import { createHandler, resolveLegacyBasicAuthEnv } from "./main";
 import { ensureBootstrapAdmin, UserRepo } from "./users";
 
 const dirs: string[] = [];
@@ -120,13 +120,27 @@ describe("anonymous and compatibility boundaries", () => {
     db.close();
   });
 
-  test("legacy Basic is only an outer barrier and health bypasses it", async () => {
+  test("legacy Basic is only an outer barrier: health bypasses it and login needs both layers", async () => {
     const { db } = await setup(); const handler = createHandler(db, { legacyBasicAuth: "edge:secret" });
     expect((await handler(request("/api/health"))).status).toBe(200);
     const denied = await handler(request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }));
     expect(denied.status).toBe(401);
     expect(denied.headers.get("www-authenticate")).toContain("Basic");
+    const authorized = await handler(request("/api/auth/login", { method: "POST", headers: {
+      authorization: `Basic ${btoa("edge:secret")}`, "content-type": "application/json",
+    }, body: JSON.stringify({ name: "Admin", password: "correct horse battery staple" }) }));
+    expect(authorized.status).toBe(200);
+    expect(authorized.headers.get("set-cookie")).toContain("easyui_session=");
     db.close();
+  });
+
+  test("BASIC_AUTH is a deprecated fallback and LEGACY_BASIC_AUTH has priority", () => {
+    const warnings: string[] = [];
+    expect(resolveLegacyBasicAuthEnv({ BASIC_AUTH: "old:secret", LEGACY_BASIC_AUTH: undefined }, (message) => warnings.push(message))).toBe("old:secret");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("deprecated");
+    expect(resolveLegacyBasicAuthEnv({ BASIC_AUTH: "old:secret", LEGACY_BASIC_AUTH: "new:secret" }, () => {})).toBe("new:secret");
+    expect(resolveLegacyBasicAuthEnv({ BASIC_AUTH: undefined, LEGACY_BASIC_AUTH: "new:secret" }, () => {})).toBe("new:secret");
   });
 
   test("session cap removes oldest sessions and expired sessions are cleaned up", async () => {
