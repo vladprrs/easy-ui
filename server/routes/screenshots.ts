@@ -33,7 +33,8 @@ export async function routeScreenshots(request: Request, service: ScreenshotServ
     const b = body(await readJson(request));
     const rev = optionalPositiveInt(b.rev, "rev"), version = optionalPositiveInt(b.version, "version");
     if (rev !== undefined && version !== undefined) throw new ApiError(400, "invalid_request", "rev and version are mutually exclusive");
-    const result = service.enqueuePrototype(segments[1]!, segments[3]!, { rev, version, viewport: b.viewport, deviceScaleFactor: b.deviceScaleFactor, theme: typeof b.theme === "string" ? b.theme : undefined, waitForFonts: b.waitForFonts !== false });
+    if (b.probe !== undefined && b.probe !== "geometry") throw new ApiError(400, "invalid_request", "probe must be geometry");
+    const result = service.enqueuePrototype(segments[1]!, segments[3]!, { rev, version, viewport: b.viewport, deviceScaleFactor: b.deviceScaleFactor, theme: typeof b.theme === "string" ? b.theme : undefined, waitForFonts: b.waitForFonts !== false, probe: b.probe as "geometry" | undefined });
     return json(result, 202, noStore);
   }
   // POST /api/components/:id/versions/:version/screenshot

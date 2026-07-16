@@ -1,6 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import type { CaptureExpected } from "../../src/capture/protocol";
+import type { GeometryCollection, GeometryRect } from "../../src/capture/geometry.mjs";
+import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
+import type { SpaceToken } from "../../src/designSystems/types";
+import { REPEAT_RENDER_COST_BUDGET } from "../../src/prototype/validate";
 import { getDesignSystemVersion, getLatestDesignSystemContent } from "../designSystems";
 import type { ThemeContent } from "../designSystemsMeta";
 import { ApiError } from "../http";
@@ -12,19 +16,37 @@ import { CaptureSessionStore, JOB_DEADLINE_MS } from "./sessions";
 
 export interface Viewport { width: number; height: number }
 export interface JobStatus { status: "queued" | "running" | "done" | "error"; result?: ScreenshotResult; error?: { code: string; message: string } }
-export interface ScreenshotResult {
+export interface ScreenshotImageResult {
+  kind: "image";
   imageUrl: string; assetId: string; width: number; height: number;
   consoleErrors: string[]; pageErrors: string[];
   bundleHash?: string; componentPins?: { id: string; version: number; bundleHash: string }[];
   rendererBuild: string | null; browserVersion: string;
 }
+export interface ScreenshotGeometryResult {
+  kind: "geometry";
+  resolvedRev: number;
+  prototypeInstanceId: string;
+  componentPins: { id: string; version: number; bundleHash: string }[];
+  designSystemMetaVersion: number | null;
+  resolvedSpaceScale: Record<SpaceToken, string>;
+  viewport: Viewport;
+  dpr: number;
+  rects: GeometryRect[];
+  truncated: boolean;
+  total: number;
+}
+export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult;
 
 export interface WorkerJob {
   captureOrigin: string; captureUrl: string; token: string;
   bootstrap: { kind: "prototype" | "component"; target: Record<string, unknown>; props?: Record<string, unknown>; expected: CaptureExpected };
   allowedUrls: string[]; viewport: Viewport; deviceScaleFactor: number; colorScheme: "light" | "dark"; waitForFonts: boolean; expected: CaptureExpected;
+  probe?: "geometry"; geometryLimit?: number;
 }
-export type WorkerOk = { ok: true; pngBase64: string; width: number; height: number; consoleErrors: string[]; pageErrors: string[]; browserVersion: string };
+export type WorkerImageOk = { ok: true; pngBase64: string; width: number; height: number; consoleErrors: string[]; pageErrors: string[]; browserVersion: string };
+export type WorkerGeometryOk = { ok: true; geometry: GeometryCollection; consoleErrors: string[]; pageErrors: string[]; browserVersion: string };
+export type WorkerOk = WorkerImageOk | WorkerGeometryOk;
 export type WorkerErr = { ok: false; error: string; consoleErrors?: string[]; pageErrors?: string[] };
 export type WorkerResult = WorkerOk | WorkerErr;
 export type RunJob = (job: WorkerJob, deadlineMs: number) => Promise<WorkerResult>;
@@ -34,10 +56,12 @@ interface InternalJob {
   expected: CaptureExpected; allowedUrls: string[]; props?: Record<string, unknown>;
   captureUrl: string; viewport: Viewport; dsf: number; theme: "light" | "dark"; waitForFonts: boolean;
   componentPins?: { id: string; version: number; bundleHash: string }[];
+  probe?: "geometry"; resolvedSpaceScale?: Record<SpaceToken, string>;
   result?: ScreenshotResult; error?: { code: string; message: string }; resultExpiresAt?: number;
 }
 
 export const MAX_QUEUE = 5;
+export const GEOMETRY_RECT_LIMIT = REPEAT_RENDER_COST_BUDGET;
 const RESULT_TTL_MS = 10 * 60_000;
 
 function validateViewport(viewport: unknown, dsf: unknown): { viewport: Viewport; dsf: number } {
@@ -113,7 +137,7 @@ export class ScreenshotService {
     if (this.queue.length >= MAX_QUEUE) throw new ApiError(429, "queue_full", "Screenshot queue is full; retry later");
   }
 
-  enqueuePrototype(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean }): { jobId: string } {
+  enqueuePrototype(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry" }): { jobId: string } {
     const {jobId}=this.enqueueWithExpected({kind:"prototype",id,screenId,rev:opts.rev,version:opts.version},opts); return {jobId};
   }
 
@@ -123,7 +147,7 @@ export class ScreenshotService {
       : this.enqueueComponentFrozen(target.id,target.version,{...opts,props:target.props});
   }
 
-  private enqueuePrototypeFrozen(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean }): FrozenEnqueue {
+  private enqueuePrototypeFrozen(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry" }): FrozenEnqueue {
     this.requireAvailable();
     const { viewport, dsf } = validateViewport(opts.viewport, opts.deviceScaleFactor);
     this.guardQueue();
@@ -132,6 +156,13 @@ export class ScreenshotService {
     const snap = repo.screenRenderStatus(id, screenId, { rev: opts.rev, version: opts.version });
     const full = repo.revision(id, snap.rev);
     const componentPins = full.components.map((p) => ({ id: p.id, version: p.version, bundleHash: p.bundleHash }));
+    const resolvedSpaceScale = opts.probe ? (() => {
+      const designSystem = (full.doc as { designSystem: string }).designSystem;
+      const themeContent = full.designSystemMetaVersion == null
+        ? getLatestDesignSystemContent(this.deps.db, designSystem)
+        : getDesignSystemVersion(this.deps.db, designSystem, full.designSystemMetaVersion);
+      return resolveSpacingScale(designSystem, themeContent?.tokens ?? {});
+    })() : undefined;
     const theme = opts.theme === "dark" ? "dark" : "light";
     const expected: CaptureExpected = { kind: "prototype", prototypeInstanceId:full.prototypeInstanceId, rev: snap.rev, componentManifestHash: full.componentManifestHash, builtinCatalogHash: full.builtinCatalogHash, dsMetaVersion: full.designSystemMetaVersion ?? null, rendererBuild: this.rendererBuild };
     const allowedUrls = this.prototypeAllowedUrls(
@@ -147,7 +178,7 @@ export class ScreenshotService {
     if (opts.version !== undefined) query.set("version", String(opts.version)); else query.set("rev", String(snap.rev));
     query.set("theme", theme); query.set("dsf", String(dsf));
     const captureUrl = `/capture/${encodeURIComponent(id)}/s/${encodeURIComponent(screenId)}?${query}`;
-    const {jobId}=this.push({ kind: "prototype", expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins });
+    const {jobId}=this.push({ kind: "prototype", expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}) });
     return {jobId,expected};
   }
 
@@ -264,13 +295,33 @@ export class ScreenshotService {
         captureOrigin: this.deps.captureOrigin, captureUrl: job.captureUrl, token: session.token,
         bootstrap: { kind: job.kind, target: this.targetOf(job), ...(job.props ? { props: job.props } : {}), expected: job.expected },
         allowedUrls: job.allowedUrls, viewport: job.viewport, deviceScaleFactor: job.dsf, colorScheme: job.theme, waitForFonts: job.waitForFonts, expected: job.expected,
+        ...(job.probe ? { probe: job.probe, geometryLimit: GEOMETRY_RECT_LIMIT } : {}),
       };
       const result = await this.deps.runJob(workerJob, JOB_DEADLINE_MS);
       if (!result.ok) { job.status = "error"; job.error = { code: "capture_failed", message: result.error }; this.expire(job); return; }
+      if (job.probe === "geometry") {
+        if (!("geometry" in result) || job.expected.kind !== "prototype") throw new Error("geometry worker result mismatch");
+        job.result = {
+          kind: "geometry",
+          resolvedRev: job.expected.rev,
+          prototypeInstanceId: job.expected.prototypeInstanceId,
+          componentPins: job.componentPins ?? [],
+          designSystemMetaVersion: job.expected.dsMetaVersion,
+          resolvedSpaceScale: job.resolvedSpaceScale!,
+          viewport: job.viewport,
+          dpr: job.dsf,
+          ...result.geometry,
+        };
+        job.status = "done";
+        this.expire(job);
+        return;
+      }
+      if (!("pngBase64" in result)) throw new Error("image worker result mismatch");
       const bytes = Buffer.from(result.pngBase64, "base64");
       const assetRepo = new AssetRepo(this.deps.db, this.deps.dataDir);
       const ingest = await assetRepo.ingest(new Uint8Array(bytes), "image/png", "screenshot.png");
       job.result = {
+        kind: "image",
         imageUrl: `/api/assets/${ingest.asset.id}`, assetId: ingest.asset.id, width: result.width, height: result.height,
         consoleErrors: result.consoleErrors, pageErrors: result.pageErrors,
         ...(job.expected.kind === "component" ? { bundleHash: job.expected.bundleHash } : { componentPins: job.componentPins }),

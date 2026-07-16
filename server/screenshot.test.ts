@@ -99,9 +99,40 @@ describe("screenshot job API", () => {
     for (let i = 0; i < 50 && status !== "done" && status !== "error"; i++) { await Bun.sleep(5); status = service.get(jobId).status; }
     const final = service.get(jobId);
     expect(final.status).toBe("done");
-    expect(final.result?.assetId.startsWith("asset_")).toBe(true);
-    expect(final.result?.imageUrl).toBe(`/api/assets/${final.result?.assetId}`);
-    expect(final.result?.componentPins).toEqual([]);
+    expect(final.result?.kind).toBe("image");
+    if (final.result?.kind !== "image") throw new Error("expected image result");
+    expect(final.result.assetId.startsWith("asset_")).toBe(true);
+    expect(final.result.imageUrl).toBe(`/api/assets/${final.result.assetId}`);
+    expect(final.result.componentPins).toEqual([]);
+  });
+
+  test("geometry probe returns metadata without ingesting a PNG asset", async () => {
+    const { db, dir, handler: h } = await setup();
+    expect((await h(req("/prototypes", "POST", { doc: await helloDoc("geometry") }))).status).toBe(201);
+    let workerJob: Parameters<RunJob>[0] | undefined;
+    const runJob: RunJob = async (job) => {
+      workerJob = job;
+      return { ok:true, geometry:{ rects:[{key:"root",instance:0,domIndex:0,x:1.25,y:2.5,width:10,height:0,layoutContext:null}], truncated:false, total:1 }, consoleErrors:[], pageErrors:[], browserVersion:"test/geometry" };
+    };
+    const service = makeService(db, dir, runJob);
+    const handler = createHandler(db, { dataDir:dir, screenshots:service });
+    const accepted = await handler(req("/prototypes/geometry/screens/welcome/screenshot", "POST", { probe:"geometry", viewport:{width:390,height:844}, deviceScaleFactor:2 }));
+    expect(accepted.status).toBe(202);
+    const {jobId} = await accepted.json() as {jobId:string};
+    for (let i=0; i<50 && service.get(jobId).status !== "done"; i++) await Bun.sleep(5);
+    const final = service.get(jobId);
+    expect(workerJob).toMatchObject({ probe:"geometry", geometryLimit:2000 });
+    expect(final.result).toMatchObject({ kind:"geometry", resolvedRev:1, prototypeInstanceId:expect.any(String), componentPins:[], designSystemMetaVersion:null, resolvedSpaceScale:{md:"12px"}, viewport:{width:390,height:844}, dpr:2, rects:[{key:"root",width:10,height:0}], truncated:false, total:1 });
+    expect((db.query("SELECT count(*) AS n FROM assets").get() as {n:number}).n).toBe(0);
+  });
+
+  test("rejects unknown probe modes", async () => {
+    const { db, dir, handler:h } = await setup();
+    expect((await h(req("/prototypes", "POST", { doc:await helloDoc("bad-probe") }))).status).toBe(201);
+    const handler=createHandler(db,{dataDir:dir,screenshots:makeService(db,dir)});
+    const response=await handler(req("/prototypes/bad-probe/screens/welcome/screenshot","POST",{probe:"pixels",viewport:{width:390,height:844}}));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({error:{code:"invalid_request"}});
   });
 });
 

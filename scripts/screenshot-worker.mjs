@@ -5,6 +5,7 @@
 // context.route allowlist keyed on the exact capture origin + allowed paths.
 /* global process, Buffer, URL, window */
 import net from "node:net";
+import { collectGeometry } from "../src/capture/geometry.mjs";
 
 /** Deterministic JSON for canonical readiness comparison (mirrors src/capture/canonicalJson.ts). */
 export function canonicalStringify(value) {
@@ -115,6 +116,11 @@ async function run(job) {
     if (!ready || ready.status === "error") return { ok: false, error: ready?.error ?? "capture reported error", consoleErrors, pageErrors };
     if (canonicalStringify(readyToExpected(ready)) !== canonicalStringify(job.expected)) {
       return { ok: false, error: `readiness mismatch: got ${canonicalStringify(readyToExpected(ready))} expected ${canonicalStringify(job.expected)}`, consoleErrors, pageErrors };
+    }
+
+    if (job.probe === "geometry") {
+      const geometry = await page.evaluate(collectGeometry, { limit: job.geometryLimit });
+      return { ok: true, geometry, consoleErrors, pageErrors, browserVersion: browser.version() };
     }
 
     const el = await page.$("#eui-capture-surface");

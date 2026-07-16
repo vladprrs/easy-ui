@@ -18,7 +18,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] | component-move <id> --design-system <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] | diff <protoId> [revA] [revB] [--json] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] [--json] | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] | status <prototypeId> <screenId>";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] | component-move <id> --design-system <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] | diff <protoId> [revA] [revB] [--json] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] [--json] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] | status <prototypeId> <screenId>";
 
 class CliError extends Error {
   constructor(message, { usage = false } = {}) {
@@ -72,6 +72,7 @@ const ranges = Object.freeze({
   diff: [1, 3],
   baseline: [1, 2],
   check: [1, 1],
+  geometry: [2, 2],
   get: [1, 2],
   delete: [2, 2],
   shoot: [1, 2],
@@ -243,6 +244,96 @@ function diffSummary(diff) {
     `identical: ${summary.identical ? "yes" : "no"}; document identical: ${summary.docIdentical ? "yes" : "no"}; truncated: ${summary.truncated ? "yes" : "no"}`,
     ...(summary.omittedSections.length ? [`omitted: ${summary.omittedSections.join(", ")}`] : []),
   ].join("\n");
+}
+
+function staticFlowDirection(flow, props) {
+  if (!flow) return { reason: "flow is not declared" };
+  if (typeof flow.direction === "string") return { direction: flow.direction };
+  const value = props?.[flow.direction.prop];
+  if (value === undefined || (value && typeof value === "object")) return { reason: "flow direction is dynamic or absent" };
+  if (flow.direction.vertical?.some((item) => Object.is(item, value))) return { direction: "vertical" };
+  if (flow.direction.horizontal?.some((item) => Object.is(item, value))) return { direction: "horizontal" };
+  return { reason: "flow direction is unmapped" };
+}
+
+/** Pure formatter input used by CLI tests and the geometry command. */
+export function analyzeGeometryGaps(screen, definitions, geometry) {
+  const elements = screen.spec.elements;
+  const rowsByParent = new Map();
+  for (const rect of geometry.rects) {
+    if (rect.parentKey === undefined) continue;
+    const id = `${rect.parentKey}\u0000${rect.parentInstance ?? 0}`;
+    const list = rowsByParent.get(id) ?? [];
+    list.push(rect);
+    rowsByParent.set(id, list);
+  }
+  return geometry.rects.map((rect) => {
+    const element = elements[rect.key];
+    const definition = element ? definitions[element.type] : undefined;
+    const flow = definition?.layout?.flow;
+    const resolved = staticFlowDirection(flow, element?.props);
+    let reason = resolved.reason;
+    if (!reason && flow.wrap) {
+      const wrapValue = element?.props?.[flow.wrap.prop];
+      if (wrapValue === undefined || (wrapValue && typeof wrapValue === "object")) reason = "flow wrap is dynamic or absent";
+      else if (flow.wrap.enabled.some((item) => Object.is(item, wrapValue))) reason = "flow wrap is enabled";
+    }
+    const context = rect.layoutContext;
+    if (!reason && !context) reason = "layout owner is ambiguous";
+    if (!reason && !String(context.display).includes("flex")) reason = `layout owner display is ${context.display || "unknown"}`;
+    if (!reason && context.flexWrap !== "nowrap") reason = `layout owner wraps (${context.flexWrap})`;
+    const expectedAxis = resolved.direction === "vertical" ? "column" : "row";
+    if (!reason && !String(context.flexDirection).startsWith(expectedAxis)) reason = `layout owner direction is ${context.flexDirection}`;
+    const childKeys = element?.children ?? [];
+    if (!reason && childKeys.some((key) => elements[key]?.repeat)) reason = "repeat in flow group";
+    if (!reason && childKeys.some((key) => elements[key]?.slot !== undefined)) reason = "named slots in flow group";
+    if (!reason && flow.slot && flow.slot !== "default") reason = "named flow slot";
+    const children = (rowsByParent.get(`${rect.key}\u0000${rect.instance}`) ?? []).filter((child) => childKeys.includes(child.key));
+    if (!reason && children.length < 2) reason = "fewer than two measured children";
+    if (reason) return { key: rect.key, instance: rect.instance, reason, cssGap: null, observed: null };
+    const vertical = resolved.direction === "vertical";
+    const sorted = [...children].sort((a, b) => vertical ? a.y - b.y : a.x - b.x);
+    const observed = sorted.slice(1).map((item, index) => {
+      const previous = sorted[index];
+      const value = vertical ? item.y - (previous.y + previous.height) : item.x - (previous.x + previous.width);
+      return Math.round((value + Number.EPSILON) * 100) / 100;
+    });
+    return {
+      key: rect.key,
+      instance: rect.instance,
+      reason: null,
+      cssGap: { rowGap: context.rowGap, columnGap: context.columnGap },
+      observed,
+    };
+  });
+}
+
+async function runGeometry(args) {
+  const [id, screenId] = args;
+  const encoded = encodeURIComponent(id);
+  const draft = await requireOk("draft", await call("GET", `/prototypes/${encoded}/draft`));
+  const screen = draft.doc.screens.find((item) => item.id === screenId);
+  if (!screen) throw new CliError(`screen ${screenId} not found in ${id}`);
+  const viewport = assertViewportPixelBudget(resolveViewport(screen, undefined, draft.doc.device), 1);
+  const [system, manifest] = await Promise.all([
+    requireOk("design system", await call("GET", `/design-systems/${encodeURIComponent(draft.doc.designSystem)}`)),
+    requireOk("catalog manifest", await call("GET", `/catalog/manifest?designSystem=${encodeURIComponent(draft.doc.designSystem)}`)),
+  ]);
+  const queued = await requireOk("geometry", await call("POST", `/prototypes/${encoded}/screens/${encodeURIComponent(screenId)}/screenshot`, {
+    rev: draft.rev, viewport, deviceScaleFactor: 1, theme: "light", waitForFonts: true, probe: "geometry",
+  }), [202]);
+  const state = await pollJob(`/screenshot-jobs/${encodeURIComponent(queued.jobId)}`, { deadlineMs: 120_000 });
+  if (state.status !== "done" || state.result?.kind !== "geometry") throw new CliError(`geometry ${state.status}: ${JSON.stringify(state)}`);
+  const definitions = Object.fromEntries([...system.components, ...system.hostPrimitives, ...manifest.components].map((item) => [item.name, item]));
+  const gaps = new Map(analyzeGeometryGaps(screen, definitions, state.result).map((item) => [`${item.key}\u0000${item.instance}`, item]));
+  console.log(`geometry ${id}/${screenId} rev=${state.result.resolvedRev} viewport=${state.result.viewport.width}x${state.result.viewport.height} dpr=${state.result.dpr} rects=${state.result.rects.length}/${state.result.total}${state.result.truncated ? " truncated" : ""}`);
+  for (const rect of state.result.rects) {
+    console.log(`${rect.key}#${rect.instance} parent=${rect.parentKey === undefined ? "-" : `${rect.parentKey}#${rect.parentInstance}`} dom=${rect.domIndex} rect=${rect.x},${rect.y} ${rect.width}x${rect.height}${rect.hidden ? " hidden" : ""}`);
+    console.log(`  layoutContext: ${rect.layoutContext ? JSON.stringify(rect.layoutContext) : "null"}`);
+    const gap = gaps.get(`${rect.key}\u0000${rect.instance}`);
+    if (gap?.reason) console.log(`  gaps: n/a (${gap.reason})`);
+    else if (gap) console.log(`  CSS gap: row=${gap.cssGap.rowGap} column=${gap.cssGap.columnGap}; observed clearance: ${gap.observed.join(", ")}`);
+  }
 }
 
 async function downloadImage(imageUrl, outputPath) {
@@ -427,6 +518,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "diff") await runDiff(args, flags);
   else if (cmd === "baseline") await runBaseline(args, flags);
   else if (cmd === "check") await runCheck(args, flags);
+  else if (cmd === "geometry") await runGeometry(args);
   else if (cmd === "get") {
     const [kind, id] = args;
     const path = kind === "assets" && id ? `/assets/${encodeURIComponent(id)}/usage` : id ? `/${kind}/${encodeURIComponent(id)}` : `/${kind}`;

@@ -263,9 +263,9 @@ export const prototypeScreenshotContract = registerContract({
   path: "/api/prototypes/{id}/screens/{screenId}/screenshot",
   summary: "Enqueue a prototype-screen screenshot job; resolves the target snapshot atomically.",
   status: 202,
-  requestSchema: z.object({ rev: z.number().int().optional(), version: z.number().int().optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional() }),
+  requestSchema: z.object({ rev: z.number().int().optional(), version: z.number().int().optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional(), probe: z.literal("geometry").optional() }),
   responseSchema: jobAcceptedSchema,
-  errors: [{ status: 404, code: "prototype_not_found" }, { status: 404, code: "screen_not_found" }, { status: 404, code: "version_not_found" }, { status: 404, code: "revision_not_found" }, ...screenshotErrors],
+  errors: [{ status: 400, code: "invalid_request" }, { status: 404, code: "prototype_not_found" }, { status: 404, code: "screen_not_found" }, { status: 404, code: "version_not_found" }, { status: 404, code: "revision_not_found" }, ...screenshotErrors],
 });
 
 export const componentScreenshotContract = registerContract({
@@ -279,13 +279,30 @@ export const componentScreenshotContract = registerContract({
   errors: [{ status: 400, code: "invalid_request" }, { status: 404, code: "not_found" }, { status: 422, code: "invalid_props" }, { status: 422, code: "unknown_example" }, ...screenshotErrors],
 });
 
-export const screenshotJobResultSchema = z.object({
+const screenshotImageResultSchema = z.object({
+  kind: z.literal("image"),
   imageUrl: z.string(), assetId: z.string(), width: z.number(), height: z.number(),
   consoleErrors: z.array(z.string()), pageErrors: z.array(z.string()),
   bundleHash: z.string().optional(),
   componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string() })).optional(),
   rendererBuild: z.string().nullable(), browserVersion: z.string(),
 });
+const geometryLayoutContextSchema = z.object({
+  display: z.string(), flexDirection: z.string(), flexWrap: z.string(), rowGap: z.string(), columnGap: z.string(),
+});
+const geometryRectSchema = z.object({
+  key: z.string(), instance: z.number().int().nonnegative(),
+  parentKey: z.string().optional(), parentInstance: z.number().int().nonnegative().optional(),
+  domIndex: z.number().int().nonnegative(), x: z.number(), y: z.number(), width: z.number(), height: z.number(),
+  hidden: z.literal(true).optional(), layoutContext: geometryLayoutContextSchema.nullable(),
+});
+const screenshotGeometryResultSchema = z.object({
+  kind: z.literal("geometry"), resolvedRev: z.number().int().positive(), prototypeInstanceId: z.string(),
+  componentPins: z.array(z.object({ id: z.string(), version: z.number().int().positive(), bundleHash: z.string() })),
+  designSystemMetaVersion: z.number().int().positive().nullable(), resolvedSpaceScale: spaceScaleSchema,
+  viewport: viewportSchema, dpr: z.number(), rects: z.array(geometryRectSchema), truncated: z.boolean(), total: z.number().int().nonnegative(),
+});
+export const screenshotJobResultSchema = z.discriminatedUnion("kind", [screenshotImageResultSchema, screenshotGeometryResultSchema]);
 
 export const screenshotJobContract = registerContract({
   method: "GET",
@@ -954,7 +971,7 @@ export const capabilitiesResponseSchema = z.object({
   conditions: z.array(z.string()),
   limits: z.object({
     elements: z.number(), depth: z.number(), bodyMiB: z.number(), sourceKiB: z.number(),
-    assetMiB: z.number(), repeatBudget: z.number(), repeatPerScreen: z.number(), screenshotQueue: z.number(),
+    assetMiB: z.number(), repeatBudget: z.number(), repeatPerScreen: z.number(), screenshotQueue: z.number(), geometryRects: z.number(),
   }),
   designSystems: z.array(z.string()),
   resolvedSpaceScales: z.record(z.string(), spaceScaleSchema),

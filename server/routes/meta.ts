@@ -11,7 +11,7 @@ import { MAX_ASSET_BYTES } from "../assets/validate";
 import { listRegisteredDesignSystems } from "../designSystems";
 import { getLatestDesignSystemContent } from "../designSystems";
 import { ApiError, json, MAX_JSON_BODY_BYTES, noStore } from "../http";
-import { MAX_QUEUE } from "../screenshot/service";
+import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "../screenshot/service";
 
 // Discovery endpoints (plan §G): /api/openapi.json, /api/schemas/*, /api/capabilities.
 // The OpenAPI document is the committed artifact generated from server/contracts.ts;
@@ -47,6 +47,7 @@ export function capabilities(db: Database): JsonObject {
       repeatBudget: REPEAT_RENDER_COST_BUDGET,
       repeatPerScreen: REPEAT_ELEMENT_LIMIT,
       screenshotQueue: MAX_QUEUE,
+      geometryRects: GEOMETRY_RECT_LIMIT,
     },
     designSystems: systems.map((system) => system.id),
     resolvedSpaceScales: Object.fromEntries(systems.map((system) => {

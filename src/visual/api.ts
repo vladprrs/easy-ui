@@ -72,7 +72,8 @@ export const getVisualRun = (runId: string, signal?: AbortSignal) =>
 export const deleteVisualReference = (id: string) =>
   request<void>(`/api/visual-references/${encodeURIComponent(id)}`, { method: "DELETE" });
 
-export interface ScreenshotJobResult {
+export interface ScreenshotImageResult {
+  kind: "image";
   imageUrl: string;
   assetId: string;
   width: number;
@@ -80,6 +81,15 @@ export interface ScreenshotJobResult {
   consoleErrors: string[];
   pageErrors: string[];
 }
+export interface GeometryLayoutContext { display:string; flexDirection:string; flexWrap:string; rowGap:string; columnGap:string }
+export interface GeometryRect { key:string; instance:number; parentKey?:string; parentInstance?:number; domIndex:number; x:number; y:number; width:number; height:number; hidden?:true; layoutContext:GeometryLayoutContext|null }
+export interface ScreenshotGeometryResult {
+  kind:"geometry"; resolvedRev:number; prototypeInstanceId:string;
+  componentPins:{id:string;version:number;bundleHash:string}[]; designSystemMetaVersion:number|null;
+  resolvedSpaceScale:Record<string,string>; viewport:{width:number;height:number}; dpr:number;
+  rects:GeometryRect[]; truncated:boolean; total:number;
+}
+export type ScreenshotJobResult = ScreenshotImageResult | ScreenshotGeometryResult;
 
 export interface ScreenshotJob {
   status: "queued" | "running" | "done" | "error";
@@ -97,6 +107,11 @@ interface CaptureOptions {
 export const enqueuePrototypeScreenshot = (prototypeId: string, screenId: string, target: { rev: number } | { version: number }, options: CaptureOptions) =>
   request<{ jobId: string }>(`/api/prototypes/${encodeURIComponent(prototypeId)}/screens/${encodeURIComponent(screenId)}/screenshot`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...target, ...options }),
+  });
+
+export const enqueuePrototypeGeometry = (prototypeId: string, screenId: string, target: { rev: number } | { version: number }, options: CaptureOptions) =>
+  request<{ jobId: string }>(`/api/prototypes/${encodeURIComponent(prototypeId)}/screens/${encodeURIComponent(screenId)}/screenshot`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...target, ...options, probe: "geometry" }),
   });
 
 export const enqueueComponentScreenshot = (componentId: string, version: number, options: CaptureOptions) =>

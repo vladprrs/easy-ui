@@ -6,6 +6,7 @@ import { createHandler } from "./main";
 import { prototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
 import {
   assertViewportPixelBudget,
+  analyzeGeometryGaps,
   buildBaselineMembers,
   buildBaselinePlan,
   parseDiffArguments,
@@ -152,6 +153,29 @@ describe("author driver CLI", () => {
 });
 
 describe("author driver planners", () => {
+  test("geometry gaps require static flow and confirming non-wrapped flex", () => {
+    const screen: {spec:{root:string;elements:Record<string,{type:string;props:Record<string,unknown>;children?:string[];repeat?:unknown}>}} = { spec:{ root:"stack", elements:{
+      stack:{type:"Stack",props:{direction:"vertical"},children:["a","b"]},
+      a:{type:"Text",props:{}}, b:{type:"Text",props:{}},
+    } } };
+    const definitions = { Stack:{layout:{flow:{kind:"flex",direction:{prop:"direction",vertical:["vertical"],horizontal:["horizontal"]}}}} };
+    const geometry: {rects:Array<{key:string;instance:number;parentKey?:string;parentInstance?:number;domIndex:number;x:number;y:number;width:number;height:number;layoutContext:{display:string;flexDirection:string;flexWrap:string;rowGap:string;columnGap:string}|null}>} = { rects:[
+      {key:"stack",instance:0,domIndex:0,x:0,y:0,width:20,height:32,layoutContext:{display:"flex",flexDirection:"column",flexWrap:"nowrap",rowGap:"12px",columnGap:"12px"}},
+      {key:"a",instance:0,parentKey:"stack",parentInstance:0,domIndex:1,x:0,y:0,width:20,height:10,layoutContext:null},
+      {key:"b",instance:0,parentKey:"stack",parentInstance:0,domIndex:2,x:0,y:22,width:20,height:10,layoutContext:null},
+    ] };
+    expect(analyzeGeometryGaps(screen,definitions,geometry)[0]).toMatchObject({reason:null,cssGap:{rowGap:"12px"},observed:[12]});
+    const owner = geometry.rects[0]!.layoutContext!;
+    owner.flexWrap="wrap";
+    expect(analyzeGeometryGaps(screen,definitions,geometry)[0]?.reason).toContain("wraps");
+    owner.flexWrap="nowrap";
+    screen.spec.elements.b.repeat={items:[1,2]};
+    expect(analyzeGeometryGaps(screen,definitions,geometry)[0]?.reason).toBe("repeat in flow group");
+    delete screen.spec.elements.b.repeat;
+    (screen.spec.elements.b as typeof screen.spec.elements.b & {slot?:string}).slot="header";
+    expect(analyzeGeometryGaps(screen,definitions,geometry)[0]?.reason).toBe("named slots in flow group");
+  });
+
   test("viewport cascade rounds canvas values and ignores object key order", () => {
     expect(resolveViewport({ canvas: { height: 844.6, width: 389.5 } }, undefined, "desktop")).toEqual({ width: 390, height: 845 });
     expect(resolveViewport({ canvas: { width: 1, height: 9000 } }, undefined, "desktop")).toEqual({ width: 64, height: 4000 });

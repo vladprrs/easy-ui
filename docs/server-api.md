@@ -285,15 +285,43 @@ Cursor — каноническая строка `<ISO-8601>~<asset_id>`, нап
 
 ## Скриншоты
 
-Асинхронный job-API рендерит экран прототипа (или опубликованный компонент) в PNG через headless Chromium (playwright) в отдельном node-подпроцессе. PNG складывается в реестр ассетов (D). Требует `SERVE_DIST` **и** установленного chromium; иначе POST сразу отвечает `501 screenshot_unavailable`.
+Асинхронный job-API рендерит экран прототипа (или опубликованный компонент) через headless Chromium (playwright) в отдельном node-подпроцессе. Обычный режим создаёт PNG и складывает его в реестр ассетов (D); geometry probe возвращает только DOM-геометрию и не создаёт PNG/asset. Оба режима требуют `SERVE_DIST` **и** установленного chromium; иначе POST сразу отвечает `501 screenshot_unavailable`.
 
 | Метод и путь | Тело / ответ |
 |---|---|
-| `POST /prototypes/:id/screens/:screenId/screenshot` | `{rev?\|version?, viewport{width,height}, deviceScaleFactor?, theme?, waitForFonts?}` → `202 {jobId}` |
+| `POST /prototypes/:id/screens/:screenId/screenshot` | `{rev?\|version?, viewport{width,height}, deviceScaleFactor?, theme?, waitForFonts?, probe?:"geometry"}` → `202 {jobId}` |
 | `POST /components/:id/versions/:version/screenshot` | `{props?\|exampleName?, viewport, deviceScaleFactor?, theme?, waitForFonts?}` → `202 {jobId}`; `props` и `exampleName` взаимоисключающие |
 | `GET /screenshot-jobs/:jobId` | `{status: queued\|running\|done\|error, result?, error?}` |
 
-`result` (при `done`): `{imageUrl, assetId, width, height, consoleErrors, pageErrors, rendererBuild, browserVersion, componentPins?|bundleHash?}`.
+`result` (при `done`) — discriminated union. Image-ветка сохраняет прежние поля и получает discriminator: `{kind:"image", imageUrl, assetId, width, height, consoleErrors, pageErrors, rendererBuild, browserVersion, componentPins?|bundleHash?}`. Geometry-ветка:
+
+```json
+{
+  "kind": "geometry",
+  "resolvedRev": 3,
+  "prototypeInstanceId": "instance_…",
+  "componentPins": [{"id":"stack","version":1,"bundleHash":"…"}],
+  "designSystemMetaVersion": 2,
+  "resolvedSpaceScale": {"none":"0px","xs":"4px","sm":"8px","md":"12px","lg":"16px","xl":"24px","2xl":"32px","3xl":"48px","4xl":"64px"},
+  "viewport": {"width":390,"height":844},
+  "dpr": 1,
+  "rects": [{
+    "key":"content","instance":0,"parentKey":"root","parentInstance":0,"domIndex":1,
+    "x":16,"y":24,"width":358,"height":80,
+    "layoutContext":{"display":"flex","flexDirection":"column","flexWrap":"nowrap","rowGap":"12px","columnGap":"12px"}
+  }],
+  "truncated": false,
+  "total": 2
+}
+```
+
+Worker обходит production-маркеры `span[data-eui-key]` после `__EUI_CAPTURE_READY__`. `instance` — нулевой ordinal одинакового `key` в DOM-порядке (в том числе для repeat), `parentKey`/`parentInstance` указывают ближайший ancestor-маркер, `domIndex` — общий DOM-порядок. Координаты округлены до 0.01 CSS px и отсчитаны от border box `#eui-capture-surface`; `dpr` не масштабирует их. Rect — union видимых box'ов DOM-поддерева маркера. Портал вне этого поддерева не включается; Overlay-layer включается, потому что его маркеры находятся внутри capture surface; fixed box целиком вне surface отбрасывается. Clipping/scroll не обрезает исходный layout rect.
+
+Состояния различаются так: отсутствующий marker отсутствует и в `rects`; `display:none`/`visibility:hidden` даёт `hidden:true` и нулевой rect; отрендеренный элемент нулевого размера имеет нулевой rect без `hidden`. Число строк ограничено `limits.geometryRects` из `GET /capabilities` (тот же бюджет, что `repeatBudget`); `total` содержит число до усечения, `truncated` сообщает об усечении.
+
+Layout owner вычисляется только из DOM: для непосредственных child-маркеров slot-группы берётся ближайший общий non-`display:contents` предок внутри parent-маркера. Fragment, несколько DOM roots или переход через marker делают owner неоднозначным, поэтому `layoutContext:null`. Из однозначного owner возвращаются computed `display`, `flexDirection`, `flexWrap`, `rowGap`, `columnGap`.
+
+`driver.mjs geometry <protoId> <screenId>` печатает rect и layoutContext. Observed clearance между соседними rect по оси и CSS gap owner'а выводятся только когда definition декларирует `layout.flow`, направление статически известно, owner подтверждает non-wrapped flex нужной оси и группа не содержит repeat/named slots. Во всех остальных случаях печатается `gaps: n/a (<причина>)`. Observed clearance намеренно может отличаться от CSS gap из-за margins.
 
 Для component screenshot `exampleName` выбирается строго из `definition.examples`: неизвестное имя или отсутствие `examples` → `422 unknown_example`, одновременные `props` и `exampleName` → `400 invalid_request`. После выбора набор проходит обычную валидацию props и участвует в `propsHash`.
 

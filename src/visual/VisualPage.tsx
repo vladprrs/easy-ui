@@ -272,7 +272,7 @@ function CaptureReference({ onCreated }: { onCreated: (id: string) => void }) {
         if (pollingGeneration.current !== generation) return;
         if (job.status === "error") throw new Error(job.error?.message ?? visual.captureFailed);
         if (job.status === "done") {
-          if (!job.result) throw new Error(visual.captureMissingResult);
+          if (!job.result || job.result.kind !== "image") throw new Error(visual.captureMissingResult);
           const reference = await putVisualReference(capturedFingerprint, job.result.assetId, note || undefined);
           if (pollingGeneration.current !== generation) return;
           setProgress(null); setOpen(false); onCreated(reference.id);

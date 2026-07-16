@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildLaunchArgs, canonicalStringify, matchAllowed, readyToExpected } from "../scripts/screenshot-worker.mjs";
+import { collectGeometry, unionRects } from "../src/capture/geometry.mjs";
 
 describe("screenshot worker helpers", () => {
   test("egress launch args are exact (port-scoped proxy-bypass + deny-proxy)", () => {
@@ -21,5 +22,10 @@ describe("screenshot worker helpers", () => {
 
   test("prototype readiness comparison includes the immutable instance id",()=>{
     expect(readyToExpected({kind:"prototype",revision:2,prototypeInstanceId:"instance-2",componentManifestHash:"m",builtinCatalogHash:"b",dsMetaVersion:null,rendererBuild:null})).toEqual({kind:"prototype",rev:2,prototypeInstanceId:"instance-2",componentManifestHash:"m",builtinCatalogHash:"b",dsMetaVersion:null,rendererBuild:null});
+  });
+
+  test("geometry evaluate function is self-contained and uses the shared union vector", () => {
+    expect(collectGeometry.toString()).toContain("rectUnion");
+    expect(unionRects([{left:1,top:4,right:5,bottom:8},{left:-2,top:6,right:3,bottom:10}])).toEqual({left:-2,top:4,right:5,bottom:10,width:7,height:6});
   });
 });

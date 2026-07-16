@@ -85,7 +85,7 @@ describe("VisualPage reference capture", () => {
 
   it("captures a prototype baseline through enqueue/poll and PUTs the returned asset", async () => {
     vi.mocked(enqueuePrototypeScreenshot).mockResolvedValue({ jobId: "shot_1" });
-    vi.mocked(getScreenshotJob).mockResolvedValue({ status: "done", result: { imageUrl: "/asset", assetId: "asset_png", width: 390, height: 844, consoleErrors: [], pageErrors: [] } });
+    vi.mocked(getScreenshotJob).mockResolvedValue({ status: "done", result: { kind: "image", imageUrl: "/asset", assetId: "asset_png", width: 390, height: 844, consoleErrors: [], pageErrors: [] } });
     render(<VisualPage />);
     fireEvent.click(await screen.findByRole("button", { name: "+ Снять эталон" }));
     await screen.findByLabelText("Экран");
@@ -103,7 +103,7 @@ describe("VisualPage reference capture", () => {
 
   it("explains a baseline-managed conflict when PUT cannot create a generic reference", async () => {
     vi.mocked(enqueuePrototypeScreenshot).mockResolvedValue({ jobId: "shot_managed" });
-    vi.mocked(getScreenshotJob).mockResolvedValue({ status: "done", result: { imageUrl: "/asset", assetId: "asset_png", width: 390, height: 844, consoleErrors: [], pageErrors: [] } });
+    vi.mocked(getScreenshotJob).mockResolvedValue({ status: "done", result: { kind: "image", imageUrl: "/asset", assetId: "asset_png", width: 390, height: 844, consoleErrors: [], pageErrors: [] } });
     vi.mocked(putVisualReference).mockRejectedValue(new ApiError(409, { code: "baseline_managed", message: "raw server error" }));
     render(<VisualPage />);
     fireEvent.click(await screen.findByRole("button", { name: "+ Снять эталон" }));

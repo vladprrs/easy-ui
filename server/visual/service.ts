@@ -114,7 +114,7 @@ export class VisualService {
         await Bun.sleep(POLL_INTERVAL_MS);
         job = screenshots.get(jobId);
       }
-      if (job.status === "error" || !job.result) { this.finalizeError(repo, runId, reference, job.error?.message ?? "candidate capture failed",context,null); return; }
+      if (job.status === "error" || !job.result || job.result.kind !== "image") { this.finalizeError(repo, runId, reference, job.error?.message ?? "candidate capture failed",context,null); return; }
 
       const result = job.result;
       const candidateAssetId = result.assetId;
@@ -151,7 +151,7 @@ export class VisualService {
     }
   }
 
-  private candidateMeta(fp: Fingerprint, result: NonNullable<ReturnType<ScreenshotService["get"]>["result"]>,context:ReturnType<VisualService["metaContext"]>,browser:NonNullable<CandidateMeta["browser"]>): CandidateMeta {
+  private candidateMeta(fp: Fingerprint, result: Extract<NonNullable<ReturnType<ScreenshotService["get"]>["result"]>, {kind:"image"}>,context:ReturnType<VisualService["metaContext"]>,browser:NonNullable<CandidateMeta["browser"]>): CandidateMeta {
     if (fp.scope === "prototype-screen") {
       return { ...context,outcome:"captured",browser,rev: context.resolvedTarget.rev, pins: result.componentPins, rendererBuild: result.rendererBuild, browserVersion: result.browserVersion };
     }

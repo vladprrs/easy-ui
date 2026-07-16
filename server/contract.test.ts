@@ -11,7 +11,7 @@ import { capabilitiesResponseSchema, listContracts, type RouteContract } from ".
 import { openDatabase } from "./db";
 import { MAX_JSON_BODY_BYTES } from "./http";
 import { createHandler } from "./main";
-import { MAX_QUEUE } from "./screenshot/service";
+import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "./screenshot/service";
 
 // Contract test (plan §G): every registered route contract is exercised through
 // createHandler — happy-path where the fixture is cheap, otherwise the typed error
@@ -212,6 +212,7 @@ describe("route contracts", () => {
       repeatBudget: REPEAT_RENDER_COST_BUDGET,
       repeatPerScreen: REPEAT_ELEMENT_LIMIT,
       screenshotQueue: MAX_QUEUE,
+      geometryRects: GEOMETRY_RECT_LIMIT,
     });
     expect(value.designSystems).toEqual(expect.arrayContaining(["shadcn", "wireframe"]));
     expect(value.layoutContractVersion).toBe(1);

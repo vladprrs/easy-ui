@@ -26,4 +26,9 @@ declare module "*/author/driver.mjs" {
     revisionArgs: readonly (string | number)[],
     headRev: number,
   ): { toRev: number; againstRev: number };
+  export function analyzeGeometryGaps(
+    screen: {spec:{elements:Record<string,{type:string;props?:Record<string,unknown>;children?:string[];slot?:string;repeat?:unknown}>}},
+    definitions: Record<string,{layout?:{flow?:unknown}}>,
+    geometry: {rects:Array<{key:string;instance:number;parentKey?:string;parentInstance?:number;domIndex:number;x:number;y:number;width:number;height:number;layoutContext:{display:string;flexDirection:string;flexWrap:string;rowGap:string;columnGap:string}|null}>},
+  ): Array<{key:string;instance:number;reason:string|null;cssGap:{rowGap:string;columnGap:string}|null;observed:number[]|null}>;
 }
