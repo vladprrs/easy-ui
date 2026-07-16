@@ -8,8 +8,8 @@ import { prototypeDocSchema } from "../prototype/schema";
 import { routeObjects } from "../app/routes";
 import { CjmFrame, TileErrorBoundary } from "./CjmScreenTile";
 
-const mocks = vi.hoisted(() => ({ getDraft: vi.fn(), getVersion: vi.fn(), loadCustom: vi.fn() }));
-vi.mock("../api/client", async (original) => ({ ...(await original()), getPrototypeDraft: mocks.getDraft, getPrototypeVersion: mocks.getVersion }));
+const mocks = vi.hoisted(() => ({ getDraft: vi.fn(), getVersion: vi.fn(), getThemeVersion: vi.fn(), getLatestTheme: vi.fn(), loadCustom: vi.fn() }));
+vi.mock("../api/client", async (original) => ({ ...(await original()), getPrototypeDraft: mocks.getDraft, getPrototypeVersion: mocks.getVersion, getDesignSystemVersion: mocks.getThemeVersion, getDesignSystemById: mocks.getLatestTheme }));
 vi.mock("../customComponents/loader", () => ({ loadCustomComponents: mocks.loadCustom }));
 
 const doc = prototypeDocSchema.parse({
@@ -20,7 +20,7 @@ const doc = prototypeDocSchema.parse({
     { id: "success", name: "Success", spec: { root: "text", elements: { text: { type: "Text", props: { text: "Done" } } } } },
   ],
 });
-const draft: PrototypeDraft = { doc, rev: 4, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] };
+const draft: PrototypeDraft = { doc, rev: 4, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [], designSystemMetaVersion: 1 };
 
 afterEach(cleanup);
 
@@ -34,6 +34,8 @@ describe("CjmShell", () => {
   beforeEach(() => {
     mocks.getDraft.mockReset().mockResolvedValue(draft);
     mocks.getVersion.mockReset().mockResolvedValue({ ...draft, version: 2, publishedAt: "2026-07-10T00:00:00Z" } satisfies PrototypeVersion);
+    mocks.getThemeVersion.mockReset().mockResolvedValue({ systemId: "shadcn", version: 1, createdAt: "2026-07-01T00:00:00Z", tokens: { "space.md": "20px", "space.lg": "24px", "space.xl": "32px", "space.2xl": "40px" }, fonts: [], icons: [] });
+    mocks.getLatestTheme.mockReset().mockResolvedValue({ id: "shadcn", latestMetaVersion: 2, tokens: { "space.md": "40px", "space.lg": "48px", "space.xl": "56px", "space.2xl": "64px", "space.3xl": "72px", "space.4xl": "80px" }, fonts: [], icons: [] });
     mocks.loadCustom.mockReset().mockResolvedValue(undefined);
   });
 
@@ -81,6 +83,29 @@ describe("CjmShell", () => {
     expect(screen.getByRole("link", { name: /Редактор/ }).getAttribute("href")).toBe("/p/journey/edit");
     expect(screen.getByText("v2")).toBeTruthy();
     await waitFor(() => expect(document.title).toBe("Checkout journey v2 · CJM — easy-ui"));
+  });
+
+  it("renders a published Overlay tile with its exact pinned v1 theme after v2 exists", async () => {
+    const overlayDoc = prototypeDocSchema.parse({ ...doc, screens: [{
+      id: "cart", name: "Cart", canvas: { width: 390, height: 844 }, spec: { root: "root", elements: {
+        root: { type: "Stack", props: {}, children: ["body", "overlay"] },
+        body: { type: "Text", props: { text: "Body" } },
+        overlay: { type: "Overlay", props: { placement: "bottom-right", inset: "md", scrim: false }, children: ["action"] },
+        action: { type: "Text", props: { text: "Pinned action" } },
+      } },
+    }] });
+    mocks.getVersion.mockResolvedValue({ ...draft, doc: overlayDoc, version: 2, publishedAt: "2026-07-10T00:00:00Z", designSystemMetaVersion: 1 } satisfies PrototypeVersion);
+    renderAt("/p/journey/v/2/cjm");
+    const stage = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>("[data-eui-stage-viewport='cjm']");
+      if (!node) throw new Error("CJM StageViewport has not mounted");
+      expect(node.querySelector("[data-eui-host-primitive='Overlay']")).not.toBeNull();
+      return node;
+    });
+    await waitFor(() => expect(stage.style.getPropertyValue("--eui-space-md")).toBe("20px"));
+    expect(stage.closest("[inert]")).not.toBeNull();
+    expect(mocks.getThemeVersion).toHaveBeenCalledWith("shadcn", 1, expect.any(AbortSignal));
+    expect(mocks.getLatestTheme).not.toHaveBeenCalled();
   });
 
   it("labels static and dynamic authored navigate transitions without creating edges", async () => {

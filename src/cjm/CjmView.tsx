@@ -5,6 +5,7 @@ import { useDocumentTitle } from "../app/useDocumentTitle";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { createPlayerRuntime } from "../catalog/runtime";
 import { resolveBuiltinSystem } from "../designSystems";
+import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import type { PrototypeDoc } from "../prototype/schema";
 import { CjmScreenTile } from "./CjmScreenTile";
 import { createCjmRegistry } from "./cjmRegistry";
@@ -68,11 +69,12 @@ function CjmConnector({ sourceScreenId, targetScreenId }: { sourceScreenId: stri
   </>;
 }
 
-export function CjmView({ doc, custom, runtimeKey, routeBase, version }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; version?: number }) {
+export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSystemMetaVersion }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; version?: number; designSystemMetaVersion?: number | null }) {
   useDocumentTitle(cjmDocumentTitle(doc.name, version));
   const runtime = useMemo(() => createPlayerRuntime({ navigate() {}, back() {}, openUrl() {}, restart() {} }, custom, doc.designSystem), [custom, doc.designSystem]);
   const registry = useMemo(() => createCjmRegistry(runtime.registry), [runtime.registry]);
   const customTypes = useMemo(() => new Set(Object.keys(custom?.definitions ?? {})), [custom]);
+  const themeContent = useDesignSystemTheme(doc.designSystem, designSystemMetaVersion);
   const designSystemName = resolveBuiltinSystem(doc.designSystem).name;
   const metadata = <dl aria-label={cjm.metadataAria} className="flex flex-wrap items-center gap-2 font-eui-ui text-xs text-eui-slate-500">
     <div><dt className="sr-only">{cjm.screensLabel}</dt><dd className="rounded-full bg-eui-lilac-100 px-2.5 py-1">{cjm.screensCount(doc.screens.length)}</dd></div>
@@ -81,12 +83,13 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version }: { doc: 
   // Единый хром /p/* (WF-4): навигация Плеер/Редактор живёт в сегментах хрома,
   // тело вью — только stage (описание + лента экранов).
   return <main className="cjm-root flex h-full min-h-0 flex-col">
+    <ThemeStyle content={themeContent} />
     <PrototypeChrome prototypeId={doc.id} prototypeName={doc.name} view="cjm" version={version} status={metadata} />
     <div className="cjm-stage min-h-0 flex-1 overflow-y-auto bg-eui-lav p-6 sm:p-8">
       {doc.description ? <p className="mx-auto max-w-[1600px] font-eui-ui text-eui-slate-500">{doc.description}</p> : null}
       <ol className="cjm-list mx-auto mt-8 flex items-start gap-16 overflow-x-auto pb-8" aria-label={cjm.screensAria}>
       {doc.screens.map((screen, index) => <li className="relative shrink-0" key={screen.id} data-screen-id={screen.id}>
-        <CjmScreenTile doc={doc} screen={screen} registry={registry} handlers={runtime.handlers} runtimeKey={runtimeKey} routeBase={routeBase} customTypes={customTypes} customDefinitions={custom?.definitions} />
+        <CjmScreenTile doc={doc} screen={screen} registry={registry} handlers={runtime.handlers} runtimeKey={runtimeKey} routeBase={routeBase} customTypes={customTypes} customDefinitions={custom?.definitions} themeContent={themeContent} />
         {index < doc.screens.length - 1 ? <CjmConnector sourceScreenId={screen.id} targetScreenId={doc.screens[index + 1]!.id} /> : null}
       </li>)}
       </ol>

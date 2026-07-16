@@ -4,6 +4,7 @@ import { ApiError, getPrototypeDraft, getPrototypeRevisionFull, listPrototypeVer
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { createPlayerRuntime } from "../catalog/runtime";
 import { resolveBuiltinSystem } from "../designSystems";
+import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import { prototypeDocSchema } from "../prototype/schema";
 import { validatePrototype } from "../prototype/validate";
 import { pillGhost, pillPrimary } from "../app/chrome";
@@ -61,6 +62,7 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
   const definitions = useMemo(() => ({ ...resolveBuiltinSystem(state.doc.designSystem).definitions, ...custom?.definitions }), [custom, state.doc.designSystem]);
   const customTypes = useMemo(() => new Set(Object.keys(custom?.definitions ?? {})), [custom]);
   const customDefinitions = custom?.definitions;
+  const themeContent = useDesignSystemTheme(state.doc.designSystem, loaded.designSystemMetaVersion);
   const screen = state.doc.screens.find((item) => item.id === state.selection.screenId) ?? state.doc.screens[0]!;
   const canUndo = state.past.length > 0;
   const canRedo = state.future.length > 0;
@@ -223,6 +225,7 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
   // ограничивает высоту ряда — h-full здесь не работает, страница бы скроллилась,
   // а канвас+инспектор теряли бы приоритет высоты (W2-1).
   return <main className="flex h-dvh min-h-0 w-full min-w-0 max-w-[100vw] flex-col overflow-hidden bg-white">
+    <ThemeStyle content={themeContent} />
     <PrototypeChrome
       prototypeId={state.doc.id}
       prototypeName={state.doc.name}
@@ -243,8 +246,8 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
     {publishNotice ? <div role="status" className="border-b border-eui-ink/10 bg-eui-lilac-100 px-6 py-3 font-eui-ui text-sm text-eui-slate-500">{publishNotice}</div> : null}
     {issues.length > 0 ? <div className="border-b border-eui-ink/10 bg-white px-6 py-3 font-eui-ui"><Issues issues={issues} /></div> : null}
     {historyOpen ? <HistoryPanel prototypeId={state.doc.id} headRev={state.baseRev} refreshKey={historyRefreshKey} restoringRev={restoringRev} onRestore={requestRestore} /> : null}
-    <EditorScreenStrip doc={state.doc} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedScreenId={screen.id} onSelect={(screenId) => dispatch({ type: "select-screen", screenId })} customTypes={customTypes} customDefinitions={customDefinitions} />
-    <div className="flex min-h-0 flex-1"><section className="min-w-0 flex-1 overflow-auto bg-eui-lav p-6" aria-label={editor.canvasAria}><EditorCanvas doc={state.doc} screen={screen} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedKey={state.selection.elementKey} onSelect={(elementKey) => dispatch({ type: "select-element", elementKey })} customTypes={customTypes} customDefinitions={customDefinitions} /></section><DocEpochContext.Provider value={state.docEpoch}><InspectorPanel state={state} definitions={definitions} dispatch={dispatch} /></DocEpochContext.Provider></div>
+    <EditorScreenStrip doc={state.doc} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedScreenId={screen.id} onSelect={(screenId) => dispatch({ type: "select-screen", screenId })} customTypes={customTypes} customDefinitions={customDefinitions} themeContent={themeContent} />
+    <div className="flex min-h-0 flex-1"><section className="min-w-0 flex-1 overflow-auto bg-eui-lav p-6" aria-label={editor.canvasAria}><EditorCanvas doc={state.doc} screen={screen} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedKey={state.selection.elementKey} onSelect={(elementKey) => dispatch({ type: "select-element", elementKey })} customTypes={customTypes} customDefinitions={customDefinitions} themeContent={themeContent} /></section><DocEpochContext.Provider value={state.docEpoch}><InspectorPanel state={state} definitions={definitions} dispatch={dispatch} /></DocEpochContext.Provider></div>
     {publishDialogOpen ? <div role="dialog" aria-modal="true" aria-label={editor.publishDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
       <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
         <h2 className="font-eui-display text-lg font-medium">{editor.publishDialogTitle}</h2>

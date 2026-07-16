@@ -1,15 +1,19 @@
 import { JSONUIProvider, Renderer, type ComponentRegistry, type JSONUIProviderProps } from "@json-render/react";
-import { Component, createRef, type ErrorInfo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Component, createRef, type ErrorInfo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import type { ComponentDefinition } from "../catalog/definitions";
+import { HostStageSurface } from "../catalog/hostPrimitives";
+import type { ThemeContent } from "../api/client";
 import type { PrototypeDoc } from "../prototype/schema";
 import { mergeScreenState } from "../prototype/stateOverrides";
-import { splitCanvas, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
+import { splitCanvas, splitHostPrimitives, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { buildPlayerPath } from "../player/navigation";
 import { cjm } from "../app/strings/cjm";
 import { previewNativeWidth, previewTileSizes } from "../designSystems/deviceMetrics";
 import type { DeviceKind } from "../designSystems/deviceMetrics";
+import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
+import { CanvasLayers } from "../player/CanvasLayers";
 
 export type CjmTransition =
   | { kind: "static"; screenId: string; screenName: string }
@@ -41,8 +45,11 @@ export function getCjmTransitions(screen: PrototypeDoc["screens"][number], scree
   return transitions;
 }
 
-export function CjmFrame({ device, nativeWidth, nativeHeight, resetKey, children }: { device: DeviceKind; nativeWidth: number; nativeHeight?: number; resetKey: string; children: ReactNode }) {
+export function CjmFrame({ device, nativeWidth, nativeHeight, resetKey, designSystem = "shadcn", themeTokens, children }: { device: DeviceKind; nativeWidth: number; nativeHeight?: number; resetKey: string; designSystem?: string; themeTokens?: ThemeContent["tokens"]; children: ReactNode }) {
   const innerRef = useRef<HTMLDivElement>(null);
+  const [stageHost, setStageHost] = useState<HTMLDivElement | null>(null);
+  const stageHostRef = useMemo(() => ({ current: stageHost }), [stageHost]);
+  const setInnerRef = useCallback((node: HTMLDivElement | null) => { innerRef.current = node; setStageHost(node); }, []);
   const tileSize = previewTileSizes[device];
   const scale = tileSize.width / nativeWidth;
   const [measuredHeight, setMeasuredHeight] = useState<number>(tileSize.fallbackHeight);
@@ -64,7 +71,9 @@ export function CjmFrame({ device, nativeWidth, nativeHeight, resetKey, children
   const height = nativeHeight === undefined ? measuredHeight : Math.min(nativeHeight * scale, tileSize.heightCap);
   const capped = nativeHeight === undefined ? autoHeightCapped : nativeHeight * scale > tileSize.heightCap;
   return <div className={`cjm-frame overflow-hidden rounded-xl bg-background text-foreground${capped ? " cjm-frame-capped" : ""}`} data-testid="cjm-frame" style={{ width: tileSize.width, height }}>
-    <div ref={innerRef} style={{ width: nativeWidth, ...(nativeHeight === undefined ? {} : { height: nativeHeight }), transform: `scale(${scale})`, transformOrigin: "top left" }}>{children}</div>
+    <SurfaceSpacingScope systemId={designSystem} themeTokens={themeTokens}>
+      <div ref={setInnerRef} data-eui-stage-viewport="cjm" style={{ position: "relative", width: nativeWidth, ...(nativeHeight === undefined ? {} : { height: nativeHeight }), transform: `scale(${scale})`, transformOrigin: "top left" }}><HostStageSurface stageHostRef={stageHostRef}>{children}</HostStageSurface></div>
+    </SurfaceSpacingScope>
   </div>;
 }
 
@@ -79,13 +88,21 @@ export class TileErrorBoundary extends Component<{ prototypeId: string; screenId
   }
 }
 
-export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, routeBase, customTypes, customDefinitions }: { doc: PrototypeDoc; screen: PrototypeDoc["screens"][number]; registry: ComponentRegistry; handlers: NonNullable<JSONUIProviderProps["handlers"]>; runtimeKey: string; routeBase: string; customTypes?: ReadonlySet<string>; customDefinitions?: Record<string, ComponentDefinition> }) {
+export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, routeBase, customTypes, customDefinitions, themeContent }: { doc: PrototypeDoc; screen: PrototypeDoc["screens"][number]; registry: ComponentRegistry; handlers: NonNullable<JSONUIProviderProps["handlers"]>; runtimeKey: string; routeBase: string; customTypes?: ReadonlySet<string>; customDefinitions?: Record<string, ComponentDefinition>; themeContent?: ThemeContent | null }) {
   // Inert runtime tree: events are stripped from spec and metadata alike.
   const tree = useMemo<RuntimeTree | null>(() => {
     const inert = stripEvents(toRuntimeSpec(screen.spec, { customTypes }));
     if (!inert.spec.root || !inert.spec.elements[inert.spec.root]) return null;
-    return screen.canvas ? splitCanvas(inert).content : inert;
-  }, [customTypes, screen.canvas, screen.spec]);
+    return inert;
+  }, [customTypes, screen.spec]);
+  const specs = useMemo(() => {
+    if (!tree) return null;
+    const { content: withoutHostPrimitives, hostPrimitives } = splitHostPrimitives(tree);
+    const overlays = hostPrimitives.map((item) => item.spec);
+    if (!screen.canvas) return { content: withoutHostPrimitives?.spec ?? null, hotspots: [], overlays };
+    const { content } = withoutHostPrimitives ? splitCanvas(withoutHostPrimitives) : { content: null };
+    return { content: content?.spec ?? null, hotspots: [], overlays };
+  }, [screen.canvas, tree]);
   const runtimeValue = useMemo<EasyUiRuntimeValue>(
     () => ({ metadata: tree?.metadata ?? {}, runtime: null, definitions: customDefinitions ?? {} }),
     [customDefinitions, tree],
@@ -98,7 +115,7 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
     <div className="relative">
       <TileErrorBoundary key={`${runtimeKey}:${screen.id}`} prototypeId={doc.id} screenId={screen.id}>
         <JSONUIProvider key={`${runtimeKey}:${screen.id}`} registry={registry} handlers={handlers} initialState={initialState}>
-          <div inert>{tree ? <CjmFrame device={doc.device} nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`}><EasyUiRuntimeProvider value={runtimeValue}><Renderer registry={registry} spec={tree.spec} /></EasyUiRuntimeProvider></CjmFrame> : <div className="flex h-64 items-center justify-center rounded-xl border bg-background font-eui-ui text-sm text-eui-slate-500" style={{ width: tileWidth }}>{cjm.noContent}</div>}</div>
+          <div inert>{tree && specs ? <CjmFrame device={doc.device} nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}><EasyUiRuntimeProvider value={runtimeValue}>{screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}</EasyUiRuntimeProvider></CjmFrame> : <div className="flex h-64 items-center justify-center rounded-xl border bg-background font-eui-ui text-sm text-eui-slate-500" style={{ width: tileWidth }}>{cjm.noContent}</div>}</div>
         </JSONUIProvider>
       </TileErrorBoundary>
       <Link to={buildPlayerPath(routeBase, screen.id)} className="cjm-tile-link absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring" aria-label={cjm.openScreenAria(screen.name, doc.name)} />

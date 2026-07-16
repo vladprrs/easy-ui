@@ -1,14 +1,18 @@
 import { JSONUIProvider, Renderer } from "@json-render/react";
-import { Component, type ErrorInfo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Component, type ErrorInfo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createCjmRegistry } from "../cjm/cjmRegistry";
 import { previewNativeWidth, previewTileSizes } from "../designSystems/deviceMetrics";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { createPlayerRuntime } from "../catalog/runtime";
 import { loadPrototypeDraft } from "../prototype/loader";
 import { mergeScreenState } from "../prototype/stateOverrides";
-import { splitCanvas, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
+import { splitCanvas, splitHostPrimitives, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
 import type { PrototypeDraft } from "../api/client";
 import { useApi } from "../api/hooks";
+import { HostStageSurface } from "../catalog/hostPrimitives";
+import { CanvasLayers } from "../player/CanvasLayers";
+import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
+import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 
 export const GALLERY_PREVIEWS_ENABLED = true;
 export const GALLERY_PREVIEW_LOAD_LIMIT = 4;
@@ -72,8 +76,12 @@ export class GalleryPreviewErrorBoundary extends Component<{ prototypeId: string
   }
 }
 
-function GalleryPreviewFrame({ draft }: { draft: PrototypeDraft }) {
+export function GalleryPreviewFrame({ draft }: { draft: PrototypeDraft }) {
   const { doc } = draft;
+  const [stageHost, setStageHost] = useState<HTMLDivElement | null>(null);
+  const stageHostRef = useMemo(() => ({ current: stageHost }), [stageHost]);
+  const setStageHostRef = useCallback((node: HTMLDivElement | null) => setStageHost(node), []);
+  const themeContent = useDesignSystemTheme(doc.designSystem, draft.designSystemMetaVersion);
   const screen = doc.screens.find((candidate) => candidate.id === doc.startScreen);
   const runtime = useMemo(() => createPlayerRuntime({ navigate() {}, back() {}, openUrl() {}, restart() {} }, undefined, doc.designSystem), [doc.designSystem]);
   const registry = useMemo(() => createCjmRegistry(runtime.registry), [runtime.registry]);
@@ -81,11 +89,19 @@ function GalleryPreviewFrame({ draft }: { draft: PrototypeDraft }) {
     if (!screen) return null;
     const inert = stripEvents(toRuntimeSpec(screen.spec));
     if (!inert.spec.root || !inert.spec.elements[inert.spec.root]) return null;
-    return screen.canvas ? splitCanvas(inert).content : inert;
+    return inert;
   }, [screen]);
+  const specs = useMemo(() => {
+    if (!tree) return null;
+    const { content: withoutHostPrimitives, hostPrimitives } = splitHostPrimitives(tree);
+    const overlays = hostPrimitives.map((item) => item.spec);
+    if (!screen?.canvas) return { content: withoutHostPrimitives?.spec ?? null, hotspots: [], overlays };
+    const { content } = withoutHostPrimitives ? splitCanvas(withoutHostPrimitives) : { content: null };
+    return { content: content?.spec ?? null, hotspots: [], overlays };
+  }, [screen?.canvas, tree]);
   const runtimeValue = useMemo<EasyUiRuntimeValue>(() => ({ metadata: tree?.metadata ?? {}, runtime: null, definitions: {} }), [tree]);
   const initialState = useMemo(() => mergeScreenState(doc.state, screen?.stateOverrides), [doc.state, screen?.stateOverrides]);
-  if (!screen || !tree) return null;
+  if (!screen || !tree || !specs) return null;
 
   const nativeWidth = screen.canvas?.width ?? previewNativeWidth[doc.device];
   const tileSize = previewTileSizes[doc.device];
@@ -98,19 +114,21 @@ function GalleryPreviewFrame({ draft }: { draft: PrototypeDraft }) {
   const height = Math.min(scaledHeight, 200);
   const key = `${doc.id}:${draft.rev}:${screen.id}`;
 
-  return <div className="mx-auto max-w-full overflow-hidden rounded-2xl bg-background text-foreground shadow-sm" style={{ width: galleryWidth, height }} data-testid={`gallery-preview-${doc.id}`}>
+  return <><ThemeStyle content={themeContent} /><div className="mx-auto max-w-full overflow-hidden rounded-2xl bg-background text-foreground shadow-sm" style={{ width: galleryWidth, height }} data-testid={`gallery-preview-${doc.id}`}>
     <div style={{ width: tileSize.width, height: height / galleryScale, transform: `scale(${galleryScale})`, transformOrigin: "top left" }}>
-      <div style={{ width: nativeWidth, ...(screen.canvas?.height === undefined ? {} : { height: screen.canvas.height }), transform: `scale(${deviceScale})`, transformOrigin: "top left" }}>
+      <SurfaceSpacingScope systemId={doc.designSystem} themeTokens={themeContent?.tokens}>
+      <div ref={setStageHostRef} inert data-eui-stage-viewport="gallery" style={{ position: "relative", width: nativeWidth, ...(screen.canvas?.height === undefined ? {} : { height: screen.canvas.height }), transform: `scale(${deviceScale})`, transformOrigin: "top left" }}>
         <JSONUIProvider key={key} registry={registry} handlers={runtime.handlers} initialState={initialState}>
-          <div inert>
+          <HostStageSurface stageHostRef={stageHostRef}><div inert>
             <EasyUiRuntimeProvider value={runtimeValue}>
-              <Renderer registry={registry} spec={tree.spec} />
+              {screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}
             </EasyUiRuntimeProvider>
-          </div>
+          </div></HostStageSurface>
         </JSONUIProvider>
       </div>
+      </SurfaceSpacingScope>
     </div>
-  </div>;
+  </div></>;
 }
 
 function LoadedGalleryPreview({ prototypeId }: { prototypeId: string }) {

@@ -2,12 +2,15 @@ import { markDevtoolsActive } from "@json-render/core";
 import { JSONUIProvider, Renderer, type ComponentRegistry, type JSONUIProviderProps } from "@json-render/react";
 import { Component, type ErrorInfo, type MouseEvent, type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentDefinition } from "../catalog/definitions";
+import { HostStageSurface } from "../catalog/hostPrimitives";
+import type { ThemeContent } from "../api/client";
 import type { PrototypeDoc } from "../prototype/schema";
-import { splitCanvas, stripEvents, toRuntimeSpec } from "../prototype/runtimeSpec";
+import { splitCanvas, splitHostPrimitives, stripEvents, toRuntimeSpec } from "../prototype/runtimeSpec";
 import { mergeScreenState } from "../prototype/stateOverrides";
 import { CanvasLayers } from "../player/CanvasLayers";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { previewNativeWidth } from "../designSystems/deviceMetrics";
+import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 
 type Screen = PrototypeDoc["screens"][number];
 type SelectionRect = { left: number; top: number; width: number; height: number };
@@ -46,11 +49,14 @@ export interface EditorCanvasProps {
   customTypes?: ReadonlySet<string>;
   /** Custom component definitions, exposed to the runtime side-channel. */
   customDefinitions?: Record<string, ComponentDefinition>;
+  themeContent?: ThemeContent | null;
 }
 
-export function EditorFrame({ nativeWidth, nativeHeight, viewportRef, previewRootRef, children, overlay, frames, onClick, onMouseMove, onMouseLeave }: {
+export function EditorFrame({ nativeWidth, nativeHeight, designSystem, themeTokens, viewportRef, previewRootRef, children, overlay, frames, onClick, onMouseMove, onMouseLeave }: {
   nativeWidth: number;
   nativeHeight?: number;
+  designSystem: string;
+  themeTokens?: ThemeContent["tokens"];
   viewportRef: RefObject<HTMLDivElement | null>;
   previewRootRef: RefObject<HTMLDivElement | null>;
   children: ReactNode;
@@ -61,6 +67,9 @@ export function EditorFrame({ nativeWidth, nativeHeight, viewportRef, previewRoo
   onMouseLeave?: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const [stageHost, setStageHost] = useState<HTMLDivElement | null>(null);
+  const stageHostRef = useMemo(() => ({ current: stageHost }), [stageHost]);
+  const setStageRef = useCallback((node: HTMLDivElement | null) => { previewRootRef.current = node; setStageHost(node); }, [previewRootRef]);
   const [availableWidth, setAvailableWidth] = useState(nativeWidth);
   const [measuredHeight, setMeasuredHeight] = useState(0);
   const scale = Math.min(1, availableWidth / nativeWidth);
@@ -88,9 +97,11 @@ export function EditorFrame({ nativeWidth, nativeHeight, viewportRef, previewRoo
 
   return <div ref={hostRef} className="min-w-0 w-full">
     <div ref={viewportRef} className="relative overflow-hidden rounded-xl border bg-background text-foreground shadow-sm" style={{ width: nativeWidth * scale, height: contentHeight * scale }} onClick={onClick} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}>
-      <div style={{ width: nativeWidth, ...(nativeHeight === undefined ? {} : { height: nativeHeight }), transform: `scale(${scale})`, transformOrigin: "top left" }}>
-        <div ref={previewRootRef} inert>{children}</div>
-      </div>
+      <SurfaceSpacingScope systemId={designSystem} themeTokens={themeTokens}>
+        <div ref={setStageRef} inert data-eui-stage-viewport="editor" style={{ position: "relative", width: nativeWidth, ...(nativeHeight === undefined ? {} : { height: nativeHeight }), transform: `scale(${scale})`, transformOrigin: "top left" }}>
+          <HostStageSurface stageHostRef={stageHostRef}><div>{children}</div></HostStageSurface>
+        </div>
+      </SurfaceSpacingScope>
       {overlay}
       {frames}
     </div>
@@ -112,7 +123,7 @@ class EditorCanvasErrorBoundary extends Component<{ prototypeId: string; screenI
   }
 }
 
-export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stateEpoch, selectedKey, onSelect, customTypes, customDefinitions }: EditorCanvasProps) {
+export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stateEpoch, selectedKey, onSelect, customTypes, customDefinitions, themeContent }: EditorCanvasProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const previewRootRef = useRef<HTMLDivElement>(null);
   const markerCacheRef = useRef(new Map<string, HTMLElement>());
@@ -129,9 +140,12 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
   const spec = tree.spec;
   const hasRoot = Boolean(spec.root && spec.elements[spec.root]);
   const specs = useMemo(() => {
-    if (!screen.canvas || !hasRoot) return null;
-    const { content, hotspots } = splitCanvas(tree);
-    return { content: content?.spec ?? null, hotspots: hotspots.map((hotspot) => hotspot.spec) };
+    if (!hasRoot) return null;
+    const { content: withoutHostPrimitives, hostPrimitives } = splitHostPrimitives(tree);
+    const overlays = hostPrimitives.map((item) => item.spec);
+    if (!screen.canvas) return { content: withoutHostPrimitives?.spec ?? null, hotspots: [], overlays };
+    const { content, hotspots } = withoutHostPrimitives ? splitCanvas(withoutHostPrimitives) : { content: null, hotspots: [] };
+    return { content: content?.spec ?? null, hotspots: hotspots.map((hotspot) => hotspot.spec), overlays };
   }, [hasRoot, screen.canvas, tree]);
   const runtimeValue = useMemo<EasyUiRuntimeValue>(
     () => ({ metadata: tree.metadata, runtime: null, definitions: customDefinitions ?? {} }),
@@ -256,7 +270,7 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
     : <EasyUiRuntimeProvider value={runtimeValue}>
       {screen.canvas && specs
         ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} />
-        : <Renderer registry={registry} spec={spec} />}
+        : <>{specs?.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs?.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}
     </EasyUiRuntimeProvider>;
 
   return <EditorCanvasErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id}>
@@ -264,6 +278,8 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
       <EditorFrame
         nativeWidth={screen.canvas?.width ?? previewNativeWidth[doc.device]}
         nativeHeight={screen.canvas?.height}
+        designSystem={doc.designSystem}
+        themeTokens={themeContent?.tokens}
         viewportRef={viewportRef}
         previewRootRef={previewRootRef}
         onClick={handleSelect}
