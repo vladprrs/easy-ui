@@ -3,7 +3,7 @@ import type { ValidationIssue } from "../src/prototype/types";
 
 // Bumped whenever the semantic validator or its catalog descriptor changes shape.
 // `validatedRevision` in meta responses reflects records written by this version.
-export const VALIDATOR_VERSION = "v1";
+export const VALIDATOR_VERSION = "v2";
 
 export type ValidationResourceType = "prototype" | "component";
 

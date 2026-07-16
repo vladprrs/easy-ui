@@ -7,6 +7,7 @@ import { resolveBuiltinSystem } from "../designSystems";
 import { getAtPointer, isSafeJsonPointer, isSafeRelativeFieldPath } from "./pointer";
 import { isAssetId, type PrototypeDoc } from "./schema";
 import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "./stateOverrides";
+import { lintPrototypeLayouts } from "./layoutLints";
 import type { PrototypeValidationResult, ValidationIssue } from "./types";
 
 type Obj = Record<string, unknown>;
@@ -512,6 +513,7 @@ export function validatePrototype(
     const hasCrossScreenNavigate = [...navigation.entries()].some(([source, targets]) => [...targets].some((target) => target !== source));
     if (!hasCrossScreenNavigate) issue(warnings, ["screens"], "prototype has multiple screens but no navigate action moves between different screens");
   }
+  warnings.push(...lintPrototypeLayouts(doc, definitions));
   return { errors, warnings };
 }
 

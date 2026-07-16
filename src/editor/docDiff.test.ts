@@ -192,6 +192,19 @@ describe("humanizeIssues (422-форматтер)", () => {
     ]);
   });
 
+  it("prefers the RFC pointer and preserves an optional warning code", () => {
+    expect(humanizeIssues(doc, [{
+      path: ["screens"],
+      pointer: "/screens/0/spec/elements/cart-total",
+      message: "layout warning",
+      code: "layout/spacer-chain",
+    }])).toEqual([{
+      path: "Экран «Корзина» › cart-total",
+      message: "layout warning",
+      code: "layout/spacer-chain",
+    }]);
+  });
+
   it("survives malformed issues", () => {
     expect(humanizeIssues(doc, ["oops", { message: "no path" }, undefined])).toEqual([
       { path: "Документ", message: "oops" },

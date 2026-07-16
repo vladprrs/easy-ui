@@ -184,7 +184,7 @@ export function describeDocPath(doc: PrototypeDoc, path: string | (string | numb
   return segments.join(" › ");
 }
 
-export type DisplayIssue = { path: string; message: string };
+export type DisplayIssue = { path: string; message: string; code?: string };
 
 /**
  * 422-форматтер: приводит issues сервера (zod path-массив или строковый JSON
@@ -192,10 +192,11 @@ export type DisplayIssue = { path: string; message: string };
  */
 export function humanizeIssues(doc: PrototypeDoc, issues: unknown[] | undefined): DisplayIssue[] {
   return (issues ?? []).map((value) => {
-    const issue = value && typeof value === "object" ? value as { path?: unknown; message?: unknown } : {};
-    const path = Array.isArray(issue.path) || typeof issue.path === "string"
-      ? describeDocPath(doc, issue.path as string | (string | number)[])
+    const issue = value && typeof value === "object" ? value as { path?: unknown; pointer?: unknown; message?: unknown; code?: unknown } : {};
+    const rawPath = typeof issue.pointer === "string" ? issue.pointer : issue.path;
+    const path = Array.isArray(rawPath) || typeof rawPath === "string"
+      ? describeDocPath(doc, rawPath as string | (string | number)[])
       : editor.diffDocLabel;
-    return { path, message: typeof issue.message === "string" ? issue.message : String(value) };
+    return { path, message: typeof issue.message === "string" ? issue.message : String(value), ...(typeof issue.code === "string" ? { code: issue.code } : {}) };
   });
 }
