@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { routeObjects } from "../app/routes";
 import type { PrototypeDraft, PrototypeVersion } from "../api/client";
 import { prototypeDocSchema } from "../prototype/schema";
@@ -30,13 +30,28 @@ function renderAt(path: string) {
   return router;
 }
 
+function matchMedia(matches: boolean): typeof window.matchMedia {
+  return vi.fn((query: string) => ({
+    matches,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as typeof window.matchMedia;
+}
+
 describe("PresentShell (W1-2)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.stubGlobal("matchMedia", matchMedia(false));
     mocks.getDraft.mockResolvedValue(draft());
     mocks.getVersion.mockResolvedValue({ ...draft(), version: 2, publishedAt: "2026-07-10T00:00:00Z" } satisfies PrototypeVersion);
     mocks.loadCustom.mockResolvedValue({ definitions: {}, components: {} });
   });
+  afterEach(() => vi.unstubAllGlobals());
 
   it("redirects the index route to the start screen without any app chrome", async () => {
     const router = renderAt("/p/hello-world/present");
@@ -54,6 +69,23 @@ describe("PresentShell (W1-2)", () => {
     // Прямой вход: вместо Esc-поведения — «Открыть в easy-ui».
     expect(screen.getByRole("link", { name: "Открыть в easy-ui" }).getAttribute("href")).toBe("/p/hello-world/s/welcome");
     expect(screen.queryByText("Esc — вернуться в плеер")).toBeNull();
+  });
+
+  it("uses the footerless fluid stage for ?mobile=1", async () => {
+    renderAt("/p/hello-world/present?mobile=1");
+    await screen.findByLabelText("Name");
+    expect(document.querySelector("main")?.classList.contains("bg-background")).toBe(true);
+    expect(document.querySelector("[data-eui-stage-viewport='present-fluid']")).not.toBeNull();
+    expect(document.querySelector("[data-eui-stage-viewport='player']")).toBeNull();
+    expect(document.querySelector("footer")).toBeNull();
+  });
+
+  it("keeps the desktop frame and footer for ?mobile=0", async () => {
+    renderAt("/p/hello-world/present?mobile=0");
+    await screen.findByLabelText("Name");
+    expect(document.querySelector("[data-eui-stage-viewport='player']")).not.toBeNull();
+    expect(document.querySelector("[data-eui-stage-viewport='present-fluid']")).toBeNull();
+    expect(screen.getByRole("navigation", { name: "Экраны презентации" })).toBeTruthy();
   });
 
   it("runs the interactive flow and restart resets state", async () => {

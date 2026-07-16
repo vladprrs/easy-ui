@@ -11,6 +11,8 @@ import { useDocumentTitle } from "../app/useDocumentTitle";
 import type { ThemeContent } from "../api/client";
 import { EasyUiActionRuntime } from "./actionRuntime";
 import { DeviceFrame, isPlayerHelpHotkey, isPlayerHotkeyEvent, type StageZoom } from "./DeviceFrame";
+import { FluidStage } from "./FluidStage";
+import { useMobilePresent } from "./mobilePresent";
 import { buildPlayerPath, FlowResetBanner, PlayerNavigationProvider, usePlayerNavigation } from "./navigation";
 import { PrototypeLoader } from "./PrototypeLoader";
 import { PlayerHotkeysHelp, ScreenErrorBoundary } from "./ScreenView";
@@ -35,13 +37,14 @@ export function PresentShell({ share = false }: { share?: boolean }) {
   const { protoId, version } = useParams();
   const numericVersion = version === undefined ? undefined : Number(version);
   const navigationType = useNavigationType();
+  const mobile = useMobilePresent();
   // Латч на маунт шелла: bootstrap-replace навигации внутри презентации не
   // должен перекрасить прямой вход в «внутренний».
   const [directEntry] = useState(() => navigationType === "POP");
   return <PrototypeLoader protoId={protoId} version={numericVersion}>
     {({ loaded, custom, runtimeKey, routeBase }) => (
       <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} routeBase={`${share ? `/share/p/${encodeURIComponent(loaded.doc.id)}/v/${numericVersion}` : routeBase}/present`}>
-        <LoadedPresent key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} playerBase={routeBase} metaVersion={loaded.designSystemMetaVersion} version={numericVersion} directEntry={directEntry} share={share} />
+        <LoadedPresent key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} playerBase={routeBase} metaVersion={loaded.designSystemMetaVersion} version={numericVersion} directEntry={directEntry} share={share} mobile={mobile} />
       </PlayerNavigationProvider>
     )}
   </PrototypeLoader>;
@@ -56,6 +59,7 @@ interface LoadedPresentProps {
   version: number | undefined;
   directEntry: boolean;
   share: boolean;
+  mobile: boolean;
 }
 
 function LoadedPresent(props: LoadedPresentProps) {
@@ -70,7 +74,7 @@ function ThemedLoadedPresent(props: LoadedPresentProps) {
   return <LoadedPresentContent {...props} themeContent={themeContent} />;
 }
 
-function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, directEntry, share, themeContent }: LoadedPresentProps & { themeContent: ThemeContent | null }) {
+function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, directEntry, share, mobile, themeContent }: LoadedPresentProps & { themeContent: ThemeContent | null }) {
   const { screenId } = useParams();
   const navigation = usePlayerNavigation();
   const routerNavigate = useNavigate();
@@ -138,25 +142,31 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [currentIndex, doc.screens, exitPath, navigation, routerNavigate, share]);
 
+  const content = screen && tree
+    ? <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>
+        <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={customDefinitions} onError={onError} tree={tree} canvas={screen.canvas} hostPrimitivesAllowed={doc.device !== "desktop" || screen.canvas !== undefined} />
+      </ScreenErrorBoundary>
+    : <section role="alert" className="m-6 rounded-2xl bg-white/10 p-6 text-eui-orange">
+        <h1 className="font-eui-display text-xl font-bold">{player.screenMissingTitle}</h1>
+        <p className="mt-2 text-sm text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p>
+      </section>;
+
   return <JSONUIProvider key={`${runtimeKey}:${navigation.sessionNonce}`} registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
     <ThemeStyle content={themeContent} />
-    <main className="flex h-dvh min-h-0 flex-col bg-eui-graphite font-eui-ui text-white">
+    <main className={mobile
+      ? "flex h-dvh min-h-0 flex-col bg-background font-eui-ui text-foreground"
+      : "flex h-dvh min-h-0 flex-col bg-eui-graphite font-eui-ui text-white"}>
       {hotkeysVisible && <PlayerHotkeysHelp present canExitPresent={!share} onClose={() => setHotkeysVisible(false)} />}
       <div className="relative flex min-h-0 min-w-0 flex-1">
         {/* Компактный баннер сброса (W1-5): deep-link в середину флоу презентации. */}
         <FlowResetBanner compact />
-        <DeviceFrame device={doc.device} canvas={screen?.canvas} zoom={fitZoom} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}>
-          {screen && tree
-            ? <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>
-                <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={customDefinitions} onError={onError} tree={tree} canvas={screen.canvas} hostPrimitivesAllowed={doc.device !== "desktop" || screen.canvas !== undefined} />
-              </ScreenErrorBoundary>
-            : <section role="alert" className="m-6 rounded-2xl bg-white/10 p-6 text-eui-orange">
-                <h1 className="font-eui-display text-xl font-bold">{player.screenMissingTitle}</h1>
-                <p className="mt-2 text-sm text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p>
-              </section>}
-        </DeviceFrame>
+        {mobile ? <FluidStage canvas={screen?.canvas} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}>
+          {content}
+        </FluidStage> : <DeviceFrame device={doc.device} canvas={screen?.canvas} zoom={fitZoom} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}>
+          {content}
+        </DeviceFrame>}
       </div>
-      <footer className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 px-4 py-2.5">
+      {!mobile && <footer className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 px-4 py-2.5">
         <nav aria-label={present.pagerAria} className="flex max-w-full flex-wrap items-center justify-center gap-1.5">
           {doc.screens.map((item) => (
             <span
@@ -173,7 +183,7 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
           : directEntry
           ? <Link className={pillGhostOnDark} to={exitPath}>{present.openInApp}</Link>
           : <span className="text-xs text-eui-ondark-2">{present.exitHint}</span>}
-      </footer>
+      </footer>}
     </main>
   </JSONUIProvider>;
 }
