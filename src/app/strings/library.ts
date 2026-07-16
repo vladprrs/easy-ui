@@ -26,6 +26,7 @@ export const library = {
   storyPreviewTitle: "Превью истории",
   customBadge: "Пользовательский компонент",
   customSectionSuffix: "пользовательские",
+  componentPageLink: "Страница компонента",
   linkedToFigma: "Связан с Figma",
   previewTitle: (componentName: string) => `Превью компонента ${componentName}`,
   previewVariantsAria: "Варианты превью",

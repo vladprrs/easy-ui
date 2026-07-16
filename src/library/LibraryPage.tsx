@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { Link } from "react-router";
 import { getCatalogManifest, getComponentMeta, listDesignSystems, listVisualReferences, type CatalogComponent, type ComponentVersionSummary, type FigmaProvenance, type VisualReference } from "../api/client";
 import { useApi } from "../api/hooks";
-import { chip, chipActive, headingBar, kicker } from "../app/chrome";
+import { chip, chipActive, headingBar, kicker, pillPrimary } from "../app/chrome";
 import { figmaBadgeTitle, levelSection, library } from "../app/strings/library";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { applicableLibraryStatusKeys, atomicLevelLabel, componentLibraryStatus, groupLibraryEntries, libraryStatusLabel, matchesLibraryFilter, selectionForComponent, selectionForStory, selectionKey, type ComponentLibraryStatus, type LibrarySelection, type LibraryStatusKey } from "./libraryModel";
@@ -178,6 +179,7 @@ function ComponentMetadata({ component, systemName }: { component: CatalogCompon
   return <article className="max-w-2xl rounded-3xl bg-eui-lav p-6">
     <div className="flex items-center gap-2"><p className={kicker}>{library.customBadge}</p>{badge ? <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${badge.className}`} title={badge.title}>{badge.label}</span> : null}{figma ? <FigmaBadge figma={figma} /> : null}</div>
     <h2 className="mt-2 font-eui-display text-2xl font-medium">{component.name}</h2>
+    <Link className={`${pillPrimary} mt-4`} to={`/library/c/${encodeURIComponent(component.id)}?v=${component.version}`}>{library.componentPageLink}</Link>
     {variants.length ? <div className="mt-4 flex flex-wrap gap-2" aria-label={library.previewVariantsAria}>
       {variants.map((variant) => <button type="button" key={variant} aria-pressed={selectedVariant === variant} className={selectedVariant === variant ? chipActive : chip} onClick={() => setSelectedVariant(variant)}>{variant}</button>)}
     </div> : null}

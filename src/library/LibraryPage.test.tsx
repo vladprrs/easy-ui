@@ -135,6 +135,20 @@ describe("LibraryPage", () => {
     expect(within(screen.getByLabelText("Варианты превью")).getByRole("button", { name: "default" }).getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("links each custom card to its manifest-entry version", async () => {
+    vi.mocked(fetchStorybookIndex).mockResolvedValue(null);
+    const v3 = ratingManifest.components[0];
+    const v4 = { ...v3, designSystem: "shadcn", version: 4, bundleHash: "hash-v4" };
+    vi.mocked(getCatalogManifest).mockResolvedValue({ components: [v4, v3] });
+    renderLibrary();
+
+    const switcher = await screen.findByLabelText("Дизайн-системы");
+    expect(screen.getByRole("link", { name: "Страница компонента" }).getAttribute("href")).toBe("/library/c/rating?v=4");
+
+    fireEvent.click(within(switcher).getByRole("button", { name: "Yandex Pay Design System" }));
+    expect(screen.getByRole("link", { name: "Страница компонента" }).getAttribute("href")).toBe("/library/c/rating?v=3");
+  });
+
   it("hides status filters for builtin stories and a uniform custom component list", async () => {
     vi.mocked(fetchStorybookIndex).mockResolvedValue({ entries: {
       atom: { id: "atom", title: "Shadcn/Atoms/Button", name: "Default", type: "story" },
