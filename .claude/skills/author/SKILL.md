@@ -80,6 +80,49 @@ Condition: boolean, truthiness `{"$state":"/path"}`, либо `{"$state":"/path"
 
 **Warnings**: save возвращает несблокирующие semantic warnings (interactive-элемент без обработчиков, отсутствие accessible label, большой inline base64, экраны без переходов и т.п.) — драйвер печатает их; чистый прототип не шумит.
 
+### Layout guide
+
+Использовать стандартные layout-пропы компонентов вместо служебных элементов и CSS-классов:
+
+- `gap` — промежуток между детьми flow-слота родителя;
+- `padding` — внутренний отступ со всех четырёх сторон;
+- `paddingX` — внутренний отступ по logical inline axis, перекрывает `padding` на этой оси;
+- `paddingY` — внутренний отступ по logical block axis, перекрывает `padding` на этой оси.
+
+Шкала `spaceToken`: `none | xs | sm | md | lg | xl | 2xl | 3xl | 4xl`. Канонические fallback-значения: `0 | 4 | 8 | 12 | 16 | 24 | 32 | 48 | 64px`. Фактические значения дизайн-системы брать из `resolvedSpaceScale` каталога (`node driver.mjs catalog <system>`) или capabilities сервера: тема может переопределять шкалу. `none` всегда равен нулю; отсутствие пропа сохраняет собственный дефолт компонента. Токены `2xl+` оставлять для макроотступов — секций, границ экрана и крупных пустых состояний, а не для обычных интервалов внутри контролов.
+
+Предпочитать `gap` на родительском `YpBox` штабелям `YpSpacer`; spacer оставлять для legacy-композиций, где родитель не поддерживает spacing contract. Например:
+
+```json
+{
+  "root": { "type": "YpBox", "props": { "mode": "col" }, "children": ["a", "s1", "s2", "b"] },
+  "s1": { "type": "YpSpacer", "props": { "size": 8, "axis": "vertical" } },
+  "s2": { "type": "YpSpacer", "props": { "size": 8, "axis": "vertical" } }
+}
+```
+
+После:
+
+```json
+{
+  "root": { "type": "YpBox", "props": { "mode": "col", "gap": "lg", "paddingX": "lg", "paddingY": "sm" }, "children": ["a", "b"] }
+}
+```
+
+Полные документы: `examples/yp-spacing-before.json` и `examples/yp-spacing-after.json`; эталонные исходники — `examples/yp-box.tsx`, `examples/yp-block.tsx`, `examples/yp-spacer.tsx`. Для ABI v3 импортировать `space` только из `easy-ui/runtime/v3`; `space("md")` возвращает CSS-ссылку `var(--eui-space-md, 12px)`. Renderer передаёт document props как есть и не применяет Zod-defaults: каждый компонент обязан повторять объявленный default оборонительным fallback в render-коде (`space(props.gap ?? "none")`, tolerant lookup maps). Проверять `{}` против явных defaults пиксельно на видимом child.
+
+`Overlay` использовать для viewport-sticky контента: задать `placement`, при необходимости `inset` и `scrim`. Overlay разрешён только прямым ребёнком root экрана; на desktop без `canvas` запрещён. Не имитировать Overlay абсолютным позиционированием.
+
+После сборки экрана запускать численную проверку:
+
+```bash
+node driver.mjs geometry <protoId> <screenId>
+```
+
+Наблюдаемые зазоры и computed CSS gap должны совпадать с `resolvedSpaceScale` выбранной DS. `gaps: n/a` означает, что flow/wrap/DOM-контекст нельзя доказать, а не нулевой зазор.
+
+`className` — best-effort escape hatch: Tailwind-утилита может отсутствовать в собранном CSS. Не применять `className` для позиционирования или spacing между siblings; использовать layout props и Overlay. Статические positioning/inset/z-index/margin utilities дают advisory warning `layout/classname-positioning`.
+
 ### Ассеты
 
 Картинки/шрифты/иконки не встраивать base64 — загружать в реестр и ссылаться `{"$asset": "<id>"}`:
@@ -107,7 +150,7 @@ curl -u "$EASYUI_AUTH" -X POST -H "Content-Type: image/png" --data-binary @banne
 - `definition.props` — Zod **strict** схема; `description: string` обязателен; опционально `slots?: string[]`, `example?`, `examples?`, `atomicLevel?`, `capabilities?: {typedEvents?, namedSlots?}` (тип требует литеральные `true` — писать `{...} as const`), семантика для валидатора (`interactive?`, `accessibleLabelProps?`, `urlProps?`). `examples` содержит до 8 именованных наборов props: имя — slug 1–32 символа, `default` зарезервирован; каждый input ≤16 KiB, все examples компонента вместе ≤64 KiB. Сервер сохраняет провалидированный **input**, а не результат Zod transform/default.
 - `events` — `string[]` (payload-less, legacy) **или** `Record<name, ZodSchema>` (typed payload). Typed-схема обязана детерминированно конвертироваться в JSON Schema — transform/preprocess дадут 422 `event_schema_not_serializable` на publish.
 - Компонент получает `{props, emit, slots}`; для typed/slots-компонентов импортируйте тип `EasyUIComponentProps` из `easy-ui/runtime` — `emit("choose", {id, price})` c payload (валидируется по схеме, `$`-ключи в payload запрещены), `slots.header` — ReactNode именованного слота (`children === slots.default`).
-- Импортировать можно: `react`, `react-dom`, `react/jsx-runtime`, `zod`, `@json-render/react` и `easy-ui/runtime` (последний = ABI v2; экспортирует также `token("color.text.primary")` и `Icon` для темы дизайн-системы). CSS-импорты и произвольные Tailwind-классы нельзя — стилить inline-стилями и CSS-переменными темы (`var(--border)`, `var(--eui-*)` из tokens системы).
+- Импортировать можно: `react`, `react-dom`, `react/jsx-runtime`, `zod`, `@json-render/react`, `easy-ui/runtime` (ABI v2: `token`, `Icon`) и `easy-ui/runtime/v3` (ABI v3: `space`). Value-imports v2 и v3 в одном модуле смешивать нельзя; type-only импорт v2 вместе с value-import v3 разрешён. CSS-импорты и произвольные Tailwind-классы нельзя — стилить inline-стилями и CSS-переменными темы (`var(--border)`, `var(--eui-*)` из tokens системы).
 - `hostAbiVersion` вычисляется на publish автоматически: capabilities или импорт `easy-ui/runtime` → 2, иначе 1.
 - Лимит source — 256 KiB; JSON-тело запроса — 1 MiB.
 

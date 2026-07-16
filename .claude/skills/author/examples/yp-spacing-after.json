@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "id": "w6-yp-spacing-after",
+  "name": "Yandex Pay spacing after",
+  "description": "The same layout intent expressed with parent gap and tokenized padding.",
+  "designSystem": "yandex-pay",
+  "device": "mobile",
+  "startScreen": "main",
+  "state": {},
+  "screens": [
+    {
+      "id": "main",
+      "name": "After",
+      "spec": {
+        "root": "root",
+        "elements": {
+          "root": { "type": "YpBox", "props": { "mode": "col", "wrap": false, "width": "full", "gap": "md", "padding": "xl", "paddingX": "lg", "paddingY": "sm" }, "children": ["panel-a", "nested"] },
+          "panel-a": { "type": "YpBlock", "props": { "bg": "primary", "radius": 16, "padding": "sm" } },
+          "nested": { "type": "YpBox", "props": { "mode": "row", "wrap": false, "width": "full", "gap": "sm" }, "children": ["panel-b", "panel-c"] },
+          "panel-b": { "type": "YpBlock", "props": { "bg": "primaryLight", "radius": 12, "padding": "sm" } },
+          "panel-c": { "type": "YpBlock", "props": { "bg": "secondary", "radius": 12, "padding": "sm" } }
+        }
+      }
+    }
+  ]
+}

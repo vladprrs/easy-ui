@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "w6-yp-spacing-before",
+  "name": "Yandex Pay spacing before",
+  "description": "Legacy cpqr-style spacer stack and nested boxes.",
+  "designSystem": "yandex-pay",
+  "device": "mobile",
+  "startScreen": "main",
+  "state": {},
+  "screens": [
+    {
+      "id": "main",
+      "name": "Before",
+      "spec": {
+        "root": "root",
+        "elements": {
+          "root": {
+            "type": "YpBox",
+            "props": { "mode": "col", "shrink": false, "wrap": false, "inline": false, "justify": "start", "align": "start", "verticalAlign": "default", "width": "full", "height": "auto" },
+            "children": ["panel-a", "spacer-1", "spacer-2", "spacer-3", "spacer-4", "spacer-5", "spacer-6", "spacer-7", "spacer-8", "nested"]
+          },
+          "panel-a": { "type": "YpBlock", "props": { "bg": "primary", "radius": 16 } },
+          "spacer-1": { "type": "YpSpacer", "props": { "size": 8, "axis": "vertical" } },
+          "spacer-2": { "type": "YpSpacer", "props": { "size": 8, "axis": "vertical" } },
+          "spacer-3": { "type": "YpSpacer", "props": { "size": 8, "axis": "vertical" } },
+          "spacer-4": { "type": "YpSpacer", "props": { "size": 8, "axis": "vertical" } },
+          "spacer-5": { "type": "YpSpacer", "props": { "size": 8, "axis": "vertical" } },
+          "spacer-6": { "type": "YpSpacer", "props": { "size": 8, "axis": "vertical" } },
+          "spacer-7": { "type": "YpSpacer", "props": { "size": 8, "axis": "vertical" } },
+          "spacer-8": { "type": "YpSpacer", "props": { "size": 8, "axis": "vertical" } },
+          "nested": { "type": "YpBox", "props": { "mode": "row", "width": "full" }, "children": ["panel-b", "panel-c"] },
+          "panel-b": { "type": "YpBlock", "props": { "bg": "primaryLight", "radius": 12 } },
+          "panel-c": { "type": "YpBlock", "props": { "bg": "secondary", "radius": 12 } }
+        }
+      }
+    }
+  ]
+}

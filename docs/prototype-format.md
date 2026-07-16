@@ -120,6 +120,12 @@ layout?: {
 
 `spacing` names the supported standard props. `spacer: true` identifies a dedicated spacer element and cannot be combined with spacing props or slots. `flow` describes a flex flow whose `gap` applies to its selected slot; a static direction can be declared directly, while a prop-driven direction maps accepted prop values to vertical, horizontal, or no-flow domains. Unmapped or dynamic values have unknown direction rather than an inferred one.
 
+## `className` advisory policy
+
+`className` remains a best-effort escape hatch, not a layout contract. A Tailwind utility named in a prototype is not guaranteed to exist in the compiled CSS. Do not use `className` to position elements or to create spacing between siblings; use component `gap`/padding props or the `Overlay` host primitive instead.
+
+Static class strings are inspected by the non-blocking `layout/classname-positioning` lint. Position utilities, `relative`, inset utilities (including variant-prefixed forms), arbitrary z-index values, and margin utilities produce a warning. Directive-valued or otherwise dynamic class names are not statically inspected. The warning is advisory and never blocks save or playback.
+
 ## Overlay host primitive
 
 `Overlay` is a host primitive available to every registered design system through the separate `hostPrimitives` discovery section. It is not a builtin or custom component, is never included in `components`, component pins, or the component manifest, and reserves the component name `Overlay`.

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "w6-yp-box-defaults",
+  "name": "YpBox default props conformance",
+  "description": "Pixel equivalence fixture for omitted and explicit YpBox defaults with a visible child.",
+  "designSystem": "yandex-pay",
+  "device": "mobile",
+  "startScreen": "omitted",
+  "state": {},
+  "screens": [
+    {
+      "id": "omitted",
+      "name": "Omitted defaults",
+      "spec": {
+        "root": "box-omitted",
+        "elements": {
+          "box-omitted": { "type": "YpBox", "props": {}, "children": ["visible-child"] },
+          "visible-child": { "type": "YpBlock", "props": { "bg": "primary", "overflow": "hidden", "radius": 16, "shadow": "low", "padding": "4xl" } }
+        }
+      }
+    },
+    {
+      "id": "explicit",
+      "name": "Explicit defaults",
+      "spec": {
+        "root": "box-explicit",
+        "elements": {
+          "box-explicit": {
+            "type": "YpBox",
+            "props": { "mode": "row", "shrink": false, "wrap": false, "inline": false, "justify": "start", "align": "start", "verticalAlign": "default", "width": "auto", "height": "auto", "gap": "none", "padding": "none", "paddingX": "none", "paddingY": "none" },
+            "children": ["visible-child"]
+          },
+          "visible-child": { "type": "YpBlock", "props": { "bg": "primary", "overflow": "hidden", "radius": 16, "shadow": "low", "padding": "4xl" } }
+        }
+      }
+    }
+  ]
+}

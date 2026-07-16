@@ -85,6 +85,8 @@ describe("component version status transitions", () => {
     db.close();
   });
 
+  // Seeds three published versions; each publish runs compile + SSR conformance, which
+  // exceeds the default 5s budget when the full suite runs in parallel.
   test("superseded requires a valid supersededBy: existent, non-self, acyclic", async () => {
     const { db, handler } = await setup(); await seedComponent(handler, 3);
     // Missing supersededBy
@@ -106,7 +108,7 @@ describe("component version status transitions", () => {
     const meta = await (await handler(req("/components/rating-stars"))).json() as { versions: { version: number; supersededBy: number | null }[] };
     expect(meta.versions.find((v) => v.version === 1)?.supersededBy).toBe(2);
     db.close();
-  });
+  }, 30_000);
 
   test("unknown version yields 404", async () => {
     const { db, handler } = await setup(); await seedComponent(handler);
