@@ -3,6 +3,7 @@ import { CapturePrototype } from "../capture/CapturePrototype";
 import { CaptureComponent } from "../capture/CaptureComponent";
 import { GalleryPage } from "../gallery/GalleryPage";
 import { LibraryPage } from "../library/LibraryPage";
+import { ComponentPage } from "../library/componentPage";
 import { VisualPage } from "../visual/VisualPage";
 import { SmokeSpec } from "../smoke/SmokeSpec";
 import { PlayerShell } from "../player/PlayerShell";
@@ -48,6 +49,7 @@ export const routeObjects: RouteObject[] = [
     children: [
       { index: true, element: <GalleryPage /> },
       { path: "library", element: <LibraryPage /> },
+      { path: "library/c/:componentId", element: <ComponentPage /> },
       { path: "visual", element: <VisualPage /> },
       { path: "debug", element: <SmokeSpec /> },
       {
