@@ -56,7 +56,7 @@ describe("PlayerShell", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/s/welcome"));
     expect(mocks.getDraft).toHaveBeenCalledWith("hello-world", expect.any(AbortSignal));
     const input = await screen.findByLabelText("Name");
-    expect(document.title).toBe("Hello World · Welcome — easy-ui");
+    await waitFor(() => expect(document.title).toBe("Hello World · Welcome — easy-ui"));
     fireEvent.change(input, { target: { value: "Lin" } });
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Lin");
     expect(screen.getByText("Hello, Lin!")).toBeTruthy();

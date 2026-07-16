@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PrototypeDoc } from "../schema";
-import { EUI_KEY_PROP, splitCanvas, stripEvents, toRuntimeSpec } from "../runtimeSpec";
+import { EUI_KEY_PROP, splitCanvas, splitHostPrimitives, stripEvents, toRuntimeSpec } from "../runtimeSpec";
 
 function specWith(props: Record<string, unknown>): PrototypeDoc["screens"][number]["spec"] {
   return { root: "text", elements: { text: { type: "Text", props } } };
@@ -59,6 +59,45 @@ describe("toRuntimeSpec RuntimeTree", () => {
     expect(content?.metadata.hs).toBeUndefined();
     expect(hotspots).toHaveLength(1);
     expect(hotspots[0]!.spec.root).toBe("hs");
+  });
+
+  it("splitHostPrimitives recursively extracts Overlay descendants with metadata markers", () => {
+    const authored: Spec = {
+      root: "root",
+      elements: {
+        root: { type: "Stack", props: {}, children: ["body", "overlay"] },
+        body: { type: "Text", props: { text: "Body" } },
+        overlay: { type: "Overlay", props: { placement: "top" }, children: ["panel"] },
+        panel: { type: "Stack", props: {}, children: ["label"] },
+        label: { type: "Text", props: { text: "Notice" } },
+      },
+    };
+    const tree = toRuntimeSpec(authored);
+    const { content, hostPrimitives } = splitHostPrimitives(tree);
+    expect(content?.spec.elements.root?.children).toEqual(["body"]);
+    expect(content?.spec.elements.overlay).toBeUndefined();
+    expect(content?.metadata.label).toBeUndefined();
+    expect(hostPrimitives).toHaveLength(1);
+    expect(Object.keys(hostPrimitives[0]!.spec.elements)).toEqual(["overlay", "panel", "label"]);
+    expect(hostPrimitives[0]!.metadata.label?.type).toBe("Text");
+    expect(hostPrimitives[0]!.spec.elements.label?.props[EUI_KEY_PROP]).toBe("label");
+  });
+
+  it("applies host splitting before canvas splitting without losing Hotspot trees", () => {
+    const authored: Spec = {
+      root: "root",
+      elements: {
+        root: { type: "Stack", props: {}, children: ["hotspot", "overlay"] },
+        hotspot: { type: "Hotspot", props: { x: 0, y: 0, width: 10, height: 10, ariaLabel: "Area" } },
+        overlay: { type: "Overlay", props: { placement: "center" }, children: ["label"] },
+        label: { type: "Text", props: { text: "Notice" } },
+      },
+    };
+    const hostSplit = splitHostPrimitives(toRuntimeSpec(authored));
+    const canvasSplit = splitCanvas(hostSplit.content!);
+    expect(canvasSplit.content?.spec.elements.root?.children).toEqual([]);
+    expect(canvasSplit.hotspots[0]!.metadata.hotspot).toBeDefined();
+    expect(hostSplit.hostPrimitives[0]!.metadata.label).toBeDefined();
   });
 });
 

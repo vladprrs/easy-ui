@@ -79,6 +79,24 @@ describe("EasyUiActionRuntime.dispatch", () => {
     expect(runtime.store.get("/rows")).toEqual([]); // rejected
     expect(onError).toHaveBeenCalled();
   });
+
+  it("uses the full authored spec so repeat content inside Overlay stays in the mutation budget", async () => {
+    const onError = vi.fn();
+    const spec: Spec = {
+      root: "root",
+      elements: {
+        root: { type: "Stack", props: {}, children: ["overlay"] },
+        overlay: { type: "Overlay", props: { placement: "top" }, children: ["list"] },
+        list: { type: "Stack", props: {}, repeat: { statePath: "/rows" }, children: ["item"] },
+        item: { type: "Text", props: { text: "item" } },
+      },
+    };
+    const runtime = new EasyUiActionRuntime({ initialState: { rows: [] }, screenIds: new Set(), deps: { navigate: vi.fn(), back: vi.fn(), openUrl: vi.fn(), restart: vi.fn() }, onError });
+    runtime.setScreenSpec(spec);
+    await runtime.dispatch({ action: "setState", params: { statePath: "/rows", value: Array.from({ length: 2500 }, () => 1) } }, ctx());
+    expect(runtime.store.get("/rows")).toEqual([]);
+    expect(onError).toHaveBeenCalled();
+  });
 });
 
 describe("createHardenedStore", () => {

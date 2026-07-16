@@ -1,5 +1,6 @@
 import type { Spec } from "@json-render/core";
 import type { PrototypeDoc } from "./schema";
+import { hostPrimitiveNames } from "../catalog/hostPrimitives/definitions";
 
 type PrototypeSpec = PrototypeDoc["screens"][number]["spec"];
 type JsonObject = Record<string, unknown>;
@@ -171,4 +172,49 @@ export function splitCanvas(tree: RuntimeTree): { content: RuntimeTree | null; h
     metadata: tree.metadata[id] ? { [id]: tree.metadata[id]! } : {},
   }));
   return { content, hotspots };
+}
+
+function descendantsOf(spec: Spec, root: string): Set<string> {
+  const descendants = new Set<string>();
+  const walk = (key: string): void => {
+    if (descendants.has(key)) return;
+    const element = spec.elements[key];
+    if (!element) return;
+    descendants.add(key);
+    for (const child of element.children ?? []) walk(child);
+  };
+  walk(root);
+  return descendants;
+}
+
+/** Extracts host subtrees while keeping every descendant's runtime metadata. */
+export function splitHostPrimitives(tree: RuntimeTree): { content: RuntimeTree | null; hostPrimitives: RuntimeTree[] } {
+  const spec = tree.spec;
+  const roots: string[] = [];
+  const visited = new Set<string>();
+  const findRoots = (key: string): void => {
+    if (visited.has(key)) return;
+    visited.add(key);
+    const element = spec.elements[key];
+    if (!element) return;
+    if (hostPrimitiveNames.has(element.type)) roots.push(key);
+    for (const child of element.children ?? []) findRoots(child);
+  };
+  findRoots(spec.root);
+  for (const key of Object.keys(spec.elements)) findRoots(key);
+  const extractedIds = new Set(roots.flatMap((root) => [...descendantsOf(spec, root)]));
+  const contentElements = Object.fromEntries(Object.entries(spec.elements)
+    .filter(([id]) => !extractedIds.has(id))
+    .map(([id, element]) => [id, element.children ? { ...element, children: element.children.filter((child) => !extractedIds.has(child)) } : element]));
+  const content = contentElements[spec.root]
+    ? { spec: { ...spec, elements: contentElements } as Spec, metadata: Object.fromEntries(Object.entries(tree.metadata).filter(([id]) => !extractedIds.has(id))) }
+    : null;
+  const hostPrimitives = roots.map((root) => {
+    const ids = descendantsOf(spec, root);
+    return {
+      spec: { root, elements: Object.fromEntries(Object.entries(spec.elements).filter(([id]) => ids.has(id))) } as Spec,
+      metadata: Object.fromEntries(Object.entries(tree.metadata).filter(([id]) => ids.has(id))),
+    };
+  });
+  return { content, hostPrimitives };
 }

@@ -9,6 +9,8 @@ import { isAssetId, type PrototypeDoc } from "./schema";
 import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "./stateOverrides";
 import { lintPrototypeLayouts } from "./layoutLints";
 import type { PrototypeValidationResult, ValidationIssue } from "./types";
+import { hostPrimitiveDefinitions, hostPrimitiveNames } from "../catalog/hostPrimitives/definitions";
+import { validateOverlayRules } from "./overlayRules";
 
 type Obj = Record<string, unknown>;
 const terminals = new Set(["navigate", "back", "restart", "openUrl"]);
@@ -230,8 +232,10 @@ export function validatePrototype(
   options?: { definitions?: Record<string, ComponentDefinition> },
 ): PrototypeValidationResult {
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
+  errors.push(...validateOverlayRules(doc));
   let definitions = options?.definitions;
   if (!definitions) definitions = resolveBuiltinSystem(doc.designSystem).definitions;
+  definitions = { ...definitions, ...hostPrimitiveDefinitions };
   // A type is "custom" when it is not part of the design system's builtin allowlist:
   // its events are dispatched by our adapter (which understands param sources/$if),
   // whereas builtin events are dispatched by the library and must stay payloadless.
@@ -337,7 +341,7 @@ export function validatePrototype(
         const parentKey = parentOf.get(key);
         const parent = parentKey ? elements[parentKey] : undefined;
         const parentDef = parent ? definitions[parent.type] : undefined;
-        const parentIsCustom = Boolean(parent) && !builtinNames.has(parent!.type) && Boolean(parentDef);
+        const parentIsCustom = Boolean(parent) && !builtinNames.has(parent!.type) && !hostPrimitiveNames.has(parent!.type) && Boolean(parentDef);
         if (!parent) issue(errors, [...ep, "slot"], "slot requires a parent element");
         else if (!parentIsCustom || parentDef?.capabilities?.namedSlots !== true) issue(errors, [...ep, "slot"], "slot is only allowed on a child of a custom component with named slots");
         else if (!(parentDef.slots ?? []).includes(childSlot)) issue(errors, [...ep, "slot"], `unknown slot for ${parent.type}: ${childSlot}`);
@@ -360,7 +364,7 @@ export function validatePrototype(
       }
       if (element.type === "Image") checkUrl(element.props.src, [...ep,"props","src"], true, errors);
       if (element.type === "Link") checkUrl(element.props.href, [...ep,"props","href"], false, errors);
-      const isCustomType = !builtinNames.has(element.type) && Boolean(definitions[element.type]);
+      const isCustomType = !builtinNames.has(element.type) && !hostPrimitiveNames.has(element.type) && Boolean(definitions[element.type]);
       // --- Semantic warnings (never block validation) ---
       const sem = elementSemantics(element.type, definition, isCustomType);
       const hasHandler = Boolean(element.on) && Object.keys(element.on!).length > 0;
@@ -497,7 +501,7 @@ export function validatePrototype(
     // a hint that the screen reconstructs a page in one component instead of composing the system.
     const rootElement = elements[screen.spec.root];
     const rootDefinition = rootElement ? definitions[rootElement.type] : undefined;
-    const rootIsCustom = Boolean(rootElement) && !builtinNames.has(rootElement!.type) && Boolean(rootDefinition);
+    const rootIsCustom = Boolean(rootElement) && !builtinNames.has(rootElement!.type) && !hostPrimitiveNames.has(rootElement!.type) && Boolean(rootDefinition);
     const rootLevel = rootDefinition?.atomicLevel;
     if (rootIsCustom && (rootLevel === "organism" || rootLevel === "page") && !(rootElement!.children?.length) && Object.keys(elements).length === 1) {
       issue(warnings, [...base, "elements", screen.spec.root], `monolithic screen: root ${rootElement!.type} is a single custom ${rootLevel} with no children; consider composing it from design-system elements`);

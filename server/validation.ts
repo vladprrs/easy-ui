@@ -5,6 +5,7 @@ import { isAssetId, type PrototypeDoc } from "../src/prototype/schema";
 import { importPublished } from "./components/pipeline";
 import { requireRegisteredDesignSystem } from "./designSystems";
 import { ApiError } from "./http";
+import { hostPrimitiveDefinitions, hostPrimitiveNames } from "../src/catalog/hostPrimitives/definitions";
 
 // Walks every element prop looking for {"$asset":"<id>"} directives, returning the referenced ids.
 export function collectAssetIds(doc:PrototypeDoc):string[] {
@@ -47,7 +48,7 @@ export function collectAndValidateComponentAssetRefs(db:Database,source:string):
 export type ComponentPin={id:string;name:string;version:number;bundleHash:string;sourcePath:string};
 export async function snapshotDefinitions(db:Database,doc:PrototypeDoc,dataDir:string):Promise<{definitions:Record<string,ComponentDefinition>;pins:ComponentPin[]}> {
   const builtin=requireRegisteredDesignSystem(db,doc.designSystem,["designSystem"]).definitions;
-  const types=new Set(doc.screens.flatMap(s=>Object.values(s.spec.elements).map(e=>e.type)).filter(t=>!Object.hasOwn(builtin,t)));
+  const types=new Set(doc.screens.flatMap(s=>Object.values(s.spec.elements).map(e=>e.type)).filter(t=>!Object.hasOwn(builtin,t)&&!hostPrimitiveNames.has(t)));
   const pins:ComponentPin[]=[]; const custom:Record<string,ComponentDefinition>={};
   for(const name of [...types].sort()) {
     const row=db.query(`SELECT c.id,c.name,cp.version,cp.rev,cp.bundle_hash bundleHash,cr.source
@@ -62,5 +63,5 @@ export async function snapshotDefinitions(db:Database,doc:PrototypeDoc,dataDir:s
     custom[name]={...raw,events,...(eventPayloadSchemas?{eventPayloadSchemas}:{})} as ComponentDefinition;
     pins.push({id:row.id,name:row.name,version:row.version,bundleHash:row.bundleHash,sourcePath:path});
   }
-  return {definitions:{...builtin,...normalizeDefinitions(custom)},pins};
+  return {definitions:{...builtin,...hostPrimitiveDefinitions,...normalizeDefinitions(custom)},pins};
 }

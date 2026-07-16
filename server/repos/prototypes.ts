@@ -8,6 +8,7 @@ import { ApiError } from "../http";
 import type { ComponentPin } from "../validation";
 import { latestValidatedRev } from "../validationRecords";
 import { parseFigmaStored } from "../figma";
+import { hostPrimitiveNames } from "../../src/catalog/hostPrimitives/definitions";
 
 type Pin = { id: string; name: string; version: number; bundleUrl: string; bundleHash: string };
 export type ResolvedPin = Pin & { status: string };
@@ -180,7 +181,7 @@ export class PrototypeRepo {
       const mismatched=pinRows.find(pin=>pin.designSystem!==doc.designSystem);
       if(mismatched) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["screens"],message:`Component pin belongs to a different design system: ${mismatched.name}`}]});
       const pinned=new Set(pinRows.map(x=>x.name));
-      for(const type of customTypes) if(!Object.hasOwn(definitions,type)&&!pinned.has(type)) throw new ApiError(422,"validation_failed","Prototype references an unpublished custom component",{issues:[{path:["screens"],message:`Unpublished custom component: ${type}`}]});
+      for(const type of customTypes) if(!Object.hasOwn(definitions,type)&&!hostPrimitiveNames.has(type)&&!pinned.has(type)) throw new ApiError(422,"validation_failed","Prototype references an unpublished custom component",{issues:[{path:["screens"],message:`Unpublished custom component: ${type}`}]});
       const duplicate=this.db.query("SELECT version FROM prototype_publishes WHERE prototype_id=? AND rev=?").get(id,head.head_rev) as {version:number}|null;
       if (duplicate) throw new ApiError(409,"already_published","This revision is already published",{currentRev:head.head_rev,currentVersion:duplicate.version});
       const latest=this.db.query("SELECT MAX(version) version FROM prototype_publishes WHERE prototype_id=?").get(id) as {version:number|null};
