@@ -1,6 +1,6 @@
 # Витрина custom-компонентов в Library: страница компонента с живым превью, контролами и доками
 
-Дата: 2026-07-16 · Статус: v3 после раундов 1–2 Codex-ревью (триаж в §6)
+Дата: 2026-07-16 · Статус: v4 после раундов 1–3 Codex-ревью (триаж в §6)
 
 ## 1. Контекст и цель
 
@@ -75,13 +75,13 @@ DAG: **(W0 ∥ W1 ∥ W2) → W3 → (W4 ∥ W5a) → W5b**. Каждая зад
 
 ### W0. Foundation: shared runtime, theme-manager, loader, API-типы, пины
 
-**Владение:** `src/customComponents/shared.ts`, `src/customComponents/loader.ts`, `src/designSystems/theme.tsx`, `src/api/client.ts`, `package.json` + `package-lock.json`, `server/shims/**` (только тесты), тесты всех перечисленных.
+**Владение:** `src/customComponents/shared.ts`, `src/customComponents/loader.ts`, `src/designSystems/theme.tsx`, `src/gallery/GalleryPreview.tsx` (адаптация к theme-manager'у), `src/api/client.ts`, `package.json` + `package-lock.json`, `server/shims/**` (только тесты), tracked-фикстуры compiled-бандлов, тесты всех перечисленных.
 
 1. **`ensureEasyUiShared()`** — идемпотентно дозаполняет core-модули в `globalThis.__easyUiShared` даже при частичной инициализации; вызывается из `shared.ts`, loader'а перед `import()`, theme-manager'а вместо `??= {}`. Баг воспроизводим уже сегодня: `loader.ts` подключает `shared.ts` только динамическим импортом, `theme.tsx` — только типами, так что `ThemeStyle`, смонтированный до первой загрузки бандла (Gallery), создаёт пустой объект, который `shared.ts` (`??=`) не дозаполнит. Юнит-тест проверяет реальный порядок модулей (theme-эффект до динамического импорта shared).
-2. **Централизованный theme-manager вместо независимых `ThemeStyle`.** Semantics: **single active theme на document** (честная фиксация фактического поведения: `:root`-переменные и так глобальны, «мульти-темность» Gallery — иллюзия каскада). Manager держит стек владельцев и управляет **одним** style-узлом и runtime-снапшотом (`tokens`/`icons`) атомарно — CSS и `token()`/`Icon()` не могут разойтись (сейчас победителя CSS определяет DOM-порядок style-тегов, а снапшота — порядок эффектов; при асинхронных Gallery-превью они различаются). `ThemeStyle` становится тонким клиентом manager'а с тем же props-API. Покрыть: не-LIFO unmount (A→B→unmount A), обновление `content` владельца без смены порядка, `content=null`, StrictMode double-effect, HMR-переживаемость, восстановление baseline после последнего unmount; A/B-тесты сверяют одновременно CSS-переменную и `token()`.
-3. **Loader = только shared transport/retry, без generation.** Rejected import: запись удаляется из `moduleCache` **только если всё ещё содержит тот же rejected promise**, а повторная попытка использует новый URL `bundle.js?retry=<n>` (канонический первый URL — без суффикса): браузер кеширует неуспешный ESM-load по URL, повторный `import()` того же URL не делает сетевого запроса (воспроизведено в ревью). Generation/отмена — ответственность потребителя (W3): у loader'а общий кеш, abort одного потребителя не должен ронять другого ждущего тот же URL. Тесты: retry после 500 → новый сетевой запрос и успех; два concurrent-потребителя одного URL, отмена одного не мешает второму.
+2. **Централизованный theme-manager вместо независимых `ThemeStyle`.** Semantics: **single active theme на document** (честная фиксация фактического поведения: `:root`-переменные и так глобальны, «мульти-темность» Gallery — иллюзия каскада). Manager держит реестр владельцев и управляет **одним** style-узлом и runtime-снапшотом (`tokens`/`icons`) атомарно — CSS и `token()`/`Icon()` не могут разойтись (сейчас победителя CSS определяет DOM-порядок style-тегов, а снапшота — порядок эффектов; при асинхронных Gallery-превью они различаются). **Приоритет владельца детерминирован и не зависит от сети:** владелец регистрируется на mount (до асинхронной загрузки content) со стабильным order-key (порядок регистрации mount-эффектов = порядок дерева), активен последний зарегистрированный владелец с непустым `content`; поздний resolve сети не переставляет приоритет (в Gallery порядок карточек, а не гонка загрузок draft'ов, определяет победителя между перезагрузками). `ThemeStyle` становится тонким клиентом manager'а с тем же props-API; `GalleryPreview.tsx` — во владении W0 (адаптация к регистрации-до-content). Покрыть: не-LIFO unmount (A→B→unmount A), противоположные порядки resolve A/B → один и тот же победитель, обновление `content` владельца без смены порядка, `content=null`, StrictMode double-effect, HMR-переживаемость, восстановление baseline после последнего unmount; A/B-тесты сверяют одновременно CSS-переменную и `token()`.
+3. **Loader = только shared transport/retry, без generation.** Rejected import: запись удаляется из `moduleCache` **только если всё ещё содержит тот же rejected promise**, а повторная попытка использует новый URL `bundle.js?retry=<n>` (канонический первый URL — без суффикса): браузер кеширует неуспешный ESM-load по URL, повторный `import()` того же URL не делает сетевого запроса (воспроизведено в ревью). **Граница retry-механизма:** суффикс bust'ит только корневой модуль — статически импортируемые `/api/shims/vN/*.js` при своём отказе остаются отравленными в module map независимо от суффикса (воспроизведено в ревью). Политика: SPA-retry покрывает отказ верхнего bundle; отказ зависимости (shim) детектируется по URL в ошибке импорта и предлагает **full-document reload** (новый module map) вместо бессмысленного повторного `import()`. Generation/отмена — ответственность потребителя (W3): у loader'а общий кеш, abort одного потребителя не должен ронять другого ждущего тот же URL. Тесты: retry bundle после 500 → новый сетевой запрос и успех; отказ shim → предлагается reload, повторный SPA-retry не выполняется; два concurrent-потребителя одного URL, отмена одного не мешает второму.
 4. **`ComponentMeta.publishedVersion`** — добавить в клиентский тип (сервер отдаёт).
-5. **Пины shim-backed зависимостей + ABI-гейт.** Exact-pin по **фактическому lockfile**: `zod` 4.4.3 (не `^4.3.6` из манифеста — иначе тихий downgrade), `react`/`react-dom` — точные версии из lock. Тест, превращающий ABI-drift shim'ов из console-warning в падение `npm run verify`; compat-прогон существующих fixture-бандлов (ABI v1–v3). Content-versioned shim ABI остаётся follow-up — при таком upgrade-gate это компенсировано.
+5. **Пины shim-backed зависимостей + ABI-гейт.** Exact-pin по **фактическому lockfile**: `zod` 4.4.3 (не `^4.3.6` из манифеста — иначе тихий downgrade), `react`/`react-dom` — точные версии из lock. Тест, превращающий ABI-drift shim'ов из console-warning в падение `npm run verify`. Compat-прогон исторических бандлов: в репозиторий коммитятся **зафиксированные скомпилированные байты** бандлов ABI v1–v3 (tracked test-фикстуры), и тест исполняет именно их против текущих shim'ов — не перекомпиляцию исходников текущим toolchain'ом (она маскировала бы дрейф). Content-versioned shim ABI остаётся follow-up — при таком upgrade-gate это компенсировано.
 
 Done-критерии: юнит-тесты 1–3, 5 зелёные; `npm run verify` зелёный; grep-инвариант: нет `__easyUiShared ??=` вне `ensureEasyUiShared`; e2e плеера/галереи не регрессят.
 
@@ -93,7 +93,7 @@ Done-критерии: юнит-тесты 1–3, 5 зелёные; `npm run ver
 
 Контракт ядра:
 - **`onCandidate(candidate, validation)`** — вызывается на каждый синтаксически разобранный коммит поля, включая невалидные по схеме: `validation = { ok: true } | { ok: false; fields: Record<string,string>; form?: string }`. Editor-адаптер диспатчит в документ только `ok`; showcase-адаптер всегда сохраняет candidate как draft и отдельно продвигает valid-снапшот (реализация D5). Текущее поведение «не вызывать `onCommit` при ошибке» остаётся особенностью editor-адаптера, не ядра;
-- `validate(candidate) => validation` — синхронный инжектируемый валидатор; **все исключения** валидатора/схемы (в т.ч. `$ZodAsyncError` от async refinement) перехватываются и конвертируются в form-level ошибку (D2b), не в падение;
+- `validate(candidate) => validation` — синхронный инжектируемый валидатор; **все исключения** валидатора/схемы (в т.ч. `$ZodAsyncError` от async refinement) перехватываются и конвертируются в form-level ошибку (D2b), не в падение. **Перехват покрывает и интроспекцию, не только валидацию candidate:** `describePropsSchema` сам вызывает `safeParse(undefined/null)` при извлечении дефолтов/контролов и бросает на async-схеме — описание полей, извлечение defaults и выбор контролов исполняются внутри того же защитного контура; при исключении интроспекции — form-level ошибка + JSON-fallback формы;
 - отображаемое значение поля — **не** `values[name] ?? defaultValue`: дефолт — hint (placeholder/подпись), у select/boolean — явное состояние «не задано»; явный `null` отличим от отсутствия ключа;
 - optional/nullable: unset для optional любых типов (включая boolean/string), выбор `null` для nullable; reset удаляет ключ;
 - `renderAssetField?`, `epoch?`, строки — инжект (редактор передаёт своё; витрина — нет/константы/`strings/propsForm.ts`).
@@ -103,7 +103,7 @@ Done-критерии: юнит-тесты 1–3, 5 зелёные; `npm run ver
 Done-критерии:
 - `npm run verify` зелёный; тесты propsForm/инспектора проходят (правки — только пути импортов);
 - grep-инварианты: в `src/propsForm/**` нет импортов из `src/editor/**`, `src/api/client`, `src/app/strings/editor`;
-- юнит-тесты ядра: два required из `{}` последовательно (черновик накапливается, `onCandidate` получает оба шага); defaulted string/number/enum/boolean → hint виден, raw candidate пуст; optional boolean/string unset vs пустая строка; nullable+default и явный `null`; root-ошибка strict-object → form-level; вложенный issue-path → поле; схема с async refinement → form-level ошибка без падения.
+- юнит-тесты ядра: два required из `{}` последовательно (черновик накапливается, `onCandidate` получает оба шага); defaulted string/number/enum/boolean → hint виден, raw candidate пуст; optional boolean/string unset vs пустая строка; nullable+default и явный `null`; root-ошибка strict-object → form-level; вложенный issue-path → поле; схема с async refinement на whole-object → form-level ошибка без падения; **field-схема `z.any().refine(async …)` → интроспекция не роняет форму** (JSON-fallback + form-level ошибка).
 
 ### W2. Docs-модель: рендер `propsJsonSchema`/событий/слотов (чистые компоненты)
 
@@ -124,7 +124,10 @@ Done-критерии: юнит-тесты — enum+default; optional+descriptio
 
 **Превью:** инлайн по образцу `LoadedComponentCapture` (`SurfaceSpacingScope` → theme-manager → `CaptureSurface`, single-element `toRuntimeSpec`); состояние `previewProps: none | valid` по D5. Error boundary: **key `(componentId, version)`** — валидные изменения props НЕ ремоунтят subtree (локальный state/фокус компонента живут при обычной смене props); при ошибке boundary сбрасывается сменой `validPropsGeneration` **только из error-состояния**. Тесты: фикстура с локальным счётчиком — обычная смена props сохраняет счётчик; schema-valid props, на которых компонент бросает → boundary → исправление контролами → subtree восстановлен.
 
-**Слоты:** preview-only Placeholder — in-memory custom-тип с именем, невозможным по серверной грамматике (`__preview_placeholder__`), инжектируется в runtime-набор страницы. Дети: **всегда один unslotted Placeholder в implicit default-слот** (default существует у любого компонента независимо от `definition.slots` — runtime создаёт его неявно) **плюс по одному ребёнку на каждый объявленный non-default слот** (через существующую slot-разметку spec).
+**Слоты:** preview-only Placeholder — in-memory custom-тип с именем, невозможным по серверной грамматике (`__preview_placeholder__`), инжектируется в runtime-набор страницы. Правила инжекции детей (форма runtime-объекта ≠ декларация поддержки детей: adapter всегда создаёт `slots.default` структурно, но json-render считает компонент child-принимающим только при непустом `definition.slots`):
+- `slots.length === 0` → детей не инжектировать вообще (бессотовые компоненты типа `rating-stars`);
+- непустые `slots` → один unslotted Placeholder в default;
+- Placeholder'ы в объявленные non-default слоты — **только при `capabilities.namedSlots`** (без него slot-разметка схлопывается в legacy default).
 
 **Контролы:** ядро W1 (`onCandidate`-адаптер витрины) от live zod-схемы; пресеты по D8; не-object схема → whole-object JSON fallback ядра.
 
@@ -138,7 +141,7 @@ Done-критерии:
 - `?v`-грамматика: дубль/`0`/`01`/не-число → «некорректный адрес»; несуществующая → «не найдена»;
 - смена версии: сброс контролов, вкладка сохранена, ни одного кадра с данными чужого ключа;
 - `<html>` не мутируется; computed-style header (цвета/отступы) неизменен при монтировании темы;
-- named-slots фикстура: implicit default + все объявленные слоты видимы как Placeholder;
+- named-slots фикстура (`capabilities.namedSlots`): default + все объявленные слоты видимы как Placeholder; бессотовая фикстура (`slots: []`): Placeholder не инжектируется;
 - `npm run verify` зелёный.
 
 ### W4. Интеграция в Library
@@ -158,17 +161,18 @@ Done-критерии: ссылка ведёт на страницу с корр
 - **props-driven** (`props-badge`: рендерит `props.label`/`props.tone` напрямую) — live-props тест; существующий `typed-events-stars` не годится (`useState(props.value)` фиксирует значение на mount);
 - **local-state** (счётчик в `useState` + отображение prop) — тест «смена props не ремоунтит» и recovery boundary;
 - `typed-events-stars` — ошибки валидации (min/max), docs событий;
-- **named slots** — переиспользовать существующую `server/fixtures/named-slots-panel.tsx` (`header`/`items` + implicit default), не создавать одноимённую новую;
+- **named slots** — переиспользовать существующую `server/fixtures/named-slots-panel.tsx` (`header`/`items` + default, `capabilities.namedSlots`), не создавать одноимённую новую;
+- **бессотовая child-sensitive** (`slots: []`, видимо реагирует на наличие детей) и **legacy-слотовая без `capabilities.namedSlots`** — приёмка правил инжекции Placeholder;
 - **required×2 без example/default** — приёмка D5;
 - фикстура в custom-DS без builtin provider — registry-only путь.
 
-E2E: прямое открытие `/library/c/<id>?v=`; live-props; сохранение локального state при смене props; ошибка поля не ломает превью; заполнение required×2 из «заполните обязательные props» до живого превью; Docs/Код (экранирование HTML); `?v`-переключение и грамматика; переход Gallery → страница SPA-навигацией без full reload (порядок ThemeStyle/loader — приёмка W0.1); rejected без запроса bundle.js; retry бандла = два сетевых запроса; слоты; keyboard-навигация вкладок.
+E2E: прямое открытие `/library/c/<id>?v=`; live-props; сохранение локального state при смене props; ошибка поля не ломает превью; заполнение required×2 из «заполните обязательные props» до живого превью; Docs/Код (экранирование HTML); `?v`-переключение и грамматика; rejected без запроса bundle.js; retry бандла = два сетевых запроса; отказ shim → предложение reload; слоты (все три фикстуры); keyboard-навигация вкладок. Переход Gallery → страница здесь не проверяется (маршрут пользователя появляется только с W4) — он в W5b.
 
 ### W5b. Library-интеграционный e2e и финальная приёмка (после W4)
 
 **Владение:** `e2e/**` (Library-интеграционный spec).
 
-E2E: Library → карточка custom-компонента → «Страница компонента» → корректная версия → Back браузером в Library. Финальная приёмка оркестратором: `npm run verify` + `npm run e2e` + runtime-прогон `.claude/skills/verify/SKILL.md` (Library → карточка → страница → контролы/доки/код; регресс инспектора редактора — все типы контролов, включая select/switch/asset; регресс плеера и галереи после W0).
+E2E: Library → карточка custom-компонента → «Страница компонента» → корректная версия → Back браузером в Library; Gallery → Library → страница компонента SPA-навигацией без full reload (порядок ThemeStyle/loader — приёмка W0.1). Финальная приёмка оркестратором: `npm run verify` + `npm run e2e` + runtime-прогон `.claude/skills/verify/SKILL.md` (Library → карточка → страница → контролы/доки/код; регресс инспектора редактора — все типы контролов, включая select/switch/asset; регресс плеера и галереи после W0).
 
 ## 4. Риски
 
@@ -225,3 +229,16 @@ E2E: Library → карточка custom-компонента → «Страни
 | 13 | `publishedVersion === null` ≠ «нет опубликованных» (deprecated/superseded-only) | **Принято** | D4: «нет active-версии», fallback на новейшую renderable, кейсы deprecated-only/superseded-only |
 | m1 | Обоснование B2-триажа v2 неверно (loader тянет shared динамически) | **Принято** | Триаж исправлен; юнит-тест W0.1 проверяет реальный порядок модулей; Gallery→page e2e — SPA-навигация без reload |
 | m2 | D1: default — loopback без auth, не BasicAuth | **Принято** | D1: precondition переформулирован («repository-equivalent код в single-user workspace либо authenticated deployment») |
+
+### Раунд 3 (resume того же треда) — 0 blocker / 5 major
+
+Блокирующих возражений нет; D5, D7, request-key, recovery boundary, version fallback, exact pins признаны закрытыми.
+
+| # | Находка | Вердикт | Реакция |
+|---|---|---|---|
+| 1 | `?retry=` не bust'ит транзитивные shim'ы — их failed module-map entry отравлен (воспроизведено) | **Принято** | W0.3: SPA-retry ограничен отказом верхнего bundle; отказ shim → предложение full-document reload; тест-сценарий shim-500 |
+| 2 | Стек theme-manager'а делает победителя зависимым от сети (Gallery регистрирует владельца после загрузки draft) | **Принято** | W0.2: регистрация владельца на mount со стабильным order-key, до загрузки content; `GalleryPreview.tsx` во владении W0; тесты противоположных порядков resolve |
+| 3 | `describePropsSchema` сам бросает `$ZodAsyncError` на интроспекции (до validate) | **Принято** | W1: защитный контур покрывает интроспекцию/defaults/выбор контролов; тест `z.any().refine(async …)` как field-схема |
+| 4 | «Default Placeholder всегда» неверно: `slots: []` = нет детей; non-default — только при `capabilities.namedSlots` | **Принято** | W3: правила инжекции по slots/capabilities; W5a: фикстуры no-slots child-sensitive и legacy без namedSlots |
+| 5 | W5a скрыто зависит от W4 (Gallery→page нужен UI-маршрут) | **Принято** | Сценарий Gallery→страница перенесён в W5b |
+| — | Compat v1–v3 должен исполнять зафиксированные скомпилированные байты, не перекомпиляцию | **Принято** | W0.5: tracked compiled-фикстуры бандлов в репозитории |
