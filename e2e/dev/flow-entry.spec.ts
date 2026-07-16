@@ -92,18 +92,6 @@ test("player hotkeys browse outside flowDepth, toggle zoom, show help, and resta
   await expect(page).toHaveURL(/\/p\/hello-world\/s\/welcome\?source=hotkeys$/);
   const chromeActions = page.getByTestId("chrome-actions");
   const back = chromeActions.getByRole("button", { name: "Назад" });
-  const input = page.getByLabel("Name");
-  const initialName = await input.inputValue();
-  await input.fill("Lin");
-
-  await input.press("ArrowRight");
-  await input.press("r");
-  await expect(page).toHaveURL(/\/p\/hello-world\/s\/welcome\?source=hotkeys$/);
-  await expect(input).toHaveValue(/r/);
-  await expect(input).not.toHaveValue(initialName);
-
-  await input.fill("Lin");
-  await input.blur();
   const fit = chromeActions.getByRole("button", { name: "Вписать" });
   const actual = chromeActions.getByRole("button", { name: "100%" });
   await expect(fit).toHaveAttribute("aria-pressed", "true");
@@ -122,7 +110,7 @@ test("player hotkeys browse outside flowDepth, toggle zoom, show help, and resta
   await expect(back).toBeDisabled();
   await page.keyboard.press("R");
   await expect(page).toHaveURL(/\/p\/hello-world\/s\/welcome\?source=hotkeys$/);
-  await expect(page.getByLabel("Name")).toHaveValue(initialName);
+  await expect(page.getByLabel("Превью прототипа на устройстве").getByRole("button", { name: "Details" })).toBeVisible();
 });
 
 test("presentation deep link shows the compact reset banner", async ({ page }) => {

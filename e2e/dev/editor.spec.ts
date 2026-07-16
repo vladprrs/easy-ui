@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import { STARTER_DS_ID, STARTER_STACK, STARTER_TEXT } from "../starter-ds.fixture";
 
 const api = "/api";
 const prototypeId = `editor-e2e-${Date.now()}`;
@@ -10,6 +11,7 @@ const doc = {
   version: 1,
   id: prototypeId,
   name: "Editor E2E prototype",
+  designSystem: STARTER_DS_ID,
   device: "desktop",
   startScreen: screenId,
   state: {},
@@ -21,8 +23,8 @@ const doc = {
       spec: {
         root: "content",
         elements: {
-          content: { type: "Stack", props: { direction: "vertical", gap: "md" }, children: ["copy"] },
-          copy: { type: "Text", props: { text: initialText } },
+          content: { type: STARTER_STACK, props: { gap: "md" }, children: ["copy"] },
+          copy: { type: STARTER_TEXT, props: { text: initialText } },
         },
       },
     },
@@ -33,7 +35,8 @@ const doc = {
       spec: {
         root: "hotspot-content",
         elements: {
-          "hotspot-content": { type: "Text", props: { text: "Canvas content under hotspot" }, children: ["hotspot"] },
+          "hotspot-content": { type: STARTER_STACK, props: { gap: "md" }, children: ["canvas-copy", "hotspot"] },
+          "canvas-copy": { type: STARTER_TEXT, props: { text: "Canvas content under hotspot" } },
           hotspot: { type: "Hotspot", props: { x: 16, y: 16, width: 220, height: 80, ariaLabel: "E2E hotspot" } },
         },
       },

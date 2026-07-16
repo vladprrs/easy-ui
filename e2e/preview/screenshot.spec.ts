@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { STARTER_DS_ID, STARTER_STACK, STARTER_TEXT } from "../starter-ds.fixture";
 
 // Preview project only (SERVE_DIST + installed chromium). Drives the real async
 // job pipeline end to end: enqueue -> poll -> done, with the PNG stored in the
@@ -37,7 +38,7 @@ test("captures a prototype screen and stores the PNG as an asset", async ({ requ
   expect(image.headers()["content-type"]).toContain("image/png");
 });
 
-test("geometry probe measures shadcn Stack md gap in CSS pixels without creating an image", async ({ request }) => {
+test("geometry probe measures custom-tree and host Image rectangles without creating an image", async ({ request }) => {
   const source = await request.get("/api/prototypes/hello-world/draft");
   expect(source.status()).toBe(200);
   const draft = await source.json();
@@ -53,9 +54,9 @@ test("geometry probe measures shadcn Stack md gap in CSS pixels without creating
       spec: {
         root: "stack",
         elements: {
-          stack: { type:"Stack", props:{direction:"vertical",gap:"md"}, children:["one","two"] },
-          one: { type:"Text", props:{text:"One"} },
-          two: { type:"Text", props:{text:"Two"} },
+          stack: { type:STARTER_STACK, props:{gap:"md"}, children:["one","image"] },
+          one: { type:STARTER_TEXT, props:{text:"One"} },
+          image: { type:"Image", props:{src:"/design/cjm-ui/assets/mascot-laptop.png",alt:"Geometry image",width:180,height:120} },
         },
       },
     }],
@@ -69,21 +70,21 @@ test("geometry probe measures shadcn Stack md gap in CSS pixels without creating
   const {jobId}=await post.json() as {jobId:string};
   const job=await pollJob(request,jobId);
   expect(job.status, `job error: ${job.error?.message ?? ""}`).toBe("done");
-  type GeometryRect = {key:string;x:number;y:number;width:number;height:number;layoutContext:{display:string;flexDirection:string;flexWrap:string;rowGap:string}|null};
+  type GeometryRect = {key:string;x:number;y:number;width:number;height:number;layoutContext:{display:string}|null};
   type GeometryResult = {kind:string;resolvedRev:number;dpr:number;viewport:{width:number;height:number};truncated:boolean;imageUrl?:string;rects:GeometryRect[]};
   const result=job.result as GeometryResult;
   expect(result).toMatchObject({kind:"geometry",resolvedRev:1,dpr:2,viewport:{width:390,height:844},truncated:false});
   expect(result.imageUrl).toBeUndefined();
   const stack=result.rects.find((rect)=>rect.key==="stack")!;
-  const one=result.rects.find((rect)=>rect.key==="one")!;
-  const two=result.rects.find((rect)=>rect.key==="two")!;
-  expect(stack.layoutContext).toMatchObject({display:"flex",flexDirection:"column",flexWrap:"nowrap",rowGap:"12px"});
-  expect(two.y-(one.y+one.height)).toBeCloseTo(12,2);
+  const image=result.rects.find((rect)=>rect.key==="image")!;
+  expect(stack.width).toBeGreaterThanOrEqual(image.width);
+  expect(image.width).toBeCloseTo(180, 0);
+  expect(image.height).toBeCloseTo(120, 0);
 });
 
-test("geometry probe covers repeat instances, Grid, wrap, Overlay and external portal markers", async ({ request }) => {
+test("geometry probe covers repeat instances, named slots, and Overlay extraction", async ({ request }) => {
   const slotSource=`import {z} from "zod";import type {EasyUIComponentProps} from "easy-ui/runtime";export const definition={props:z.strictObject({}),events:[],capabilities:{namedSlots:true} as const,slots:["header","items"],description:"geometry slots",example:{}};export default function GeometrySlotsPanel({slots}:EasyUIComponentProps<Record<string,never>>){return <section><header>{slots.header}</header><main>{slots.items}</main></section>}`;
-  const component=await request.post("/api/components",{data:{id:"geometry-slots-e2e",name:"GeometrySlotsPanel",source:slotSource}});
+  const component=await request.post("/api/components",{data:{id:"geometry-slots-e2e",name:"GeometrySlotsPanel",source:slotSource,designSystem:STARTER_DS_ID}});
   expect(component.status(),await component.text()).toBe(201);
   const published=await request.post("/api/components/geometry-slots-e2e/publish",{data:{baseRev:1}});
   expect(published.status(),await published.text()).toBe(201);
@@ -91,23 +92,17 @@ test("geometry probe covers repeat instances, Grid, wrap, Overlay and external p
   const doc = {
     ...base.doc,
     id:"geometry-matrix-e2e", name:"Geometry matrix e2e", device:"mobile", startScreen:"matrix",
-    state:{items:[{id:"a"},{id:"b"}],dialogOpen:true},
+    state:{items:[{id:"a"},{id:"b"}]},
     screens:[{id:"matrix",name:"Matrix",spec:{root:"root",elements:{
-      root:{type:"Stack",props:{direction:"vertical",gap:"md"},children:["grid","wrap","repeat","slots","dialog","overlay"]},
-      grid:{type:"Grid",props:{columns:2,gap:"sm"},children:["grid-a","grid-b"]},
-      "grid-a":{type:"Text",props:{text:"A"}}, "grid-b":{type:"Text",props:{text:"B"}},
-      wrap:{type:"Stack",props:{direction:"horizontal",gap:"md"},children:["wrap-a","wrap-b"]},
-      "wrap-a":{type:"Text",props:{text:"A"}}, "wrap-b":{type:"Text",props:{text:"B"}},
-      repeat:{type:"Stack",props:{direction:"vertical",gap:"sm"},repeat:{statePath:"/items",key:"id"},children:["row"]},
-      row:{type:"Stack",props:{direction:"vertical",gap:"none"},children:["row-child"]},
-      "row-child":{type:"Text",props:{text:"row"}},
+      root:{type:STARTER_STACK,props:{gap:"md"},children:["repeat","slots","overlay"]},
+      repeat:{type:STARTER_STACK,props:{gap:"sm"},repeat:{statePath:"/items",key:"id"},children:["row"]},
+      row:{type:STARTER_STACK,props:{gap:"none"},children:["row-child"]},
+      "row-child":{type:STARTER_TEXT,props:{text:"row"}},
       slots:{type:"GeometrySlotsPanel",props:{},children:["slot-header","slot-item"]},
-      "slot-header":{type:"Text",props:{text:"Header"},slot:"header"},
-      "slot-item":{type:"Text",props:{text:"Item"},slot:"items"},
-      dialog:{type:"Dialog",props:{title:"Portal",description:null,openPath:"/dialogOpen"},children:["dialog-child"]},
-      "dialog-child":{type:"Text",props:{text:"Portalled"}},
+      "slot-header":{type:STARTER_TEXT,props:{text:"Header"},slot:"header"},
+      "slot-item":{type:STARTER_TEXT,props:{text:"Item"},slot:"items"},
       overlay:{type:"Overlay",props:{placement:"bottom",inset:"md",scrim:false},children:["overlay-child"]},
-      "overlay-child":{type:"Text",props:{text:"Overlay"}},
+      "overlay-child":{type:STARTER_TEXT,props:{text:"Overlay"}},
     }}}],
   };
   const created=await request.post("/api/prototypes",{data:{doc}});
@@ -117,15 +112,12 @@ test("geometry probe covers repeat instances, Grid, wrap, Overlay and external p
   const job=await pollJob(request,(await queued.json()).jobId);
   expect(job.status,`job error: ${job.error?.message ?? ""}`).toBe("done");
   const result=job.result as {rects:Array<{key:string;instance:number;parentKey?:string;parentInstance?:number;layoutContext:{display:string;flexWrap:string}|null}>};
-  expect(result.rects.find((rect)=>rect.key==="grid")?.layoutContext?.display).toBe("grid");
-  expect(result.rects.find((rect)=>rect.key==="wrap")?.layoutContext?.flexWrap).toBe("wrap");
   const repeated=result.rects.filter((rect)=>rect.key==="row");
   expect(repeated.map((rect)=>rect.instance)).toEqual([0,1]);
   expect(result.rects.filter((rect)=>rect.key==="row-child").map((rect)=>rect.parentInstance)).toEqual([0,1]);
   expect(result.rects.find((rect)=>rect.key==="slot-header")?.parentKey).toBe("slots");
   expect(result.rects.find((rect)=>rect.key==="slot-item")?.parentKey).toBe("slots");
   expect(result.rects.some((rect)=>rect.key==="overlay-child")).toBe(true);
-  expect(result.rects.some((rect)=>rect.key==="dialog-child")).toBe(true);
 });
 
 test("rejects out-of-bounds viewports with 422", async ({ request }) => {

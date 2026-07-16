@@ -1,10 +1,11 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { authenticatedRequest, E2E_MEMBER_NAME, E2E_MEMBER_PASSWORD } from "../auth";
+import { STARTER_DS_ID, STARTER_TEXT } from "../starter-ds.fixture";
 
 function doc(id: string, name: string) {
   return {
-    version: 1, id, name, designSystem: "shadcn", device: "mobile", startScreen: "main", state: {},
-    screens: [{ id: "main", name: "Main", spec: { root: "copy", elements: { copy: { type: "Text", props: { text: name } } } } }],
+    version: 1, id, name, designSystem: STARTER_DS_ID, device: "mobile", startScreen: "main", state: {},
+    screens: [{ id: "main", name: "Main", spec: { root: "copy", elements: { copy: { type: STARTER_TEXT, props: { text: name } } } } }],
   };
 }
 

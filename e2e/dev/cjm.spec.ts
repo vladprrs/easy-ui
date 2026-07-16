@@ -73,7 +73,7 @@ test("settings CJM connects measured tile centers and labels authored transition
 
   const metadata = page.getByLabel("Метаданные CJM");
   await expect(metadata.getByText("3 экрана", { exact: true })).toBeVisible();
-  await expect(metadata.getByText("Shadcn", { exact: true })).toBeVisible();
+  await expect(metadata.getByText("e2e-starter", { exact: true })).toBeVisible();
   await expect(page.getByText("→ О приложении", { exact: true })).toBeVisible();
   await expect(page.getByText("→ Конфиденциальность", { exact: true })).toBeVisible();
 

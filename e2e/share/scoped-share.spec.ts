@@ -79,18 +79,18 @@ test("scoped share exchanges token, renders all resources, denies foreign scope,
   await expect(page).toHaveTitle(`${SHARE_PROTOTYPE_NAME} v${version} · Просмотр — easy-ui`);
   await expect(page.getByRole("link", { name: "Открыть в easy-ui" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Галерея" })).toHaveCount(0);
+  await page.waitForLoadState("networkidle");
+  failedResources.length = 0;
 
   const cookies = await shareContext.cookies(baseURL!);
   const cookie = cookies.find((item) => item.name === "easy_ui_share");
   expect(cookie).toMatchObject({ domain: "127.0.0.1", path: "/", httpOnly: true, secure: false, sameSite: "Lax" });
 
   // Interactive presentation and its renderer resources all load through the cookie scope.
-  const input = page.getByLabel("Name");
-  await expect(input).toHaveValue("Ada");
-  await input.fill("Lin");
+  await expect(page.getByText("Hello, Ada!")).toBeVisible();
   await page.getByRole("button", { name: "Details" }).click();
   await expect(page).toHaveURL(new RegExp(`/share/p/${SHARE_PROTOTYPE_ID}/v/${version}/present/s/details$`));
-  await expect(page.getByText("Share fixture second screen.")).toBeVisible();
+  await expect(page.getByText("This is the second screen.")).toBeVisible();
   expect(failedResources).toEqual([]);
 
   // BrowserContext.request shares the browser cookie jar, but gets no BasicAuth credentials.

@@ -5,6 +5,7 @@ import { useApi } from "../api/hooks";
 import { chip, chipActive, headingPage, inputBase, pillGhost, pillPrimary, plate } from "../app/chrome";
 import { common } from "../app/strings/common";
 import { deviceNames, gallery, versionLink } from "../app/strings/gallery";
+import { loader } from "../app/strings/player";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { useAuth } from "../auth";
 import { prototypeStatusBadge } from "../library/statusBadge";
@@ -220,7 +221,9 @@ export function GalleryPage() {
           >{prototype.name}</Link>
         </h2>
         <p className="mt-2 min-h-10 break-words text-sm text-eui-slate-500 [overflow-wrap:anywhere]">{prototype.description ?? gallery.noDescription}</p>
-        {previewsEnabled && prototype.status !== "archived" ? <GalleryPreview prototypeId={prototype.id} /> : null}
+        {prototype.status === "archived"
+          ? <section className="mt-5 rounded-2xl bg-eui-lilac-100 p-5 text-center" data-prototype-archived="true" role="status"><h3 className="font-eui-display text-lg font-bold">{loader.archivedTitle}</h3><p className="mt-2 text-sm text-eui-slate-500">{loader.archivedBody}</p></section>
+          : previewsEnabled ? <GalleryPreview prototypeId={prototype.id} /> : null}
         <dl className="mt-5 grid min-w-0 grid-cols-2 gap-3 text-sm xl:grid-cols-4">
           <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.deviceLabel}</dt><dd className="inline-flex rounded-full bg-white px-2.5 py-1 text-xs font-medium">{deviceNames[prototype.device]}</dd></div>
           <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.screensLabel}</dt><dd className="inline-flex rounded-full bg-white px-2.5 py-1 text-xs font-medium">{prototype.screenCount}</dd></div>

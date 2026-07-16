@@ -43,7 +43,7 @@ async function ensureFixtures(request: APIRequestContext, options: { api: string
 }
 
 async function openFixtureCard(page: Page) {
-  await page.locator('[aria-label="Дизайн-системы"]').getByRole("button", { name: "Shadcn", exact: true }).click();
+  await page.locator('[aria-label="Дизайн-системы"]').getByRole("button", { name: "E2E Starter", exact: true }).click();
   await page.getByRole("navigation", { name: "Компоненты" }).getByRole("button", { name: COMPONENT_NAME, exact: true }).click();
   const link = page.getByRole("link", { name: "Страница компонента" });
   await expect(link).toHaveAttribute("href", `/library/c/${COMPONENT_PAGE_IDS.propsBadge}?v=${COMPONENT_VERSION}`);

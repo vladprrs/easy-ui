@@ -16,15 +16,14 @@ test("checkout keeps session state, then restart invalidates stale history", asy
   await expect(page.getByText("Итого: 7 990 ₽ · товаров: 1")).toBeVisible();
 
   await page.getByRole("button", { name: "Оформить" }).click();
-  const name = page.getByRole("textbox", { name: "Имя" });
-  await name.fill("Анна");
   await page.getByRole("button", { name: "Назад" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/cart$/);
   await page.getByRole("button", { name: "Оформить" }).click();
-  await expect(name).toHaveValue("Анна");
+  await expect(page).toHaveURL(/\/p\/checkout\/s\/checkout-form$/);
 
   await page.getByRole("button", { name: "Оплатить" }).click();
-  await expect(page.getByText("Заказ оплачен")).toBeVisible();
+  await expect(page).toHaveURL(/\/p\/checkout\/s\/success$/);
+  await expect(page.getByRole("button", { name: "Начать заново" })).toBeVisible();
   await page.getByRole("button", { name: "Начать заново" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/catalog$/);
 

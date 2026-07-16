@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { STARTER_DS_ID, STARTER_TEXT } from "../starter-ds.fixture";
 
 const api = "/api";
 
@@ -72,12 +73,12 @@ test("seeded composition-demo renders a repeat from state and navigates between 
 
   await preview.getByRole("button", { name: "Finish" }).click();
   await expect(page).toHaveURL(/\/p\/composition-demo\/s\/done$/);
-  await expect(preview.getByText("All set")).toBeVisible();
+  await expect(preview.getByRole("button", { name: "Start over" })).toBeVisible();
 });
 
 test("typed event payload drives setState via $event, $if gates an action, slots route children, and the inspector logs the payload", async ({ request, page }) => {
   expect((await request.post(`${api}/components`, {
-    data: { id: "combo-panel", name: "ComboPanel", source: comboSource },
+    data: { id: "combo-panel", name: "ComboPanel", source: comboSource, designSystem: STARTER_DS_ID },
   })).status()).toBe(201);
   expect((await request.post(`${api}/components/combo-panel/publish`, { data: { baseRev: 1 } })).status()).toBe(201);
 
@@ -85,6 +86,7 @@ test("typed event payload drives setState via $event, $if gates an action, slots
     version: 1,
     id: "typed-events-flow",
     name: "Typed events flow",
+    designSystem: STARTER_DS_ID,
     device: "mobile",
     startScreen: "plans",
     state: { picked: "", hasAmount: false },
@@ -100,9 +102,9 @@ test("typed event payload drives setState via $event, $if gates an action, slots
             ] },
             children: ["hdr", "picked", "amount"],
           },
-          hdr: { type: "Text", slot: "header", props: { text: "Choose a plan" } },
-          picked: { type: "Text", slot: "body", props: { text: { $template: "Picked: ${/picked}" } } },
-          amount: { type: "Text", slot: "body", props: { text: "Amount applied" }, visible: { $state: "/hasAmount" } },
+          hdr: { type: STARTER_TEXT, slot: "header", props: { text: "Choose a plan" } },
+          picked: { type: STARTER_TEXT, slot: "body", props: { text: { $template: "Picked: ${/picked}" } } },
+          amount: { type: STARTER_TEXT, slot: "body", props: { text: "Amount applied" }, visible: { $state: "/hasAmount" } },
         } },
       },
     ],

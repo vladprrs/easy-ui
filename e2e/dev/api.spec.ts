@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
+import { STARTER_DS_ID, starterPrototypeFromFile } from "../starter-ds.fixture";
 
 const api = "/api";
 
@@ -7,38 +8,41 @@ test("API revisions, publishing, component bundles, and shim ABI work end to end
   const seeded = await request.get(`${api}/prototypes`);
   expect(seeded.ok()).toBeTruthy();
   expect((await seeded.json()).map((item: { id: string }) => item.id)).toEqual(
-    expect.arrayContaining(["checkout", "hello-world", "settings", "scale-demo", "composition-demo", "wireframe-demo"]),
+    expect.arrayContaining(["checkout", "hello-world", "settings", "scale-demo", "composition-demo", "e2e-starter-prototype"]),
   );
 
-  const draft = await (await request.get(`${api}/prototypes/hello-world/draft`)).json();
-  const saved = await request.put(`${api}/prototypes/hello-world`, {
+  const apiPrototypeId = "api-revision-flow";
+  const apiDoc = await starterPrototypeFromFile("test/fixtures/hello-world.json", { id: apiPrototypeId, name: "API revision flow" });
+  expect((await request.post(`${api}/prototypes`, { data: { doc: apiDoc } })).status()).toBe(201);
+  const draft = await (await request.get(`${api}/prototypes/${apiPrototypeId}/draft`)).json();
+  const saved = await request.put(`${api}/prototypes/${apiPrototypeId}`, {
     data: { doc: { ...draft.doc, name: "Hello API" }, baseRev: draft.rev },
   });
   expect(saved.ok()).toBeTruthy();
   expect(await saved.json()).toMatchObject({ rev: draft.rev + 1, warnings: expect.any(Array) });
 
-  const conflict = await request.put(`${api}/prototypes/hello-world`, {
+  const conflict = await request.put(`${api}/prototypes/${apiPrototypeId}`, {
     data: { doc: { ...draft.doc, name: "Stale" }, baseRev: draft.rev },
   });
   expect(conflict.status()).toBe(409);
   expect(await conflict.json()).toMatchObject({ error: { code: "revision_conflict", currentRev: draft.rev + 1 } });
 
-  const invalid = await request.put(`${api}/prototypes/hello-world`, {
+  const invalid = await request.put(`${api}/prototypes/${apiPrototypeId}`, {
     data: { doc: { ...draft.doc, id: "wrong-id" }, baseRev: draft.rev + 1 },
   });
   expect(invalid.status()).toBe(422);
   expect(await invalid.json()).toMatchObject({ error: { code: "validation_failed", issues: expect.any(Array) } });
 
-  const published = await request.post(`${api}/prototypes/hello-world/publish`, { data: { baseRev: draft.rev + 1 } });
+  const published = await request.post(`${api}/prototypes/${apiPrototypeId}/publish`, { data: { baseRev: draft.rev + 1 } });
   expect(published.status()).toBe(201);
   expect(await published.json()).toMatchObject({ version: 1, rev: draft.rev + 1 });
-  expect(await (await request.get(`${api}/prototypes/hello-world/versions`)).json()).toEqual([
+  expect(await (await request.get(`${api}/prototypes/${apiPrototypeId}/versions`)).json()).toEqual([
     expect.objectContaining({ version: 1, rev: draft.rev + 1 }),
   ]);
 
   const source = await readFile("server/fixtures/rating-stars.tsx", "utf8");
   const created = await request.post(`${api}/components`, {
-    data: { id: "api-rating-stars", name: "ApiRatingStars", source },
+    data: { id: "api-rating-stars", name: "ApiRatingStars", source, designSystem: STARTER_DS_ID },
   });
   expect(created.status()).toBe(201);
   const componentPublish = await request.post(`${api}/components/api-rating-stars/publish`, { data: { baseRev: 1 } });
@@ -57,6 +61,7 @@ test("API revisions, publishing, component bundles, and shim ABI work end to end
     version: 1,
     id: "shim-abi-flow",
     name: "Shim ABI flow",
+    designSystem: STARTER_DS_ID,
     device: "mobile",
     startScreen: "rating",
     state: {},

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { APIRequestContext } from "@playwright/test";
+import { STARTER_DS_ID } from "../starter-ds.fixture";
 
 /**
  * W0-8 custom design system fixture, shared by e2e waves (W1/W2/W5).
@@ -129,7 +130,7 @@ async function publishFixture(request: APIRequestContext, api: string, seed: Com
   if (await componentExists(request, api, seed.id)) return;
   const source = await readFile(`server/fixtures/${seed.fixture}`, "utf8");
   const created = await request.post(`${api}/components`, {
-    data: { id: seed.id, name: seed.name, source, ...(seed.designSystem ? { designSystem: seed.designSystem } : {}) },
+    data: { id: seed.id, name: seed.name, source, designSystem: seed.designSystem ?? STARTER_DS_ID },
   });
   await expectStatus(`create component ${seed.id}`, created.status(), [201]);
   const published = await request.post(`${api}/components/${seed.id}/publish`, { data: { baseRev: 1 } });
@@ -143,7 +144,7 @@ export async function ensureComponentPageFixtures(request: APIRequestContext, ap
   if (!(await componentExists(request, api, COMPONENT_PAGE_IDS.propsBadge))) {
     const firstSource = await readFile("server/fixtures/props-badge.tsx", "utf8");
     await expectStatus("create props badge", (await request.post(`${api}/components`, {
-      data: { id: COMPONENT_PAGE_IDS.propsBadge, name: "E2ePropsBadge", source: firstSource },
+      data: { id: COMPONENT_PAGE_IDS.propsBadge, name: "E2ePropsBadge", source: firstSource, designSystem: STARTER_DS_ID },
     })).status(), [201]);
     await expectStatus("publish props badge v1", (await request.post(`${api}/components/${COMPONENT_PAGE_IDS.propsBadge}/publish`, {
       data: { baseRev: 1 },

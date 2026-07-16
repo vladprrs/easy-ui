@@ -20,7 +20,7 @@ test.describe("new prototype onboarding", () => {
     await page.getByRole("button", { name: "Новый прототип" }).first().click();
     const dialog = page.getByRole("dialog", { name: "Создание прототипа" });
     await dialog.getByLabel("Название прототипа").fill(`Onboarding E2E ${Date.now()}`);
-    await dialog.getByLabel("Дизайн-система").selectOption("wireframe");
+    await dialog.getByLabel("Дизайн-система").selectOption("e2e-starter");
     const responsePromise = page.waitForResponse((response) => response.url().endsWith("/api/prototypes") && response.request().method() === "POST");
     await dialog.getByRole("button", { name: "Создать прототип" }).click();
     const response = await responsePromise;
@@ -29,6 +29,7 @@ test.describe("new prototype onboarding", () => {
     await expect(page).toHaveURL(new RegExp(`/p/${createdId}/edit$`));
     const canvas = page.getByRole("region", { name: "Холст редактора" });
     await expect(canvas).toBeVisible();
-    await expect(canvas.getByText("Набросайте структуру будущего сценария.", { exact: true })).toBeVisible();
+    await expect(canvas.getByRole("img", { name: /Onboarding E2E/ })).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Начать сначала" })).toBeVisible();
   });
 });

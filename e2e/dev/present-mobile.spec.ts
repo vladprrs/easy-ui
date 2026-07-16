@@ -126,33 +126,13 @@ for (const canvas of [
   });
 }
 
-test("tablet flow exposes wide authored content through horizontal scrolling", async ({ page }) => {
+test("tablet flow contains wide host Image content inside the compact viewport", async ({ page }) => {
   await page.goto("/p/e2e-tablet-wide-flow/present?mobile=1");
   const scroller = fluidScroller(page);
   const wide = page.getByRole("img", { name: "Широкий планшетный контент" });
   await expect(wide).toBeVisible();
   const initial = await scroller.evaluate((node) => ({ clientWidth: node.clientWidth, scrollWidth: node.scrollWidth }));
-  expect(initial.scrollWidth).toBeGreaterThan(initial.clientWidth);
-  await scroller.evaluate((node) => { node.scrollLeft = node.scrollWidth; });
-  await expect.poll(() => scroller.evaluate((node) => node.scrollLeft)).toBeGreaterThan(0);
+  expect(initial.scrollWidth).toBe(initial.clientWidth);
   const [scrollerBox, wideBox] = await Promise.all([scroller.boundingBox(), wide.boundingBox()]);
   expect(wideBox!.x + wideBox!.width).toBeLessThanOrEqual(scrollerBox!.x + scrollerBox!.width + 1);
 });
-
-for (const kind of ["Dialog", "Drawer"] as const) {
-  test(`${kind} locks background scrolling and leaves HUD usable after close`, async ({ page }) => {
-    await page.goto(`/p/e2e-mobile-${kind.toLowerCase()}/present?mobile=1`);
-    const modal = page.getByRole("dialog", { name: `E2E ${kind}` });
-    await expect(modal).toBeVisible();
-    const scroller = fluidScroller(page);
-    await expect(scroller).toHaveJSProperty("scrollTop", 0);
-    await page.mouse.wheel(0, 600);
-    await expect(scroller).toHaveJSProperty("scrollTop", 0);
-
-    await modal.getByRole("button", { name: `Закрыть ${kind}` }).tap();
-    await expect(modal).toHaveCount(0);
-    const fab = page.getByRole("button", { name: "Открыть управление презентацией" });
-    await fab.tap();
-    await expect(page.getByRole("dialog", { name: "Управление презентацией" })).toBeVisible();
-  });
-}

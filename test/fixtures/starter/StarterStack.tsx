@@ -7,7 +7,7 @@ export const definition = {
   description: "Starter vertical stack",
   atomicLevel: "molecule" as const,
   slots: ["default"],
-  layout: { version: 1 as const, spacing: ["gap"] as const, flow: { kind: "flex" as const, direction: "vertical" as const } },
+  layout: { version: 1 as const, spacing: ["gap"] as Array<"gap" | "padding" | "paddingX" | "paddingY">, flow: { kind: "flex" as const, direction: "vertical" as const } },
   example: { gap: "md" },
 };
 

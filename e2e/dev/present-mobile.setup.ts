@@ -1,4 +1,5 @@
 import { expect, type APIRequestContext } from "@playwright/test";
+import { STARTER_STACK, STARTER_TEXT, starterizePrototype } from "../starter-ds.fixture";
 
 const DEV_API = "/api";
 
@@ -15,10 +16,10 @@ const flowOverlayDoc = {
     spec: {
       root: "root",
       elements: {
-        root: { type: "Stack", props: { direction: "vertical", gap: "md" }, children: ["long-content", "overlay"] },
+        root: { type: STARTER_STACK, props: { gap: "md" }, children: ["long-content", "overlay"] },
         "long-content": { type: "Image", props: { src: "/e2e-missing-placeholder.svg", alt: "Длинный flow-контент", width: 360, height: 1400 } },
         overlay: { type: "Overlay", props: { placement: "bottom", inset: "md", scrim: false }, children: ["overlay-copy"] },
-        "overlay-copy": { type: "Badge", props: { text: "Flow Overlay", variant: "secondary" } },
+        "overlay-copy": { type: STARTER_TEXT, props: { text: "Flow Overlay" } },
       },
     },
   }],
@@ -39,10 +40,10 @@ const canvasDoc = {
     spec: {
       root: "root",
       elements: {
-        root: { type: "Stack", props: { direction: "vertical", gap: "md" }, children: ["heading", "overlay"] },
-        heading: { type: "Heading", props: { text: screen.name, level: "h1" } },
+        root: { type: STARTER_STACK, props: { gap: "md" }, children: ["heading", "overlay"] },
+        heading: { type: STARTER_TEXT, props: { text: screen.name } },
         overlay: { type: "Overlay", props: { placement: "bottom-right", inset: "md", scrim: false }, children: ["overlay-copy"] },
-        "overlay-copy": { type: "Badge", props: { text: `Canvas Overlay ${screen.id}`, variant: "secondary" } },
+        "overlay-copy": { type: STARTER_TEXT, props: { text: `Canvas Overlay ${screen.id}` } },
       },
     },
   })),
@@ -61,49 +62,20 @@ const tabletWideDoc = {
     spec: {
       root: "root",
       elements: {
-        root: { type: "Stack", props: { direction: "vertical", gap: "md" }, children: ["wide-content"] },
+        root: { type: STARTER_STACK, props: { gap: "md" }, children: ["wide-content"] },
         "wide-content": { type: "Image", props: { src: "/e2e-missing-placeholder.svg", alt: "Широкий планшетный контент", width: 900, height: 240 } },
       },
     },
   }],
 } as const;
 
-function modalDoc(kind: "Dialog" | "Drawer") {
-  const stateKey = `${kind.toLowerCase()}Open`;
-  return {
-    version: 1,
-    id: `e2e-mobile-${kind.toLowerCase()}`,
-    name: `E2E mobile ${kind}`,
-    device: "mobile",
-    startScreen: "modal",
-    state: { [stateKey]: true },
-    screens: [{
-      id: "modal",
-      name: `${kind} open`,
-      spec: {
-        root: "root",
-        elements: {
-          root: { type: "Stack", props: { direction: "vertical", gap: "md" }, children: ["long-content", "modal"] },
-          "long-content": { type: "Image", props: { src: "/e2e-missing-placeholder.svg", alt: `Фон под ${kind}`, width: 360, height: 1400 } },
-          modal: { type: kind, props: { title: `E2E ${kind}`, description: `Открытый ${kind}`, openPath: `/${stateKey}` }, children: ["close"] },
-          close: {
-            type: "Button",
-            props: { label: `Закрыть ${kind}`, variant: "secondary" },
-            on: { press: { action: "setState", params: { statePath: `/${stateKey}`, value: false } } },
-          },
-        },
-      },
-    }],
-  } as const;
-}
-
 async function createFixture(request: APIRequestContext, doc: object): Promise<void> {
-  const response = await request.post(`${DEV_API}/prototypes`, { data: { doc } });
+  const response = await request.post(`${DEV_API}/prototypes`, { data: { doc: starterizePrototype(doc as Record<string, unknown>) } });
   expect(response.status(), await response.text()).toBe(201);
 }
 
 export async function provisionMobilePresentationFixtures(request: APIRequestContext) {
-  for (const doc of [flowOverlayDoc, canvasDoc, tabletWideDoc, modalDoc("Dialog"), modalDoc("Drawer")]) {
+  for (const doc of [flowOverlayDoc, canvasDoc, tabletWideDoc]) {
     await createFixture(request, doc);
   }
 }
