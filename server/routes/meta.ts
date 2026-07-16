@@ -3,10 +3,13 @@ import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { prototypeActionSchemas } from "../../src/catalog/actions";
 import { atomicLevels } from "../../src/designSystems/types";
+import { layoutSpacingProps, spaceTokens } from "../../src/designSystems/types";
+import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
 import { prototypeDocSchema, ASSET_ID_PATTERN } from "../../src/prototype/schema";
 import { ELEMENTS_PER_SCREEN_LIMIT, REPEAT_ELEMENT_LIMIT, REPEAT_RENDER_COST_BUDGET, TREE_DEPTH_LIMIT } from "../../src/prototype/validate";
 import { MAX_ASSET_BYTES } from "../assets/validate";
 import { listRegisteredDesignSystems } from "../designSystems";
+import { getLatestDesignSystemContent } from "../designSystems";
 import { ApiError, json, MAX_JSON_BODY_BYTES, noStore } from "../http";
 import { MAX_QUEUE } from "../screenshot/service";
 
@@ -26,9 +29,11 @@ export const CAPABILITY_PARAM_SOURCES = ["$event", "$elementId", "$itemIndex", "
 export const CAPABILITY_CONDITIONS = ["$and", "$or", "$state", "$item", "$index", "eq", "neq", "gt", "gte", "lt", "lte", "not"] as const;
 
 export function capabilities(db: Database): JsonObject {
+  const systems = listRegisteredDesignSystems(db);
   return {
     apiVersion: 1,
     documentVersion: 1,
+    layoutContractVersion: 1,
     actions: Object.keys(prototypeActionSchemas),
     directives: [...CAPABILITY_DIRECTIVES],
     paramSources: [...CAPABILITY_PARAM_SOURCES],
@@ -43,7 +48,11 @@ export function capabilities(db: Database): JsonObject {
       repeatPerScreen: REPEAT_ELEMENT_LIMIT,
       screenshotQueue: MAX_QUEUE,
     },
-    designSystems: listRegisteredDesignSystems(db).map((system) => system.id),
+    designSystems: systems.map((system) => system.id),
+    resolvedSpaceScales: Object.fromEntries(systems.map((system) => {
+      const theme = getLatestDesignSystemContent(db, system.id);
+      return [system.id, resolveSpacingScale(system.id, theme.tokens)];
+    })),
     features: {
       renderStatus: true,
       screenshots: true,
@@ -53,6 +62,7 @@ export function capabilities(db: Database): JsonObject {
       repeat: true,
       namedSlots: true,
       themeVersions: true,
+      layoutContract: true,
     },
   };
 }
@@ -126,6 +136,20 @@ export function buildPrototypeDocumentSchema(): JsonObject {
 // typed-event schemas are zod values in TSX source; on publish they are serialized to
 // JSON Schema (propsJsonSchema / eventPayloads in the definition metadata).
 export function buildComponentDefinitionSchema(): JsonObject {
+  const jsonScalar = { type: ["string", "number", "boolean", "null"] };
+  const layoutDirection = {
+    anyOf: [
+      { enum: ["vertical", "horizontal"] },
+      {
+        type: "object", additionalProperties: false, required: ["prop", "vertical", "horizontal"],
+        properties: {
+          prop: { type: "string" }, vertical: { type: "array", minItems: 1, items: jsonScalar },
+          horizontal: { type: "array", minItems: 1, items: jsonScalar },
+          none: { type: "array", minItems: 1, items: jsonScalar },
+        },
+      },
+    ],
+  };
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     $id: "/api/schemas/component-definition.json",
@@ -161,6 +185,24 @@ export function buildComponentDefinitionSchema(): JsonObject {
         $comment: "Named example props. Canonical JSON is limited to 16 KiB per example and 64 KiB per component.",
       },
       atomicLevel: { enum: [...atomicLevels] },
+      layoutNeutral: { type: "boolean" },
+      layout: {
+        type: "object", additionalProperties: false, required: ["version"],
+        properties: {
+          version: { const: 1 },
+          spacing: { type: "array", items: { enum: [...layoutSpacingProps] } },
+          spacer: { const: true },
+          flow: {
+            type: "object", additionalProperties: false, required: ["kind", "direction"],
+            properties: {
+              kind: { const: "flex" }, direction: layoutDirection,
+              wrap: { type: "object", additionalProperties: false, required: ["prop", "enabled"], properties: { prop: { type: "string" }, enabled: { type: "array", minItems: 1, items: jsonScalar } } },
+              slot: { type: "string" },
+            },
+          },
+        },
+        $comment: `Layout metadata v1. Spacing props accept subsets of: ${spaceTokens.join(", ")}. Cross-field invariants are enforced during extraction.`,
+      },
       interactive: { type: "boolean" },
       accessibleLabelProps: { type: "array", items: { type: "string" } },
       urlProps: { type: "array", items: { type: "string" } },

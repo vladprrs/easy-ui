@@ -3,6 +3,7 @@
 //   ~/.bun/bin/bun run scripts/generate-builtin-catalog.ts
 import { z } from "zod";
 import { designSystems } from "../src/designSystems";
+import { resolveSpacingScale } from "../src/designSystems/spacingScale";
 
 const out: Record<string, unknown> = {};
 for (const system of Object.values(designSystems)) {
@@ -11,14 +12,21 @@ for (const system of Object.values(designSystems)) {
     components[name] = {
       description: definition.description,
       ...(definition.atomicLevel ? { atomicLevel: definition.atomicLevel } : {}),
-      ...(definition.layoutNeutral ? { layoutNeutral: true } : {}),
-      props: z.toJSONSchema(definition.props, { io: "input" }),
+      layoutNeutral: definition.layoutNeutral ?? false,
+      ...(definition.layout ? { layout: definition.layout } : {}),
+      propsJsonSchema: z.toJSONSchema(definition.props, { io: "input" }),
       ...(definition.events?.length ? { events: definition.events } : {}),
       ...(definition.slots?.length ? { slots: definition.slots } : {}),
       ...(definition.example ? { example: definition.example } : {}),
     };
   }
-  out[system.id] = { name: system.name, description: system.description, components };
+  out[system.id] = {
+    name: system.name,
+    description: system.description,
+    resolvedSpaceScale: resolveSpacingScale(system.id),
+    hostPrimitives: [],
+    components,
+  };
 }
 
 const path = new URL("../.claude/skills/author/reference/builtin-catalog.json", import.meta.url).pathname;

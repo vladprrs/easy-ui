@@ -3,6 +3,8 @@ import { openDatabase } from "../db";
 import { builtinCatalogHash, builtinCatalogHashFor } from "../builtinHash";
 import { prototypeDocSchema } from "../../src/prototype/schema";
 import { PrototypeRepo } from "./prototypes";
+import { insertDesignSystemVersion } from "../designSystems";
+import { canonicalSpacingScale } from "../../src/designSystems/spacingScale";
 
 const legacyDoc = {
   version: 1,
@@ -40,6 +42,21 @@ test("restore reinstates the source revision design system and catalog hash",()=
   expect(repo.restore("legacy",1,2)).toEqual({rev:3});
   expect(repo.draft("legacy")).toMatchObject({doc:{designSystem:"shadcn"},builtinCatalogHash:builtinCatalogHashFor("shadcn")});
   expect((db.query("SELECT design_system value FROM prototypes WHERE id='legacy'").get() as {value:string}).value).toBe("shadcn");
+  db.close();
+});
+
+test("restore copies a historical theme pin and its spacing-sensitive catalog hash",()=>{
+  const db=openDatabase(":memory:"); const repo=new PrototypeRepo(db); const doc=prototypeDocSchema.parse(legacyDoc);
+  const tokens1=Object.fromEntries(Object.entries(canonicalSpacingScale).map(([key,value])=>[`space.${key}`,value]));
+  const tokens2={...tokens1,"space.md":"20px","space.lg":"20px"};
+  insertDesignSystemVersion(db,"shadcn",1,{tokens:tokens1,fonts:[],icons:[]},"one");
+  repo.create(doc);
+  const first=repo.draft("legacy");
+  insertDesignSystemVersion(db,"shadcn",2,{tokens:tokens2,fonts:[],icons:[]},"two");
+  repo.save("legacy",doc,1);
+  expect(repo.draft("legacy").builtinCatalogHash).not.toBe(first.builtinCatalogHash);
+  expect(repo.restore("legacy",1,2)).toEqual({rev:3});
+  expect(repo.draft("legacy")).toMatchObject({designSystemMetaVersion:1,builtinCatalogHash:first.builtinCatalogHash});
   db.close();
 });
 

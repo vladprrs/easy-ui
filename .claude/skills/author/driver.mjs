@@ -223,13 +223,15 @@ export function parseDiffArguments(revisionArgs, headRev) {
 export const planDiffRevisions = parseDiffArguments;
 
 function compactCatalog(system, manifest) {
-  const customKeys = ["id", "name", "version", "atomicLevel", "description", "events", "eventPayloads", "slots", "example", "examples", "propsJsonSchema"];
-  const builtinKeys = ["name", "description", "events", "slots"];
+  const customKeys = ["id", "name", "version", "atomicLevel", "layoutNeutral", "layout", "description", "events", "eventPayloads", "slots", "example", "examples", "propsJsonSchema"];
+  const builtinKeys = ["name", "atomicLevel", "layoutNeutral", "layout", "description", "events", "slots", "propsJsonSchema"];
+  const hostKeys = ["name", "atomicLevel", "layoutNeutral", "layout", "description", "events", "slots", "propsJsonSchema"];
   const pick = (value, keys) => Object.fromEntries(keys.filter((key) => value[key] !== undefined).map((key) => [key, value[key]]));
   return {
-    designSystem: { id: system.id, name: system.name, description: system.description },
+    designSystem: { id: system.id, name: system.name, description: system.description, resolvedSpaceScale: system.resolvedSpaceScale },
     custom: manifest.components.map((component) => pick(component, customKeys)),
     builtins: system.components.map((component) => pick(component, builtinKeys)),
+    hostPrimitives: system.hostPrimitives.map((component) => pick(component, hostKeys)),
   };
 }
 

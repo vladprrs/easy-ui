@@ -34,7 +34,7 @@
 
 `PUT /prototypes/:id` — это осознанный checkpoint, а не no-op. Даже если `doc` не изменился, успешный запрос с актуальным `baseRev` создаёт новую ревизию: сервер заново разрешает и фиксирует пины active custom-бандлов, текущей версии темы дизайн-системы и ассетов, а также сохраняет переданный `message`. CAS по `baseRev` действует как обычно. Сервер намеренно не дедуплицирует такие ревизии, потому что повторное сохранение выражает явное решение зафиксировать актуальное окружение документа.
 
-`ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её встроенный каталог. Дескриптор v1 включает имена, descriptions, events, slots и actions, но намеренно не включает `atomicLevel`: классификация может меняться без изменения render-совместимости. В MVP хеш диагностический — рантайм не сравнивает и не блокирует его mismatch; enforcement и таблицы совместимости оставлены на post-MVP.
+`ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её render/validation-контракт. Дескриптор включает обязательный `renderContractVersion` (сейчас `1`), actions, имена/descriptions/events/slots, input JSON Schema пропсов, `layout`/`layoutNeutral` и resolved spacing scale из **pinned** `design_system_meta_version`. Restore копирует версию темы исходной ревизии, поэтому восстанавливает и соответствующий hash. Хеш остаётся детектором несовместимости, а не pin: рантайм не сравнивает и не блокирует mismatch.
 
 ### Diff ревизий
 
@@ -148,7 +148,7 @@ Meta-ответы прототипов и компонентов additively не
 | `POST /components/:id/restore` | `{rev,baseRev}` → `{rev}` |
 | `POST /components/:id/publish` | `{message?,baseRev}` → 201 `{version,hostAbiVersion,warnings}` и `Location` |
 | `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,statusReason:string\|null,supersededBy:number\|null,statusRev,designSystem,publishedAt}` |
-| `GET /components/:id/versions/:version` | Метадата версии **любого статуса**: `{version,rev,status,statusReason,supersededBy,statusRev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; immutable |
+| `GET /components/:id/versions/:version` | Метадата версии **любого статуса**: `{version,rev,status,statusReason,supersededBy,statusRev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; `propsJsonSchema` описывает input (до Zod defaults/transforms); immutable |
 | `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); отдаётся при статусе `active\|deprecated\|superseded`, иначе `404 bundle_unavailable`; immutable |
 | `POST /components/:id/versions/:version/status` | `{status, reason?, supersededBy?, baseStatusRev}` → 200 `{status, statusRev}`; см. [Статусы версий](#статусы-версий-компонентов) |
 
@@ -212,7 +212,7 @@ Meta-ответы прототипов и компонентов additively не
 | `PATCH /design-systems/:id` | Тема (см. §Тема) `{tokens?,fonts?,icons?,baseVersion}` → 200 `DesignSystemSummary`; builtin → `405`; CAS-конфликт → `409 version_conflict` |
 | `GET /design-systems/:id/versions/:v` | Immutable `{systemId,version,tokens,fonts,icons,createdAt}`; отсутствует → `404 not_found` |
 
-`DesignSystemSummary` имеет `{id,name,description,builtinCatalogHash,components}` плюс additively `latestMetaVersion` и содержимое последней версии темы `{tokens,fonts,icons}`; provider не раскрывается. Malformed JSON/body не-object даёт `400 invalid_request`; неизвестные поля, неверные типы, невалидный slug, пустые или слишком длинные значения — `422 validation_failed` с `issues[].path`. `PUT` и `DELETE` на collection или `:id`, а также `PATCH` на collection дают `405 method_not_allowed`: registry metadata в этом API неизменяемы. Повтор идентичного POST не идемпотентен и также даёт 409.
+`DesignSystemSummary` имеет `{id,name,description,builtinCatalogHash,resolvedSpaceScale,components,hostPrimitives}` плюс additively `latestMetaVersion` и содержимое последней версии темы `{tokens,fonts,icons}`; provider не раскрывается. `components[]` сериализует `propsJsonSchema` (input), `layout?` и явный `layoutNeutral`; `hostPrimitives[]` использует ту же generic-схему дескриптора, но в W2b всегда пуст (host-примитивы не входят в bundle-manifest). `resolvedSpaceScale` — итоговые девять `none..4xl` для последней merged-темы системы. Malformed JSON/body не-object даёт `400 invalid_request`; неизвестные поля, неверные типы, невалидный slug, пустые или слишком длинные значения — `422 validation_failed` с `issues[].path`. `PUT` и `DELETE` на collection или `:id`, а также `PATCH` на collection дают `405 method_not_allowed`: registry metadata в этом API неизменяемы. Повтор идентичного POST не идемпотентен и также даёт 409.
 
 #### Тема дизайн-системы (tokens/fonts/icons) и версии
 
@@ -250,7 +250,7 @@ Production-миграция выполняется по явному manifest с
 | Метод и путь | Ответ |
 |---|---|
 | `GET /health` | `{status:"ready"}` после миграций, seed и ABI-проверки; до готовности 503 `starting` |
-| `GET /catalog/manifest?designSystem=<slug>` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?}]}` — последняя active-версия каждого неудалённого компонента для каждой системы или только указанной системы |
+| `GET /catalog/manifest?designSystem=<slug>` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?}]}` — последняя active-версия каждого неудалённого custom-компонента для каждой системы или только указанной системы; host-примитивы намеренно не входят |
 | `GET /shims/v1/:name.js` | ESM-шим host ABI v1; immutable |
 | `GET /shims/v2/:name.js` | ESM-шим host ABI v2 (v1 + `easy-ui-runtime.js`); immutable |
 
@@ -393,7 +393,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 
 Опциональные поля присутствуют только когда применимы. Типичные статусы: 400 — неверный JSON/DTO или отсутствующий `baseRev`; 404 — ресурс; 405 — метод; 409 — CAS-конфликт, дубликат либо повторный publish ревизии; 413 — лимит; 415 — не `application/json`; 422 — семантическая валидация (включая `event_schema_not_serializable` — типизированный event-payload не сериализуется в JSON Schema); 429 — очередь занята; 501 — возможность недоступна в этом окружении. JSON body ограничен 1 MiB, source компонента — 256 KiB.
 
-Каждый элемент `issues[]` дополнительно получает поле `pointer` — корректный RFC 6901 JSON Pointer с escape `~0`/`~1` (легаси-поле `path` сохраняется как есть). Pointer добавляется централизованно в `errorResponse`: для массивных `path` каждый сегмент экранируется, строковые pointer-подобные `path` проходят без изменений.
+Каждый элемент `issues[]` имеет `{path,message,pointer?,code?}`. Опциональный `code` — стабильный машинный код правила (его наполнение layout-линтами начинается в W3). `pointer` — корректный RFC 6901 JSON Pointer с escape `~0`/`~1` (легаси-поле `path` сохраняется как есть) и добавляется централизованно в `errorResponse`: для массивных `path` каждый сегмент экранируется, строковые pointer-подобные `path` проходят без изменений.
 
 ## Discovery
 
@@ -408,17 +408,19 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 {
   "apiVersion": 1,
   "documentVersion": 1,
+  "layoutContractVersion": 1,
   "actions": ["navigate", "back", "openUrl", "restart", "setState", "pushState", "removeState"],
   "directives": ["$state", "$bindState", "$template", "$cond", "$asset"],
   "paramSources": ["$event", "$elementId", "$itemIndex", "$itemKey"],
   "conditions": ["$and", "$or", "$state", "$item", "$index", "eq", "neq", "gt", "gte", "lt", "lte", "not"],
   "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5 },
   "designSystems": ["shadcn", "wireframe", "..."],
-  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true }
+  "resolvedSpaceScales": { "shadcn": { "none": "0px", "xs": "4px", "sm": "8px", "md": "12px", "lg": "16px", "xl": "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" } },
+  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true }
 }
 ```
 
-`designSystems` читается из живого реестра БД; значения `limits` импортируются из модулей, где они реально enforce'ятся (`src/prototype/validate.ts`, `server/assets/validate.ts`, `server/screenshot/service.ts`, `server/http.ts`), — двойного хардкода нет.
+`designSystems` читается из живого реестра БД; `resolvedSpaceScales` резолвится для каждой системы из её последней merged-темы с canonical fallback. Значения `limits` импортируются из модулей, где они реально enforce'ятся (`src/prototype/validate.ts`, `server/assets/validate.ts`, `server/screenshot/service.ts`, `server/http.ts`), — двойного хардкода нет.
 
 **Правило**: каждый новый endpoint обязан регистрироваться в `server/contracts.ts` (`registerContract`) — contract-тест `server/contract.test.ts` требует покрытия каждого контракта, а drift-check заставит перегенерировать `server/openapi.json`.
 
@@ -426,7 +428,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 
 ## Контракт кастомного компонента
 
-Модуль TSX экспортирует named `definition` и default plain function component. `definition.props` — Zod-схема; допустимы `events`, `slots?: string[]`, `capabilities?`, обязательный `description: string`, legacy `example?: Record<string, unknown>`, именованные `examples?: Record<string, Record<string, unknown>>` и `atomicLevel?: "atom" | "molecule" | "organism" | "template" | "page"`. `DefinitionMeta`, сохранённый для published-версии, содержит нормализованные `events`, `slots`, `description` и опциональные `eventPayloads`, `capabilities`, `example`, `examples`, `propsJsonSchema`, `atomicLevel`; те же метаданные входят в version DTO и manifest. У custom-компонента уровень опционален для ABI v1 backward compatibility, но publish без него возвращает warning `Atomic design level is not provided; component will be classified as Other` и Library классифицирует компонент как `Other`. Default получает `BaseComponentProps` — объект `{props, emit}`. `memo` и `forwardRef` не поддерживаются.
+Модуль TSX экспортирует named `definition` и default plain function component. `definition.props` — Zod-схема; допустимы `events`, `slots?: string[]`, `capabilities?`, обязательный `description: string`, legacy `example?: Record<string, unknown>`, именованные `examples?: Record<string, Record<string, unknown>>`, `atomicLevel?: "atom" | "molecule" | "organism" | "template" | "page"`, `layoutNeutral?: boolean` и `layout?` контракта v1. `DefinitionMeta`, сохранённый для published-версии, содержит нормализованные `events`, `slots`, `description` и опциональные `eventPayloads`, `capabilities`, `example`, `examples`, input-`propsJsonSchema`, `atomicLevel`, `layoutNeutral`, `layout`; те же метаданные входят в version DTO и manifest. У custom-компонента уровень опционален для ABI v1 backward compatibility, но publish без него возвращает warning `Atomic design level is not provided; component will be classified as Other` и Library классифицирует компонент как `Other`. Default получает `BaseComponentProps` — объект `{props, emit}`. `memo` и `forwardRef` не поддерживаются.
 
 #### Named examples
 

@@ -93,9 +93,10 @@ describe("author driver CLI", () => {
     const valid = await run(api, ["catalog", "shadcn"]);
     expect(valid.exitCode).toBe(0);
     expect(JSON.parse(valid.stdout)).toMatchObject({
-      designSystem: { id: "shadcn" },
+      designSystem: { id: "shadcn", resolvedSpaceScale: { none: "0px", md: "12px", "4xl": "64px" } },
       custom: [],
-      builtins: expect.arrayContaining([expect.objectContaining({ name: "Button", events: expect.any(Array), slots: expect.any(Array) })]),
+      builtins: expect.arrayContaining([expect.objectContaining({ name: "Button", layoutNeutral: false, propsJsonSchema: expect.objectContaining({ type: "object" }), events: expect.any(Array), slots: expect.any(Array) })]),
+      hostPrimitives: [],
     });
     const missing = await run(api, ["catalog", "missing-system"]);
     expect(missing.exitCode).toBe(1);

@@ -2,7 +2,8 @@ import type { Database } from "bun:sqlite";
 import type { PrototypeDoc } from "../../src/prototype/schema";
 import { prototypeDocSchema } from "../../src/prototype/schema";
 import { builtinCatalogHashFor, emptyComponentManifestHash } from "../builtinHash";
-import { latestDesignSystemMetaVersion, requireRegisteredDesignSystem } from "../designSystems";
+import { getDesignSystemVersion, latestDesignSystemMetaVersion, requireRegisteredDesignSystem } from "../designSystems";
+import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
 import { ApiError } from "../http";
 import type { ComponentPin } from "../validation";
 import { latestValidatedRev } from "../validationRecords";
@@ -94,9 +95,13 @@ export class PrototypeRepo {
   // `metaVersion` is undefined for fresh saves (resolve latest now) and explicit for restore (copy source pin).
   private insertRevision(id:string, rev:number, doc:PrototypeDoc, message:string|null, createdAt:string, metaVersion?:number|null, figmaJson:string|null=null): void {
     const pin=metaVersion===undefined?latestDesignSystemMetaVersion(this.db,doc.designSystem):metaVersion;
+    const system=requireRegisteredDesignSystem(this.db,doc.designSystem,["designSystem"]);
+    const pinnedTheme=pin===null?null:getDesignSystemVersion(this.db,doc.designSystem,pin);
+    if(pin!==null&&!pinnedTheme) throw new ApiError(422,"validation_failed","Pinned design-system theme version does not exist",{issues:[{path:["designSystem"],message:`Unknown theme version ${pin} for ${doc.designSystem}`}]});
+    const resolvedSpaceScale=resolveSpacingScale(doc.designSystem,pinnedTheme?.tokens??{});
     this.db.query(`INSERT INTO prototype_revisions
       (prototype_id,rev,doc,builtin_catalog_hash,design_system_meta_version,figma_json,message,created_at) VALUES (?,?,?,?,?,?,?,?)`)
-      .run(id,rev,JSON.stringify(doc),builtinCatalogHashFor(doc.designSystem,requireRegisteredDesignSystem(this.db,doc.designSystem,["designSystem"]).definitions),pin,figmaJson,message,createdAt);
+      .run(id,rev,JSON.stringify(doc),builtinCatalogHashFor(doc.designSystem,system.definitions,resolvedSpaceScale),pin,figmaJson,message,createdAt);
   }
   private insertPins(id:string,rev:number,pins:ComponentPin[]):void {
     for(const pin of pins) {

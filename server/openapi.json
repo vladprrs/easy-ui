@@ -605,6 +605,9 @@
                         "assets": {
                           "type": "boolean"
                         },
+                        "layoutContract": {
+                          "type": "boolean"
+                        },
                         "namedSlots": {
                           "type": "boolean"
                         },
@@ -635,9 +638,14 @@
                         "typedEvents",
                         "repeat",
                         "namedSlots",
-                        "themeVersions"
+                        "themeVersions",
+                        "layoutContract"
                       ],
                       "type": "object"
+                    },
+                    "layoutContractVersion": {
+                      "const": 1,
+                      "type": "number"
                     },
                     "limits": {
                       "additionalProperties": false,
@@ -684,17 +692,69 @@
                         "type": "string"
                       },
                       "type": "array"
+                    },
+                    "resolvedSpaceScales": {
+                      "additionalProperties": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "2xl": {
+                            "type": "string"
+                          },
+                          "3xl": {
+                            "type": "string"
+                          },
+                          "4xl": {
+                            "type": "string"
+                          },
+                          "lg": {
+                            "type": "string"
+                          },
+                          "md": {
+                            "type": "string"
+                          },
+                          "none": {
+                            "type": "string"
+                          },
+                          "sm": {
+                            "type": "string"
+                          },
+                          "xl": {
+                            "type": "string"
+                          },
+                          "xs": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "none",
+                          "xs",
+                          "sm",
+                          "md",
+                          "lg",
+                          "xl",
+                          "2xl",
+                          "3xl",
+                          "4xl"
+                        ],
+                        "type": "object"
+                      },
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
                     }
                   },
                   "required": [
                     "apiVersion",
                     "documentVersion",
+                    "layoutContractVersion",
                     "actions",
                     "directives",
                     "paramSources",
                     "conditions",
                     "limits",
                     "designSystems",
+                    "resolvedSpaceScales",
                     "features"
                   ],
                   "type": "object"
@@ -737,20 +797,78 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
                   "additionalProperties": false,
                   "properties": {
                     "components": {
                       "items": {
                         "additionalProperties": {},
                         "properties": {
+                          "atomicLevel": {
+                            "enum": [
+                              "atom",
+                              "molecule",
+                              "organism",
+                              "template",
+                              "page"
+                            ],
+                            "type": "string"
+                          },
                           "bundleHash": {
                             "type": "string"
                           },
                           "bundleUrl": {
                             "type": "string"
                           },
+                          "capabilities": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "namedSlots": {
+                                "const": true,
+                                "type": "boolean"
+                              },
+                              "typedEvents": {
+                                "const": true,
+                                "type": "boolean"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
                           "designSystem": {
                             "type": "string"
+                          },
+                          "eventPayloads": {
+                            "additionalProperties": {},
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "type": "object"
+                          },
+                          "events": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
                           },
                           "example": {
                             "additionalProperties": {},
@@ -779,8 +897,130 @@
                           "id": {
                             "type": "string"
                           },
+                          "layout": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "flow": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "direction": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "vertical",
+                                          "horizontal"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "horizontal": {
+                                            "items": {
+                                              "$ref": "#/$defs/__schema0"
+                                            },
+                                            "minItems": 1,
+                                            "type": "array"
+                                          },
+                                          "none": {
+                                            "items": {
+                                              "$ref": "#/$defs/__schema0"
+                                            },
+                                            "minItems": 1,
+                                            "type": "array"
+                                          },
+                                          "prop": {
+                                            "type": "string"
+                                          },
+                                          "vertical": {
+                                            "items": {
+                                              "$ref": "#/$defs/__schema0"
+                                            },
+                                            "minItems": 1,
+                                            "type": "array"
+                                          }
+                                        },
+                                        "required": [
+                                          "prop",
+                                          "vertical",
+                                          "horizontal"
+                                        ],
+                                        "type": "object"
+                                      }
+                                    ]
+                                  },
+                                  "kind": {
+                                    "const": "flex",
+                                    "type": "string"
+                                  },
+                                  "slot": {
+                                    "type": "string"
+                                  },
+                                  "wrap": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "enabled": {
+                                        "items": {
+                                          "$ref": "#/$defs/__schema0"
+                                        },
+                                        "minItems": 1,
+                                        "type": "array"
+                                      },
+                                      "prop": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "prop",
+                                      "enabled"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "direction"
+                                ],
+                                "type": "object"
+                              },
+                              "spacer": {
+                                "const": true,
+                                "type": "boolean"
+                              },
+                              "spacing": {
+                                "items": {
+                                  "enum": [
+                                    "gap",
+                                    "padding",
+                                    "paddingX",
+                                    "paddingY"
+                                  ],
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "version": {
+                                "const": 1,
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "version"
+                            ],
+                            "type": "object"
+                          },
+                          "layoutNeutral": {
+                            "type": "boolean"
+                          },
                           "name": {
                             "type": "string"
+                          },
+                          "propsJsonSchema": {},
+                          "slots": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
                           },
                           "version": {
                             "type": "number"
@@ -793,7 +1033,10 @@
                           "version",
                           "bundleUrl",
                           "bundleHash",
-                          "hostAbiVersion"
+                          "hostAbiVersion",
+                          "description",
+                          "events",
+                          "slots"
                         ],
                         "type": "object"
                       },
@@ -2218,12 +2461,28 @@
                 "schema": {
                   "$defs": {
                     "__schema0": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "__schema1": {
                       "maxLength": 64,
                       "minLength": 1,
                       "pattern": "^[A-Za-z0-9:._-]+$",
                       "type": "string"
                     },
-                    "__schema1": {
+                    "__schema2": {
                       "pattern": "^asset_[0-9a-f]{64}$",
                       "type": "string"
                     }
@@ -2257,8 +2516,32 @@
                       },
                       "type": "array"
                     },
+                    "atomicLevel": {
+                      "enum": [
+                        "atom",
+                        "molecule",
+                        "organism",
+                        "template",
+                        "page"
+                      ],
+                      "type": "string"
+                    },
                     "bundleHash": {
                       "type": "string"
+                    },
+                    "capabilities": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "namedSlots": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "typedEvents": {
+                          "const": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
                     },
                     "description": {
                       "type": "string"
@@ -2266,11 +2549,25 @@
                     "designSystem": {
                       "type": "string"
                     },
+                    "eventPayloads": {
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
                     "events": {
                       "items": {
                         "type": "string"
                       },
                       "type": "array"
+                    },
+                    "example": {
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
                     },
                     "examples": {
                       "additionalProperties": {
@@ -2304,7 +2601,7 @@
                             },
                             "nodeIds": {
                               "items": {
-                                "$ref": "#/$defs/__schema0"
+                                "$ref": "#/$defs/__schema1"
                               },
                               "maxItems": 50,
                               "minItems": 1,
@@ -2312,7 +2609,7 @@
                             },
                             "referenceScreenshots": {
                               "items": {
-                                "$ref": "#/$defs/__schema1"
+                                "$ref": "#/$defs/__schema2"
                               },
                               "maxItems": 50,
                               "type": "array"
@@ -2332,6 +2629,122 @@
                     "hostAbiVersion": {
                       "type": "number"
                     },
+                    "layout": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "flow": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "direction": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "vertical",
+                                    "horizontal"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "horizontal": {
+                                      "items": {
+                                        "$ref": "#/$defs/__schema0"
+                                      },
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "none": {
+                                      "items": {
+                                        "$ref": "#/$defs/__schema0"
+                                      },
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "prop": {
+                                      "type": "string"
+                                    },
+                                    "vertical": {
+                                      "items": {
+                                        "$ref": "#/$defs/__schema0"
+                                      },
+                                      "minItems": 1,
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": [
+                                    "prop",
+                                    "vertical",
+                                    "horizontal"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "kind": {
+                              "const": "flex",
+                              "type": "string"
+                            },
+                            "slot": {
+                              "type": "string"
+                            },
+                            "wrap": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "enabled": {
+                                  "items": {
+                                    "$ref": "#/$defs/__schema0"
+                                  },
+                                  "minItems": 1,
+                                  "type": "array"
+                                },
+                                "prop": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "prop",
+                                "enabled"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "direction"
+                          ],
+                          "type": "object"
+                        },
+                        "spacer": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "spacing": {
+                          "items": {
+                            "enum": [
+                              "gap",
+                              "padding",
+                              "paddingX",
+                              "paddingY"
+                            ],
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "version": {
+                          "const": 1,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "version"
+                      ],
+                      "type": "object"
+                    },
+                    "layoutNeutral": {
+                      "type": "boolean"
+                    },
+                    "propsJsonSchema": {},
                     "publishedAt": {
                       "type": "string"
                     },
@@ -2356,9 +2769,9 @@
                     "rev",
                     "source",
                     "designSystem",
+                    "description",
                     "events",
                     "slots",
-                    "description",
                     "bundleHash",
                     "hostAbiVersion",
                     "assets",
@@ -2760,6 +3173,207 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "enum": [
+                        "atom",
+                        "molecule",
+                        "organism",
+                        "template",
+                        "page"
+                      ],
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "type": "boolean"
+                    },
+                    "__schema10": {
+                      "additionalProperties": {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "propertyNames": {
+                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "__schema11": {},
+                    "__schema2": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "flow": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "direction": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "vertical",
+                                    "horizontal"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "horizontal": {
+                                      "items": {
+                                        "$ref": "#/$defs/__schema3"
+                                      },
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "none": {
+                                      "items": {
+                                        "$ref": "#/$defs/__schema3"
+                                      },
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "prop": {
+                                      "type": "string"
+                                    },
+                                    "vertical": {
+                                      "items": {
+                                        "$ref": "#/$defs/__schema3"
+                                      },
+                                      "minItems": 1,
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": [
+                                    "prop",
+                                    "vertical",
+                                    "horizontal"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "kind": {
+                              "const": "flex",
+                              "type": "string"
+                            },
+                            "slot": {
+                              "type": "string"
+                            },
+                            "wrap": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "enabled": {
+                                  "items": {
+                                    "$ref": "#/$defs/__schema3"
+                                  },
+                                  "minItems": 1,
+                                  "type": "array"
+                                },
+                                "prop": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "prop",
+                                "enabled"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "direction"
+                          ],
+                          "type": "object"
+                        },
+                        "spacer": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "spacing": {
+                          "items": {
+                            "enum": [
+                              "gap",
+                              "padding",
+                              "paddingX",
+                              "paddingY"
+                            ],
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "version": {
+                          "const": 1,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "version"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema3": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "__schema4": {
+                      "type": "string"
+                    },
+                    "__schema5": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "__schema6": {
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "__schema7": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "namedSlots": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "typedEvents": {
+                          "const": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "__schema8": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "__schema9": {
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    }
+                  },
                   "additionalProperties": false,
                   "properties": {
                     "designSystems": {
@@ -2773,23 +3387,41 @@
                             "items": {
                               "additionalProperties": {},
                               "properties": {
+                                "atomicLevel": {
+                                  "$ref": "#/$defs/__schema0"
+                                },
+                                "capabilities": {
+                                  "$ref": "#/$defs/__schema7"
+                                },
                                 "description": {
-                                  "type": "string"
+                                  "$ref": "#/$defs/__schema4"
+                                },
+                                "eventPayloads": {
+                                  "$ref": "#/$defs/__schema6"
                                 },
                                 "events": {
-                                  "items": {
-                                    "type": "string"
-                                  },
-                                  "type": "array"
+                                  "$ref": "#/$defs/__schema5"
+                                },
+                                "example": {
+                                  "$ref": "#/$defs/__schema9"
+                                },
+                                "examples": {
+                                  "$ref": "#/$defs/__schema10"
+                                },
+                                "layout": {
+                                  "$ref": "#/$defs/__schema2"
+                                },
+                                "layoutNeutral": {
+                                  "$ref": "#/$defs/__schema1"
                                 },
                                 "name": {
                                   "type": "string"
                                 },
+                                "propsJsonSchema": {
+                                  "$ref": "#/$defs/__schema11"
+                                },
                                 "slots": {
-                                  "items": {
-                                    "type": "string"
-                                  },
-                                  "type": "array"
+                                  "$ref": "#/$defs/__schema8"
                                 }
                               },
                               "required": [
@@ -2832,6 +3464,57 @@
                               "required": [
                                 "family",
                                 "src"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          "hostPrimitives": {
+                            "items": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "atomicLevel": {
+                                  "$ref": "#/$defs/__schema0"
+                                },
+                                "capabilities": {
+                                  "$ref": "#/$defs/__schema7"
+                                },
+                                "description": {
+                                  "$ref": "#/$defs/__schema4"
+                                },
+                                "eventPayloads": {
+                                  "$ref": "#/$defs/__schema6"
+                                },
+                                "events": {
+                                  "$ref": "#/$defs/__schema5"
+                                },
+                                "example": {
+                                  "$ref": "#/$defs/__schema9"
+                                },
+                                "examples": {
+                                  "$ref": "#/$defs/__schema10"
+                                },
+                                "layout": {
+                                  "$ref": "#/$defs/__schema2"
+                                },
+                                "layoutNeutral": {
+                                  "$ref": "#/$defs/__schema1"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "propsJsonSchema": {
+                                  "$ref": "#/$defs/__schema11"
+                                },
+                                "slots": {
+                                  "$ref": "#/$defs/__schema8"
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "description",
+                                "events",
+                                "slots"
                               ],
                               "type": "object"
                             },
@@ -2887,6 +3570,50 @@
                           "name": {
                             "type": "string"
                           },
+                          "resolvedSpaceScale": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "2xl": {
+                                "type": "string"
+                              },
+                              "3xl": {
+                                "type": "string"
+                              },
+                              "4xl": {
+                                "type": "string"
+                              },
+                              "lg": {
+                                "type": "string"
+                              },
+                              "md": {
+                                "type": "string"
+                              },
+                              "none": {
+                                "type": "string"
+                              },
+                              "sm": {
+                                "type": "string"
+                              },
+                              "xl": {
+                                "type": "string"
+                              },
+                              "xs": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "none",
+                              "xs",
+                              "sm",
+                              "md",
+                              "lg",
+                              "xl",
+                              "2xl",
+                              "3xl",
+                              "4xl"
+                            ],
+                            "type": "object"
+                          },
                           "tokens": {
                             "additionalProperties": {
                               "anyOf": [
@@ -2909,7 +3636,9 @@
                           "name",
                           "description",
                           "builtinCatalogHash",
+                          "resolvedSpaceScale",
                           "components",
+                          "hostPrimitives",
                           "latestMetaVersion",
                           "tokens",
                           "fonts",
@@ -2978,6 +3707,207 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "enum": [
+                        "atom",
+                        "molecule",
+                        "organism",
+                        "template",
+                        "page"
+                      ],
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "type": "boolean"
+                    },
+                    "__schema10": {
+                      "additionalProperties": {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "propertyNames": {
+                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "__schema11": {},
+                    "__schema2": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "flow": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "direction": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "vertical",
+                                    "horizontal"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "horizontal": {
+                                      "items": {
+                                        "$ref": "#/$defs/__schema3"
+                                      },
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "none": {
+                                      "items": {
+                                        "$ref": "#/$defs/__schema3"
+                                      },
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "prop": {
+                                      "type": "string"
+                                    },
+                                    "vertical": {
+                                      "items": {
+                                        "$ref": "#/$defs/__schema3"
+                                      },
+                                      "minItems": 1,
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": [
+                                    "prop",
+                                    "vertical",
+                                    "horizontal"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "kind": {
+                              "const": "flex",
+                              "type": "string"
+                            },
+                            "slot": {
+                              "type": "string"
+                            },
+                            "wrap": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "enabled": {
+                                  "items": {
+                                    "$ref": "#/$defs/__schema3"
+                                  },
+                                  "minItems": 1,
+                                  "type": "array"
+                                },
+                                "prop": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "prop",
+                                "enabled"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "direction"
+                          ],
+                          "type": "object"
+                        },
+                        "spacer": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "spacing": {
+                          "items": {
+                            "enum": [
+                              "gap",
+                              "padding",
+                              "paddingX",
+                              "paddingY"
+                            ],
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "version": {
+                          "const": 1,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "version"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema3": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "__schema4": {
+                      "type": "string"
+                    },
+                    "__schema5": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "__schema6": {
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "__schema7": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "namedSlots": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "typedEvents": {
+                          "const": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "__schema8": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "__schema9": {
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    }
+                  },
                   "additionalProperties": {},
                   "properties": {
                     "builtinCatalogHash": {
@@ -2987,23 +3917,41 @@
                       "items": {
                         "additionalProperties": {},
                         "properties": {
+                          "atomicLevel": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "capabilities": {
+                            "$ref": "#/$defs/__schema7"
+                          },
                           "description": {
-                            "type": "string"
+                            "$ref": "#/$defs/__schema4"
+                          },
+                          "eventPayloads": {
+                            "$ref": "#/$defs/__schema6"
                           },
                           "events": {
-                            "items": {
-                              "type": "string"
-                            },
-                            "type": "array"
+                            "$ref": "#/$defs/__schema5"
+                          },
+                          "example": {
+                            "$ref": "#/$defs/__schema9"
+                          },
+                          "examples": {
+                            "$ref": "#/$defs/__schema10"
+                          },
+                          "layout": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "layoutNeutral": {
+                            "$ref": "#/$defs/__schema1"
                           },
                           "name": {
                             "type": "string"
                           },
+                          "propsJsonSchema": {
+                            "$ref": "#/$defs/__schema11"
+                          },
                           "slots": {
-                            "items": {
-                              "type": "string"
-                            },
-                            "type": "array"
+                            "$ref": "#/$defs/__schema8"
                           }
                         },
                         "required": [
@@ -3046,6 +3994,57 @@
                         "required": [
                           "family",
                           "src"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "hostPrimitives": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "atomicLevel": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "capabilities": {
+                            "$ref": "#/$defs/__schema7"
+                          },
+                          "description": {
+                            "$ref": "#/$defs/__schema4"
+                          },
+                          "eventPayloads": {
+                            "$ref": "#/$defs/__schema6"
+                          },
+                          "events": {
+                            "$ref": "#/$defs/__schema5"
+                          },
+                          "example": {
+                            "$ref": "#/$defs/__schema9"
+                          },
+                          "examples": {
+                            "$ref": "#/$defs/__schema10"
+                          },
+                          "layout": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "layoutNeutral": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "propsJsonSchema": {
+                            "$ref": "#/$defs/__schema11"
+                          },
+                          "slots": {
+                            "$ref": "#/$defs/__schema8"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "description",
+                          "events",
+                          "slots"
                         ],
                         "type": "object"
                       },
@@ -3101,6 +4100,50 @@
                     "name": {
                       "type": "string"
                     },
+                    "resolvedSpaceScale": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "2xl": {
+                          "type": "string"
+                        },
+                        "3xl": {
+                          "type": "string"
+                        },
+                        "4xl": {
+                          "type": "string"
+                        },
+                        "lg": {
+                          "type": "string"
+                        },
+                        "md": {
+                          "type": "string"
+                        },
+                        "none": {
+                          "type": "string"
+                        },
+                        "sm": {
+                          "type": "string"
+                        },
+                        "xl": {
+                          "type": "string"
+                        },
+                        "xs": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "none",
+                        "xs",
+                        "sm",
+                        "md",
+                        "lg",
+                        "xl",
+                        "2xl",
+                        "3xl",
+                        "4xl"
+                      ],
+                      "type": "object"
+                    },
                     "tokens": {
                       "additionalProperties": {
                         "anyOf": [
@@ -3123,7 +4166,9 @@
                     "name",
                     "description",
                     "builtinCatalogHash",
+                    "resolvedSpaceScale",
                     "components",
+                    "hostPrimitives",
                     "latestMetaVersion",
                     "tokens",
                     "fonts",
@@ -3188,6 +4233,207 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "enum": [
+                        "atom",
+                        "molecule",
+                        "organism",
+                        "template",
+                        "page"
+                      ],
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "type": "boolean"
+                    },
+                    "__schema10": {
+                      "additionalProperties": {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "propertyNames": {
+                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "__schema11": {},
+                    "__schema2": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "flow": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "direction": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "vertical",
+                                    "horizontal"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "horizontal": {
+                                      "items": {
+                                        "$ref": "#/$defs/__schema3"
+                                      },
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "none": {
+                                      "items": {
+                                        "$ref": "#/$defs/__schema3"
+                                      },
+                                      "minItems": 1,
+                                      "type": "array"
+                                    },
+                                    "prop": {
+                                      "type": "string"
+                                    },
+                                    "vertical": {
+                                      "items": {
+                                        "$ref": "#/$defs/__schema3"
+                                      },
+                                      "minItems": 1,
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": [
+                                    "prop",
+                                    "vertical",
+                                    "horizontal"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "kind": {
+                              "const": "flex",
+                              "type": "string"
+                            },
+                            "slot": {
+                              "type": "string"
+                            },
+                            "wrap": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "enabled": {
+                                  "items": {
+                                    "$ref": "#/$defs/__schema3"
+                                  },
+                                  "minItems": 1,
+                                  "type": "array"
+                                },
+                                "prop": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "prop",
+                                "enabled"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "direction"
+                          ],
+                          "type": "object"
+                        },
+                        "spacer": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "spacing": {
+                          "items": {
+                            "enum": [
+                              "gap",
+                              "padding",
+                              "paddingX",
+                              "paddingY"
+                            ],
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "version": {
+                          "const": 1,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "version"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema3": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "__schema4": {
+                      "type": "string"
+                    },
+                    "__schema5": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "__schema6": {
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "__schema7": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "namedSlots": {
+                          "const": true,
+                          "type": "boolean"
+                        },
+                        "typedEvents": {
+                          "const": true,
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "__schema8": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "__schema9": {
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    }
+                  },
                   "additionalProperties": {},
                   "properties": {
                     "builtinCatalogHash": {
@@ -3197,23 +4443,41 @@
                       "items": {
                         "additionalProperties": {},
                         "properties": {
+                          "atomicLevel": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "capabilities": {
+                            "$ref": "#/$defs/__schema7"
+                          },
                           "description": {
-                            "type": "string"
+                            "$ref": "#/$defs/__schema4"
+                          },
+                          "eventPayloads": {
+                            "$ref": "#/$defs/__schema6"
                           },
                           "events": {
-                            "items": {
-                              "type": "string"
-                            },
-                            "type": "array"
+                            "$ref": "#/$defs/__schema5"
+                          },
+                          "example": {
+                            "$ref": "#/$defs/__schema9"
+                          },
+                          "examples": {
+                            "$ref": "#/$defs/__schema10"
+                          },
+                          "layout": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "layoutNeutral": {
+                            "$ref": "#/$defs/__schema1"
                           },
                           "name": {
                             "type": "string"
                           },
+                          "propsJsonSchema": {
+                            "$ref": "#/$defs/__schema11"
+                          },
                           "slots": {
-                            "items": {
-                              "type": "string"
-                            },
-                            "type": "array"
+                            "$ref": "#/$defs/__schema8"
                           }
                         },
                         "required": [
@@ -3256,6 +4520,57 @@
                         "required": [
                           "family",
                           "src"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "hostPrimitives": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "atomicLevel": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "capabilities": {
+                            "$ref": "#/$defs/__schema7"
+                          },
+                          "description": {
+                            "$ref": "#/$defs/__schema4"
+                          },
+                          "eventPayloads": {
+                            "$ref": "#/$defs/__schema6"
+                          },
+                          "events": {
+                            "$ref": "#/$defs/__schema5"
+                          },
+                          "example": {
+                            "$ref": "#/$defs/__schema9"
+                          },
+                          "examples": {
+                            "$ref": "#/$defs/__schema10"
+                          },
+                          "layout": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "layoutNeutral": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "propsJsonSchema": {
+                            "$ref": "#/$defs/__schema11"
+                          },
+                          "slots": {
+                            "$ref": "#/$defs/__schema8"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "description",
+                          "events",
+                          "slots"
                         ],
                         "type": "object"
                       },
@@ -3311,6 +4626,50 @@
                     "name": {
                       "type": "string"
                     },
+                    "resolvedSpaceScale": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "2xl": {
+                          "type": "string"
+                        },
+                        "3xl": {
+                          "type": "string"
+                        },
+                        "4xl": {
+                          "type": "string"
+                        },
+                        "lg": {
+                          "type": "string"
+                        },
+                        "md": {
+                          "type": "string"
+                        },
+                        "none": {
+                          "type": "string"
+                        },
+                        "sm": {
+                          "type": "string"
+                        },
+                        "xl": {
+                          "type": "string"
+                        },
+                        "xs": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "none",
+                        "xs",
+                        "sm",
+                        "md",
+                        "lg",
+                        "xl",
+                        "2xl",
+                        "3xl",
+                        "4xl"
+                      ],
+                      "type": "object"
+                    },
                     "tokens": {
                       "additionalProperties": {
                         "anyOf": [
@@ -3333,7 +4692,9 @@
                     "name",
                     "description",
                     "builtinCatalogHash",
+                    "resolvedSpaceScale",
                     "components",
+                    "hostPrimitives",
                     "latestMetaVersion",
                     "tokens",
                     "fonts",
@@ -4367,10 +5728,35 @@
                       "items": {
                         "additionalProperties": {},
                         "properties": {
+                          "code": {
+                            "type": "string"
+                          },
                           "message": {
                             "type": "string"
                           },
-                          "path": {}
+                          "path": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              }
+                            ]
+                          },
+                          "pointer": {
+                            "type": "string"
+                          }
                         },
                         "required": [
                           "path",
@@ -5104,10 +6490,35 @@
                       "items": {
                         "additionalProperties": {},
                         "properties": {
+                          "code": {
+                            "type": "string"
+                          },
                           "message": {
                             "type": "string"
                           },
-                          "path": {}
+                          "path": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ]
+                                },
+                                "type": "array"
+                              }
+                            ]
+                          },
+                          "pointer": {
+                            "type": "string"
+                          }
                         },
                         "required": [
                           "path",

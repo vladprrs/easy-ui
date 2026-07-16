@@ -1,9 +1,17 @@
 import type { PrototypeDoc } from "../prototype/schema";
+import type { ComponentLayout, SpaceToken } from "../designSystems/types";
+
+export interface ValidationIssue {
+  path: string | (string | number)[];
+  pointer?: string;
+  message: string;
+  code?: string;
+}
 
 export interface ApiErrorBody {
   code: string;
   message: string;
-  issues?: unknown[];
+  issues?: ValidationIssue[];
   warnings?: unknown[];
   currentRev?: number;
   currentVersion?: number;
@@ -12,7 +20,7 @@ export interface ApiErrorBody {
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
-  readonly issues?: unknown[];
+  readonly issues?: ValidationIssue[];
   readonly warnings?: unknown[];
   readonly currentRev?: number;
   readonly currentVersion?: number;
@@ -87,14 +95,41 @@ export interface ComponentMeta { id: string; name: string; designSystem: string;
 export interface ComponentStatusResult { status: ComponentStatus; statusRev: number }
 export const setComponentVersionStatus = (id: string, version: number, change: { status: ComponentStatus; reason?: string; supersededBy?: number; baseStatusRev: number }, signal?: AbortSignal) =>
   request<ComponentStatusResult>(`${componentPath(id)}/versions/${version}/status`, { method: "POST", body: change, signal });
-export interface CatalogComponent { id: string; name: string; designSystem: string; version: number; bundleUrl: string; bundleHash: string; atomicLevel?: AtomicLevel; description: string; events: string[]; slots: string[]; hostAbiVersion: number; example?: Record<string, unknown>; examples?: Record<string, Record<string, unknown>> }
+export interface SerializedComponentDefinition {
+  atomicLevel?: AtomicLevel;
+  layoutNeutral?: boolean;
+  layout?: ComponentLayout;
+  description?: string;
+  events: string[];
+  eventPayloads?: Record<string, unknown>;
+  capabilities?: { typedEvents?: true; namedSlots?: true };
+  slots: string[];
+  example?: Record<string, unknown>;
+  examples?: Record<string, Record<string, unknown>>;
+  propsJsonSchema?: unknown;
+}
+export interface CatalogComponent extends SerializedComponentDefinition { id: string; name: string; designSystem: string; version: number; bundleUrl: string; bundleHash: string; hostAbiVersion: number; description: string }
 export interface CatalogManifest { components: CatalogComponent[] }
-export interface DesignSystemComponent { name: string; atomicLevel: AtomicLevel; layoutNeutral: boolean; description: string; events: string[]; slots: string[] }
+export interface DesignSystemComponent extends SerializedComponentDefinition { name: string; layoutNeutral: boolean; description: string }
+export interface HostPrimitiveDescriptor extends SerializedComponentDefinition { name: string; description: string }
 export interface ThemeFont { family: string; src: string; weight?: number | string; style?: string }
 export interface ThemeIcon { name: string; assetId: string; viewBox?: string; themes?: { light?: string; dark?: string } }
 export interface ThemeContent { tokens: Record<string, string | number>; fonts: ThemeFont[]; icons: ThemeIcon[] }
-export interface DesignSystemSummary { id: string; name: string; description: string; builtinCatalogHash: string; components: DesignSystemComponent[]; latestMetaVersion?: number | null; tokens?: ThemeContent["tokens"]; fonts?: ThemeContent["fonts"]; icons?: ThemeContent["icons"] }
+export interface DesignSystemSummary { id: string; name: string; description: string; builtinCatalogHash: string; resolvedSpaceScale?: Record<SpaceToken, string>; components: DesignSystemComponent[]; hostPrimitives?: HostPrimitiveDescriptor[]; latestMetaVersion?: number | null; tokens?: ThemeContent["tokens"]; fonts?: ThemeContent["fonts"]; icons?: ThemeContent["icons"] }
 export interface DesignSystemVersion extends ThemeContent { systemId: string; version: number; createdAt: string }
+export interface Capabilities {
+  apiVersion: 1;
+  documentVersion: 1;
+  layoutContractVersion: 1;
+  actions: string[];
+  directives: string[];
+  paramSources: string[];
+  conditions: string[];
+  limits: Record<string, number>;
+  designSystems: string[];
+  resolvedSpaceScales: Record<string, Record<SpaceToken, string>>;
+  features: Record<string, boolean> & { layoutContract: true };
+}
 
 type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
 
@@ -171,6 +206,7 @@ const componentPath = (id: string) => `/api/components/${encodeURIComponent(id)}
 
 export const listPrototypes = (signal?: AbortSignal) => request<PrototypeSummary[]>("/api/prototypes", { signal });
 export const listDesignSystems = (signal?: AbortSignal) => request<{designSystems: DesignSystemSummary[]}>("/api/design-systems", { signal });
+export const getCapabilities = (signal?: AbortSignal) => request<Capabilities>("/api/capabilities", { signal });
 export const getCatalogManifest = (signal?: AbortSignal) => request<CatalogManifest>("/api/catalog/manifest", { signal });
 export const getDesignSystemById = (id: string, signal?: AbortSignal) => request<DesignSystemSummary>(`/api/design-systems/${encodeURIComponent(id)}`, { signal });
 export const createDesignSystem = (id: string, name: string, description: string, signal?: AbortSignal) => request<DesignSystemSummary>("/api/design-systems", { method: "POST", body: { id, name, description }, signal });
@@ -218,7 +254,7 @@ export const getPrototypeRevisionFull = async (id: string, rev: number, signal?:
   revisionAssetsByPrototype.set(id, cached);
   return revision;
 };
-export interface ComponentVersion { version: number; rev: number; status?: ComponentStatus; statusReason?: string | null; supersededBy?: number | null; statusRev?: number; name?: string; source: string; designSystem: string; bundleHash: string; hostAbiVersion: number; events: string[]; slots: string[]; description?: string; example?: Record<string, unknown>; examples?: Record<string, Record<string, unknown>>; propsJsonSchema?: unknown; assets: { id: string; sha256: string; mime: string; size: number }[]; figma?: FigmaProvenance | null; publishedAt: string }
+export interface ComponentVersion extends SerializedComponentDefinition { version: number; rev: number; status?: ComponentStatus; statusReason?: string | null; supersededBy?: number | null; statusRev?: number; name?: string; source: string; designSystem: string; bundleHash: string; hostAbiVersion: number; assets: { id: string; sha256: string; mime: string; size: number }[]; figma?: FigmaProvenance | null; publishedAt: string }
 export const getComponentVersion = (id: string, version: number, signal?: AbortSignal) => request<ComponentVersion>(`${componentPath(id)}/versions/${version}`, { signal });
 export const restorePrototype = async (id: string, rev: number, baseRev: number, signal?: AbortSignal) => {
   const restored = await request<{rev: number}>(`${prototypePath(id)}/restore`, { method: "POST", body: { rev, baseRev }, signal });

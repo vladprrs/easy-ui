@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { prototypeDocSchema } from "../src/prototype/schema";
+import { atomicLevels, layoutSpacingProps, spaceTokens } from "../src/designSystems/types";
 import { ApiError } from "./http";
 import { figmaSchema } from "./figma";
 
@@ -70,6 +71,55 @@ export function parseQuery<T>(schema: z.ZodType<T>, searchParams: URLSearchParam
 // --- Contracts registered by this task (T1) ---
 
 const positiveIntFromString = z.string().regex(/^[1-9][0-9]*$/, "must be a positive integer").transform(Number);
+
+const jsonScalarSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+const layoutDirectionSchema = z.union([
+  z.enum(["vertical", "horizontal"]),
+  z.strictObject({
+    prop: z.string(),
+    vertical: z.array(jsonScalarSchema).min(1),
+    horizontal: z.array(jsonScalarSchema).min(1),
+    none: z.array(jsonScalarSchema).min(1).optional(),
+  }),
+]);
+export const componentLayoutSchema = z.strictObject({
+  version: z.literal(1),
+  spacing: z.array(z.enum(layoutSpacingProps)).optional(),
+  spacer: z.literal(true).optional(),
+  flow: z.strictObject({
+    kind: z.literal("flex"),
+    direction: layoutDirectionSchema,
+    wrap: z.strictObject({ prop: z.string(), enabled: z.array(jsonScalarSchema).min(1) }).optional(),
+    slot: z.string().optional(),
+  }).optional(),
+});
+export const spaceScaleSchema = z.object(Object.fromEntries(spaceTokens.map((token) => [token, z.string()])) as Record<(typeof spaceTokens)[number], z.ZodString>);
+export const validationIssueSchema = z.object({
+  path: z.union([z.string(), z.array(z.union([z.string(), z.number()]))]),
+  pointer: z.string().optional(),
+  message: z.string(),
+  code: z.string().optional(),
+});
+
+const componentExamplesSchema = z.record(
+  z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  z.record(z.string(), z.unknown()),
+);
+
+const componentCapabilitiesSchema = z.object({ typedEvents: z.literal(true).optional(), namedSlots: z.literal(true).optional() });
+const serializedDefinitionFields = {
+  atomicLevel: z.enum(atomicLevels).optional(),
+  layoutNeutral: z.boolean().optional(),
+  layout: componentLayoutSchema.optional(),
+  description: z.string(),
+  events: z.array(z.string()),
+  eventPayloads: z.record(z.string(), z.unknown()).optional(),
+  capabilities: componentCapabilitiesSchema.optional(),
+  slots: z.array(z.string()),
+  example: z.record(z.string(), z.unknown()).optional(),
+  examples: componentExamplesSchema.optional(),
+  propsJsonSchema: z.unknown().optional(),
+};
 
 export const renderStatusQuerySchema = z
   .strictObject({ version: positiveIntFromString.optional(), rev: positiveIntFromString.optional() })
@@ -207,11 +257,6 @@ const screenshotErrors = [
 ];
 
 export const jobAcceptedSchema = z.object({ jobId: z.string() });
-
-const componentExamplesSchema = z.record(
-  z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  z.record(z.string(), z.unknown()),
-);
 
 export const prototypeScreenshotContract = registerContract({
   method: "POST",
@@ -414,7 +459,7 @@ const errorCatalog = {
 const slugString = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 const positiveInt = z.number().int().positive();
 const isoDate = z.string();
-const issueSchema = z.looseObject({ path: z.unknown(), message: z.string() });
+const issueSchema = validationIssueSchema.loose();
 const screenUrlSchema = z.object({ id: z.string(), url: z.string() });
 const casBody = { baseRev: positiveInt, message: z.string().optional() };
 
@@ -782,8 +827,7 @@ export const getComponentVersionContract = registerContract({
   summary: "Read a published version: source, definition metadata, bundle hash, ABI, asset pins.",
   responseSchema: z.looseObject({
     version: z.number(), rev: z.number(), source: z.string(), designSystem: z.string(),
-    events: z.array(z.string()), slots: z.array(z.string()), description: z.string(),
-    examples: componentExamplesSchema.optional(),
+    ...serializedDefinitionFields,
     bundleHash: z.string(), hostAbiVersion: z.number(),
     assets: z.array(assetPublicSchema.omit({ width: true, height: true })), figma: figmaResponseSchema, publishedAt: isoDate,
   }),
@@ -814,7 +858,9 @@ export const getComponentBundleContract = registerContract({
 
 const designSystemSummarySchema = z.looseObject({
   id: z.string(), name: z.string(), description: z.string(), builtinCatalogHash: z.string(),
-  components: z.array(z.looseObject({ name: z.string(), description: z.string(), events: z.array(z.string()), slots: z.array(z.string()) })),
+  resolvedSpaceScale: spaceScaleSchema,
+  components: z.array(z.looseObject({ name: z.string(), ...serializedDefinitionFields })),
+  hostPrimitives: z.array(z.looseObject({ name: z.string(), ...serializedDefinitionFields })),
   latestMetaVersion: z.number().nullable(),
   tokens: themeTokensSchema, fonts: z.array(themeFontSchema), icons: z.array(themeIconSchema),
 });
@@ -851,7 +897,10 @@ export const catalogManifestContract = registerContract({
   summary: "Manifest of the latest active custom-component versions across design systems.",
   query: catalogManifestQuerySchema,
   validated: true,
-  responseSchema: z.object({ components: z.array(z.looseObject({ id: z.string(), name: z.string(), designSystem: z.string(), version: z.number(), bundleUrl: z.string(), bundleHash: z.string(), hostAbiVersion: z.number(), example: z.record(z.string(),z.unknown()).optional(), examples: componentExamplesSchema.optional() })) }),
+  responseSchema: z.object({ components: z.array(z.looseObject({
+    id: z.string(), name: z.string(), designSystem: z.string(), version: z.number(), bundleUrl: z.string(),
+    bundleHash: z.string(), hostAbiVersion: z.number(), ...serializedDefinitionFields,
+  })) }),
   errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed, errorCatalog.validationFailed],
 });
 
@@ -898,6 +947,7 @@ export const componentDefinitionSchemaContract = registerContract({
 export const capabilitiesResponseSchema = z.object({
   apiVersion: z.literal(1),
   documentVersion: z.literal(1),
+  layoutContractVersion: z.literal(1),
   actions: z.array(z.string()),
   directives: z.array(z.string()),
   paramSources: z.array(z.string()),
@@ -907,9 +957,10 @@ export const capabilitiesResponseSchema = z.object({
     assetMiB: z.number(), repeatBudget: z.number(), repeatPerScreen: z.number(), screenshotQueue: z.number(),
   }),
   designSystems: z.array(z.string()),
+  resolvedSpaceScales: z.record(z.string(), spaceScaleSchema),
   features: z.object({
     renderStatus: z.boolean(), screenshots: z.boolean(), visualRegression: z.boolean(), assets: z.boolean(),
-    typedEvents: z.boolean(), repeat: z.boolean(), namedSlots: z.boolean(), themeVersions: z.boolean(),
+    typedEvents: z.boolean(), repeat: z.boolean(), namedSlots: z.boolean(), themeVersions: z.boolean(), layoutContract: z.boolean(),
   }),
 });
 

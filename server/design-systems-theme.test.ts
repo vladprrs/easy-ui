@@ -44,6 +44,21 @@ async function createCustomSystem(handler: (r: Request) => Promise<Response>, id
 }
 
 describe("PATCH /api/design-systems/:id — theme grammar", () => {
+  test("publishes the latest resolved spacing scale in summary and capabilities and bumps compatibility hash", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "scale-discovery");
+    const before = await (await handler(req("/design-systems/scale-discovery"))).json() as { builtinCatalogHash: string };
+    const tokens = { ...fullSpace, "space.md": "20px", "space.lg": "24px", "space.xl": "32px", "space.2xl": "40px", "space.3xl": "56px", "space.4xl": "72px" };
+    expect((await handler(req("/design-systems/scale-discovery", "PATCH", { tokens, baseVersion: 0 }))).status).toBe(200);
+    const summary = await (await handler(req("/design-systems/scale-discovery"))).json() as { builtinCatalogHash: string; resolvedSpaceScale: Record<string,string>; hostPrimitives: unknown[] };
+    expect(summary.resolvedSpaceScale).toMatchObject({ md: "20px", "2xl": "40px", "4xl": "72px" });
+    expect(summary.hostPrimitives).toEqual([]);
+    expect(summary.builtinCatalogHash).not.toBe(before.builtinCatalogHash);
+    const capabilities = await (await handler(req("/capabilities"))).json() as { resolvedSpaceScales: Record<string,Record<string,string>> };
+    expect(capabilities.resolvedSpaceScales["scale-discovery"]).toEqual(summary.resolvedSpaceScale);
+    db.close();
+  });
+
   test("creates version 1 for valid tokens/fonts/icons and reads it back immutably", async () => {
     const { db, handler } = await setup();
     await createCustomSystem(handler, "custom-a");

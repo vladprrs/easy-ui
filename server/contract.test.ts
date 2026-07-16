@@ -214,6 +214,9 @@ describe("route contracts", () => {
       screenshotQueue: MAX_QUEUE,
     });
     expect(value.designSystems).toEqual(expect.arrayContaining(["shadcn", "wireframe"]));
+    expect(value.layoutContractVersion).toBe(1);
+    expect(value.features.layoutContract).toBe(true);
+    expect(value.resolvedSpaceScales.shadcn).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
     expect(Object.values(value.features).every((flag) => flag === true)).toBe(true);
   });
 
@@ -244,7 +247,7 @@ describe("route contracts", () => {
     expect(schema.$schema).toContain("json-schema.org");
     expect(schema.type).toBe("object");
     expect(schema.required).toEqual(["props", "description"]);
-    for (const key of ["props", "events", "slots", "capabilities", "description", "example", "atomicLevel"]) {
+    for (const key of ["props", "events", "slots", "capabilities", "description", "example", "atomicLevel", "layoutNeutral", "layout"]) {
       expect(schema.properties).toHaveProperty(key);
     }
     const events = schema.properties.events as { anyOf: unknown[] };

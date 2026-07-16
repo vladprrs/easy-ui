@@ -2,11 +2,24 @@
  "shadcn": {
   "name": "Shadcn",
   "description": "Accessible shadcn/ui components for polished product interfaces.",
+  "resolvedSpaceScale": {
+   "none": "0px",
+   "xs": "4px",
+   "sm": "8px",
+   "md": "12px",
+   "lg": "16px",
+   "xl": "24px",
+   "2xl": "32px",
+   "3xl": "48px",
+   "4xl": "64px"
+  },
+  "hostPrimitives": [],
   "components": {
    "Card": {
     "description": "Container card for content sections. Use for forms/content boxes, NOT for page headers.",
     "atomicLevel": "organism",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -81,7 +94,25 @@
     "description": "Flex container for layouts",
     "atomicLevel": "atom",
     "layoutNeutral": true,
-    "props": {
+    "layout": {
+     "version": 1,
+     "spacing": [
+      "gap"
+     ],
+     "flow": {
+      "kind": "flex",
+      "direction": {
+       "prop": "direction",
+       "vertical": [
+        "vertical"
+       ],
+       "horizontal": [
+        "horizontal"
+       ]
+      }
+     }
+    },
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -174,7 +205,13 @@
     "description": "Grid layout (1-6 columns)",
     "atomicLevel": "atom",
     "layoutNeutral": true,
-    "props": {
+    "layout": {
+     "version": 1,
+     "spacing": [
+      "gap"
+     ]
+    },
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -228,7 +265,8 @@
    "Separator": {
     "description": "Visual separator line",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -253,7 +291,8 @@
    "Tabs": {
     "description": "Tab navigation. Use { $bindState } on value for active tab binding.",
     "atomicLevel": "organism",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -312,7 +351,8 @@
    "Accordion": {
     "description": "Collapsible sections. Items as [{title, content}]. Type 'single' (default) or 'multiple'.",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -359,7 +399,8 @@
    "Collapsible": {
     "description": "Collapsible section with trigger. Children render inside.",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -389,7 +430,8 @@
    "Dialog": {
     "description": "Modal dialog. Set openPath to a boolean state path. Use setState to toggle.",
     "atomicLevel": "organism",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -423,7 +465,8 @@
    "Drawer": {
     "description": "Bottom sheet drawer. Set openPath to a boolean state path. Use setState to toggle.",
     "atomicLevel": "organism",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -457,7 +500,8 @@
    "Carousel": {
     "description": "Horizontally scrollable carousel of cards.",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -500,7 +544,8 @@
    "Table": {
     "description": "Data table. columns: header labels. rows: 2D array of cell strings, e.g. [[\"Alice\",\"admin\"],[\"Bob\",\"user\"]].",
     "atomicLevel": "organism",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -556,7 +601,8 @@
    "Heading": {
     "description": "Heading text (h1-h4)",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -593,7 +639,8 @@
    "Text": {
     "description": "Paragraph text",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -630,7 +677,8 @@
    "Image": {
     "description": "Image component. Renders an img tag when src is provided, otherwise a placeholder.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -677,7 +725,8 @@
    "Avatar": {
     "description": "User avatar with fallback initials",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -723,7 +772,8 @@
    "Badge": {
     "description": "Status badge",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -760,7 +810,8 @@
    "Alert": {
     "description": "Alert banner",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -808,7 +859,8 @@
    "Progress": {
     "description": "Progress bar (value 0-100)",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -850,7 +902,8 @@
    "Skeleton": {
     "description": "Loading placeholder skeleton",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -891,7 +944,8 @@
    "Spinner": {
     "description": "Loading spinner indicator",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -927,7 +981,8 @@
    "Tooltip": {
     "description": "Hover tooltip. Shows content on hover over text.",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -948,7 +1003,8 @@
    "Popover": {
     "description": "Popover that appears on click of trigger.",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -969,7 +1025,8 @@
    "Input": {
     "description": "Text input field. Use { $bindState } on value for two-way binding. Use checks for validation (e.g. required, email, minLength). validateOn controls timing (default: blur).",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1085,7 +1142,8 @@
    "Textarea": {
     "description": "Multi-line text input. Use { $bindState } on value for binding. Use checks for validation. validateOn controls timing (default: blur).",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1184,7 +1242,8 @@
    "Select": {
     "description": "Dropdown select input. Use { $bindState } on value for binding. Use checks for validation. validateOn controls timing (default: change).",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1283,7 +1342,8 @@
    "Checkbox": {
     "description": "Checkbox input. Use { $bindState } on checked for binding. Use checks for validation. validateOn controls timing (default: change).",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1365,7 +1425,8 @@
    "Radio": {
     "description": "Radio button group. Use { $bindState } on value for binding. Use checks for validation. validateOn controls timing (default: change).",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1454,7 +1515,8 @@
    "Switch": {
     "description": "Toggle switch. Use { $bindState } on checked for binding. Use checks for validation. validateOn controls timing (default: change).",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1536,7 +1598,8 @@
    "Slider": {
     "description": "Range slider input. Use { $bindState } on value for binding.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1600,7 +1663,8 @@
    "Button": {
     "description": "Clickable button. Bind on.press for handler.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1649,7 +1713,8 @@
    "Link": {
     "description": "Anchor link. Bind on.press for click handler.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1673,7 +1738,8 @@
    "DropdownMenu": {
     "description": "Dropdown menu with trigger button and selectable items. Use { $bindState } on value for selected item binding.",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1723,7 +1789,8 @@
    "Toggle": {
     "description": "Toggle button. Use { $bindState } on pressed for state binding.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1767,7 +1834,8 @@
    "ToggleGroup": {
     "description": "Group of toggle buttons. Type 'single' (default) or 'multiple'. Use { $bindState } on value.",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1827,7 +1895,8 @@
    "ButtonGroup": {
     "description": "Segmented button group. Use { $bindState } on selected for selected value.",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1873,7 +1942,8 @@
    "Pagination": {
     "description": "Page navigation. Use { $bindState } on page for current page number.",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1903,7 +1973,8 @@
    "Hotspot": {
     "description": "Transparent, keyboard-accessible absolute-positioned action area.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1944,12 +2015,24 @@
  "wireframe": {
   "name": "Wireframe",
   "description": "Schematic low-fidelity components for rapidly mapping interface structure.",
+  "resolvedSpaceScale": {
+   "none": "0px",
+   "xs": "4px",
+   "sm": "8px",
+   "md": "16px",
+   "lg": "24px",
+   "xl": "32px",
+   "2xl": "48px",
+   "3xl": "64px",
+   "4xl": "80px"
+  },
+  "hostPrimitives": [],
   "components": {
    "Box": {
     "description": "Dashed wireframe container for grouping content.",
     "atomicLevel": "atom",
     "layoutNeutral": true,
-    "props": {
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1970,7 +2053,17 @@
     "description": "Vertical layout for wireframe elements.",
     "atomicLevel": "atom",
     "layoutNeutral": true,
-    "props": {
+    "layout": {
+     "version": 1,
+     "spacing": [
+      "gap"
+     ],
+     "flow": {
+      "kind": "flex",
+      "direction": "vertical"
+     }
+    },
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -1978,9 +2071,15 @@
        "default": "md",
        "type": "string",
        "enum": [
+        "none",
+        "xs",
         "sm",
         "md",
-        "lg"
+        "lg",
+        "xl",
+        "2xl",
+        "3xl",
+        "4xl"
        ]
       }
      },
@@ -1997,7 +2096,7 @@
     "description": "Responsive-looking schematic column layout.",
     "atomicLevel": "atom",
     "layoutNeutral": true,
-    "props": {
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -2035,7 +2134,8 @@
    "Heading": {
     "description": "Wireframe heading text.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -2077,7 +2177,8 @@
    "Text": {
     "description": "Wireframe body copy.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -2097,7 +2198,8 @@
    "Image": {
     "description": "Schematic image placeholder with a diagonal cross.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -2123,7 +2225,8 @@
    "Button": {
     "description": "Low-fidelity action button.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -2151,7 +2254,8 @@
    "Input": {
     "description": "Low-fidelity single-line text input.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -2187,7 +2291,8 @@
    "Checkbox": {
     "description": "Low-fidelity checkbox control.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -2220,7 +2325,8 @@
    "Hotspot": {
     "description": "Transparent, keyboard-accessible absolute-positioned action area.",
     "atomicLevel": "atom",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -2266,7 +2372,8 @@
    "Select": {
     "description": "Low-fidelity option picker.",
     "atomicLevel": "molecule",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
@@ -2328,7 +2435,8 @@
    "Card": {
     "description": "Dashed wireframe card with an optional title.",
     "atomicLevel": "organism",
-    "props": {
+    "layoutNeutral": false,
+    "propsJsonSchema": {
      "$schema": "https://json-schema.org/draft/2020-12/schema",
      "type": "object",
      "properties": {
