@@ -49,8 +49,8 @@ describe("VisualPage reference capture", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(listVisualReferences).mockResolvedValue({ references: [] });
-    vi.mocked(listPrototypes).mockResolvedValue([{ id: "checkout", name: "Checkout", device: "mobile", screenCount: 2, headRev: 2, latestVersion: 1, updatedAt: "now" }]);
-    vi.mocked(getPrototypeMeta).mockResolvedValue({ id: "checkout", name: "Checkout", designSystem: "shadcn", headRev: 2, latestVersion: 1, versions: [{ version: 1, rev: 1, publishedAt: "then" }], updatedAt: "now" });
+    vi.mocked(listPrototypes).mockResolvedValue([{ id: "checkout", name: "Checkout", device: "mobile", screenCount: 2, headRev: 2, latestVersion: 1, updatedAt: "now", status: "private", owner: { id: "user_admin", name: "Admin" } }]);
+    vi.mocked(getPrototypeMeta).mockResolvedValue({ id: "checkout", name: "Checkout", designSystem: "shadcn", headRev: 2, latestVersion: 1, versions: [{ version: 1, rev: 1, publishedAt: "then" }], updatedAt: "now", status: "private", owner: { id: "user_admin", name: "Admin" } });
     vi.mocked(listPrototypeRevisions).mockResolvedValue([{ rev: 2, message: null, createdAt: "now" }, { rev: 1, message: null, createdAt: "then" }]);
     vi.mocked(getPrototypeRevision).mockResolvedValue(snapshot);
     vi.mocked(getPrototypeVersion).mockResolvedValue({ ...snapshot, rev: 1, version: 1, publishedAt: "then" });

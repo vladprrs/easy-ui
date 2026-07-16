@@ -64,7 +64,12 @@ export interface PrototypeSummary {
   headRev: number;
   latestVersion: number | null;
   updatedAt: string;
+  status: PrototypeStatus;
+  owner: ResourceOwner;
 }
+
+export interface ResourceOwner { id: string; name: string }
+export type PrototypeStatus = "private" | "published" | "archived";
 
 // Figma provenance (plan §J): an immutable per-revision link back to the source Figma file.
 export interface FigmaProvenance { fileKey: string; nodeIds: string[]; referenceScreenshots?: string[]; lastSyncedAt?: string }
@@ -80,6 +85,8 @@ export interface PrototypeMeta {
   versions: PrototypeVersionSummary[];
   updatedAt: string;
   figma?: FigmaProvenance | null;
+  status: PrototypeStatus;
+  owner: ResourceOwner;
 }
 export interface PrototypeComponentPin { id: string; name: string; version: number; bundleUrl: string; bundleHash: string }
 export interface AssetPin { id: string; sha256: string; mime: string; size: number }
@@ -311,5 +318,7 @@ export const restorePrototype = async (id: string, rev: number, baseRev: number,
   return restored;
 };
 export const publishPrototype = (id: string, baseRev: number, message?: string, signal?: AbortSignal) => request<PublishPrototypeResult>(`${prototypePath(id)}/publish`, { method: "POST", body: { baseRev, message }, signal });
+export const setPrototypeStatus = (id: string, status: PrototypeStatus, signal?: AbortSignal) =>
+  request<{ status: PrototypeStatus }>(`${prototypePath(id)}/status`, { method: "POST", body: { status }, signal });
 export const listPrototypeVersions = (id: string, signal?: AbortSignal) => request<PrototypeVersionSummary[]>(`${prototypePath(id)}/versions`, { signal });
 export const getPrototypeVersion = (id: string, version: number, signal?: AbortSignal) => request<PrototypeVersion>(`${prototypePath(id)}/versions/${version}`, { signal });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { componentStatusBadge } from "./statusBadge";
+import { componentStatusBadge, prototypeStatusBadge } from "./statusBadge";
 
 describe("componentStatusBadge", () => {
   it("renders no badge for active and lifecycle-internal statuses", () => {
@@ -18,5 +18,13 @@ describe("componentStatusBadge", () => {
   it("carries the reason into the title when provided", () => {
     expect(componentStatusBadge("rejected", "  unsafe code  ")).toMatchObject({ title: "Отклонён: unsafe code" });
     expect(componentStatusBadge("deprecated", "   ")?.title).toBe("Устаревший");
+  });
+});
+
+describe("prototypeStatusBadge", () => {
+  it("maps every visibility status to a Russian badge", () => {
+    expect(prototypeStatusBadge("private")).toMatchObject({ label: "Личный", title: "Личный" });
+    expect(prototypeStatusBadge("published")).toMatchObject({ label: "Общий", title: "Общий" });
+    expect(prototypeStatusBadge("archived")).toMatchObject({ label: "В архиве", title: "В архиве" });
   });
 });

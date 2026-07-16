@@ -1,25 +1,74 @@
 import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { createPrototype, getCatalogManifest, listDesignSystems, listPrototypes, listPrototypeVersions, type PrototypeSummary, type PrototypeVersionSummary } from "../api/client";
+import { ApiError, createPrototype, getCatalogManifest, listDesignSystems, listPrototypes, listPrototypeVersions, setPrototypeStatus, type PrototypeStatus, type PrototypeSummary, type PrototypeVersionSummary } from "../api/client";
 import { useApi } from "../api/hooks";
 import { chip, chipActive, headingPage, inputBase, pillGhost, pillPrimary, plate } from "../app/chrome";
 import { common } from "../app/strings/common";
 import { deviceNames, gallery, versionLink } from "../app/strings/gallery";
 import { useDocumentTitle } from "../app/useDocumentTitle";
+import { useAuth } from "../auth";
+import { prototypeStatusBadge } from "../library/statusBadge";
 import { BUILTIN_TEMPLATE_VERSION, buildBuiltinPrototypeTemplate, buildCustomPrototypeTemplate, createPrototypeId, findCustomStarterComponent, isBuiltinDesignSystem } from "./prototypeTemplates";
 import { GalleryPreview, GALLERY_PREVIEWS_ENABLED } from "./GalleryPreview";
 import { GalleryShareDialog } from "./GalleryShareDialog";
 
 export type GallerySort = "updated" | "name";
+export type GalleryTab = "mine" | "shared" | "archive";
 
-export function filterAndSortPrototypes(prototypes: PrototypeSummary[], systemId: string | null, query: string, sort: GallerySort): PrototypeSummary[] {
+export interface GalleryFilters {
+  tab: GalleryTab;
+  userId: string;
+  systemId: string | null;
+  query: string;
+  sort: GallerySort;
+}
+
+export function filterAndSortPrototypes(prototypes: PrototypeSummary[], filters: GalleryFilters): PrototypeSummary[] {
+  const { tab, userId, systemId, query, sort } = filters;
   const normalizedQuery = query.trim().toLocaleLowerCase("ru");
   const filtered = prototypes
+    .filter((prototype) => tab === "mine"
+      ? prototype.owner.id === userId && prototype.status !== "archived"
+      : tab === "shared"
+        ? prototype.status === "published"
+        : prototype.owner.id === userId && prototype.status === "archived")
     .filter((prototype) => systemId === null || (prototype.designSystem ?? "shadcn") === systemId)
     .filter((prototype) => !normalizedQuery || prototype.name.toLocaleLowerCase("ru").includes(normalizedQuery));
   return [...filtered].sort(sort === "name"
       ? (left, right) => left.name.localeCompare(right.name, "ru", { numeric: true, sensitivity: "base" })
       : (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.name.localeCompare(right.name, "ru", { numeric: true, sensitivity: "base" }));
+}
+
+function PrototypeStatusBadge({ status }: { status: PrototypeStatus }) {
+  const badge = prototypeStatusBadge(status);
+  return <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${badge.className}`} title={badge.title}>{badge.label}</span>;
+}
+
+function OwnerControls({ prototype, onChanged }: { prototype: PrototypeSummary; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const changeStatus = async (status: PrototypeStatus) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await setPrototypeStatus(prototype.id, status);
+      setBusy(false);
+      onChanged();
+    } catch (cause) {
+      setError(cause instanceof ApiError && cause.status === 409 && cause.code === "prototype_not_renderable"
+        ? gallery.restoreNotRenderable
+        : gallery.statusChangeFailed);
+      setBusy(false);
+    }
+  };
+  return <>
+    {prototype.status === "private" ? <button type="button" className={pillGhost} disabled={busy} onClick={() => void changeStatus("published")}>{gallery.publish}</button> : null}
+    {prototype.status === "published" ? <button type="button" className={pillGhost} disabled={busy} onClick={() => void changeStatus("private")}>{gallery.unpublish}</button> : null}
+    {prototype.status !== "archived" ? <button type="button" className={pillGhost} disabled={busy} onClick={() => void changeStatus("archived")}>{gallery.archive}</button> : null}
+    {prototype.status === "archived" ? <button type="button" className={pillGhost} disabled={busy} onClick={() => void changeStatus("private")}>{gallery.restore}</button> : null}
+    {busy ? <span className="self-center text-xs text-eui-slate-500" role="status">{gallery.statusChanging}</span> : null}
+    {error ? <p className="basis-full text-xs text-eui-magenta" role="alert">{error}</p> : null}
+  </>;
 }
 
 const updatedAtFormatter = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
@@ -72,12 +121,14 @@ type CreateDialogState = {
 
 export function GalleryPage() {
   useDocumentTitle(gallery.title);
+  const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const prototypes = useApi(listPrototypes, []);
   const designSystems = useApi(listDesignSystems, []);
   const catalog = useApi(getCatalogManifest, []);
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
+  const [tab, setTab] = useState<GalleryTab>("mine");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<GallerySort>("updated");
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null);
@@ -96,10 +147,10 @@ export function GalleryPage() {
   }, [designSystems, prototypes]);
   const systemNames = useMemo(() => new Map(systems.map(({ id, name }) => [id, name])), [systems]);
   const visiblePrototypes = useMemo(() => prototypes.status === "ready"
-    ? filterAndSortPrototypes(prototypes.data, selectedSystem, query, sort)
-    : [], [prototypes, query, selectedSystem, sort]);
+    ? filterAndSortPrototypes(prototypes.data, { tab, userId: user?.userId ?? "", systemId: selectedSystem, query, sort })
+    : [], [prototypes, query, selectedSystem, sort, tab, user?.userId]);
   const previewsEnabled = GALLERY_PREVIEWS_ENABLED && new URLSearchParams(location.search).get("galleryPreviews") !== "off";
-  const loading = prototypes.status === "loading" || designSystems.status === "loading";
+  const loading = authLoading || prototypes.status === "loading" || designSystems.status === "loading";
   const failed = prototypes.status === "error" || designSystems.status === "error";
   const reload = () => { prototypes.reload(); designSystems.reload(); };
   const openCreateDialog = () => {
@@ -133,9 +184,13 @@ export function GalleryPage() {
       {!loading && !failed ? <button type="button" className={pillPrimary} onClick={openCreateDialog}>{gallery.newPrototype}</button> : null}
     </div>
     <p className="mt-2 text-eui-slate-500">{gallery.subtitle}</p>
+    {typeof location.state === "object" && location.state && "notice" in location.state && typeof location.state.notice === "string" ? <p className={`${plate} mt-5 text-sm text-eui-brand`} role="status">{location.state.notice}</p> : null}
     {loading ? <p className={`${plate} mt-8 text-eui-slate-500`} aria-live="polite">{gallery.loading}</p> : null}
     {failed ? <div className={`${plate} mt-8 text-eui-magenta`} role="alert"><p>{gallery.apiUnavailable}</p><button className={`${pillGhost} mt-3`} type="button" onClick={reload}>{common.retry}</button></div> : null}
-    {!loading && !failed ? <div className="mt-6 flex flex-wrap gap-2" aria-label={gallery.designSystemsAria}>
+    {!loading && !failed ? <div className="mt-6 flex flex-wrap gap-2" aria-label={gallery.tabsAria}>
+      {([['mine', gallery.tabMine], ['shared', gallery.tabShared], ['archive', gallery.tabArchive]] as const).map(([id, label]) => <button type="button" key={id} aria-pressed={tab === id} className={tab === id ? chipActive : chip} onClick={() => setTab(id)}>{label}</button>)}
+    </div> : null}
+    {!loading && !failed ? <div className="mt-4 flex flex-wrap gap-2" aria-label={gallery.designSystemsAria}>
       <button type="button" aria-pressed={selectedSystem === null} className={selectedSystem === null ? chipActive : chip} onClick={() => setSelectedSystem(null)}>{gallery.allSystems}</button>
       {systems.map((system) => <button type="button" key={system.id} aria-pressed={selectedSystem === system.id} className={selectedSystem === system.id ? chipActive : chip} onClick={() => setSelectedSystem(system.id)}>{system.name}</button>)}
     </div> : null}
@@ -151,7 +206,10 @@ export function GalleryPage() {
       </label>
     </div> : null}
     {!loading && !failed && visiblePrototypes.length ? <ul className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-      {visiblePrototypes.map((prototype) => <li className="relative flex min-w-0 flex-col rounded-3xl bg-eui-lav p-6 transition-shadow focus-within:shadow-lg hover:shadow-lg" key={prototype.id}>
+      {visiblePrototypes.map((prototype) => {
+        const isOwner = prototype.owner.id === user?.userId;
+        return <li className="relative flex min-w-0 flex-col rounded-3xl bg-eui-lav p-6 transition-shadow focus-within:shadow-lg hover:shadow-lg" key={prototype.id}>
+        <div className="mb-3 flex flex-wrap gap-2"><PrototypeStatusBadge status={prototype.status} />{!isOwner ? <span className="rounded-full bg-eui-lilac-200 px-2.5 py-1 text-xs font-bold">{gallery.ownerBadge(prototype.owner.name)}</span> : null}</div>
         <h2 className="min-w-0 font-eui-display text-xl font-medium [overflow-wrap:anywhere]">
           <Link
             className="after:absolute after:inset-0 after:rounded-3xl after:content-[''] focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-eui-brand"
@@ -169,11 +227,12 @@ export function GalleryPage() {
         <div className="relative z-10 mt-5 flex flex-wrap gap-2">
           <Link className={`${pillGhost} bg-white`} to={`/p/${prototype.id}/present`}>{gallery.presentLink}</Link>
           <Link className={pillGhost} to={`/p/${prototype.id}/cjm`}>CJM</Link>
-          <Link className={pillGhost} to={`/p/${prototype.id}/edit`}>{gallery.editorLink}</Link>
-          {prototype.latestVersion !== null ? <button type="button" className={pillGhost} title={gallery.qrOnPhone} aria-label={gallery.qrOnPhone} onClick={() => { setSharePrototypeId(prototype.id); setShareLatestVersion(prototype.latestVersion); }}>{gallery.qrOnPhone}</button> : null}
+          {isOwner ? <Link className={pillGhost} to={`/p/${prototype.id}/edit`}>{gallery.editorLink}</Link> : null}
+          {isOwner && prototype.latestVersion !== null ? <button type="button" className={pillGhost} title={gallery.qrOnPhone} aria-label={gallery.qrOnPhone} onClick={() => { setSharePrototypeId(prototype.id); setShareLatestVersion(prototype.latestVersion); }}>{gallery.qrOnPhone}</button> : null}
           {prototype.latestVersion !== null ? <VersionsMenu prototype={prototype} /> : null}
+          {isOwner ? <OwnerControls prototype={prototype} onChanged={prototypes.reload} /> : null}
         </div>
-      </li>)}
+      </li>;})}
     </ul> : null}
     {!loading && !failed && !visiblePrototypes.length ? prototypes.status === "ready" && prototypes.data.length
       ? <p className={`${plate} mt-8 text-eui-slate-500`}>{query.trim() ? gallery.emptySearch : gallery.emptyFiltered}</p>

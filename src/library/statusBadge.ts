@@ -1,4 +1,4 @@
-import type { ComponentStatus } from "../api/client";
+import type { ComponentStatus, PrototypeStatus } from "../api/client";
 import { componentStatusLabels } from "../app/strings/library";
 
 // Visual status badge for a custom component version (K.3). `active` (and lifecycle-internal
@@ -17,4 +17,15 @@ export function componentStatusBadge(status: ComponentStatus, reason?: string | 
   const badge = BADGES[status];
   if (!badge) return null;
   return { label: badge.label, className: badge.className, title: reason?.trim() ? `${badge.label}: ${reason.trim()}` : badge.label };
+}
+
+const PROTOTYPE_BADGES: Record<PrototypeStatus, { label: string; className: string }> = {
+  private: { label: "Личный", className: "bg-white text-eui-slate-600" },
+  published: { label: "Общий", className: "bg-emerald-100 text-emerald-800" },
+  archived: { label: "В архиве", className: "bg-eui-slate-200 text-eui-slate-600" },
+};
+
+export function prototypeStatusBadge(status: PrototypeStatus): ComponentStatusBadge {
+  const badge = PROTOTYPE_BADGES[status];
+  return { ...badge, title: badge.label };
 }

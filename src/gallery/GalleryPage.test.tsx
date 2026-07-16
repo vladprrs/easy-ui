@@ -1,17 +1,22 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPrototype, getCatalogManifest, getPrototypeDraft, listDesignSystems, listPrototypes, listPrototypeVersions } from "../api/client";
-import { GalleryPage } from "./GalleryPage";
+import { ApiError, createPrototype, getCatalogManifest, getPrototypeDraft, listDesignSystems, listPrototypes, listPrototypeVersions, setPrototypeStatus, type PrototypeSummary } from "../api/client";
+import { filterAndSortPrototypes, GalleryPage } from "./GalleryPage";
 
-vi.mock("../api/client", () => ({ createPrototype: vi.fn(), getCatalogManifest: vi.fn(), getPrototypeDraft: vi.fn(), listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn() }));
+vi.mock("../api/client", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../api/client")>();
+  return { ...original, createPrototype: vi.fn(), getCatalogManifest: vi.fn(), getPrototypeDraft: vi.fn(), listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn(), setPrototypeStatus: vi.fn() };
+});
+vi.mock("../auth", () => ({ useAuth: () => ({ user: { userId: "user-me", name: "Я", isAdmin: false }, loading: false }) }));
 vi.mock("./GalleryShareDialog", () => ({
   GalleryShareDialog: ({ prototypeId, latestVersion, onClose }: { prototypeId: string; latestVersion: number; onClose: () => void }) => <div role="dialog" aria-label={`QR ${prototypeId} v${latestVersion}`}><button type="button" onClick={onClose}>Закрыть QR</button></div>,
 }));
 
-const summary = {
+const summary: PrototypeSummary = {
   id: "hello-world", name: "Hello World", description: "A minimal two-screen prototype.", device: "mobile" as const,
   screenCount: 2, headRev: 3, latestVersion: 2, updatedAt: "2026-07-10T00:00:00.000Z",
+  status: "private", owner: { id: "user-me", name: "Я" },
 };
 
 const draft = {
@@ -52,6 +57,7 @@ describe("GalleryPage", () => {
     vi.mocked(createPrototype).mockReset();
     vi.mocked(getCatalogManifest).mockReset();
     vi.mocked(getPrototypeDraft).mockReset();
+    vi.mocked(setPrototypeStatus).mockReset();
     vi.mocked(getPrototypeDraft).mockResolvedValue(draft);
     intersectionObservers = [];
     vi.stubGlobal("IntersectionObserver", class {
@@ -70,6 +76,7 @@ describe("GalleryPage", () => {
     });
     vi.mocked(getCatalogManifest).mockResolvedValue({ components: [] });
     vi.mocked(createPrototype).mockResolvedValue({ id: "created-prototype", rev: 1, warnings: [] });
+    vi.mocked(setPrototypeStatus).mockImplementation(async (_id, status) => ({ status }));
     vi.mocked(listPrototypeVersions).mockResolvedValue([{ version: 2, rev: 3, publishedAt: "2026-07-10T00:00:00.000Z" }]);
     vi.mocked(listDesignSystems).mockResolvedValue({ designSystems: [
       { id: "shadcn", name: "Shadcn", description: "", builtinCatalogHash: "one", components: [] },
@@ -241,6 +248,47 @@ describe("GalleryPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "classic" }));
     expect(screen.getByRole("heading", { name: "Legacy flow" })).toBeTruthy();
     expect(within(screen.getByRole("heading", { name: "Legacy flow" }).closest("li")!).getByText("classic")).toBeTruthy();
+  });
+
+  it("filters mine, shared and archive tabs in the chokepoint", () => {
+    const rows: PrototypeSummary[] = [
+      { ...summary, id: "own-private", name: "Own private", status: "private" },
+      { ...summary, id: "own-published", name: "Own published", status: "published" },
+      { ...summary, id: "own-archived", name: "Own archived", status: "archived" },
+      { ...summary, id: "foreign-published", name: "Foreign published", status: "published", owner: { id: "user-other", name: "Другой" } },
+    ];
+    const ids = (tab: "mine" | "shared" | "archive") => filterAndSortPrototypes(rows, { tab, userId: "user-me", systemId: null, query: "", sort: "name" }).map(({ id }) => id);
+    expect(ids("mine")).toEqual(["own-private", "own-published"]);
+    expect(ids("shared")).toEqual(["foreign-published", "own-published"]);
+    expect(ids("archive")).toEqual(["own-archived"]);
+  });
+
+  it("renders mutation controls only for the owner and changes status through the API", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([
+      { ...summary, id: "own", name: "Свой", status: "published" },
+      { ...summary, id: "foreign", name: "Чужой", status: "published", owner: { id: "user-other", name: "Анна" } },
+    ]);
+    renderGallery();
+    fireEvent.click(await screen.findByRole("button", { name: "Общие" }));
+    const own = screen.getByRole("heading", { name: "Свой" }).closest("li")!;
+    const foreign = screen.getByRole("heading", { name: "Чужой" }).closest("li")!;
+    expect(within(own).getByRole("link", { name: "Редактор" })).toBeTruthy();
+    expect(within(own).getByRole("button", { name: "Снять с публикации" })).toBeTruthy();
+    expect(within(foreign).getByText("Владелец: Анна")).toBeTruthy();
+    expect(within(foreign).queryByRole("link", { name: "Редактор" })).toBeNull();
+    expect(within(foreign).queryByRole("button", { name: "Снять с публикации" })).toBeNull();
+    expect(within(foreign).queryByRole("button", { name: "В архив" })).toBeNull();
+    fireEvent.click(within(own).getByRole("button", { name: "Снять с публикации" }));
+    await waitFor(() => expect(setPrototypeStatus).toHaveBeenCalledWith("own", "private"));
+  });
+
+  it("shows the typed 409 message when an archived head is not renderable", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([{ ...summary, status: "archived" }]);
+    vi.mocked(setPrototypeStatus).mockRejectedValue(new ApiError(409, { code: "prototype_not_renderable", message: "not renderable" }));
+    renderGallery();
+    fireEvent.click(await screen.findByRole("button", { name: "Архив" }));
+    fireEvent.click(screen.getByRole("button", { name: "Вернуть из архива" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("текущая ревизия не отображается");
   });
 
   it("creates a builtin template from the empty-state CTA and opens its editor", async () => {

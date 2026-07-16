@@ -1,11 +1,12 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { createMemoryRouter, RouterProvider } from "react-router";
+import { createMemoryRouter, RouterProvider, useLocation } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { FigmaProvenance, PrototypeDraft } from "../api/client";
 import { routeObjects } from "../app/routes";
 import { prototypeDocSchema } from "../prototype/schema";
+import { EditorShell } from "./EditorShell";
 
 const mocks = vi.hoisted(() => ({ loadCustom: vi.fn() }));
 vi.mock("../customComponents/loader", () => ({ loadCustomComponents: mocks.loadCustom }));
@@ -16,10 +17,16 @@ const doc = prototypeDocSchema.parse({
 });
 const draft: PrototypeDraft = { doc, rev: 7, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] };
 const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
+const isEditorGuard = (input: RequestInfo | URL) => String(input).includes("/revisions?limit=1");
 
 function renderEditor(protoId = "editor-demo") {
   const router = createMemoryRouter(routeObjects, { initialEntries: [`/p/${protoId}/edit`] });
   render(<RouterProvider router={router} />);
+}
+
+function RedirectNotice() {
+  const location = useLocation();
+  return <p>{(location.state as { notice?: string } | null)?.notice}</p>;
 }
 
 describe("EditorShell", () => {
@@ -29,14 +36,30 @@ describe("EditorShell", () => {
     vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
     Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: vi.fn(() => []) });
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      if (isEditorGuard(input)) return json([]);
       if (String(input) === "/api/prototypes/editor-demo/draft") return json(draft);
       throw new Error(`Unexpected request: ${String(input)}`);
     }));
   });
 
+  it("redirects when the owner-only server check rejects access", async () => {
+    vi.mocked(fetch).mockImplementation((input) => isEditorGuard(input)
+      ? json({ error: { code: "forbidden", message: "forbidden" } }, 403)
+      : Promise.reject(new Error(`Unexpected request: ${String(input)}`)));
+    const router = createMemoryRouter([
+      { path: "/", element: <RedirectNotice /> },
+      { path: "/p/:protoId/edit", element: <EditorShell /> },
+    ], { initialEntries: ["/p/editor-demo/edit"] });
+    render(<RouterProvider router={router} />);
+    expect(await screen.findByText("Редактировать этот прототип может только его владелец.")).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/");
+    expect(fetch).not.toHaveBeenCalledWith("/api/prototypes/editor-demo/draft", expect.anything());
+  });
+
   it("loads the draft, selects an element, updates preview, and saves parsed data with baseRev", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockImplementation((input, init) => {
+      if (isEditorGuard(input)) return json([]);
       if (String(input).endsWith("/draft")) return json(draft);
       if (String(input) === "/api/prototypes/editor-demo" && init?.method === "PUT") return json({ rev: 8, warnings: [] });
       throw new Error(`Unexpected request: ${String(input)}`);
@@ -64,6 +87,7 @@ describe("EditorShell", () => {
     const figmaDraft: PrototypeDraft = { ...draft, figma, assets: [] };
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockImplementation((input, init) => {
+      if (isEditorGuard(input)) return json([]);
       if (String(input).endsWith("/draft")) return json(figmaDraft);
       if (String(input) === "/api/prototypes/editor-demo" && init?.method === "PUT") return json({ rev: 8, warnings: [] });
       throw new Error(`Unexpected request: ${String(input)}`);
@@ -82,6 +106,7 @@ describe("EditorShell", () => {
     const fetchMock = vi.mocked(fetch);
     let draftLoads = 0;
     fetchMock.mockImplementation((input, init) => {
+      if (isEditorGuard(input)) return json([]);
       if (String(input).endsWith("/draft")) { draftLoads += 1; return json(draft); }
       if (init?.method === "PUT") return json({ error: { code: "revision_conflict", message: "conflict", currentRev: 12 } }, 409);
       throw new Error("Unexpected request");
@@ -102,6 +127,7 @@ describe("EditorShell", () => {
     [[{ path: "/screens/0/name", message: "pointer path" }], "Экран «Home» › Название"],
   ])("renders 422 issues in either path format", async (issues, expectedPath) => {
     vi.mocked(fetch).mockImplementation((input, init) => {
+      if (isEditorGuard(input)) return json([]);
       if (String(input).endsWith("/draft")) return json(draft);
       if (init?.method === "PUT") return json({ error: { code: "validation_failed", message: "invalid", issues } }, 422);
       throw new Error("Unexpected request");
@@ -128,7 +154,7 @@ describe("EditorShell", () => {
       components: { Widget: ({ props, slots }: { props: { label?: string }; slots: Record<string, ReactNode> }) =>
         <div><span data-testid="widget-label">{props.label}</span><div data-testid="widget-header">{slots.header}</div><div data-testid="widget-body">{slots.default}</div></div> },
     });
-    vi.mocked(fetch).mockImplementation((input) => String(input) === "/api/prototypes/custom-demo/draft" ? json(customDraft) : Promise.reject(new Error(`Unexpected request: ${String(input)}`)));
+    vi.mocked(fetch).mockImplementation((input) => isEditorGuard(input) ? json([]) : String(input) === "/api/prototypes/custom-demo/draft" ? json(customDraft) : Promise.reject(new Error(`Unexpected request: ${String(input)}`)));
     renderEditor("custom-demo");
     // Canvas + screen strip both render the custom component through the runtime adapter.
     const labels = await screen.findAllByTestId("widget-label");
@@ -145,7 +171,7 @@ describe("EditorShell", () => {
   it("renders composition-demo previews inertly without losing repeat/$cond composition", async () => {
     const compositionDoc = prototypeDocSchema.parse((await import("../../prototypes/composition-demo.json")).default);
     const compositionDraft: PrototypeDraft = { doc: compositionDoc, rev: 1, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] };
-    vi.mocked(fetch).mockImplementation((input) => String(input) === "/api/prototypes/composition-demo/draft" ? json(compositionDraft) : Promise.reject(new Error(`Unexpected request: ${String(input)}`)));
+    vi.mocked(fetch).mockImplementation((input) => isEditorGuard(input) ? json([]) : String(input) === "/api/prototypes/composition-demo/draft" ? json(compositionDraft) : Promise.reject(new Error(`Unexpected request: ${String(input)}`)));
     renderEditor("composition-demo");
     await screen.findByRole("heading", { name: "Composition demo" });
     // Repeat rows and the $cond first-row marker render in the previews (canvas + strip).
@@ -159,7 +185,7 @@ describe("EditorShell", () => {
 
   it("keeps the inspector usable for a screen without a root", async () => {
     const emptyDoc = { ...doc, screens: [{ ...doc.screens[0], spec: { root: "missing", elements: {} } }] };
-    vi.mocked(fetch).mockImplementation((input) => String(input).endsWith("/draft") ? json({ ...draft, doc: emptyDoc }) : Promise.reject(new Error("Unexpected request")));
+    vi.mocked(fetch).mockImplementation((input) => isEditorGuard(input) ? json([]) : String(input).endsWith("/draft") ? json({ ...draft, doc: emptyDoc }) : Promise.reject(new Error("Unexpected request")));
     renderEditor();
     expect((await screen.findAllByText("Нет содержимого")).length).toBeGreaterThan(0);
     expect(screen.getByLabelText("Инспектор")).toBeTruthy();
