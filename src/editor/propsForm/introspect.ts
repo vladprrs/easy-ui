@@ -1,1 +1,1 @@
-export { describePropsSchema, type PropControl, type PropField, type SelectValue } from "../../catalog/zodIntrospect";
+export { describePropsSchema, type PropControl, type PropField, type SelectValue } from "../../propsForm/introspect";
