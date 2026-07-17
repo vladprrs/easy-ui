@@ -1,0 +1,370 @@
+{
+  "version": 1,
+  "id": "branching-checkout",
+  "name": "Ветвящееся оформление заказа",
+  "description": "Три полных сценария оформления: успешная оплата, отказ банка с повторной оплатой и отмена заказа.",
+  "device": "mobile",
+  "startScreen": "catalog",
+  "state": {},
+  "screens": [
+    {
+      "id": "catalog",
+      "name": "Каталог",
+      "spec": {
+        "root": "catalog-layout",
+        "elements": {
+          "catalog-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["catalog-title", "catalog-copy", "catalog-next"]
+          },
+          "catalog-title": {
+            "type": "Text",
+            "props": { "text": "Каталог", "variant": "lead" }
+          },
+          "catalog-copy": {
+            "type": "Text",
+            "props": { "text": "Кроссовки для ежедневных прогулок — 7 990 ₽." }
+          },
+          "catalog-next": {
+            "type": "Button",
+            "props": { "label": "Добавить в корзину", "variant": "primary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "cart" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "cart",
+      "name": "Корзина",
+      "spec": {
+        "root": "cart-layout",
+        "elements": {
+          "cart-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["cart-title", "cart-copy", "cart-next", "cart-cancel"]
+          },
+          "cart-title": {
+            "type": "Text",
+            "props": { "text": "Корзина", "variant": "lead" }
+          },
+          "cart-copy": {
+            "type": "Text",
+            "props": { "text": "Один товар на сумму 7 990 ₽." }
+          },
+          "cart-next": {
+            "type": "Button",
+            "props": { "label": "Перейти к доставке", "variant": "primary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "delivery" }
+              }
+            }
+          },
+          "cart-cancel": {
+            "type": "Button",
+            "props": { "label": "Отменить заказ", "variant": "secondary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "cancel-confirm" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "delivery",
+      "name": "Доставка",
+      "spec": {
+        "root": "delivery-layout",
+        "elements": {
+          "delivery-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["delivery-title", "delivery-copy", "delivery-next"]
+          },
+          "delivery-title": {
+            "type": "Text",
+            "props": { "text": "Доставка", "variant": "lead" }
+          },
+          "delivery-copy": {
+            "type": "Text",
+            "props": { "text": "Курьер доставит заказ завтра с 10:00 до 14:00." }
+          },
+          "delivery-next": {
+            "type": "Button",
+            "props": { "label": "Перейти к оплате", "variant": "primary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "payment" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "payment",
+      "name": "Оплата",
+      "spec": {
+        "root": "payment-layout",
+        "elements": {
+          "payment-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["payment-title", "payment-copy", "payment-success", "payment-declined"]
+          },
+          "payment-title": {
+            "type": "Text",
+            "props": { "text": "Оплата", "variant": "lead" }
+          },
+          "payment-copy": {
+            "type": "Text",
+            "props": { "text": "К оплате 7 990 ₽." }
+          },
+          "payment-success": {
+            "type": "Button",
+            "props": { "label": "Оплатить", "variant": "primary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "success" }
+              }
+            }
+          },
+          "payment-declined": {
+            "type": "Button",
+            "props": { "label": "Смоделировать отказ банка", "variant": "secondary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "declined" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "success",
+      "name": "Заказ оплачен",
+      "spec": {
+        "root": "success-layout",
+        "elements": {
+          "success-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["success-title", "success-copy", "success-restart"]
+          },
+          "success-title": {
+            "type": "Text",
+            "props": { "text": "Заказ оплачен", "variant": "lead" }
+          },
+          "success-copy": {
+            "type": "Text",
+            "props": { "text": "Чек отправлен, заказ передан в сборку." }
+          },
+          "success-restart": {
+            "type": "Button",
+            "props": { "label": "Начать заново", "variant": "secondary" },
+            "on": {
+              "press": {
+                "action": "restart",
+                "params": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "declined",
+      "name": "Банк отклонил оплату",
+      "spec": {
+        "root": "declined-layout",
+        "elements": {
+          "declined-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["declined-title", "declined-copy", "declined-retry"]
+          },
+          "declined-title": {
+            "type": "Text",
+            "props": { "text": "Платёж отклонён", "variant": "lead" }
+          },
+          "declined-copy": {
+            "type": "Text",
+            "props": { "text": "Выберите другую карту и вернитесь к оплате." }
+          },
+          "declined-retry": {
+            "type": "Button",
+            "props": { "label": "Вернуться к оплате", "variant": "primary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "payment" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "cancel-confirm",
+      "name": "Подтверждение отмены",
+      "spec": {
+        "root": "cancel-confirm-layout",
+        "elements": {
+          "cancel-confirm-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["cancel-confirm-title", "cancel-confirm-copy", "cancel-confirm-reason", "cancel-confirm-finish"]
+          },
+          "cancel-confirm-title": {
+            "type": "Text",
+            "props": { "text": "Отменить заказ?", "variant": "lead" }
+          },
+          "cancel-confirm-copy": {
+            "type": "Text",
+            "props": { "text": "Перед отменой можно указать причину." }
+          },
+          "cancel-confirm-reason": {
+            "type": "Button",
+            "props": { "label": "Указать причину", "variant": "secondary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "cancel-reason" }
+              }
+            }
+          },
+          "cancel-confirm-finish": {
+            "type": "Button",
+            "props": { "label": "Подтвердить отмену", "variant": "primary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "cancelled" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "cancel-reason",
+      "name": "Причина отмены",
+      "spec": {
+        "root": "cancel-reason-layout",
+        "elements": {
+          "cancel-reason-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["cancel-reason-title", "cancel-reason-copy", "cancel-reason-next"]
+          },
+          "cancel-reason-title": {
+            "type": "Text",
+            "props": { "text": "Причина отмены", "variant": "lead" }
+          },
+          "cancel-reason-copy": {
+            "type": "Text",
+            "props": { "text": "Выбрано: хочу изменить состав заказа." }
+          },
+          "cancel-reason-next": {
+            "type": "Button",
+            "props": { "label": "Продолжить отмену", "variant": "primary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "cancel-confirm" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "cancelled",
+      "name": "Заказ отменён",
+      "spec": {
+        "root": "cancelled-layout",
+        "elements": {
+          "cancelled-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["cancelled-title", "cancelled-copy", "cancelled-restart"]
+          },
+          "cancelled-title": {
+            "type": "Text",
+            "props": { "text": "Заказ отменён", "variant": "lead" }
+          },
+          "cancelled-copy": {
+            "type": "Text",
+            "props": { "text": "Корзина сохранена — к покупке можно вернуться позже." }
+          },
+          "cancelled-restart": {
+            "type": "Button",
+            "props": { "label": "Вернуться в каталог", "variant": "secondary" },
+            "on": {
+              "press": {
+                "action": "restart",
+                "params": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "id": "happy-path",
+      "name": "Успешная оплата",
+      "description": "Покупатель оформляет доставку и оплачивает заказ без ошибок.",
+      "steps": [
+        { "screenId": "catalog" },
+        { "screenId": "cart" },
+        { "screenId": "delivery" },
+        { "screenId": "payment" },
+        { "screenId": "success" }
+      ]
+    },
+    {
+      "id": "bank-declined",
+      "name": "Отказ банка и повторная оплата",
+      "description": "После отказа банка покупатель возвращается назад к якорному экрану оплаты и завершает заказ.",
+      "steps": [
+        { "screenId": "catalog" },
+        { "screenId": "cart" },
+        { "screenId": "delivery" },
+        { "screenId": "payment" },
+        { "screenId": "declined", "note": "Неякорный тайл показывает причину отказа банка." },
+        { "screenId": "payment" },
+        { "screenId": "success" }
+      ]
+    },
+    {
+      "id": "cancellation",
+      "name": "Отмена заказа",
+      "description": "Покупатель уточняет причину и повторно видит подтверждение перед окончательной отменой.",
+      "steps": [
+        { "screenId": "catalog" },
+        { "screenId": "cart" },
+        { "screenId": "cancel-confirm", "note": "Первое вхождение: покупатель запрашивает форму причины." },
+        { "screenId": "cancel-reason", "note": "Покупатель выбирает причину отмены." },
+        { "screenId": "cancel-confirm", "note": "Повтор неякорного экрана: теперь отмена подтверждается." },
+        { "screenId": "cancelled", "note": "Сценарий заканчивается отменённым заказом." }
+      ]
+    }
+  ]
+}
