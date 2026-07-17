@@ -2,7 +2,7 @@
 
 ## Проект: easy-ui
 
-Мультиюзерный просмотрщик и редактор кликабельных прототипов поверх json-render. Каталог custom-only: компоненты публикуются через API, а `Image`/`Hotspot`/`Overlay` поставляет host runtime. Storybook и встроенные дизайн-системы удалены.
+Мультиюзерный просмотрщик и редактор кликабельных прототипов поверх json-render. Каталог custom-only: компоненты публикуются через API, а `Image`/`Hotspot`/`Overlay`/`@eui/FlowRoot` поставляет host runtime. Storybook и встроенные дизайн-системы удалены.
 
 - План MVP и контракты: `docs/plans/2026-07-10-prototype-viewer-mvp.md` (v3), формат прототипов: `docs/prototype-format.md` (строгий allowlist v1), Bun API: `docs/server-api.md` (в т.ч. discovery: `GET /api/openapi.json`, `GET /api/capabilities`, JSON-схемы документа/компонента).
 - Ключевые зоны: `src/catalog/` (host definitions/actions/runtime), `src/designSystems/` (theme/spacing compatibility), `src/prototype/` (schema/validate/loader), `src/player/`, `src/editor/`, `src/capture/`, `src/visual/`, `src/gallery|library/`, `server/assets|screenshot|visual/`, `test/fixtures/`.

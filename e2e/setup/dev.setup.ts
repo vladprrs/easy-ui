@@ -5,6 +5,7 @@ import { expect, test } from "@playwright/test";
 import { authenticatedRequest } from "../auth";
 import { ensureComponentPageFixtures, CUSTOM_DS_ID, CUSTOM_DS_PROTOTYPE_ID } from "../dev/custom-ds.fixture";
 import { provisionMobilePresentationFixtures } from "../dev/present-mobile.setup";
+import { provisionScreenRegionFixtures } from "../screen-regions.fixture";
 import { ensureStarterPrototype, provisionStarterFixtures, STARTER_DS_ID } from "../starter-ds.fixture";
 
 export const DEV_STORAGE_STATE = ".e2e-data/storage/dev.json";
@@ -15,6 +16,7 @@ test("login and provision dev fixtures through the Vite origin", async ({ baseUR
   await mkdir(".e2e-data/storage", { recursive: true });
   const request = await authenticatedRequest(baseURL!, { storageStatePath: DEV_STORAGE_STATE });
   await provisionStarterFixtures(request);
+  await provisionScreenRegionFixtures(request);
   await ensureComponentPageFixtures(request);
   await provisionMobilePresentationFixtures(request);
   await ensureStarterPrototype(request, {

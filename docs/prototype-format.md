@@ -6,7 +6,7 @@ Prototype files live in `prototypes/*.json`. A file is a self-contained flow; it
 
 The root is a strict object with `version: 1`, slug `id`, human-readable `name`, optional `description`, slug `designSystem` (default `"shadcn"`), `device` (`mobile`, `tablet`, or `desktop`, default `desktop`), slug `startScreen`, `state`, and a non-empty `screens` array. Screen IDs are unique slugs and `startScreen` must exist. The SQLite `design_systems` registry is the single source of registered systems; an unknown system is an error. `shadcn` and `wireframe` registry entries have code-backed builtin providers. A registry entry without a provider starts with no builtin definitions and can use published custom components assigned to it. The default remains `shadcn`, so existing documents without `designSystem` retain their meaning. Version 1 evolves additively: new fields are optional, so existing v1 documents remain valid.
 
-Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, optional non-blank `note` (at most 500 characters), optional `stateOverrides`, and `spec`. `note` is the author's caption below the screen in the CJM view. Screens appear in CJM in their `screens` array order. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, optional `on`, optional `repeat`, and optional `slot`. Its type and props must match the normalized definition in the document's selected design system. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
+Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, optional non-blank `note` (at most 500 characters), optional `stateOverrides`, and `spec`. `note` is the author's caption below the screen in the CJM view. Screens appear in CJM in their `screens` array order. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, optional `on`, optional `repeat`, optional `slot`, and optional `region`. Its type and props must match the normalized definition in the document's selected design system. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
 
 ### Per-system component allowlist
 
@@ -138,6 +138,36 @@ layout?: {
 
 Static class strings are inspected by the non-blocking `layout/classname-positioning` lint. Position utilities, `relative`, inset utilities (including variant-prefixed forms), arbitrary z-index values, and margin utilities produce a warning. Directive-valued or otherwise dynamic class names are not statically inspected. The warning is advisory and never blocks save or playback.
 
+## Screen regions
+
+Flow screens may mark direct children of their root with `region: "statusBar" | "header" | "footer"`. A screen that uses any region must have the host-owned `@eui/FlowRoot` as its root. `@eui/FlowRoot` is a neutral block container available in every design system: it has only a default slot and adds no padding, gap, positioning, inherited color/font, or stacking context. It is valid only as the screen root and cannot have `repeat`, `visible`, or `on`.
+
+Region subtrees must be self-contained: all styling and layout needed by a bar belongs inside that marked subtree, because mobile fluid present renders the three regions independently. The usual structure is:
+
+```json
+{
+  "root": "root",
+  "elements": {
+    "root": { "type": "@eui/FlowRoot", "props": {}, "children": ["status", "header", "content", "footer"] },
+    "status": { "type": "StatusBar", "props": {}, "region": "statusBar" },
+    "header": { "type": "AppHeader", "props": {}, "region": "header" },
+    "content": { "type": "Content", "props": {} },
+    "footer": { "type": "TabBar", "props": {}, "region": "footer" }
+  }
+}
+```
+
+In mobile fluid present, `statusBar` is omitted, `header` and `footer` occupy fixed flex rows, and only the content between them scrolls. Navigation, back, and restart reset that content scroller to the top. In framed player, desktop present, editor canvas/strip, CJM, capture, and Gallery the same tree remains inline in authored order. The desktop player/present status-bar preference can omit `statusBar` only on those viewer surfaces; it does not affect editor, CJM, capture, or Gallery. A screen without regions uses the full StageViewport height. Pathologically tall bars are clipped by the viewport's `overflow: hidden`; mobile browser keyboard resizing follows `h-dvh`.
+
+Validation enforces all of the following:
+
+- A region element has exactly one parent, and that parent is the screen root. Orphan, nested, and multiply referenced markers are invalid.
+- At most one element of each region kind is allowed per screen.
+- Regions are forbidden on canvas screens and on `Overlay` or `Hotspot`.
+- A region element cannot have `repeat` or `slot`; `visible` is allowed.
+- `Hotspot` is forbidden anywhere inside a region subtree.
+- `@eui/FlowRoot` cannot be nested or used anywhere except as a screen root.
+
 ## Overlay host primitive
 
 `Overlay` is a host primitive available to every registered design system through the separate `hostPrimitives` discovery section. It is not a builtin or custom component, is never included in `components`, component pins, or the component manifest, and reserves the component name `Overlay`.
@@ -178,7 +208,7 @@ The four relevant boxes are distinct: `ClipViewport` provides outer clipping or 
 | 2 | Player, canvas (any device) | Same transformed native div; `CanvasLayers` uses the same box | `canvas.width` × `canvas.height` | Outer `DeviceFrame` scroller | Frame card clips | — | Third `CanvasLayers` layer above hotspots; moves with canvas |
 | 3 | Player, desktop flow without canvas | **Forbidden by validation**; desktop preview control is disabled and an existing override is reset | — | — | — | — | — |
 | 4 | Present, framed | The same `DeviceFrame` nodes as rows 1–2; uses `doc.device` with no preview override | As rows 1–2 | `DeviceFrame` scroller | As row 1 | — | As rows 1–2 |
-| 5 | Present, mobile fluid | Flow: the phone viewport host `div[data-eui-stage-viewport="present-fluid"]`; canvas: the transformed author-sized div with the same attribute | Flow: phone viewport (`h-dvh`); canvas: `canvas.width` × `canvas.height`, scaled to host width | Nested `div[data-eui-content-scroller="present-fluid"]` in both branches | Flow content scrolls inside the viewport host; canvas scrolls as a scale-to-width spacer | — | Flow: fixed to the phone viewport while content scrolls; canvas: shares the canvas transform and scales and scrolls with it |
+| 5 | Present, mobile fluid | Flow: flex-column phone viewport host `div[data-eui-stage-viewport="present-fluid"]`; canvas: the transformed author-sized div with the same attribute | Flow: phone viewport (`h-dvh`); canvas: `canvas.width` × `canvas.height`, scaled to host width | Flow: flexing middle row between header/footer region slots; canvas: scale-to-width scroller | Flow content scrolls inside the viewport host; canvas scrolls as a scale-to-width spacer | — | Flow: absolute Overlay layer (`z-20`) above content (`z-0`) and region slots (`z-10`); canvas: shares the canvas transform and scales and scrolls with it |
 | 6 | Capture, mobile/tablet flow | Native `#eui-capture-surface`, without transform | Canonical device viewport | No in-surface scroller | No surface overflow rule | Worker captures this element; Overlay remains inside its bounds | Fixed to capture-surface edges; excess content does not move it |
 | 7 | Capture, canvas | `#eui-capture-surface` is the canvas box | `canvas.width` × `canvas.height` | None | None | As row 6 | Third `CanvasLayers` layer |
 | 8 | Capture, desktop flow | **Forbidden by validation**; the auto-height surface has no normative bottom anchor | — | — | — | Such a document cannot be saved for capture | — |
@@ -189,7 +219,7 @@ The four relevant boxes are distinct: `ClipViewport` provides outer clipping or 
 | 13 | Storybook | For specs with Overlay only, relative `div[data-eui-stage-viewport="story"]`; other stories keep the bare Renderer path | 390×844 | Storybook canvas | Host box does not add clipping or scrolling | — | Anchored inside the fixed story host box |
 | 14 | Tablet canvas | Uses the corresponding canvas nodes from rows 2, 7, and 9–12; tablet does not create a separate branch | Canvas dimensions | As corresponding surface | As corresponding surface | As corresponding surface | As corresponding canvas surface |
 
-Across all supported surfaces, `stageHostRef` points to the StageViewport or a direct relative container with identical geometry. Overlay stays in the stage's native coordinate system and inert subtree where applicable. The split order is host primitives before canvas; presentation trees use the split results, while action runtime evaluates the original complete spec. The story host is created only for specs containing Overlay.
+Across all supported surfaces, `stageHostRef` points to the StageViewport or a direct relative container with identical geometry. Overlay stays in the stage's native coordinate system and inert subtree where applicable. In mobile fluid flow, StageViewport is an isolated flex column; content is `z-0`, header/footer slots are `z-10`, and the absolute Overlay portal layer is `z-20`, so authored region `z-index` values cannot cover an Overlay. The split order is host primitives before canvas and then region policy for flow content; presentation trees use the split results, while action runtime evaluates the original complete spec. The story host is created only for specs containing Overlay.
 
 Mobile fluid present is selected once, when `PresentShell` mounts, and is not recomputed during the lifetime of that shell. A single exact `?mobile=1` forces fluid mode and `?mobile=0` forces the framed mode; otherwise the detector requires a coarse pointer and a viewport short side below 768px. A coarse-pointer tablet whose short side is at least 768px therefore remains framed. The query string survives navigation through the prototype flow. During share-token exchange, the server carries a single validated `mobile=0|1` value into the destination of the 303 redirect; duplicate or invalid values are not forwarded.
 

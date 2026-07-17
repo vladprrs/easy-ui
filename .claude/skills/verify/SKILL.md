@@ -17,7 +17,7 @@ description: Verify easy-ui custom-only flows end-to-end with Playwright and scr
 Use API-created custom components or `test/fixtures/starter/`; do not assume any built-in catalog. Verify:
 
 1. Gallery → custom prototype → player navigation/state/restart.
-2. Player, Present, CJM, Editor and Capture render pinned custom bundles plus host `Image`/`Hotspot`/`Overlay`.
+2. Player, Present, CJM, Editor and Capture render pinned custom bundles plus host `Image`/`Hotspot`/`Overlay`/`@eui/FlowRoot`.
 3. An unrenderable authorized revision shows «Прототип в архиве» before component bundles load; revoked share URLs remain 404/410.
 4. Gallery archive cards show the archive badge without mounting a preview.
 5. `/library` lists only API-backed custom components and their capture previews.

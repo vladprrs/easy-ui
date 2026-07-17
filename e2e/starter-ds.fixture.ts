@@ -94,7 +94,7 @@ function starterElement(value: unknown): JsonObject {
       },
     };
   }
-  if (type === "Hotspot" || type === "Overlay") return { ...shared, type, props };
+  if (type === "Hotspot" || type === "Overlay" || type === "@eui/FlowRoot") return { ...shared, type, props };
 
   if (type === "Button" || type === "Link") {
     return {

@@ -1,6 +1,6 @@
 # easy-ui
 
-easy-ui is a multi-user viewer and editor for clickable JSON-defined UI prototypes. It uses [`json-render`](https://github.com/vercel-labs/json-render), host-rendered `Image`/`Hotspot`/`Overlay`, and API-published custom React components. The Library is custom-only; Storybook and built-in component catalogs have been removed.
+easy-ui is a multi-user viewer and editor for clickable JSON-defined UI prototypes. It uses [`json-render`](https://github.com/vercel-labs/json-render), host-rendered `Image`/`Hotspot`/`Overlay`/`@eui/FlowRoot`, and API-published custom React components. The Library is custom-only; Storybook and built-in component catalogs have been removed.
 
 ## Quick start
 
