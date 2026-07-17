@@ -1,4 +1,4 @@
-# План v2: screen regions — header / footer / OS status bar в прототипах
+# План v3: screen regions — header / footer / OS status bar в прототипах
 
 ## Context
 
@@ -15,14 +15,18 @@
 
 Поле на элементе (direct child от `spec.root`), по прецеденту side-channel-поля `slot`: schema → strip в `toRuntimeSpec` (`src/prototype/runtimeSpec.ts:111`) → `ElementMetadata` → element-diff → contracts → авто-протекание в discovery JSON-схему. Против screen-level map: нет висячих id при удалении элемента, естественнее в редакторе, дешевле в диффе. Шаринг футера между экранами = future work.
 
-### Root-контракт (закрывает blocker ревью №1 — потеря контекста authored root)
+### Root-контракт: новый host primitive `FlowRoot` (закрывает blockers ревью №1 и №2)
 
-Извлечение region-поддеревьев в отдельные Renderer-порталы теряет контекст authored root (`repeat`-scope `$item`/`$index`, `visible`, named-slot семантику custom root). Вместо renderer-level перехвата (сложный spike) **сужаем контракт валидацией**: `region` допустим только когда root экрана — builtin plain container:
-- root **не** custom-компонент (нет slotIndices → region-split не ломает named slots — закрывает blocker №2 для этой фичи);
-- root без `repeat` и без `visible`;
-- root не `Overlay`/`Hotspot`.
+Извлечение region-поддеревьев в отдельные Renderer-порталы теряет контекст authored root: `repeat`-scope, `visible`, named-slot семантику custom root, а также layout/наследуемые свойства контейнера (gap/padding/direction, `color`/`font`, containing block). После custom-only cutover (v15) builtin-контейнеров в новых документах нет — root практически всегда custom, поэтому «запретить custom root» неисполнимо.
 
-Типовой root (Stack/Box builtin) проходит; экзотика получает понятную ошибку валидации. Ослабление контракта — future work, зафиксировано в prototype-format.md.
+Решение — **host-owned нейтральный контейнер `FlowRoot`** (`src/catalog/hostPrimitives/`, рядом с Image/Hotspot/Overlay, доступен каждой системе):
+- нулевой контракт: без props (кроме служебных), без событий, без named slots, без layout-вклада — рендерит детей простым блочным потоком; ничего не наследует и не задаёт;
+- `region` допустим **только когда root экрана — `FlowRoot`** (+ на самом region-элементе нет `repeat`/`slot`); eligibility проверяется по одному документу, definitions не нужны;
+- `FlowRoot` допустим только как root экрана (не вложенно), без `repeat`/`visible`/`on` на нём;
+- **regions — self-contained поддеревья**: стилизация баров и контента живёт внутри соответствующих поддеревьев (типовая структура: `FlowRoot → [statusBar?, header?, content-контейнер, footer?]`); это документируется в формате как контракт, извлечение ничего не теряет, т.к. FlowRoot ничего не даёт детям;
+- отсутствие custom root закрывает и blocker №2 (нет `slotIndices` у root).
+
+Существующие экраны для использования regions переводятся автором на `FlowRoot`-root (документируется в format/author-скилле; editor-affordance «обернуть в FlowRoot» — future work). Новый примитив меняет host-каталог → попадает в builtin catalog hash; `RENDER_CONTRACT_VERSION` и так повышается в этой же волне.
 
 ### Рендер в mobile fluid present — flex-колонка stage-host
 
@@ -36,7 +40,7 @@ host (h-dvh, flex flex-col, overflow-hidden, isolate)   ← FluidStage flow-ве
 
 - Flex резервирует реальную высоту баров — нет измерений и scroll-under; host `h-dvh` → футер над адресной строкой браузера.
 - **Slot-регистрация — callback-ref со state** (прецедент `FluidStage.tsx:20`), не `useRef`: обычный ref не вызывает ре-рендер и порталы навсегда останутся без таргета. До готовности таргета region-контент не рендерится (drop-until-ready, без inline-fallback → без визуального скачка при первом кадре).
-- **Disposition per kind вместо опциональных слотов**: контекст `ScreenRegionsContext` задаёт для каждого kind явную политику `"inline" | "drop" | { portal: HTMLElement | null }` (default всюду `inline`). Fluid: statusBar → drop, header/footer → portal. Desktop present/плеер: header/footer → inline, statusBar → drop при включённом тумблере. Editor/CJM/capture/gallery: провайдера нет → всё inline. Это исключает утечку viewer-преференса в capture.
+- **Disposition per kind вместо опциональных слотов**: структурный режим на уровне split — `"inline" | "drop" | "extract"` (в `runtimeSpec`, без DOM-типов); portal-таргеты (`HTMLElement | null`) живут только в `ScreenSurface`/контексте, и смена callback-ref-таргета не пересобирает split-деревья. Владельцы политики — **player и present (оба)**: fluid = statusBar drop + header/footer extract→portal; desktop present и framed player = header/footer inline, statusBar drop при включённом тумблере. Editor/CJM/capture/gallery — без провайдера → всё inline; `DeviceFrame` сам политикой не владеет. Это исключает утечку viewer-преференса в capture.
 - **Pipeline split фиксируется**: `toRuntimeSpec → splitHostPrimitives → (canvas ? splitCanvas : applyRegionPolicy)`. Region-политика применяется только к flow-контенту после извлечения Overlay; canvas-ветка её обходит полностью. Тесты: region + Overlay-sibling; Hotspot на canvas не затронут; невалидный черновик с region не роняет рендер.
 - **Стекинг явными слоями**: content z-0 < region-слоты z-10 < Overlay-обёртка z-20 внутри изолированного host. Контракт «Overlay выше баров» обеспечивается слоем, а не document order; тест с authored `z-index:999` внутри футера и Overlay со scrim.
 - **Safe-area**: `viewport-fit=cover` в v1 НЕ добавляем (консистентно с решением mobile-player плана; глобальная правка index.html затронула бы все маршруты). `env(safe-area-inset-bottom, 0px)` остаётся progressive enhancement (0 в браузере, работает в standalone/PWA). Padding живёт в портальном wrapper'е и схлопывается, когда region-контент не отрендерен (`visible:false` → wrapper пуст → без пустой полоски); тест с динамическим `visible`.
@@ -53,17 +57,17 @@ host (h-dvh, flex flex-col, overflow-hidden, isolate)   ← FluidStage flow-ве
 
 ### Валидация — `src/prototype/regionRules.ts`, parent multimap
 
-Не копировать обход `overlayRules` (он идёт только по reachable root и пропустит orphan-маркеры). Сначала собрать **parent multimap по всем `elements`**, затем для каждого элемента с `region`:
-1. ровно один родитель и он равен `spec.root` (orphan, множественные родители, глубина — ошибки);
+Не копировать обход `overlayRules` (он идёт только по reachable root и пропустит orphan-маркеры). Общая функция **`regionEligibility(screen)`** (root — `FlowRoot`, нет `canvas`) используется валидатором, инспектором и suggestion — одна логика на три поверхности. Сначала собрать **parent multimap по всем `elements`**, затем:
+1. для каждого элемента с `region`: ровно один родитель и он равен `spec.root` (orphan, множественные родители, глубина — ошибки);
 2. ≤1 элемента на region-kind на экран (уникальность считается по валидным маркерам; невалидные дают собственные ошибки и в уникальности не участвуют);
-3. запрещён при `screen.canvas`;
-4. root-контракт: root не custom, без `repeat`/`visible`, не Overlay/Hotspot;
+3. `region` запрещён при `screen.canvas`;
+4. root-контракт: `region` только при root = `FlowRoot`; `FlowRoot` только как root (не вложенно, не в других экранах деревом ниже), без `repeat`/`visible`/`on` на нём;
 5. `region` несовместим с `repeat` и `slot` на самом элементе;
 6. запрещён на `Overlay`/`Hotspot`;
 7. `Hotspot` внутри region-поддерева запрещён; вложенный `region` внутри region-поддерева невозможен по правилу 1, но получает точечную ошибку.
 `visible` на region-элементе разрешён (условный футер). Device-гейтинга нет.
 
-Тесты: orphan-маркер, маркер внутри маркера, root с repeat, root-custom, root-Hotspot, duplicate child reference, все правила позитив+негатив.
+Тесты: orphan-маркер, маркер внутри маркера, region при не-FlowRoot root, вложенный FlowRoot, FlowRoot с repeat/visible/on, duplicate child reference, все правила позитив+негатив; позитивные фикстуры — на production-like custom-only системе (не legacy builtin).
 
 ### Версии и кэши
 
@@ -87,7 +91,7 @@ host (h-dvh, flex flex-col, overflow-hidden, isolate)   ← FluidStage flow-ве
 
 ### Editor UX
 
-Дропдаун Region в element-секции инспектора (только direct child root, не canvas; занятый kind — disabled), бейдж в `ElementTree`, мутатор `setElementRegion` + action `set-element-region`. **Canvas-переход** (ревью №12): установка `canvas` через `CanvasEditor` на экране с region-маркерами — подтверждение и один undoable commit, очищающий все region-поля экрана (иначе UI прячет маркеры, а документ перестаёт сохраняться); reducer/integration-тест, не только unit дропдауна.
+Дропдаун Region в element-секции инспектора; условия показа/активности — через общую `regionEligibility(screen)` (root = FlowRoot, нет canvas) + direct child root; при неэлигибельном экране контрол disabled с объяснением («Регионы доступны на экранах с корнем FlowRoot»), занятый kind — disabled. `suggestRegion` тоже проверяет eligibility. Бейдж в `ElementTree`, мутатор `setElementRegion` + action `set-element-region`. **Canvas-переход** (ревью №12): установка `canvas` через `CanvasEditor` на экране с region-маркерами — подтверждение и один undoable commit, очищающий все region-поля экрана (иначе UI прячет маркеры, а документ перестаёт сохраняться); reducer/integration-тест, не только unit дропдауна.
 
 ## Триаж ревью-раунда 1 (Codex gpt-5.6-sol, 2026-07-17)
 
@@ -95,15 +99,23 @@ host (h-dvh, flex flex-col, overflow-hidden, isolate)   ← FluidStage flow-ве
 
 Отклонено: T0 design spike (нужда отпала после сужения root-контракта — blocker 1 решается валидацией, а не новой renderer-механикой).
 
-## Фазы (DAG: T1 → T2 → {T3 → T4, T5, T6} → T7; T3/T5/T6 параллелятся)
+## Триаж ревью-раунда 2 (2026-07-17)
 
-### T1 — схема, runtime-plumbing, OpenAPI
-Файлы: `src/prototype/schema.ts` (`REGION_KINDS`, `region: z.enum(...).optional()`, тип `RegionKind`), `src/prototype/runtimeSpec.ts` (`ElementMetadata.region`; strip зеркально `slot`; `applyRegionPolicy(tree, policy)` → `{content, regions}` по direct children root; общий rebuild-helper `slotIndices` после любого child-фильтра — фикс pre-existing бага в `splitHostPrimitives`/`splitCanvas`), `server/openapi.json` (реген — drift-check в verify), юниты, фикстура с regions.
-**Done**: strip/metadata/split покрыты (fast-path идентичность объекта; custom-root + Overlay-sibling + slotted children — slotIndices корректны после split), `npm run verify` зелёный.
+Принято: blocker (builtin plain-container root не существует после custom-only cutover) → **вариант FlowRoot** (host-owned нейтральный контейнер; capability-вариант `screenRegionRoot` отклонён как расширяющий scope на capabilities/extraction/loader/ABI без выигрыша для v1); major 2 (semantic-нейтральность) → закрыт нулевым контрактом FlowRoot + контракт «regions self-contained» в format-доке + тесты root-стилей; major 3 → общая `regionEligibility` для валидатора/инспектора/suggestion, definitions не нужны (проверка по типу root); major 4 (небезопасный промежуточный контракт T1/T2) → T1+T2 объединены в одну неделимую волну W1; major 5 → OpenAPI-реген и в T6 (contracts меняются повторно); minor 6 → зафиксировано владение политикой (player+present owners; структурные режимы inline|drop|extract в runtimeSpec, DOM-таргеты только в ScreenSurface); minor 7 → helper определён как **remap** slotIndices по паре original/filtered children (slot-имена из trimmed spec невосстановимы), пустые slot-группы сохраняются, + symmetric-тест для splitCanvas.
 
-### T2 — валидация + версии
-Файлы: `src/prototype/regionRules.ts` (новый, parent multimap), вызов из `validate.ts`, `server/validationRecords.ts` → `"v4"`, `server/builtinHash.ts` → `RENDER_CONTRACT_VERSION = 4`, юниты на каждое правило + orphan/duplicate-parent кейсы.
-**Done**: `npm run validate:templates`, серверные validation/hash-тесты зелёные (обновить ожидания контрактной версии).
+## Фазы (DAG: W1(T1+T2) → {T3 → T4, T5, T6} → T7; T3/T5/T6 параллелятся)
+
+### W1 — FlowRoot + схема + runtime-plumbing + валидация + версии (неделимая волна, ревью-2 major 4)
+
+T1 и T2 выполняются и коммитятся одной волной: схема с `region` без валидационного гейта — небезопасный промежуточный контракт (документы с region прошли бы запись до появления правил).
+
+**T1 — примитив, схема, runtime-plumbing, OpenAPI.**
+Файлы: `src/catalog/hostPrimitives/` (**новый `FlowRoot`**: definition + компонент по образцу Overlay — нулевой props-контракт, без событий/slots/layout-вклада, простой блочный поток; регистрация в `index.ts`/`definitions.ts` → попадает в builtin catalog hash), `src/prototype/schema.ts` (`REGION_KINDS`, `region: z.enum(...).optional()`, тип `RegionKind`), `src/prototype/runtimeSpec.ts` (`ElementMetadata.region`; strip зеркально `slot`; `applyRegionPolicy(tree, policy)` → `{content, regions}` по direct children root, режимы `inline | drop | extract`; общий **remap-helper `slotIndices`** по паре original/filtered children — фикс pre-existing бага в `splitHostPrimitives`/`splitCanvas`, пустые slot-группы сохраняются), `server/openapi.json` (реген — drift-check в verify), юниты, фикстура с regions на custom-only системе.
+
+**T2 — валидация + версии.**
+Файлы: `src/prototype/regionRules.ts` (новый: **`regionEligibility(screen)`** — экспорт для инспектора/suggestion; parent multimap; правила 1–7), вызов из `validate.ts`, `server/validationRecords.ts` → `"v4"`, `server/builtinHash.ts` → `RENDER_CONTRACT_VERSION = 4`, юниты на каждое правило + orphan/duplicate-parent кейсы + FlowRoot-правила (вложенный FlowRoot, repeat/visible/on на нём).
+
+**Done (волна целиком)**: strip/metadata/split покрыты (fast-path идентичность объекта; custom-root + Overlay-sibling + slotted children — slotIndices корректны после split; symmetric-тест для `splitCanvas`); тесты нулевого контракта FlowRoot (не наследует/не задаёт стили детям); `npm run validate:templates`, серверные validation/hash-тесты зелёные (обновить ожидания контрактной версии); `npm run verify` зелёный.
 
 ### T3 — рендер в mobile fluid present
 Файлы: `src/player/ScreenRegions.tsx` (контекст disposition per kind + типы), `src/player/ScreenSurface.tsx` (pipeline `splitHostPrimitives → applyRegionPolicy`, порталы, drop), `src/player/FluidStage.tsx` (flex-колонка, callback-ref слоты `data-eui-region`, z-слои, safe-area wrapper со схлопыванием, провайдер fluid-политики, scroll-reset `useLayoutEffect`), `src/player/PresentShell.tsx` (проброс `resetKey` — ownership здесь, не в T4).
@@ -114,7 +126,7 @@ host (h-dvh, flex flex-col, overflow-hidden, isolate)   ← FluidStage flow-ве
 **Done**: кнопка видна только при statusBar-регионе на текущем экране; toggle переключает disposition statusBar inline↔drop (header/footer остаются inline); персист между маунтами; в mobile fluid кнопки нет.
 
 ### T5 — editor UX (параллельно T3)
-Файлы: `src/editor/docMutations.ts` (`setElementRegion`), `editorReducer.ts` (`set-element-region`; canvas-переход очищает regions одним commit), `InspectorPanel.tsx` (дропдаун + подтверждение canvas-перехода), `src/editor/regionSuggestion.ts`, `ElementTree.tsx` (бейдж), `src/editor/docDiff.ts` (`diffRegionLabel` + путь), строки editor.
+Файлы: `src/editor/docMutations.ts` (`setElementRegion`), `editorReducer.ts` (`set-element-region`; canvas-переход очищает regions одним commit), `InspectorPanel.tsx` (дропдаун; показ/активность через `regionEligibility`, disabled-объяснение; подтверждение canvas-перехода), `src/editor/regionSuggestion.ts` (проверяет eligibility), `ElementTree.tsx` (бейдж), `src/editor/docDiff.ts` (`diffRegionLabel` + путь), строки editor.
 **Done**: выбор пишет/удаляет поле (undo/redo); canvas-переход с regions — подтверждение + очистка, reducer-тест; таблица кейсов эвристики; docDiff показывает region-изменение.
 
 ### T6 — серверная поверхность (параллельно T3)
