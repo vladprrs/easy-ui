@@ -112,6 +112,40 @@ describe("PresentShell (W2-1)", () => {
     expect((await screen.findByLabelText("Name") as HTMLInputElement).value).toBe("Ada");
   });
 
+  it("opens navigate, Back, and restart destinations at the top in fluid present", async () => {
+    renderAt("/p/hello-world/present?mobile=1");
+    await screen.findByLabelText("Name");
+    const currentScroller = () => document.querySelector<HTMLElement>("[data-eui-content-scroller='present-fluid']")!;
+
+    currentScroller().scrollTop = 140;
+    currentScroller().scrollLeft = 24;
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    await screen.findByText("This is the second screen.");
+    await waitFor(() => {
+      expect(currentScroller().scrollTop).toBe(0);
+      expect(currentScroller().scrollLeft).toBe(0);
+    });
+
+    currentScroller().scrollTop = 110;
+    currentScroller().scrollLeft = 16;
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await screen.findByLabelText("Name");
+    await waitFor(() => {
+      expect(currentScroller().scrollTop).toBe(0);
+      expect(currentScroller().scrollLeft).toBe(0);
+    });
+
+    currentScroller().scrollTop = 90;
+    currentScroller().scrollLeft = 12;
+    fireEvent.click(screen.getByRole("button", { name: "Открыть управление презентацией" }));
+    fireEvent.click(screen.getByRole("button", { name: "Начать сначала" }));
+    await screen.findByLabelText("Name");
+    await waitFor(() => {
+      expect(currentScroller().scrollTop).toBe(0);
+      expect(currentScroller().scrollLeft).toBe(0);
+    });
+  });
+
   it("keeps a deep-linked screen (no forced redirect to start)", async () => {
     const router = renderAt("/p/hello-world/present/s/details");
     await screen.findByText("This is the second screen.");

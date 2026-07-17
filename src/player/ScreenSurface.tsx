@@ -4,10 +4,12 @@ import { createPortal } from "react-dom";
 import { EUI_KEY_ATTRIBUTE } from "../catalog/runtime";
 import type { ComponentDefinition } from "../catalog/definitions";
 import type { createPlayerRuntime } from "../catalog/runtime";
+import { REGION_KINDS } from "../prototype/schema";
 import { buildScreenRenderPlan, type ElementMetadata, type RuntimeTree } from "../prototype/runtimeSpec";
 import type { EasyUiActionRuntime } from "./actionRuntime";
 import { CanvasLayers } from "./CanvasLayers";
 import { EasyUiRuntimeProvider } from "./easyUiRuntime";
+import { useScreenRegions } from "./ScreenRegions";
 
 export interface ScreenSurfaceProps {
   registry: ReturnType<typeof createPlayerRuntime>["registry"];
@@ -150,20 +152,27 @@ function MisclickHighlightSurface({ metadata, children }: { metadata: Record<str
  * Хром, стейдж и провайдеры store (JSONUIProvider) остаются у вызывающего.
  */
 export function ScreenSurface({ registry, runtime, customDefinitions, onError, tree, canvas, misclickHighlights = false, hostPrimitivesAllowed = true }: ScreenSurfaceProps) {
+  const screenRegions = useScreenRegions();
+  const regionPolicy = screenRegions?.disposition;
   const specs = useMemo(() => {
-    return buildScreenRenderPlan(tree, { canvas, renderHostPrimitives: hostPrimitivesAllowed });
-  }, [canvas, hostPrimitivesAllowed, tree]);
+    return buildScreenRenderPlan(tree, { canvas, regionPolicy, renderHostPrimitives: hostPrimitivesAllowed });
+  }, [canvas, hostPrimitivesAllowed, regionPolicy, tree]);
 
   useEffect(() => { runtime.setScreenSpec(tree.spec); return () => runtime.setScreenSpec(null); }, [runtime, tree.spec]);
   useEffect(() => {
     if (specs.hasBlockedHostPrimitives) console.warn("[overlay] Overlay is not rendered on a desktop flow screen without a canvas");
   }, [specs.hasBlockedHostPrimitives, tree]);
 
+  const regionPortals = screenRegions ? REGION_KINDS.map((kind) => {
+    const spec = specs.regions[kind];
+    const target = screenRegions.targets[kind];
+    return spec && target ? createPortal(<Renderer registry={registry} spec={spec} />, target, kind) : null;
+  }) : null;
   const body = canvas
     ? <CanvasLayers canvas={canvas} specs={specs} registry={registry} />
     : specs.content
-      ? <><Renderer registry={registry} spec={specs.content} />{specs.overlays.map((spec) => <Renderer registry={registry} spec={spec} key={spec.root} />)}</>
-      : specs.overlays.map((spec) => <Renderer registry={registry} spec={spec} key={spec.root} />);
+      ? <><Renderer registry={registry} spec={specs.content} />{specs.overlays.map((spec) => <Renderer registry={registry} spec={spec} key={spec.root} />)}{regionPortals}</>
+      : <>{specs.overlays.map((spec) => <Renderer registry={registry} spec={spec} key={spec.root} />)}{regionPortals}</>;
   const surface = misclickHighlights
     ? <MisclickHighlightSurface metadata={specs.metadata}>{body}</MisclickHighlightSurface>
     : body;

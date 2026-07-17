@@ -9,6 +9,7 @@ import type { PrototypeDoc } from "../prototype/schema";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { EasyUiActionRuntime } from "./actionRuntime";
 import type { EasyUIComponentProps } from "./easyUiRuntime";
+import { ScreenRegionsProvider } from "./ScreenRegions";
 import { ScreenSurface } from "./ScreenSurface";
 
 const noopDeps = { navigate() {}, back() {}, openUrl() {}, restart() {} };
@@ -319,5 +320,34 @@ describe("ScreenSurface Overlay stage integration", () => {
     expect(flowRoot.contains(screen.getByRole("img", { name: "Inline region" }))).toBe(true);
     expect(flowRoot.contains(screen.getByRole("img", { name: "Inline body" }))).toBe(true);
     expect(host.contains(screen.getByRole("img", { name: "Region overlay" }))).toBe(true);
+  });
+
+  it("drops an extracted region until its portal target is ready without an inline first frame", () => {
+    const authored = {
+      root: "root",
+      elements: {
+        root: { type: "@eui/FlowRoot", props: {}, children: ["body", "footer"] },
+        body: { type: "Image", props: { src: "/body.png", alt: "Stable body" } },
+        footer: { type: "Image", props: { src: "/footer.png", alt: "Deferred footer" }, region: "footer" },
+      },
+    } as PrototypeDoc["screens"][number]["spec"];
+    const runtime = createPlayerRuntime(noopDeps);
+    const actionRuntime = new EasyUiActionRuntime({ initialState: {}, screenIds: new Set(["screen"]), deps: noopDeps });
+    const tree = toRuntimeSpec(authored);
+    const target = document.createElement("div");
+    const renderSurfaceWithTarget = (footer: HTMLElement | null) => <JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
+      <ScreenRegionsProvider disposition={{ footer: "extract" }} targets={{ footer }}>
+        <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={{}} onError={() => {}} tree={tree} misclickHighlights={false} />
+      </ScreenRegionsProvider>
+    </JSONUIProvider>;
+
+    const view = render(renderSurfaceWithTarget(null));
+    expect(screen.getByRole("img", { name: "Stable body" })).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "Deferred footer" })).toBeNull();
+
+    document.body.append(target);
+    view.rerender(renderSurfaceWithTarget(target));
+    expect(target.contains(screen.getByRole("img", { name: "Deferred footer" }))).toBe(true);
+    target.remove();
   });
 });

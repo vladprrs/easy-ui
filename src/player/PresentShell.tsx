@@ -170,7 +170,7 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
       <div className="relative flex min-h-0 min-w-0 flex-1">
         {/* Компактный баннер сброса (W1-5): deep-link в середину флоу презентации. */}
         <FlowResetBanner compact />
-        {mobile ? <FluidStage canvas={screen?.canvas} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}>
+        {mobile ? <FluidStage canvas={screen?.canvas} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} resetKey={screen?.id}>
           {content}
         </FluidStage> : <DeviceFrame device={doc.device} canvas={screen?.canvas} zoom={fitZoom} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}>
           {content}
