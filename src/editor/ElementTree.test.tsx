@@ -70,4 +70,12 @@ describe("ElementTree", () => {
     render(<ElementTree selectedKey={null} onSelect={() => {}} spec={{ root: "missing", elements: {} }} />);
     expect(screen.getByText("На экране пока нет элементов.")).toBeTruthy();
   });
+
+  it("shows the authored region as an element badge", () => {
+    render(<ElementTree selectedKey={null} onSelect={() => {}} spec={{ root: "root", elements: {
+      root: { type: "FlowRoot", props: {}, children: ["header"] },
+      header: { type: "Header", props: {}, region: "header" },
+    } }} />);
+    expect(screen.getByTitle("Регион: header").textContent).toBe("header");
+  });
 });

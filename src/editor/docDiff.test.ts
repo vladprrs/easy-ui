@@ -113,13 +113,14 @@ describe("diffDocs (W2-4)", () => {
     expect(changes).toContain("added:Экран «Корзина» › banner");
   });
 
-  it("diffs on/repeat/slot/children/visible and element type", () => {
+  it("diffs on/repeat/region/slot/children/visible and element type", () => {
     const base = makeDoc();
     const next = clone(base);
     const checkout = next.screens[0]!.spec.elements["checkout"]!;
     checkout.type = "Link";
     checkout.on = { click: { action: "back" }, hover: { action: "toast" } };
     delete checkout.repeat;
+    checkout.region = "footer";
     checkout.slot = "header";
     checkout.visible = true;
     next.screens[0]!.spec.elements["layout"]!.children = ["checkout", "cart-total"];
@@ -128,6 +129,7 @@ describe("diffDocs (W2-4)", () => {
     expect(changes).toContain("changed:Экран «Корзина» › checkout › обработчик «click»");
     expect(changes).toContain("added:Экран «Корзина» › checkout › обработчик «hover»");
     expect(changes).toContain("removed:Экран «Корзина» › checkout › повтор (repeat)");
+    expect(changes).toContain("added:Экран «Корзина» › checkout › регион");
     expect(changes).toContain("changed:Экран «Корзина» › checkout › слот");
     expect(changes).toContain("changed:Экран «Корзина» › checkout › видимость");
     expect(changes).toContain("changed:Экран «Корзина» › layout › дочерние элементы");
@@ -193,9 +195,10 @@ describe("describeDocPath", () => {
     expect(describeDocPath(doc, ["screens", 0, "spec", "elements", "cart-total", "props", "text"])).toBe("Экран «Корзина» › cart-total › text");
   });
 
-  it("decodes handlers, repeat, root, overrides and screen fields", () => {
+  it("decodes handlers, repeat, region, root, overrides and screen fields", () => {
     expect(describeDocPath(doc, "/screens/0/spec/elements/checkout/on/click")).toBe("Экран «Корзина» › checkout › обработчик «click»");
     expect(describeDocPath(doc, "/screens/0/spec/elements/checkout/repeat/statePath")).toBe("Экран «Корзина» › checkout › повтор (repeat) › statePath");
+    expect(describeDocPath(doc, "/screens/0/spec/elements/checkout/region")).toBe("Экран «Корзина» › checkout › регион");
     expect(describeDocPath(doc, "/screens/0/spec/root")).toBe("Экран «Корзина» › корневой элемент");
     expect(describeDocPath(doc, "/screens/0/stateOverrides/items")).toBe("Экран «Корзина» › состояние экрана › items");
     expect(describeDocPath(doc, "/screens/1/name")).toBe("Экран «Готово» › Название");

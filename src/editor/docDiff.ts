@@ -61,6 +61,7 @@ function diffElement(changes: DocChange[], prefix: string[], before: Element, af
   diffRecord(changes, prefix, before.props, after.props);
   diffRecord(changes, prefix, before.on, after.on, (event) => editor.diffHandlerLabel(event));
   diffValue(changes, [...prefix, editor.diffRepeatLabel], before.repeat, after.repeat);
+  diffValue(changes, [...prefix, editor.diffRegionLabel], before.region, after.region);
   diffValue(changes, [...prefix, editor.diffSlotLabel], before.slot, after.slot);
   diffValue(changes, [...prefix, editor.diffChildrenLabel], before.children, after.children);
   diffValue(changes, [...prefix, editor.diffVisibleLabel], before.visible, after.visible);
@@ -158,6 +159,7 @@ function describeElementPath(rest: string[]): string[] {
   if (head === "type") return [editor.diffTypeLabel, ...tail];
   if (head === "on") { const [event, ...more] = tail; return [event === undefined ? editor.diffHandlerLabel("") : editor.diffHandlerLabel(event), ...more]; }
   if (head === "repeat") return [editor.diffRepeatLabel, ...tail];
+  if (head === "region") return [editor.diffRegionLabel, ...tail];
   if (head === "slot") return [editor.diffSlotLabel, ...tail];
   if (head === "children") return [editor.diffChildrenLabel, ...tail];
   if (head === "visible") return [editor.diffVisibleLabel, ...tail];

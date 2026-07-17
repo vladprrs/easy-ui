@@ -1,5 +1,5 @@
-import type { PrototypeDoc } from "../prototype/schema";
-import { patchDocMeta, patchScreen, setElementProps, type Screen } from "./docMutations";
+import type { PrototypeDoc, RegionKind } from "../prototype/schema";
+import { patchDocMeta, patchScreen, setElementProps, setElementRegion, type Screen } from "./docMutations";
 
 /** Максимум undo-снапшотов authored-документа (W2-2). */
 export const HISTORY_LIMIT = 50;
@@ -46,6 +46,7 @@ export type EditorAction =
   | { type: "select-screen"; screenId: string }
   | { type: "select-element"; screenId?: string; elementKey: string | null }
   | { type: "set-element-props"; screenId: string; elementKey: string; props: Record<string, unknown> }
+  | { type: "set-element-region"; screenId: string; elementKey: string; region: RegionKind | undefined }
   | { type: "set-screen-meta"; screenId: string; patch: Partial<Pick<Screen, "name" | "note" | "stateOverrides" | "canvas">> }
   | { type: "set-doc-meta"; patch: DocMetaPatch }
   | { type: "undo" }
@@ -87,9 +88,18 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const doc = setElementProps(state.doc, action.screenId, action.elementKey, action.props);
       return doc === state.doc ? state : commitDoc(state, doc, false);
     }
+    case "set-element-region": {
+      const doc = setElementRegion(state.doc, action.screenId, action.elementKey, action.region);
+      return doc === state.doc ? state : commitDoc(state, doc, false);
+    }
     case "set-screen-meta": {
       const previous = state.doc.screens.find((screen) => screen.id === action.screenId);
-      const doc = patchScreen(state.doc, action.screenId, action.patch);
+      let doc = patchScreen(state.doc, action.screenId, action.patch);
+      if (action.patch.canvas !== undefined) {
+        for (const [elementKey, element] of Object.entries(previous?.spec.elements ?? {})) {
+          if (element.region !== undefined) doc = setElementRegion(doc, action.screenId, elementKey, undefined);
+        }
+      }
       if (doc === state.doc) return state;
       const next = doc.screens.find((screen) => screen.id === action.screenId);
       return commitDoc(state, doc, !Object.is(previous?.stateOverrides, next?.stateOverrides));

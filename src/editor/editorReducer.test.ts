@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FLOW_ROOT_TYPE } from "../catalog/hostPrimitives/flowRoot.definition";
 import { prototypeDocSchema } from "../prototype/schema";
 import { createEditorState, editorReducer, HISTORY_LIMIT, type EditorAction, type EditorState } from "./editorReducer";
 
@@ -35,6 +36,47 @@ describe("editorReducer", () => {
     const next = editorReducer(state, setText("Changed"));
     expect(next.dirty).toBe(true);
     expect(rootText(next)).toBe("Changed");
+  });
+
+  it("sets and removes an element region with undo and redo", () => {
+    let state = editorReducer(initial(), { type: "set-element-region", screenId: "one", elementKey: "root", region: "header" });
+    expect(state.doc.screens[0]!.spec.elements.root!.region).toBe("header");
+    expect(state.past).toHaveLength(1);
+
+    state = editorReducer(state, { type: "set-element-region", screenId: "one", elementKey: "root", region: undefined });
+    expect(state.doc.screens[0]!.spec.elements.root).not.toHaveProperty("region");
+    state = editorReducer(state, { type: "undo" });
+    expect(state.doc.screens[0]!.spec.elements.root!.region).toBe("header");
+    state = editorReducer(state, { type: "redo" });
+    expect(state.doc.screens[0]!.spec.elements.root).not.toHaveProperty("region");
+  });
+
+  it("sets canvas and clears every region in one undoable commit", () => {
+    const regionDoc = prototypeDocSchema.parse({
+      version: 1, id: "regions", name: "Regions", startScreen: "home", state: {},
+      screens: [{ id: "home", name: "Home", spec: { root: "root", elements: {
+        root: { type: FLOW_ROOT_TYPE, props: {}, children: ["header", "body", "footer"] },
+        header: { type: "Header", props: {}, region: "header" },
+        body: { type: "Content", props: {} },
+        footer: { type: "Footer", props: {}, region: "footer" },
+      } } }],
+    });
+    let state = createEditorState({ doc: regionDoc, rev: 1 });
+    state = editorReducer(state, { type: "set-screen-meta", screenId: "home", patch: { canvas: { width: 390, height: 844 } } });
+
+    expect(state.doc.screens[0]!.canvas).toEqual({ width: 390, height: 844 });
+    expect(state.doc.screens[0]!.spec.elements.header).not.toHaveProperty("region");
+    expect(state.doc.screens[0]!.spec.elements.footer).not.toHaveProperty("region");
+    expect(state.past).toHaveLength(1);
+
+    state = editorReducer(state, { type: "undo" });
+    expect(state.doc.screens[0]!.canvas).toBeUndefined();
+    expect(state.doc.screens[0]!.spec.elements.header!.region).toBe("header");
+    expect(state.doc.screens[0]!.spec.elements.footer!.region).toBe("footer");
+    state = editorReducer(state, { type: "redo" });
+    expect(state.doc.screens[0]!.canvas).toEqual({ width: 390, height: 844 });
+    expect(state.doc.screens[0]!.spec.elements.header).not.toHaveProperty("region");
+    expect(state.doc.screens[0]!.spec.elements.footer).not.toHaveProperty("region");
   });
 
   it("increments stateEpoch only for state and stateOverrides changes", () => {

@@ -81,6 +81,7 @@ export function ElementTree({ spec, selectedKey, onSelect }: { spec: Spec; selec
           onClick={() => onSelect(node.key)}
           className="min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-left font-eui-ui text-sm text-eui-slate-500 hover:bg-eui-lilac-100 aria-[current=true]:bg-eui-lilac-100 aria-[current=true]:font-bold aria-[current=true]:text-eui-ink"
         >{element.type} · {node.key}</button>
+        {element.region ? <span className="shrink-0 rounded-full bg-eui-lilac-100 px-2 py-0.5 font-eui-ui text-[10px] font-medium text-eui-purple" title={editor.regionBadge(element.region)}>{element.region}</span> : null}
       </div>
     </li>;
   };

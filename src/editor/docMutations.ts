@@ -1,4 +1,4 @@
-import type { PrototypeDoc } from "../prototype/schema";
+import type { PrototypeDoc, RegionKind } from "../prototype/schema";
 
 export type Screen = PrototypeDoc["screens"][number];
 
@@ -44,6 +44,35 @@ export function setElementProps(
       elements: {
         ...screen.spec.elements,
         [elementKey]: { ...element, props },
+      },
+    },
+  };
+  const screens = [...doc.screens];
+  screens[screenIndex] = nextScreen;
+  return { ...doc, screens };
+}
+
+export function setElementRegion(
+  doc: PrototypeDoc,
+  screenId: string,
+  elementKey: string,
+  region: RegionKind | undefined,
+): PrototypeDoc {
+  const screenIndex = doc.screens.findIndex((screen) => screen.id === screenId);
+  if (screenIndex < 0) return doc;
+  const screen = doc.screens[screenIndex]!;
+  const element = screen.spec.elements[elementKey];
+  if (!element || element.region === region) return doc;
+
+  const nextElement = { ...element, region };
+  if (region === undefined) delete nextElement.region;
+  const nextScreen: Screen = {
+    ...screen,
+    spec: {
+      ...screen.spec,
+      elements: {
+        ...screen.spec.elements,
+        [elementKey]: nextElement,
       },
     },
   };
