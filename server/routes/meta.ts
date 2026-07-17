@@ -63,6 +63,7 @@ export function capabilities(db: Database): JsonObject {
       const theme = getLatestDesignSystemContent(db, system.id);
       return [system.id, resolveSpacingScale(system.id, theme.tokens)];
     })),
+    regions: ["statusBar", "header", "footer"],
     features: {
       renderStatus: true,
       screenshots: true,
@@ -74,6 +75,7 @@ export function capabilities(db: Database): JsonObject {
       themeVersions: true,
       layoutContract: true,
       flows: true,
+      screenRegions: true,
     },
   };
 }

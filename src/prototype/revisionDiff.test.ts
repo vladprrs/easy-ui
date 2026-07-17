@@ -54,6 +54,23 @@ describe("diffPrototypeDocs", () => {
     expect(changed.children).toBeDefined(); expect(changed.repeat).toBeDefined(); expect(changed.slot).toBeDefined();
   });
 
+  test("diffs region additions, removals, and changes as opaque element values", () => {
+    const before = doc();
+    const added = structuredClone(before);
+    added.screens[0]!.spec.elements.root!.region = "header";
+    const changed = structuredClone(added);
+    changed.screens[0]!.spec.elements.root!.region = "footer";
+    const removed = structuredClone(changed);
+    delete removed.screens[0]!.spec.elements.root!.region;
+
+    expect((diffPrototypeDocs(revision(1, before), revision(2, added)) as any).screens.changed[0].elements.changed[0].region)
+      .toEqual({ from: { missing: true }, to: { value: "header" } });
+    expect((diffPrototypeDocs(revision(2, added), revision(3, changed)) as any).screens.changed[0].elements.changed[0].region)
+      .toEqual({ from: { value: "header" }, to: { value: "footer" } });
+    expect((diffPrototypeDocs(revision(3, changed), revision(4, removed)) as any).screens.changed[0].elements.changed[0].region)
+      .toEqual({ from: { value: "footer" }, to: { missing: true } });
+  });
+
   test("computes identity before truncation and includes render inputs and pins", () => {
     const a = revision(1, doc(), { message: "a".repeat(1000), components: [{ id: "x", version: 1 }] });
     const b = revision(2, doc(), { message: "b".repeat(1000), components: [{ id: "x", version: 1 }], designSystemMetaVersion: 2 });

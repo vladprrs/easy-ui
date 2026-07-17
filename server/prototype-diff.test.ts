@@ -38,6 +38,29 @@ describe("prototype revision diff route", () => {
     expect(body.renderInputs[0].key).toBe("designSystemMetaVersion"); db.close();
   });
 
+  test("reports region additions, changes, and removals through the revision diff route", async () => {
+    const {db,handler}=await setup(); const first=await fixture("diff-regions");
+    const screen=first.screens[0]!;
+    const content=screen.spec.elements[screen.spec.root]!;
+    screen.spec={root:"root",elements:{root:{type:"@eui/FlowRoot",props:{},children:["content"]},content}};
+    expect((await handler(request("/prototypes","POST",{doc:first}))).status).toBe(201);
+    const withRegion=structuredClone(first); withRegion.screens[0]!.spec.elements.content!.region="header";
+    expect((await handler(request("/prototypes/diff-regions","PUT",{baseRev:1,doc:withRegion}))).status).toBe(200);
+    const changed=structuredClone(withRegion); changed.screens[0]!.spec.elements.content!.region="footer";
+    expect((await handler(request("/prototypes/diff-regions","PUT",{baseRev:2,doc:changed}))).status).toBe(200);
+    const removed=structuredClone(changed); delete removed.screens[0]!.spec.elements.content!.region;
+    expect((await handler(request("/prototypes/diff-regions","PUT",{baseRev:3,doc:removed}))).status).toBe(200);
+
+    const regionDiff=async(rev:number) => {
+      const body=await (await handler(request(`/prototypes/diff-regions/revisions/${rev}/diff`))).json() as any;
+      return body.screens.changed[0].elements.changed[0].region;
+    };
+    expect(await regionDiff(2)).toEqual({from:{missing:true},to:{value:"header"}});
+    expect(await regionDiff(3)).toEqual({from:{value:"header"},to:{value:"footer"}});
+    expect(await regionDiff(4)).toEqual({from:{value:"footer"},to:{missing:true}});
+    db.close();
+  });
+
   test("returns the specified typed errors", async () => {
     const {db,handler}=await setup(); const value=await fixture("diff-errors"); await handler(request("/prototypes","POST",{doc:value}));
     for (const [path,status,code] of [

@@ -1,4 +1,4 @@
-import type { PrototypeDoc } from "../prototype/schema";
+import type { PrototypeDoc, RegionKind } from "../prototype/schema";
 import type { ComponentLayout, SpaceToken } from "../designSystems/types";
 
 export interface ValidationIssue {
@@ -155,7 +155,8 @@ export interface Capabilities {
   limits: Record<string, number>;
   designSystems: string[];
   resolvedSpaceScales: Record<string, Record<SpaceToken, string>>;
-  features: Record<string, boolean> & { layoutContract: true };
+  regions: RegionKind[];
+  features: Record<string, boolean> & { layoutContract: true; screenRegions: true };
 }
 
 type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown; redirectOnUnauthorized?: boolean };

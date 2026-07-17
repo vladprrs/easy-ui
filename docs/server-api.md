@@ -78,7 +78,7 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 
 `PUT /prototypes/:id` — это осознанный checkpoint, а не no-op. Даже если `doc` не изменился, успешный запрос с актуальным `baseRev` создаёт новую ревизию: сервер заново разрешает и фиксирует пины active custom-бандлов, текущей версии темы дизайн-системы и ассетов, а также сохраняет переданный `message`. CAS по `baseRev` действует как обычно. Сервер намеренно не дедуплицирует такие ревизии, потому что повторное сохранение выражает явное решение зафиксировать актуальное окружение документа.
 
-`ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её render/validation-контракт. Дескриптор включает обязательный `renderContractVersion` (сейчас `1`), actions, имена/descriptions/events/slots, input JSON Schema пропсов, `layout`/`layoutNeutral` и resolved spacing scale из **pinned** `design_system_meta_version`. Restore копирует версию темы исходной ревизии, поэтому восстанавливает и соответствующий hash. Хеш остаётся детектором несовместимости, а не pin: рантайм не сравнивает и не блокирует mismatch.
+`ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её render/validation-контракт. Дескриптор включает обязательный `renderContractVersion` (сейчас `4`), actions, имена/descriptions/events/slots, input JSON Schema пропсов, `layout`/`layoutNeutral`, host-примитивы, включая `@eui/FlowRoot`, и resolved spacing scale из **pinned** `design_system_meta_version`. Restore копирует версию темы исходной ревизии, поэтому восстанавливает и соответствующий hash. Хеш остаётся детектором несовместимости, а не pin: рантайм не сравнивает и не блокирует mismatch.
 
 ### Diff ревизий
 
@@ -102,7 +102,7 @@ Endpoints auth (здесь и далее API-пути могут быть пок
       "stateOverrides": {"added": [], "removed": [], "changed": []},
       "elements": {
         "added": [{"id": "...", "type": "..."}], "removed": [{"id": "...", "type": "..."}],
-        "changed": [{"id": "...", "type": {"from": "...", "to": "..."}, "props": {"added": [], "removed": [], "changed": []}, "children": {"from": V, "to": V}, "on": {"added": [], "removed": [], "changed": []}, "visible": {"from": V, "to": V}, "repeat": {"from": V, "to": V}, "slot": {"from": V, "to": V}}]
+        "changed": [{"id": "...", "type": {"from": "...", "to": "..."}, "props": {"added": [], "removed": [], "changed": []}, "children": {"from": V, "to": V}, "on": {"added": [], "removed": [], "changed": []}, "visible": {"from": V, "to": V}, "repeat": {"from": V, "to": V}, "slot": {"from": V, "to": V}, "region": {"from": V, "to": V}}]
       }
     }]
   },
@@ -258,7 +258,7 @@ Meta-ответы прототипов и компонентов additively не
 | `PATCH /design-systems/:id` | Тема (см. §Тема) `{tokens?,fonts?,icons?,baseVersion}` → 200 `DesignSystemSummary`; builtin → `405`; CAS-конфликт → `409 version_conflict` |
 | `GET /design-systems/:id/versions/:v` | Immutable `{systemId,version,tokens,fonts,icons,createdAt}`; отсутствует → `404 not_found` |
 
-`DesignSystemSummary` имеет `{id,name,description,builtinCatalogHash,resolvedSpaceScale,components,hostPrimitives}` плюс additively `latestMetaVersion` и содержимое последней версии темы `{tokens,fonts,icons}`; provider не раскрывается. `components[]` сериализует `propsJsonSchema` (input), `layout?` и явный `layoutNeutral`; `hostPrimitives[]` использует ту же generic-схему дескриптора, но в W2b всегда пуст (host-примитивы не входят в bundle-manifest). `resolvedSpaceScale` — итоговые девять `none..4xl` для последней merged-темы системы. Malformed JSON/body не-object даёт `400 invalid_request`; неизвестные поля, неверные типы, невалидный slug, пустые или слишком длинные значения — `422 validation_failed` с `issues[].path`. `PUT` и `DELETE` на collection или `:id`, а также `PATCH` на collection дают `405 method_not_allowed`: registry metadata в этом API неизменяемы. Повтор идентичного POST не идемпотентен и также даёт 409.
+`DesignSystemSummary` имеет `{id,name,description,builtinCatalogHash,resolvedSpaceScale,components,hostPrimitives}` плюс additively `latestMetaVersion` и содержимое последней версии темы `{tokens,fonts,icons}`; provider не раскрывается. `components[]` сериализует `propsJsonSchema` (input), `layout?` и явный `layoutNeutral`; `hostPrimitives[]` использует ту же generic-схему дескриптора и содержит host-owned `Image`, `Hotspot`, `Overlay` и `@eui/FlowRoot` для каждой системы. Они доступны runtime независимо от custom bundle и намеренно не входят в `/catalog/manifest`. `resolvedSpaceScale` — итоговые девять `none..4xl` для последней merged-темы системы. Malformed JSON/body не-object даёт `400 invalid_request`; неизвестные поля, неверные типы, невалидный slug, пустые или слишком длинные значения — `422 validation_failed` с `issues[].path`. `PUT` и `DELETE` на collection или `:id`, а также `PATCH` на collection дают `405 method_not_allowed`: registry metadata в этом API неизменяемы. Повтор идентичного POST не идемпотентен и также даёт 409.
 
 #### Тема дизайн-системы (tokens/fonts/icons) и версии
 
@@ -492,7 +492,8 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
   "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5, "geometryRects": 2000, "flows": 12, "flowSteps": 50, "flowTotalSteps": 200 },
   "designSystems": ["shadcn", "wireframe", "..."],
   "resolvedSpaceScales": { "shadcn": { "none": "0px", "xs": "4px", "sm": "8px", "md": "12px", "lg": "16px", "xl": "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" } },
-  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true }
+  "regions": ["statusBar", "header", "footer"],
+  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true, "screenRegions": true }
 }
 ```
 
@@ -614,5 +615,7 @@ Production разворачивается в Dokploy из корневого `do
 Compose healthcheck обращается без credentials к открытому `GET http://127.0.0.1:8787/api/health` и считает сервис готовым только при HTTP 200 и JSON `status: "ready"`. Для rollback следует указать в compose известный хороший тег `ghcr.io/vladprrs/easy-ui:<sha>` (каждый коммит main тегируется) либо revert+push; миграции forward-only, поэтому перед рискованными изменениями нужен backup volume.
 
 При выкладке поддержки `doc.flows` действует отдельное правило совместимости: в течение rollback-window нельзя персистить **ни одной** ревизии с `flows` — ни через create, ни через save, ни через restore. Старый образ не умеет читать такой документ, поэтому наличие flows-ревизии делает безопасный rollback образа невозможным. После окончания окна откат на образ без поддержки `flows` выполняется только вместе с откатом данных на совместимый backup.
+
+Для screen regions действует та же rollback-политика. Перед деплоем обязателен проверенный логический бэкап данных, совместимый со старым образом; его сохраняют на весь rollback-window. Несовместимость возникает в двух независимых случаях: строгая схема старого сервера не распарсит документ с полем элемента `region`, а документ с `@eui/FlowRoot` старый runtime не сможет отрендерить, поскольку у него нет ни host-рендерера, ни component pin для этого типа. Поэтому в течение rollback-window нельзя персистить через create, save или restore ни одной ревизии, содержащей `region` или `@eui/FlowRoot`. После первой такой записи откат на образ без screen regions допустим только вместе с восстановлением совместимого бэкапа.
 
 SQLite работает в WAL-режиме: корректный backup должен учитывать основной `.db` вместе с файлами `-wal` и `-shm` либо выполняться штатным SQLite backup-механизмом. `docker compose down -v` удаляет named volume и все постоянные данные — на production эту команду применять нельзя.

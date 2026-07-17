@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { inputPrototypeDocSchema } from "../src/prototype/schema";
+import { inputPrototypeDocSchema, REGION_KINDS } from "../src/prototype/schema";
 import { atomicLevels, layoutSpacingProps, spaceTokens } from "../src/designSystems/types";
 import { ApiError } from "./http";
 import { figmaSchema } from "./figma";
@@ -624,6 +624,7 @@ const elementChangedSchema = z.strictObject({
   visible: elementValueDiffSchema.optional(),
   repeat: elementValueDiffSchema.optional(),
   slot: elementValueDiffSchema.optional(),
+  region: elementValueDiffSchema.optional(),
 });
 const elementsDiffSchema = z.union([
   z.strictObject({
@@ -1010,10 +1011,11 @@ export const capabilitiesResponseSchema = z.object({
   }),
   designSystems: z.array(z.string()),
   resolvedSpaceScales: z.record(z.string(), spaceScaleSchema),
+  regions: z.array(z.enum(REGION_KINDS)),
   features: z.object({
     renderStatus: z.boolean(), screenshots: z.boolean(), visualRegression: z.boolean(), assets: z.boolean(),
     typedEvents: z.boolean(), repeat: z.boolean(), namedSlots: z.boolean(), themeVersions: z.boolean(), layoutContract: z.boolean(),
-    flows: z.boolean(),
+    flows: z.boolean(), screenRegions: z.boolean(),
   }),
 });
 

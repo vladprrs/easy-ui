@@ -158,7 +158,7 @@ function elementsDiff(fromScreen: MutableRecord, toScreen: MutableRecord, ctx: B
     const a = before as MutableRecord, b = after as MutableRecord, entry: MutableRecord = { id: outputId };
     if (!equal(own(a, "type"), own(b, "type"))) entry.type = { from: boundedString(String(a.type ?? ""), ctx), to: boundedString(String(b.type ?? ""), ctx) };
     const props = mapDiff(a.props, b.props, ctx, "props"); if (props) entry.props = props;
-    for (const key of ["children", "visible", "repeat", "slot"] as const) {
+    for (const key of ["children", "visible", "repeat", "slot", "region"] as const) {
       const av = own(a, key), bv = own(b, key);
       if (!equal(av, bv)) { entry[key] = { from: valueUnion(av, ctx), to: valueUnion(bv, ctx) }; count(ctx, "elements"); }
     }

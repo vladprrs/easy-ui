@@ -787,6 +787,9 @@
                         "repeat": {
                           "type": "boolean"
                         },
+                        "screenRegions": {
+                          "type": "boolean"
+                        },
                         "screenshots": {
                           "type": "boolean"
                         },
@@ -810,7 +813,8 @@
                         "namedSlots",
                         "themeVersions",
                         "layoutContract",
-                        "flows"
+                        "flows",
+                        "screenRegions"
                       ],
                       "type": "object"
                     },
@@ -880,6 +884,17 @@
                       },
                       "type": "array"
                     },
+                    "regions": {
+                      "items": {
+                        "enum": [
+                          "statusBar",
+                          "header",
+                          "footer"
+                        ],
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
                     "resolvedSpaceScales": {
                       "additionalProperties": {
                         "additionalProperties": false,
@@ -942,6 +957,7 @@
                     "limits",
                     "designSystems",
                     "resolvedSpaceScales",
+                    "regions",
                     "features"
                   ],
                   "type": "object"
@@ -8430,6 +8446,9 @@
                                                       "$ref": "#/$defs/__schema3"
                                                     }
                                                   ]
+                                                },
+                                                "region": {
+                                                  "$ref": "#/$defs/__schema5"
                                                 },
                                                 "repeat": {
                                                   "$ref": "#/$defs/__schema5"

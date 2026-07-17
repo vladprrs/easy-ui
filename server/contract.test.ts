@@ -251,6 +251,7 @@ describe("route contracts", () => {
     });
     expect(value.designSystems).toEqual(expect.arrayContaining(["contract-ds", "yandex-pay"]));
     expect(value.layoutContractVersion).toBe(1);
+    expect(value.regions).toEqual(["statusBar", "header", "footer"]);
     expect(value.features).toEqual({
       renderStatus: true,
       screenshots: true,
@@ -262,6 +263,7 @@ describe("route contracts", () => {
       themeVersions: true,
       layoutContract: true,
       flows: true,
+      screenRegions: true,
     });
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
   });
@@ -284,6 +286,33 @@ describe("route contracts", () => {
     expect(text).toContain('"#/$defs/propValue"');
     expect(text).toContain('"#/$defs/actionParamValue"');
     expect(text).toContain("asset_[0-9a-f]{64}");
+    const regionSchemas: unknown[] = [];
+    const visit = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(visit);
+      if (!node || typeof node !== "object") return;
+      const record = node as Record<string, unknown>;
+      const nodeProperties = record.properties;
+      if (nodeProperties && typeof nodeProperties === "object" && !Array.isArray(nodeProperties)) {
+        const region = (nodeProperties as Record<string, unknown>).region;
+        if (region) regionSchemas.push(region);
+      }
+      Object.values(record).forEach(visit);
+    };
+    visit(schema);
+    expect(regionSchemas).toContainEqual({ type: "string", enum: ["statusBar", "header", "footer"] });
+  });
+
+  test("POST /api/prototypes rejects an unknown screen region", async () => {
+    const doc = await helloDoc("contract-invalid-region");
+    (doc.screens[0]!.spec.elements.image as { region?: unknown }).region = "sidebar";
+    const response = await call("POST", "/api/prototypes", { doc });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "validation_failed",
+        issues: [expect.objectContaining({ path: ["screens", 0, "spec", "elements", "image", "region"] })],
+      },
+    });
   });
 
   test("POST and PUT prototype documents with flows return semantic warnings", async () => {
