@@ -70,6 +70,8 @@ export const editor = {
   diffScreensLabel: "Экраны",
   diffDocLabel: "Документ",
   diffStateLabel: "Состояние",
+  diffFlowLabel: (name: string) => `Сценарий «${name}»`,
+  diffFlowStepsLabel: "шаги",
   diffDesignSystemLabel: "Дизайн-система",
   diffTypeLabel: "тип",
   diffHandlerLabel: (event: string) => `обработчик «${event}»`,

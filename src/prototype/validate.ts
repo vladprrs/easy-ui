@@ -10,6 +10,7 @@ import { lintPrototypeLayouts } from "./layoutLints";
 import type { PrototypeValidationResult, ValidationIssue } from "./types";
 import { hostPrimitiveDefinitions, hostPrimitiveNames } from "../catalog/hostPrimitives/definitions";
 import { validateOverlayRules } from "./overlayRules";
+import { buildNavigationGraph, verifyEdge } from "./navigationGraph";
 
 type Obj = Record<string, unknown>;
 const terminals = new Set(["navigate", "back", "restart", "openUrl"]);
@@ -241,7 +242,7 @@ export function validatePrototype(
   const definitions: Record<string, ComponentDefinition> = { ...(suppliedDefinitions ?? testDefinitions ?? {}), ...hostPrimitiveDefinitions };
   const builtinNames = new Set<string>();
   const screenIds = new Set(doc.screens.map((screen) => screen.id));
-  const navigation = new Map<string, Set<string>>();
+  const navigation = buildNavigationGraph(doc);
   for (const [screenIndex, screen] of doc.screens.entries()) {
     const base = ["screens", screenIndex, "spec"];
     const overrideBase = ["screens", screenIndex, "stateOverrides"];
@@ -454,11 +455,6 @@ export function validatePrototype(
           if (["setState","pushState","removeState"].includes(action.action)) checkPointer(statePath, [...ap,"params","statePath"], errors, warnings, effectiveState, false);
           if (action.action === "navigate" && typeof action.params?.screenId === "string") {
             if (!screenIds.has(action.params.screenId)) issue(errors, [...ap,"params","screenId"], "navigate target does not exist");
-            else {
-              const targets = navigation.get(screen.id) ?? new Set<string>();
-              targets.add(action.params.screenId);
-              navigation.set(screen.id, targets);
-            }
           }
           if (action.action === "openUrl") checkUrl(action.params?.url, [...ap,"params","url"], false, errors);
         });
@@ -503,14 +499,29 @@ export function validatePrototype(
     }
   }
   const reachableScreens = new Set<string>();
-  const visitScreen = (id: string) => { if (reachableScreens.has(id)) return; reachableScreens.add(id); navigation.get(id)?.forEach(visitScreen); };
+  const visitScreen = (id: string) => { if (reachableScreens.has(id)) return; reachableScreens.add(id); navigation.edges.get(id)?.forEach(visitScreen); };
   visitScreen(doc.startScreen);
   doc.screens.forEach((screen, index) => { if (!reachableScreens.has(screen.id)) issue(warnings, ["screens",index,"id"], "screen is not reachable by navigate actions"); });
   // Multiple screens with no navigate action moving between two different screens: likely
   // disconnected screens (back/restart/openUrl don't count as inter-screen navigation).
   if (doc.screens.length >= 2) {
-    const hasCrossScreenNavigate = [...navigation.entries()].some(([source, targets]) => [...targets].some((target) => target !== source));
+    const hasCrossScreenNavigate = [...navigation.edges.entries()].some(([source, targets]) => [...targets].some((target) => target !== source));
     if (!hasCrossScreenNavigate) issue(warnings, ["screens"], "prototype has multiple screens but no navigate action moves between different screens");
+  }
+  if (doc.flows) {
+    const mainScreenIds = new Set(doc.flows[0]!.steps.map((step) => step.screenId));
+    doc.flows.forEach((flow, flowIndex) => {
+      if (flow.steps.length === 1) issue(warnings, ["flows", flowIndex, "steps"], "flow has a single step");
+      flow.steps.forEach((step, stepIndex) => {
+        // Anchors are branch-flow steps referencing a main-flow screen; main-flow steps own their tiles and display notes.
+        if (flowIndex > 0 && step.note !== undefined && mainScreenIds.has(step.screenId)) {
+          issue(warnings, ["flows", flowIndex, "steps", stepIndex, "note"], "flow step note on a main-flow anchor is not displayed");
+        }
+        if (stepIndex > 0 && verifyEdge(navigation, flow.steps[stepIndex - 1]!.screenId, step.screenId) === "missing") {
+          issue(warnings, ["flows", flowIndex, "steps", stepIndex, "screenId"], "flow step is not connected to the previous step by a navigate action");
+        }
+      });
+    });
   }
   warnings.push(...lintPrototypeLayouts(doc, definitions));
   return { errors, warnings };

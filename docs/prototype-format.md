@@ -32,6 +32,18 @@ The keys `__proto__`, `prototype`, and `constructor` are forbidden at every over
 
 Each CJM tile gets an isolated json-render state store. This does not isolate custom components' own local state or browser side effects such as portals, global listeners, or storage access.
 
+## Flows (scenario lanes)
+
+The optional `flows` field annotates full end-to-end scenarios over the prototype's `navigate` graph. It is additive to format v1 and does not change runtime behavior: only actions define navigation, while flows provide authored scenario lanes for CJM and guided browsing in the player. During guided browsing, a selected screen opens in the current player session state. Intermediate actions are not executed, and guided browsing does not apply the destination screen's `stateOverrides`.
+
+Each flow has a slug `id`, a non-empty `name` of at most 120 characters, an optional `description` of at most 500 characters, and one or more `steps`. A step contains a screen `screenId` and may contain a trimmed, non-blank `note` of at most 500 characters. The first flow is the canonical main scenario. Its first step must be `startScreen`, and its screen IDs must be unique.
+
+A step whose screen occurs in the main flow is an anchor. Two adjacent anchors in any flow are valid only when they are adjacent in the main flow in the same forward direction; shortcuts and direct backward anchor-to-anchor pairs are errors. Authors must insert an intermediate non-anchor screen or change the main flow. Equal adjacent steps are forbidden. Other repeated screens, including repeated non-anchor screens used for retry loops and backward returns through their own tiles, are allowed. Branch-from-branch and convergence between branches are not represented specially in v1: a screen belonging to another branch remains that flow's own tile.
+
+Limits are 12 flows, 50 steps per flow, and 200 steps across all flows. An explicitly empty `flows` array is invalid; omit the field when scenarios are not authored. Every flow ID is unique and every step references an existing screen.
+
+Flow diagnostics are warnings, not errors, when a flow has only one step, when no static or dynamic `navigate` action can connect a step to its predecessor, or when a note is attached to an anchor step of a branch flow (anchor steps have no separate tile, so their notes are not displayed; main-flow steps own their tiles and display notes normally). Static navigation is recognized even under an action `$if`. A dynamic `screenId` makes the edge unverifiable and suppresses the missing-edge warning for that source; it does not create a graph edge. `back`, `restart`, and dynamic targets are not part of the statically inferred navigate graph.
+
 ## Dynamic values and conditions
 
 Props may be literals or exactly one of these strict directives. A directive may be the value of an individual prop (including a nested value), but may not replace the entire `props` object.

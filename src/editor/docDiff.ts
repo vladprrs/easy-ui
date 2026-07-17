@@ -85,6 +85,26 @@ function diffScreen(changes: DocChange[], before: Screen, after: Screen): void {
   }
 }
 
+function diffFlows(changes: DocChange[], before: PrototypeDoc["flows"], after: PrototypeDoc["flows"]): void {
+  const nextById = new Map((after ?? []).map((flow) => [flow.id, flow]));
+  for (const flow of before ?? []) {
+    const counterpart = nextById.get(flow.id);
+    if (!counterpart) {
+      changes.push({ kind: "removed", segments: [editor.diffFlowLabel(flow.name)] });
+      continue;
+    }
+    if (flow.name !== counterpart.name) {
+      changes.push({ kind: "renamed", segments: [editor.diffFlowLabel(flow.name)], detail: editor.diffScalarDetail(flow.name, counterpart.name) });
+    }
+    diffValue(changes, [editor.diffFlowLabel(counterpart.name), editor.descriptionLabel], flow.description, counterpart.description);
+    diffValue(changes, [editor.diffFlowLabel(counterpart.name), editor.diffFlowStepsLabel], flow.steps, counterpart.steps);
+  }
+  const baseIds = new Set((before ?? []).map((flow) => flow.id));
+  for (const flow of after ?? []) {
+    if (!baseIds.has(flow.id)) changes.push({ kind: "added", segments: [editor.diffFlowLabel(flow.name)] });
+  }
+}
+
 const DOC_FIELD_LABELS: Partial<Record<keyof PrototypeDoc, string>> = {
   name: editor.nameLabel,
   description: editor.descriptionLabel,
@@ -103,6 +123,7 @@ export function diffDocs(base: PrototypeDoc, next: PrototypeDoc): DocChange[] {
   for (const field of Object.keys(DOC_FIELD_LABELS) as (keyof typeof DOC_FIELD_LABELS)[]) {
     diffValue(changes, [DOC_FIELD_LABELS[field]!], base[field], next[field]);
   }
+  diffFlows(changes, base.flows, next.flows);
   diffRecord(changes, [editor.diffStateLabel], base.state, next.state);
   const nextById = new Map(next.screens.map((screen) => [screen.id, screen]));
   for (const screen of base.screens) {

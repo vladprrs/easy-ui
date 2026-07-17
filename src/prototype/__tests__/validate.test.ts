@@ -421,6 +421,52 @@ describe("semantic warnings", () => {
     expect(warns(connected).some((m) => m.includes("no navigate action moves between"))).toBe(false);
   });
 
+  it("warns for a missing flow edge at the destination step path", () => {
+    const doc = build({}, "a", { screens: [
+      screen({ a: { type: "Text", props: { text: "A" } } }, "a", { id: "s", name: "A" }),
+      screen({ b: { type: "Text", props: { text: "B" } } }, "b", { id: "s2", name: "B" }),
+    ] });
+    doc.flows = [{ id: "main", name: "Main", steps: [{ screenId: "s" }, { screenId: "s2" }] }];
+    expect(validatePrototype(doc).warnings).toContainEqual({
+      path: "/flows/0/steps/1/screenId",
+      message: "flow step is not connected to the previous step by a navigate action",
+    });
+  });
+
+  it("suppresses a missing flow-edge warning for a dynamic navigate source", () => {
+    const widget: ComponentDefinition = { description: "Widget", props: z.strictObject({}), events: ["go"], eventPayloadSchemas: { go: z.strictObject({ target: z.string() }) } };
+    const doc = build({}, "a", { screens: [
+      screen({ a: { type: "Widget", props: {}, on: { go: { action: "navigate", params: { screenId: { $event: "/target" } } } } } }, "a", { id: "s", name: "A" }),
+      screen({ b: { type: "Text", props: { text: "B" } } }, "b", { id: "s2", name: "B" }),
+    ] });
+    doc.flows = [{ id: "main", name: "Main", steps: [{ screenId: "s" }, { screenId: "s2" }] }];
+    expect(validatePrototype(doc, { definitions: { Widget: widget } }).warnings.some((entry) => entry.message.includes("flow step is not connected"))).toBe(false);
+  });
+
+  it("warns for a single-step flow and a note on a branch-flow anchor, but not on main-flow steps", () => {
+    const doc = build({ a: { type: "Text", props: { text: "A" } } }, "a");
+    doc.flows = [
+      { id: "main", name: "Main", steps: [{ screenId: "s", note: "Shown on the main tile" }] },
+      { id: "branch", name: "Branch", steps: [{ screenId: "s", note: "Hidden" }] },
+    ];
+    const warnings = validatePrototype(doc).warnings;
+    expect(warnings).toEqual(expect.arrayContaining([
+      { path: "/flows/0/steps", message: "flow has a single step" },
+      { path: "/flows/1/steps/0/note", message: "flow step note on a main-flow anchor is not displayed" },
+    ]));
+    expect(warnings).not.toContainEqual(expect.objectContaining({ path: "/flows/0/steps/0/note" }));
+  });
+
+  it("keeps reachability based on statically inferred navigate edges", () => {
+    const doc = build({}, "a", { screens: [
+      screen({ a: { type: "Button", props: { label: "Next" }, on: { press: { action: "navigate", params: { screenId: "s2" } } } } }, "a", { id: "s", name: "A" }),
+      screen({ b: { type: "Text", props: { text: "B" } } }, "b", { id: "s2", name: "B" }),
+      screen({ c: { type: "Text", props: { text: "C" } } }, "c", { id: "s3", name: "C" }),
+    ] });
+    expect(validatePrototype(doc).warnings.filter((entry) => entry.message === "screen is not reachable by navigate actions"))
+      .toEqual([{ path: "/screens/2/id", message: "screen is not reachable by navigate actions" }]);
+  });
+
   it("warns on a monolithic screen (single custom organism/page root with no children)", () => {
     const page: ComponentDefinition = { description: "Whole page", props: z.strictObject({}), atomicLevel: "page" };
     const container: ComponentDefinition = { description: "Container", props: z.strictObject({}), atomicLevel: "organism" };

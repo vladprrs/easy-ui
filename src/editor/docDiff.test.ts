@@ -45,6 +45,40 @@ describe("diffDocs (W2-4)", () => {
     expect(diffDocs(makeDoc(), clone(makeDoc()))).toEqual([]);
   });
 
+  it("makes a flows-only CAS conflict visible without a generic flows change", () => {
+    const base = makeDoc();
+    base.flows = [{ id: "main", name: "Покупка", steps: [{ screenId: "cart" }, { screenId: "done" }] }];
+    const next = clone(base);
+    next.flows![0]!.steps = [{ screenId: "cart", note: "Проверить сумму" }, { screenId: "done" }];
+    expect(paths(diffDocs(base, next))).toEqual(["changed:Сценарий «Покупка» › шаги"]);
+  });
+
+  it("preserves flows through an unrelated edit and document round-trip", () => {
+    const base = makeDoc();
+    base.flows = [{ id: "main", name: "Покупка", steps: [{ screenId: "cart" }, { screenId: "done" }] }];
+    const edited = { ...base, name: "Магазин после правки" };
+    const roundTripped = prototypeDocSchema.parse(JSON.parse(JSON.stringify(edited)));
+    expect(roundTripped.flows).toEqual(base.flows);
+  });
+
+  it("reports added, removed, and renamed flows", () => {
+    const base = makeDoc();
+    base.flows = [
+      { id: "main", name: "Покупка", steps: [{ screenId: "cart" }, { screenId: "done" }] },
+      { id: "old", name: "Старый", steps: [{ screenId: "cart" }] },
+    ];
+    const next = clone(base);
+    next.flows = [
+      { id: "main", name: "Новая покупка", steps: [{ screenId: "cart" }, { screenId: "done" }] },
+      { id: "new", name: "Новый", steps: [{ screenId: "cart" }] },
+    ];
+    expect(paths(diffDocs(base, next))).toEqual([
+      "renamed:Сценарий «Покупка»",
+      "removed:Сценарий «Старый»",
+      "added:Сценарий «Новый»",
+    ]);
+  });
+
   it("reports added and removed screens by id", () => {
     const base = makeDoc();
     const next = clone(base);
