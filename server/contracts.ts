@@ -669,6 +669,7 @@ export const prototypeRevisionDiffContract = registerContract({
     doc: z.union([z.array(docDiffFieldSchema), omittedSchema]).optional(),
     state: z.union([diffMapSchema, omittedSchema]).optional(),
     screens: screensDiffSchema.optional(),
+    flows: z.union([elementValueDiffSchema, omittedSchema]).optional(),
     screenOrder: z.union([z.strictObject({ from: z.array(boundedDiffString).max(100), to: z.array(boundedDiffString).max(100) }), omittedSchema]).optional(),
     pins: z.union([pinsDiffSchema, omittedSchema]).optional(),
     renderInputs: z.union([z.array(renderInputDiffFieldSchema), omittedSchema]).optional(),
@@ -676,7 +677,7 @@ export const prototypeRevisionDiffContract = registerContract({
       screensAdded: z.number().int().nonnegative(), screensRemoved: z.number().int().nonnegative(), screensChanged: z.number().int().nonnegative(),
       staticElementsAdded: z.number().int().nonnegative(), staticElementsRemoved: z.number().int().nonnegative(), staticElementsChanged: z.number().int().nonnegative(),
       identical: z.boolean(), docIdentical: z.boolean(), truncated: z.boolean(),
-      omittedSections: z.array(z.enum(["props", "elements", "screens", "state", "doc", "pins", "renderInputs", "screenOrder"])),
+      omittedSections: z.array(z.enum(["props", "elements", "screens", "flows", "state", "doc", "pins", "renderInputs", "screenOrder"])),
     }),
   }),
   errors: [errorCatalog.invalidRequest, errorCatalog.prototypeNotFound, errorCatalog.revisionNotFound],
@@ -1005,12 +1006,14 @@ export const capabilitiesResponseSchema = z.object({
   limits: z.object({
     elements: z.number(), depth: z.number(), bodyMiB: z.number(), sourceKiB: z.number(),
     assetMiB: z.number(), repeatBudget: z.number(), repeatPerScreen: z.number(), screenshotQueue: z.number(), geometryRects: z.number(),
+    flows: z.number(), flowSteps: z.number(), flowTotalSteps: z.number(),
   }),
   designSystems: z.array(z.string()),
   resolvedSpaceScales: z.record(z.string(), spaceScaleSchema),
   features: z.object({
     renderStatus: z.boolean(), screenshots: z.boolean(), visualRegression: z.boolean(), assets: z.boolean(),
     typedEvents: z.boolean(), repeat: z.boolean(), namedSlots: z.boolean(), themeVersions: z.boolean(), layoutContract: z.boolean(),
+    flows: z.boolean(),
   }),
 });
 

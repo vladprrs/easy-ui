@@ -5,7 +5,13 @@ import { prototypeActionSchemas } from "../../src/catalog/actions";
 import { atomicLevels } from "../../src/designSystems/types";
 import { layoutSpacingProps, spaceTokens } from "../../src/designSystems/types";
 import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
-import { inputPrototypeDocSchema, ASSET_ID_PATTERN } from "../../src/prototype/schema";
+import {
+  inputPrototypeDocSchema,
+  ASSET_ID_PATTERN,
+  FLOWS_LIMIT,
+  FLOW_STEPS_LIMIT,
+  FLOW_TOTAL_STEPS_LIMIT,
+} from "../../src/prototype/schema";
 import { ELEMENTS_PER_SCREEN_LIMIT, REPEAT_ELEMENT_LIMIT, REPEAT_RENDER_COST_BUDGET, TREE_DEPTH_LIMIT } from "../../src/prototype/validate";
 import { MAX_ASSET_BYTES } from "../assets/validate";
 import { listActiveDesignSystems } from "../designSystems";
@@ -48,6 +54,9 @@ export function capabilities(db: Database): JsonObject {
       repeatPerScreen: REPEAT_ELEMENT_LIMIT,
       screenshotQueue: MAX_QUEUE,
       geometryRects: GEOMETRY_RECT_LIMIT,
+      flows: FLOWS_LIMIT,
+      flowSteps: FLOW_STEPS_LIMIT,
+      flowTotalSteps: FLOW_TOTAL_STEPS_LIMIT,
     },
     designSystems: systems.map((system) => system.id),
     resolvedSpaceScales: Object.fromEntries(systems.map((system) => {
@@ -64,6 +73,7 @@ export function capabilities(db: Database): JsonObject {
       namedSlots: true,
       themeVersions: true,
       layoutContract: true,
+      flows: true,
     },
   };
 }

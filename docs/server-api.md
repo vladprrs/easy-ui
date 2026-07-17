@@ -489,10 +489,10 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
   "directives": ["$state", "$bindState", "$template", "$cond", "$asset"],
   "paramSources": ["$event", "$elementId", "$itemIndex", "$itemKey"],
   "conditions": ["$and", "$or", "$state", "$item", "$index", "eq", "neq", "gt", "gte", "lt", "lte", "not"],
-  "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5 },
+  "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5, "geometryRects": 2000, "flows": 12, "flowSteps": 50, "flowTotalSteps": 200 },
   "designSystems": ["shadcn", "wireframe", "..."],
   "resolvedSpaceScales": { "shadcn": { "none": "0px", "xs": "4px", "sm": "8px", "md": "12px", "lg": "16px", "xl": "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" } },
-  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true }
+  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true }
 }
 ```
 
@@ -612,5 +612,7 @@ Checked-in инструменты (`.claude/skills/author/driver.mjs`, `scripts/
 Production разворачивается в Dokploy из корневого `docker-compose.yml` на домене `easy-ui.pay-offline.ru`. Образ **не собирается на прод-сервере**: его строит GitHub Actions (`.github/workflows/build-image.yml`) на каждый push в `main` и публикует в `ghcr.io/vladprrs/easy-ui:{latest,<sha>}` (публичный пакет, анонимный pull); по завершении workflow вызывает `compose.deploy` через Dokploy API (секрет `DOKPLOY_API_KEY`), и Dokploy выполняет только `docker compose pull` + `up` (`pull_policy: always`). Серверная сборка (npm ci + chromium + vite + storybook) трижды роняла хост 2026-07-14 и запрещена; прямой GitHub→Dokploy push-вебхук отключён. Контейнер использует `HOST=0.0.0.0`, `PORT=8787`, `SERVE_DIST=dist`, `DATA_DIR=data`; `PUBLIC_ORIGIN=https://easy-ui.pay-offline.ru` и named admin (`ADMIN_NAME`, `ADMIN_PASSWORD`) задаются только в окружении Dokploy. На переходный период внешний барьер задаётся `LEGACY_BASIC_AUTH`; существующий `BASIC_AUTH` можно сохранить для rollback-image, новый сервер примет его как alias. Compose пробрасывает оба имени без жёсткого требования. `PUBLIC_ORIGIN` содержит только scheme + host + опциональный port, без path/query/credentials. Для любого non-loopback hostname сервер требует HTTPS; явный HTTP разрешён лишь для loopback auth-preview/e2e. Именно этот origin используется в абсолютных share/QR URL и `303 Location`, поэтому он должен совпадать с внешним origin reverse proxy. Named volume `easy-ui-data` монтируется в `/app/data`.
 
 Compose healthcheck обращается без credentials к открытому `GET http://127.0.0.1:8787/api/health` и считает сервис готовым только при HTTP 200 и JSON `status: "ready"`. Для rollback следует указать в compose известный хороший тег `ghcr.io/vladprrs/easy-ui:<sha>` (каждый коммит main тегируется) либо revert+push; миграции forward-only, поэтому перед рискованными изменениями нужен backup volume.
+
+При выкладке поддержки `doc.flows` действует отдельное правило совместимости: в течение rollback-window нельзя персистить **ни одной** ревизии с `flows` — ни через create, ни через save, ни через restore. Старый образ не умеет читать такой документ, поэтому наличие flows-ревизии делает безопасный rollback образа невозможным. После окончания окна откат на образ без поддержки `flows` выполняется только вместе с откатом данных на совместимый backup.
 
 SQLite работает в WAL-режиме: корректный backup должен учитывать основной `.db` вместе с файлами `-wal` и `-shm` либо выполняться штатным SQLite backup-механизмом. `docker compose down -v` удаляет named volume и все постоянные данные — на production эту команду применять нельзя.

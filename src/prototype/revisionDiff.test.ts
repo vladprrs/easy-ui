@@ -81,4 +81,28 @@ describe("diffPrototypeDocs", () => {
     expect(result.screenOrder).toEqual({ omitted: true });
     expect(result.summary.omittedSections).toContain("screenOrder");
   });
+
+  test("reports flows in a dedicated diff section", () => {
+    const before = doc();
+    const after = doc({
+      flows: [{ id: "main", name: "Main", steps: [{ screenId: "home" }] }],
+    });
+    const result = diffPrototypeDocs(revision(1, before), revision(2, after)) as any;
+    expect(result.flows).toEqual({
+      from: { missing: true },
+      to: { value: [{ id: "main", name: "Main", steps: [{ screenId: "home" }] }] },
+    });
+    expect(result.doc).toBeUndefined();
+    expect(result.summary).toMatchObject({ docIdentical: false, identical: false });
+  });
+
+  test("accounts for and omits the flows section under the leaf budget", () => {
+    const before = doc();
+    const after = doc({
+      flows: [{ id: "main", name: "Main", steps: [{ screenId: "home" }] }],
+    });
+    const result = diffPrototypeDocs(revision(1, before), revision(2, after), { leafBudget: 0 }) as any;
+    expect(result.flows).toEqual({ omitted: true });
+    expect(result.summary).toMatchObject({ truncated: true, omittedSections: ["flows"] });
+  });
 });

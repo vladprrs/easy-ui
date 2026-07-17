@@ -5,7 +5,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { Database } from "bun:sqlite";
 import { renderOpenApiJson, OPENAPI_PATH } from "../scripts/generate-openapi";
-import { prototypeDocSchema } from "../src/prototype/schema";
+import {
+  prototypeDocSchema,
+  FLOWS_LIMIT,
+  FLOW_STEPS_LIMIT,
+  FLOW_TOTAL_STEPS_LIMIT,
+  type PrototypeDoc,
+} from "../src/prototype/schema";
 import { ELEMENTS_PER_SCREEN_LIMIT, REPEAT_ELEMENT_LIMIT, REPEAT_RENDER_COST_BUDGET, TREE_DEPTH_LIMIT } from "../src/prototype/validate";
 import { MAX_ASSET_BYTES } from "./assets/validate";
 import { capabilitiesResponseSchema, listContracts, type RouteContract } from "./contracts";
@@ -51,6 +57,22 @@ const PNG_1X1 = Buffer.from(
 async function helloDoc(id: string) {
   const original = prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json());
   return { ...original, id, name: id };
+}
+
+async function flowDoc(id: string, screenIds = ["home", "a", "b"]): Promise<PrototypeDoc> {
+  const original = prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json());
+  const source = original.screens[0]!;
+  return {
+    ...original,
+    id,
+    name: id,
+    startScreen: screenIds[0]!,
+    screens: screenIds.map((screenId) => ({
+      ...structuredClone(source),
+      id: screenId,
+      name: screenId,
+    })),
+  };
 }
 
 const componentSource = await Bun.file("server/fixtures/rating-stars.tsx").text();
@@ -223,12 +245,25 @@ describe("route contracts", () => {
       repeatPerScreen: REPEAT_ELEMENT_LIMIT,
       screenshotQueue: MAX_QUEUE,
       geometryRects: GEOMETRY_RECT_LIMIT,
+      flows: FLOWS_LIMIT,
+      flowSteps: FLOW_STEPS_LIMIT,
+      flowTotalSteps: FLOW_TOTAL_STEPS_LIMIT,
     });
     expect(value.designSystems).toEqual(expect.arrayContaining(["contract-ds", "yandex-pay"]));
     expect(value.layoutContractVersion).toBe(1);
-    expect(value.features.layoutContract).toBe(true);
+    expect(value.features).toEqual({
+      renderStatus: true,
+      screenshots: true,
+      visualRegression: true,
+      assets: true,
+      typedEvents: true,
+      repeat: true,
+      namedSlots: true,
+      themeVersions: true,
+      layoutContract: true,
+      flows: true,
+    });
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
-    expect(Object.values(value.features).every((flag) => flag === true)).toBe(true);
   });
 
   test("GET /api/schemas/prototype-document.json is a JSON Schema with directive annotations", async () => {
@@ -238,7 +273,7 @@ describe("route contracts", () => {
     expect(schema.$schema).toContain("json-schema.org");
     expect(schema.type).toBe("object");
     const properties = schema.properties as Record<string, unknown>;
-    for (const key of ["version", "id", "startScreen", "state", "screens"]) expect(properties).toHaveProperty(key);
+    for (const key of ["version", "id", "startScreen", "state", "screens", "flows"]) expect(properties).toHaveProperty(key);
     const defs = schema.$defs as Record<string, { anyOf?: unknown[] }>;
     for (const name of ["stateDirective", "bindStateDirective", "templateDirective", "condDirective", "assetDirective", "propValue", "actionParamValue"]) {
       expect(defs).toHaveProperty(name);
@@ -249,6 +284,114 @@ describe("route contracts", () => {
     expect(text).toContain('"#/$defs/propValue"');
     expect(text).toContain('"#/$defs/actionParamValue"');
     expect(text).toContain("asset_[0-9a-f]{64}");
+  });
+
+  test("POST and PUT prototype documents with flows return semantic warnings", async () => {
+    const doc = await flowDoc("contract-flows", ["home", "done"]);
+    doc.flows = [{
+      id: "main",
+      name: "Main",
+      steps: [{ screenId: "home" }, { screenId: "done" }],
+    }];
+
+    let response = await call("POST", "/api/prototypes", { doc });
+    expect(response.status).toBe(201);
+    let value = await response.json() as { warnings: { path: string; message: string }[] };
+    expect(value.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: "/flows/0/steps/1/screenId",
+        message: "flow step is not connected to the previous step by a navigate action",
+      }),
+    ]));
+
+    response = await call("PUT", "/api/prototypes/contract-flows", {
+      baseRev: 1,
+      doc: { ...doc, name: "contract-flows-saved" },
+    });
+    expect(response.status).toBe(200);
+    value = await response.json() as { warnings: { path: string; message: string }[] };
+    expect(value.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "/flows/0/steps/1/screenId" }),
+    ]));
+  });
+
+  test("POST rejects every v1 flows schema rule and all flow limits", async () => {
+    const cases: {
+      name: string;
+      screens?: string[];
+      flows: unknown[];
+    }[] = [
+      {
+        name: "main-start",
+        flows: [{ id: "main", name: "Main", steps: [{ screenId: "a" }] }],
+      },
+      {
+        name: "main-duplicate",
+        flows: [{ id: "main", name: "Main", steps: [{ screenId: "home" }, { screenId: "a" }, { screenId: "home" }] }],
+      },
+      {
+        name: "anchor-shortcut",
+        flows: [
+          { id: "main", name: "Main", steps: [{ screenId: "home" }, { screenId: "a" }, { screenId: "b" }] },
+          { id: "shortcut", name: "Shortcut", steps: [{ screenId: "home" }, { screenId: "b" }] },
+        ],
+      },
+      {
+        name: "anchor-backward",
+        flows: [
+          { id: "main", name: "Main", steps: [{ screenId: "home" }, { screenId: "a" }, { screenId: "b" }] },
+          { id: "backward", name: "Backward", steps: [{ screenId: "b" }, { screenId: "a" }] },
+        ],
+      },
+      {
+        name: "adjacent-equal",
+        flows: [
+          { id: "main", name: "Main", steps: [{ screenId: "home" }] },
+          { id: "equal", name: "Equal", steps: [{ screenId: "a" }, { screenId: "a" }] },
+        ],
+      },
+      { name: "empty", flows: [] },
+      {
+        name: "flow-count",
+        flows: [
+          { id: "main", name: "Main", steps: [{ screenId: "home" }] },
+          ...Array.from({ length: FLOWS_LIMIT }, (_, index) => ({
+            id: `branch-${index}`,
+            name: `Branch ${index}`,
+            steps: [{ screenId: "a" }],
+          })),
+        ],
+      },
+      {
+        name: "flow-steps",
+        flows: [
+          { id: "main", name: "Main", steps: [{ screenId: "home" }] },
+          {
+            id: "long",
+            name: "Long",
+            steps: Array.from({ length: FLOW_STEPS_LIMIT + 1 }, (_, index) => ({ screenId: index % 2 ? "a" : "b" })),
+          },
+        ],
+      },
+      {
+        name: "flow-total-steps",
+        flows: [
+          { id: "main", name: "Main", steps: [{ screenId: "home" }] },
+          ...Array.from({ length: 4 }, (_, flowIndex) => ({
+            id: `long-${flowIndex}`,
+            name: `Long ${flowIndex}`,
+            steps: Array.from({ length: FLOW_STEPS_LIMIT }, (_, index) => ({ screenId: index % 2 ? "a" : "b" })),
+          })),
+        ],
+      },
+    ];
+
+    for (const entry of cases) {
+      const doc = await flowDoc(`invalid-${entry.name}`, entry.screens);
+      const response = await call("POST", "/api/prototypes", { doc: { ...doc, flows: entry.flows } });
+      expect({ name: entry.name, status: response.status }).toEqual({ name: entry.name, status: 422 });
+      expect(await response.json()).toMatchObject({ error: { code: "validation_failed", issues: expect.any(Array) } });
+    }
   });
 
   test("GET /api/schemas/component-definition.json describes the definition contract", async () => {

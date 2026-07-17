@@ -30,7 +30,7 @@ const STRING_LIMIT = 160;
 const SCREEN_ORDER_LIMIT = 100;
 const DEFAULT_LEAF_BUDGET = 500;
 const HARD_BYTE_BUDGET = 256 * 1024;
-const OMIT_PRIORITY = ["props", "elements", "screens", "state", "doc", "pins", "renderInputs", "screenOrder"] as const;
+const OMIT_PRIORITY = ["props", "elements", "screens", "flows", "state", "doc", "pins", "renderInputs", "screenOrder"] as const;
 const MISSING = Symbol("missing");
 type MaybeValue = unknown | typeof MISSING;
 // Optional response sections are assembled dynamically, then replaced by the
@@ -247,6 +247,11 @@ export function diffPrototypeDocs(from: PrototypeRevisionForDiff, to: PrototypeR
   const doc = fieldDiff(from.doc, to.doc, ["name", "description", "device", "designSystem", "startScreen"], ctx, "doc"); if (doc.length) response.doc = doc;
   const state = mapDiff(from.doc.state, to.doc.state, ctx, "state"); if (state) response.state = state;
   const screens = screensDiff(from.doc, to.doc, ctx, summary); if (screens) response.screens = screens;
+  const fromFlows = own(from.doc, "flows"), toFlows = own(to.doc, "flows");
+  if (!equal(fromFlows, toFlows)) {
+    response.flows = { from: valueUnion(fromFlows, ctx), to: valueUnion(toFlows, ctx) };
+    count(ctx, "flows");
+  }
   const fromOrder = from.doc.screens.map(x => x.id), toOrder = to.doc.screens.map(x => x.id);
   if (!equal(fromOrder, toOrder)) {
     if (fromOrder.length > SCREEN_ORDER_LIMIT || toOrder.length > SCREEN_ORDER_LIMIT) { response.screenOrder = { omitted: true }; summary.omittedSections.push("screenOrder"); ctx.truncated = true; }
