@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { buildPrototypeRouteBase } from "../player/navigation";
 import { prototypeChrome } from "./strings/common";
 
@@ -27,6 +27,8 @@ export interface PrototypeChromeProps {
   view: PrototypeViewId;
   /** Опубликованная версия из /p/:id/v/N; undefined = draft-контекст. */
   version?: number | undefined;
+  /** Явный экран плеера для возврата из CJM со scenario step. */
+  playerPath?: string;
   /**
    * Слот статуса вью: dirty-индикатор, «Сохранено/Не сохранено» и т.п.
    * Рендерится рядом с сегментами, слева от actions.
@@ -44,8 +46,22 @@ function Segment({ active, to, children }: { active: boolean; to: string; childr
   return <Link aria-current={active ? "page" : undefined} className={active ? segmentActive : segmentIdle} to={to}>{children}</Link>;
 }
 
-export function PrototypeChrome({ prototypeId, prototypeName, view, version, status, actions }: PrototypeChromeProps) {
+function transferScenarioQuery(path: string, search: string): string {
+  const source = new URLSearchParams(search);
+  const target = new URLSearchParams();
+  const flow = source.get("flow");
+  const step = source.get("step");
+  if (flow !== null) target.set("flow", flow);
+  if (step !== null) target.set("step", step);
+  const query = target.toString();
+  return query === "" ? path : `${path}?${query}`;
+}
+
+export function PrototypeChrome({ prototypeId, prototypeName, view, version, playerPath, status, actions }: PrototypeChromeProps) {
   const routeBase = buildPrototypeRouteBase(prototypeId, version);
+  const location = useLocation();
+  const playerTarget = transferScenarioQuery(playerPath ?? routeBase, location.search);
+  const cjmTarget = transferScenarioQuery(`${routeBase}/cjm`, location.search);
   return <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-eui-ink/10 bg-white px-4 py-2 font-eui-ui sm:px-6">
     <nav aria-label={prototypeChrome.breadcrumbAria} className="flex min-w-0 items-center gap-2 text-sm">
       <Link className="shrink-0 text-eui-slate-500 hover:text-eui-brand" to="/">{prototypeChrome.gallery}</Link>
@@ -54,8 +70,8 @@ export function PrototypeChrome({ prototypeId, prototypeName, view, version, sta
       {version === undefined ? null : <span className="shrink-0 rounded-full bg-eui-lilac-100 px-2.5 py-0.5 text-xs text-eui-slate-500">{prototypeChrome.versionBadge(version)}</span>}
     </nav>
     <nav aria-label={prototypeChrome.viewsAria} className="flex items-center gap-1 rounded-full bg-eui-lilac-100 p-1 text-sm">
-      <Segment active={view === "player"} to={routeBase}>{prototypeChrome.player}</Segment>
-      <Segment active={view === "cjm"} to={`${routeBase}/cjm`}>{prototypeChrome.cjm}</Segment>
+      <Segment active={view === "player"} to={playerTarget}>{prototypeChrome.player}</Segment>
+      <Segment active={view === "cjm"} to={cjmTarget}>{prototypeChrome.cjm}</Segment>
       <Segment active={view === "editor"} to={`/p/${encodeURIComponent(prototypeId)}/edit`}>
         {prototypeChrome.editor}
         {version === undefined ? null : <span className="ml-1.5 rounded-full border border-eui-magenta/40 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-eui-magenta">{prototypeChrome.draftBadge}</span>}

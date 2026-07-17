@@ -53,6 +53,18 @@ export const player = {
   unpublishedChanges: "есть неопубликованные изменения",
   nonLatestVersion: (version: number, date: string) => `Версия ${version} от ${date}`,
   openLatestPublished: "Открыть актуальную",
+  scenarioAria: "Навигация по сценарию",
+  scenarioSelect: "Сценарий",
+  scenarioNone: "Без сценария",
+  scenarioStep: (current: number, total: number) => `Шаг ${current} из ${total}`,
+  scenarioPrevious: "Предыдущий шаг",
+  scenarioNext: "Следующий шаг",
+  scenarioOutside: "Текущий экран вне сценария",
+  scenarioAmbiguous: "Шаг не определён",
+  scenarioToFirst: "К шагу 1",
+  scenarioOccurrences: "Выберите вхождение экрана",
+  scenarioOccurrence: (step: number) => `Шаг ${step}`,
+  scenarioGuidedBrowse: "Экран открывается в текущем состоянии сессии; промежуточные действия не выполняются.",
 } as const;
 
 /** Человекочитаемая дата публикации в продуктовом русском интерфейсе. */

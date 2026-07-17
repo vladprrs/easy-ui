@@ -17,6 +17,7 @@ const Devtools = lazy(async () => ({ default: (await import("@json-render/devtoo
 
 export interface PlayerOutletContext {
   doc: PrototypeDoc;
+  runtimeKey: string;
   registry: ReturnType<typeof createPlayerRuntime>["registry"];
   runtime: EasyUiActionRuntime;
   customTypes: ReadonlySet<string>;
@@ -97,6 +98,7 @@ function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions }:
     <ThemeStyle content={themeContent} />
     <Outlet context={{
       doc,
+      runtimeKey,
       registry: runtime.registry,
       runtime: inspectorSession.actionRuntime,
       customTypes,

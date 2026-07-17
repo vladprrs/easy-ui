@@ -15,6 +15,15 @@ import { useDocumentTitle } from "../app/useDocumentTitle";
 import { InspectorPanel } from "./inspector/InspectorPanel";
 import { getPrototypeVersion, type PrototypeDraft } from "../api/client";
 import { ShareDialog } from "./ShareDialog";
+import { ScenarioBar } from "./ScenarioBar";
+
+export function stripScenarioSearch(search: string): string {
+  const params = new URLSearchParams(search);
+  params.delete("flow");
+  params.delete("step");
+  const next = params.toString();
+  return next === "" ? "" : `?${next}`;
+}
 
 export class ScreenErrorBoundary extends Component<{
   prototypeId: string;
@@ -69,7 +78,7 @@ export function PlayerHotkeysHelp({ onClose, present = false, canExitPresent = p
 }
 
 export function ScreenView() {
-  const { doc, registry, runtime, customTypes, customDefinitions, onError, themeContent, inspector, versions } = useOutletContext<PlayerOutletContext>();
+  const { doc, runtimeKey, registry, runtime, customTypes, customDefinitions, onError, themeContent, inspector, versions } = useOutletContext<PlayerOutletContext>();
   const { screenId } = useParams();
   const { version } = useParams();
   const navigation = usePlayerNavigation();
@@ -100,9 +109,9 @@ export function ScreenView() {
   const tree = useMemo(() => (screenSpec ? toRuntimeSpec(screenSpec, { customTypes }) : null), [screenSpec, customTypes]);
   const numericVersion = version === undefined ? undefined : Number(version);
   // Вход в презентацию с текущего экрана (W1-2); present-маршруты живут вне /p-хрома.
-  // Query string (в т.ч. ?debug=1) сохраняется переходом (W1-5).
+  // Present не поддерживает guided browse: flow/step срезаются, прочий query сохраняется.
   const location = useLocation();
-  const presentPath = `${buildPrototypeRouteBase(doc.id, numericVersion)}/present${screen ? `/s/${encodeURIComponent(screen.id)}` : ""}${location.search}`;
+  const presentPath = `${buildPrototypeRouteBase(doc.id, numericVersion)}/present${screen ? `/s/${encodeURIComponent(screen.id)}` : ""}${stripScenarioSearch(location.search)}`;
   // Zoom-контролы осмысленны только для фиксированного viewport (canvas-экран или
   // mobile/tablet); desktop auto-height рендерится fluid-веткой без масштаба.
   const hasFixedViewport = screenCanvas !== undefined || canonicalViewport[device] !== null;
@@ -254,6 +263,7 @@ export function ScreenView() {
         : <span className="font-semibold text-eui-slate-500">{player.openLatestPublished}</span>}
     </div> : null}
     <FlowResetBanner />
+    <ScenarioBar doc={doc} currentScreen={screen.id} runtimeKey={runtimeKey} />
     <div className="flex min-h-0 flex-1 bg-eui-graphite text-white">
       <ScreensSidebar doc={doc} currentScreen={screen.id} collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((prev) => !prev)} />
       <DeviceFrame device={device} canvas={screen.canvas} zoom={zoomValue} onEffectiveScale={stageZoom.onEffectiveScale} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}>
