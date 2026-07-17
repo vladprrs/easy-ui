@@ -11,6 +11,7 @@ import type { PrototypeValidationResult, ValidationIssue } from "./types";
 import { hostPrimitiveDefinitions, hostPrimitiveNames } from "../catalog/hostPrimitives/definitions";
 import { validateOverlayRules } from "./overlayRules";
 import { buildNavigationGraph, verifyEdge } from "./navigationGraph";
+import { validateRegionRules } from "./regionRules";
 
 type Obj = Record<string, unknown>;
 const terminals = new Set(["navigate", "back", "restart", "openUrl"]);
@@ -233,6 +234,7 @@ export function validatePrototype(
 ): PrototypeValidationResult {
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
   errors.push(...validateOverlayRules(doc));
+  errors.push(...validateRegionRules(doc));
   // Custom definitions are followed by reserved host definitions. The server
   // supplies the exact pinned custom snapshot; host-only documents need no snapshot.
   const testGlobal = globalThis as typeof globalThis & { __EUI_LEGACY_TEST_RUNTIME__?: { definitions: Record<string, ComponentDefinition> } };

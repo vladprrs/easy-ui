@@ -18,7 +18,7 @@ test("latestValidatedRev includes passing audit records from older validator ver
       issues: [],
     });
 
-    expect(VALIDATOR_VERSION).toBe("v3");
+    expect(VALIDATOR_VERSION).toBe("v4");
     expect(latestValidatedRev(db, "prototype", "audit-history")).toBe(7);
   } finally {
     db.close();

@@ -261,4 +261,63 @@ describe("ScreenSurface Overlay stage integration", () => {
     expect(screen.getByRole("button", { name: "Flow hotspot" })).toBeTruthy();
     expect(screen.getByTestId("flow")).toBeTruthy();
   });
+
+  it("renders named slots correctly after combined Overlay and canvas Hotspot splits", () => {
+    const Panel = ({ slots }: EasyUIComponentProps) => <div data-testid="named-panel">
+      <div data-testid="header-slot">{slots.header}</div>
+      <div data-testid="actions-slot">{slots.actions}</div>
+      <div data-testid="default-slot">{slots.default}</div>
+    </div>;
+    const custom: CustomPlayerRuntime = {
+      definitions: { Panel: { props: z.strictObject({}), slots: ["header", "actions", "default"], capabilities: { namedSlots: true }, description: "Panel" } },
+      components: { Panel: Panel as never },
+    };
+    const runtime = createPlayerRuntime(noopDeps, custom);
+    const actionRuntime = new EasyUiActionRuntime({ initialState: {}, screenIds: new Set(["screen"]), deps: noopDeps });
+    const authored = {
+      root: "panel",
+      elements: {
+        panel: { type: "Panel", props: {}, children: ["header", "overlay", "hotspot", "body"] },
+        header: { type: "Image", props: { src: "/header.png", alt: "Slotted header" }, slot: "header" },
+        overlay: { type: "Overlay", props: { placement: "top", inset: "md", scrim: false }, children: ["notice"] },
+        notice: { type: "Image", props: { src: "/notice.png", alt: "Overlay notice" } },
+        hotspot: { type: "Hotspot", props: { x: 1, y: 2, width: 20, height: 20, ariaLabel: "Split hotspot" }, slot: "actions" },
+        body: { type: "Image", props: { src: "/body.png", alt: "Default body" } },
+      },
+    } as PrototypeDoc["screens"][number]["spec"];
+    const tree = toRuntimeSpec(authored, { customTypes: new Set(["Panel"]) });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const stageHostRef = createRef<HTMLElement>();
+    stageHostRef.current = host;
+    render(<JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
+      <HostStageSurface stageHostRef={stageHostRef}>
+        <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={custom.definitions} onError={() => {}} tree={tree} canvas={{ width: 320, height: 240 }} misclickHighlights={false} />
+      </HostStageSurface>
+    </JSONUIProvider>);
+    expect(screen.getByTestId("header-slot").contains(screen.getByRole("img", { name: "Slotted header" }))).toBe(true);
+    expect(screen.getByTestId("default-slot").contains(screen.getByRole("img", { name: "Default body" }))).toBe(true);
+    expect(screen.getByTestId("actions-slot").textContent).toBe("");
+    expect(screen.getByRole("button", { name: "Split hotspot" })).toBeTruthy();
+    expect(host.contains(screen.getByRole("img", { name: "Overlay notice" }))).toBe(true);
+    host.remove();
+  });
+
+  it("renders a FlowRoot region inline while Overlay remains a separate provider-backed branch", () => {
+    const authored = {
+      root: "root",
+      elements: {
+        root: { type: "@eui/FlowRoot", props: {}, children: ["header", "body", "overlay"] },
+        header: { type: "Image", props: { src: "/header.png", alt: "Inline region" }, region: "header" },
+        body: { type: "Image", props: { src: "/body.png", alt: "Inline body" } },
+        overlay: { type: "Overlay", props: { placement: "top", inset: "md", scrim: false }, children: ["notice"] },
+        notice: { type: "Image", props: { src: "/notice.png", alt: "Region overlay" } },
+      },
+    } as PrototypeDoc["screens"][number]["spec"];
+    const { container, host } = renderHostedSurface(authored);
+    const flowRoot = container.querySelector("[data-eui-host-primitive='FlowRoot']")!;
+    expect(flowRoot.contains(screen.getByRole("img", { name: "Inline region" }))).toBe(true);
+    expect(flowRoot.contains(screen.getByRole("img", { name: "Inline body" }))).toBe(true);
+    expect(host.contains(screen.getByRole("img", { name: "Region overlay" }))).toBe(true);
+  });
 });

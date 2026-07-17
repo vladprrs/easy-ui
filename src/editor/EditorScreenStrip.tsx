@@ -7,7 +7,7 @@ import { HostStageSurface } from "../catalog/hostPrimitives";
 import type { ThemeContent } from "../api/client";
 import type { PrototypeDoc } from "../prototype/schema";
 import { mergeScreenState } from "../prototype/stateOverrides";
-import { splitCanvas, splitHostPrimitives, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
+import { buildScreenRenderPlan, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
 import { TileErrorBoundary } from "../cjm/CjmScreenTile";
 import { createCjmRegistry } from "../cjm/cjmRegistry";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
@@ -62,15 +62,11 @@ function ScreenTile({ doc, screen, registry, handlers, runtimeKey, stateEpoch, s
   }, [customTypes, screen.spec]);
   const specs = useMemo(() => {
     if (!tree) return null;
-    const { content: withoutHostPrimitives, hostPrimitives } = splitHostPrimitives(tree);
-    const overlays = hostPrimitives.map((item) => item.spec);
-    if (!screen.canvas) return { content: withoutHostPrimitives?.spec ?? null, hotspots: [], overlays };
-    const { content } = withoutHostPrimitives ? splitCanvas(withoutHostPrimitives) : { content: null };
-    return { content: content?.spec ?? null, hotspots: [], overlays };
+    return buildScreenRenderPlan(tree, { canvas: screen.canvas, renderHotspots: !screen.canvas });
   }, [screen.canvas, tree]);
   const runtimeValue = useMemo<EasyUiRuntimeValue>(
-    () => ({ metadata: tree?.metadata ?? {}, runtime: null, definitions: customDefinitions ?? {} }),
-    [customDefinitions, tree],
+    () => ({ metadata: specs?.metadata ?? {}, runtime: null, definitions: customDefinitions ?? {} }),
+    [customDefinitions, specs],
   );
   const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
   const key = `${runtimeKey}:${screen.id}:${stateEpoch}`;

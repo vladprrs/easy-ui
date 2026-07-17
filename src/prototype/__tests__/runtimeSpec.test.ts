@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PrototypeDoc } from "../schema";
-import { EUI_KEY_PROP, splitCanvas, splitHostPrimitives, stripEvents, toRuntimeSpec } from "../runtimeSpec";
+import { FLOW_ROOT_TYPE } from "../../catalog/hostPrimitives";
+import { applyRegionPolicy, buildScreenRenderPlan, EUI_KEY_PROP, splitCanvas, splitHostPrimitives, stripEvents, toRuntimeSpec } from "../runtimeSpec";
 
 function specWith(props: Record<string, unknown>): PrototypeDoc["screens"][number]["spec"] {
   return { root: "text", elements: { text: { type: "Text", props } } };
@@ -61,6 +62,22 @@ describe("toRuntimeSpec RuntimeTree", () => {
     expect(hotspots[0]!.spec.root).toBe("hs");
   });
 
+  it("strips region into metadata and keeps all-inline policy object-identical", () => {
+    const authored: Spec = {
+      root: "root",
+      elements: {
+        root: { type: FLOW_ROOT_TYPE, props: {}, children: ["header"] },
+        header: { type: "MyCard", props: {}, region: "header" },
+      },
+    };
+    const tree = toRuntimeSpec(authored);
+    expect((tree.spec.elements.header as { region?: unknown }).region).toBeUndefined();
+    expect(tree.metadata.header?.region).toBe("header");
+    const inline = applyRegionPolicy(tree, {});
+    expect(inline.content).toBe(tree);
+    expect(inline.regions).toEqual({});
+  });
+
   it("splitHostPrimitives recursively extracts Overlay descendants with metadata markers", () => {
     const authored: Spec = {
       root: "root",
@@ -116,6 +133,63 @@ describe("toRuntimeSpec RuntimeTree", () => {
     expect(split.content?.spec.elements.image).toBeDefined();
     expect(split.content?.spec.elements.hotspot).toBeDefined();
     expect(split.hostPrimitives.map((item) => item.spec.root)).toEqual(["overlay"]);
+  });
+
+  it("keeps FlowRoot in content and remaps named slots after Overlay extraction", () => {
+    const authored: Spec = {
+      root: "root",
+      elements: {
+        root: { type: "Panel", props: {}, children: ["header", "overlay", "body"] },
+        header: { type: "Item", props: {}, slot: "header" },
+        overlay: { type: "Overlay", props: { placement: "top" } },
+        body: { type: "Item", props: {} },
+      },
+    };
+    const split = splitHostPrimitives(toRuntimeSpec(authored, { customTypes: new Set(["Panel"]) }));
+    expect(split.content?.metadata.root?.slotIndices).toEqual({ header: [0], default: [1] });
+    expect(split.content?.spec.elements.root?.children).toEqual(["header", "body"]);
+
+    const flow = splitHostPrimitives(toRuntimeSpec({
+      root: "flow", elements: { flow: { type: FLOW_ROOT_TYPE, props: {}, children: ["body"] }, body: { type: "Item", props: {} } },
+    }));
+    expect(flow.content?.spec.root).toBe("flow");
+    expect(flow.hostPrimitives).toEqual([]);
+  });
+
+  it("symmetrically remaps named slots after canvas Hotspot extraction and preserves empty slot groups", () => {
+    const authored: Spec = {
+      root: "root",
+      elements: {
+        root: { type: "Panel", props: {}, children: ["header", "hotspot", "body"] },
+        header: { type: "Item", props: {}, slot: "header" },
+        hotspot: { type: "Hotspot", props: { x: 0, y: 0, width: 1, height: 1 }, slot: "actions" },
+        body: { type: "Item", props: {} },
+      },
+    };
+    const split = splitCanvas(toRuntimeSpec(authored, { customTypes: new Set(["Panel"]) }));
+    expect(split.content?.metadata.root?.slotIndices).toEqual({ header: [0], actions: [], default: [1] });
+    expect(split.content?.spec.elements.root?.children).toEqual(["header", "body"]);
+  });
+
+  it("builds terminal region/Overlay branches with one collision-free remapped metadata map", () => {
+    const authored: Spec = {
+      root: "root",
+      elements: {
+        root: { type: FLOW_ROOT_TYPE, props: {}, children: ["status", "header", "body", "overlay"] },
+        status: { type: "Item", props: {}, region: "statusBar" },
+        header: { type: "Item", props: {}, region: "header", children: ["title"] },
+        title: { type: "Item", props: {} },
+        body: { type: "Item", props: {} },
+        overlay: { type: "Overlay", props: { placement: "top" }, children: ["notice"] },
+        notice: { type: "Item", props: {} },
+      },
+    };
+    const plan = buildScreenRenderPlan(toRuntimeSpec(authored), { regionPolicy: { statusBar: "drop", header: "extract" } });
+    expect(plan.content?.elements.root?.children).toEqual(["body"]);
+    expect(plan.regions.header?.root).toBe("header");
+    expect(plan.overlays[0]?.root).toBe("overlay");
+    expect(plan.metadata.status).toBeUndefined();
+    expect(Object.keys(plan.metadata).sort()).toEqual(["body", "header", "notice", "overlay", "root", "title"]);
   });
 });
 

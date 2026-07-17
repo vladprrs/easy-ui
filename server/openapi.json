@@ -5775,6 +5775,14 @@
                                   },
                                   "type": "object"
                                 },
+                                "region": {
+                                  "enum": [
+                                    "statusBar",
+                                    "header",
+                                    "footer"
+                                  ],
+                                  "type": "string"
+                                },
                                 "repeat": {
                                   "additionalProperties": false,
                                   "properties": {
@@ -6683,6 +6691,14 @@
                                     "type": "string"
                                   },
                                   "type": "object"
+                                },
+                                "region": {
+                                  "enum": [
+                                    "statusBar",
+                                    "header",
+                                    "footer"
+                                  ],
+                                  "type": "string"
                                 },
                                 "repeat": {
                                   "additionalProperties": false,

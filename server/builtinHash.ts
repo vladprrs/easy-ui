@@ -6,7 +6,7 @@ import { extractionPrimitiveDefinitions, hostPrimitiveDefinitions } from "../src
 import { resolveSpacingScale } from "../src/designSystems/spacingScale";
 import type { SpaceToken } from "../src/designSystems/types";
 
-export const RENDER_CONTRACT_VERSION = 3;
+export const RENDER_CONTRACT_VERSION = 4;
 const LEGACY_RENDER_CONTRACT_VERSION = 2;
 const retiredBuiltinV2Hashes: Readonly<Record<string, string>> = Object.freeze({
   shadcn: "5d28a8faa2c8fb2016c78f52cfdf3cda1606e37f6d0c81a692a6410ecec77e41",
@@ -50,7 +50,7 @@ function calculateBuiltinCatalogHash(
 }
 
 /**
- * Hash for newly written revisions. Contract v3 adds host content types to the
+ * Hash for newly written revisions. Contract v4 adds screen regions and FlowRoot to the
  * portable render inputs. Stored revision hashes are immutable database values:
  * callers must never recompute or rewrite them during reads or migrations.
  */

@@ -6,7 +6,7 @@ import { HostStageSurface } from "../catalog/hostPrimitives";
 import type { ThemeContent } from "../api/client";
 import type { PrototypeDoc } from "../prototype/schema";
 import { mergeScreenState } from "../prototype/stateOverrides";
-import { splitCanvas, splitHostPrimitives, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
+import { buildScreenRenderPlan, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { buildPlayerPath } from "../player/navigation";
 import { cjm } from "../app/strings/cjm";
@@ -97,15 +97,11 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
   }, [customTypes, screen.spec]);
   const specs = useMemo(() => {
     if (!tree) return null;
-    const { content: withoutHostPrimitives, hostPrimitives } = splitHostPrimitives(tree);
-    const overlays = hostPrimitives.map((item) => item.spec);
-    if (!screen.canvas) return { content: withoutHostPrimitives?.spec ?? null, hotspots: [], overlays };
-    const { content, hotspots } = withoutHostPrimitives ? splitCanvas(withoutHostPrimitives) : { content: null, hotspots: [] };
-    return { content: content?.spec ?? null, hotspots: hotspots.map((item) => item.spec), overlays };
+    return buildScreenRenderPlan(tree, { canvas: screen.canvas });
   }, [screen.canvas, tree]);
   const runtimeValue = useMemo<EasyUiRuntimeValue>(
-    () => ({ metadata: tree?.metadata ?? {}, runtime: null, definitions: customDefinitions ?? {} }),
-    [customDefinitions, tree],
+    () => ({ metadata: specs?.metadata ?? {}, runtime: null, definitions: customDefinitions ?? {} }),
+    [customDefinitions, specs],
   );
   const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
   const transitions = useMemo(() => getCjmTransitions(screen, doc.screens), [doc.screens, screen]);

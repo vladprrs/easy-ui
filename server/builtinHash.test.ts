@@ -5,13 +5,13 @@ import type { ComponentDefinition } from "../src/catalog/normalize";
 import { canonicalSpacingScale } from "../src/designSystems/spacingScale";
 
 test("shadcn builtin hash is stable for the current render contract",()=>{
-  expect(RENDER_CONTRACT_VERSION).toBe(3);
+  expect(RENDER_CONTRACT_VERSION).toBe(4);
   expect(builtinCatalogHash).toMatch(/^[a-f0-9]{64}$/);
   expect(builtinCatalogHashFor("shadcn")).toBe(builtinCatalogHash);
   expect(builtinCatalogHashFor("wireframe")).toMatch(/^[a-f0-9]{64}$/);
 });
 
-test("host content types participate in the v3 compatibility hash",()=>{
+test("host primitives participate in the v4 compatibility hash",()=>{
   const extractionOnly=legacyBuiltinCatalogHashFor("shadcn");
   expect(builtinCatalogHash).not.toBe(extractionOnly);
 });

@@ -77,7 +77,7 @@ describe("host primitive API lifecycle", () => {
     };
     expect(discovery.designSystems.length).toBeGreaterThanOrEqual(2);
     for (const system of discovery.designSystems) {
-      expect(system.hostPrimitives).toHaveLength(3);
+      expect(system.hostPrimitives).toHaveLength(4);
       expect(system.hostPrimitives).toEqual(expect.arrayContaining([expect.objectContaining({
         name: "Overlay",
         description: "Viewport-anchored content rendered into the current stage host.",
@@ -92,7 +92,11 @@ describe("host primitive API lifecycle", () => {
             scrim: expect.objectContaining({ default: false }),
           }),
         }),
-      }), expect.objectContaining({ name: "Image" }), expect.objectContaining({ name: "Hotspot" })]));
+      }), expect.objectContaining({ name: "Image" }), expect.objectContaining({ name: "Hotspot" }), expect.objectContaining({
+        name: "@eui/FlowRoot",
+        slots: ["default"],
+        layoutNeutral: true,
+      })]));
       expect(system.components.some((component) => component.name === "Overlay")).toBeFalse();
       const detail = await (await handler(request(`/design-systems/${system.id}`))).json() as typeof system;
       expect(detail.hostPrimitives).toEqual(system.hostPrimitives);
@@ -110,6 +114,11 @@ describe("host primitive API lifecycle", () => {
       expect(response.status).toBe(409);
       expect(await response.json()).toMatchObject({ error: { code: "already_exists" } });
     }
+    const namespaced = await handler(request("/components", "POST", { designSystem: "yandex-pay", id: "namespaced-flow-root", name: "@eui/FlowRoot", source }));
+    expect(namespaced.status).toBe(422);
+    const ordinary = await handler(request("/components", "POST", { designSystem: "yandex-pay", id: "ordinary-flow-root", name: "FlowRoot", source }));
+    expect(ordinary.status).toBe(201);
+    expect((await handler(request("/components/ordinary-flow-root/publish", "POST", { baseRev: 1 }))).status).toBe(201);
 
     new ComponentRepo(db).create("legacy-overlay", "Overlay", source, "yandex-pay");
     const update = await handler(request("/components/legacy-overlay", "PUT", { baseRev: 1, source: source.replace("five-star", "changed") }));
@@ -128,8 +137,14 @@ describe("host primitive API lifecycle", () => {
     const doc = prototypeDocSchema.parse({
       version: 1, id: "host-content", name: "Host content", designSystem: "host-only", device: "desktop", startScreen: "image", state: {},
       screens: [
-        { id: "image", name: "Image", spec: { root: "image", elements: { image: { type: "Image", props: { src: "/images/host.png", alt: "Host", objectFit: "cover" } } } } },
-        { id: "hotspot", name: "Hotspot", spec: { root: "hotspot", elements: { hotspot: { type: "Hotspot", props: { x: 0, y: 0, width: 20, height: 20, ariaLabel: "Open" } } } } },
+        { id: "image", name: "Image", spec: { root: "root", elements: {
+          root: { type: "@eui/FlowRoot", props: {}, children: ["image"] },
+          image: { type: "Image", props: { src: "/images/host.png", alt: "Host", objectFit: "cover" }, region: "header" },
+        } } },
+        { id: "hotspot", name: "Hotspot", spec: { root: "root", elements: {
+          root: { type: "@eui/FlowRoot", props: {}, children: ["hotspot"] },
+          hotspot: { type: "Hotspot", props: { x: 0, y: 0, width: 20, height: 20, ariaLabel: "Open" } },
+        } } },
       ],
     });
     expect((await handler(request("/prototypes", "POST", { doc }))).status).toBe(201);

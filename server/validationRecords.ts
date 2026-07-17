@@ -4,7 +4,7 @@ import type { ValidationIssue } from "../src/prototype/types";
 // Audit label for the validator/catalog semantics that produced each record.
 // `validatedRevision` intentionally reports the latest passing record across all
 // validator versions; it is revision history, not a current-version cache.
-export const VALIDATOR_VERSION = "v3";
+export const VALIDATOR_VERSION = "v4";
 
 export type ValidationResourceType = "prototype" | "component";
 

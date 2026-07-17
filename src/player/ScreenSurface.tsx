@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { EUI_KEY_ATTRIBUTE } from "../catalog/runtime";
 import type { ComponentDefinition } from "../catalog/definitions";
 import type { createPlayerRuntime } from "../catalog/runtime";
-import { splitCanvas, splitHostPrimitives, type ElementMetadata, type RuntimeTree } from "../prototype/runtimeSpec";
+import { buildScreenRenderPlan, type ElementMetadata, type RuntimeTree } from "../prototype/runtimeSpec";
 import type { EasyUiActionRuntime } from "./actionRuntime";
 import { CanvasLayers } from "./CanvasLayers";
 import { EasyUiRuntimeProvider } from "./easyUiRuntime";
@@ -151,13 +151,7 @@ function MisclickHighlightSurface({ metadata, children }: { metadata: Record<str
  */
 export function ScreenSurface({ registry, runtime, customDefinitions, onError, tree, canvas, misclickHighlights = false, hostPrimitivesAllowed = true }: ScreenSurfaceProps) {
   const specs = useMemo(() => {
-    const { content: withoutHostPrimitives, hostPrimitives } = splitHostPrimitives(tree);
-    const overlays = hostPrimitivesAllowed ? hostPrimitives.map((item) => item.spec) : [];
-    if (canvas) {
-      const { content, hotspots } = withoutHostPrimitives ? splitCanvas(withoutHostPrimitives) : { content: null, hotspots: [] };
-      return { content: content?.spec ?? null, hotspots: hotspots.map((h) => h.spec), overlays, hasBlockedHostPrimitives: !hostPrimitivesAllowed && hostPrimitives.length > 0 };
-    }
-    return { content: withoutHostPrimitives?.spec ?? null, hotspots: [], overlays, hasBlockedHostPrimitives: !hostPrimitivesAllowed && hostPrimitives.length > 0 };
+    return buildScreenRenderPlan(tree, { canvas, renderHostPrimitives: hostPrimitivesAllowed });
   }, [canvas, hostPrimitivesAllowed, tree]);
 
   useEffect(() => { runtime.setScreenSpec(tree.spec); return () => runtime.setScreenSpec(null); }, [runtime, tree.spec]);
@@ -171,10 +165,10 @@ export function ScreenSurface({ registry, runtime, customDefinitions, onError, t
       ? <><Renderer registry={registry} spec={specs.content} />{specs.overlays.map((spec) => <Renderer registry={registry} spec={spec} key={spec.root} />)}</>
       : specs.overlays.map((spec) => <Renderer registry={registry} spec={spec} key={spec.root} />);
   const surface = misclickHighlights
-    ? <MisclickHighlightSurface metadata={tree.metadata}>{body}</MisclickHighlightSurface>
+    ? <MisclickHighlightSurface metadata={specs.metadata}>{body}</MisclickHighlightSurface>
     : body;
 
-  return <EasyUiRuntimeProvider value={{ metadata: tree.metadata, runtime, definitions: customDefinitions, onError }}>
+  return <EasyUiRuntimeProvider value={{ metadata: specs.metadata, runtime, definitions: customDefinitions, onError }}>
     {surface}
   </EasyUiRuntimeProvider>;
 }

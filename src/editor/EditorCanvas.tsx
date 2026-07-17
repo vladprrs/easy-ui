@@ -5,7 +5,7 @@ import type { ComponentDefinition } from "../catalog/definitions";
 import { HostStageSurface } from "../catalog/hostPrimitives";
 import type { ThemeContent } from "../api/client";
 import type { PrototypeDoc } from "../prototype/schema";
-import { splitCanvas, splitHostPrimitives, stripEvents, toRuntimeSpec } from "../prototype/runtimeSpec";
+import { buildScreenRenderPlan, stripEvents, toRuntimeSpec } from "../prototype/runtimeSpec";
 import { mergeScreenState } from "../prototype/stateOverrides";
 import { CanvasLayers } from "../player/CanvasLayers";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
@@ -141,15 +141,11 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
   const hasRoot = Boolean(spec.root && spec.elements[spec.root]);
   const specs = useMemo(() => {
     if (!hasRoot) return null;
-    const { content: withoutHostPrimitives, hostPrimitives } = splitHostPrimitives(tree);
-    const overlays = hostPrimitives.map((item) => item.spec);
-    if (!screen.canvas) return { content: withoutHostPrimitives?.spec ?? null, hotspots: [], overlays };
-    const { content, hotspots } = withoutHostPrimitives ? splitCanvas(withoutHostPrimitives) : { content: null, hotspots: [] };
-    return { content: content?.spec ?? null, hotspots: hotspots.map((hotspot) => hotspot.spec), overlays };
+    return buildScreenRenderPlan(tree, { canvas: screen.canvas });
   }, [hasRoot, screen.canvas, tree]);
   const runtimeValue = useMemo<EasyUiRuntimeValue>(
-    () => ({ metadata: tree.metadata, runtime: null, definitions: customDefinitions ?? {} }),
-    [customDefinitions, tree.metadata],
+    () => ({ metadata: specs?.metadata ?? {}, runtime: null, definitions: customDefinitions ?? {} }),
+    [customDefinitions, specs],
   );
   const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
 

@@ -6,6 +6,7 @@ import type { ComponentDefinition } from "../src/catalog/definitions";
 import { buildPrototypeTemplate } from "../src/gallery/prototypeTemplates";
 import { inputPrototypeDocSchema } from "../src/prototype/schema";
 import { validatePrototype } from "../src/prototype/validate";
+import { hostPrimitiveNames } from "../src/catalog/hostPrimitives/definitions";
 
 const starterDir = resolve("test/fixtures/starter");
 const fixtureSchema = z.strictObject({
@@ -24,7 +25,7 @@ for (const component of fixture.components) {
 const starterInput = JSON.parse(await readFile(resolve(starterDir, "prototype.json"), "utf8"));
 const starter = inputPrototypeDocSchema.parse(starterInput);
 if (starter.designSystem !== fixture.id) throw new Error("Starter prototype designSystem must equal the fixture id");
-const referencedCustomTypes = new Set(Object.values(starter.screens[0]!.spec.elements).map((element) => element.type).filter((type) => !["Image", "Hotspot", "Overlay"].includes(type)));
+const referencedCustomTypes = new Set(Object.values(starter.screens[0]!.spec.elements).map((element) => element.type).filter((type) => !hostPrimitiveNames.has(type)));
 if (referencedCustomTypes.size !== fixture.components.length || fixture.components.some((component) => !referencedCustomTypes.has(component.name))) {
   throw new Error("Starter prototype must reference the exact fixture definitions");
 }

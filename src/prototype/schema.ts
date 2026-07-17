@@ -17,6 +17,9 @@ export const FLOWS_LIMIT = 12;
 export const FLOW_STEPS_LIMIT = 50;
 export const FLOW_TOTAL_STEPS_LIMIT = 200;
 
+export const REGION_KINDS = ["statusBar", "header", "footer"] as const;
+export type RegionKind = (typeof REGION_KINDS)[number];
+
 // Content-addressed asset id: "asset_" + full lowercase sha256 (64 hex). Referenced from URL
 // props via the {"$asset": "asset_<sha256>"} directive, which resolves to /api/assets/<id>.
 export const ASSET_ID_PATTERN = /^asset_[0-9a-f]{64}$/;
@@ -42,6 +45,7 @@ const elementSchema = z.strictObject({
   visible: z.unknown().optional(),
   on: z.record(z.string(), z.union([actionSchema, z.array(actionSchema).min(1)])).optional(),
   repeat: repeatSchema.optional(),
+  region: z.enum(REGION_KINDS).optional(),
   // Named-slot placement: routes this child into a parent custom component's slot
   // (see validate.ts — parent must be a custom component with capabilities.namedSlots).
   slot: slugSchema.optional(),

@@ -1,4 +1,5 @@
 import type { ComponentDefinition } from "../definitions";
+import { FLOW_ROOT_TYPE, flowRootDefinition } from "./flowRoot.definition";
 import { hostContentTypeDefinitions } from "./content/definitions";
 import { extractionPrimitiveDefinitions } from "./extraction/definitions";
 
@@ -9,6 +10,7 @@ import { extractionPrimitiveDefinitions } from "./extraction/definitions";
 export const hostPrimitiveDefinitions = {
   ...extractionPrimitiveDefinitions,
   ...hostContentTypeDefinitions,
+  [FLOW_ROOT_TYPE]: flowRootDefinition,
 } satisfies Record<string, ComponentDefinition>;
 
 export type HostPrimitiveName = keyof typeof hostPrimitiveDefinitions;

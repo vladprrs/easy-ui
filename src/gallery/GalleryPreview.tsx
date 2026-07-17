@@ -6,7 +6,7 @@ import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUi
 import { createPlayerRuntime } from "../catalog/runtime";
 import { loadPrototypeDraft } from "../prototype/loader";
 import { mergeScreenState } from "../prototype/stateOverrides";
-import { splitCanvas, splitHostPrimitives, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
+import { buildScreenRenderPlan, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
 import type { PrototypeDraft, ThemeContent } from "../api/client";
 import { useApi } from "../api/hooks";
 import { HostStageSurface } from "../catalog/hostPrimitives";
@@ -95,13 +95,9 @@ export function GalleryPreviewFrame({ draft, themeContent: suppliedThemeContent,
   }, [screen]);
   const specs = useMemo(() => {
     if (!tree) return null;
-    const { content: withoutHostPrimitives, hostPrimitives } = splitHostPrimitives(tree);
-    const overlays = hostPrimitives.map((item) => item.spec);
-    if (!screen?.canvas) return { content: withoutHostPrimitives?.spec ?? null, hotspots: [], overlays };
-    const { content, hotspots } = withoutHostPrimitives ? splitCanvas(withoutHostPrimitives) : { content: null, hotspots: [] };
-    return { content: content?.spec ?? null, hotspots: hotspots.map((item) => item.spec), overlays };
+    return buildScreenRenderPlan(tree, { canvas: screen?.canvas });
   }, [screen?.canvas, tree]);
-  const runtimeValue = useMemo<EasyUiRuntimeValue>(() => ({ metadata: tree?.metadata ?? {}, runtime: null, definitions: {} }), [tree]);
+  const runtimeValue = useMemo<EasyUiRuntimeValue>(() => ({ metadata: specs?.metadata ?? {}, runtime: null, definitions: {} }), [specs]);
   const initialState = useMemo(() => mergeScreenState(doc.state, screen?.stateOverrides), [doc.state, screen?.stateOverrides]);
   if (!screen || !tree || !specs) return null;
 

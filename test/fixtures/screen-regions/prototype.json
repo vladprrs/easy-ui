@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "id": "screen-regions",
+  "name": "Screen regions",
+  "designSystem": "screen-regions-custom",
+  "device": "mobile",
+  "startScreen": "main",
+  "state": {},
+  "screens": [
+    {
+      "id": "main",
+      "name": "Main",
+      "spec": {
+        "root": "root",
+        "elements": {
+          "root": { "type": "@eui/FlowRoot", "props": {}, "children": ["status", "header", "content", "footer", "overlay"] },
+          "status": { "type": "RegionBar", "props": { "label": "9:41" }, "region": "statusBar" },
+          "header": { "type": "RegionBar", "props": { "label": "Account" }, "region": "header" },
+          "content": { "type": "ContentPanel", "props": { "label": "Body" } },
+          "footer": { "type": "RegionBar", "props": { "label": "Home" }, "region": "footer" },
+          "overlay": { "type": "Overlay", "props": { "placement": "bottom", "inset": "md", "scrim": false }, "children": ["notice"] },
+          "notice": { "type": "ContentPanel", "props": { "label": "Notice" } }
+        }
+      }
+    }
+  ]
+}
