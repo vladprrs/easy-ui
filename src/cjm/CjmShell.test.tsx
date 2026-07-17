@@ -30,6 +30,27 @@ const hostDoc = prototypeDocSchema.parse({
   } } }],
 });
 
+const flowDoc = prototypeDocSchema.parse({
+  ...doc,
+  screens: [
+    {
+      ...doc.screens[0]!,
+      spec: { root: "go", elements: { go: { type: "Button", props: { label: "Go" }, on: { press: { action: "navigate", params: { screenId: "success" } } } } } },
+    },
+    {
+      id: "declined",
+      name: "Declined",
+      spec: { root: "retry", elements: { retry: { type: "Button", props: { label: "Retry" }, on: { press: { action: "navigate", params: { screenId: { $state: "/target" } } } } } } },
+    },
+    doc.screens[1]!,
+    { id: "secret", name: "Secret", spec: { root: "text", elements: { text: { type: "Text", props: { text: "Outside flows" } } } } },
+  ],
+  flows: [
+    { id: "happy", name: "Успешная оплата", description: "Основной путь", steps: [{ screenId: "cart" }, { screenId: "success" }] },
+    { id: "bank-decline", name: "Отказ банка", steps: [{ screenId: "cart" }, { screenId: "declined", note: "Повторить оплату" }, { screenId: "success" }] },
+  ],
+});
+
 afterEach(cleanup);
 
 function renderAt(path: string) {
@@ -138,6 +159,57 @@ describe("CjmShell", () => {
     expect(await screen.findByText("→ Success")).toBeTruthy();
     expect(screen.getByText("динамический переход")).toBeTruthy();
     expect(screen.queryByText("→ Secret")).toBeNull();
+  });
+
+  it("renders scenario lanes, verified edge styles, legend, flow links, and collapsed unassigned screens", async () => {
+    mocks.getDraft.mockResolvedValue({ ...draft, doc: flowDoc });
+    renderAt("/p/journey/cjm");
+    expect(await screen.findAllByTestId("cjm-lane-label")).toHaveLength(2);
+    expect(screen.getByText("Успешная оплата")).toBeTruthy();
+    expect(screen.getByText("Основной путь")).toBeTruthy();
+    expect(screen.getByText("Отказ банка")).toBeTruthy();
+    expect(screen.getByText("Повторить оплату")).toBeTruthy();
+    expect(document.querySelector("[data-verified='static']")).not.toBeNull();
+    expect(document.querySelector("[data-verified='dynamic']")).not.toBeNull();
+    expect(document.querySelector("[data-verified='missing']")).not.toBeNull();
+    expect(screen.getByLabelText("Легенда рёбер сценариев")).toBeTruthy();
+    expect(screen.getByText("Подтверждённый переход")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Открыть экран «Cart»/ }).getAttribute("href")).toBe("/p/journey/s/cart?flow=happy&step=0");
+    expect(screen.getByRole("link", { name: /Открыть экран «Declined»/ }).getAttribute("href")).toBe("/p/journey/s/declined?flow=bank-decline&step=1");
+    const unassigned = screen.getByRole("button", { name: "Вне сценариев, 1" });
+    expect(unassigned.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("heading", { name: "Secret" })).toBeNull();
+    fireEvent.click(unassigned);
+    expect(await screen.findByRole("heading", { name: "Secret" })).toBeTruthy();
+  });
+
+  it("points the chrome player segment at the scenario step screen for a valid flow/step pair", async () => {
+    mocks.getDraft.mockResolvedValue({ ...draft, doc: flowDoc });
+    renderAt("/p/journey/cjm?flow=bank-decline&step=1");
+    await screen.findAllByTestId("cjm-lane-label");
+    expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey/s/declined?flow=bank-decline&step=1");
+  });
+
+  it("falls back to the route base in chrome when the flow/step pair is invalid", async () => {
+    mocks.getDraft.mockResolvedValue({ ...draft, doc: flowDoc });
+    renderAt("/p/journey/cjm?flow=bank-decline&step=9");
+    await screen.findAllByTestId("cjm-lane-label");
+    expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey?flow=bank-decline&step=9");
+  });
+
+  it("mounts unassigned screens in batches of twenty", async () => {
+    const extras = Array.from({ length: 21 }, (_, index) => ({
+      id: `outside-${index}`,
+      name: `Outside ${index}`,
+      spec: { root: "text", elements: { text: { type: "Text", props: { text: `Outside body ${index}` } } } },
+    }));
+    const batched = prototypeDocSchema.parse({ ...flowDoc, screens: [...flowDoc.screens.filter((item) => item.id !== "secret"), ...extras] });
+    mocks.getDraft.mockResolvedValue({ ...draft, doc: batched });
+    renderAt("/p/journey/cjm");
+    fireEvent.click(await screen.findByRole("button", { name: "Вне сценариев, 21" }));
+    expect(document.querySelectorAll(".cjm-unassigned .cjm-tile")).toHaveLength(20);
+    fireEvent.click(screen.getByRole("button", { name: "показать ещё" }));
+    expect(document.querySelectorAll(".cjm-unassigned .cjm-tile")).toHaveLength(21);
   });
 
   it("omits the description block when the document has no description", async () => {

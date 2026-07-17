@@ -168,6 +168,50 @@ button { cursor: pointer; }
   mask-image: linear-gradient(to bottom, #000 calc(100% - 44px), transparent 100%);
 }
 
+.cjm-flow-edge {
+  stroke: #844edc;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cjm-edges-overlay [data-verified="dynamic"] .cjm-flow-edge {
+  stroke-dasharray: 6 4;
+}
+
+.cjm-edges-overlay [data-verified="missing"] .cjm-flow-edge {
+  stroke: #b54708;
+  stroke-dasharray: 2 4;
+}
+
+.cjm-edge-warning {
+  fill: #b54708;
+  font: 700 12px/1 sans-serif;
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 3px;
+}
+
+.cjm-edge-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cjm-legend-line {
+  display: inline-block;
+  width: 32px;
+  border-top: 2.5px solid #844edc;
+}
+
+.cjm-legend-line[data-verified="dynamic"] {
+  border-top-style: dashed;
+}
+
+.cjm-legend-line[data-verified="missing"] {
+  border-top: 2.5px dotted #b54708;
+}
+
 @media print {
   @page { size: landscape; margin: 12mm; }
 
@@ -201,6 +245,32 @@ button { cursor: pointer; }
     padding: 0 !important;
   }
 
+  .cjm-grid-scroll {
+    overflow: visible !important;
+  }
+
+  .cjm-grid {
+    display: block !important;
+    width: auto !important;
+  }
+
+  .cjm-lane-label {
+    position: static !important;
+    margin: 8mm 0 3mm !important;
+  }
+
+  .cjm-grid [data-cjm-node] {
+    display: inline-block;
+    margin: 0 5mm 8mm 0;
+    vertical-align: top;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .cjm-unassigned {
+    break-before: page;
+  }
+
   .cjm-list > li {
     break-inside: avoid;
     page-break-inside: avoid;
@@ -229,7 +299,8 @@ button { cursor: pointer; }
     print-color-adjust: exact;
   }
 
-  .cjm-connector {
+  .cjm-connector,
+  .cjm-edges-overlay {
     display: none !important;
   }
 }
