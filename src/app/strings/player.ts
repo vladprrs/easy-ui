@@ -24,6 +24,7 @@ export const player = {
   restart: "Начать сначала",
   present: "Презентация",
   note: "Заметка",
+  statusBarToggle: "Скрыть статус-бар",
   notePanelAria: "Заметка к экрану",
   screensAria: "Экраны",
   screensCollapse: "Свернуть список экранов",

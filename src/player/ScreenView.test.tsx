@@ -1,7 +1,7 @@
 import { JSONUIProvider } from "@json-render/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, Outlet, RouterProvider } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPlayerRuntime } from "../catalog/runtime";
 import { prototypeDocSchema } from "../prototype/schema";
 import { EasyUiActionRuntime } from "./actionRuntime";
@@ -16,6 +16,8 @@ vi.mock("./navigation", async (importOriginal) => ({
   // Баннер читает контекст через оригинальный usePlayerNavigation — вне провайдера стаб.
   FlowResetBanner: () => null,
 }));
+
+beforeEach(() => window.localStorage.clear());
 
 function BrokenRuntimeProp(): never {
   throw new Error("invalid runtime prop");
@@ -60,6 +62,34 @@ const mobileDoc = () => prototypeDocSchema.parse({
   }],
 });
 
+const regionsDoc = () => prototypeDocSchema.parse({
+  version: 1,
+  id: "regions-prototype",
+  name: "Regions prototype",
+  designSystem: "custom-only",
+  device: "mobile",
+  startScreen: "home",
+  state: {},
+  screens: [{
+    id: "home",
+    name: "Home",
+    spec: {
+      root: "root",
+      elements: {
+        root: { type: "@eui/FlowRoot", props: {}, children: ["status", "header", "body", "footer"] },
+        status: { type: "Image", props: { src: "/status.png", alt: "Player status bar" }, region: "statusBar" },
+        header: { type: "Image", props: { src: "/header.png", alt: "Player header" }, region: "header" },
+        body: { type: "Image", props: { src: "/body.png", alt: "Player body" } },
+        footer: { type: "Image", props: { src: "/footer.png", alt: "Player footer" }, region: "footer" },
+      },
+    },
+  }, {
+    id: "plain",
+    name: "Plain",
+    spec: { root: "body", elements: { body: { type: "Image", props: { src: "/plain.png", alt: "Plain player screen" } } } },
+  }],
+});
+
 const overlayElementSet = (label: string) => ({
   root: "root",
   elements: {
@@ -81,6 +111,23 @@ function overlayDoc(device: "mobile" | "tablet", withCanvasScreen = false) {
 }
 
 describe("ScreenView stage controls (W1-1)", () => {
+  it("toggles only statusBar and hides the control on a screen without that region", async () => {
+    const { router } = renderPlayer(regionsDoc(), "/p/regions-prototype/s/home");
+    const toggle = screen.getByRole("button", { name: "Скрыть статус-бар" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("img", { name: "Player status bar" })).toBeTruthy();
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByRole("img", { name: "Player status bar" })).toBeNull();
+    expect(screen.getByRole("img", { name: "Player header" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Player footer" })).toBeTruthy();
+
+    await router.navigate("/p/regions-prototype/s/plain");
+    await screen.findByRole("img", { name: "Plain player screen" });
+    expect(screen.queryByRole("button", { name: "Скрыть статус-бар" })).toBeNull();
+  });
+
   it("renders zoom controls in the chrome actions slot and switches fit/actual/manual", () => {
     renderPlayer(mobileDoc(), "/p/stage-prototype/s/home");
     const zoomGroup = screen.getByRole("group", { name: "Масштаб" });

@@ -32,6 +32,23 @@ const presentHostDoc = prototypeDocSchema.parse({
   } } }],
 });
 
+const presentRegionsDoc = prototypeDocSchema.parse({
+  version: 1, id: "present-regions", name: "Present regions", designSystem: "custom-only", device: "mobile", startScreen: "main", state: {},
+  screens: [{
+    id: "main", name: "Main", spec: { root: "root", elements: {
+      root: { type: "@eui/FlowRoot", props: {}, children: ["status", "header", "body", "footer"] },
+      status: { type: "Image", props: { src: "/status.png", alt: "Authored status bar" }, region: "statusBar" },
+      header: { type: "Image", props: { src: "/header.png", alt: "Authored header" }, region: "header" },
+      body: { type: "Image", props: { src: "/body.png", alt: "Authored body" } },
+      footer: { type: "Image", props: { src: "/footer.png", alt: "Authored footer" }, region: "footer" },
+    } },
+  }, {
+    id: "plain", name: "Plain", spec: { root: "body", elements: {
+      body: { type: "Image", props: { src: "/plain.png", alt: "Plain screen" } },
+    } },
+  }],
+});
+
 function renderAt(path: string) {
   const router = createMemoryRouter(routeObjects, { initialEntries: [path] });
   render(<RouterProvider router={router} />);
@@ -54,6 +71,7 @@ function matchMedia(matches: boolean): typeof window.matchMedia {
 describe("PresentShell (W2-1)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    window.localStorage.clear();
     vi.stubGlobal("matchMedia", matchMedia(false));
     mocks.getDraft.mockResolvedValue(draft());
     mocks.getVersion.mockResolvedValue({ ...draft(), version: 2, publishedAt: "2026-07-10T00:00:00Z" } satisfies PrototypeVersion);
@@ -97,6 +115,48 @@ describe("PresentShell (W2-1)", () => {
     expect(document.querySelector("[data-eui-stage-viewport='present-fluid']")).toBeNull();
     expect(screen.getByRole("navigation", { name: "Экраны презентации" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Открыть управление презентацией" })).toBeNull();
+  });
+
+  it("shares the status-bar preference between the framed player and desktop present", async () => {
+    mocks.getDraft.mockResolvedValue({ ...draft(), doc: presentRegionsDoc });
+    const router = renderAt("/p/present-regions/s/main");
+    expect(await screen.findByRole("img", { name: "Authored status bar" })).toBeTruthy();
+    const playerToggle = screen.getByRole("button", { name: "Скрыть статус-бар" });
+    expect(playerToggle.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(playerToggle);
+    expect(screen.queryByRole("img", { name: "Authored status bar" })).toBeNull();
+    expect(screen.getByRole("img", { name: "Authored header" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Authored footer" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("link", { name: "Презентация" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/p/present-regions/present/s/main"));
+    const presentToggle = await screen.findByRole("button", { name: "Скрыть статус-бар" });
+    expect(presentToggle.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByRole("img", { name: "Authored status bar" })).toBeNull();
+    expect(screen.getByRole("img", { name: "Authored header" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Authored footer" })).toBeTruthy();
+
+    fireEvent.click(presentToggle);
+    expect(presentToggle.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("img", { name: "Authored status bar" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Authored header" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Authored footer" })).toBeTruthy();
+
+    await router.navigate("/p/present-regions/present/s/plain");
+    await screen.findByRole("img", { name: "Plain screen" });
+    expect(screen.queryByRole("button", { name: "Скрыть статус-бар" })).toBeNull();
+  });
+
+  it("does not show the toggle in mobile fluid present and always drops the status bar", async () => {
+    mocks.getDraft.mockResolvedValue({ ...draft(), doc: presentRegionsDoc });
+    renderAt("/p/present-regions/present/s/main?mobile=1");
+
+    expect(await screen.findByRole("img", { name: "Authored body" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Скрыть статус-бар" })).toBeNull();
+    expect(screen.queryByRole("img", { name: "Authored status bar" })).toBeNull();
+    expect(screen.getByRole("img", { name: "Authored header" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Authored footer" })).toBeTruthy();
   });
 
   it("runs the interactive flow and restart resets state", async () => {
