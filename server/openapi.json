@@ -769,6 +769,169 @@
         "x-easyui-validated": false
       }
     },
+    "/api/bundles/import": {
+      "post": {
+        "operationId": "post_bundles_import",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "enum": [
+                "dry-run",
+                "apply"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "action": {
+                            "enum": [
+                              "created",
+                              "reused",
+                              "skipped",
+                              "error"
+                            ],
+                            "type": "string"
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "remappedTo": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "enum": [
+                              "asset",
+                              "designSystem",
+                              "component",
+                              "prototype"
+                            ],
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "id",
+                          "action"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "mode": {
+                      "enum": [
+                        "dry-run",
+                        "apply"
+                      ],
+                      "type": "string"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "summary": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "created": {
+                          "type": "number"
+                        },
+                        "errors": {
+                          "type": "number"
+                        },
+                        "reused": {
+                          "type": "number"
+                        },
+                        "skipped": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "created",
+                        "reused",
+                        "skipped",
+                        "errors"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "ok",
+                    "items",
+                    "summary"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_bundle"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "payload_too_large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "unsupported_media_type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "Import a ZIP bundle (multipart file or raw application/zip); dry-run predicts, apply writes. Returns a per-item report.",
+        "x-easyui-validated": false
+      }
+    },
     "/api/capabilities": {
       "get": {
         "operationId": "get_capabilities",
@@ -820,6 +983,9 @@
                         "bundleExport": {
                           "type": "boolean"
                         },
+                        "bundleImport": {
+                          "type": "boolean"
+                        },
                         "flows": {
                           "type": "boolean"
                         },
@@ -863,7 +1029,8 @@
                         "layoutContract",
                         "flows",
                         "screenRegions",
-                        "bundleExport"
+                        "bundleExport",
+                        "bundleImport"
                       ],
                       "type": "object"
                     },

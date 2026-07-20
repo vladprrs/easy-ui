@@ -77,6 +77,7 @@ export function capabilities(db: Database): JsonObject {
       flows: true,
       screenRegions: true,
       bundleExport: true,
+      bundleImport: true,
     },
   };
 }

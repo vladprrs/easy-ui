@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { inputPrototypeDocSchema, REGION_KINDS } from "../src/prototype/schema";
 import { atomicLevels, layoutSpacingProps, spaceTokens } from "../src/designSystems/types";
+import { importReportSchema } from "../src/bundle/schema";
 import { ApiError } from "./http";
 import { figmaSchema } from "./figma";
 
@@ -933,6 +934,23 @@ export const exportBundlesContract = registerContract({
   errors: [exportUnauthorized, exportForbidden, exportTooLarge],
 });
 
+// --- Bundle import (ZIP) ---
+
+export const importBundleQuerySchema = z.strictObject({ mode: z.enum(["dry-run", "apply"]).optional() });
+
+export const importBundleContract = registerContract({
+  method: "POST", path: "/api/bundles/import",
+  summary: "Import a ZIP bundle (multipart file or raw application/zip); dry-run predicts, apply writes. Returns a per-item report.",
+  query: importBundleQuerySchema,
+  responseSchema: importReportSchema,
+  errors: [
+    { status: 400, code: "invalid_bundle" },
+    { status: 413, code: "payload_too_large" },
+    { status: 415, code: "unsupported_media_type" },
+    { status: 422, code: "validation_failed" },
+  ],
+});
+
 // --- Design systems ---
 
 const designSystemSummarySchema = z.looseObject({
@@ -1042,7 +1060,7 @@ export const capabilitiesResponseSchema = z.object({
   features: z.object({
     renderStatus: z.boolean(), screenshots: z.boolean(), visualRegression: z.boolean(), assets: z.boolean(),
     typedEvents: z.boolean(), repeat: z.boolean(), namedSlots: z.boolean(), themeVersions: z.boolean(), layoutContract: z.boolean(),
-    flows: z.boolean(), screenRegions: z.boolean(), bundleExport: z.boolean(),
+    flows: z.boolean(), screenRegions: z.boolean(), bundleExport: z.boolean(), bundleImport: z.boolean(),
   }),
 });
 

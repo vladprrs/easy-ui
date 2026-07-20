@@ -49,11 +49,39 @@ function recordPrototypeValidation(db:Database,id:string,rev:number,issues:{path
   recordValidation(db,{resourceType:"prototype",resourceId:id,rev,catalogHash:row?.hash??"",ok,issues});
 }
 
+// Create a prototype from a fully-formed document (extracted from the POST branch so the bundle
+// importer reuses the exact snapshot/validation/audit/ledger sequence). Behaviour of POST is unchanged.
+export async function createPrototypeFromDoc(db:Database,repo:PrototypeRepo,doc:PrototypeDoc,dataDir:string,ownerId:string,opts:{message?:string;figmaInput?:unknown}={}) {
+  const snapshot=await snapshotDefinitions(db,doc,dataDir);
+  const warnings=validatePrototypeForSave(doc,snapshot.definitions);
+  const assetIds=collectAndValidateAssetRefs(db,doc);
+  const figma=parseFigmaInput(db,opts.figmaInput,"figma");
+  const result=repo.create(doc,opts.message,snapshot.pins,assetIds,figma,ownerId);
+  db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(ownerId,doc.id,result.rev);
+  writeAuditEvent(db,{actorId:ownerId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:doc.id,detail:{rev:result.rev}});
+  recordPrototypeValidation(db,doc.id,result.rev,warnings);
+  return {id:result.id,rev:result.rev,warnings};
+}
+
+// Save a new head revision from a document (used by the bundle importer for an owned id whose
+// document differs from head). Mirrors the PUT save sequence; the route's PUT branch is unchanged.
+export async function updatePrototypeFromDoc(db:Database,repo:PrototypeRepo,id:string,doc:PrototypeDoc,baseRev:number,dataDir:string,ownerId:string,opts:{message?:string;figmaInput?:unknown}={}) {
+  const snapshot=await snapshotDefinitions(db,doc,dataDir);
+  const warnings=validatePrototypeForSave(doc,snapshot.definitions);
+  const assetIds=collectAndValidateAssetRefs(db,doc);
+  const figma=parseFigmaInput(db,opts.figmaInput,"figma");
+  const saved=repo.save(id,doc,baseRev,opts.message,snapshot.pins,assetIds,figma);
+  db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(ownerId,id,saved.rev);
+  writeAuditEvent(db,{actorId:ownerId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}});
+  recordPrototypeValidation(db,id,saved.rev,warnings);
+  return {rev:saved.rev,warnings};
+}
+
 export async function routePrototypes(request:Request,db:Database,segments:string[],principal:Principal,dataDir=process.env.DATA_DIR||"data",serveDist?:string):Promise<Response> {
   const repo=new PrototypeRepo(db);
   if(segments.length===1) {
     if(request.method==="GET") return json(repo.list(principal),200,noStore);
-    if(request.method==="POST") { const actor=requireUser(principal); const b=objectBody(await readJson(request)); const doc=parseDoc(b.doc); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions); const assetIds=collectAndValidateAssetRefs(db,doc); const figma=parseFigmaInput(db,b.figma,"figma"); const result=repo.create(doc,message(b),snapshot.pins,assetIds,figma,actor.userId); db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,doc.id,result.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:doc.id,detail:{rev:result.rev}}); recordPrototypeValidation(db,doc.id,result.rev,warnings); return json({...result,warnings,screens:headScreens(doc)},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(result.id)}`}); }
+    if(request.method==="POST") { const actor=requireUser(principal); const b=objectBody(await readJson(request)); const doc=parseDoc(b.doc); const result=await createPrototypeFromDoc(db,repo,doc,dataDir,actor.userId,{message:message(b),figmaInput:b.figma}); return json({...result,screens:headScreens(doc)},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(result.id)}`}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }
   const id=segments[1]!; const tail=segments.slice(2);

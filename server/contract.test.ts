@@ -173,6 +173,12 @@ function orderedCases(): [string, Case][] {
     ["GET /api/prototypes/{id}/export", { run: () => call("GET", "/api/prototypes/contract-proto/export"), expected: ok(200, "application/zip") }],
     ["GET /api/components/{id}/export", { run: () => call("GET", "/api/components/contract-stars/export"), expected: ok(200, "application/zip") }],
     ["GET /api/bundles/export", { run: () => call("GET", "/api/bundles/export"), expected: ok(200, "application/zip") }],
+    // Bundle import (ZIP): round-tripped from the exporter (raw application/zip; multipart boundaries break call()).
+    // dry-run keeps the shared fixture db untouched while still exercising the manifest/report path.
+    ["POST /api/bundles/import", { run: async () => {
+      const zip = new Uint8Array(await (await call("GET", "/api/bundles/export")).arrayBuffer());
+      return call("POST", "/api/bundles/import?mode=dry-run", zip, "application/zip");
+    }, expected: ok(200) }],
     // Deletions last (CAS on the final head revisions)
     ["DELETE /api/prototypes/{id}/share/{shareId}", { run: () => call("DELETE", `/api/prototypes/contract-proto/share/${state.shareId}`), expected: ok(204) }],
     ["DELETE /api/prototypes/{id}/share/{shareId}", { run: () => call("DELETE", `/api/prototypes/contract-proto/share/${state.shareId}`), expected: err(404, "share_not_found") }],
@@ -269,6 +275,7 @@ describe("route contracts", () => {
       flows: true,
       screenRegions: true,
       bundleExport: true,
+      bundleImport: true,
     });
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
   });
