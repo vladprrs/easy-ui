@@ -724,6 +724,51 @@
         "x-easyui-validated": true
       }
     },
+    "/api/bundles/export": {
+      "get": {
+        "operationId": "get_bundles_export",
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "export_too_large"
+          }
+        },
+        "summary": "Export every prototype and component owned by the caller as a single ZIP bundle.",
+        "x-easyui-validated": false
+      }
+    },
     "/api/capabilities": {
       "get": {
         "operationId": "get_capabilities",
@@ -772,6 +817,9 @@
                         "assets": {
                           "type": "boolean"
                         },
+                        "bundleExport": {
+                          "type": "boolean"
+                        },
                         "flows": {
                           "type": "boolean"
                         },
@@ -814,7 +862,8 @@
                         "themeVersions",
                         "layoutContract",
                         "flows",
-                        "screenRegions"
+                        "screenRegions",
+                        "bundleExport"
                       ],
                       "type": "object"
                     },
@@ -2012,6 +2061,71 @@
           }
         },
         "summary": "Alias of /source: read the head revision source.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/components/{id}/export": {
+      "get": {
+        "operationId": "get_components_id_export",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "export_too_large"
+          }
+        },
+        "summary": "Export a custom component (latest active version, or head draft when unpublished) as a ZIP bundle.",
         "x-easyui-validated": false
       }
     },
@@ -7278,6 +7392,71 @@
           }
         },
         "summary": "Read the head revision document with catalog hashes, component pins and asset pins.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/prototypes/{id}/export": {
+      "get": {
+        "operationId": "get_prototypes_id_export",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found | version_not_found"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "export_too_large"
+          }
+        },
+        "summary": "Export a prototype revision (owner draft or a published version) with its full dependency closure as a ZIP bundle.",
         "x-easyui-validated": false
       }
     },

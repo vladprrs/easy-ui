@@ -169,6 +169,10 @@ function orderedCases(): [string, Case][] {
     ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest?designSystem=missing-system"), expected: err(404, "not_found") }],
     ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest?designSystem=Bad_slug"), expected: err(422, "validation_failed") }],
     ["GET /api/shims/{abi}/{file}", { run: () => call("GET", "/api/shims/v1/react.js"), expected: ok(200, "text/javascript") }],
+    // Bundle export (ZIP): owner draft, unpublished component draft, bulk (all owned)
+    ["GET /api/prototypes/{id}/export", { run: () => call("GET", "/api/prototypes/contract-proto/export"), expected: ok(200, "application/zip") }],
+    ["GET /api/components/{id}/export", { run: () => call("GET", "/api/components/contract-stars/export"), expected: ok(200, "application/zip") }],
+    ["GET /api/bundles/export", { run: () => call("GET", "/api/bundles/export"), expected: ok(200, "application/zip") }],
     // Deletions last (CAS on the final head revisions)
     ["DELETE /api/prototypes/{id}/share/{shareId}", { run: () => call("DELETE", `/api/prototypes/contract-proto/share/${state.shareId}`), expected: ok(204) }],
     ["DELETE /api/prototypes/{id}/share/{shareId}", { run: () => call("DELETE", `/api/prototypes/contract-proto/share/${state.shareId}`), expected: err(404, "share_not_found") }],
@@ -264,6 +268,7 @@ describe("route contracts", () => {
       layoutContract: true,
       flows: true,
       screenRegions: true,
+      bundleExport: true,
     });
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
   });

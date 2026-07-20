@@ -52,7 +52,7 @@ const nowIso = (now: number) => new Date(now).toISOString();
 const digest = (value: string) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 const credential = () => randomBytes(32).toString("base64url");
 
-function themeAssetIds(content: ReturnType<typeof getDesignSystemVersion>): string[] {
+export function themeAssetIds(content: ReturnType<typeof getDesignSystemVersion>): string[] {
   if (!content) return [];
   const ids = new Set<string>();
   for (const font of content.fonts) ids.add(font.src);

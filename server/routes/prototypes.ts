@@ -14,6 +14,8 @@ import { diffPrototypeDocs } from "../../src/prototype/revisionDiff";
 import type { Principal } from "../auth";
 import { requirePrototypeOwner, requirePrototypeRead, requireUser } from "../authorization";
 import { writeAuditEvent } from "../audit";
+import { BundleClosure } from "../bundle/exporter";
+import { zipResponse } from "./bundles";
 
 const headScreens = (doc:PrototypeDoc) => doc.screens.map(s=>({id:s.id,url:headScreenUrl(doc.id,s.id)}));
 
@@ -63,6 +65,15 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
   }
   if(tail[0]==="screens"&&tail.length===3&&tail[2]==="render-status") { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); requirePrototypeRead(db,id,principal); return renderStatus(request,db,id,tail[1]!,{serveDist}); }
   if(tail[0]==="draft"&&tail.length===1) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); return json(repo.draft(id,principal),200,noStore); }
+  if(tail[0]==="export"&&tail.length===1) {
+    if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed");
+    const access=requirePrototypeRead(db,id,principal);
+    const versionRaw=new URL(request.url).searchParams.get("version"); const version=versionRaw===null?undefined:integer(Number(versionRaw),"version");
+    const closure=new BundleClosure(db,dataDir); const exported=closure.addPrototype(id,{owner:access.owner,version});
+    const bytes=await closure.buildZip("prototype",new URL(request.url).origin);
+    const suffix=exported.selector==="draft"?`draft-r${exported.rev}`:`v${exported.version}`;
+    return zipResponse(bytes,`easy-ui-prototype-${id}-${suffix}.zip`);
+  }
   if(tail[0]==="revisions") {
     if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed");
     if(tail.length===2&&principal.kind==="capture") { requirePrototypeRead(db,id,principal); return json(repo.revision(id,integer(Number(tail[1]),"rev"),principal),200,noStore); }

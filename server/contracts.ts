@@ -906,6 +906,33 @@ export const getComponentBundleContract = registerContract({
   errors: [errorCatalog.invalidRequest, errorCatalog.notFound],
 });
 
+// --- Bundle export (ZIP) ---
+
+const exportUnauthorized = { status: 401, code: "unauthorized" } as const;
+const exportForbidden = { status: 403, code: "forbidden" } as const;
+const exportTooLarge = { status: 413, code: "export_too_large" } as const;
+
+export const exportPrototypeContract = registerContract({
+  method: "GET", path: "/api/prototypes/{id}/export",
+  summary: "Export a prototype revision (owner draft or a published version) with its full dependency closure as a ZIP bundle.",
+  contentType: "application/zip",
+  errors: [exportUnauthorized, exportForbidden, errorCatalog.prototypeNotFound, errorCatalog.versionNotFound, exportTooLarge],
+});
+
+export const exportComponentContract = registerContract({
+  method: "GET", path: "/api/components/{id}/export",
+  summary: "Export a custom component (latest active version, or head draft when unpublished) as a ZIP bundle.",
+  contentType: "application/zip",
+  errors: [exportUnauthorized, exportForbidden, errorCatalog.notFound, exportTooLarge],
+});
+
+export const exportBundlesContract = registerContract({
+  method: "GET", path: "/api/bundles/export",
+  summary: "Export every prototype and component owned by the caller as a single ZIP bundle.",
+  contentType: "application/zip",
+  errors: [exportUnauthorized, exportForbidden, exportTooLarge],
+});
+
 // --- Design systems ---
 
 const designSystemSummarySchema = z.looseObject({
@@ -1015,7 +1042,7 @@ export const capabilitiesResponseSchema = z.object({
   features: z.object({
     renderStatus: z.boolean(), screenshots: z.boolean(), visualRegression: z.boolean(), assets: z.boolean(),
     typedEvents: z.boolean(), repeat: z.boolean(), namedSlots: z.boolean(), themeVersions: z.boolean(), layoutContract: z.boolean(),
-    flows: z.boolean(), screenRegions: z.boolean(),
+    flows: z.boolean(), screenRegions: z.boolean(), bundleExport: z.boolean(),
   }),
 });
 

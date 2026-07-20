@@ -19,6 +19,7 @@ import { VisualService as VisualServiceImpl } from "./visual/service";
 import { routeVisual } from "./routes/visual";
 import { routeMeta } from "./routes/meta";
 import { exchangeShareToken, protectShareResponse, routeShares } from "./routes/share";
+import { routeBundles } from "./routes/bundles";
 import { ShareRepo } from "./share/repo";
 import { catalogManifestQuerySchema, parseQuery } from "./contracts";
 import { getIncludingRetired } from "./designSystems";
@@ -152,6 +153,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         const shot=await routeScreenshots(request,db,options.screenshots,segments.slice(1),principal); if(shot) return finish(shot);
         const vis=await routeVisual(request,db,options.dataDir??process.env.DATA_DIR??"data",segments.slice(1),principal,options.visual); if(vis) return finish(vis);
         const share=await routeShares(request,db,segments.slice(1),principal,{publicOrigin,serveDist:options.serveDist}); if(share) return finish(share);
+        const bundles=await routeBundles(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"); if(bundles) return finish(bundles);
         if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),principal,options.dataDir,options.serveDist));
         if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
         if(segments[1]==="assets") return finish(await routeAssets(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
