@@ -1,11 +1,11 @@
 ---
 name: deploy
-description: Deploy easy-ui to production (easy-ui.pay-offline.ru on Dokploy) — push to main builds the image in GitHub Actions (GHCR) and auto-deploys; check deploy status, trigger a manual redeploy, watch progress, and verify health, session auth, compatibility barrier, and SPA.
+description: Deploy easy-ui to production (easy-ui.pay-offline.ru on Dokploy) — push to main builds the image in GitHub Actions (GHCR) and auto-deploys; check deploy status, trigger a manual redeploy, watch progress, and verify health, session auth, and SPA.
 ---
 
 # Deploy easy-ui to Dokploy
 
-Production runs at **https://easy-ui.pay-offline.ru** — a Dokploy compose service running the prebuilt image `ghcr.io/vladprrs/easy-ui:latest` (`docker-compose.yml` at repo root, single container: Bun server serving API + `dist` static, named volume `easy-ui-data:/app/data` for SQLite + published component modules). Application auth uses named cookie sessions bootstrapped by `ADMIN_NAME`/`ADMIN_PASSWORD`; `LEGACY_BASIC_AUTH` is a temporary outer barrier and old `BASIC_AUTH` remains a deprecated alias for rollback. The image is built by GitHub Actions (`.github/workflows/build-image.yml`) — **never on the prod server**: server-side builds (npm ci + chromium + vite + storybook) starved the 1-CPU host and took the whole box down three times on 2026-07-14. Full deployment contract: `docs/server-api.md#deployment`; plan/history: `docs/plans/2026-07-11-dokploy-deploy.md`.
+Production runs at **https://easy-ui.pay-offline.ru** — a Dokploy compose service running the prebuilt image `ghcr.io/vladprrs/easy-ui:latest` (`docker-compose.yml` at repo root, single container: Bun server serving API + `dist` static, named volume `easy-ui-data:/app/data` for SQLite + published component modules). Application auth uses named cookie sessions bootstrapped by `ADMIN_NAME`/`ADMIN_PASSWORD`. The outer Basic barrier (`LEGACY_BASIC_AUTH`, deprecated alias `BASIC_AUTH`) was removed from the prod env on 2026-07-20 — the server code still honors those vars, so setting them in Dokploy re-enables the barrier if ever needed. The image is built by GitHub Actions (`.github/workflows/build-image.yml`) — **never on the prod server**: server-side builds (npm ci + chromium + vite + storybook) starved the 1-CPU host and took the whole box down three times on 2026-07-14. Full deployment contract: `docs/server-api.md#deployment`; plan/history: `docs/plans/2026-07-11-dokploy-deploy.md`.
 
 All paths below are relative to the repo root. The driver is `.claude/skills/deploy/driver.mjs` (plain node, zero deps).
 
@@ -15,10 +15,8 @@ Secrets in `.env` at repo root (gitignored; template in `.env.example`):
 
 ```
 DOKPLOY_API_KEY=...          # Dokploy UI -> Settings -> API/CLI
-EASY_UI_BASIC_AUTH=user:pass # prod basic-auth creds, optional (verify degrades without it)
 EASYUI_USERNAME=admin        # named account for post-deploy API/SPA verification
 EASYUI_PASSWORD=...          # named-account password
-EASYUI_LEGACY_BASIC_AUTH=user:pass # outer barrier during the compatibility window
 ```
 
 Without `DOKPLOY_API_KEY` the driver exits with code 2.
@@ -40,13 +38,14 @@ The legacy deploy driver still checks infrastructure state; use the author drive
 EASYUI_API=https://easy-ui.pay-offline.ru/api node .claude/skills/author/driver.mjs get prototypes
 ```
 
-Expected auth gates during the compatibility window:
+Expected auth gates:
 
 ```
 PASS  health open, ready (200 ready)
-PASS  API requires auth (401, www-authenticate=Basic realm="easy-ui")
-PASS  login with legacy Basic + named credentials sets a session cookie
-PASS  API/SPA with legacy Basic + session cookie (200)
+PASS  API requires auth (401, www-authenticate=null)
+PASS  SPA open (200)
+PASS  login sets session cookie (200)
+PASS  API with session cookie (200)
 ```
 
 ## Manual deploy / redeploy (no new commit)
@@ -71,13 +70,13 @@ No first-class rollback. Point the compose file at a known-good image tag (`ghcr
 
 - **Deploy happens on every push to main** — pushing an unfinished commit deploys it (after the CI build). There is no staging environment.
 - **Never build on the prod server.** The image comes prebuilt from GHCR (public package, anonymous pull). If Dokploy ever reports a source build, the disabled webhook was re-enabled or `docker-compose.yml` regained a `build:` section — fix that first.
-- Keep `ADMIN_NAME`/`ADMIN_PASSWORD` paired. During rollback-window keep old `BASIC_AUTH` while adding `LEGACY_BASIC_AUTH`; the new name wins when both are set.
+- Keep `ADMIN_NAME`/`ADMIN_PASSWORD` paired. `LEGACY_BASIC_AUTH`/`BASIC_AUTH` are no longer set in prod; the code still accepts them (new name wins when both are set) if the barrier ever needs to come back.
 - A failing CI build or failed pull leaves the previous container running — prod stays up.
 - `compose.deploy` only **queues**; `watch` polls `compose.one` every 15 s. Deployment status `running` with no progress for >10 min = check Dokploy UI logs.
 - The API returns `deployments` unsorted and `composeStatus` can hold a stale `error` — the driver sorts by `createdAt` and trusts only the newest deployment's status.
-- The app enforces named cookie sessions and, transitionally, the outer Basic barrier in the Dokploy service (not Traefik). Rotate named and legacy credentials independently.
+- The app enforces named cookie sessions; auth lives in the app (not Traefik).
 - `curl` against SPA routes without `Accept: text/html` returns 404 — the static server's SPA fallback is HTML-only. Browsers are unaffected; the driver sends the header.
-- `/api/health`, share exchange/share-scope and capture-scope bypass the outer Basic barrier. Login and ordinary static assets remain behind it during the transition.
+- `/api/health`, share exchange/share-scope and capture-scope are open without a session; everything else on `/api` requires one.
 - Publishing custom components in prod exercises `tsc` + `Bun.build` inside the container — that's why the image keeps full devDependencies; don't "optimize" `npm ci --omit=dev`.
 
 ## Troubleshooting

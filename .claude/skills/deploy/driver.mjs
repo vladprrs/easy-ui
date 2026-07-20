@@ -25,7 +25,8 @@ if (!apiKey) {
   console.error("DOKPLOY_API_KEY is not set (env or .env in project root)");
   process.exit(2);
 }
-const basicAuth = process.env.EASY_UI_BASIC_AUTH; // "user:pass", optional (verify degrades)
+const namedUser = process.env.EASYUI_USERNAME; // named account, optional (verify degrades)
+const namedPassword = process.env.EASYUI_PASSWORD;
 
 async function api(path, body) {
   const res = await fetch(`${DOKPLOY_URL}/api/${path}`, {
@@ -96,15 +97,22 @@ async function verify() {
   const unauth = await fetch(`${APP_URL}/api/prototypes`);
   allOk &= await check("API requires auth", unauth.status === 401, `${unauth.status}, www-authenticate=${unauth.headers.get("www-authenticate")}`);
 
-  if (basicAuth) {
-    const authz = { authorization: `Basic ${Buffer.from(basicAuth).toString("base64")}` };
-    const apiRes = await fetch(`${APP_URL}/api/prototypes`, { headers: authz });
-    allOk &= await check("API with creds", apiRes.status === 200, `${apiRes.status}`);
-    const spa = await fetch(`${APP_URL}/`, { headers: { ...authz, accept: "text/html" } });
-    const html = await spa.text();
-    allOk &= await check("SPA with creds", spa.status === 200 && html.includes("<title>easy-ui</title>"), `${spa.status}`);
+  const spa = await fetch(`${APP_URL}/`, { headers: { accept: "text/html" } });
+  const html = await spa.text();
+  allOk &= await check("SPA open", spa.status === 200 && html.includes("<title>easy-ui</title>"), `${spa.status}`);
+
+  if (namedUser && namedPassword) {
+    const login = await fetch(`${APP_URL}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: APP_URL },
+      body: JSON.stringify({ name: namedUser, password: namedPassword }),
+    });
+    const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
+    allOk &= await check("login sets session cookie", login.status === 200 && cookie.length > 0, `${login.status}`);
+    const apiRes = await fetch(`${APP_URL}/api/prototypes`, { headers: { cookie } });
+    allOk &= await check("API with session cookie", apiRes.status === 200, `${apiRes.status}`);
   } else {
-    console.log("SKIP  authed checks (EASY_UI_BASIC_AUTH not set)");
+    console.log("SKIP  session checks (EASYUI_USERNAME/EASYUI_PASSWORD not set)");
   }
   if (!allOk) process.exit(1);
 }
