@@ -226,6 +226,65 @@ Meta-ответы прототипов и компонентов additively не
 
 Миграция v8 расширяет `CHECK(status)` строгим rebuild-алгоритмом `component_publishes`: снапшот всех FK-child (`prototype_revision_components` RESTRICT, `component_publish_assets` CASCADE) → drop children → rebuild parent → recreate children → restore rows → `PRAGMA foreign_key_check`.
 
+## Bundles (экспорт/импорт ZIP)
+
+Перенос прототипов и custom-компонентов наружу (между серверами/аккаунтами, локальный архив, обмен) — через ZIP-бандлы. Три вида экспорта (прототип, компонент, всё owned) описываются **одним манифестом** и импортируются **единым** endpoint'ом. Схемы (`bundleManifestSchema`, `importReportSchema`) живут в `src/bundle/schema.ts` и общие для сервера и клиента; ZIP-кодек (`fflate`) — только на сервере и в клиентских download-хелперах, никогда в shared-схеме или SPA-рендере.
+
+### Endpoints
+
+| Метод и путь | Authz | Семантика |
+|---|---|---|
+| `GET /prototypes/:id/export?version=N` | `requirePrototypeRead`; draft (без `?version`) — только owner; не-owner по умолчанию — последняя published-версия (иначе `404 version_not_found`) | Прототип выбранной ревизии + полное замыкание зависимостей. Файл `easy-ui-prototype-<id>-{draft-r<rev>\|v<N>}.zip` |
+| `GET /components/:id/export?version=N` | `requireUser` (как `/source`) | По умолчанию последняя active-версия; без публикаций — head draft (`version: null` в манифесте). Файл `easy-ui-component-<id>-{v<N>\|draft-r<rev>}.zip` |
+| `GET /bundles/export` | `requireUser` | Всё owned вызывающим. Для каждого прототипа — последняя published-версия, head draft **только если публикаций нет**; компоненты — последняя active, иначе head draft. Файл `easy-ui-export-<yyyymmdd>.zip` |
+| `POST /bundles/import?mode=dry-run\|apply` | `requireUser` | Импорт бандла. `mode` по умолчанию `apply`. Тело — multipart (`file`) **или** raw `application/zip`. Ответ — отчёт `importReportSchema` (см. ниже) |
+
+Ответ на все три export'а — бинарный `application/zip` с `content-disposition: attachment; filename="…"` и `no-store` (свежая материализация замыкания, кэшировать нельзя). Per-resource `export`-хвосты живут в `routes/prototypes.ts`/`routes/components.ts` (authz на месте); `/bundles/*` — в `routes/bundles.ts`.
+
+Коды ошибок export: `401 unauthorized`, `403 forbidden`, `404 prototype_not_found`/`404 not_found`/`404 version_not_found`, `413 export_too_large`. Коды ошибок import (HTTP-уровень): `400 invalid_bundle` (не-zip, traversal-путь, битый/лживый central directory, sha-mismatch байтов, невалидный манифест), `413 payload_too_large` (аплоад/бюджет распаковки/лимит entries), `415 unsupported_media_type` (не multipart и не `application/zip`), `422 validation_failed`. Конфликты отдельных элементов **не** роняют запрос — они попадают в отчёт как item-error (см. [Конфликт-политика](#конфликт-политика-импорта)).
+
+### Формат бандла
+
+`formatVersion: 1`, zod-валидируемый `manifest.json`. Layout архива:
+
+```
+manifest.json
+prototypes/<prototypeId>.json          # точный doc экспортируемой ревизии
+components/<componentId>/source.tsx    # TSX-исходник
+assets/<sha256>                        # сырые байты, имя = sha256 (store); JSON/TSX — deflate
+```
+
+`manifest.json`:
+
+- `kind` (`prototype|component|bulk`, информационно — импортёр един), `exportedAt` (ISO).
+- `source { origin, apiVersion, renderContractVersion, builtinCatalogHash }` — compat-сигнал источника для диагностики межверсионного импорта.
+- `prototypes[]`: `{ id, name, designSystem, exported {selector: "draft"|"version", rev, version|null}, docPath, componentPins [{id, version}], assetIds[], designSystemMetaVersion|null }`.
+- `components[]`: `{ id, name, designSystem, sourcePath, sourceHash (sha256 источника), exported {rev, version|null}, assetIds[] }`.
+- `designSystems[]`: `{ id, name, description?, builtin, theme {metaVersion, tokens, fonts, icons} | null }`.
+- `assets[]`: `{ id (asset_<64hex>), sha256, mime, size, originalName|null }` — каждый ассет в архиве один раз по sha.
+
+**Пины компонентов и DS meta-version в манифесте информационные.** На импорте они не восстанавливаются буквально: пины пересчитываются резолвом по `name+designSystem` к последней active-версии на цели, тема перепиновывается. Точная **version-fidelity не гарантируется** — импорт эквивалентен свежему POST (см. [Конфликт-политика](#конфликт-политика-импорта)). Пины ассетов ревизии — единственный источник asset-замыкания (walk по `props`); `$asset` в `state`/`stateOverrides`/`flows` рантаймом не резолвится и не пинуется — это осознанно **не** пробел.
+
+**Что НЕ экспортируется** (осознанно): `compiled_js`/`bundle_hash`/host-ABI (цель перекомпилирует через publish-пайплайн), история ревизий, скриншоты и visual-бейзлайны, share-гранты, `figma_json`, owner/audit-данные, статус прототипа (импорт всегда приватный). Прототипный и bulk-бандл **включает TSX всех запинованных компонентов независимо от их владельца** — это консистентно с текущим `GET /components/:id/source` (читается любым аутентифицированным пользователем) и зафиксировано как продуктовое решение.
+
+### Конфликт-политика импорта
+
+Импорт **не атомарен** (компиляция компонентов идёт в сабпроцессах, глобального rollback нет). Поэтому отчёт — по-элементный: `{ mode, ok, items: [{type, id, name?, action: "created"|"reused"|"skipped"|"error", detail?, remappedTo?, version?}], summary {created, reused, skipped, errors} }`. Порядок обработки: ассеты → дизайн-системы → компоненты → прототипы (зависимость сверху вниз). Элемент-ошибка выставляет `ok: false`, но остальные элементы обрабатываются.
+
+| Фаза | created | reused | skipped | error (typed `detail`) |
+|---|---|---|---|---|
+| **Ассеты** | новый sha ingest'ится | sha уже есть (`ingest` идемпотентен) | — | байты не сходятся с заявленным sha256, либо `id ≠ asset_<sha>` |
+| **Дизайн-системы** | custom id свободен → создаётся (owner = импортёр); своя тема пишется как version 1 после `validateThemeAssets` | id существует → **reuse by reference** (реестр глобальный); своя (owner=импортёр) отличающаяся тема → новая версия `latest+1`; чужая отличающаяся тема → reuse + `detail` «theme drift: not owner…» | — | builtin отсутствует на цели → `design_system_missing` |
+| **Компоненты** | оба свободны → `create`+publish; свой id/name с отличающимся source → новая версия; `compiled_js` бандла **не** используется — только `publishComponent` | свой id/name, head sourceHash совпадает и есть active publish | — | чужой занятый name → `name_conflict`; soft-deleted строка по id/name → `deleted_conflict` (v1 без revive); имя = builtin-каталог → `builtin_name_reserved`; провал publish-пайплайна → его сообщение |
+| **Прототипы** | id свободен → created; чужой/tombstone id → remap `<id>-imported-<n>` (`remappedTo` в отчёте) | — | свой id, doc идентичен head | зависимость (DS/компонент) не разрешима → `dependency_failed: …`; невалидный doc при `renderContractVersion`/`builtinCatalogHash` новее целевых → `format_too_new: …` |
+
+**`mode=dry-run`** ничего не пишет и не компилирует: действия предсказываются по хешам/именам/id. Строки dry-run-отчёта **предварительные** — компиляция компонентов оценивается только на `apply`, поэтому провал пайплайна в предпросмотре не виден. UI помечает предпросмотр явно.
+
+### Лимиты
+
+- **Экспорт**: раскрытый (uncompressed) объём ≤ **512 MiB**. Кап проверяется **до материализации** архива — сумма размеров ассетов (из БД) + длины doc/source; превышение → `413 export_too_large`. ZIP собирается целиком в памяти (streaming — совместимый follow-up).
+- **Импорт**: аплоад ≤ **256 MiB**; бюджет распаковки читается из central directory (заявленные uncompressed-размеры) — суммарно ≤ **512 MiB**, entries ≤ **4096** — и отклоняется **до инфляции** (защита от zip-бомбы); после инфляции фактические длины сверяются с заявленными (расхождение → `400 invalid_bundle`). Пути — по allowlist-regexp (`manifest.json | prototypes/<slug>.json | components/<slug>/source.tsx | assets/<64hex>`), перекрёстно сверяются манифест↔архив, байты ассетов перехешируются.
+
 ## Figma provenance
 
 Ссылка на исходный Figma-файл — **immutable-свойство ревизии**: колонка `figma_json TEXT NULL` в `prototype_revisions` и `component_revisions` (миграция v9, два additive `ALTER`). Поле `figma` принимается опционально рядом с `doc`/`source`:
