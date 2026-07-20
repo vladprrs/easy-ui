@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { ApiError, createPrototype, getCatalogManifest, listDesignSystems, listPrototypes, listPrototypeVersions, setPrototypeStatus, type PrototypeStatus, type PrototypeSummary, type PrototypeVersionSummary } from "../api/client";
+import { downloadBundle } from "../api/bundles";
 import { useApi } from "../api/hooks";
 import { chip, chipActive, headingPage, inputBase, pillGhost, pillPrimary, plate } from "../app/chrome";
 import { common } from "../app/strings/common";
@@ -12,6 +13,7 @@ import { prototypeStatusBadge } from "../library/statusBadge";
 import { TEMPLATE_VERSION, buildPrototypeTemplate, createPrototypeId, hasUsableComponents } from "./prototypeTemplates";
 import { GalleryPreview, GALLERY_PREVIEWS_ENABLED } from "./GalleryPreview";
 import { GalleryShareDialog } from "./GalleryShareDialog";
+import { ImportDialog } from "./ImportDialog";
 
 export type GallerySort = "updated" | "name";
 export type GalleryTab = "mine" | "shared" | "archive";
@@ -84,8 +86,10 @@ type VersionsState =
   | { status: "ready"; data: PrototypeVersionSummary[] }
   | { status: "error"; data: PrototypeVersionSummary[] };
 
-function VersionsMenu({ prototype }: { prototype: PrototypeSummary }) {
+function VersionsMenu({ prototype, isOwner }: { prototype: PrototypeSummary; isOwner: boolean }) {
   const [versions, setVersions] = useState<VersionsState>({ status: "idle", data: [] });
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   useEffect(() => () => controllerRef.current?.abort(), []);
 
@@ -102,15 +106,57 @@ function VersionsMenu({ prototype }: { prototype: PrototypeSummary }) {
   };
   const onToggle = (event: SyntheticEvent<HTMLDetailsElement>) => { if (event.currentTarget.open) load(); };
 
+  const runExport = async (key: string, url: string, fallbackName: string) => {
+    setDownloading(key);
+    setExportError(null);
+    try {
+      await downloadBundle(url, fallbackName);
+    } catch (cause) {
+      setExportError(cause instanceof Error ? cause.message : gallery.exportError);
+    } finally {
+      setDownloading(null);
+    }
+  };
+  const exportUrl = (version: number | null) => `/api/prototypes/${encodeURIComponent(prototype.id)}/export${version === null ? "" : `?version=${version}`}`;
+  const exportName = (version: number | null) => `easy-ui-prototype-${prototype.id}-${version === null ? "draft" : `v${version}`}.zip`;
+
   return <details className="relative" onToggle={onToggle}>
     <summary className={`${pillGhost} cursor-pointer list-none bg-white`}>{gallery.versionsMenu}</summary>
-    <div aria-label={gallery.versionsMenuAria(prototype.name)} className="absolute right-0 z-20 mt-2 w-52 rounded-2xl border border-eui-ink/10 bg-white p-2 shadow-xl">
+    <div aria-label={gallery.versionsMenuAria(prototype.name)} className="absolute right-0 z-20 mt-2 w-64 rounded-2xl border border-eui-ink/10 bg-white p-2 shadow-xl">
+      {isOwner ? <div className="mb-1 border-b border-eui-ink/10 pb-1">
+        <button type="button" disabled={downloading !== null} className="block w-full rounded-xl px-3 py-2 text-left text-sm hover:bg-eui-lav focus-visible:outline-2 focus-visible:outline-eui-brand disabled:opacity-50" onClick={() => void runExport("draft", exportUrl(null), exportName(null))}>{downloading === "draft" ? gallery.exporting : gallery.exportDraft}</button>
+      </div> : null}
       {versions.status === "idle" || versions.status === "loading" ? <p className="px-2 py-1 text-xs text-eui-slate-500" aria-live="polite">{gallery.versionsLoading}</p> : null}
       {versions.status === "error" ? <><p role="alert" className="px-2 py-1 text-xs text-eui-magenta">{gallery.versionsLoadFailed}</p><button type="button" className={`${pillGhost} mt-1`} onClick={load}>{common.retry}</button></> : null}
       {versions.status === "ready" && !versions.data.length ? <p className="px-2 py-1 text-xs text-eui-slate-500">{gallery.noVersions}</p> : null}
-      {versions.status === "ready" ? <ul className="space-y-1">{versions.data.map((version) => <li key={version.version}><Link className="block rounded-xl px-3 py-2 text-sm hover:bg-eui-lav focus-visible:outline-2 focus-visible:outline-eui-brand" to={`/p/${prototype.id}/v/${version.version}`}>{versionLink(version.version)}</Link></li>)}</ul> : null}
+      {versions.status === "ready" ? <ul className="space-y-1">{versions.data.map((version) => <li key={version.version} className="flex items-center gap-1">
+        <Link className="block flex-1 rounded-xl px-3 py-2 text-sm hover:bg-eui-lav focus-visible:outline-2 focus-visible:outline-eui-brand" to={`/p/${prototype.id}/v/${version.version}`}>{versionLink(version.version)}</Link>
+        {isOwner ? <button type="button" disabled={downloading !== null} className="rounded-xl px-2 py-2 text-xs font-medium text-eui-brand hover:bg-eui-lav focus-visible:outline-2 focus-visible:outline-eui-brand disabled:opacity-50" onClick={() => void runExport(`v${version.version}`, exportUrl(version.version), exportName(version.version))}>{downloading === `v${version.version}` ? gallery.exporting : gallery.exportVersionAction(version.version)}</button> : null}
+      </li>)}</ul> : null}
+      {exportError ? <p role="alert" className="mt-1 px-2 py-1 text-xs text-eui-magenta">{exportError}</p> : null}
     </div>
   </details>;
+}
+
+function PrototypeExportButton({ prototype }: { prototype: PrototypeSummary }) {
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (prototype.latestVersion === null) return null;
+  const onExport = async () => {
+    setDownloading(true);
+    setError(null);
+    try {
+      await downloadBundle(`/api/prototypes/${encodeURIComponent(prototype.id)}/export?version=${prototype.latestVersion}`, `easy-ui-prototype-${prototype.id}-v${prototype.latestVersion}.zip`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : gallery.exportError);
+    } finally {
+      setDownloading(false);
+    }
+  };
+  return <>
+    <button type="button" className={pillGhost} disabled={downloading} onClick={() => void onExport()}>{downloading ? gallery.exporting : gallery.exportLatest}</button>
+    {error ? <p className="basis-full text-xs text-eui-magenta" role="alert">{error}</p> : null}
+  </>;
 }
 
 type CreateDialogState = {
@@ -135,6 +181,7 @@ export function GalleryPage() {
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null);
   const [sharePrototypeId, setSharePrototypeId] = useState<string | null>(null);
   const [shareLatestVersion, setShareLatestVersion] = useState<number | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const systems = useMemo(() => {
     if (prototypes.status !== "ready" || designSystems.status !== "ready") return [];
     const registered = designSystems.data.designSystems.map(({ id, name }) => ({ id, name }));
@@ -180,7 +227,11 @@ export function GalleryPage() {
   return <main className="mx-auto h-full w-full max-w-6xl p-6 font-eui-ui sm:p-8" data-gallery-ready={!loading && !failed ? "true" : "false"}>
     <div className="flex flex-wrap items-center justify-between gap-4">
       <h1 className={headingPage}>{gallery.title}</h1>
-      {!loading && !failed && usableSystems.length ? <button type="button" className={pillPrimary} onClick={openCreateDialog}>{gallery.newPrototype}</button> : null}
+      {!loading && !failed ? <div className="flex flex-wrap items-center gap-2">
+        <a className={pillGhost} href="/api/bundles/export">{gallery.exportAll}</a>
+        <button type="button" className={pillGhost} onClick={() => setImportOpen(true)}>{gallery.importButton}</button>
+        {usableSystems.length ? <button type="button" className={pillPrimary} onClick={openCreateDialog}>{gallery.newPrototype}</button> : null}
+      </div> : null}
     </div>
     <p className="mt-2 text-eui-slate-500">{gallery.subtitle}</p>
     {typeof location.state === "object" && location.state && "notice" in location.state && typeof location.state.notice === "string" ? <p className={`${plate} mt-5 text-sm text-eui-brand`} role="status">{location.state.notice}</p> : null}
@@ -235,7 +286,8 @@ export function GalleryPage() {
           <Link className={pillGhost} to={`/p/${prototype.id}/cjm`}>CJM</Link>
           {isOwner ? <Link className={pillGhost} to={`/p/${prototype.id}/edit`}>{gallery.editorLink}</Link> : null}
           {isOwner && prototype.latestVersion !== null ? <button type="button" className={pillGhost} title={gallery.qrOnPhone} aria-label={gallery.qrOnPhone} onClick={() => { setSharePrototypeId(prototype.id); setShareLatestVersion(prototype.latestVersion); }}>{gallery.qrOnPhone}</button> : null}
-          {prototype.latestVersion !== null ? <VersionsMenu prototype={prototype} /> : null}
+          {prototype.latestVersion !== null || isOwner ? <VersionsMenu prototype={prototype} isOwner={isOwner} /> : null}
+          {!isOwner ? <PrototypeExportButton prototype={prototype} /> : null}
           {isOwner ? <OwnerControls prototype={prototype} onChanged={prototypes.reload} /> : null}
         </div>
       </li>;})}
@@ -273,5 +325,6 @@ export function GalleryPage() {
       latestVersion={shareLatestVersion}
       onClose={() => { setSharePrototypeId(null); setShareLatestVersion(null); }}
     /> : null}
+    {importOpen ? <ImportDialog onClose={() => setImportOpen(false)} onImported={reload} /> : null}
   </main>;
 }
