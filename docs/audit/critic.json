@@ -1,0 +1,93 @@
+{
+ "missed_classes": [
+  {
+   "description": "Кросс-контрактные проверки прототип↔компонент не выполняются ни компонентными, ни прототипными батчами. Никто не сверяет: (а) имена слотов, которые прототип назначает через slot:\"...\", с массивом slots в definition компонента; (б) ключи обработчиков on:{...} в прототипе с объявленными events компонента (несовпадение = хендлер молча не срабатывает); (в) что props, переданные из прототипа, реально проходят strictObject-схему. Прототипные батчи ревьюят каждый doc в изоляции на doc-гигиену, компонентные — компонент в изоляции; шов между ними не покрыт.",
+   "evidence": "atoms-selector-slice-candidate.json назначает slot:\"icon\"/\"network-icon\" на YpPaymentMethodCard и on.select→setState с $event:/id; cpqr-payment-info-evidence.json назначает slot:\"merchant-logo\"/\"status\"/\"cashback\" на YpPaymentInfo (slots:[\"merchant-logo\",\"status\",\"cashback\",\"discount\"]). Совпадения корректны, но ни один батч этот факт не проверял — при опечатке в имени слота (напр. \"cashback\" vs \"discount\") аудит бы не заметил тихого выпадения контента.",
+   "suggested_action": "Добавить в аудит-пайплайн отдельную линзу prototype-binding: для каждого узла прототипа резолвить type→definition и валидировать slot-имена, on-ключи и props против схемы/events/slots компонента."
+  },
+  {
+   "description": "Блокеры класса «дефолт .default() не honored при undefined» оцениваются в изоляции по компоненту, без проверки, опускают ли реальные прототипы этот проп на практике. Прототипы каталога написаны ОБОРОНИТЕЛЬНО — явно передают все дефолтные значения именно для обхода Renderer-no-defaults, поэтому часть «blocker»-находок не срабатывает в реально отгружаемых доках. Severity таких находок может быть завышен без учёта, что ни один published-doc не омитит проп.",
+   "evidence": "cpqr-payment-info-evidence.json передаёт YpProcessingGate size:32 и durationMs:15000 явно — тем самым обходя оба блокера аудита по yp-processing-gate (size undefined→NaN, durationMs undefined→setTimeout(0)). Аналогично default-props-noise-находки в прототипных батчах фактически являются митигацией того же блокер-класса.",
+   "suggested_action": "При триаже связывать каждый defensive-props blocker с фактом: омитит ли этот проп хоть один прототип каталога. Если ни один — понижать severity до major/minor (латентный риск для будущих доков), а не blocker."
+  },
+  {
+   "description": "fontWeight вне шрифтовой шкалы темы (разрешены 400/500/700) детектируется несистемно: класс явно считается валидным (флагается в части компонентов), но пропущен как минимум в 7 из ~12 мест. Это тот же дефект, что аудит уже фиксировал точечно.",
+   "evidence": "Флагнуто: yp-button 600, yp-cpqr-status-bar 600, yp-app-home-vitrina/savers/loans 900. НЕ флагнуто: yp-badge 600 (x2), yp-screen 600, yp-loyalty-badge 800 и 600, yp-cashback-badge 800, yp-cpqr-sheet-frame 600, yp-ctyp-payment-page 600, yp-best-profit-base-card-mini 600, yp-app-home-more-important 900.",
+   "suggested_action": "Прогнать один grep по всему каталогу (fontWeight/font-shorthand) и добавить недостающие находки одним пакетом abi-hygiene minor; в design.md зафиксировать, что 600/800/900 в исходниках требуют либо расширения шкалы, либо нормализации к 500/700."
+  },
+  {
+   "description": "Кросс-батчевые дубли и расхождения одинаковых по смыслу констант почти не ищутся: правило аудита прямо ограничивает сравнение рамками одного батча («сравни компоненты батча между собой»). Дубли между семействами (в разных батчах) системно недоищутся.",
+   "evidence": "Глиф Плюса как кириллическая «Я» есть и в yp-loyalty-badge, и в yp-cashback-badge — флагнут только loyalty (даже внутри одного батча пропущен близнец). Рендер статус-бара с часами дублируется в yp-cpqr-status-bar + yp-cpqr-sheet-frame (батч cpqr) + yp-app-home-chrome (батч app-home-shell) — кросс-батчевое пересечение ответственности не отмечено. Форматирование суммы/валюты дублируется в yp-amount/yp-animated-amount/yp-crossed-amount (typography) и yp-badge/yp-custom-payment-button/yp-payment-info (другие батчи) с расходящейся defensive-логикой.",
+   "suggested_action": "Ввести финальную кросс-батчевую линзу дедупликации: собрать по всему каталогу семантические кластеры (status-bar, nav-bar, plus-glyph, amount-formatter, card-mini, tooltip-surface) и выписать расхождения констант/логики между батчами."
+  },
+  {
+   "description": "Парсибельность examples/example против props-схемы не проверяется. Контракт требует, чтобы каждый example парсился props-схемой (strictObject отвергает лишние ключи и требует required-поля), но аудит оценивает только богатство/покрытие примеров, а не факт их валидности. Также не отмечается избыточное одновременное наличие examples и legacy example.",
+   "evidence": "yp-chart-informer-default.tsx содержит и examples (7 именованных), и дублирующий legacy example — ни один батч не проверил, что оба валидны и не конфликтуют. 97 компонентов используют singular example, 15 — examples; ни в одном батче нет подтверждения strictObject.parse(example) на реальном значении.",
+   "suggested_action": "Добавить дешёвую машинную проверку: для каждого компонента прогнать definition.props.parse на каждом example/examples[*] и вынести падения как blocker (нарушение контракта публикации)."
+  },
+  {
+   "description": "Систематический sweep «named slots объявлены, но рендерятся children» не задокументирован. Аудит поймал 2 сломанных случая (yp-navigation, yp-platform-modal), но нет свидетельств, что остальные ~15 slot-объявляющих компонентов проверены — совпадение, что попались именно битые.",
+   "evidence": "Компоненты, деструктурирующие children при объявленных slots: yp-navigation (slots [left,center,right] — БИТ, флагнут), yp-platform-modal (slots [content] — БИТ, флагнут), но также yp-chips-group/yp-box/yp-block/yp-panel/yp-screen/yp-scroll-x (slots [default] — корректно, children=default), yp-list (slots [default,before,content,after]+namedSlots — я проверил: рендерит slots.* корректно). Проверка была, но точечная, не сплошная.",
+   "suggested_action": "Формализовать линзу: для каждого компонента с непустым slots и/или capabilities.namedSlots подтверждать, что тело обращается к slots[<name>] для каждого не-default имени; default-слот через children считать валидным."
+  }
+ ],
+ "coverage_gaps": [
+  "Компоненты: покрытие полное — все 100 .tsx-файлов workspace присутствуют в батчах, лишних id (covered без файла) нет. Проверено diff-ом ls vs объединённого covered.",
+  "Прототипы: в workspace 33 .json-файла, но батчи покрыли только 20. НЕ покрыт НИ ОДНИМ батчем 21 файл? Нет — 13 файлов: atoms-selector-slice-candidate, checkout, composition-demo, cpqr-card-geometry-evidence, cpqr-mini-banner-evidence, cpqr-navbar-evidence, cpqr-payment-info-evidence, cpqr-success-row-evidence, ctyp-sticky-footer-evidence, hello-world, scale-demo, settings, wireframe-demo.",
+  "Из 13 непокрытых прототипов 7 — IN-SCOPE yandex-pay (designSystem=yandex-pay) и ссылаются на аудируемые компоненты: atoms-selector-slice-candidate (YpPaymentMethodCarousel/Card, YpIconBank), cpqr-navbar-evidence (YpPayboxNavBar), cpqr-success-row-evidence (YpSuccessPaymentCard), ctyp-sticky-footer-evidence (YpStickyPaymentFooter), cpqr-mini-banner-evidence (YpBannerMini), cpqr-card-geometry-evidence (YpPaymentMethodCard/Carousel), cpqr-payment-info-evidence (YpPaymentInfo/Icon/ProcessingGate/PaymentAccrualBadge). Это реальный пробел покрытия: source-boundary evidence-стенды для CPQR/CTYP-геометрии не отревьюены.",
+  "Оставшиеся 6 непокрытых (checkout, scale-demo [20 экранов], settings, wireframe-demo, composition-demo, hello-world) — designSystem=shadcn/wireframe, НЕ yandex-pay; их исключение из yandex-pay-аудита защитимо, но нигде явно не задекларировано как «вне скоупа».",
+  "Расхождение вводных: постановка задачи говорит «20 прототипов», а в каталоге фактически 33 .json. Разница в 13 файлов ни в одном батче не отмечена и не отреконсилена — риск, что скоуп по прототипам был занижен молча, а не осознанно.",
+  "Компонентные id, перечисленные в covered батча scenario-pay-app-home-v1 (yp-app-home-*), — это встроенные в прототип компоненты, дублирующие покрытие из компонентных батчей; на подсчёт 100/100 не влияют."
+ ],
+ "spot_checks": [
+  {
+   "id": "yp-app-home-shell",
+   "notes": "Прочитан полностью. Импорт `import type {EasyUIComponentProps} from \"easy-ui/runtime\"` (TYPE-only) + `import {space} from \"easy-ui/runtime/v3\"` (value). Это НЕ нарушение ABI: запрет касается одновременного VALUE-импорта v2 и v3, а здесь v2 — type-only. Ложный лид, батч правомерно не флагнул. Слоты nav/feed/payment/tab рендерятся корректно. Блокер по геометрии (canvasHeight−feedTop−tabHeight без ??) подтверждён; feedGap защищён `?? \"sm\"`, числа — нет (согласуется с находкой батча)."
+  },
+  {
+   "id": "yp-navigation",
+   "notes": "Прочитан полностью. Подтверждён major-финдинг: slots [left,center,right] объявлены, но тело использует children (стр.20,29). Дополнительно: используется BaseComponentProps из @json-render/react и НЕТ capabilities.namedSlots — то есть именованные слоты не смогут наполниться в принципе. Кросс-батч: смысловое пересечение с yp-paybox-nav-bar/yp-cpqr-status-bar (nav/status bars в разных батчах) не отмечено."
+  },
+  {
+   "id": "yp-payment-method-card",
+   "notes": "Прочитан полностью. Образцовый molecule: typedEvents (select {id}), namedSlots (icon/network-icon/badge) рендерятся корректно, id/title/accessibleLabel — required (без default). Подтверждён major: surfaces[props.surface] без ?? при .default(\"white\") → undefined-фон. Кросс-батч: дублирует роль карточек метода оплаты с yp-cpqr-home-card/yp-base-card-mini (payment-cards-footers) — не сопоставлено между батчами."
+  },
+  {
+   "id": "yp-chips-group",
+   "notes": "Прочитан полностью (0 находок в батче form-controls). slots [\"default\"] рендерятся через children — для default-слота это корректно (не баг). Реальный незамеченный нюанс: это layout-обёртка (flex+gap) с atomicLevel:\"molecule\", но БЕЗ layoutNeutral/layout v1, в отличие от эталона yp-box — расхождение классификации layout-примитивов. Мелочь, но класс не отмечен."
+  },
+  {
+   "id": "yp-cashback-badge",
+   "notes": "Прочитан полностью (0 находок в батче badges-plus-loyalty). НЕЗАМЕЧЕНО: глиф Плюса рендерится как кириллическая «Я» (fontWeight:800) — идентично yp-loyalty-badge, который за это ЖЕ флагнут в том же батче; близнец пропущен. fontWeight:800 вне шкалы 400/500/700 — тоже не отмечено. cashbackPercent required (defensive OK)."
+  },
+  {
+   "id": "yp-success-payment-card",
+   "notes": "Прочитан полностью (0 находок в payment-core, оправданно). Образцовый: slots payment-icon/network-icon рендерятся, label/cardMask/accessibleLabel required, geometry-ветвление безопасно при undefined (падает в дефолтную ctyp-card). Fallback --fill-color-default-50,#f3f5f7 совпадает с большинством (батч флагал yp-full-payment-block за отклонение #f2f3f5). events:{} (объект) vs events:[] у соседей — класс уже отмечен батчем однажды."
+  },
+  {
+   "id": "yp-chart-informer-default",
+   "notes": "Прочитан полностью (0 находок в snippets-informers, оправданно). Один из самых чистых: variant[props.duration] ?? variant[\"4-month\"] — defensive; duration/accessibleLabel required. Есть И examples (7 именованных, покрывают все варианты), И legacy example — избыточность не отмечена, но парсибельность examples никем не проверялась (см. missed_class про examples)."
+  },
+  {
+   "id": "yp-radio-button",
+   "notes": "Прочитан полностью (0 находок, оправданно). typedEvents change {value}, namedSlots [content] рендерится, value/ariaLabel required. Чистый atom-facade. Смысловое пересечение с yp-pseudo-radio (form-controls) батч отметил как info внутри батча."
+  },
+  {
+   "id": "yp-icon",
+   "notes": "Прочитан полностью. Подтверждены minor-находки typography (mode undefined→null; alt=props.label undefined). Дополнительно НЕЗАМЕЧЕНО: colors[props.color] без fallback (color .default(\"inherit\")→ colors[undefined]=undefined) — тот же класс, что батч флагал у yp-text/yp-link, но для yp-icon пропущен. events [\"load\",\"error\",\"press\"] (untyped array) без typedEvents — консистентно."
+  },
+  {
+   "id": "yp-list",
+   "notes": "Прочитан полностью. Подтверждён major: metricsByVariant[props.variant] без ?? → при size===0 и undefined variant metrics=undefined, стр.122 metrics.contentGap крашит. namedSlots (default/before/content/after) рендерятся корректно (React.Children.toArray(slots.default)). size/radius как z.union литералов чисел — propsJsonSchema-friendly (без transform), не проблема."
+  },
+  {
+   "id": "atoms-selector-slice-candidate",
+   "notes": "Прочитан (in-scope yandex-pay прототип, НЕ покрыт батчами). Корректно сформирован: $cond/$state/$event, slot:\"icon\"/\"network-icon\", $asset-ссылки. Оборонительно передаёт все дефолтные пропы. Наполняет typed-слоты и typed-event select→setState. Легитимный контент, выпавший из аудита; демонстрирует непроверенный шов prototype↔component."
+  },
+  {
+   "id": "cpqr-payment-info-evidence",
+   "notes": "Прочитан полностью (in-scope yandex-pay, НЕ покрыт батчами). YpPaymentInfo children→slot merchant-logo/status/cashback (совпадают с decl slots компонента). YpProcessingGate получает size:32,durationMs:15000 явно — обходит ДВА блокера аудита по processing-gate. Прямое доказательство, что severity defensive-props-блокеров надо триажить с учётом реальных доков."
+  }
+ ],
+ "overall_assessment": "Аудит по СОДЕРЖАНИЮ находок сильный и добросовестный: компонентное покрытие 100/100 (проверено diff-ом), defensive-props-класс (Renderer-no-defaults) отработан широко и точно, минифицированные/грязные компоненты разобраны детально, а чистые компоненты (yp-success-payment-card, yp-chart-informer-*, yp-radio-button, yp-payment-method-card) правомерно получили ноль находок — я перечитал их и подтвердил корректность. Мои спот-чеки не выявили ни одного пропущенного блокера-краша: severity-калибровка адекватна.\n\nГлавные пробелы — не в глубине, а в ПОЛНОТЕ охвата и в системности отдельных линз. (1) Прототипное покрытие занижено: из 33 .json отревьюено только 20; 7 in-scope yandex-pay evidence-стендов (CPQR/CTYP-геометрия, atoms-selector) выпали полностью, ещё 6 — чужие DS (защитимо, но не задекларировано). Расхождение «20 vs 33» нигде не отреконсилено. (2) Ряд классов детектируется несистемно, а не отсутствует: fontWeight вне шкалы 400/500/700 пропущен в ~7 местах при флаге в ~5; глиф Плюса «Я» и статус-бар с часами показывают, что кросс-батчевые дубли почти не ищутся (правило аудита ограничивает сравнение рамками батча). (3) Три линзы вообще не заведены: сверка шва прототип↔компонент (имена слотов, ключи on vs events, props vs схема), машинная парсибельность examples против strictObject, и триаж defensive-блокеров с учётом того, что реальные прототипы оборонительно передают все дефолты (что снижает практический severity части блокеров). Рекомендация: перед отчётом добавить финальную кросс-батчевую/кросс-контрактную стадию и дозакрыть 7 непокрытых yandex-pay-прототипов — это даст полноту без переделки уже сделанной (качественной) части.\""
+}

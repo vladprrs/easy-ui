@@ -1,0 +1,1205 @@
+{
+ "colors": [
+  [
+   "#fff",
+   12
+  ],
+  [
+   "rgba(255,255,255,.98)",
+   8
+  ],
+  [
+   "rgba(0,0,0,.86)",
+   6
+  ],
+  [
+   "rgba(0,0,0,.5)",
+   6
+  ],
+  [
+   "#edeff2",
+   6
+  ],
+  [
+   "#2e2f33",
+   6
+  ],
+  [
+   "#1f2023",
+   5
+  ],
+  [
+   "#f3f5f7",
+   5
+  ],
+  [
+   "#ffdc60",
+   4
+  ],
+  [
+   "#111",
+   4
+  ],
+  [
+   "#f2f3f5",
+   4
+  ],
+  [
+   "#f5f7f9",
+   4
+  ],
+  [
+   "#111214",
+   4
+  ],
+  [
+   "#121214",
+   4
+  ],
+  [
+   "#56c776",
+   3
+  ],
+  [
+   "#000000d8",
+   3
+  ],
+  [
+   "#e1e3e8",
+   3
+  ],
+  [
+   "#777a85",
+   3
+  ],
+  [
+   "#5c33d6",
+   3
+  ],
+  [
+   "#f1f2f4",
+   3
+  ],
+  [
+   "#fffffffa",
+   3
+  ],
+  [
+   "#f0f1f3",
+   3
+  ],
+  [
+   "var(--background-color-primary,#fff)",
+   2
+  ],
+  [
+   "#6b47ff",
+   2
+  ],
+  [
+   "#2c9e56",
+   2
+  ],
+  [
+   "#188fc7",
+   2
+  ],
+  [
+   "#f5f5f5",
+   2
+  ],
+  [
+   "rgba(107,71,255,.25)",
+   2
+  ],
+  [
+   "rgba(0,0,0,.12)",
+   2
+  ],
+  [
+   "#56c676",
+   2
+  ],
+  [
+   "#f33",
+   2
+  ],
+  [
+   "#dedfe3",
+   2
+  ],
+  [
+   "#d9dbe0",
+   2
+  ],
+  [
+   "#1f1f1f",
+   2
+  ],
+  [
+   "rgba(0,0,0,.08)",
+   2
+  ],
+  [
+   "#fae9f6",
+   2
+  ],
+  [
+   "linear-gradient(90deg,#ff5c4d,#eb469f 48%,#8341ef)",
+   2
+  ],
+  [
+   "rgba(0,0,0,.86) / #000000db",
+   2
+  ],
+  [
+   "var(--border-color-primary,#e5e7eb)",
+   2
+  ],
+  [
+   "var(--fill-color-default-50,#f3f5f7)",
+   2
+  ],
+  [
+   "linear-gradient(90deg,#ff5c4d 0%,#eb469f 25%,#8341ef 72%,#3f68f9 100%)",
+   2
+  ],
+  [
+   "#f1eff8",
+   2
+  ],
+  [
+   "linear-gradient(180deg,#fcf3ce 0%,#fcf2c8 100%)",
+   2
+  ],
+  [
+   "linear-gradient(180deg,#ffd8d8 0%,#ffd6d6 100%)",
+   2
+  ],
+  [
+   "var(--fill-color-default-50,#f2f3f5)",
+   1
+  ],
+  [
+   "var(--background-color-secondary,#f7f8fa)",
+   1
+  ],
+  [
+   "var(--text-color-primary,#000000d8)",
+   1
+  ],
+  [
+   "var(--text-color-secondary,#00000080)",
+   1
+  ],
+  [
+   "var(--separator-color,#00000014)",
+   1
+  ],
+  [
+   "transparent",
+   1
+  ],
+  [
+   "var(--text-color-primary, #000000d8)",
+   1
+  ],
+  [
+   "var(--text-color-primary,#1f2023)",
+   1
+  ],
+  [
+   "var(--text-color-primary, var(--foreground, #111))",
+   1
+  ],
+  [
+   "var(--text-color-secondary, #00000080)",
+   1
+  ],
+  [
+   "var(--text-color-tertiary, #0000004d)",
+   1
+  ],
+  [
+   "var(--text-color-quaternary, #0003)",
+   1
+  ],
+  [
+   "var(--text-color-negative, #ff4d52)",
+   1
+  ],
+  [
+   "var(--text-color-positive, #2c9e56)",
+   1
+  ],
+  [
+   "var(--text-color-link-normal, #37948c)",
+   1
+  ],
+  [
+   "var(--plus-text-solid, rgba(159,0,214,0.7))",
+   1
+  ],
+  [
+   "var(--plus-text-gradient, linear-gradient(90deg, #8341ef 0%, #3f68f9 100%))",
+   1
+  ],
+  [
+   "linearGradient #FF5C4D -> #EB469F(0.4) -> #8341EF",
+   1
+  ],
+  [
+   "var(--fill-color-6-500, #24a8e0)",
+   1
+  ],
+  [
+   "var(--fill-color-2-500, #ed824c)",
+   1
+  ],
+  [
+   "var(--fill-color-7-300, #9c92d6) / var(--fill-color-7-600, #584fad)",
+   1
+  ],
+  [
+   "var(--split-positive, #55d48e)",
+   1
+  ],
+  [
+   "var(--skeleton-color,#f2f3f5)",
+   1
+  ],
+  [
+   "rgba(0,0,0,.5) / #00000080",
+   1
+  ],
+  [
+   "#ff2e93 / #8b3dff / #3277ff",
+   1
+  ],
+  [
+   "#ff2e93 / #6b47ff",
+   1
+  ],
+  [
+   "#7b42f6",
+   1
+  ],
+  [
+   "var(--text-color-secondary, #6b6d74)",
+   1
+  ],
+  [
+   "var(--text-color-primary, #1f2023)",
+   1
+  ],
+  [
+   "var(--badge-color-discount, #ffdc60)",
+   1
+  ],
+  [
+   "var(--plus-color, #8f42ff)",
+   1
+  ],
+  [
+   "#0a6cff",
+   1
+  ],
+  [
+   "var(--color-split, #5c33d6)",
+   1
+  ],
+  [
+   "var(--chart-informer-track, var(--fill-color-default-200, #e2e3e7))",
+   1
+  ],
+  [
+   "#d6d7da",
+   1
+  ],
+  [
+   "#767779 / #6b6d74 / #777 / #00000080",
+   1
+  ],
+  [
+   "#2e2f33 / #edeff2",
+   1
+  ],
+  [
+   "#eee",
+   1
+  ],
+  [
+   "#2e2f33 (--fill-color-default-800 / rgb(46,47,51))",
+   1
+  ],
+  [
+   "rgb(18,23,37) / rgba(18,23,37,.5)",
+   1
+  ],
+  [
+   "var(--button-color-secondary,#f0f1f3) / hover #e8e9ec / pressed #dfe1e5",
+   1
+  ],
+  [
+   "#edeff2 / #f5f7f9",
+   1
+  ],
+  [
+   "#2c9e56 (--text-color-positive)",
+   1
+  ],
+  [
+   "rgba(0,0,0,.5)/.3/.2",
+   1
+  ],
+  [
+   "linear-gradient rgba(226,193,249,.5),rgba(255,177,212,.5),rgba(251,255,228,.5),rgba(182,207,247,.5)",
+   1
+  ],
+  [
+   "radial-gradient rgba(255,92,77,.7),rgba(235,70,159,.58),rgba(131,65,239,.5),rgba(63,104,249,.28)",
+   1
+  ],
+  [
+   "linear-gradient rgba(18,18,20,0)/.25/0",
+   1
+  ],
+  [
+   "#ffffff59",
+   1
+  ],
+  [
+   "linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.8) 49.48%, rgba(255,255,255,0) 100%)",
+   1
+  ],
+  [
+   "#FDDE55/#FF7070, #F2DAED/#E39DD5, #988EE5/#766FC9, #C7EEFF/#7CCBEB, #74D6C4/#4AC2A8, #56C772/#1EB053",
+   1
+  ],
+  [
+   "rgba(0,0,0,.85)",
+   1
+  ],
+  [
+   "#00000080",
+   1
+  ],
+  [
+   "#00000066",
+   1
+  ],
+  [
+   "#00000024",
+   1
+  ],
+  [
+   "#d9dce1",
+   1
+  ],
+  [
+   "rgba(0,0,0,.1)",
+   1
+  ],
+  [
+   "#e1fae7",
+   1
+  ],
+  [
+   "#efedf7",
+   1
+  ],
+  [
+   "#fff0d9",
+   1
+  ],
+  [
+   "#2e2030",
+   1
+  ],
+  [
+   "#6b6f76 / #93979e / #b6bac1",
+   1
+  ],
+  [
+   "#ffffffb8 / #ffffff80",
+   1
+  ],
+  [
+   "#f33 / #13a463",
+   1
+  ],
+  [
+   "#8f42ff",
+   1
+  ],
+  [
+   "#f1f2f4 / #d8dadd / #ffffff2e",
+   1
+  ],
+  [
+   "#f0f1f3 / #e8e9ed",
+   1
+  ],
+  [
+   "#f4f5f6 / #1f1f1f / #d7d9dc",
+   1
+  ],
+  [
+   "rgba(0,0,0,.35)",
+   1
+  ],
+  [
+   "var(--other-skeleton,#edeff2)",
+   1
+  ],
+  [
+   "var(--background-color-secondary,#edeff2)",
+   1
+  ],
+  [
+   "var(--product-savers-violet-300,#b3acff)",
+   1
+  ],
+  [
+   "var(--product-loans-300,#ffaa80)",
+   1
+  ],
+  [
+   "var(--product-pay-fill-pay-black,#242424)",
+   1
+  ],
+  [
+   "rgba(255,255,255,.62) / rgba(255,255,255,.68)",
+   1
+  ],
+  [
+   "radial-gradient(...ee­d8ff/caffde) + linear-gradient(160deg,#fff,#f8efff,#effff6)",
+   1
+  ],
+  [
+   "linear-gradient(90deg,#ff5c4d,#eb469f,#8341ef,#3f68f9)",
+   1
+  ],
+  [
+   "var(--text-color-primary,rgba(0,0,0,.86))",
+   1
+  ],
+  [
+   "radial-gradient(circle at 85% 12%,rgba(167,255,96,.85),transparent 42%),linear-gradient(135deg,#f7e4ff,#d9ffe0)",
+   1
+  ],
+  [
+   "radial-gradient(circle at 80% 15%,#7facef 0,#d9e8ff 75%)",
+   1
+  ],
+  [
+   "#E1F7F4,#FFEDD1,#E3F3FA,#FDEBEB,#E1FAE7,#EDEFF2,#FAE9F6,#FCF1C5,#EFEDF7",
+   1
+  ],
+  [
+   "linear-gradient(90deg,#eceef0 25%,#f7f8f9 37%,#eceef0 63%)",
+   1
+  ],
+  [
+   "#e6f0ff",
+   1
+  ],
+  [
+   "#ffe2f4",
+   1
+  ],
+  [
+   "#e3efff",
+   1
+  ],
+  [
+   "#fff0e5",
+   1
+  ],
+  [
+   "#e4d5fa",
+   1
+  ],
+  [
+   "rgba(0,0,0,.30)",
+   1
+  ],
+  [
+   "rgba(0,0,0,.32)",
+   1
+  ],
+  [
+   "#000",
+   1
+  ],
+  [
+   "rgba(33,34,36,.17)",
+   1
+  ],
+  [
+   "#56c776 / текст #102b18",
+   1
+  ],
+  [
+   "rgba(255,255,255,.72)",
+   1
+  ],
+  [
+   "linear-gradient(135deg,#ffdc60 0%,#ff8a5c 50%,#8d62ff 100%) / текст #111",
+   1
+  ],
+  [
+   "#fff / var(--background-color-primary,#fff)",
+   1
+  ],
+  [
+   "var(--button-color-inverted, #111)",
+   1
+  ],
+  [
+   "rgba(0,0,0,.50)",
+   1
+  ],
+  [
+   "rgba(0,0,0,.38)",
+   1
+  ],
+  [
+   "#000000d8 / var(--text-color-primary,#000000d8)",
+   1
+  ],
+  [
+   "#00000080 / var(--text-color-secondary,#00000080)",
+   1
+  ],
+  [
+   "#00000014 / var(--border-color,#00000014)",
+   1
+  ],
+  [
+   "#1f1f1f / var(--control-active-dark,#1f1f1f)",
+   1
+  ],
+  [
+   "#777 / var(--text-color-secondary,#777)",
+   1
+  ],
+  [
+   "#262626 / var(--cards-border-color,#262626)",
+   1
+  ],
+  [
+   "#d9d9d9 / var(--cards-border-color-shopiton,#d9d9d9)",
+   1
+  ],
+  [
+   "#f2f2f2 / var(--fill-color-default-50,#f2f2f2) / var(--background-color-secondary,#f2f2f2)",
+   1
+  ],
+  [
+   "#7b3fe4 / var(--plus-solid,#7b3fe4)",
+   1
+  ],
+  [
+   "#9f00d6",
+   1
+  ],
+  [
+   "#f3f5f7 / #f5f5f5",
+   1
+  ],
+  [
+   "#56c776 / #b9f3bc / #e9f8ee",
+   1
+  ],
+  [
+   "#e7ddff",
+   1
+  ],
+  [
+   "#ffe52b / #ef3124",
+   1
+  ],
+  [
+   "linear-gradient(135deg,#ff5c4d,#eb469f 45%,#8341ef) / linear-gradient(135deg,#12c8c3,#6953e7)",
+   1
+  ],
+  [
+   "#1551e5",
+   1
+  ],
+  [
+   "#e6f0ff / #edeff2 / #ffe2f4 / #e3efff / #fff0e5 / #e4d5fa",
+   1
+  ],
+  [
+   "#efedf7 / #e1fae7 / #fae9f6",
+   1
+  ],
+  [
+   "#000000d8 / #0000004d",
+   1
+  ],
+  [
+   "rgba(0,0,0,.86) / rgba(0,0,0,.30) / rgba(0,0,0,.5)",
+   1
+  ],
+  [
+   "rgba(159,0,214,0.7)",
+   1
+  ],
+  [
+   "#EDEFF2 (var(--other-skeleton) и var(--background-color-secondary))",
+   1
+  ],
+  [
+   "#fff (var(--background-color-primary))",
+   1
+  ],
+  [
+   "rgb(46,47,51) + radial rgba(255,92,77 / 235,70,159 / 131,65,239 / 63,104,249)",
+   1
+  ],
+  [
+   "rgba(255,255,255,.62) и rgba(255,255,255,.68)",
+   1
+  ],
+  [
+   "radial rgba(238,216,255,.92)+rgba(202,255,222,.9), linear #fff→#f8efff→#effff6",
+   1
+  ],
+  [
+   "var(--fill-color-7-100)",
+   1
+  ],
+  [
+   "primary / secondary",
+   1
+  ],
+  [
+   "#e8e9ec",
+   1
+  ],
+  [
+   "#dfe1e5",
+   1
+  ],
+  [
+   "rgba(0,0,0,.3)",
+   1
+  ],
+  [
+   "rgba(0,0,0,.2)",
+   1
+  ],
+  [
+   "#e2e3e7",
+   1
+  ],
+  [
+   "#e8e9ed",
+   1
+  ],
+  [
+   "rgba(18,18,20,0→.25→0)",
+   1
+  ],
+  [
+   "#6b6d74",
+   1
+  ],
+  [
+   "#767779",
+   1
+  ],
+  [
+   "#777",
+   1
+  ],
+  [
+   "linear-gradient(135deg, #ff2e93 0%, #8b3dff 52%, #3277ff 100%)",
+   1
+  ],
+  [
+   "linear-gradient(90deg, #ff2e93, #6b47ff)",
+   1
+  ]
+ ],
+ "radii": [
+  [
+   "20",
+   6
+  ],
+  [
+   "16",
+   6
+  ],
+  [
+   "12",
+   5
+  ],
+  [
+   "24",
+   4
+  ],
+  [
+   "8",
+   3
+  ],
+  [
+   "6px",
+   3
+  ],
+  [
+   "50%",
+   3
+  ],
+  [
+   "16px",
+   3
+  ],
+  [
+   "24px",
+   3
+  ],
+  [
+   "6",
+   3
+  ],
+  [
+   "14",
+   2
+  ],
+  [
+   "30",
+   2
+  ],
+  [
+   "28",
+   2
+  ],
+  [
+   "10",
+   2
+  ],
+  [
+   "20px",
+   2
+  ],
+  [
+   "8px",
+   2
+  ],
+  [
+   "12px",
+   2
+  ],
+  [
+   "yp-block",
+   1
+  ],
+  [
+   "yp-screen",
+   1
+  ],
+  [
+   "borderRadius:20",
+   1
+  ],
+  [
+   "borderRadius:'50%'",
+   1
+  ],
+  [
+   "48",
+   1
+  ],
+  [
+   "4",
+   1
+  ],
+  [
+   "clipPath",
+   1
+  ],
+  [
+   "checkbox:",
+   1
+  ],
+  [
+   "pseudo-radio:",
+   1
+  ],
+  [
+   "switch:",
+   1
+  ],
+  [
+   "text-field:",
+   1
+  ],
+  [
+   "material-text-field:",
+   1
+  ],
+  [
+   "auth-phone-field:",
+   1
+  ],
+  [
+   "chips:",
+   1
+  ],
+  [
+   "chips-group:",
+   1
+  ],
+  [
+   "yp-button:",
+   1
+  ],
+  [
+   "yp-arrow-button:",
+   1
+  ],
+  [
+   "yp-animated-button:",
+   1
+  ],
+  [
+   "yp-slide-button:",
+   1
+  ],
+  [
+   "yp-custom-payment-button:",
+   1
+  ],
+  [
+   "yp-app-home-payment-button:",
+   1
+  ],
+  [
+   "yp-tooltip",
+   1
+  ],
+  [
+   "yp-promo-tooltip",
+   1
+  ],
+  [
+   "yp-skeleton",
+   1
+  ],
+  [
+   "yp-shimmer",
+   1
+  ],
+  [
+   "yp-notification",
+   1
+  ],
+  [
+   "yp-countdown",
+   1
+  ],
+  [
+   "yp-spinner",
+   1
+  ],
+  [
+   "yp-platform-modal:",
+   1
+  ],
+  [
+   "yp-animated-collapse:",
+   1
+  ],
+  [
+   "yp-custom-carousel:",
+   1
+  ],
+  [
+   "yp-list:",
+   1
+  ],
+  [
+   "yp-collapsible/yp-navigation/yp-processing-gate:",
+   1
+  ],
+  [
+   "7",
+   1
+  ],
+  [
+   "0",
+   1
+  ],
+  [
+   "promo-base",
+   1
+  ],
+  [
+   "chrome:",
+   1
+  ],
+  [
+   "section:",
+   1
+  ],
+  [
+   "surface:",
+   1
+  ],
+  [
+   "vitrina:",
+   1
+  ],
+  [
+   "32px",
+   1
+  ],
+  [
+   "999px",
+   1
+  ],
+  [
+   "4px",
+   1
+  ],
+  [
+   "48px",
+   1
+  ],
+  [
+   "50%/100px",
+   1
+  ],
+  [
+   "13",
+   1
+  ],
+  [
+   "18",
+   1
+  ],
+  [
+   "40",
+   1
+  ],
+  [
+   "YpCpqrSheetFrame:",
+   1
+  ],
+  [
+   "YpCpqrHomeCard",
+   1
+  ],
+  [
+   "YpPaymentMethodCard",
+   1
+  ],
+  [
+   "YpBannerMini/YpBannerMid/YpCpqrWidgetSurface",
+   1
+  ],
+  [
+   "YpButton",
+   1
+  ],
+  [
+   "home",
+   1
+  ],
+  [
+   "32",
+   1
+  ],
+  [
+   "arrow-button:",
+   1
+  ],
+  [
+   "button:",
+   1
+  ],
+  [
+   "badge:",
+   1
+  ],
+  [
+   "chart",
+   1
+  ],
+  [
+   "context-banner:",
+   1
+  ],
+  [
+   "0px",
+   1
+  ]
+ ],
+ "typography": [
+  "font-family: 'YS Text','Helvetica Neue',Helvetica,Arial,sans-serif (yp-screen, yp-panel)",
+  "yp-screen title: font-size 20 / line-height 24 / weight 600",
+  "yp-screen subtitle: font-size 13 / line-height 16",
+  "yp-screen back-arrow ‹: font-size 24; close ×: font-size 22",
+  "Семейство: 'YS Text','Helvetica Neue',Helvetica,Arial,sans-serif (yp-text/animated/crossed/merchant); yp-text доп. 'YS Text Cond' при fontCond; yp-merchant опускает Helvetica в списке",
+  "Шкала size (fontSize/lineHeight px) идентична в yp-text и yp-animated-amount: 52/56,48/48,40/40,36/36,32/34,26/28,24/28,22/24,20/24,18/20,16/20,14/18,13/16,12/14,11/12",
+  "Веса: 400 базовый, 500 medium, 700 bold (yp-text); yp-animated-amount и yp-merchant-name — фикс 500; yp-crossed-amount — 400",
+  "fontFeatureSettings:'pnum' on,'lnum' on (yp-text, yp-crossed, yp-animated); fontVariantNumeric:'tabular-nums' (yp-amount)",
+  "yp-crossed-amount: fontSize 14 / lineHeight 18px, tertiary",
+  "yp-merchant-name: fontSize 16 / lineHeight 20px, weight 500, обрезка на 30 символов + '...'",
+  "Шрифт-стек 'YS Text','Helvetica Neue',Arial,sans-serif (yp-plus-return добавляет лишний 'Helvetica')",
+  "500 12px/14px — yp-plus-badge, yp-loyalty-badge, yp-cashback-badge, yp-badge noCommission m",
+  "yp-badge accent: 12px/600; discount: fontSize из таблицы {14:12,18:14,20:16,24:20,40:32} italic 600",
+  "yp-badge noCommission s / nothingDueToday / commission: 400 11px/12px",
+  "yp-plus-text metric (size/line/weight): TextHB1 40/44/700 … TextB3 14/18/400 … TextC3 11/12/400 (16 вариантов); iconSizes отдельная таблица 40…12",
+  "yp-plus-progress caption: 14px/18px 500",
+  "yp-plus-return: 14px (token=16px) /18px",
+  "yp-payment-accrual-badge: 16px/20px 400",
+  "fontFeatureSettings 'lnum','pnum' — только в yp-badge",
+  "fontFamily: 'YS Text','Helvetica Neue',Arial,sans-serif — во всех 8 компонентах",
+  "13px / lineHeight 18px / weight 400 — сниппеты (discount, discount-plus, plus)",
+  "14px / lineHeight 18px — тело split & cashback; бейдж внутри weight 500",
+  "weight 700 — глиф Плюса ✦ и метка ВТБ (cashback)",
+  "YS Text 16px/20px — подпись checkbox/pseudo-radio/switch",
+  "YS Text 18px/20px — input yp-text-field",
+  "YS Text 16px/20px — input yp-material-text-field",
+  "YS Text 20px/24px — input yp-auth-phone-field",
+  "hint/error 13px/16px (в filled-stroke lineHeight 20px)",
+  "material floating label: 16px→12px (raised), lineHeight 20px→14px",
+  "chips: title 14/18 (s), 16/20 (m/l); subtitle 13/16 (l) или 16/20",
+  "семейство шрифтов: 'YS Text','Helvetica Neue',Helvetica,Arial,sans-serif",
+  "Семейство: 'YS Text' + fallback; два варианта стека — с Helvetica (animated/slide/custom/app-home) и без (button/arrow)",
+  "Вес: yp-button 600 (не-inverted-gray) / 500 (inverted-gray); arrow 500; animated 500; slide n/a; custom 400; app-home 500. NB: 600 вне шкалы темы YS Text 400/500/700",
+  "fontSize yp-button: l=18,m=16,s=14,xs=14; lineHeight 18px(s)/20px",
+  "fontSize: arrow 14/lh18; animated l=18,m=16,s=14,xs=14; slide 18/lh20; custom 14; app-home 16/lh20",
+  "small label в yp-button: 13px (xs=11px), opacity .7, marginTop 2",
+  "fontFamily везде 'YS Text','Helvetica Neue',Helvetica,Arial,sans-serif",
+  "yp-countdown цифры: 20/24, weight 500, tabular-nums; подписи: 11/12",
+  "yp-tooltip заголовок: 16/20 weight 500; подзаголовок: 13/16; ссылка: 13",
+  "yp-notification: 14/18 weight 400, WebkitLineClamp 2",
+  "yp-promo-tooltip: 13/16 weight 400, nowrap",
+  "Везде fontFamily: 'YS Text','Helvetica Neue',Helvetica,Arial,sans-serif",
+  "yp-platform-modal: заголовок 20/24 weight500, кнопка × 22",
+  "yp-collapsible: кнопка 16/20, content 14/18, шеврон 18/lineHeight10",
+  "yp-animated-collapse: content 14/18",
+  "yp-navigation: title 18/20 weight500, subtitle 13/16, back ‹ 28, close × 24",
+  "yp-list: 16/20, fontFeatureSettings 'pnum' on,'lnum' on",
+  "yp-custom-carousel: кнопки ‹› 24/lineHeight36",
+  "Font: 'YS Text','Helvetica Neue',Arial,sans-serif (banner-list/mid/mini/promo-banner); +Helvetica в promo-base и maps ('YS Text','Helvetica Neue',Helvetica,Arial)",
+  "Заголовок баннера: 18px / lineHeight 20px / weight 500 (banner-mid, promo-banner, promo-base, banner-list Mid)",
+  "maps заголовок: 16px / 20px / 500 (strong)",
+  "Подзаголовок/тело/CTA: 14px / 18px / weight 400 (тело) и 500 (CTA)",
+  "promo-base description: 14px / 18px / 400; CTA-кнопка 14/20/500",
+  "mini ctyp title: 13px / 16px / 500; subtitle 12px / 16px / 400",
+  "mini cpqr title: 14px / 18px / 500; subtitle 12px / 16px / 400",
+  "Бейдж +N: 11px / 14px / 500",
+  "Ad-label: 10px / 12px / 400 (rgba(0,0,0,.3))",
+  "chrome статус-бар: 17/20px, weight 500, семейство -apple-system/BlinkMacSystemFont (стр.65)",
+  "chrome таб-лейбл: 10/12px, weight 500(active)/400, 'YS Text' (стр.95)",
+  "shell/section/vitrina корневое семейство: 'YS Text','Helvetica Neue',Helvetica,Arial (shell стр.44)",
+  "vitrina заголовок: 18/20px weight 900 (вне шкалы темы 400/500/700), letterSpacing 0 (стр.62)",
+  "vitrina title карточки: 16/18px weight 500 (стр.53)",
+  "vitrina largeTitle: 18/20px weight 500; largeSubtitle: 13/16px weight 400 (стр.73-74)",
+  "vitrina кнопка: 16/20px weight 500 (стр.79)",
+  "h2 заголовок: 18px / 20px / weight 900 (loans, savers, more-important) — вне шкалы YS Text",
+  "заголовок карточки: 18px / 20px / weight 500 (loans/savers/product)",
+  "caption карточки: 13px / 16px / weight 400",
+  "бейдж: 12px / 14px / weight 500",
+  "заголовок offer-карточки (more-important): 13px / 16px / weight 500",
+  "текст чипа Communication: 12px / 14px / weight 500",
+  "Стек: 'YS Text','Helvetica Neue',Arial,sans-serif (везде, кроме tab-bar, где голова стека 'Circe Rounded' — вне темы)",
+  "home-card заголовок: 14px / 18px, вес feature?400:500",
+  "sheet-frame статус-время: 16px / 20px, вес 600 (вне шкалы темы 400/500/700)",
+  "status-bar время: 16px / 20px, вес 600 (вне шкалы)",
+  "tab-bar подпись: 12px / 16px, вес 700, letterSpacing .1px",
+  "Тема поставляет только YS Text 400/500/700 — вес 600 отсутствует",
+  "Семейство: 'YS Text','Helvetica Neue',Arial,sans-serif (payment-info/card/carousel/split/success)",
+  "Вариант с лишним Helvetica: 'YS Text','Helvetica Neue',Helvetica,Arial,sans-serif (full-payment, no-pay)",
+  "Сумма payment-info: ctyp 40/44 вес500, cpqr 52/56 вес400 letterSpacing -1.5px",
+  "Заголовки 16/20 вес500 (merchant, title full-payment/split)",
+  "Subtitle: 13/16 (full-payment), 14/18 (split-row)",
+  "Caption/label вторичный: 11/12, 12/14, 13/16, 14/18",
+  "Карточка title cpqr 14/18 / ctyp 12/14 вес500; caption cpqr 12/14 / ctyp 11/12 вес400",
+  "no-pay: текст 14/18, бейдж «Пэй» 10/12 вес700",
+  "Семейство: 'YS Text','Helvetica Neue',(Helvetica,)Arial,sans-serif — во всех компонентах",
+  "CTA: 18/22px, weight 500 (footer, native-footer)",
+  "Заголовок карточки mini/oneline: 16/20px, weight 500",
+  "Описание карточки mini: 13/16px",
+  "Бейдж mini: 11/14px weight 500",
+  "oneline cardText: 14/18px",
+  "best-profit: title 12/14 w500, icon 11-12 w600, cashback 12/14 w500, description 11/14",
+  "Лигал: 11/14px (footer), 11/12px (ctyp)",
+  "ctyp сумма: 52/56px letterSpacing -1.5; заголовок Пэй 20px w700",
+  "ctyp method: title 12/14 w500, caption 10/12",
+  "Символ звезды: U+2605 ★ (repeat по value); текст без явных font-size/line-height/weight — наследует окружение",
+  "Шрифт 'YS Text' (таббар — 'Circe Rounded','YS Text' fallback)",
+  "Использованные ступени YpText (size→fontSize/lineHeight): 26→26/28 (servicesTitle), 22→22/24 (activeTitle), 14→14/18 (бейджи %), 11→11/12 (activeLegal)",
+  "Веса: 400/500/700; в доке medium:true даёт 500, servicesTitle medium:true",
+  "YpCpqrHomeCard заголовки 14/18, feature вес 400 / service вес 500; caption карты 12/14 (cpqr)",
+  "YS Text 400/500/700, 'YS Text','Helvetica Neue',Arial",
+  "Сумма PaymentInfo ctyp: 40/44 вес 500; success amount YpText size='32' → 32/34",
+  "reward YpText size='12' → 12/14 вес 500",
+  "title 16/20 вес 500, subtitle 13-14/16-18 вес 400",
+  "CTA 18/22 вес 500 letterSpacing .4px",
+  "YS Text; заголовки h2 18/20 weight 900 — ВНЕ тем-шкалы 400/500/700",
+  "тайтлы карточек 18/20 weight 500, captions 13/16 weight 400",
+  "бейджи и коммуникации 12/14 weight 500",
+  "витрина: product title 16/18 w500, кнопки 16/20 w500",
+  "таб-лейблы 10/12 (активный 500 / неактивный 400)",
+  "часы статус-бара 17/20 w500 на -apple-system (не YS Text)",
+  "more-important offer 13/16 w500",
+  "YpText.size значения в доке: \"16\" (большинство) и \"26\" (экран text, as=h2)",
+  "YpPlusText.as=\"TextB3\" (экран plus-text)",
+  "YpText medium=true → вес 500; bold=false",
+  "Единый font-family во всех компонентах: 'YS Text','Helvetica Neue',Arial,sans-serif",
+  "arrow-button: 14px / 18px, вес 500",
+  "button: fontSize l=18/m=16/s=14/xs=14; вес inverted-gray=500, иначе 600; lineHeight s='18px', иначе '20px'",
+  "badge noCommission M: 500 12/14; noCommission S / nothingDueToday / commission: 400 11/12; accent: 12px вес 600; discount: italic вес 600, fontSize {14→12,18→14,20→16,24→20,40→32}",
+  "context-banner: 14px / 18px, вес 400",
+  "fontFeatureSettings 'lnum','pnum' — badge и button",
+  "Семейство везде: 'YS Text','Helvetica Neue',Arial,sans-serif",
+  "YpNotification 14px/18px/400",
+  "YpPlusBadge 12px/14px/500",
+  "YpPromoTooltip 13px/16px/400",
+  "YpSnippetDiscount/Plus/DiscountPlus 13px/18px/400",
+  "YpTextField input 18px/20px, hint 13px (line 20px filled-stroke / 16px legacy)",
+  "YpPlusText type-ramp (size/line/weight): HB1 40/44/700, HB2 36/40/700, H1 32/36/500, H2 26/32/500, H3 22/28/500, T1 18/22/500, T2 16/20/500, T3 14/18/500, B1 18/22/400, B2 16/20/400, B3 14/18/400, C1 13/16/400, CM1 13/16/500, CM2 12/14/500, C3 11/12/400, CM3 11/12/500"
+ ],
+ "shadows": [
+  "--shadow-low fallback '0 1px 3px #0003' — ручка yp-switch",
+  "0 -1px #e6e6e6 — верхняя граница нижней панели ctyp стр.45",
+  "0 0 70px <20|40>px rgba(107,71,255,.25) — yp-badge accent glow (shadowRadius medium/large)",
+  "0 2px 10px rgba(0,0,0,.18) — плавающая payment-кнопка",
+  "0 2px 5px 0 rgba(0,0,0,.12) — YpPlusBadge",
+  "0 2px 5px 0 rgba(0,0,0,.12) — yp-plus-badge",
+  "0 2px 5px rgba(0,0,0,.12) (без spread) — yp-cashback-badge",
+  "0 4px 10px rgba(0,0,0,.05) — populated-секции product/savers/loans/more-important/vitrina",
+  "0 4px 10px rgba(0,0,0,.05) — section-контейнер, идентичен во всех четырёх app-home",
+  "0 7px 23px rgba(33,34,36,.17) — единая тень footer (sheet-frame footer-блок стр.126 и action-footer стр.29)",
+  "0 7px 23px rgba(33,34,36,.17) — лист футера (footer стр.41, native-footer стр.36, ctyp StickyBottomTouch)",
+  "0 7px 23px rgba(33,34,36,.17) — тень листа обоих футеров (StickyPaymentFooter и StickyNativeFooter, согласовано)",
+  "0 7px 7px rgba(33,34,36,.08) — легал-плашка ctyp стр.45",
+  "YpBlock.shadow=\"low\" (экран block)",
+  "YpCpqrSheetFrame footer: 0 7px 23px rgba(33,34,36,.17)",
+  "YpSwitch ручка: var(--shadow-low, 0 1px 3px #0003)",
+  "badge accent: 0 0 70px {20|40}px var(--fill-color-4-100, rgba(107,71,255,.25)) при shadowRadius medium/large",
+  "button processing inverted-gray: linear-gradient(90deg, rgba(18,18,20,0), rgba(18,18,20,.25) 51%, rgba(18,18,20,0))",
+  "loading YpAppHomeSection — тени НЕТ (рассинхрон loading↔populated)",
+  "var(--shadow-high,0 16px 40px rgba(0,0,0,.16)) — yp-block shadow=high",
+  "var(--shadow-low,0 2px 8px rgba(0,0,0,.08)) — yp-block shadow=low",
+  "var(--shadow-medium,0 -8px 24px rgba(0,0,0,.10)) — yp-screen футер (ТОТ ЖЕ токен --shadow-medium, но другой fallback: восходящее смещение, альфа .10 vs .12)",
+  "var(--shadow-medium,0 8px 24px rgba(0,0,0,.12)) — yp-block shadow=medium",
+  "vitrina: boxShadow '0 4px 10px rgba(0,0,0,.05)' (стр.61) — единственная тень в батче",
+  "yp-app-home-payment-button: 0 2px 10px rgba(0,0,0,.18) (единственная тень в батче)",
+  "yp-custom-carousel кнопки: 0 2px 8px rgba(0,0,0,.1)",
+  "yp-platform-modal section: 0 16px 48px #00000024",
+  "yp-promo-tooltip: без тени",
+  "yp-tooltip boxShadow: var(--tooltip-box-shadow, none)",
+  "Тени в батче отсутствуют — ни box-shadow, ни drop-shadow; глубина не используется (maps-banner имитирует свечение через второй img с filter:blur(60px), opacity .8)",
+  "теней (box-shadow) в семействе не используется",
+  "теней нет ни в одном компоненте батча"
+ ]
+}
