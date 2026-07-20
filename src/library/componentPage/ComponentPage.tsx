@@ -11,6 +11,7 @@ import {
   type ComponentVersion,
   type ThemeContent,
 } from "../../api/client";
+import { downloadBundle } from "../../api/bundles";
 import { chip, chipActive, headingPage, inputBase, kicker, pillGhost, pillPrimary } from "../../app/chrome";
 import { componentPage as strings, componentStatusLabels } from "../../app/strings/componentPage";
 import { useDocumentTitle } from "../../app/useDocumentTitle";
@@ -132,6 +133,7 @@ export function ComponentPage() {
             <option key={entry.version} value={entry.version}>v{entry.version} — {componentStatusLabels[entry.status]}</option>)}
         </select>
       </label>
+      <ExportButton componentId={componentId} version={selectedVersion} />
     </header>
     <p className="sr-only" aria-live="polite">{strings.statusAnnouncement(selectedVersion, statusLabel)}</p>
 
@@ -166,6 +168,30 @@ export function ComponentPage() {
 
 function PageFrame({ children }: { children: ReactNode }) {
   return <main className="mx-auto flex min-h-full max-w-screen-2xl flex-col gap-5 px-5 py-7 font-eui-ui md:px-8">{children}</main>;
+}
+
+function ExportButton({ componentId, version }: { componentId: string; version: number | null }) {
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const onExport = async () => {
+    setDownloading(true);
+    setError(null);
+    const query = version === null ? "" : `?version=${version}`;
+    const fallbackName = `easy-ui-component-${componentId}-${version === null ? "draft" : `v${version}`}.zip`;
+    try {
+      await downloadBundle(`/api/components/${encodeURIComponent(componentId)}/export${query}`, fallbackName);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : strings.exportError);
+    } finally {
+      setDownloading(false);
+    }
+  };
+  return <div className="flex flex-col items-start gap-1">
+    <button type="button" className={pillGhost} onClick={onExport} disabled={downloading}>
+      {downloading ? strings.exporting : strings.exportVersion}
+    </button>
+    {error ? <span role="alert" className="text-xs text-eui-magenta">{error}</span> : null}
+  </div>;
 }
 
 function NoRenderableVersions({ meta, onSelect }: { meta: ComponentMeta; onSelect: (version: number) => void }) {

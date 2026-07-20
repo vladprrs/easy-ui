@@ -46,5 +46,8 @@ export const componentPage = {
   invalidPreset: "Пресет не проходит схему props этой версии",
   placeholder: (slot: string) => `Слот: ${slot}`,
   runtimeError: "Во время исполнения компонента произошла ошибка.",
+  exportVersion: "Экспорт",
+  exporting: "Экспортируем…",
+  exportError: "Не удалось экспортировать версию.",
 } as const;
 
