@@ -117,6 +117,44 @@ describe("PATCH /api/design-systems/:id — theme grammar", () => {
     db.close();
   });
 
+  test("accepts shadow.* and gradient.* namespaced color tokens without regressing plain colors", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "shadow-gradient");
+    let version = 0;
+    const patch = (tokens: Record<string, unknown>) => handler(req("/design-systems/shadow-gradient", "PATCH", { tokens, baseVersion: version }));
+    const accept = async (label: string, tokens: Record<string, unknown>) => {
+      const r = await patch(tokens);
+      expect(r.status, `accept ${label}`).toBe(200);
+      version += 1;
+    };
+    const reject = async (label: string, tokens: Record<string, unknown>) => {
+      const r = await patch(tokens);
+      expect(r.status, `reject ${label}`).toBe(422);
+    };
+
+    // No regression for plain color.* keys.
+    await accept("plain colors", { "color.text-inverted": "#fff", "color.overlay": "rgba(255,255,255,.98)" });
+    // Shadows: canonical medium, footer up-shadow, hex-alpha, comma-list, inset.
+    await accept("shadow medium", { "color.shadow-medium": "0 8px 24px rgba(0,0,0,.12)" });
+    await accept("shadow medium-up", { "color.shadow-medium-up": "0 -8px 24px rgba(0,0,0,.12)" });
+    await accept("shadow low-handle", { "color.shadow-low-handle": "0 1px 3px #0003" });
+    await accept("shadow comma-list", { "color.shadow-layered": "0 8px 24px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.08)" });
+    await accept("shadow inset", { "color.shadow-inset": "inset 0 1px 2px rgba(0,0,0,.08)" });
+    // Gradients: radial (new) + multi-stop linear with percents.
+    await accept("gradient radial", { "color.gradient-glow": "radial-gradient(circle at 50% 0%, #ff2e93 0%, transparent 70%)" });
+    await accept("gradient plus", { "color.gradient-plus": "linear-gradient(135deg,#ff2e93 0%,#8b3dff 52%,#3277ff 100%)" });
+
+    // Rejections.
+    await reject("shadow without color", { "color.shadow-medium": "0 8px 24px" });
+    await reject("shadow: red garbage", { "color.shadow-medium": "shadow: red" });
+    await reject("shadow url()", { "color.shadow-medium": "url(evil.png)" });
+    await reject("gradient url()", { "color.gradient-plus": "url(evil.png)" });
+    await reject("value with semicolon", { "color.shadow-medium": "0 8px 24px rgba(0,0,0,.12);" });
+    // Format-valid comma-list that exceeds the 256-char value cap.
+    await reject("value over 256 chars", { "color.shadow-medium": Array(11).fill("0 8px 24px rgba(0,0,0,.12)").join(", ") });
+    db.close();
+  });
+
   test("validates complete absolute-px, zero-origin, monotonic spacing scales", async () => {
     const { db, handler } = await setup();
     await createCustomSystem(handler, "space-validation");

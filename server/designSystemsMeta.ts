@@ -60,23 +60,54 @@ export function spaceTokenIssues(tokens: Record<string, unknown>): { path: strin
 // values to CSS color forms so a color token cannot smuggle arbitrary CSS. The key set stays open
 // (the theme owns it — see plan D1); only the value shape is constrained.
 //  - hex: #rgb / #rgba / #rrggbb / #rrggbbaa
-//  - functions: rgb()/rgba()/hsl()/hsla()/var()/linear-gradient() with a digit/letter/space/comma/
-//    dot/percent/hash/hyphen/slash/parens payload (covers `rgba(255,255,255,.98)`, `var(--x, #fff)`,
-//    nested gradients)
+//  - functions: rgb()/rgba()/hsl()/hsla()/var()/linear-gradient()/radial-gradient() with a digit/
+//    letter/space/comma/dot/percent/hash/hyphen/slash/parens payload (covers `rgba(255,255,255,.98)`,
+//    `var(--x, #fff)`, nested gradients)
 //  - named colors: letters only (`transparent`, `white`, `currentColor`, …)
 const COLOR_HEX = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
-const COLOR_FN = /^(?:rgb|rgba|hsl|hsla|var|linear-gradient)\([0-9a-zA-Z.,%#\-\s()/]*\)$/;
+const COLOR_FN = /^(?:rgb|rgba|hsl|hsla|var|linear-gradient|radial-gradient)\([0-9a-zA-Z.,%#\-\s()/]*\)$/;
 const COLOR_NAMED = /^[a-zA-Z]+$/;
 
 function isColorValue(value: unknown): value is string {
   return typeof value === "string" && (COLOR_HEX.test(value) || COLOR_FN.test(value) || COLOR_NAMED.test(value));
 }
 
+// --- Namespaced value grammars for shadow/gradient color tokens ------------
+//
+// Wave 3 (H8) keeps shadows and gradients under the `color.*` namespace (read by the same
+// ABI v4 `color()` runtime — no new ABI), but their values are not plain colors:
+//  - `color.shadow-*` → one or a comma-list of CSS box-shadow strings
+//        `[inset] <x> <y> [blur] [spread] <color>` (offsets may be negative, units optional per CSS)
+//  - `color.gradient-*` → a linear-/radial-gradient() function value
+// All other `color.*` keys keep the existing `isColorValue` allowlist unchanged.
+
+// Reusable CSS color fragment (unanchored) — hex / rgb(a)/hsl(a) / named — for the trailing color of a shadow.
+const CSS_COLOR = "(?:#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|(?:rgb|rgba|hsl|hsla)\\([0-9a-zA-Z.,%\\-\\s/]*\\)|[a-zA-Z]+)";
+// A length: optional sign, digits, optional decimals, optional `px` (CSS allows a bare `0`).
+const SHADOW_LEN = "-?\\d+(?:\\.\\d+)?(?:px)?";
+// One shadow: optional `inset`, mandatory x/y offsets, up to two more lengths (blur, spread), then a color.
+const ONE_SHADOW = `(?:inset\\s+)?${SHADOW_LEN}\\s+${SHADOW_LEN}(?:\\s+${SHADOW_LEN}){0,2}\\s+${CSS_COLOR}`;
+const SHADOW_RE = new RegExp(`^${ONE_SHADOW}(?:\\s*,\\s*${ONE_SHADOW})*$`);
+const GRADIENT_RE = /^(?:linear-gradient|radial-gradient)\([0-9a-zA-Z.,%#\-\s()/]*\)$/;
+
+function isShadowValue(value: unknown): value is string {
+  return typeof value === "string" && SHADOW_RE.test(value);
+}
+function isGradientValue(value: unknown): value is string {
+  return typeof value === "string" && GRADIENT_RE.test(value);
+}
+
 export function colorTokenIssues(tokens: Record<string, unknown>): { path: string[]; message: string }[] {
   const issues: { path: string[]; message: string }[] = [];
   for (const [key, value] of Object.entries(tokens)) {
     if (!key.startsWith("color.")) continue;
-    if (!isColorValue(value)) issues.push({ path: [key], message: "color token value must be a hex, rgb(a)/hsl(a), var(), linear-gradient() or named color" });
+    if (key.startsWith("color.shadow-")) {
+      if (!isShadowValue(value)) issues.push({ path: [key], message: "shadow token value must be one or a comma-list of `[inset] <x> <y> [blur] [spread] <color>` box-shadows" });
+    } else if (key.startsWith("color.gradient-")) {
+      if (!isGradientValue(value)) issues.push({ path: [key], message: "gradient token value must be a linear-gradient() or radial-gradient()" });
+    } else if (!isColorValue(value)) {
+      issues.push({ path: [key], message: "color token value must be a hex, rgb(a)/hsl(a), var(), linear-gradient() or named color" });
+    }
   }
   return issues;
 }
