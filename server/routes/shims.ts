@@ -2,6 +2,7 @@ import { immutable } from "../http";
 import { ABI_V1, emitShim, type ShimName } from "../shims/abi-v1";
 import { EASY_UI_RUNTIME_FILE, emitEasyUiRuntimeShim, isV2StandardShim } from "../shims/abi-v2";
 import { EASY_UI_RUNTIME_V3_FILE, emitEasyUiRuntimeV3Shim, isV3StandardShim } from "../shims/abi-v3";
+import { EASY_UI_RUNTIME_V4_FILE, emitEasyUiRuntimeV4Shim, isV4StandardShim } from "../shims/abi-v4";
 
 const jsResponse = (body: string) => new Response(body, { headers: { ...immutable, "content-type": "text/javascript; charset=utf-8" } });
 const notFound = () => new Response("Not found", { status: 404 });
@@ -11,6 +12,12 @@ export function routeShims(request: Request, segments: string[]): Response {
   const version = segments[1];
   const file = segments[2];
   if (!file?.endsWith(".js")) return notFound();
+  if (version === "v4") {
+    if (file === EASY_UI_RUNTIME_V4_FILE) return jsResponse(emitEasyUiRuntimeV4Shim());
+    const name = file.slice(0, -3);
+    if (isV4StandardShim(name)) return jsResponse(emitShim(name));
+    return notFound();
+  }
   if (version === "v3") {
     if (file === EASY_UI_RUNTIME_V3_FILE) return jsResponse(emitEasyUiRuntimeV3Shim());
     const name = file.slice(0, -3);

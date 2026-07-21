@@ -56,6 +56,31 @@ export function spaceTokenIssues(tokens: Record<string, unknown>): { path: strin
   return issues;
 }
 
+// Syntactic allowlist for `color.*` token values. The grammar already bans `;{}<>`; this narrows
+// values to CSS color forms so a color token cannot smuggle arbitrary CSS. The key set stays open
+// (the theme owns it — see plan D1); only the value shape is constrained.
+//  - hex: #rgb / #rgba / #rrggbb / #rrggbbaa
+//  - functions: rgb()/rgba()/hsl()/hsla()/var()/linear-gradient() with a digit/letter/space/comma/
+//    dot/percent/hash/hyphen/slash/parens payload (covers `rgba(255,255,255,.98)`, `var(--x, #fff)`,
+//    nested gradients)
+//  - named colors: letters only (`transparent`, `white`, `currentColor`, …)
+const COLOR_HEX = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+const COLOR_FN = /^(?:rgb|rgba|hsl|hsla|var|linear-gradient)\([0-9a-zA-Z.,%#\-\s()/]*\)$/;
+const COLOR_NAMED = /^[a-zA-Z]+$/;
+
+function isColorValue(value: unknown): value is string {
+  return typeof value === "string" && (COLOR_HEX.test(value) || COLOR_FN.test(value) || COLOR_NAMED.test(value));
+}
+
+export function colorTokenIssues(tokens: Record<string, unknown>): { path: string[]; message: string }[] {
+  const issues: { path: string[]; message: string }[] = [];
+  for (const [key, value] of Object.entries(tokens)) {
+    if (!key.startsWith("color.")) continue;
+    if (!isColorValue(value)) issues.push({ path: [key], message: "color token value must be a hex, rgb(a)/hsl(a), var(), linear-gradient() or named color" });
+  }
+  return issues;
+}
+
 const assetIdSchema = z.string().regex(ASSET_ID_RE, "must be an asset id (asset_<64 hex>)");
 const familySchema = z
   .string()
@@ -107,7 +132,10 @@ export const themePatchSchema = z.strictObject({
   icons: iconsSchema.optional(),
   baseVersion: z.number().int().min(0),
 }).superRefine((patch, context) => {
-  if (!patch.tokens || !Object.keys(patch.tokens).some((key) => key.startsWith("space."))) return;
+  if (!patch.tokens) return;
+  // Color validation runs before the space early-return so a color-only PATCH is still checked.
+  for (const issue of colorTokenIssues(patch.tokens)) context.addIssue({ code: "custom", path: ["tokens", ...issue.path], message: issue.message });
+  if (!Object.keys(patch.tokens).some((key) => key.startsWith("space."))) return;
   for (const issue of spaceTokenIssues(patch.tokens)) context.addIssue({ code: "custom", path: ["tokens", ...issue.path], message: issue.message });
 });
 export type ThemePatch = z.infer<typeof themePatchSchema>;

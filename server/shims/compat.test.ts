@@ -11,8 +11,9 @@ import { pathToFileURL } from "node:url";
 import { ABI_V1, emitShim, verifyShimAbi, type ShimName } from "./abi-v1";
 import { emitEasyUiRuntimeShim } from "./abi-v2";
 import { emitEasyUiRuntimeV3Shim } from "./abi-v3";
+import { emitEasyUiRuntimeV4Shim } from "./abi-v4";
 
-async function executeFixture(name: string, abi: 1 | 2 | 3) {
+async function executeFixture(name: string, abi: 1 | 2 | 3 | 4) {
   const directory = await mkdtemp(join(tmpdir(), `easy-ui-abi-v${abi}-`));
   let source = await Bun.file(`${import.meta.dir}/fixtures/${name}`).text();
   try {
@@ -31,6 +32,11 @@ async function executeFixture(name: string, abi: 1 | 2 | 3) {
       await Bun.write(runtimePath, emitEasyUiRuntimeV3Shim());
       source = source.replaceAll("/api/shims/v3/easy-ui-runtime.js", pathToFileURL(runtimePath).href);
     }
+    if (abi === 4) {
+      const runtimePath = join(directory, "easy-ui-runtime.mjs");
+      await Bun.write(runtimePath, emitEasyUiRuntimeV4Shim());
+      source = source.replaceAll("/api/shims/v4/easy-ui-runtime.js", pathToFileURL(runtimePath).href);
+    }
     const bundlePath = join(directory, name);
     await Bun.write(bundlePath, source);
     return await import(pathToFileURL(bundlePath).href) as { default(props?: Record<string, unknown>): unknown; definition: { description: string } };
@@ -40,7 +46,7 @@ async function executeFixture(name: string, abi: 1 | 2 | 3) {
 }
 
 describe("immutable compiled bundle compatibility", () => {
-  test("the checked-in ABI v1-v3 bytes execute against current host shims", async () => {
+  test("the checked-in ABI v1-v4 bytes execute against current host shims", async () => {
     (globalThis as typeof globalThis & { __easyUiShared: Record<string, unknown> }).__easyUiShared = {
       react: React,
       "react-dom": ReactDOM,
@@ -53,10 +59,12 @@ describe("immutable compiled bundle compatibility", () => {
     const v1 = await executeFixture("compiled-abi-v1.mjs", 1);
     const v2 = await executeFixture("compiled-abi-v2.mjs", 2);
     const v3 = await executeFixture("compiled-abi-v3.mjs", 3);
+    const v4 = await executeFixture("compiled-abi-v4.mjs", 4);
     expect(v1.definition.description).toContain("ABI v1");
     expect(v1.default({ label: "legacy" })).toMatchObject({ props: { children: "legacy" } });
     expect(v2.default()).toBe("red");
     expect(v3.default()).toBe("red|var(--eui-space-md, 12px)");
+    expect(v4.default()).toBe("red|var(--eui-space-md, 12px)|var(--eui-color-bg-muted, #fff)");
   });
 
   test("turns any shim export drift warning into a verify failure", async () => {

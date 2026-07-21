@@ -17,6 +17,7 @@ try {
     setup(build) {
       build.module("easy-ui/runtime", () => ({ loader: "object", exports: { token: () => "", Icon: () => null } }));
       build.module("easy-ui/runtime/v3", () => ({ loader: "object", exports: { token: () => "", space: (key: string) => `var(--eui-space-${key})`, Icon: () => null } }));
+      build.module("easy-ui/runtime/v4", () => ({ loader: "object", exports: { token: () => "", space: (key: string) => `var(--eui-space-${key})`, color: (key: string, fallback?: string) => fallback === undefined ? `var(--eui-color-${key})` : `var(--eui-color-${key}, ${fallback})`, Icon: () => null } }));
     },
   });
 } catch { /* plugin already registered or unavailable */ }

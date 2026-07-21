@@ -100,6 +100,23 @@ describe("PATCH /api/design-systems/:id — theme grammar", () => {
     db.close();
   });
 
+  test("accepts allowlisted color.* values and rejects garbage color values", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "color-validation");
+    // Positive: 3-digit hex + rgba() with commas and a leading-dot alpha.
+    const ok = await handler(req("/design-systems/color-validation", "PATCH", {
+      tokens: { "color.surface": "#fff", "color.overlay": "rgba(255,255,255,.98)", "color.brand": "linear-gradient(90deg, #fff, #000)", "color.ref": "var(--eui-color-surface, #fff)" },
+      baseVersion: 0,
+    }));
+    expect(ok.status).toBe(200);
+    // Negative: a value that clears the base grammar (no ;{}<>) but is not a color.
+    const bad = await handler(req("/design-systems/color-validation", "PATCH", { tokens: { "color.surface": "url(evil)" }, baseVersion: 1 }));
+    expect(bad.status).toBe(422);
+    const badMix = await handler(req("/design-systems/color-validation", "PATCH", { tokens: { "color.surface": "12px solid" }, baseVersion: 1 }));
+    expect(badMix.status).toBe(422);
+    db.close();
+  });
+
   test("validates complete absolute-px, zero-origin, monotonic spacing scales", async () => {
     const { db, handler } = await setup();
     await createCustomSystem(handler, "space-validation");
