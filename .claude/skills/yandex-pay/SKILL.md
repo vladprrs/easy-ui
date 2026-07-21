@@ -42,9 +42,9 @@ const items = props.items ?? [];                 // массив (иначе .ma
 - **`yp-spacer`** — legacy; предпочитать `gap` родителя `yp-box`.
 - Radio — две **разные** сущности: `yp-radio-button` (слот-фасад групп, typed-событие) и `yp-pseudo-radio` (автономный radio с label). Не путать.
 
-## 3. Канон литералов
+## 3. Канон литералов и `color()` (ABI v4)
 
-Тема yandex-pay v4 поставляет **только spacing-токены** — цветовых токенов нет, все `var(--...)`-цвета резолвятся во fallback-литерал. Канон = канон fallback (design.md §1). Кратко:
+Прод-тема yandex-pay — **v5** (волна 2): помимо spacing она несёт **8 пилотных `color.*`-токенов** (design.md §1.4). Остальные ~173 цвета токенов пока нет — они резолвятся во fallback-литерал. Канон = канон fallback (design.md §1). Кратко:
 
 - **font-стек**: `'YS Text','Helvetica Neue',Arial,sans-serif` (лишний `Helvetica` — легаси, убирать).
 - **`--shadow-medium`**: `0 8px 24px rgba(0,0,0,.12)` (alpha **.12**); восходящая тень футера `yp-screen` — `0 -8px 24px rgba(0,0,0,.12)`.
@@ -52,7 +52,22 @@ const items = props.items ?? [];                 // массив (иначе .ma
 - **fontWeight**: только **400 / 500 / 700** (400 текст, 500 medium/CTA/суммы, 700 bold/глиф Плюса). **600/800/900 → 700** (иначе faux-bold).
 - **spacing**: `space()`-токены (`none/xs4/sm8/md12/lg16/xl24/2xl32/3xl48/4xl64`), не сырые px. Значения брать из `resolvedSpaceScale` каталога.
 - **`20px` gutter** (боковые поля экрана) — осознанное исключение вне шкалы; к `lg16`/`xl24` НЕ приводить.
-- Прочие fallback-цвета выравнивать **внутри своего семейства**; кросс-семейный `--text-color-primary` (три fallback) НЕ сводить (отложено в theme v5).
+- Прочие fallback-цвета выравнивать **внутри своего семейства**; кросс-семейный `--text-color-primary` (три fallback) НЕ сводить (канонизация — H2).
+
+**Цвет через `color()` (новые/обновляемые компоненты):**
+
+```
+import { color } from "easy-ui/runtime/v4";   // ровно ОДИН runtime-специфаер на компонент (нельзя мешать v1–v3)
+background: color("surface-primary", "#fff")  // key без префикса "color."; → var(--eui-color-surface-primary, #fff)
+```
+
+- `fallback` **обязателен** и **равен канон-литералу** соответствующего токена из design.md §1.4 (побайтово — это держит пиксель-no-op при откате темы).
+- Пилотные ключи (без `color.`): `surface-primary` `#fff`, `surface-overlay` `rgba(255,255,255,.98)`, `surface-secondary` `#edeff2`, `fill-dark` `#2e2f33`, `fill-muted-f3f5f7` `#f3f5f7`, `fill-muted-f2f3f5` `#f2f3f5`, `fill-muted-f5f7f9` `#f5f7f9`, `badge-discount` `#ffdc60`.
+- **Дивергентные семьи не токенизировать до H2**: `--text-color-primary` (три fallback), фиолетовый Split/Plus, тени/градиенты — оставлять литералами/legacy-`var`, пока канон не утверждён.
+
+**`currency` — enum (не свободная строка).** В `yp-split-discount-info` и `yp-discount-info-with-cashback` валюта — `z.enum(["RUB","UZS"])`, включая вложенный `limits.currency`. Расширение enum новой валютой требует обновления форматтера (`symbol()`/`money()`); для валюты без утверждённого символа печатать код — текущее безопасное поведение.
+
+**`yp-random-avatar` — `seed` для детерминизма.** Проп `seed: z.union([z.string(), z.number()]).optional()`; при заданном seed аватар детерминирован (mulberry32 от хеша), без seed — прежнее `Math.random`-поведение. Для скриншот-гейтов использовать `examples`-вариант с фиксированным `seed` (иначе снимок недетерминирован и исключается из pixelmatch).
 
 ## 4. Definition-гигиена
 

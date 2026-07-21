@@ -116,3 +116,21 @@
 ## Процесс (по CLAUDE.md)
 
 После одобрения: план сохраняется в `docs/plans/2026-07-21-yp-wave2-theme-v5.md`, коммитится → **Stage 2: адверсариальное ревью плана** (Opus-субагенты, линзы: no-op-инвариант, порядок деплоя, миграция доков) → триаж находок в плане → исполнение по волнам (Stage 3).
+
+## Итог выполнения (2026-07-21)
+
+Волна выполнена полностью в тот же день; прод обновлён, 0 регрессий.
+
+**A — ABI v4 (коммит `9df25ea`).** Шим `color(key, fallback)` → `var(--eui-color-<key>, <fallback>)`; роутер раздачи обобщён с хардкода `v1|v2|v3` на `/^v[1-9]\d*$/`; ветка `abi===4` в share/export (runtime-шим не теряется); `compile.ts`/`pipeline.ts`/fixture/`colorTokenIssues()` (валидация значений `color.*` до раннего return space-ветки, тест-кейсы `#fff`/`rgba(...,.98)`). `npm run verify` зелёный, e2e 95 passed, локально publish `hostAbiVersion===4` подтверждён. Образ собран GitHub Actions, задеплоен; `/api/shims/v4/*` на проде отвечает.
+
+**B — реестр.** `work/yp-wave2/token-registry.json` — 181 литерал: **8 ship-now / 152 defer-H2 / 21 defer-H8**. Пилот (`pilot.json`) — 8 токенов surface/fill (literal-preserving, `value == литерал`) × 8 компонентов-носителей; миграция пер-литеральная. Артефакты — в `work/yp-wave2/` (gitignored workspace).
+
+**C — PATCH темы.** Факт-отклонение от плана: прод-тема была **v4** (не v3, как предполагал план; v4 — со spacing-волны 2026-07-16). Снапшот v4 сохранён (`work/yp-wave2/rollback-theme.json` + `.backups/prod-wave2-20260721/`), PATCH `baseVersion:4` → **v5** c 8 `color.*`. C2 на стенде: эмиссия `--eui-color-*` в `:root` подтверждена браузером.
+
+**D — пилот (локально).** D-H1: 6 компонентов, 17 вхождений литералов → `color()`; per-example pixelmatch 9 пар = 0; DOM-гейт (тройка несъёмочных из-за шиммер-анимации — ограничение скриншот-воркера, как в фикс-волне) 9 слепков mismatches=0. D-H6: инвентарь 159 прод-доков — значений `currency` в доках нет вообще (оба компонента нигде не используются), enum `["RUB","UZS"]` взят из examples; диффы 8 шотов = 0. D-H9: `seed` (mulberry32 + FNV-1a), seeded/seeded-string diff=0, random ожидаемо недетерминирован, `diff.mjs` `NONDETERMINISTIC` опустошён.
+
+**E — прод-выкатка (§W3).** 9/9 publish OK (8× `abi=4`, avatar `abi=1`); барьер 100% active; per-example диффы 17 пар = 0; DOM-гейт на проде 9 слепков mismatches=0; H9 на проде seeded=0. Re-pin **не** потребовался — ни один прод-док не использует целевые компоненты. Бэкапы pre/post-export в `.backups/prod-wave2-20260721/`; здоровье прода: verify 5×PASS, `/library` 200. Непубликованный драфт `yp-tooltip` rev4 перекрыт новым head (остался в истории ревизий).
+
+Новые прод-версии: `yp-split-discount-info` v3, `yp-discount-info-with-cashback` v3, `yp-plus-return` v3, `yp-tooltip` v4, `yp-payment-method-card` v14, `yp-app-home-section` v5, `yp-skeleton` v3, `yp-app-home-savers` v3, `yp-random-avatar` v3.
+
+**F — доки/скилл.** `docs/design/yandex-pay.md` (§1.4 theme v5 + реестр + `color()`, §2.3 H3-B официально, §5 известный долг), `.claude/skills/yandex-pay/SKILL.md` (`color()` + пилотные ключи + правило «дивергентные семьи до H2», `currency`-enum, `seed`), этот итоговый раздел.
