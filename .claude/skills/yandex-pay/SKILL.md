@@ -44,26 +44,26 @@ const items = props.items ?? [];                 // массив (иначе .ma
 
 ## 3. Канон литералов и `color()` (ABI v4)
 
-Прод-тема yandex-pay — **v5** (волна 2): помимо spacing она несёт **8 пилотных `color.*`-токенов** (design.md §1.4). Остальные ~173 цвета токенов пока нет — они резолвятся во fallback-литерал. Канон = канон fallback (design.md §1). Кратко:
+Прод-тема yandex-pay — **v7** (волна 3): **78 токенов = 9 `space.*` + 69 `color.*`** (вкл. `color.shadow-*`/`color.gradient-*`). Токенизация палитры **завершена** — цвет пиши через `color()`, не через сырой литерал/legacy-`var`. **Полная канон-таблица — design.md §1.1** (не дублировать здесь). Кратко:
 
+- **Цвет — только `color("<ключ>", "<канон>")`**, ключ без префикса `color.`, `fallback` = канон-литерал таблицы §1.1 (побайтово — держит пиксель-паритет при откате темы). Ровно **ОДИН** runtime-специфаер на компонент (нельзя мешать `v4` с v1–v3).
+- **Тени и градиенты — тоже через `color()`**: `shadow-medium` `0 8px 24px rgba(0,0,0,.12)`, `shadow-medium-up` `0 -8px 24px rgba(0,0,0,.12)` (футер `yp-screen`), `shadow-low` `0 2px 8px rgba(0,0,0,.08)`, `shadow-low-handle` `0 1px 3px #0003` (ручка `yp-switch`, не сводится), `shadow-high` `0 16px 40px rgba(0,0,0,.16)`, `gradient-plus` `linear-gradient(135deg,#ff2e93 0%,#8b3dff 52%,#3277ff 100%)`.
 - **font-стек**: `'YS Text','Helvetica Neue',Arial,sans-serif` (лишний `Helvetica` — легаси, убирать).
-- **`--shadow-medium`**: `0 8px 24px rgba(0,0,0,.12)` (alpha **.12**); восходящая тень футера `yp-screen` — `0 -8px 24px rgba(0,0,0,.12)`.
-- **градиент Плюса**: `linear-gradient(135deg, #ff2e93 0%, #8b3dff 52%, #3277ff 100%)` (135deg, стопы 0/52/100).
-- **fontWeight**: только **400 / 500 / 700** (400 текст, 500 medium/CTA/суммы, 700 bold/глиф Плюса). **600/800/900 → 700** (иначе faux-bold).
-- **spacing**: `space()`-токены (`none/xs4/sm8/md12/lg16/xl24/2xl32/3xl48/4xl64`), не сырые px. Значения брать из `resolvedSpaceScale` каталога.
-- **`20px` gutter** (боковые поля экрана) — осознанное исключение вне шкалы; к `lg16`/`xl24` НЕ приводить.
-- Прочие fallback-цвета выравнивать **внутри своего семейства**; кросс-семейный `--text-color-primary` (три fallback) НЕ сводить (канонизация — H2).
-
-**Цвет через `color()` (новые/обновляемые компоненты):**
+- **fontWeight**: только **400 / 500 / 700** (400 текст, 500 medium/CTA/суммы, 700 bold/знак Плюса). **600/800/900 → 700** (иначе faux-bold).
+- **spacing**: `space()`-токены — реальные ключи `none/xs/sm/md/lg/xl/2xl/3xl/4xl` (не суффиксные), значения из `resolvedSpaceScale` каталога. **`20px` gutter** — осознанное исключение вне шкалы, к `lg`/`xl` НЕ приводить.
 
 ```
-import { color } from "easy-ui/runtime/v4";   // ровно ОДИН runtime-специфаер на компонент (нельзя мешать v1–v3)
-background: color("surface-primary", "#fff")  // key без префикса "color."; → var(--eui-color-surface-primary, #fff)
+import { color } from "easy-ui/runtime/v4";   // ровно ОДИН runtime-специфаер на компонент
+background: color("text-primary", "rgba(0,0,0,.86)")   // ключ без "color."; → var(--eui-color-text-primary, rgba(0,0,0,.86))
+boxShadow:  color("shadow-medium", "0 8px 24px rgba(0,0,0,.12)")
 ```
 
-- `fallback` **обязателен** и **равен канон-литералу** соответствующего токена из design.md §1.4 (побайтово — это держит пиксель-no-op при откате темы).
-- Пилотные ключи (без `color.`): `surface-primary` `#fff`, `surface-overlay` `rgba(255,255,255,.98)`, `surface-secondary` `#edeff2`, `fill-dark` `#2e2f33`, `fill-muted-f3f5f7` `#f3f5f7`, `fill-muted-f2f3f5` `#f2f3f5`, `fill-muted-f5f7f9` `#f5f7f9`, `badge-discount` `#ffdc60`.
-- **Дивергентные семьи не токенизировать до H2**: `--text-color-primary` (три fallback), фиолетовый Split/Plus, тени/градиенты — оставлять литералами/legacy-`var`, пока канон не утверждён.
+- В мигрируемом коде `var(--x, <literal>)` (вкл. вложенные `var(--x, var(--y, …))`) переписывается **целиком** в `color(...)`; legacy-`var` никем не эмитятся.
+- **Union-spacing `yp-text`/`yp-skeleton`** (волна 3): spacing-пропы — `number` (legacy px, буквально сохранён в схеме) **|** строковый ключ шкалы (`z.enum(["none","xs","sm","md","lg","xl","2xl","3xl","4xl"])`). Render: строка → `space(key)` (кидает TypeError на неизвестном ключе), число → px legacy. Числовой union не пере-выводить (потеря литерала → 422 на re-pin). `yp-spacer` не трогать.
+
+**asset-url контракт (волна 3, H7).** url-пропы компонентов, ожидающие ассет — строгий regex `/^\/api\/assets\/asset_[a-f0-9]{64}$/` (для optional — плюс `""`); внешние/inline-URL запрещены на re-pin. `$asset`-директивы в доках идут **мимо** zod (резолвятся рантаймом). Свободные url-пропы (напр. `yp-icon mode:"url"`) классифицированы явно и **не** сужаются этим regex.
+
+**banner-канон.** Промо-баннер — всегда `yp-promo-banner` (параметризован `imageLayout`/`ctaSize`/`tone`/`width`/`height`, поглотил mid — design.md §4.5). `yp-banner-mid` **deprecated**: не в active-манифесте, новые прототипы его не подхватывают, immutable-пины рендерятся.
 
 **`currency` — enum (не свободная строка).** В `yp-split-discount-info` и `yp-discount-info-with-cashback` валюта — `z.enum(["RUB","UZS"])`, включая вложенный `limits.currency`. Расширение enum новой валютой требует обновления форматтера (`symbol()`/`money()`); для валюты без утверждённого символа печатать код — текущее безопасное поведение.
 
@@ -79,7 +79,7 @@ background: color("surface-primary", "#fff")  // key без префикса "co
 
 Картинки/шрифты/иконки **не встраивать base64 в исходник** (запрещено — раздувает bundle, минует пиннинг/дедуп). Загружать через `POST /api/assets` и ссылаться литералом `/api/assets/asset_<sha256>` (из TSX — строковый URL; в доке — `{"$asset":"asset_<sha256>"}`). Механика загрузки — author §Ассеты.
 
-**Знак Плюса** = registry-ассет (`asset_2a907dc8…`, как в `yp-plus-badge`/`yp-snippet-plus`). Легаси-глифы `«Я»`/`✦` в новых компонентах не использовать (design.md §4.3).
+**Знак Плюса** = registry-ассет (`asset_2a907dc8…`, `<img>`, как в `yp-plus-badge`/`yp-snippet-plus`). Глифы `«Я»`/`✦` **запрещены** — устранены из всех носителей волной 3 (D4, design.md §4.3); в любых правках рисовать только ассет.
 
 ## 6. Слоты
 
@@ -88,3 +88,8 @@ background: color("surface-primary", "#fff")  // key без префикса "co
 ## 7. Публикация
 
 Через driver.mjs общего скилла: `node driver.mjs component <id> <Name> <file.tsx> --design-system yandex-pay`, затем прототип `node driver.mjs prototype <doc.json>`. Полная механика (setup, версии/publish, `snap`/`baseline`/`check`, troubleshooting) — **`.claude/skills/author/SKILL.md`**. Не изобретать заново.
+
+**Грабли (волна 3):**
+- **База правки — актуальный active-source с прода** (`GET /api/components/<id>/versions/<v>` для текущей версии), **не** локальный снапшот `work/*`. Публикация со stale-снапшота теряет уже выкаченные изменения (в W-C `yp-payment-method-card` v15 откатил ABI 4→2 с отставшего снапшота — пришлось republish v16). `?version=` в url source **игнорируется** сервером — версию брать через путь `/versions/:v`.
+- Тема **append-only**: новые ключи (`fill-muted`, `control-active-dark`, `control-disabled` в v7) добавляются PATCH `baseVersion:N → N+1`, существующие значения байт-в-байт неизменны; v5-орфаны `fill-muted-*` не удаляются.
+- Публичный API имеет **login rate-limit** — не спамить авторизацией в циклах.

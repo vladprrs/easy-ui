@@ -1,100 +1,73 @@
 # Дизайн-система yandex-pay — справочник для авторов
 
-Справочник фактического канона каталога **yandex-pay** (100 компонентов, custom-only) для авторов компонентов и прототипов. Источники: аудит `docs/audit/2026-07-20-yp-catalog-audit.md`, агрегаты `docs/audit/design-facts-agg.json`, находки `docs/audit/2026-07-20-yp-catalog-findings.md`; канон принят фикс-волной 2026-07-20 (`docs/plans/2026-07-20-yp-catalog-fixes.md`, §Конвенции).
+Справочник фактического канона каталога **yandex-pay** (100 компонентов, custom-only) для авторов компонентов и прототипов. Источники: аудит `docs/audit/2026-07-20-yp-catalog-audit.md`, агрегаты `docs/audit/design-facts-agg.json`, находки `docs/audit/2026-07-20-yp-catalog-findings.md`; канон принят фикс-волной 2026-07-20 (`docs/plans/2026-07-20-yp-catalog-fixes.md`, §Конвенции), токенизация палитры завершена волной 3 (`docs/plans/2026-07-21-yp-wave3-backlog-close.md`).
 
-> **Ключевой факт.** Прод-тема yandex-pay — **v5** (`metaVersion 5`, волна 2, 2026-07-21). Помимо spacing-токенов (`space()`) она несёт первые **8 пилотных `color.*`-токенов** (см. [§1.4](#14-theme-v5--пилотные-color-токены)). Остальные ~173 цвета каталога цветовых токенов пока **не имеют** и резолвятся во **fallback-литерал** (CSS-переменная undefined). Поэтому «канон» ниже по-прежнему в основном канон fallback-литералов; токенизация палитры разворачивается по волнам (пилот — v5, канонизация дивергентных семей — H2). Новые/мигрируемые компоненты читают цвет через ABI v4 `color()` (см. §1.4).
+> **Ключевой факт.** Прод-тема yandex-pay — **v7** (`metaVersion 7`, волна 3, 2026-07-21): **78 токенов = 9 `space.*` + 69 `color.*`**, включая namespace `color.shadow-*` и `color.gradient-*`. Бэклог токенизации палитры (H2 семьи цветов, H8 тени/градиенты) **закрыт волной 3**: дивергентные семьи канонизированы, тени и градиенты переведены в тему. Компоненты читают цвет через **ABI v4 `color(key, fallback)`** (`easy-ui/runtime/v4`); тени и градиенты — тем же `color()` (ключи `shadow-*`/`gradient-*`). `fallback` обязателен и равен канон-литералу таблицы §1.1 (держит пиксель-паритет при откате темы). Литералы за пределами реестра (per-case opaque-цвета на фоне, `20px` gutter) — осознанные исключения, см. ниже.
 
 ---
 
 ## 1. Токен-канон
 
-### 1.1 Канонические fallback для употребимых CSS-var
+### 1.1 Канон-таблица (волна 3)
 
-Пиши эти литералы как fallback внутри `var(--token, <fallback>)`. Канон принят фикс-волной (F5) и обязателен в правках.
+Пиши цвет через `color("<ключ>", "<канон>")` (ключ — без префикса `color.`). Каноны приняты гейтом G1 (+ поправка G1-A) волны 3 и обязательны в правках. Полный реестр — `work/yp-wave3/token-registry-v6.json` (workspace, gitignored).
 
-| CSS-var | Канонический fallback | Примечание |
-|---|---|---|
-| `--shadow-medium` | `0 8px 24px rgba(0,0,0,.12)` | alpha **.12**. У **футера `yp-screen`** сохраняется восходящее направление: `0 -8px 24px rgba(0,0,0,.12)` (тот же токен, смещение `-8px`). Дивергенция alpha .10↔.12 сведена к .12. |
-| `--plus-glyph-gradient` | `linear-gradient(135deg, #ff2e93 0%, #8b3dff 52%, #3277ff 100%)` | **135deg**, стопы 0/52/100. Легаси-варианты `90deg` (`yp-plus-progress`, `yp-loyalty-badge`) и разнобой стопов — приводить к этому. |
-| font-family | `'YS Text','Helvetica Neue',Arial,sans-serif` | Канонический стек. Лишний `Helvetica` в некоторых семействах (`yp-plus-return`, `*-full-payment`, `no-pay`, maps) — легаси, убирать. |
-| `--shadow-low` | `0 1px 3px #0003` (ручка `yp-switch`); в `yp-block` — `0 2px 8px rgba(0,0,0,.08)` | fallback зависит от роли; не унифицирован. |
-| `--shadow-high` | `0 16px 40px rgba(0,0,0,.16)` | `yp-block shadow=high`. |
+**canon-now — семьи, сведённые к канону (пиксель меняется осознанно, fallback = канон):**
 
-### 1.2 Задокументированная дивергенция `--text-color-primary`
+| Семья | `color()`-ключ | Канон | Примечание |
+|---|---|---|---|
+| text.primary | `text-primary` | `rgba(0,0,0,.86)` | folds #000000d8 / #1f2023 / #111 |
+| text.secondary | `text-secondary` | `rgba(0,0,0,.5)` | folds #00000080 / #6b6d74 / #767779 / #777 |
+| text.tertiary | `text-tertiary` | `rgba(0,0,0,.3)` | folds #93979e; #777a85 — отдельно (control, ниже) |
+| text.quaternary | `text-quaternary` | `rgba(0,0,0,.2)` | == #0003 |
+| text.inverted | `text-inverted` | `#fff` | `rgba(255,255,255,.98)` остаётся `surface-overlay` |
+| text.positive | `text-positive` | `#2c9e56` | штатный fallback `--text-color-positive`; folds #13a463 (visualReview) |
+| text.negative | `text-negative` | `#f33` | folds #ff4d52 |
+| accent.blue | `accent-blue` | `#188fc7` | #0a6cff/#1551e5 — per-case literal-preserve (link/декор) |
+| separator | `separator` | `rgba(0,0,0,.08)` | ≈ #00000014 |
+| border-hairline | `border-hairline` | `#e1e3e8` | настоящие бордеры карточек (folds #dedfe3/#d9dce1); не-бордеры → `control-*` |
+| fill-muted | `fill-muted` | `#f5f7f9` | **свод** #f2f3f5/#f3f5f7 → #f5f7f9; три v5 `fill-muted-*`-ключа остаются в теме орфанами |
+| split | `split` | `#5c33d6` | бренд Bank Split |
+| plus | `plus` | `#6b47ff` | стоп градиента Плюса; folds #8f42ff/#7b42f6/#7b3fe4 |
+| shadow.medium | `shadow-medium` | `0 8px 24px rgba(0,0,0,.12)` | свод alpha .10↔.12 |
+| shadow.medium-up | `shadow-medium-up` | `0 -8px 24px rgba(0,0,0,.12)` | восходящая тень футера `yp-screen` |
+| shadow.low | `shadow-low` | `0 2px 8px rgba(0,0,0,.08)` | `yp-block` |
+| shadow.low-handle | `shadow-low-handle` | `0 1px 3px #0003` | ручка `yp-switch` — **не** сводится с `shadow.low` |
+| shadow.high | `shadow-high` | `0 16px 40px rgba(0,0,0,.16)` | `yp-block shadow=high` |
+| gradient.plus | `gradient-plus` | `linear-gradient(135deg,#ff2e93 0%,#8b3dff 52%,#3277ff 100%)` | 135deg, стопы 0/52/100; свод 90deg/2-стоп |
 
-Одна семантика «основной текст» имеет **три fallback-литерала по семействам компонентов**. Сведение **осознанно отложено** в theme v5 — не унифицировать кросс-семейно, выравнивать только *внутри* своего семейства.
+**literal-preserve — роль отличается, значение сохранено 1:1 (diff=0), но токенизировано ключом:**
 
-| Литерал | Где |
-|---|---|
-| `#1f2023` | checkbox / switch / `yp-text` и родственные |
-| `#000000d8` | `yp-pseudo-radio`, `yp-chips`, ряд карточек |
-| `rgba(0,0,0,.86)` | ещё одно семейство (тот же `#000000db`) |
+- `positive-badge` `#56c776` (яркая бейдж-зелень, отдельная роль от ядра `#2c9e56`); `control-active-positive` `#56c676` (ручка `yp-switch`).
+- `control-active-dark` `#777a85` (control-fill: selected-фоны `yp-checkbox`/`yp-pseudo-radio`, индикатор `yp-split-row`, selected `yp-switch`/`yp-payment-method-card` — **не** text.tertiary, поправка G1-A); `control-disabled` `#d6d7da` (disabled-трек `yp-switch`).
+- `control-secondary-hover` `#e8e9ec`, `control-secondary-pressed` `#dfe1e5`, `fill-default-150/200/300`, `accent-blue-*` (#0a6cff link / #1551e5 декор), `plus-solid` `#9f00d6`.
+- `gradient.shimmer` — шиммер `yp-skeleton` сохранён литералом (канона формы нет); прочие декоративные градиенты (promo-семья, radial-глоу, rainbow, карточные) — literal-preserve `gradient-*`.
 
-### 1.3 Топ-цвета каталога (семантика)
+**ship-now (пилот волны 2, в теме, literal-preserving):** `surface-primary` `#fff`, `surface-overlay` `rgba(255,255,255,.98)`, `surface-secondary` `#edeff2`, `fill-dark` `#2e2f33`, `badge-discount` `#ffdc60` (+ три орфан-ключа `fill-muted-*`, §1.3).
 
-Из 181 уникальной строки цвета (`design-facts-agg.json`). Число — частота по 100 компонентам.
+**Диспозиция реестра v6 (186 записей):** ship-now 8 · **canon-now 36** · **literal-preserve 43** · **meta 77** (agg/var, развёрнуты пер-вхожденчески по носителям) · **skip 22** (уникальные скримы/аудит-артефакты без семантической роли).
 
-| Цвет | N | Семантика |
-|---|---|---|
-| `#fff` | 12 | Основной фон поверхностей (`--background-color-primary`) |
-| `rgba(255,255,255,.98)` | 8 | Полупрозрачный светлый фон (шапки/оверлеи) |
-| `rgba(0,0,0,.86)` / `#000000d8` | 6+3 | Основной текст (см. дивергенцию 1.2) |
-| `rgba(0,0,0,.5)` / `#00000080` | 6 | Вторичный текст (`--text-color-secondary`) |
-| `#edeff2` | 6 | Скелетон / вторичный фон (`--other-skeleton`, `--background-color-secondary`) |
-| `#2e2f33` | 6 | Тёмная заливка (`--fill-color-default-800`) |
-| `#1f2023` | 5 | Основной текст (семейство checkbox/switch/text) |
-| `#f3f5f7` / `#f2f3f5` / `#f5f7f9` | 5+4+4 | Светлые fill-фоны (`--fill-color-default-50`) |
-| `#ffdc60` | 4 | **Жёлтый discount-бейдж** (`--badge-color-discount`) |
-| `#111` / `#111214` / `#121214` | 4 | Почти-чёрный (инверт-кнопки, тёмные поверхности) |
-| `#56c776` / `#2c9e56` | 3+2 | Позитив/success зелёный (`--text-color-positive`, `--split-positive`) |
-| `#5c33d6` / `#6b47ff` / `#8f42ff` | 3+2+1 | Фиолетовый Split/Plus (`--color-split`, `--plus-color`) — **несколько оттенков, не унифицированы** |
-| `#e1e3e8` / `#f0f1f3` / `#f1f2f4` | 3 | Границы/кнопка-secondary фоны |
-| `#777a85` | 3 | Третичный текст/иконки |
+**font-стек** (не цвет, но канон правок): `'YS Text','Helvetica Neue',Arial,sans-serif`. Лишний `Helvetica` в некоторых семействах (`yp-plus-return`, `*-full-payment`, `no-pay`, maps) — легаси, убирать.
 
-Плюс-градиент (2 стоп-варианта): `linear-gradient(90deg, #ff2e93, #6b47ff)` и полный `linear-gradient(135deg, #ff2e93 0%, #8b3dff 52%, #3277ff 100%)` — канон см. 1.1.
+### 1.2 ABI v4 `color()`
 
-### 1.4 theme v5 + пилотные `color.*`-токены
-
-**Прод-тема yandex-pay поднята до v5** (волна 2). v5 = spacing-токены v4 + **8 первых `color.*`-токенов** (пилот H1). Сведение остальных цветов в тему разворачивается по волнам; полный реестр «литерал → токен» на 181 запись со статусами генерируется из `work/yp-wave2/token-registry.json` (workspace, gitignored). Статусы: **ship-now 8**, **defer-H2 152**, **defer-H8 21**.
-
-**Несущий инвариант H1 (literal-preserving).** Ship-now-токены — это **не** канонизация, а перенос литерала 1:1: `value` тем-токена == `fallback` в `color()` == прежний литерал компонента (побайтово, без нормализации). Поэтому миграция пиксель-no-op независимо от того, читается тема или нет.
-
-**ABI v4 `color()`.** Мигрируемые/новые компоненты берут цвет так:
+Мигрируемые/новые компоненты берут цвет так:
 
 ```
 import { color } from "easy-ui/runtime/v4";
-// key — без префикса "color.", fallback обязателен и равен канон-литералу реестра
-background: color("surface-primary", "#fff")   // → var(--eui-color-surface-primary, #fff)
+// ключ — без префикса "color.", fallback обязателен и равен канон-литералу таблицы §1.1
+background: color("text-primary", "rgba(0,0,0,.86)")   // → var(--eui-color-text-primary, rgba(0,0,0,.86))
+boxShadow:  color("shadow-medium", "0 8px 24px rgba(0,0,0,.12)")
 ```
 
-`fallback` в `.d.ts` **обязателен** — при откате темы компонент никогда не резолвится в `undefined`. Ровно **один** runtime-специфаер на компонент (нельзя мешать `easy-ui/runtime/v4` с v1–v3).
+- Ровно **один** runtime-специфаер на компонент (нельзя мешать `easy-ui/runtime/v4` с v1–v3).
+- `fallback` в `.d.ts` **обязателен** — при откате темы компонент никогда не резолвится в `undefined`.
+- Тени и градиенты валидируются на PATCH темы отдельными грамматиками (`color.shadow-*` → box-shadow-строка/comma-list; `color.gradient-*` → `linear-`/`radial-gradient(…)`), читаются тем же `color()` — нового ABI нет (`server/designSystemsMeta.ts`).
+- `var(--x, <literal>)` в мигрируемом коде переписывается целиком в `color(...)`; legacy-`var` никем не эмитятся.
 
-#### Ship-now (в theme v5, `value == литерал`)
+### 1.3 Свод `fill-muted` и v5-орфаны
 
-| Литерал | Токен (`color.`) | N | Семантика |
-|---|---|---|---|
-| `#fff` | `surface-primary` | 12 | Основной фон поверхностей (`--background-color-primary`) |
-| `rgba(255,255,255,.98)` | `surface-overlay` | 8 | Полупрозрачный светлый фон (шапки/оверлеи) |
-| `#edeff2` | `surface-secondary` | 6 | Скелетон/вторичный фон (`--other-skeleton`) |
-| `#2e2f33` | `fill-dark` | 6 | Тёмная заливка (`--fill-color-default-800`) |
-| `#f3f5f7` | `fill-muted-f3f5f7` | 5 | Светлый fill (`--fill-color-default-50`, вариант) |
-| `#f2f3f5` | `fill-muted-f2f3f5` | 4 | Светлый fill (`--fill-color-default-50`, вариант) |
-| `#f5f7f9` | `fill-muted-f5f7f9` | 4 | Светлый fill (`--fill-color-default-50`, вариант) |
-| `#ffdc60` | `badge-discount` | 4 | Жёлтый discount-бейдж (`--badge-color-discount`) |
-
-> `fill-muted-*` — **три разных значения одной семантики** `--fill-color-default-50`, каждому свой literal-preserving токен. Это осознанная дивергенция, **не** канонизация; сведение трёх в один — задача H2.
-
-#### defer-H2 — дивергентные семьи (канонизация в H2)
-
-Литералы получают literal-preserving ключи, но в тему v5 **не** попадают. Ключевые семьи:
-
-- `--text-color-primary` (одна семантика, три fallback по семействам, §1.2): `rgba(0,0,0,.86)` (N6) → `text-primary-rgba086`, `#1f2023` (N5) → `text-primary-1f2023`, `#000000d8` (N3) → `text-primary-000000d8`.
-- Фиолетовый Split/Plus (несколько оттенков, §1.3): `#5c33d6`/`#6b47ff`/`#8f42ff`/`#7b42f6`/`#9f00d6`/`rgba(159,0,214,0.7)` → `split-*`/`plus-*`.
-- Длинный хвост (152 записи всего): текст secondary/tertiary, границы, продуктовые тинты, одиночные литералы вне пилота, var-fallback-записи, артефакты агрегации — канонизация целиком отложена в **H2**; поимённо — в `token-registry.json`.
-
-#### defer-H8 — тени и градиенты (канон формы в H8)
-
-21 запись: Плюс-градиенты (`90deg`/`135deg`, разнобой стопов), декоративные `radial-gradient(…)`, шиммер-градиенты. Форму сводить в H8, не в пилоте.
+Три значения одной семантики `--fill-color-default-50` (#f2f3f5/#f3f5f7/#f5f7f9) волной 3 **сведены** к канону `#f5f7f9` (ключ `fill-muted`) переключением носителей — осознанный diff. Три пилотных v5-ключа `fill-muted-f2f3f5`/`-f3f5f7`/`-f5f7f9` остаются в теме, но больше не читаются ни одним компонентом (**орфаны**, append-only тема их не удаляет).
 
 ---
 
@@ -102,21 +75,23 @@ background: color("surface-primary", "#fff")   // → var(--eui-color-surface-pr
 
 ### 2.1 Spacing (тема v4, `space()`-токены)
 
-Единственная тем-шкала. Используй `space()`-токены, не сырые px.
+Единственная тем-шкала. Используй `space()`-токены (реальные ключи `spaceToken`), не сырые px.
 
 | Токен | px |
 |---|---|
 | `none` | 0 |
-| `xs4` | 4 |
-| `sm8` | 8 |
-| `md12` | 12 |
-| `lg16` | 16 |
-| `xl24` | 24 |
-| `2xl32` | 32 |
-| `3xl48` | 48 |
-| `4xl64` | 64 |
+| `xs` | 4 |
+| `sm` | 8 |
+| `md` | 12 |
+| `lg` | 16 |
+| `xl` | 24 |
+| `2xl` | 32 |
+| `3xl` | 48 |
+| `4xl` | 64 |
 
-**`20px` — вне шкалы.** Это продуктовый экранный **gutter** (боковые поля экрана). Зафиксирован как осознанное исключение; к `lg16`/`xl24` не приводить без визуального ревью.
+**`20px` — вне шкалы.** Это продуктовый экранный **gutter** (боковые поля экрана). Зафиксирован как осознанное исключение; к `lg`/`xl` не приводить без визуального ревью.
+
+**Union-spacing `yp-text` / `yp-skeleton` (волна 3, H4).** Их spacing-пропы принимают **union**: `number` (legacy px, буквально сохранённый в схеме) **|** строковый ключ шкалы (`z.enum(["none","xs","sm","md","lg","xl","2xl","3xl","4xl"])`). Render: строка → `space(key)`, число → px legacy. Миграция W-E — только exact-match число→ключ (9 значений, diff=0); off-token (напр. `20`) остаются числами. `yp-spacer` не трогается (остаётся legacy).
 
 ### 2.2 Радиусы (типовые из агрегатов)
 
@@ -149,6 +124,7 @@ background: color("surface-primary", "#fff")   // → var(--eui-color-surface-pr
 | **`yp-screen`** | **Decorated organism**: та же структура + навигация, subtitle, preFooter, футер с тенью, padding, fullscreen | organism |
 | **`yp-scroll-area`** | Viewport со скроллом; **резерв под футер `bottomInset=111`** — ядро компонента (без fallback ломается) | — |
 | **`yp-spacer`** | **Legacy**-спейсер (числовые размеры вне токенов). Предпочитать `gap` родителя (`yp-box`) | legacy |
+| **`yp-promo-banner`** | **Канон промо-баннера** (organism): кликабельная поверхность заголовок+CTA+артворк. Параметризован под всё семейство banner/*: `imageLayout` (adaptive/fixed-bottom), `ctaSize`, `tone`, `width`/`height` (`number \| enum`). Поглотил `yp-banner-mid` (§4.5) | organism |
 
 Radio (две сущности `role="radio"`, не дубли — разные API):
 
@@ -157,7 +133,9 @@ Radio (две сущности `role="radio"`, не дубли — разные 
 | **`yp-radio-button`** | Слот-фасад для групп: слот `content`, typed-событие `value-identity` |
 | **`yp-pseudo-radio`** | Автономный визуальный radio с `label` и SVG-галкой (общая с `yp-checkbox`) |
 
-Выбор `yp-panel` vs `yp-screen`: нужна голая структура — `yp-panel`; нужны навигация/футер/тени — `yp-screen`.
+Выбор `yp-panel` vs `yp-screen`: `yp-panel` — **bare** секция (flex-column header/content/footer, sticky-футер) без декора; `yp-screen` — **decorated** organism поверх той же структуры (навигация, subtitle, preFooter, тень футера `shadow.medium-up`, padding, fullscreen). Нужна голая структура → `yp-panel`; навигация/футер/тени → `yp-screen`. Не дублировать декор `yp-screen` руками в `yp-panel`.
+
+Промо-баннер — всегда `yp-promo-banner` (§4.5). `yp-banner-mid` **deprecated** (слит в канон), новые прототипы его не подхватывают; существующие immutable-пины рендерятся.
 
 ---
 
@@ -193,11 +171,36 @@ const items = props.items ?? [];           // массив (иначе .map кр
 
 ### 4.3 Представление знака Плюса
 
-**Канон: registry-ассет `asset_2a907dc8…`** (как в `yp-plus-badge`, `yp-snippet-plus`, `yp-snippet-discount-plus`). Легаси-представления — глиф `«Я»` (`yp-cashback-badge`, `yp-loyalty-badge`, цвета `#7b42f6`/белый) и глиф `✦` (`yp-plus-return`, `yp-snippet…`). Унификация к ассету **отложена** — при новых компонентах используй registry-ассет.
+**Канон: registry-ассет `asset_2a907dc8…`** (`<img>`, эталон `yp-plus-badge`/`yp-snippet-plus`/`yp-snippet-discount-plus`). Ассет **обязателен** — глифы запрещены. Легаси-глифы `«Я»` (`yp-cashback-badge`, `yp-loyalty-badge`) и `✦` (`yp-plus-return`) **устранены волной 3 (D4)**: заменены на `<img>` с Плюс-ассетом (визуальная приёмка — паритет с реальным Yandex Pay). В новых/правимых компонентах глиф Плюса не рисовать — только ассет.
 
 ### 4.4 Статус-бар / часы
 
-Дублирующиеся реализации статус-бара с часами в разных семействах (`yp-cpqr-sheet-frame`, `yp-cpqr-status-bar`, `yp-app-home-chrome`): часы `16/20 w600` (вне шкалы, → 700) на `-apple-system`, часть опускает индикатор батареи. **Известный долг** — не образец для копирования.
+Часовая типографика статус-бара выровнена там, где семейства совпадают: `yp-cpqr-sheet-frame` и `yp-cpqr-status-bar` несут идентичную тройку `fontSize 16 / lineHeight 20px / fontWeight 700` (YS Text), вынесенную в локальный `clockType`-хелпер с маркером `SHARED-SHAPE` (позиционирование отличается по поверхности — не выравнивается; кросс-компонентный импорт невозможен, см. §4.6). `yp-app-home-chrome` **намеренно вне** общей формы: его часы `-apple-system 17/20 w500` (не YS, не 700) — иная роль (нативный OS-хром), не долг. Индикатор батареи у части реализаций опущен по источнику.
+
+### 4.5 Промо-баннер (канон banner/*)
+
+`yp-promo-banner` — единый носитель промо-семейства (поглотил `yp-banner-mid`). Пропы:
+
+| Проп | Тип | Дефолт | Роль |
+|---|---|---|---|
+| `title` | string ≤50 | — | заголовок (клампится) |
+| `subtitle` | string ≤70 | `""` | подзаголовок |
+| `ctaLabel` | string ≤24 | — | текст CTA |
+| `imageUrl` | **asset-ref** `/api/assets/asset_<64hex>` | — | артворк (внешний URL запрещён; `$asset` резолвится мимо zod) |
+| `imageAlt` | string ≤80 | `""` | alt артворка |
+| `variant` | `cashback\|discount\|split` | `cashback` | легаси-фон промо (`#fae9f6`/`#fff0d9`/`#e1fae7`) |
+| `tone` | `purple\|green\|pink` | — (opt) | **перекрывает** `variant`: `purple`=`#efedf7` (канон-фон mid); `green`=`#e1fae7` (**алиас** split); `pink`=`#fae9f6` (**алиас** cashback) — не новые литералы |
+| `theme` | `light\|dark` | `light` | тёмная тема (`#2e2030`, инверт текст/CTA) |
+| `imageLayout` | `adaptive\|fixed-bottom` | `adaptive` | **adaptive** = `min(148,max(120,w-160))`, `objectFit:cover`; **fixed-bottom** = mid-колонка `148×120`, `align-self:flex-end`, `objectPosition:center bottom` + mid-ритм текста |
+| `ctaSize` | `compact\|wide` | `compact` | **compact** = `minWidth 76 × 36` (промо); **wide** = `134 × 40` (mid) |
+| `width` | `number(280–440) \| enum "327"\|"336"\|"343"` | `336` | ширина; enum — mobile/master/CPQR |
+| `height` | `number(100–240) \| enum "136"\|"156"\|"176"` | — (opt) | без значения: `height 156 / minHeight 138`; при задании: фикс `height=minHeight` (mid) |
+
+Инвариант: дефолты (adaptive/compact/variant, без tone/height) воспроизводят прежнее `yp-promo-banner` **пиксель-в-пиксель**; `fixed-bottom` + `ctaSize:"wide"` + `tone` воспроизводит `yp-banner-mid` пиксель-в-пиксель (проверено DOM-gate strict diff=0 и md5-идентичностью снимков плеера при миграции 4 живых узлов).
+
+### 4.6 Шаринг кода: невозможен импортом, только выровненные инлайн-хелперы
+
+Кастом-компоненты материализуются как **самостоятельные single-file бандлы** (`Bun.build`, `external` = только shim-ABI-специфаеры `react`/`zod`/`@json-render/*`/`easy-ui/runtime*`; финальная проверка отвергает любой импорт, не являющийся shim-ABI-URL — `server/components/compile.ts`). **Импорт одного компонента из другого или из общего модуля невозможен.** Дедупликация — только **выровненные инлайн-хелперы** внутри каждого файла с маркер-комментарием происхождения (`SHARED-SHAPE(...)` / `SHARED-SURFACE`), рендер-результат байт-в-байт неизменен (DOM-gate strict diff=0). Примеры W-G: `BadgeHeading` (savers↔loans; цвет бейджа расходится по состоянию), `surfaceBg` (tooltip: фон пузыря + fill стрелки), `clockType` (§4.4).
 
 ---
 
@@ -205,9 +208,9 @@ const items = props.items ?? [];           // массив (иначе .map кр
 
 Кратко (подробности и приоритизация — в `docs/product-hypotheses-2026-07-20.md`):
 
-- **Токенизация палитры** — фундамент заложен волной 2: theme **v5** + ABI v4 `color()` (§1.4), пилот 8 ship-now-токенов на 8 компонентах. Остаётся ~173 литерала: канонизация дивергентных семей — **H2** (152 записи), тени/градиенты — **H8** (21). Полный реестр — `token-registry.json`.
-- **Дивергенция `--text-color-primary`** (три fallback, §1.2) — literal-preserving ключи заведены, но токены в тему **не** внесены; сведение трёх в один — **H2**.
+- **Токенизация палитры** — **закрыта волной 3** (H2/H8): theme **v7** (9 space + 69 color, вкл. `shadow-*`/`gradient-*`) + ABI v4 `color()` (§1.1–1.2). Дивергентные семьи канонизированы (canon-now 36), роль-специфичные — literal-preserve (43); реестр `work/yp-wave3/token-registry-v6.json`. Осталось только: per-case opaque-литералы на фоне и `20px` gutter — осознанные исключения.
+- **Дивергенция `--text-color-primary`** — **закрыта (H2)**: сведена к `text-primary` `rgba(0,0,0,.86)` (§1.1).
 - **fontWeight 600/800/900** вне шкалы (13 компонентов) — **закрыто как H3-B**: канон `→ 700` официален, файлов начертаний нет (§2.3). Вариант «добавить начертания в тему» отклонён.
-- **Представление Плюса** (4 варианта) и **discount-badge** (2 clipPath) — унификация к ассету/общему компоненту отложена.
-- **Near-duplicates**: `yp-promo-banner`≈`yp-banner-mid`, `yp-app-home-savers`≈`yp-app-home-loans`, `yp-panel`⊂`yp-screen` — консолидация breaking, в бэклоге.
+- **Представление Плюса** — **унифицировано волной 3 (D4)**: глифы устранены, канон = registry-ассет (§4.3). **discount-badge** (2 clipPath) — извлечение общего компонента отложено (§4.2).
+- **Near-duplicates**: `yp-promo-banner`≈`yp-banner-mid` — **закрыто (W-G)**: mid слит в канон (`imageLayout`/`ctaSize`/`tone`/`width|height`), deprecated, 4 живых узла мигрированы pixel-identical (§4.5). `yp-app-home-savers`≈`yp-app-home-loans` и статус-бары — выровнены инлайн-хелперами с маркерами (diff=0), но **кросс-файловая консолидация невозможна** (single-file бандлы, §4.6). `yp-panel`⊂`yp-screen` — разграничение ролей в §3, слияние breaking, в бэклоге.
 - **Ассеты в исходниках** (`yp-random-avatar`, `yp-maps-review-banner`, `yp-ctyp-payment-page`, ~253KB base64) — вынести в пайплайн ассетов.
