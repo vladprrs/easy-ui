@@ -13,6 +13,9 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run verify
