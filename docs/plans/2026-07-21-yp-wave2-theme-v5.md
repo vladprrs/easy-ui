@@ -31,12 +31,12 @@
 
 | Задача | Файлы (ownership) | Суть |
 |---|---|---|
-| A1 шим | `server/shims/abi-v4.ts` (новый), `server/shims/easy-ui-runtime-v4.d.ts` (новый) | `emitEasyUiRuntimeV4Shim`: `token`/`Icon`/`space` из v3 + `color(key, fallback?)` → `` `var(--eui-color-${key.replace(/\./g,"-")}, ${fallback})` `` (согласовано с `tokenCssVar`). Ключ — открытая строка (решение D1) |
-| A2 раздача | `server/routes/shims.ts` | ветка `v4`, immutable-кэш как у v1–v3 |
+| A1 шим | `server/shims/abi-v4.ts` (новый), `server/shims/easy-ui-runtime-v4.d.ts` (новый) | `emitEasyUiRuntimeV4Shim`: `token`/`Icon`/`space` из v3 + `color(key, fallback)` → `` `var(--eui-color-${key.replace(/\./g,"-")}, ${fallback})` `` (согласовано с `tokenCssVar`). Ключ — открытая строка (решение D1); **fallback обязателен в `.d.ts`** (typecheck принуждает; рантайм-шим толерантен к отсутствию) — иначе откат темы ломал бы будущие компоненты без fallback |
+| A2 раздача | `server/routes/shims.ts`, `server/main.ts`, `server/share/repo.ts` | ветка `v4` в `routeShims` + **роутер `main.ts:162`** (хардкод `v1|v2|v3` → добавить `v4`, лучше `/^v[1-9]\d*$/`) + **share/export `share/repo.ts:118-122`** (ветка `if (abi === 4)` для runtime-шима v4, иначе экспорт/шаринг v4-компонентов теряет `color()`); immutable-кэш как у v1–v3 |
 | A3 компиляция | `server/components/compile.ts` | `EASY_UI_RUNTIME_V4_SPECIFIER="easy-ui/runtime/v4"`, `IMPORT_ABI_V4`, `finalImportsV4`, `ALLOWED_SPECIFIERS`, `valueRuntimeSpecifiers`, формула `hostAbiVersion` → 4, typecheck `paths` → v4 `.d.ts`, запрет смешивать **любые** пары runtime-специфаеров (R6) |
 | A4 серверный стаб | `server/components/pipeline.ts` | `build.module("easy-ui/runtime/v4", …)` c `color` для eval/extract |
 | A5 compat | `server/shims/fixtures/compiled-abi-v4.mjs` (новый), `server/shims/compat.test.ts` | прекомпилированный fixture + `executeFixture(…, 4)` |
-| A6 валидация темы | `server/designSystemsMeta.ts`, `server/design-systems-theme.test.ts` | `colorTokenIssues()` по образцу `spaceTokenIssues`: синтаксическая проверка значений `color.*` (regex-allowlist: hex/rgb(a)/hsl/`var(`/`linear-gradient(`/named); подключить в `superRefine`. Закрытого списка ключей **нет** |
+| A6 валидация темы | `server/designSystemsMeta.ts`, `server/design-systems-theme.test.ts` | `colorTokenIssues()` по образцу `spaceTokenIssues`: синтаксическая проверка значений `color.*` (regex-allowlist: hex/rgb(a)/hsl/`var(`/`linear-gradient(`/named); подключить в `superRefine` **до раннего `return` space-ветки** (`designSystemsMeta.ts:110` — иначе color-only PATCH обойдёт проверку). Тест-кейсы allowlist из design-facts обязательны: `#fff` (3-значный hex), `rgba(255,255,255,.98)` (запятые, лидирующая точка). Закрытого списка ключей **нет** |
 
 **Done A:** `npm run verify` + `npm run e2e` + runtime-прогон `/verify` зелёные; локально опубликован тестовый ABI v4-компонент (`hostAbiVersion===4`, бандл ссылается только на `/api/shims/v4/*`), `color()` резолвится и в fallback (без темы), и в тем-значение (с темой).
 
@@ -45,7 +45,7 @@
 ### Волна B — Реестр токенов (1 Opus-субагент, параллельно A)
 
 - **B1.** Из `docs/audit/design-facts-agg.json` (colors: 181 пара `[значение, частота]`) + `docs/design/yandex-pay.md §1` сгенерировать реестр `work/yp-wave2/token-registry.json`: `литерал → color.<семантический-ключ> → значение(==литерал)` + статус `ship-now | defer-H2 | defer-H8`. Значения не нормализовать (no-op). Дивергентным семьям — разные literal-preserving ключи с пометкой defer-H2.
-- **B2.** Пилот: топ-частотные литералы surface/fill **без дивергенции** — `#fff`(12), `rgba(255,255,255,.98)`(8), `#edeff2`(6), `#2e2f33`(6), `#f3f5f7`/`#f2f3f5`/`#f5f7f9`, `#ffdc60` — ~8–10 токенов. Отобрать 6–10 пилотных компонентов, использующих только их; включить H6-компоненты (`yp-split-discount-info`, `yp-discount-info-with-cashback`) — одна републикация закроет и H6, и H1-пилот. Тени/градиенты/`text-primary` — исключены.
+- **B2.** Пилот: топ-частотные литералы surface/fill **без дивергенции** — `#fff`(12), `rgba(255,255,255,.98)`(8), `#edeff2`(6), `#2e2f33`(6), `#f3f5f7`/`#f2f3f5`/`#f5f7f9`, `#ffdc60` — ~8–10 токенов. Миграция **пер-литеральная**: в пилотном компоненте на `color()` переводятся ТОЛЬКО пилотные литералы, остальные остаются как есть (no-op-инвариант выполняется для каждого мигрированного вызова независимо; ревью показало, что компонентов «только из пилотных литералов» в каталоге всего 2 — `yp-app-home-section`, `yp-skeleton`). Отобрать 6–10 пилотных компонентов из пула носителей пилотных литералов (~52 с `#fff`, ~15 с `#edeff2`); `yp-app-home-section` и `yp-skeleton` — обязательно. H6-компоненты дают тонкую H1-поверхность (по одному ship-now литералу) — включить в пилот попутно, но не считать основной поверхностью. Тени/градиенты/`text-primary` — исключены.
 - **B3.** Черновики разделов design.md (финализация в F).
 
 **Done B:** реестр со статусами, список пилотных компонентов, черновики.
@@ -53,22 +53,22 @@
 ### Волна C — PATCH темы (оркестратор; после деплоя A и готовности B)
 
 1. **C1.** Собрать полный `tokens`: `GET /api/design-systems/yandex-pay` → текущие `space.*` + пилотные ship-now `color.*`. `fonts`/`icons` в PATCH **опустить** (наследуются — не потерять 3 шрифта YS Text). Образец вызова — `scripts/w6-yandex-pay.mjs`.
-2. **C2.** Стенд: PATCH → проверить эмиссию `--eui-color-*`, идентичность пикселя пилотных компонентов с темой и без.
+2. **C2.** Стенд: PATCH → проверить эмиссию `--eui-color-*` в `:root` (проверка «пиксель с темой и без» до миграции компонентов тривиально истинна — она переносится в D-H1, где сверяется мигрированный `color()` против стендовой темы).
 3. **C3.** Прод: admin-сессия + `Origin`; сохранить снапшот текущей `version=3` → `work/yp-wave2/rollback-theme.json`; PATCH `baseVersion:3` → `version=4`. **Откат темы** (append-only): новый PATCH со снапшотом v3.
 
 **Done C:** прод-тема v4 несёт пилотные `color.*`; чистый аддитив (никто их ещё не читает); rollback-снапшот готов.
 
 ### Волна D — Пилот H1 ∥ H6 ∥ H9 (3 параллельных Opus-субагента, локально; непересекающиеся файлы)
 
-- **D-H1** (`work/yp-wave2/components/<пилот>/source.tsx`): `import { color } from "easy-ui/runtime/v4"`; литералы → `color("<key>", "<исходный-литерал>")` строго по реестру. Done: локальный publish `hostAbiVersion===4`; pixelmatch с задеплоенной темой = 0.
-- **D-H6** (`…/yp-split-discount-info/source.tsx`, `…/yp-discount-info-with-cashback/source.tsx`): сначала **инвентарь** фактических `currency` по 33 живым докам прода (известно из examples: RUB, UZS); затем `z.string().min(1)` → `z.enum([...])` — в cashback-компоненте и top-level `currency`, **и вложенный `limits.currency`**; форматтер `symbol()`/`money()` покрывает весь enum (для не-RUB без утверждённого символа — печатать код, текущее безопасное поведение; R3). Done: все живые доки валидны против enum.
-- **D-H9** (`…/yp-random-avatar/source.tsx`, база — уже пофикшенный F2-исходник с ассетами): `+ seed: z.union([z.string(), z.number()]).optional()`; mulberry32 от 32-bit хеша seed; `undefined` → `Math.random` как сейчас; `useMemo` deps → `[props.seed]`. Снапшот-тулинг (`capture.mjs`/`prod-baseline.mjs`) подаёт фиксированный seed → компонент возвращается в pixelmatch-гейт; **доки принудительно не мигрируются**. Done: детерминизм под seed, прежнее поведение без него.
+- **D-H1** (`work/yp-wave2/components/<пилот>/source.tsx`): `import { color } from "easy-ui/runtime/v4"`; литералы → `color("<key>", "<исходный-литерал>")` строго по реестру. Done: локальный publish `hostAbiVersion===4`; **per-example** pixelmatch (`capture.mjs` + `diff.mjs`) против до-миграционного baseline со **стендовой** темой (C2) = 0 — волна D не зависит от прод-PATCH C3.
+- **D-H6** (`…/yp-split-discount-info/source.tsx`, `…/yp-discount-info-with-cashback/source.tsx`): сначала **инвентарь** фактических `currency` по **всем** докам прода, **включая архивные** (`restore {rev}` ре-валидирует док — промах инвентаря даст 422; скрипт обхода написать, готового нет; факт ревью: во всех 33 доках только `RUB`, `UZS` — в example компонента); затем `z.string().min(1)` → `z.enum(["RUB","UZS",...])` — в cashback-компоненте и top-level `currency`, **и вложенный `limits.currency`**; форматтер `symbol()`/`money()` покрывает весь enum (для не-RUB без утверждённого символа — печатать код, текущее безопасное поведение; R3). Done: все доки (вкл. архивные) валидны против enum. **Внимание:** значение вне enum — это `422 validation_failed` на checkpoint-save (`routes/prototypes.ts:41`), т.е. hard-fail барьера re-pin, не warning.
+- **D-H9** (`…/yp-random-avatar/source.tsx`, база — уже пофикшенный F2-исходник с ассетами): `+ seed: z.union([z.string(), z.number()]).optional()`; mulberry32 от 32-bit хеша seed; `undefined` → `Math.random` как сейчас; `useMemo` deps → `[props.seed]`. Доставка seed в гейт: добавить `examples`-вариант с фиксированным `seed` в определение компонента (только так — `capture.mjs` читает `meta.examples`, механизма инъекции пропов нет) и убрать `yp-random-avatar` из `NONDETERMINISTIC` в `diff.mjs:26` → компонент возвращается в **per-example** pixelmatch-гейт. **Доки принудительно не мигрируются**, поэтому прод-экраны с аватаром остаются недетерминированными — из прод-скрин-гейта E они исключаются как ожидаемо-ненулевые. Done: детерминизм под seed (per-example), прежнее поведение без него.
 
 **Done D:** verify + e2e + runtime-прогон зелёные; критерии каждого субагента проверены оркестратором независимо.
 
 ### Волна E — Прод-выкатка по §W3 (оркестратор, строго последовательно)
 
-Переиспользовать `work/yp-fixes/scripts/*`. Фазы: admin-сессия+Origin → бэкап+инвентарь (rev/version/statusRev компонентов, rev живых доков) → прод-baseline экранов затрагиваемых доков (`prod-baseline.mjs`; yp-random-avatar — с фиксированным seed) → канарейка `yp-split-discount-info` (H6+H1 в одном, малый) → батч publish по одному (1 CPU, контроль `active`) → **барьер 100% active** → re-pin checkpoint-save живых доков → `prod-diff.mjs`: ожидание H1=0, H6=0 для RUB-доков, H9=0 под seed; каждый ненулевой дифф объяснить → финальный бэкап `.backups/prod-wave2-<date>/`.
+Переиспользовать `work/yp-fixes/scripts/*`. **Главный инструмент доказательства no-op — per-example скриншоты компонентов** (`capture.mjs` через `POST /components/:id/versions/:v/screenshot` с `--base` на прод + `diff.mjs`): baseline = текущая прод-версия, after = новая; скрин-экраны прототипов (`prod-baseline.mjs`/`prod-diff.mjs`) — вторичный гейт, т.к. его `GALLERY_SCREENS` (12 экранов) не покрывает целевые компоненты — либо расширить список экранами с целевыми компонентами, либо полагаться на per-example. Фазы: admin-сессия+Origin → бэкап+инвентарь (rev/version/statusRev компонентов, rev живых доков) → per-example baseline целевых компонентов + прод-baseline затронутых экранов → канарейка `yp-split-discount-info` (H6+H1 в одном, малый) → батч publish по одному (1 CPU, контроль `active`) → **барьер 100% active** → re-pin checkpoint-save живых доков → диффы: per-example H1=0, H6=0 для RUB, H9=0 под seed (example с seed); прод-экраны с `yp-random-avatar` — исключены как ожидаемо-ненулевые; каждый прочий ненулевой дифф объяснить → финальный бэкап `.backups/prod-wave2-<date>/`.
 
 Грабли фикс-волны (учитывать): импорт прототип-бандлов бампает зависимости на старый source → чинить републикацией head; ключи `examples` — только slug, `default` зарезервирован; screenshot-воркер не отдаёт PNG канвасов ~1880px+.
 
@@ -90,11 +90,28 @@
 - **R4 — enum ломает доки вне набора:** инвентарь обязателен до сужения.
 - **R6 — специфаеры:** ровно один runtime-специфаер на компонент (расширить запрет в compile.ts).
 
+## Триаж адверсариального ревью (2026-07-21, 2 Opus-ревьюера)
+
+Принято и внесено в план (все находки, отклонённых нет):
+- **[blocker] `server/main.ts:162` хардкодит `v1|v2|v3`** — без правки `/api/shims/v4/*` даёт 404, рушится гейт деплоя → внесено в A2.
+- **[blocker] Критерий пилота «компоненты только из пилотных литералов» недостижим** (таких 2 из 100) → B2 переписан на пер-литеральную миграцию.
+- **[blocker] `prod-baseline/prod-diff` (12 экранов `GALLERY_SCREENS`) не покрывают целевые компоненты** → доказательство no-op переведено на per-example `capture.mjs`/`diff.mjs`, Done E переписан.
+- **[major] `share/repo.ts:118-122` без ветки `abi===4`** теряет runtime-шим при экспорте/шаринге → внесено в A2.
+- **[major] enum-промах = `422` hard-fail на re-pin**, инвентарь обязан включать архивные доки (`restore` ре-валидирует) → внесено в D-H6; факт: во всех 33 доках только RUB.
+- **[major] Механизм seed для гейта не существовал** (`capture.mjs` читает только `meta.examples`, `diff.mjs` исключает аватар через `NONDETERMINISTIC`) → D-H9: seed через examples-вариант + правка `diff.mjs`; прод-экраны с аватаром исключены из гейта.
+- **[minor] Ранний `return` в `superRefine` пропустил бы color-only PATCH** → A6: проверка до return + тест-кейсы `#fff`, `rgba(...,.98)`.
+- **[minor] Done D-H1 зависел от прод-темы** → сверка против стендовой темы (C2).
+- **[minor] C2 «пиксель с темой и без» тривиально истинна до миграции** → сведена к проверке эмиссии.
+- **[minor] Опциональный fallback в ABI опасен при откате темы** → fallback обязателен в `.d.ts` (рантайм толерантен).
+- **[minor] `examples` компонентов не zod-валидируются при publish** — на них как enum-гейт не полагаться (зафиксировано, принуждение — только валидация доков).
+
+Подтверждено ревью без возражений: no-op-инвариант строго доказуем (`cssEscapeString` не искажает пилотные литералы), семантика PATCH/CAS/наследования верна, клиентский код (`src/`) править не нужно, порядок деплоя и откаты корректны, откат темы не ломает пилот (fallback==литерал).
+
 ## Верификация (end-to-end)
 
 1. Локально: `npm run verify`, `npm run e2e`, runtime-прогон `/verify` — гейты волн A и D.
 2. Стенд: PATCH темы + рендер пилотных компонентов с темой/без — пиксель идентичен (C2).
-3. Прод: `GET /api/shims/v4/easy-ui-runtime.js` (после деплоя A); §W3-цикл baseline → diff (E): H1-пилот дифф=0, H6 дифф=0 на RUB-доках, H9 дифф=0 под seed; `driver.mjs status`, `/library` открывается.
+3. Прод: `GET /api/shims/v4/easy-ui-runtime.js` (после деплоя A); §W3-цикл (E): per-example диффы H1=0 / H6=0 (RUB) / H9=0 (seed-example), прод-экраны затронутых доков без регрессий (аватар-экраны исключены); `driver.mjs status`, `/library` открывается.
 
 ## Процесс (по CLAUDE.md)
 
