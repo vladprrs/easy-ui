@@ -50,6 +50,17 @@ function renderGallery() {
   return router;
 }
 
+// Статус-действия владельца живут внутри свёрнутого «⋯»-меню (нативный <details>).
+// Раскрываем его так же, как пользователь: клик по <summary aria-label="Действия">.
+// В этом jsdom клик по summary тоглит details.open — именно так меню и открывается.
+function openCardMenu(card: HTMLElement) {
+  const summary = within(card).getByLabelText("Действия");
+  const details = summary.closest("details") as HTMLDetailsElement;
+  if (!details.open) fireEvent.click(summary);
+  expect(details.open).toBe(true);
+  return details;
+}
+
 describe("GalleryPage", () => {
   beforeEach(() => {
     vi.mocked(listPrototypes).mockReset();
@@ -277,12 +288,16 @@ describe("GalleryPage", () => {
     const own = screen.getByRole("heading", { name: "Свой" }).closest("li")!;
     const foreign = screen.getByRole("heading", { name: "Чужой" }).closest("li")!;
     expect(within(own).getByRole("link", { name: "Редактор" })).toBeTruthy();
-    expect(within(own).getByRole("button", { name: "Снять с публикации" })).toBeTruthy();
+    // Статус-действия владельца доступны только после раскрытия «⋯»-меню.
+    const ownMenu = within(openCardMenu(own));
+    expect(ownMenu.getByRole("button", { name: "Снять с публикации" })).toBeTruthy();
     expect(within(foreign).getByText("Владелец: Анна")).toBeTruthy();
     expect(within(foreign).queryByRole("link", { name: "Редактор" })).toBeNull();
-    expect(within(foreign).queryByRole("button", { name: "Снять с публикации" })).toBeNull();
-    expect(within(foreign).queryByRole("button", { name: "В архив" })).toBeNull();
-    fireEvent.click(within(own).getByRole("button", { name: "Снять с публикации" }));
+    // У чужой карточки «⋯» содержит только экспорт — статус-кнопок нет.
+    const foreignMenu = within(openCardMenu(foreign));
+    expect(foreignMenu.queryByRole("button", { name: "Снять с публикации" })).toBeNull();
+    expect(foreignMenu.queryByRole("button", { name: "В архив" })).toBeNull();
+    fireEvent.click(ownMenu.getByRole("button", { name: "Снять с публикации" }));
     await waitFor(() => expect(setPrototypeStatus).toHaveBeenCalledWith("own", "private"));
   });
 
@@ -291,7 +306,10 @@ describe("GalleryPage", () => {
     vi.mocked(setPrototypeStatus).mockRejectedValue(new ApiError(409, { code: "prototype_not_renderable", message: "not renderable" }));
     renderGallery();
     fireEvent.click(await screen.findByRole("button", { name: "Архив" }));
-    fireEvent.click(screen.getByRole("button", { name: "Вернуть из архива" }));
+    const card = screen.getByRole("heading", { name: "Hello World" }).closest("li")!;
+    const menu = within(openCardMenu(card));
+    fireEvent.click(menu.getByRole("button", { name: "Вернуть из архива" }));
+    // role=alert рендерится сиблингом details (вне сворачиваемой области), поэтому виден и после закрытия меню.
     expect((await screen.findByRole("alert")).textContent).toContain("текущая ревизия не отображается");
   });
 

@@ -36,15 +36,22 @@ test("gallery tabs publish, archive, and restore from the owner card", async ({ 
   await ensurePrototype(request, id, name);
   await page.goto("/");
   const card = () => page.getByRole("listitem").filter({ hasText: name });
+  // Статус-действия владельца скрыты в свёрнутом «⋯»-меню; каждый раз раскрываем его заново —
+  // после смены статуса меню закрывается и карточка переезжает между табами.
+  const openMenu = () => card().getByLabel("Действия").click();
   await expect(page.getByRole("button", { name: "Мои" })).toHaveAttribute("aria-pressed", "true");
+  await openMenu();
   await card().getByRole("button", { name: "В архив" }).click();
   await page.getByRole("button", { name: "Архив", exact: true }).click();
   await expect(card()).toBeVisible();
+  await openMenu();
   await card().getByRole("button", { name: "Вернуть из архива" }).click();
   await page.getByRole("button", { name: "Мои", exact: true }).click();
+  await openMenu();
   await card().getByRole("button", { name: "Опубликовать" }).click();
   await page.getByRole("button", { name: "Общие", exact: true }).click();
   await expect(card()).toBeVisible();
+  await openMenu();
   await expect(card().getByRole("button", { name: "Снять с публикации" })).toBeVisible();
 });
 
