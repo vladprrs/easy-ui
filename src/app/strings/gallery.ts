@@ -1,8 +1,11 @@
 // Строки галереи прототипов (W0-5).
 
 export const gallery = {
+  kicker: "Галерея",
   title: "Прототипы",
   subtitle: "Выберите флоу, чтобы открыть его первый экран.",
+  countLabel: (n: number) => `Всего прототипов: ${n}`,
+  overflowActionsAria: "Действия",
   newPrototype: "Новый прототип",
   createDialogAria: "Создание прототипа",
   createDialogTitle: "Новый прототип",

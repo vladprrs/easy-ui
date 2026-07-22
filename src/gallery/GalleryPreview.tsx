@@ -143,7 +143,7 @@ function LoadedGalleryPreview({ prototypeId }: { prototypeId: string }) {
   </>;
 }
 
-export function GalleryPreview({ prototypeId }: { prototypeId: string }) {
+export function GalleryPreview({ prototypeId, wrapperClassName }: { prototypeId: string; wrapperClassName?: string }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
 
@@ -155,7 +155,7 @@ export function GalleryPreview({ prototypeId }: { prototypeId: string }) {
     return () => observer.disconnect();
   }, []);
 
-  return <div ref={rootRef} className="mt-5 min-h-px" data-gallery-preview={prototypeId} data-gallery-preview-mounted={visible ? "true" : "false"}>
+  return <div ref={rootRef} className={`${wrapperClassName ?? "mt-5"} min-h-px`} data-gallery-preview={prototypeId} data-gallery-preview-mounted={visible ? "true" : "false"}>
     {visible ? <GalleryPreviewErrorBoundary prototypeId={prototypeId}><LoadedGalleryPreview prototypeId={prototypeId} /></GalleryPreviewErrorBoundary> : null}
   </div>;
 }
