@@ -33,7 +33,7 @@ export function GalleryHero(props: GalleryHeroProps): ReactElement {
               {gallery.importButton}
             </button>
             {canCreate ? (
-              <button type="button" className={`${pillPrimary} w-full sm:w-auto`} onClick={onCreate}>
+              <button type="button" className={`${pillPrimary} max-sm:w-full`} onClick={onCreate}>
                 {gallery.newPrototype}
               </button>
             ) : null}

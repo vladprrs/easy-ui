@@ -57,7 +57,7 @@ export function GalleryToolbar(props: GalleryToolbarProps): ReactElement {
           ))}
         </div>
         {showSearch ? (
-          <label className="flex w-full flex-col gap-1.5 text-sm font-medium sm:w-72">
+          <label className="flex flex-col gap-1.5 text-sm font-medium max-sm:w-full sm:w-72">
             {gallery.searchLabel}
             <span className="relative block">
               <svg
