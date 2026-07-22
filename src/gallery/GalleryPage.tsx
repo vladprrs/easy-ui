@@ -1,163 +1,24 @@
-import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
-import { ApiError, createPrototype, getCatalogManifest, listDesignSystems, listPrototypes, listPrototypeVersions, setPrototypeStatus, type PrototypeStatus, type PrototypeSummary, type PrototypeVersionSummary } from "../api/client";
-import { downloadBundle } from "../api/bundles";
+import { useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
+import { createPrototype, getCatalogManifest, listDesignSystems, listPrototypes } from "../api/client";
 import { useApi } from "../api/hooks";
-import { chip, chipActive, headingPage, inputBase, pillGhost, pillPrimary, plate } from "../app/chrome";
-import { common } from "../app/strings/common";
-import { deviceNames, gallery, versionLink } from "../app/strings/gallery";
-import { loader } from "../app/strings/player";
+import { inputBase, pillGhost, pillPrimary } from "../app/chrome";
+import { gallery } from "../app/strings/gallery";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { useAuth } from "../auth";
-import { prototypeStatusBadge } from "../library/statusBadge";
 import { TEMPLATE_VERSION, buildPrototypeTemplate, createPrototypeId, hasUsableComponents } from "./prototypeTemplates";
-import { GalleryPreview, GALLERY_PREVIEWS_ENABLED } from "./GalleryPreview";
+import { GALLERY_PREVIEWS_ENABLED } from "./GalleryPreview";
 import { GalleryShareDialog } from "./GalleryShareDialog";
 import { ImportDialog } from "./ImportDialog";
+import { filterAndSortPrototypes, type GallerySort, type GalleryTab } from "./galleryModel";
+import { GalleryHero } from "./components/GalleryHero";
+import { GalleryToolbar } from "./components/GalleryToolbar";
+import { PrototypeCard } from "./components/PrototypeCard";
+import { GalleryEmpty, GalleryFailed, GallerySkeletons, NoUsableSystems } from "./components/GalleryStates";
 
-export type GallerySort = "updated" | "name";
-export type GalleryTab = "mine" | "shared" | "archive";
-
-export interface GalleryFilters {
-  tab: GalleryTab;
-  userId: string;
-  systemId: string | null;
-  query: string;
-  sort: GallerySort;
-}
-
-export function filterAndSortPrototypes(prototypes: PrototypeSummary[], filters: GalleryFilters): PrototypeSummary[] {
-  const { tab, userId, systemId, query, sort } = filters;
-  const normalizedQuery = query.trim().toLocaleLowerCase("ru");
-  const filtered = prototypes
-    .filter((prototype) => tab === "mine"
-      ? prototype.owner.id === userId && prototype.status !== "archived"
-      : tab === "shared"
-        ? prototype.status === "published"
-        : prototype.owner.id === userId && prototype.status === "archived")
-    .filter((prototype) => systemId === null || prototype.designSystem === systemId)
-    .filter((prototype) => !normalizedQuery || prototype.name.toLocaleLowerCase("ru").includes(normalizedQuery));
-  return [...filtered].sort(sort === "name"
-      ? (left, right) => left.name.localeCompare(right.name, "ru", { numeric: true, sensitivity: "base" })
-      : (left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.name.localeCompare(right.name, "ru", { numeric: true, sensitivity: "base" }));
-}
-
-function PrototypeStatusBadge({ status }: { status: PrototypeStatus }) {
-  const badge = prototypeStatusBadge(status);
-  return <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${badge.className}`} title={badge.title}>{badge.label}</span>;
-}
-
-function OwnerControls({ prototype, onChanged }: { prototype: PrototypeSummary; onChanged: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const changeStatus = async (status: PrototypeStatus) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await setPrototypeStatus(prototype.id, status);
-      setBusy(false);
-      onChanged();
-    } catch (cause) {
-      setError(cause instanceof ApiError && cause.status === 409 && cause.code === "prototype_not_renderable"
-        ? gallery.restoreNotRenderable
-        : gallery.statusChangeFailed);
-      setBusy(false);
-    }
-  };
-  return <>
-    {prototype.status === "private" ? <button type="button" className={pillGhost} disabled={busy} onClick={() => void changeStatus("published")}>{gallery.publish}</button> : null}
-    {prototype.status === "published" ? <button type="button" className={pillGhost} disabled={busy} onClick={() => void changeStatus("private")}>{gallery.unpublish}</button> : null}
-    {prototype.status !== "archived" ? <button type="button" className={pillGhost} disabled={busy} onClick={() => void changeStatus("archived")}>{gallery.archive}</button> : null}
-    {prototype.status === "archived" ? <button type="button" className={pillGhost} disabled={busy} onClick={() => void changeStatus("private")}>{gallery.restore}</button> : null}
-    {busy ? <span className="self-center text-xs text-eui-slate-500" role="status">{gallery.statusChanging}</span> : null}
-    {error ? <p className="basis-full text-xs text-eui-magenta" role="alert">{error}</p> : null}
-  </>;
-}
-
-const updatedAtFormatter = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-
-export function formatGalleryUpdatedAt(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : updatedAtFormatter.format(date);
-}
-
-type VersionsState =
-  | { status: "idle" | "loading"; data: PrototypeVersionSummary[] }
-  | { status: "ready"; data: PrototypeVersionSummary[] }
-  | { status: "error"; data: PrototypeVersionSummary[] };
-
-function VersionsMenu({ prototype, isOwner }: { prototype: PrototypeSummary; isOwner: boolean }) {
-  const [versions, setVersions] = useState<VersionsState>({ status: "idle", data: [] });
-  const [downloading, setDownloading] = useState<string | null>(null);
-  const [exportError, setExportError] = useState<string | null>(null);
-  const controllerRef = useRef<AbortController | null>(null);
-  useEffect(() => () => controllerRef.current?.abort(), []);
-
-  const load = () => {
-    if (versions.status !== "idle" && versions.status !== "error") return;
-    controllerRef.current?.abort();
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    setVersions((current) => ({ status: "loading", data: current.data }));
-    void listPrototypeVersions(prototype.id, controller.signal).then(
-      (data) => { if (!controller.signal.aborted) setVersions({ status: "ready", data }); },
-      () => { if (!controller.signal.aborted) setVersions((current) => ({ status: "error", data: current.data })); },
-    );
-  };
-  const onToggle = (event: SyntheticEvent<HTMLDetailsElement>) => { if (event.currentTarget.open) load(); };
-
-  const runExport = async (key: string, url: string, fallbackName: string) => {
-    setDownloading(key);
-    setExportError(null);
-    try {
-      await downloadBundle(url, fallbackName);
-    } catch (cause) {
-      setExportError(cause instanceof Error ? cause.message : gallery.exportError);
-    } finally {
-      setDownloading(null);
-    }
-  };
-  const exportUrl = (version: number | null) => `/api/prototypes/${encodeURIComponent(prototype.id)}/export${version === null ? "" : `?version=${version}`}`;
-  const exportName = (version: number | null) => `easy-ui-prototype-${prototype.id}-${version === null ? "draft" : `v${version}`}.zip`;
-
-  return <details className="relative" onToggle={onToggle}>
-    <summary className={`${pillGhost} cursor-pointer list-none bg-white`}>{gallery.versionsMenu}</summary>
-    <div aria-label={gallery.versionsMenuAria(prototype.name)} className="absolute right-0 z-20 mt-2 w-64 rounded-2xl border border-eui-ink/10 bg-white p-2 shadow-xl">
-      {isOwner ? <div className="mb-1 border-b border-eui-ink/10 pb-1">
-        <button type="button" disabled={downloading !== null} className="block w-full rounded-xl px-3 py-2 text-left text-sm hover:bg-eui-lav focus-visible:outline-2 focus-visible:outline-eui-brand disabled:opacity-50" onClick={() => void runExport("draft", exportUrl(null), exportName(null))}>{downloading === "draft" ? gallery.exporting : gallery.exportDraft}</button>
-      </div> : null}
-      {versions.status === "idle" || versions.status === "loading" ? <p className="px-2 py-1 text-xs text-eui-slate-500" aria-live="polite">{gallery.versionsLoading}</p> : null}
-      {versions.status === "error" ? <><p role="alert" className="px-2 py-1 text-xs text-eui-magenta">{gallery.versionsLoadFailed}</p><button type="button" className={`${pillGhost} mt-1`} onClick={load}>{common.retry}</button></> : null}
-      {versions.status === "ready" && !versions.data.length ? <p className="px-2 py-1 text-xs text-eui-slate-500">{gallery.noVersions}</p> : null}
-      {versions.status === "ready" ? <ul className="space-y-1">{versions.data.map((version) => <li key={version.version} className="flex items-center gap-1">
-        <Link className="block flex-1 rounded-xl px-3 py-2 text-sm hover:bg-eui-lav focus-visible:outline-2 focus-visible:outline-eui-brand" to={`/p/${prototype.id}/v/${version.version}`}>{versionLink(version.version)}</Link>
-        {isOwner ? <button type="button" disabled={downloading !== null} className="rounded-xl px-2 py-2 text-xs font-medium text-eui-brand hover:bg-eui-lav focus-visible:outline-2 focus-visible:outline-eui-brand disabled:opacity-50" onClick={() => void runExport(`v${version.version}`, exportUrl(version.version), exportName(version.version))}>{downloading === `v${version.version}` ? gallery.exporting : gallery.exportVersionAction(version.version)}</button> : null}
-      </li>)}</ul> : null}
-      {exportError ? <p role="alert" className="mt-1 px-2 py-1 text-xs text-eui-magenta">{exportError}</p> : null}
-    </div>
-  </details>;
-}
-
-function PrototypeExportButton({ prototype }: { prototype: PrototypeSummary }) {
-  const [downloading, setDownloading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  if (prototype.latestVersion === null) return null;
-  const onExport = async () => {
-    setDownloading(true);
-    setError(null);
-    try {
-      await downloadBundle(`/api/prototypes/${encodeURIComponent(prototype.id)}/export?version=${prototype.latestVersion}`, `easy-ui-prototype-${prototype.id}-v${prototype.latestVersion}.zip`);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : gallery.exportError);
-    } finally {
-      setDownloading(false);
-    }
-  };
-  return <>
-    <button type="button" className={pillGhost} disabled={downloading} onClick={() => void onExport()}>{downloading ? gallery.exporting : gallery.exportLatest}</button>
-    {error ? <p className="basis-full text-xs text-eui-magenta" role="alert">{error}</p> : null}
-  </>;
-}
+export { filterAndSortPrototypes } from "./galleryModel";
+export type { GalleryFilters, GallerySort, GalleryTab } from "./galleryModel";
+export { formatGalleryUpdatedAt } from "./galleryFormat";
 
 type CreateDialogState = {
   name: string;
@@ -224,81 +85,52 @@ export function GalleryPage() {
     }
   };
 
+  const notice = typeof location.state === "object" && location.state && "notice" in location.state && typeof location.state.notice === "string"
+    ? location.state.notice
+    : null;
+  const ready = prototypes.status === "ready" && !loading && !failed;
+  const heroCount = ready && visiblePrototypes.length ? visiblePrototypes.length : null;
+
   return <main className="mx-auto h-full w-full max-w-6xl p-6 font-eui-ui sm:p-8" data-gallery-ready={!loading && !failed ? "true" : "false"}>
-    <div className="flex flex-wrap items-center justify-between gap-4">
-      <h1 className={headingPage}>{gallery.title}</h1>
-      {!loading && !failed ? <div className="flex flex-wrap items-center gap-2">
-        <a className={pillGhost} href="/api/bundles/export">{gallery.exportAll}</a>
-        <button type="button" className={pillGhost} onClick={() => setImportOpen(true)}>{gallery.importButton}</button>
-        {usableSystems.length ? <button type="button" className={pillPrimary} onClick={openCreateDialog}>{gallery.newPrototype}</button> : null}
-      </div> : null}
-    </div>
-    <p className="mt-2 text-eui-slate-500">{gallery.subtitle}</p>
-    {typeof location.state === "object" && location.state && "notice" in location.state && typeof location.state.notice === "string" ? <p className={`${plate} mt-5 text-sm text-eui-brand`} role="status">{location.state.notice}</p> : null}
-    {loading ? <p className={`${plate} mt-8 text-eui-slate-500`} aria-live="polite">{gallery.loading}</p> : null}
-    {failed ? <div className={`${plate} mt-8 text-eui-magenta`} role="alert"><p>{gallery.apiUnavailable}</p><button className={`${pillGhost} mt-3`} type="button" onClick={reload}>{common.retry}</button></div> : null}
-    {!loading && !failed && catalog.status === "ready" && !usableSystems.length ? <section className={`${plate} mt-8`}>
-      <h2 className="font-eui-display text-xl font-medium">{gallery.noUsableSystemsTitle}</h2>
-      <p className="mt-2 text-eui-slate-500">{gallery.noUsableSystemsBody}</p>
-      <Link className={`${pillPrimary} mt-5`} to="/library">{gallery.createDesignSystem}</Link>
-    </section> : null}
-    {!loading && !failed ? <div className="mt-6 flex flex-wrap gap-2" aria-label={gallery.tabsAria}>
-      {([['mine', gallery.tabMine], ['shared', gallery.tabShared], ['archive', gallery.tabArchive]] as const).map(([id, label]) => <button type="button" key={id} aria-pressed={tab === id} className={tab === id ? chipActive : chip} onClick={() => setTab(id)}>{label}</button>)}
-    </div> : null}
-    {!loading && !failed ? <div className="mt-4 flex flex-wrap gap-2" aria-label={gallery.designSystemsAria}>
-      <button type="button" aria-pressed={selectedSystem === null} className={selectedSystem === null ? chipActive : chip} onClick={() => setSelectedSystem(null)}>{gallery.allSystems}</button>
-      {systems.map((system) => <button type="button" key={system.id} aria-pressed={selectedSystem === system.id} className={selectedSystem === system.id ? chipActive : chip} onClick={() => setSelectedSystem(system.id)}>{system.name}</button>)}
-    </div> : null}
-    {!loading && !failed && prototypes.status === "ready" && prototypes.data.length ? <div className="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-      <label className="min-w-0 text-sm font-medium">{gallery.searchLabel}
-        <input type="search" className={`${inputBase} mt-1.5 w-full`} value={query} placeholder={gallery.searchPlaceholder} onChange={(event) => setQuery(event.target.value)} />
-      </label>
-      <label className="text-sm font-medium">{gallery.sortLabel}
-        <select className={`${inputBase} mt-1.5 w-full bg-white sm:w-56`} value={sort} onChange={(event) => setSort(event.target.value as GallerySort)}>
-          <option value="updated">{gallery.sortUpdated}</option>
-          <option value="name">{gallery.sortName}</option>
-        </select>
-      </label>
-    </div> : null}
+    <GalleryHero
+      count={heroCount}
+      showActions={!loading && !failed}
+      canCreate={usableSystems.length > 0}
+      onCreate={openCreateDialog}
+      onImport={() => setImportOpen(true)}
+      notice={notice}
+    />
+    {loading ? <GallerySkeletons /> : null}
+    {failed ? <GalleryFailed onRetry={reload} /> : null}
+    {!loading && !failed && catalog.status === "ready" && !usableSystems.length ? <NoUsableSystems /> : null}
+    {!loading && !failed ? <GalleryToolbar
+      tab={tab}
+      onTabChange={setTab}
+      systems={systems}
+      selectedSystem={selectedSystem}
+      onSystemChange={setSelectedSystem}
+      query={query}
+      onQueryChange={setQuery}
+      sort={sort}
+      onSortChange={setSort}
+      showSearch={prototypes.status === "ready" && prototypes.data.length > 0}
+    /> : null}
     {!loading && !failed && visiblePrototypes.length ? <ul className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-      {visiblePrototypes.map((prototype) => {
-        const isOwner = prototype.owner.id === user?.userId;
-        return <li className="relative flex min-w-0 flex-col rounded-3xl bg-eui-lav p-6 transition-shadow focus-within:shadow-lg hover:shadow-lg" key={prototype.id}>
-        <div className="mb-3 flex flex-wrap gap-2"><PrototypeStatusBadge status={prototype.status} />{!isOwner ? <span className="rounded-full bg-eui-lilac-200 px-2.5 py-1 text-xs font-bold">{gallery.ownerBadge(prototype.owner.name)}</span> : null}</div>
-        <h2 className="min-w-0 font-eui-display text-xl font-medium [overflow-wrap:anywhere]">
-          <Link
-            className="after:absolute after:inset-0 after:rounded-3xl after:content-[''] focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-eui-brand"
-            to={`/p/${prototype.id}`}
-          >{prototype.name}</Link>
-        </h2>
-        <p className="mt-2 min-h-10 break-words text-sm text-eui-slate-500 [overflow-wrap:anywhere]">{prototype.description ?? gallery.noDescription}</p>
-        {prototype.status === "archived"
-          ? <section className="mt-5 rounded-2xl bg-eui-lilac-100 p-5 text-center" data-prototype-archived="true" role="status"><h3 className="font-eui-display text-lg font-bold">{loader.archivedTitle}</h3><p className="mt-2 text-sm text-eui-slate-500">{loader.archivedBody}</p></section>
-          : previewsEnabled ? <GalleryPreview prototypeId={prototype.id} /> : null}
-        <dl className="mt-5 grid min-w-0 grid-cols-2 gap-3 text-sm xl:grid-cols-4">
-          <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.deviceLabel}</dt><dd className="inline-flex rounded-full bg-white px-2.5 py-1 text-xs font-medium">{deviceNames[prototype.device]}</dd></div>
-          <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.screensLabel}</dt><dd className="inline-flex rounded-full bg-white px-2.5 py-1 text-xs font-medium">{prototype.screenCount}</dd></div>
-          <div className="flex min-w-0 flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.systemLabel}</dt><dd className="inline-flex max-w-full break-all rounded-full bg-eui-lilac-200 px-2.5 py-1 text-xs font-medium">{prototype.designSystem ? systemNames.get(prototype.designSystem) ?? prototype.designSystem : gallery.legacySystem}</dd></div>
-          <div className="flex flex-col items-start gap-1.5"><dt className="text-eui-slate-500">{gallery.updatedLabel}</dt><dd className="text-xs font-medium"><time dateTime={prototype.updatedAt}>{formatGalleryUpdatedAt(prototype.updatedAt)}</time></dd></div>
-        </dl>
-        <div className="relative z-10 mt-5 flex flex-wrap gap-2">
-          <Link className={`${pillGhost} bg-white`} to={`/p/${prototype.id}/present`}>{gallery.presentLink}</Link>
-          <Link className={pillGhost} to={`/p/${prototype.id}/cjm`}>CJM</Link>
-          {isOwner ? <Link className={pillGhost} to={`/p/${prototype.id}/edit`}>{gallery.editorLink}</Link> : null}
-          {isOwner && prototype.latestVersion !== null ? <button type="button" className={pillGhost} title={gallery.qrOnPhone} aria-label={gallery.qrOnPhone} onClick={() => { setSharePrototypeId(prototype.id); setShareLatestVersion(prototype.latestVersion); }}>{gallery.qrOnPhone}</button> : null}
-          {prototype.latestVersion !== null || isOwner ? <VersionsMenu prototype={prototype} isOwner={isOwner} /> : null}
-          {!isOwner ? <PrototypeExportButton prototype={prototype} /> : null}
-          {isOwner ? <OwnerControls prototype={prototype} onChanged={prototypes.reload} /> : null}
-        </div>
-      </li>;})}
+      {visiblePrototypes.map((prototype) => <PrototypeCard
+        key={prototype.id}
+        prototype={prototype}
+        isOwner={prototype.owner.id === user?.userId}
+        systemName={prototype.designSystem ? systemNames.get(prototype.designSystem) ?? prototype.designSystem : gallery.legacySystem}
+        previewsEnabled={previewsEnabled}
+        onShare={(id, latestVersion) => { setSharePrototypeId(id); setShareLatestVersion(latestVersion); }}
+        onChanged={prototypes.reload}
+      />)}
     </ul> : null}
-    {!loading && !failed && !visiblePrototypes.length ? prototypes.status === "ready" && prototypes.data.length
-      ? <p className={`${plate} mt-8 text-eui-slate-500`}>{query.trim() ? gallery.emptySearch : gallery.emptyFiltered}</p>
-      : <section className={`${plate} mt-8`}>
-        <h2 className="font-eui-display text-xl font-medium">{gallery.emptyTitle}</h2>
-        <p className="mt-2 text-eui-slate-500">{gallery.empty}</p>
-        {usableSystems.length ? <button type="button" className={`${pillPrimary} mt-5`} onClick={openCreateDialog}>{gallery.newPrototype}</button> : null}
-      </section> : null}
+    {!loading && !failed && !visiblePrototypes.length ? <GalleryEmpty
+      variant={prototypes.status === "ready" && prototypes.data.length ? (query.trim() ? "search" : "filtered") : "none"}
+      canCreate={usableSystems.length > 0}
+      onCreate={openCreateDialog}
+    /> : null}
     {createDialog ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
       <section role="dialog" aria-modal="true" aria-label={gallery.createDialogAria} className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
         <h2 className="font-eui-display text-2xl font-medium">{gallery.createDialogTitle}</h2>
