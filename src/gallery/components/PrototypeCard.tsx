@@ -27,7 +27,7 @@ function PrototypeStatusBadge({ status }: { status: PrototypeStatus }): ReactEle
 
 export function PrototypeCard({ prototype, isOwner, systemName, previewsEnabled, onShare, onChanged }: PrototypeCardProps): ReactElement {
   const { latestVersion } = prototype;
-  return <li className="group relative flex min-w-0 flex-col rounded-3xl bg-white ring-1 ring-eui-ink/5 transition hover:-translate-y-0.5 hover:shadow-xl focus-within:shadow-xl motion-reduce:transform-none">
+  return <li className="group relative flex min-w-0 flex-col rounded-3xl bg-white ring-1 ring-eui-ink/5 transition hover:-translate-y-0.5 hover:shadow-xl focus-within:z-20 focus-within:shadow-xl motion-reduce:transform-none">
     <div className="relative overflow-hidden rounded-t-3xl bg-eui-lav p-4">
       {prototype.status === "archived"
         ? <section className="rounded-2xl bg-eui-lilac-100 p-5 text-center" data-prototype-archived="true" role="status">
