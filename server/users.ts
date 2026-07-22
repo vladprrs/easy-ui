@@ -69,6 +69,20 @@ export class UserRepo {
     return asUser(row);
   }
 
+  setAdmin(input: { id: string; isAdmin: boolean; actorId: string }): UserRecord {
+    const row = this.db.query("SELECT id,name,password_hash,is_admin,created_at FROM users WHERE id=?").get(input.id) as UserRow | null;
+    if (!row) throw new ApiError(404, "user_not_found", "User not found");
+    if (row.id === BOOTSTRAP_ADMIN_ID && !input.isAdmin) throw new ApiError(409, "bootstrap_admin_protected", "The bootstrap administrator cannot be demoted");
+    const next = input.isAdmin ? 1 : 0;
+    if (row.is_admin !== next) {
+      this.db.transaction(() => {
+        this.db.query("UPDATE users SET is_admin=? WHERE id=?").run(next, row.id);
+        writeAuditEvent(this.db, { actorId: input.actorId, action: "user.updated", subjectType: "user", subjectId: row.id, detail: { isAdmin: input.isAdmin } });
+      })();
+    }
+    return asUser({ ...row, is_admin: next });
+  }
+
   async verify(name: string, password: string, dummyHash: string): Promise<UserRecord | null> {
     const row = this.byName(name);
     let valid = false;

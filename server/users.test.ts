@@ -56,6 +56,23 @@ describe("admin user routes", () => {
     db.close();
   });
 
+  test("promotes and demotes a user via PATCH, audits, and protects the bootstrap admin", async () => {
+    const db = openDatabase(":memory:"); const handler = createTestHandler(db);
+    const created = await (await handler(new Request("http://localhost/api/users", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Masha", password: "masha password" }) }))).json() as { id: string };
+    const patch = (id: string, isAdmin: boolean) => handler(new Request(`http://localhost/api/users/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ isAdmin }) }));
+    const promoted = await patch(created.id, true);
+    expect(promoted.status).toBe(200);
+    expect(await promoted.json()).toMatchObject({ id: created.id, name: "Masha", isAdmin: true });
+    expect(db.query("SELECT is_admin FROM users WHERE id=?").get(created.id)).toEqual({ is_admin: 1 });
+    expect(db.query("SELECT actor_id FROM audit_events WHERE action='user.updated' AND subject_id=?").get(created.id)).toEqual({ actor_id: "user_admin" });
+    const demoted = await patch(created.id, false);
+    expect(demoted.status).toBe(200);
+    expect(db.query("SELECT is_admin FROM users WHERE id=?").get(created.id)).toEqual({ is_admin: 0 });
+    expect((await patch("user_admin", false)).status).toBe(409);
+    expect((await patch("user_missing", true)).status).toBe(404);
+    db.close();
+  });
+
   test("rejects a non-admin user", async () => {
     const db = openDatabase(":memory:");
     await ensureBootstrapAdmin(db, { name: "Root", password: "bootstrap password" });
@@ -63,6 +80,8 @@ describe("admin user routes", () => {
     const session = new UserRepo(db).createSession(user.id);
     const response = await createHandler(db)(new Request("http://localhost/api/users", { headers: { cookie: `easyui_session=${session.token}` } }));
     expect(response.status).toBe(403);
+    const patched = await createHandler(db)(new Request(`http://localhost/api/users/${user.id}`, { method: "PATCH", headers: { cookie: `easyui_session=${session.token}`, "content-type": "application/json" }, body: JSON.stringify({ isAdmin: true }) }));
+    expect(patched.status).toBe(403);
     db.close();
   });
 });

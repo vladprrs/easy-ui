@@ -84,7 +84,7 @@ type Expectation =
 interface Case { run: () => Promise<Response>; expected: Expectation }
 
 // Shared mutable fixture state threaded through the ordered execution below.
-const state: { assetId?: string; referenceId?: string; screenId?: string; screenIds?:string[]; shareId?: string; prototypeInstanceId?:string; loginCookie?:string } = {};
+const state: { assetId?: string; referenceId?: string; screenId?: string; screenIds?:string[]; shareId?: string; prototypeInstanceId?:string; loginCookie?:string; operatorId?:string } = {};
 
 function orderedCases(): [string, Case][] {
   const ok = (status?: number, contentType?: string): Expectation => ({ kind: "success", status, contentType });
@@ -97,7 +97,8 @@ function orderedCases(): [string, Case][] {
     ["GET /api/schemas/component-definition.json", { run: () => call("GET", "/api/schemas/component-definition.json"), expected: ok() }],
     ["GET /api/capabilities", { run: () => call("GET", "/api/capabilities"), expected: ok() }],
     // Named users and cookie sessions
-    ["POST /api/users", { run: () => call("POST", "/api/users", { name: "Contract Operator", password: "operator password", isAdmin: false }), expected: ok(201) }],
+    ["POST /api/users", { run: async () => { const response = await call("POST", "/api/users", { name: "Contract Operator", password: "operator password", isAdmin: false }); state.operatorId = ((await response.clone().json()) as { id: string }).id; return response; }, expected: ok(201) }],
+    ["PATCH /api/users/{id}", { run: () => call("PATCH", `/api/users/${state.operatorId}`, { isAdmin: true }), expected: ok() }],
     ["GET /api/users", { run: () => call("GET", "/api/users"), expected: ok() }],
     ["POST /api/auth/login", { run: () => call("POST", "/api/auth/login", { name: "Login Fixture", password: "contract password" }), expected: ok() }],
     ["GET /api/auth/me", { run: () => call("GET", "/api/auth/me"), expected: ok() }],

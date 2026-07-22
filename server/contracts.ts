@@ -83,11 +83,15 @@ export const createUserRequestSchema = z.strictObject({
   password: z.string().min(8).max(256),
   isAdmin: z.boolean().optional().default(false),
 });
+export const updateUserRequestSchema = z.strictObject({
+  isAdmin: z.boolean(),
+});
 
 export const loginContract = registerContract({ method: "POST", path: "/api/auth/login", summary: "Create a named-user cookie session.", requestSchema: loginRequestSchema, responseSchema: z.strictObject({ user: authUserSchema, next: z.string().optional() }), validated: true, errors: [{ status: 401, code: "invalid_credentials" }, { status: 429, code: "rate_limited" }, { status: 422, code: "validation_failed" }] });
 export const logoutContract = registerContract({ method: "POST", path: "/api/auth/logout", summary: "Revoke the current cookie session.", status: 204, validated: true, errors: [] });
 export const meContract = registerContract({ method: "GET", path: "/api/auth/me", summary: "Return the current named user.", responseSchema: authUserSchema, validated: true, errors: [{ status: 401, code: "unauthorized" }] });
 export const createUserContract = registerContract({ method: "POST", path: "/api/users", summary: "Create a user (admin only).", status: 201, requestSchema: createUserRequestSchema, responseSchema: userPublicSchema, validated: true, errors: [{ status: 401, code: "unauthorized" }, { status: 403, code: "forbidden" }, { status: 409, code: "already_exists" }, { status: 422, code: "validation_failed" }] });
+export const updateUserContract = registerContract({ method: "PATCH", path: "/api/users/{id}", summary: "Update a user's admin flag (admin only).", requestSchema: updateUserRequestSchema, responseSchema: userPublicSchema, validated: true, errors: [{ status: 401, code: "unauthorized" }, { status: 403, code: "forbidden" }, { status: 404, code: "user_not_found" }, { status: 409, code: "bootstrap_admin_protected" }, { status: 422, code: "validation_failed" }] });
 export const listUsersContract = registerContract({ method: "GET", path: "/api/users", summary: "List users (admin only).", responseSchema: z.strictObject({ users: z.array(userPublicSchema) }), validated: true, errors: [{ status: 401, code: "unauthorized" }, { status: 403, code: "forbidden" }] });
 
 // --- Contracts registered by this task (T1) ---
