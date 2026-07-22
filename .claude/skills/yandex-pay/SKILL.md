@@ -5,7 +5,7 @@ description: Author and edit components and prototypes in the yandex-pay design 
 
 # Авторинг в дизайн-системе yandex-pay
 
-Скилл — how-to для добавления и правки компонентов и прототипов **в дизайн-системе yandex-pay** (custom-only, 100 компонентов `yp-*`). Источник истины по канону/шкалам/ролям — **`docs/design/yandex-pay.md`** (читай его перед работой). Механика публикации (driver.mjs, setup, скриншоты, версии) — общий скилл **`.claude/skills/author/SKILL.md`**; здесь она не дублируется.
+Скилл — how-to для добавления и правки компонентов и прототипов **в дизайн-системе yandex-pay** (custom-only, 100 компонентов `yp-*`). Источник истины по канону/шкалам/ролям — **`docs/design/yandex-pay.md`** (читай его перед работой). Механика публикации (driver.mjs, setup, скриншоты, версии) — общий скилл **`.claude/skills/author/SKILL.md`**; сборка **прототипов** в YP (скелет экрана, FlowRoot-футер, грабли YpBox/state) — скилл **`.claude/skills/yp-prototype/SKILL.md`**; здесь они не дублируются.
 
 Перед авторингом получи актуальный каталог: `node driver.mjs catalog yandex-pay` — только возвращённые exact definitions и `resolvedSpaceScale`.
 
