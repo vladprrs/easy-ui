@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { JSONUIProvider } from "@json-render/react";
 import { render, screen } from "@testing-library/react";
+import { useEffect } from "react";
 import { describe, expect, it } from "vitest";
 import type { PrototypeDoc } from "../prototype/schema";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
@@ -25,9 +26,11 @@ function regionSpec(): PrototypeDoc["screens"][number]["spec"] {
   };
 }
 
+// Мутация внешней переменной в рендере запрещена (react-hooks/globals) — пишем в эффекте.
 let captured: ScreenRegionsContract | null = null;
 function RegionsProbe() {
-  captured = useScreenRegions();
+  const regions = useScreenRegions();
+  useEffect(() => { captured = regions; }, [regions]);
   return null;
 }
 

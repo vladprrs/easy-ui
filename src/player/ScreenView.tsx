@@ -4,9 +4,8 @@ import type { PlayerOutletContext } from "./PlayerShell";
 import { DeviceFrame, isPlayerHelpHotkey, isPlayerHotkeyEvent, useStageZoom } from "./DeviceFrame";
 import { ScreensSidebar } from "./ScreensSidebar";
 import { buildPlayerPath, buildPrototypeRouteBase, documentLifetimeNonce, FlowResetBanner, type PlayerLocationState, usePlayerNavigation } from "./navigation";
-import { toRuntimeSpec, type RegionPolicy } from "../prototype/runtimeSpec";
+import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { ScreenSurface } from "./ScreenSurface";
-import { ScreenRegionsProvider } from "./ScreenRegions";
 import { useStatusBarPreference } from "./statusBarPreference";
 import { chip, chipActive, pillGhost, pillGhostOnDark } from "../app/chrome";
 import { PrototypeChrome } from "../app/PrototypeChrome";
@@ -111,11 +110,6 @@ export function ScreenView() {
   // customTypes — стабильный Set из контекста загрузчика; пересчёт дерева нужен только при его замене.
   // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const tree = useMemo(() => (screenSpec ? toRuntimeSpec(screenSpec, { customTypes }) : null), [screenSpec, customTypes]);
-  const viewerRegionDisposition = useMemo(() => ({
-    statusBar: statusBarHidden ? "drop" : "inline",
-    header: "inline",
-    footer: "inline",
-  } satisfies RegionPolicy), [statusBarHidden]);
   const numericVersion = version === undefined ? undefined : Number(version);
   // Вход в презентацию с текущего экрана (W1-2); present-маршруты живут вне /p-хрома.
   // Present не поддерживает guided browse: flow/step срезаются, прочий query сохраняется.
@@ -256,9 +250,7 @@ export function ScreenView() {
   const shareDialog = shareOpen ? <ShareDialog prototypeId={doc.id} versions={publishedVersions} currentVersion={numericVersion} onClose={() => setShareOpen(false)} /> : null;
   if (!screen) return <main className="flex h-dvh min-h-0 flex-col">{shareDialog}{chrome}<div className="flex min-h-0 flex-1 items-start justify-center bg-eui-graphite p-8 text-white"><section role="alert" className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h2 className="font-eui-display text-2xl font-bold">{player.screenMissingTitle}</h2><p className="mt-2 text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">{common.backToGallery}</Link></section></div></main>;
 
-  const rendered = <ScreenRegionsProvider disposition={viewerRegionDisposition} targets={{}}>
-    <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} misclickHighlights hostPrimitivesAllowed={device !== "desktop" || screen.canvas !== undefined} />
-  </ScreenRegionsProvider>;
+  const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} misclickHighlights hostPrimitivesAllowed={device !== "desktop" || screen.canvas !== undefined} />;
 
   return <main className="flex h-dvh min-h-0 flex-col">
     {shareDialog}
@@ -278,7 +270,7 @@ export function ScreenView() {
     <ScenarioBar doc={doc} currentScreen={screen.id} runtimeKey={runtimeKey} />
     <div className="flex min-h-0 flex-1 bg-eui-graphite text-white">
       <ScreensSidebar doc={doc} currentScreen={screen.id} collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((prev) => !prev)} />
-      <DeviceFrame device={device} canvas={screen.canvas} zoom={zoomValue} onEffectiveScale={stageZoom.onEffectiveScale} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}>
+      <DeviceFrame device={device} canvas={screen.canvas} zoom={zoomValue} onEffectiveScale={stageZoom.onEffectiveScale} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} statusBarHidden={statusBarHidden} scrollResetKey={screen.id}>
         <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>{rendered}</ScreenErrorBoundary>
       </DeviceFrame>
       {inspector.enabled && inspector.visible ? <InspectorPanel log={inspector.log} /> : null}

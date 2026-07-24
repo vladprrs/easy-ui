@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ThemeContent } from "../api/client";
 import { HostStageSurface } from "../catalog/hostPrimitives";
 import type { PrototypeDoc } from "../prototype/schema";
 import { player } from "../app/strings/player";
 import { canonicalViewport, playerDesktopMinStageHeight } from "../designSystems/deviceMetrics";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
+import { RegionStage } from "./RegionStage";
+import { ScreenRegionsProvider } from "./ScreenRegions";
 
 type Device = PrototypeDoc["device"];
 
@@ -86,22 +88,40 @@ const frameCard = "overflow-hidden bg-background text-foreground shadow-[0_20px_
  * scaled-обёртке: внешний контейнер размером `w×scale / h×scale`, transformed-inner
  * с `transform: scale()`. Размер обёртки считается от scale (не наоборот) —
  * ResizeObserver наблюдает только сам stage-вьюпорт (overflow-hidden, на его
- * размер scale не влияет), фидбэк-лупа нет. Desktop (auto-height) — fluid-ветка
- * с min-height из `playerDesktopMinStageHeight`.
+ * размер scale не влияет), фидбэк-лупа нет.
+ *
+ * Габариты фрейма (до scale) — всегда телефонной длины: у устройств с
+ * каноническим viewport высота фрейма **всегда каноническая** (mobile 844,
+ * tablet 1112), ширина — авторская (`canvas.width`) или каноническая. Desktop —
+ * fluid-ветка (auto-height, min-height из `playerDesktopMinStageHeight`).
+ *
+ * Внутри фрейма — телефонная сцена регионов:
+ * - **no-canvas** (mobile/tablet): {@link RegionStage} извлекает header/footer
+ *   (и statusBar по `statusBarHidden`) в пиннед-слоты, контент скроллится в
+ *   `player-stage`, Overlay заякорен на вьюпорт фрейма и не уезжает при скролле;
+ * - **canvas**: вертикальный скроллер `player-canvas` с canvas-размерным div
+ *   (`stageHost`, якорь Overlay, скроллится вместе с canvas);
+ * - **desktop-fluid**: минимальный провайдер регионов (`statusBar` по тумблеру,
+ *   header/footer inline) — тумблер статусбара сохраняет смысл.
  */
-export function DeviceFrame({ device, canvas, zoom, onEffectiveScale, designSystem, themeTokens, children }: {
+export function DeviceFrame({ device, canvas, zoom, onEffectiveScale, designSystem, themeTokens, statusBarHidden, scrollResetKey, children }: {
   device: Device;
   canvas?: { width: number; height: number } | undefined;
   zoom: StageZoom;
   onEffectiveScale?: ((scale: number) => void) | undefined;
   designSystem: string;
   themeTokens?: ThemeContent["tokens"] | undefined;
+  /** Тумблер «скрыть статус-бар»: `true` → statusBar `drop`, `false` → `extract`. */
+  statusBarHidden: boolean;
+  /** Смена ключа сбрасывает внутренний скролл сцены в 0 (навигация/Back). */
+  scrollResetKey?: string | undefined;
   children: ReactNode;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [stageHost, setStageHost] = useState<HTMLDivElement | null>(null);
   const stageHostRef = useMemo(() => ({ current: stageHost }), [stageHost]);
   const [avail, setAvail] = useState<{ width: number; height: number } | null>(null);
+  const canvasScrollerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const host = hostRef.current;
     if (!host || typeof ResizeObserver === "undefined") return;
@@ -111,16 +131,26 @@ export function DeviceFrame({ device, canvas, zoom, onEffectiveScale, designSyst
     observer.observe(host);
     return () => observer.disconnect();
   }, []);
+  // Canvas-скроллер сбрасывается на верх при навигации/Back (no-canvas сцена — сама
+  // в RegionStage; desktop-fluid без внутреннего скроллера).
+  useLayoutEffect(() => {
+    const scroller = canvasScrollerRef.current;
+    if (!scroller) return;
+    scroller.scrollTop = 0;
+    scroller.scrollLeft = 0;
+  }, [scrollResetKey]);
 
   const frame = canonicalViewport[device];
-  const contentWidth = canvas?.width ?? frame?.width;
-  const contentHeight = canvas?.height ?? frame?.height;
-  const hasFixedViewport = contentWidth !== undefined && contentHeight !== undefined;
+  // Фрейм — всегда телефонной длины: каноническая высота (844/1112) для устройств с
+  // viewport, иначе (desktop+canvas) — высота canvas. Ширина — авторская либо каноник.
+  const frameWidth = canvas?.width ?? frame?.width;
+  const frameHeight = frame?.height ?? canvas?.height;
+  const hasFixedViewport = frameWidth !== undefined && frameHeight !== undefined;
   const fitScale = hasFixedViewport && avail
     ? Math.min(
         1,
-        Math.max(avail.width - stagePadding * 2, 1) / contentWidth,
-        Math.max(avail.height - stagePadding * 2, 1) / contentHeight,
+        Math.max(avail.width - stagePadding * 2, 1) / frameWidth,
+        Math.max(avail.height - stagePadding * 2, 1) / frameHeight,
       )
     : 1;
   const scale = hasFixedViewport ? (zoom.mode === "fit" ? fitScale : zoom.zoom) : 1;
@@ -136,10 +166,20 @@ export function DeviceFrame({ device, canvas, zoom, onEffectiveScale, designSyst
         <div className="h-full w-full overflow-auto" data-eui-content-scroller="player">
           {hasFixedViewport ? (
             <div className="flex w-max min-w-full min-h-full items-center justify-center" style={{ padding: stagePadding }}>
-              <div className={`${frameCard} rounded-[28px]`} style={{ width: contentWidth * scale, height: contentHeight * scale }}>
+              <div className={`${frameCard} rounded-[28px]`} style={{ width: frameWidth * scale, height: frameHeight * scale }}>
                 <SurfaceSpacingScope systemId={designSystem} themeTokens={themeTokens}>
-                  <div ref={setStageHost} data-eui-stage-viewport="player" style={{ width: contentWidth, height: contentHeight, transform: `scale(${scale})`, transformOrigin: "top left" }}>
-                    <HostStageSurface stageHostRef={stageHostRef}>{children}</HostStageSurface>
+                  <div data-eui-stage-viewport="player" style={{ width: frameWidth, height: frameHeight, transform: `scale(${scale})`, transformOrigin: "top left" }}>
+                    {canvas ? (
+                      <div ref={canvasScrollerRef} className="h-full w-full overflow-x-hidden overflow-y-auto overscroll-y-contain" data-eui-content-scroller="player-canvas" style={{ scrollbarGutter: "stable" }}>
+                        <div ref={setStageHost} className="relative isolate" style={{ width: canvas.width, height: canvas.height }}>
+                          <HostStageSurface stageHostRef={stageHostRef}>{children}</HostStageSurface>
+                        </div>
+                      </div>
+                    ) : (
+                      <RegionStage statusBarDisposition={statusBarHidden ? "drop" : "extract"} scrollResetKey={scrollResetKey} surfaceName="player-stage">
+                        {children}
+                      </RegionStage>
+                    )}
                   </div>
                 </SurfaceSpacingScope>
               </div>
@@ -147,7 +187,9 @@ export function DeviceFrame({ device, canvas, zoom, onEffectiveScale, designSyst
           ) : (
             <div className="flex min-h-full" style={{ padding: stagePadding }}>
               <div className={`${frameCard} w-full rounded-3xl`} style={{ minHeight: playerDesktopMinStageHeight }}>
-                {children}
+                <ScreenRegionsProvider disposition={{ statusBar: statusBarHidden ? "drop" : "inline", header: "inline", footer: "inline" }} targets={{}}>
+                  {children}
+                </ScreenRegionsProvider>
               </div>
             </div>
           )}

@@ -324,17 +324,19 @@ describe("ScreenView Overlay device rules and stage", () => {
     expect(screen.getByText("Flow overlay")).toBeTruthy();
   });
 
-  it("keeps Overlay anchored to the transformed StageViewport while the player scroller moves", () => {
+  it("anchors flow Overlay to the RegionStage overlay layer, pinned while the in-stage content scroller moves", () => {
     renderPlayer(overlayDoc("mobile"), "/p/overlay-prototype/s/flow");
-    const scroller = document.querySelector<HTMLElement>("[data-eui-content-scroller='player']")!;
-    const stage = document.querySelector<HTMLElement>("[data-eui-stage-viewport='player']")!;
-    const overlay = stage.querySelector<HTMLElement>("[data-eui-host-primitive='Overlay']")!;
-    const hostBefore = overlay.parentElement;
+    // Overlay теперь живёт в overlay-слое RegionStage (не в транформ-обёртке напрямую)
+    // и заякорен на вьюпорт телефона, а не на скроллер контента.
+    const overlayLayer = document.querySelector<HTMLElement>("[data-eui-overlay-layer='player-stage']")!;
+    const scroller = document.querySelector<HTMLElement>("[data-eui-content-scroller='player-stage']")!;
+    const overlay = overlayLayer.querySelector<HTMLElement>("[data-eui-host-primitive='Overlay']")!;
+    expect(overlay.parentElement).toBe(overlayLayer);
+    expect(scroller.contains(overlay)).toBe(false);
     const bottomBefore = overlay.querySelector<HTMLElement>("[data-eui-overlay-content]")!.style.bottom;
     scroller.scrollTop = 120;
     fireEvent.scroll(scroller);
-    expect(overlay.parentElement).toBe(hostBefore);
-    expect(overlay.parentElement).toBe(stage);
+    expect(overlay.parentElement).toBe(overlayLayer);
     expect(overlay.querySelector<HTMLElement>("[data-eui-overlay-content]")!.style.bottom).toBe(bottomBefore);
   });
 });

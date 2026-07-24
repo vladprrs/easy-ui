@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate, useNavigationType, useParams } from "re
 import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import type { PrototypeDoc } from "../prototype/schema";
-import { toRuntimeSpec, type RegionPolicy } from "../prototype/runtimeSpec";
+import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { pillGhostOnDark } from "../app/chrome";
 import { player, present, presentDocumentTitle, share as shareStrings, shareDocumentTitle } from "../app/strings/player";
 import { useDocumentTitle } from "../app/useDocumentTitle";
@@ -18,7 +18,6 @@ import { PresentHud } from "./PresentHud";
 import { PrototypeLoader } from "./PrototypeLoader";
 import { PlayerHotkeysHelp, ScreenErrorBoundary } from "./ScreenView";
 import { ScreenSurface } from "./ScreenSurface";
-import { ScreenRegionsProvider } from "./ScreenRegions";
 import { useStatusBarPreference } from "./statusBarPreference";
 
 /** Презентация всегда вписывает фрейм в вьюпорт — зум-контролов нет (W1-2). */
@@ -118,11 +117,6 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
   const screen = doc.screens.find((item) => item.id === screenId);
   const hasStatusBar = screen !== undefined && Object.values(screen.spec.elements).some((element) => element.region === "statusBar");
   const tree = useMemo(() => (screen ? toRuntimeSpec(screen.spec, { customTypes }) : null), [screen, customTypes]);
-  const viewerRegionDisposition = useMemo(() => ({
-    statusBar: statusBarHidden ? "drop" : "inline",
-    header: "inline",
-    footer: "inline",
-  } satisfies RegionPolicy), [statusBarHidden]);
   // Возврат в плеер — на тот же экран, что открыт в презентации.
   // Query string (в т.ч. ?debug=1) сохраняется переходом (W1-5).
   const location = useLocation();
@@ -181,10 +175,8 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
         <FlowResetBanner compact />
         {mobile ? <FluidStage canvas={screen?.canvas} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} resetKey={screen?.id}>
           {content}
-        </FluidStage> : <DeviceFrame device={doc.device} canvas={screen?.canvas} zoom={fitZoom} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}>
-          <ScreenRegionsProvider disposition={viewerRegionDisposition} targets={{}}>
-            {content}
-          </ScreenRegionsProvider>
+        </FluidStage> : <DeviceFrame device={doc.device} canvas={screen?.canvas} zoom={fitZoom} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} statusBarHidden={statusBarHidden} scrollResetKey={screen?.id}>
+          {content}
         </DeviceFrame>}
         {mobile && <PresentHud open={hudOpen} onOpenChange={setHudOpen} navigation={navigation} current={currentIndex + 1} total={doc.screens.length} exitPath={exitPath} directEntry={directEntry} share={share} />}
       </div>
