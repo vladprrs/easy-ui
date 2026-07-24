@@ -5,6 +5,31 @@ const flowRoot = (scope: Page | Locator) => scope.locator('[data-eui-host-primit
 const fluidStage = (page: Page) => page.locator('[data-eui-stage-viewport="present-fluid"]');
 const fluidScroller = (page: Page) => page.locator('[data-eui-content-scroller="present-fluid"]');
 
+/**
+ * Framed-плеер и десктопный present теперь извлекают регионы во внутреннюю телефонную
+ * сцену `player-stage`: statusBar+header — в верхних пиннед-слотах, footer — в нижнем,
+ * контент — в скроллере. `status: "drop"` — тумблер статусбара выключил статусбар (слот пуст).
+ */
+async function expectRegionsExtracted(scope: Page | Locator, opts: { status: "extract" | "drop" }) {
+  const stage = scope.locator('[data-eui-stage-viewport="player-stage"]');
+  await expect(stage).toBeVisible();
+  const statusSlot = stage.locator('[data-eui-region="statusBar"]');
+  const headerSlot = stage.locator('[data-eui-region="header"]');
+  const footerSlot = stage.locator('[data-eui-region="footer"]');
+  const scroller = stage.locator('[data-eui-content-scroller="player-stage"]');
+  // header/footer — в пиннед-слотах, контент — в скроллере (а не в слотах).
+  await expect(headerSlot.getByText("E2E fixed header", { exact: true })).toBeVisible();
+  await expect(footerSlot.getByRole("button", { name: "Open regionless screen" })).toBeVisible();
+  await expect(scroller.getByRole("img", { name: "E2E long region content" })).toBeVisible();
+  await expect(headerSlot.getByRole("img", { name: "E2E long region content" })).toHaveCount(0);
+  await expect(footerSlot.getByRole("img", { name: "E2E long region content" })).toHaveCount(0);
+  if (opts.status === "extract") {
+    await expect(statusSlot.getByText("9:41 · E2E status", { exact: true })).toBeVisible();
+  } else {
+    await expect(scope.getByText("9:41 · E2E status", { exact: true })).toHaveCount(0);
+  }
+}
+
 async function expectRegionsInline(scope: Page | Locator) {
   const root = flowRoot(scope).filter({ hasText: "E2E fixed header" }).first();
   await expect(root).toBeVisible();
@@ -75,22 +100,23 @@ test.describe("mobile fluid screen regions", () => {
   });
 });
 
-test.describe("inline cross-surface rendering", () => {
-  test("framed player and desktop present keep authored regions inline; the viewer toggle only drops status", async ({ page }) => {
+test.describe("framed player and desktop present region extraction", () => {
+  test("framed player and desktop present extract authored regions into pinned slots; the viewer toggle drops status", async ({ page }) => {
     await page.goto(`/p/${SCREEN_REGIONS_ID}/s/regions?mobile=0`);
-    await expectRegionsInline(page.getByRole("region", { name: "Превью прототипа на устройстве" }));
+    await expectRegionsExtracted(page.getByRole("region", { name: "Превью прототипа на устройстве" }), { status: "extract" });
 
     await page.goto(`/p/${SCREEN_REGIONS_ID}/present/s/regions?mobile=0`);
-    await expectRegionsInline(page);
+    await expectRegionsExtracted(page, { status: "extract" });
     const toggle = page.getByRole("button", { name: "Скрыть статус-бар" });
     await expect(toggle).toHaveAttribute("aria-pressed", "false");
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByText("9:41 · E2E status", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("E2E fixed header", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Open regionless screen" })).toBeVisible();
+    // Тумблер = drop: статусбар исчез, header/footer остались в слотах.
+    await expectRegionsExtracted(page, { status: "drop" });
   });
+});
 
+test.describe("inline cross-surface rendering", () => {
   test("editor canvas and strip, CJM, and capture render regions inline", async ({ page }) => {
     await page.goto(`/p/${SCREEN_REGIONS_ID}/edit`);
     await expectRegionsInline(page.locator('[data-eui-stage-viewport="editor"]'));

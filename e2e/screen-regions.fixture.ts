@@ -3,6 +3,8 @@ import { ensureStarterPrototype, starterizePrototype } from "./starter-ds.fixtur
 
 export const SCREEN_REGIONS_ID = "e2e-screen-regions";
 export const SCREEN_REGIONS_GALLERY_ID = "e2e-screen-regions-gallery";
+/** Canvas-экран 390×1722 для проверки телефонной сцены плеера (высота фрейма каноническая). */
+export const SCREEN_REGIONS_CANVAS_ID = "e2e-player-canvas";
 
 const screenRegionsDoc = {
   version: 1,
@@ -95,7 +97,38 @@ const galleryHostOnlyDoc = {
   }],
 } as const;
 
+// Canvas-экран 390×1722: «телефон» вдвое длиннее каноника. Плеер обязан держать
+// высоту фрейма канонической (844), а сам canvas скроллить вертикально до низа.
+// Наполнение: верхний маркер, тяжёлый филлер и нижний маркер — чтобы низ canvas был
+// достижим скроллом. Ширина filler 390 совпадает с canvas.width.
+const canvasTallDoc = {
+  version: 1,
+  id: SCREEN_REGIONS_CANVAS_ID,
+  name: "E2E player canvas tall",
+  device: "mobile",
+  startScreen: "canvas",
+  state: {},
+  screens: [{
+    id: "canvas",
+    name: "Canvas 390×1722",
+    canvas: { width: 390, height: 1722 },
+    spec: {
+      root: "root",
+      elements: {
+        root: { type: "Stack", props: { gap: "none" }, children: ["canvas-top", "canvas-filler", "canvas-bottom"] },
+        "canvas-top": { type: "Text", props: { text: "E2E canvas top" } },
+        "canvas-filler": {
+          type: "Image",
+          props: { src: "/e2e-player-canvas-filler.svg", alt: "E2E canvas filler", width: 390, height: 1600 },
+        },
+        "canvas-bottom": { type: "Text", props: { text: "E2E canvas bottom" } },
+      },
+    },
+  }],
+} as const;
+
 export async function provisionScreenRegionFixtures(request: APIRequestContext, api = "/api"): Promise<void> {
   await ensureStarterPrototype(request, starterizePrototype(screenRegionsDoc), { api });
   await ensureStarterPrototype(request, starterizePrototype(galleryHostOnlyDoc), { api });
+  await ensureStarterPrototype(request, starterizePrototype(canvasTallDoc), { api });
 }
