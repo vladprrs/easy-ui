@@ -79,7 +79,8 @@ describe("FluidStage", () => {
     expect(scroller.firstElementChild?.classList.contains("min-h-full")).toBe(true);
     expect(stage.querySelector("[data-eui-host-primitive='Overlay']")?.textContent).toBe("Overlay copy");
     expect(stage.classList.contains("isolate")).toBe(true);
-    expect(stage.style.getPropertyValue("--eui-space-md")).toBe("14px");
+    // SurfaceSpacingScope теперь на h-dvh-обёртке FluidStage, а не на самом RegionStage-стейдже.
+    expect(stage.parentElement?.style.getPropertyValue("--eui-space-md")).toBe("14px");
     expect(scroller.style.scrollbarGutter).toBe("stable");
     expect(scroller.style.touchAction).toBe("");
   });

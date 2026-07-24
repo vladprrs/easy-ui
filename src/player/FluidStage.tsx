@@ -2,8 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import type { ThemeContent } from "../api/client";
 import { HostStageSurface } from "../catalog/hostPrimitives";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
-import type { RegionPolicy } from "../prototype/runtimeSpec";
-import { ScreenRegionsProvider } from "./ScreenRegions";
+import { RegionStage } from "./RegionStage";
 
 interface FluidStageProps {
   canvas?: { width: number; height: number } | undefined;
@@ -14,11 +13,6 @@ interface FluidStageProps {
 }
 
 const scrollerClassName = "h-full w-full overflow-x-auto overflow-y-auto overscroll-y-contain";
-const fluidRegionDisposition = {
-  statusBar: "drop",
-  header: "extract",
-  footer: "extract",
-} satisfies RegionPolicy;
 
 /**
  * Мобильная сцена презентации: flow занимает реальный viewport, а авторский
@@ -28,9 +22,6 @@ export function FluidStage({ canvas, designSystem, themeTokens, resetKey, childr
   const hostRef = useRef<HTMLDivElement>(null);
   const [stageHost, setStageHost] = useState<HTMLDivElement | null>(null);
   const stageHostRef = useMemo(() => ({ current: stageHost }), [stageHost]);
-  const [headerSlot, setHeaderSlot] = useState<HTMLDivElement | null>(null);
-  const [footerSlot, setFooterSlot] = useState<HTMLDivElement | null>(null);
-  const regionTargets = useMemo(() => ({ header: headerSlot, footer: footerSlot }), [footerSlot, headerSlot]);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [hostWidth, setHostWidth] = useState<number | null>(null);
 
@@ -52,26 +43,13 @@ export function FluidStage({ canvas, designSystem, themeTokens, resetKey, childr
   }, [canvas]);
 
   if (!canvas) {
+    // Реальный телефон рисует свой статусбар, поэтому present-flow его `drop`-ает.
+    // `h-dvh`-враппер и SurfaceSpacingScope — здесь: RegionStage height-agnostic.
     return <SurfaceSpacingScope systemId={designSystem} themeTokens={themeTokens}>
-      <div
-        className="relative isolate flex h-dvh w-full flex-col overflow-hidden"
-        data-eui-stage-viewport="present-fluid"
-      >
-        <ScreenRegionsProvider disposition={fluidRegionDisposition} targets={regionTargets}>
-          <HostStageSurface stageHostRef={stageHostRef}>
-            <div ref={setHeaderSlot} className="relative z-10 shrink-0" data-eui-region="header" />
-            <div ref={scrollerRef} className="relative z-0 min-h-0 w-full flex-1 overflow-x-auto overflow-y-auto overscroll-y-contain" data-eui-content-scroller="present-fluid" style={{ scrollbarGutter: "stable" }}>
-              <div className="min-h-full">{children}</div>
-            </div>
-            <div
-              ref={setFooterSlot}
-              className="relative z-10 shrink-0 [&:empty]:hidden"
-              data-eui-region="footer"
-              style={{ paddingBottom: "var(--eui-safe-area-bottom, env(safe-area-inset-bottom, 0px))" }}
-            />
-            <div ref={setStageHost} className="pointer-events-none absolute inset-0 z-20" data-eui-overlay-layer="present-fluid" />
-          </HostStageSurface>
-        </ScreenRegionsProvider>
+      <div className="h-dvh w-full">
+        <RegionStage statusBarDisposition="drop" scrollResetKey={resetKey} surfaceName="present-fluid">
+          {children}
+        </RegionStage>
       </div>
     </SurfaceSpacingScope>;
   }
