@@ -5,7 +5,8 @@ import { resolve } from "node:path";
 import { openDatabase } from "./db";
 import { createHandler } from "./main";
 import { prototypeDocSchema } from "../src/prototype/schema";
-import { ScreenshotService, themeAssetIds, validatePropsAgainstSchema, type RunJob, type WorkerResult } from "./screenshot/service";
+import { geometryRoleKeysOf, ScreenshotService, themeAssetIds, validatePropsAgainstSchema, type RunJob, type WorkerResult } from "./screenshot/service";
+import { classifyCaptureErrors, isInfraNoise } from "./screenshot/noise";
 import { CaptureSessionStore, isLoopbackAddress, matchAllowed } from "./screenshot/sessions";
 import { buildStaticAllowedUrls, rendererBuildFrom } from "./screenshot/allowedUrls";
 
@@ -113,7 +114,16 @@ describe("screenshot job API", () => {
     let workerJob: Parameters<RunJob>[0] | undefined;
     const runJob: RunJob = async (job) => {
       workerJob = job;
-      return { ok:true, geometry:{ rects:[{key:"root",instance:0,domIndex:0,x:1.25,y:2.5,width:10,height:0,layoutContext:null}], truncated:false, total:1 }, consoleErrors:[], pageErrors:[], browserVersion:"test/geometry" };
+      return { ok:true, geometry:{
+        rects:[{key:"root",instance:0,domIndex:0,x:1.25,y:2.5,width:10,height:0,layoutContext:null}], truncated:false, total:1,
+        safeArea:{top:0,right:0,bottom:0,left:0},
+        roleRects:{ panel:{x:0,y:0,width:390,height:844,source:"key",key:"root"} },
+        frame:{x:0,y:0,width:390,height:844,source:"surface"},
+        content:{x:0,y:0,width:390,height:844},
+        scroll:{width:390,height:844},
+        viewportOwnership:{frame:{width:390,height:844},content:{width:390,height:844},scroll:{width:390,height:844},scrollable:false,owners:[{role:"panel",areaPct:100,heightPct:100}],unownedPct:0},
+        issues:[{code:"footer-owns-page",severity:"warn",message:"footer owns the page",detail:{}}],
+      }, consoleErrors:[], consoleWarnings:["slow render"], pageErrors:[], browserVersion:"test/geometry" };
     };
     const service = makeService(db, dir, runJob);
     const handler = createTestHandler(db, { dataDir:dir, screenshots:service });
@@ -122,9 +132,48 @@ describe("screenshot job API", () => {
     const {jobId} = await accepted.json() as {jobId:string};
     for (let i=0; i<50 && service.get(jobId).status !== "done"; i++) await Bun.sleep(5);
     const final = service.get(jobId);
-    expect(workerJob).toMatchObject({ probe:"geometry", geometryLimit:2000 });
+    expect(workerJob).toMatchObject({ probe:"geometry", geometryLimit:2000, geometryRoleKeys:{ panel:expect.any(String) } });
     expect(final.result).toMatchObject({ kind:"geometry", resolvedRev:1, prototypeInstanceId:expect.any(String), componentPins:[], designSystemMetaVersion:null, resolvedSpaceScale:{md:"12px"}, viewport:{width:390,height:844}, dpr:2, rects:[{key:"root",width:10,height:0}], truncated:false, total:1 });
+    expect(final.result).toMatchObject({
+      captureClean:true, productErrors:[], infraNoise:[], runtimeWarnings:["slow render"],
+      roleRects:{ panel:{ width:390 } }, safeArea:{ top:0 }, issues:[{ code:"footer-owns-page" }],
+      viewportOwnership:{ scrollable:false, unownedPct:0 },
+    });
     expect((db.query("SELECT count(*) AS n FROM assets").get() as {n:number}).n).toBe(0);
+  });
+
+  test("image result splits product errors from infrastructure noise and keeps legacy fields", async () => {
+    const { db, dir, handler: h } = await setup();
+    expect((await h(req("/prototypes", "POST", { doc: await helloDoc("clean") }))).status).toBe(201);
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1]);
+    const consoleErrors = [
+      "Failed to load resource: 404 (http://127.0.0.1:8787/favicon.ico)",
+      "ResizeObserver loop completed with undelivered notifications.",
+      "net::ERR_NETWORK_CHANGED",
+      "Uncaught TypeError: props.items is not iterable (http://127.0.0.1:8787/api/components/x/versions/1/bundle.js)",
+      "extension error (chrome-extension://abcdef/inject.js)",
+      "Blocked script (https://cdn.example.com/tracker.js)",
+    ];
+    const runJob: RunJob = async () => ({ ok: true, pngBase64: Buffer.from(png).toString("base64"), width: 1, height: 1, consoleErrors, consoleWarnings: ["[overlay] warning"], pageErrors: ["boom in prototype code"], browserVersion: "test/1" });
+    const service = makeService(db, dir, runJob);
+    const { jobId } = service.enqueuePrototype("clean", "welcome", { viewport: { width: 390, height: 844 } });
+    for (let i = 0; i < 50 && service.get(jobId).status !== "done"; i++) await Bun.sleep(5);
+    const result = service.get(jobId).result;
+    if (result?.kind !== "image") throw new Error("expected image result");
+    expect(result.imageProduced).toBe(true);
+    expect(result.captureClean).toBe(false);
+    expect(result.productErrors).toEqual(["Uncaught TypeError: props.items is not iterable (http://127.0.0.1:8787/api/components/x/versions/1/bundle.js)", "boom in prototype code"]);
+    expect(result.infraNoise).toHaveLength(5);
+    expect(result.runtimeWarnings).toEqual(["[overlay] warning"]);
+    // Legacy fields stay verbatim for older clients.
+    expect(result.consoleErrors).toEqual(consoleErrors);
+    expect(result.pageErrors).toEqual(["boom in prototype code"]);
+  });
+
+  test("geometry role keys come from the authored screen regions", async () => {
+    const doc = await helloDoc("roles");
+    expect(geometryRoleKeysOf(doc, doc.screens[0]!.id)).toMatchObject({ panel: doc.screens[0]!.spec.root });
+    expect(geometryRoleKeysOf(doc, "missing")).toEqual({});
   });
 
   test("rejects unknown probe modes", async () => {
@@ -134,6 +183,31 @@ describe("screenshot job API", () => {
     const response=await handler(req("/prototypes/bad-probe/screens/welcome/screenshot","POST",{probe:"pixels",viewport:{width:390,height:844}}));
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({error:{code:"invalid_request"}});
+  });
+});
+
+describe("capture error classification", () => {
+  const origin = "http://127.0.0.1:8787";
+  test("allowlisted noise never counts as a product error", () => {
+    for (const message of [
+      "GET http://127.0.0.1:8787/favicon.ico 404",
+      "Denied loading chrome-extension://xyz/content.js",
+      "moz-extension://abc/inject.js failed",
+      "Fetch failed: net::ERR_NETWORK_CHANGED",
+      "ResizeObserver loop completed with undelivered notifications.",
+      "ResizeObserver loop limit exceeded",
+      "Refused to connect to https://analytics.example.com/collect",
+    ]) expect(isInfraNoise(message, origin)).toBe(true);
+  });
+
+  test("errors of the captured document stay product errors", () => {
+    for (const message of [
+      "TypeError: cannot read properties of undefined",
+      "Failed to load /api/components/yp-box/versions/3/bundle.js (http://127.0.0.1:8787/api/components/yp-box/versions/3/bundle.js)",
+      "[overlay] Overlay is not rendered",
+    ]) expect(isInfraNoise(message, origin)).toBe(false);
+    const classified = classifyCaptureErrors(["favicon.ico 404", "TypeError: boom"], { captureOrigin: origin });
+    expect(classified).toEqual({ productErrors: ["TypeError: boom"], infraNoise: ["favicon.ico 404"] });
   });
 });
 

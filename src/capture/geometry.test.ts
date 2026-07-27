@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectGeometry, unionRects } from "./geometry.mjs";
+import { analyzeGeometry, collectGeometry, rectIntersection, unionArea, unionRects } from "./geometry.mjs";
 
 type Box = { left:number; top:number; right:number; bottom:number; width:number; height:number; x:number; y:number; toJSON():unknown };
 const box = (left:number, top:number, width:number, height:number):Box => ({ left, top, right:left+width, bottom:top+height, width, height, x:left, y:top, toJSON(){ return this; } });
@@ -73,5 +73,65 @@ describe("geometry collector", () => {
       expect(portal).toMatchObject({x:20,y:30,width:15,height:16});
       expect(portal).not.toHaveProperty("parentKey");
     } finally { restore(); }
+  });
+
+  it("resolves role rects from authored keys and DOM slots, plus safe area and content bounds", () => {
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface"><span data-eui-key="root" style="display:contents"><span data-eui-key="head" style="display:contents"><div data-rect="head" data-eui-region="header"></div></span><span data-eui-key="foot" style="display:contents"><div data-rect="foot"></div></span></span></div>`;
+    const restore = installRects({ surface:box(0, 0, 390, 844), head:box(0, 0, 390, 60), foot:box(0, 784, 390, 60) });
+    try {
+      const result = collectGeometry({ roleKeys: { panel:"root", "region:footer":"foot" } });
+      expect(result.roleRects.panel).toMatchObject({ x:0, y:0, width:390, height:844, source:"key", key:"root" });
+      expect(result.roleRects["region:footer"]).toMatchObject({ y:784, height:60, source:"key" });
+      // Header has no roleKey: the DOM slot marker is the fallback.
+      expect(result.roleRects["region:header"]).toMatchObject({ height:60, source:"selector" });
+      expect(result.frame).toMatchObject({ width:390, height:844, source:"surface" });
+      expect(result.content).toMatchObject({ x:0, y:0, width:390, height:844 });
+      expect(result.safeArea).toEqual({ top:0, right:0, bottom:0, left:0 });
+      expect(document.querySelector("#eui-capture-surface")?.children.length).toBe(1); // probe removed
+    } finally { restore(); }
+  });
+});
+
+describe("geometry analysis", () => {
+  const frame = { x:0, y:0, width:390, height:844 };
+  it("computes viewport ownership over the frame", () => {
+    const result = analyzeGeometry({
+      frame,
+      content: { x:0, y:0, width:390, height:844 },
+      scroll: { width:390, height:1200 },
+      roleRects: { "region:header":{ x:0, y:0, width:390, height:84 }, "region:footer":{ x:0, y:760, width:390, height:84 } },
+    });
+    expect(result.viewportOwnership.scrollable).toBe(true);
+    expect(result.viewportOwnership.owners).toEqual([
+      { role:"region:header", areaPct:9.95, heightPct:9.95 },
+      { role:"region:footer", areaPct:9.95, heightPct:9.95 },
+    ]);
+    expect(result.viewportOwnership.unownedPct).toBeCloseTo(80.1, 1);
+    expect(result.issues).toEqual([]);
+  });
+
+  it("detects clipping, overlap, and a footer that owns the page", () => {
+    const clipped = analyzeGeometry({ frame, content:{ x:0, y:0, width:420, height:900 }, roleRects:{} });
+    expect(clipped.issues).toMatchObject([{ code:"content-clipped-by-frame", detail:{ overflowRight:30, overflowBottom:56 } }]);
+
+    const overlapping = analyzeGeometry({
+      frame,
+      content: { x:0, y:0, width:390, height:844 },
+      roleRects: { "region:header":{ x:0, y:0, width:390, height:100 }, "region:footer":{ x:0, y:50, width:390, height:100 } },
+    });
+    expect(overlapping.issues.map((issue) => issue.code)).toContain("overlapping-regions");
+    expect(overlapping.issues.find((issue) => issue.code === "overlapping-regions")?.detail).toMatchObject({ roles:["region:header", "region:footer"] });
+
+    const heavyFooter = analyzeGeometry({ frame, content:{ x:0, y:0, width:390, height:844 }, roleRects:{ "region:footer":{ x:0, y:400, width:390, height:444 } } });
+    expect(heavyFooter.issues.map((issue) => issue.code)).toEqual(["footer-owns-page"]);
+    expect(heavyFooter.issues[0]?.detail).toMatchObject({ footerHeight:444, frameHeight:844 });
+  });
+
+  it("stays silent on a well-formed screen and on missing measurements", () => {
+    expect(analyzeGeometry({ frame, content:{ x:0, y:0, width:390, height:844 }, roleRects:{ "region:footer":{ x:0, y:760, width:390, height:84 } } }).issues).toEqual([]);
+    expect(analyzeGeometry().issues).toEqual([]);
+    expect(analyzeGeometry().viewportOwnership).toMatchObject({ frame:null, owners:[], unownedPct:0 });
+    expect(unionArea([{ x:0, y:0, width:10, height:10 }, { x:5, y:0, width:10, height:10 }])).toBe(150);
+    expect(rectIntersection({ x:0, y:0, width:5, height:5 }, { x:10, y:10, width:5, height:5 })).toBeNull();
   });
 });

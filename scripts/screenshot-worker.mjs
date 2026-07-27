@@ -5,7 +5,7 @@
 // context.route allowlist keyed on the exact capture origin + allowed paths.
 /* global process, Buffer, URL, window */
 import net from "node:net";
-import { collectGeometry } from "../src/capture/geometry.mjs";
+import { analyzeGeometry, collectGeometry } from "../src/capture/geometry.mjs";
 
 /** Deterministic JSON for canonical readiness comparison (mirrors src/capture/canonicalJson.ts). */
 export function canonicalStringify(value) {
@@ -54,6 +54,7 @@ async function readStdin() {
 async function run(job) {
   const { chromium } = await import("playwright");
   const consoleErrors = [];
+  const consoleWarnings = [];
   const pageErrors = [];
 
   const denyProxy = net.createServer((socket) => socket.destroy());
@@ -103,9 +104,12 @@ async function run(job) {
 
     const page = await context.newPage();
     page.on("console", (msg) => {
-      if (msg.type() !== "error" || consoleErrors.length >= 100) return;
+      const type = msg.type();
+      if (type !== "error" && type !== "warning") return;
+      const sink = type === "error" ? consoleErrors : consoleWarnings;
+      if (sink.length >= 100) return;
       const url = msg.location()?.url;
-      consoleErrors.push(url ? `${msg.text()} (${url})` : msg.text());
+      sink.push(url ? `${msg.text()} (${url})` : msg.text());
     });
     page.on("pageerror", (err) => { if (pageErrors.length < 100) pageErrors.push(err.message); });
 
@@ -113,21 +117,23 @@ async function run(job) {
 
     const handle = await page.waitForFunction(() => window.__EUI_CAPTURE_READY__ ?? null, null, { timeout: 20000, polling: 100 });
     const ready = await handle.jsonValue();
-    if (!ready || ready.status === "error") return { ok: false, error: ready?.error ?? "capture reported error", consoleErrors, pageErrors };
+    if (!ready || ready.status === "error") return { ok: false, error: ready?.error ?? "capture reported error", consoleErrors, consoleWarnings, pageErrors };
     if (canonicalStringify(readyToExpected(ready)) !== canonicalStringify(job.expected)) {
-      return { ok: false, error: `readiness mismatch: got ${canonicalStringify(readyToExpected(ready))} expected ${canonicalStringify(job.expected)}`, consoleErrors, pageErrors };
+      return { ok: false, error: `readiness mismatch: got ${canonicalStringify(readyToExpected(ready))} expected ${canonicalStringify(job.expected)}`, consoleErrors, consoleWarnings, pageErrors };
     }
 
     if (job.probe === "geometry") {
-      const geometry = await page.evaluate(collectGeometry, { limit: job.geometryLimit });
-      return { ok: true, geometry, consoleErrors, pageErrors, browserVersion: browser.version() };
+      const measurements = await page.evaluate(collectGeometry, { limit: job.geometryLimit, roleKeys: job.geometryRoleKeys ?? {} });
+      // Structural analysis runs outside the page: it is pure and unit-tested without a DOM.
+      const geometry = { ...measurements, ...analyzeGeometry(measurements) };
+      return { ok: true, geometry, consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version() };
     }
 
     const el = await page.$("#eui-capture-surface");
     const buf = el ? await el.screenshot({ type: "png" }) : await page.screenshot({ type: "png" });
     const width = buf.length >= 24 ? buf.readUInt32BE(16) : job.viewport.width;
     const height = buf.length >= 24 ? buf.readUInt32BE(20) : job.viewport.height;
-    return { ok: true, pngBase64: buf.toString("base64"), width, height, consoleErrors, pageErrors, browserVersion: browser.version() };
+    return { ok: true, pngBase64: buf.toString("base64"), width, height, consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version() };
   } finally {
     try { await context?.close(); } catch { /* best effort */ }
     try { await browser?.close(); } catch { /* best effort */ }

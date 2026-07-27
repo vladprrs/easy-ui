@@ -5,8 +5,11 @@ import { resolve } from "node:path";
 import { openDatabase } from "./db";
 import { ensureBootstrapAdmin } from "./users";
 import { prototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
+import { ScreenshotService, type RunJob } from "./screenshot/service";
 import {
   assertViewportPixelBudget,
+  snapExitCode,
+  summarizeCapture,
   analyzeGeometryGaps,
   buildBaselineMembers,
   buildBaselinePlan,
@@ -25,15 +28,43 @@ afterEach(async () => {
   for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
 });
 
-async function setup(legacyBasicAuth?: string) {
+async function setup(legacyBasicAuth?: string, runJob?: RunJob) {
   const directory = await mkdtemp(resolve(process.cwd(), ".driver-cli-test-"));
   directories.push(directory);
   const db = openDatabase(":memory:");
   databases.push(db);
   await ensureBootstrapAdmin(db, { name: "Driver Admin", password: "driver-test-password" });
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: createTestHandler(db, { dataDir: directory, legacyBasicAuth }) });
+  const screenshots = runJob
+    ? new ScreenshotService({ db, dataDir: directory, serveDist: "dist", captureOrigin: "http://127.0.0.1:8787", chromiumAvailable: true, runJob })
+    : undefined;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: createTestHandler(db, { dataDir: directory, legacyBasicAuth, screenshots }) });
   servers.push(server);
-  return { db, api: `http://127.0.0.1:${server.port}/api` };
+  return { db, directory, api: `http://127.0.0.1:${server.port}/api` };
+}
+
+/** Worker stub: one PNG per call, with whatever console output the case needs. */
+function pngRunJob(consoleErrors: string[] = [], pageErrors: string[] = []): { runJob: RunJob; calls: () => number } {
+  let calls = 0;
+  const runJob: RunJob = async () => {
+    calls += 1;
+    return { ok: true, pngBase64: Buffer.from(png()).toString("base64"), width: 2, height: 3, consoleErrors, pageErrors, browserVersion: "test/1" };
+  };
+  return { runJob, calls: () => calls };
+}
+
+async function saveDoc(api: string, doc: PrototypeDoc) {
+  const response = await fetch(`${api}/prototypes`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ doc, message: "snap fixture" }),
+  });
+  expect(response.status).toBe(201);
+}
+
+async function twoScreenDoc(id: string): Promise<PrototypeDoc> {
+  const base = await fixture(id);
+  const first = base.screens[0]!;
+  return { ...base, screens: [first, { ...first, id: "second" }] };
 }
 
 async function run(api: string, args: string[], legacyBasicAuth = "") {
@@ -167,7 +198,84 @@ describe("author driver CLI", () => {
   });
 });
 
+describe("author driver snap contract", () => {
+  test("exit 0 when every screen produced a PNG without product errors", async () => {
+    const { api, directory } = await setup(undefined, pngRunJob(["GET /favicon.ico 404", "ResizeObserver loop completed with undelivered notifications"]).runJob);
+    await saveDoc(api, await fixture("snap-clean"));
+    const result = await run(api, ["snap", "snap-clean", `${directory}/shots`, "--json"]);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as { exitCode: number; screens: { screenId: string; imageProduced: boolean; captureClean: boolean; infraNoise: string[]; path: string }[] };
+    expect(payload.exitCode).toBe(0);
+    expect(payload.screens).toHaveLength(1);
+    expect(payload.screens[0]).toMatchObject({ imageProduced: true, captureClean: true, productErrors: [] });
+    expect(payload.screens[0]!.infraNoise).toHaveLength(2);
+    expect(await Bun.file(payload.screens[0]!.path).exists()).toBe(true);
+  });
+
+  test("exit 2 when a PNG was produced but the prototype logged errors", async () => {
+    const { api, directory } = await setup(undefined, pngRunJob(["TypeError: props.items is not iterable"]).runJob);
+    await saveDoc(api, await fixture("snap-dirty"));
+    const result = await run(api, ["snap", "snap-dirty", `${directory}/shots`, "--json"]);
+    expect(result.exitCode).toBe(2);
+    const payload = JSON.parse(result.stdout) as { exitCode: number; screens: { imageProduced: boolean; productErrors: string[]; attempts: number; path: string }[] };
+    expect(payload.exitCode).toBe(2);
+    expect(payload.screens[0]).toMatchObject({ imageProduced: true, captureClean: false, attempts: 1 });
+    expect(payload.screens[0]!.productErrors).toEqual(["TypeError: props.items is not iterable"]);
+    // No retry on product errors, and the PNG is still on disk.
+    expect(await Bun.file(payload.screens[0]!.path).exists()).toBe(true);
+  });
+
+  test("exit 1 with two attempts when the capture never produces an image", async () => {
+    let calls = 0;
+    const runJob: RunJob = async () => { calls += 1; return { ok: false, error: "capture reported error" }; };
+    const { api, directory } = await setup(undefined, runJob);
+    await saveDoc(api, await fixture("snap-broken"));
+    const result = await run(api, ["snap", "snap-broken", `${directory}/shots`, "--json"]);
+    expect(result.exitCode).toBe(1);
+    expect(calls).toBe(2); // infra failure is retried exactly once
+    const payload = JSON.parse(result.stdout) as { screens: { imageProduced: boolean; attempts: number; failure: string }[] };
+    expect(payload.screens[0]).toMatchObject({ imageProduced: false, attempts: 2 });
+    expect(payload.screens[0]!.failure).toContain("capture reported error");
+  });
+
+  test("--all-screens fans status out over every screen and stays machine-readable", async () => {
+    const { api } = await setup();
+    await saveDoc(api, await twoScreenDoc("status-all"));
+    const result = await run(api, ["status", "status-all", "--all-screens", "--json"]);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as { screens: { screenId: string; renderable: boolean }[] };
+    expect(payload.screens.map((screen) => screen.screenId)).toEqual(["welcome", "second"]);
+    expect(payload.screens.every((screen) => screen.renderable)).toBe(true);
+    const missing = await run(api, ["status", "status-all"]);
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain("--all-screens");
+  });
+
+  test("snap fans out over every screen of the draft", async () => {
+    const stub = pngRunJob();
+    const { api, directory } = await setup(undefined, stub.runJob);
+    await saveDoc(api, await twoScreenDoc("snap-all"));
+    const result = await run(api, ["snap", "snap-all", `${directory}/shots`, "--all-screens", "--json"]);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as { screens: { screenId: string }[] };
+    expect(payload.screens.map((screen) => screen.screenId)).toEqual(["welcome", "second"]);
+    expect(stub.calls()).toBe(2);
+  });
+});
+
 describe("author driver planners", () => {
+  test("capture summaries classify results and map onto exit codes", () => {
+    expect(summarizeCapture({ imageProduced: true, captureClean: true, productErrors: [], infraNoise: ["favicon"], runtimeWarnings: ["w"] }))
+      .toEqual({ imageProduced: true, captureClean: true, productErrors: [], infraNoise: ["favicon"], runtimeWarnings: ["w"] });
+    // Pre-7.1 servers do not classify: raw browser errors stay product errors.
+    expect(summarizeCapture({ imageUrl: "/api/assets/x", consoleErrors: ["boom"], pageErrors: [] }))
+      .toMatchObject({ imageProduced: true, captureClean: false, productErrors: ["boom"], infraNoise: [] });
+    expect(snapExitCode([{ imageProduced: true, productErrors: [] }])).toBe(0);
+    expect(snapExitCode([{ imageProduced: true, productErrors: ["boom"] }])).toBe(2);
+    expect(snapExitCode([{ imageProduced: false, productErrors: ["boom"] }])).toBe(1);
+    expect(snapExitCode([])).toBe(0);
+  });
+
   test("geometry gaps require static flow and confirming non-wrapped flex", () => {
     const screen: {spec:{root:string;elements:Record<string,{type:string;props:Record<string,unknown>;children?:string[];repeat?:unknown}>}} = { spec:{ root:"stack", elements:{
       stack:{type:"Stack",props:{direction:"vertical"},children:["a","b"]},

@@ -31,4 +31,16 @@ declare module "*/author/driver.mjs" {
     definitions: Record<string,{layout?:{flow?:unknown}}>,
     geometry: {rects:Array<{key:string;instance:number;parentKey?:string;parentInstance?:number;domIndex:number;x:number;y:number;width:number;height:number;layoutContext:{display:string;flexDirection:string;flexWrap:string;rowGap:string;columnGap:string}|null}>},
   ): Array<{key:string;instance:number;reason:string|null;cssGap:{rowGap:string;columnGap:string}|null;observed:number[]|null}>;
+  export const EXIT: { readonly ok: 0; readonly failed: 1; readonly productErrors: 2 };
+  export const SNAP_ATTEMPTS: number;
+  export const RETRY_BACKOFF_MS: number[];
+  export interface DriverCaptureSummary {
+    imageProduced: boolean;
+    captureClean: boolean;
+    productErrors: string[];
+    infraNoise: string[];
+    runtimeWarnings: string[];
+  }
+  export function summarizeCapture(result: Record<string, unknown> | null | undefined): DriverCaptureSummary;
+  export function snapExitCode(rows: readonly { imageProduced: boolean; productErrors: readonly string[] }[]): 0 | 1 | 2;
 }

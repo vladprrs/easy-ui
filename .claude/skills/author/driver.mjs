@@ -17,13 +17,26 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] | component-move <id> --design-system <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] | diff <protoId> [revA] [revB] [--json] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] [--json] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] | status <prototypeId> <screenId>";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] | component-move <id> --design-system <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] | status <prototypeId> [screenId] [--all-screens]\nevery verb accepts --json; snap exits 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG)";
+
+/** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
+export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
 
 class CliError extends Error {
-  constructor(message, { usage = false } = {}) {
+  constructor(message, { usage = false, exitCode = EXIT.failed } = {}) {
     super(message);
     this.usage = usage;
+    this.exitCode = exitCode;
   }
+}
+
+let jsonMode = false;
+/** Human line printed only outside --json; JSON mode owns stdout entirely. */
+const out = (line) => { if (!jsonMode) console.log(line); };
+/** Terminal output of a verb: a JSON document in --json mode, human lines otherwise. */
+function report(lines, payload) {
+  if (jsonMode) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else for (const line of [lines].flat()) console.log(line);
 }
 
 function invalid(message) {
@@ -39,16 +52,24 @@ const viewportFlag = {
   },
 };
 
+const jsonFlag = { "--json": { value: false, key: "json" } };
+const allScreensFlag = { "--all-screens": { value: false, key: "allScreens" } };
+
 export const flagSpecs = Object.freeze({
-  component: { "--design-system": { value: true, key: "designSystem" } },
-  "component-move": { "--design-system": { value: true, key: "designSystem" } },
-  diff: { "--json": { value: false, key: "json" } },
+  component: { ...jsonFlag, "--design-system": { value: true, key: "designSystem" } },
+  "component-move": { ...jsonFlag, "--design-system": { value: true, key: "designSystem" } },
+  "design-system": { ...jsonFlag },
+  prototype: { ...jsonFlag },
+  catalog: { ...jsonFlag },
+  diff: { ...jsonFlag },
   baseline: {
+    ...jsonFlag,
     "--viewport": { ...viewportFlag, key: "viewport" },
     "--theme": { value: true, key: "theme", enum: ["light", "dark"] },
     "--dsf": { value: true, key: "dsf", enum: ["1", "2", "3"], parse: Number },
   },
   check: {
+    ...jsonFlag,
     "--threshold": {
       value: true,
       key: "threshold",
@@ -58,8 +79,13 @@ export const flagSpecs = Object.freeze({
         return number;
       },
     },
-    "--json": { value: false, key: "json" },
   },
+  geometry: { ...jsonFlag },
+  get: { ...jsonFlag },
+  delete: { ...jsonFlag },
+  shoot: { ...jsonFlag },
+  snap: { ...jsonFlag, ...allScreensFlag },
+  status: { ...jsonFlag, ...allScreensFlag },
 });
 
 const ranges = Object.freeze({
@@ -76,7 +102,7 @@ const ranges = Object.freeze({
   delete: [2, 2],
   shoot: [1, 2],
   snap: [1, 2],
-  status: [2, 2],
+  status: [1, 2],
 });
 
 export function parseArgs(argv) {
@@ -108,21 +134,43 @@ export function parseArgs(argv) {
   }
   if (positionals.length < range[0] || positionals.length > range[1]) invalid(`invalid arguments for ${command}`);
   if (command === "component-move" && flags.designSystem === undefined) invalid("component-move requires --design-system <id>");
+  if (command === "status" && positionals.length < 2 && !flags.allScreens) invalid("status requires <screenId> or --all-screens");
   return { cmd: command, args: positionals, flags };
 }
 
-async function call(method, path, body) {
-  const response = await client.request(path, {
-    method,
-    headers: {
-      ...(body !== undefined ? { "content-type": "application/json" } : {}),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  const text = await response.text();
-  let json;
-  try { json = text ? JSON.parse(text) : null; } catch { json = text; }
-  return { status: response.status, json };
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+/** Retries only transient server-side failures; the auth session is minted once per process. */
+export const RETRY_BACKOFF_MS = [500, 1500];
+const isTransient = (status) => status >= 500;
+
+async function call(method, path, body, options = {}) {
+  // Reads are retried by default; writes only when the caller opts in (snap enqueue).
+  const retries = options.retries ?? (method === "GET" ? RETRY_BACKOFF_MS.length : 0);
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt > 0) await delay(RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)]);
+    let response;
+    try {
+      response = await client.request(path, {
+        method,
+        headers: {
+          ...(body !== undefined ? { "content-type": "application/json" } : {}),
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt === retries) throw error;
+      continue;
+    }
+    const text = await response.text();
+    let json;
+    try { json = text ? JSON.parse(text) : null; } catch { json = text; }
+    if (isTransient(response.status) && attempt < retries) continue;
+    return { status: response.status, json };
+  }
+  throw lastError;
 }
 
 function errorCode(response) {
@@ -144,8 +192,6 @@ async function getMeta(kind, id) {
   if (response.status === 404) return null;
   return requireOk(`GET /${kind}/${id}`, response);
 }
-
-const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 export async function pollJob(path, { deadlineMs }) {
   const deadline = Date.now() + deadlineMs;
@@ -306,6 +352,8 @@ export function analyzeGeometryGaps(screen, definitions, geometry) {
   });
 }
 
+const formatRect = (rect) => (rect ? `${rect.x},${rect.y} ${rect.width}x${rect.height}` : "-");
+
 async function runGeometry(args) {
   const [id, screenId] = args;
   const encoded = encodeURIComponent(id);
@@ -323,15 +371,111 @@ async function runGeometry(args) {
   const state = await pollJob(`/screenshot-jobs/${encodeURIComponent(queued.jobId)}`, { deadlineMs: 120_000 });
   if (state.status !== "done" || state.result?.kind !== "geometry") throw new CliError(`geometry ${state.status}: ${JSON.stringify(state)}`);
   const definitions = Object.fromEntries([...system.components, ...system.hostPrimitives, ...manifest.components].map((item) => [item.name, item]));
-  const gaps = new Map(analyzeGeometryGaps(screen, definitions, state.result).map((item) => [`${item.key}\u0000${item.instance}`, item]));
-  console.log(`geometry ${id}/${screenId} rev=${state.result.resolvedRev} viewport=${state.result.viewport.width}x${state.result.viewport.height} dpr=${state.result.dpr} rects=${state.result.rects.length}/${state.result.total}${state.result.truncated ? " truncated" : ""}`);
-  for (const rect of state.result.rects) {
-    console.log(`${rect.key}#${rect.instance} parent=${rect.parentKey === undefined ? "-" : `${rect.parentKey}#${rect.parentInstance}`} dom=${rect.domIndex} rect=${rect.x},${rect.y} ${rect.width}x${rect.height}${rect.hidden ? " hidden" : ""}`);
-    console.log(`  layoutContext: ${rect.layoutContext ? JSON.stringify(rect.layoutContext) : "null"}`);
-    const gap = gaps.get(`${rect.key}\u0000${rect.instance}`);
-    if (gap?.reason) console.log(`  gaps: n/a (${gap.reason})`);
-    else if (gap) console.log(`  CSS gap: row=${gap.cssGap.rowGap} column=${gap.cssGap.columnGap}; observed clearance: ${gap.observed.join(", ")}`);
+  const gapRows = analyzeGeometryGaps(screen, definitions, state.result);
+  const gaps = new Map(gapRows.map((item) => [`${item.key}\u0000${item.instance}`, item]));
+  out(`geometry ${id}/${screenId} rev=${state.result.resolvedRev} viewport=${state.result.viewport.width}x${state.result.viewport.height} dpr=${state.result.dpr} rects=${state.result.rects.length}/${state.result.total}${state.result.truncated ? " truncated" : ""}`);
+  const safeArea = state.result.safeArea;
+  if (safeArea) out(`safeArea: top=${safeArea.top} right=${safeArea.right} bottom=${safeArea.bottom} left=${safeArea.left}`);
+  for (const [role, rect] of Object.entries(state.result.roleRects ?? {})) out(`role ${role}: ${formatRect(rect)} (${rect.source})`);
+  const ownership = state.result.viewportOwnership;
+  if (ownership) {
+    out(`viewportOwnership: frame=${ownership.frame ? `${ownership.frame.width}x${ownership.frame.height}` : "-"} scrollable=${ownership.scrollable} unowned=${ownership.unownedPct}%`);
+    for (const owner of ownership.owners) out(`  owner ${owner.role}: area=${owner.areaPct}% height=${owner.heightPct}%`);
   }
+  for (const issue of state.result.issues ?? []) out(`issue ${issue.severity} ${issue.code}: ${issue.message}`);
+  for (const rect of state.result.rects) {
+    out(`${rect.key}#${rect.instance} parent=${rect.parentKey === undefined ? "-" : `${rect.parentKey}#${rect.parentInstance}`} dom=${rect.domIndex} rect=${rect.x},${rect.y} ${rect.width}x${rect.height}${rect.hidden ? " hidden" : ""}`);
+    out(`  layoutContext: ${rect.layoutContext ? JSON.stringify(rect.layoutContext) : "null"}`);
+    const gap = gaps.get(`${rect.key}\u0000${rect.instance}`);
+    if (gap?.reason) out(`  gaps: n/a (${gap.reason})`);
+    else if (gap) out(`  CSS gap: row=${gap.cssGap.rowGap} column=${gap.cssGap.columnGap}; observed clearance: ${gap.observed.join(", ")}`);
+  }
+  if (jsonMode) report(null, { command: "geometry", prototypeId: id, screenId, ...state.result, gaps: gapRows });
+}
+
+/**
+ * Normalizes a screenshot job result into the 7.1 capture contract. Servers
+ * older than wave 7.1 do not classify errors, so their raw console/page errors
+ * are treated as product errors — the previous, stricter behaviour.
+ */
+export function summarizeCapture(result) {
+  const raw = [...(result?.consoleErrors ?? []), ...(result?.pageErrors ?? [])];
+  const classified = Array.isArray(result?.productErrors);
+  const productErrors = classified ? result.productErrors : raw;
+  const infraNoise = classified ? (result.infraNoise ?? []) : [];
+  return {
+    imageProduced: result?.imageProduced ?? Boolean(result?.imageUrl),
+    captureClean: result?.captureClean ?? productErrors.length === 0,
+    productErrors,
+    infraNoise,
+    runtimeWarnings: result?.runtimeWarnings ?? [],
+  };
+}
+
+/** snap contract: 1 when any screen produced no PNG, 2 when PNGs carry product errors, else 0. */
+export function snapExitCode(rows) {
+  if (rows.some((row) => !row.imageProduced)) return EXIT.failed;
+  if (rows.some((row) => row.productErrors.length > 0)) return EXIT.productErrors;
+  return EXIT.ok;
+}
+
+/** Infra failures (job error/timeout, 5xx) get one more attempt; product errors never do. */
+export const SNAP_ATTEMPTS = 2;
+
+async function snapScreen(id, screenId, outputDir) {
+  const encoded = encodeURIComponent(id);
+  let failure = null;
+  for (let attempt = 1; attempt <= SNAP_ATTEMPTS; attempt++) {
+    const queued = await call("POST", `/prototypes/${encoded}/screens/${encodeURIComponent(screenId)}/screenshot`, { viewport: { width: 480, height: 800 } }, { retries: 1 });
+    if (queued.status !== 202) {
+      failure = `enqueue failed (${queued.status}): ${JSON.stringify(queued.json)}`;
+      if (isTransient(queued.status)) continue;
+      break;
+    }
+    const state = await pollJob(`/screenshot-jobs/${encodeURIComponent(queued.json.jobId)}`, { deadlineMs: 60_000 });
+    if (state.status !== "done") { failure = `screenshot ${state.status}: ${JSON.stringify(state)}`; continue; }
+    const summary = summarizeCapture(state.result);
+    const path = `${outputDir}/${screenId}.png`;
+    if (summary.imageProduced) await downloadImage(state.result.imageUrl, path);
+    return { screenId, attempts: attempt, failure: summary.imageProduced ? null : "job reported no image", path: summary.imageProduced ? path : null, ...summary };
+  }
+  return { screenId, attempts: SNAP_ATTEMPTS, failure, path: null, imageProduced: false, captureClean: false, productErrors: [], infraNoise: [], runtimeWarnings: [] };
+}
+
+async function runSnap(args) {
+  const [id, outputDir = `author-shots/${id}`] = args;
+  const draft = await requireOk("draft", await call("GET", `/prototypes/${encodeURIComponent(id)}/draft`));
+  await mkdir(outputDir, { recursive: true });
+  const rows = [];
+  for (const screen of draft.doc.screens) {
+    const row = await snapScreen(id, screen.id, outputDir);
+    rows.push(row);
+    if (row.path) out(row.path);
+    if (row.failure) console.error(`${screen.id}: ${row.failure}`);
+    if (row.productErrors.length) console.error(`${screen.id} product errors:`, JSON.stringify(row.productErrors));
+    if (row.infraNoise.length && !jsonMode) console.error(`${screen.id} infra noise (ignored):`, JSON.stringify(row.infraNoise));
+  }
+  const exitCode = snapExitCode(rows);
+  if (jsonMode) report(null, { command: "snap", prototypeId: id, outputDir, rev: draft.rev, exitCode, screens: rows });
+  if (exitCode === EXIT.productErrors) throw new CliError("screenshots produced with product errors", { exitCode: EXIT.productErrors });
+  if (exitCode === EXIT.failed) throw new CliError("one or more screenshots produced no PNG", { exitCode: EXIT.failed });
+}
+
+async function runStatus(args, flags) {
+  const [id, screenId] = args;
+  const encoded = encodeURIComponent(id);
+  const screenIds = flags.allScreens
+    ? (await requireOk("draft", await call("GET", `/prototypes/${encoded}/draft`))).doc.screens.map((screen) => screen.id)
+    : [screenId];
+  const rows = [];
+  for (const screen of screenIds) {
+    const result = await requireOk("render-status", await call("GET", `/prototypes/${encoded}/screens/${encodeURIComponent(screen)}/render-status`));
+    rows.push({ screenId: screen, ...result });
+    out(JSON.stringify(result, null, 2));
+  }
+  if (jsonMode) report(null, { command: "status", prototypeId: id, screens: rows });
+  const broken = rows.filter((row) => !row.renderable).map((row) => row.screenId);
+  if (broken.length) throw new CliError(`prototype screen is not renderable: ${broken.join(", ")}`);
 }
 
 async function downloadImage(imageUrl, outputPath) {
@@ -346,7 +490,8 @@ async function publishComponent(id, rev) {
   const published = await call("POST", `/components/${encodeURIComponent(id)}/publish`, { baseRev: rev });
   if (published.status !== 201) await failRevisionConflict("publish", published, "components", id);
   const meta = await getMeta("components", id);
-  console.log(`published ${id} version ${published.json.version} in ${meta.designSystem}`, published.json.warnings?.length ? published.json.warnings : "");
+  if (!jsonMode) console.log(`published ${id} version ${published.json.version} in ${meta.designSystem}`, published.json.warnings?.length ? published.json.warnings : "");
+  return { version: published.json.version, designSystem: meta.designSystem, warnings: published.json.warnings ?? [] };
 }
 
 async function failRevisionConflict(step, response, kind, id) {
@@ -383,7 +528,7 @@ async function runDiff(args, flags) {
   catch (error) { throw new CliError(error.message); }
   const response = await call("GET", `/prototypes/${encodeURIComponent(id)}/revisions/${revisions.toRev}/diff?against=${revisions.againstRev}`);
   const result = await requireOk("diff", response);
-  console.log(flags.json ? JSON.stringify(result, null, 2) : diffSummary(result));
+  report(diffSummary(result), result);
 }
 
 async function runBaseline(args, flags) {
@@ -431,7 +576,8 @@ async function runBaseline(args, flags) {
     await mkdir(outputDir, { recursive: true });
     for (const capture of captures) await downloadImage(capture.imageUrl, `${outputDir}/${capture.screenId}.png`);
   }
-  for (const member of result.members) console.log(`${member.screenId} -> ${member.referenceId}`);
+  if (jsonMode) report(null, { command: "baseline", prototypeId: id, rev: plan.rev, members: result.members });
+  else for (const member of result.members) console.log(`${member.screenId} -> ${member.referenceId}`);
 }
 
 function checkRow(member, baselineRev, run) {
@@ -462,16 +608,16 @@ async function runCheck(args, flags) {
     const run = await pollJob(`/visual-runs/${encodeURIComponent(accepted.runId)}`, { deadlineMs: 120_000 });
     rows.push(checkRow(member, baseline.rev, run));
   }
-  if (flags.json) console.log(JSON.stringify(rows, null, 2));
-  else {
-    console.log("screenId\tstatus\tdiffPercent\trefRev->candRev\tdiffUrl");
-    for (const row of rows) console.log(`${row.screenId}\t${row.status}\t${row.diffPercent ?? "-"}\t${row.revisions}\t${row.diffUrl ?? "-"}`);
-  }
+  report(
+    ["screenId\tstatus\tdiffPercent\trefRev->candRev\tdiffUrl", ...rows.map((row) => `${row.screenId}\t${row.status}\t${row.diffPercent ?? "-"}\t${row.revisions}\t${row.diffUrl ?? "-"}`)],
+    rows,
+  );
   if (rows.some((row) => !["pass"].includes(row.status))) throw new CliError("visual check failed");
 }
 
 export async function main(argv = process.argv.slice(2)) {
   const { cmd, args, flags } = parseArgs(argv);
+  jsonMode = flags.json === true;
   if (cmd === "component") {
     const [id, name, sourcePath] = args;
     const selectedSystem = flags.designSystem ?? process.env.EASYUI_DESIGN_SYSTEM;
@@ -483,8 +629,9 @@ export async function main(argv = process.argv.slice(2)) {
       : await call("PUT", `/components/${encodeURIComponent(id)}`, { source, ...systemBody, message: "driver save", baseRev: meta.headRev });
     if (![200, 201].includes(saved.status)) await failRevisionConflict("save", saved, "components", id);
     const savedMeta = await getMeta("components", id);
-    console.log(`saved ${id} rev ${saved.json.rev} in ${savedMeta.designSystem}`);
-    await publishComponent(id, saved.json.rev);
+    out(`saved ${id} rev ${saved.json.rev} in ${savedMeta.designSystem}`);
+    const published = await publishComponent(id, saved.json.rev);
+    if (jsonMode) report(null, { command: "component", id, rev: saved.json.rev, ...published });
   } else if (cmd === "component-move") {
     const [id] = args;
     const meta = await getMeta("components", id);
@@ -492,13 +639,14 @@ export async function main(argv = process.argv.slice(2)) {
     const saved = await call("PUT", `/components/${encodeURIComponent(id)}`, { designSystem: flags.designSystem, message: "driver move", baseRev: meta.headRev });
     if (saved.status !== 200) await failRevisionConflict("move", saved, "components", id);
     const savedMeta = await getMeta("components", id);
-    console.log(`saved ${id} rev ${saved.json.rev} in ${savedMeta.designSystem}`);
-    await publishComponent(id, saved.json.rev);
+    out(`saved ${id} rev ${saved.json.rev} in ${savedMeta.designSystem}`);
+    const published = await publishComponent(id, saved.json.rev);
+    if (jsonMode) report(null, { command: "component-move", id, rev: saved.json.rev, ...published });
   } else if (cmd === "design-system") {
     const [id, name, description] = args;
     const created = await call("POST", "/design-systems", { id, name, description });
-    if (created.status === 201) console.log(JSON.stringify(created.json, null, 2));
-    else if (created.status === 409) console.log(JSON.stringify(await requireOk("design-system", await call("GET", `/design-systems/${encodeURIComponent(id)}`)), null, 2));
+    if (created.status === 201) process.stdout.write(`${JSON.stringify(created.json, null, 2)}\n`);
+    else if (created.status === 409) process.stdout.write(`${JSON.stringify(await requireOk("design-system", await call("GET", `/design-systems/${encodeURIComponent(id)}`)), null, 2)}\n`);
     else requestFailed("design-system", created);
   } else if (cmd === "prototype") {
     const doc = JSON.parse(await readFile(args[0], "utf8"));
@@ -507,12 +655,19 @@ export async function main(argv = process.argv.slice(2)) {
       ? await call("POST", "/prototypes", { doc, message: "driver save" })
       : await call("PUT", `/prototypes/${encodeURIComponent(doc.id)}`, { doc, message: "driver save", baseRev: meta.headRev });
     const result = await requireOk("save", saved, [200, 201]);
-    console.log(`saved ${doc.id} rev ${result.rev}`, result.warnings?.length ? result.warnings : "");
+    if (!jsonMode) console.log(`saved ${doc.id} rev ${result.rev}`, result.warnings?.length ? result.warnings : "");
     const draft = await requireOk("draft", await call("GET", `/prototypes/${encodeURIComponent(doc.id)}/draft`));
-    console.log("component pins:", JSON.stringify(draft.components));
     const base = API.replace(/\/api$/, "");
-    console.log(`player: ${base}/p/${doc.id}`);
-    for (const screen of result.screens ?? []) console.log(`screen:  ${base}${screen.url}`);
+    out(`component pins: ${JSON.stringify(draft.components)}`);
+    out(`player: ${base}/p/${doc.id}`);
+    for (const screen of result.screens ?? []) out(`screen:  ${base}${screen.url}`);
+    if (jsonMode) {
+      report(null, {
+        command: "prototype", id: doc.id, rev: result.rev, warnings: result.warnings ?? [],
+        componentPins: draft.components, playerUrl: `${base}/p/${doc.id}`,
+        screens: (result.screens ?? []).map((screen) => ({ ...screen, url: `${base}${screen.url}` })),
+      });
+    }
   } else if (cmd === "catalog") await runCatalog(args);
   else if (cmd === "diff") await runDiff(args, flags);
   else if (cmd === "baseline") await runBaseline(args, flags);
@@ -521,13 +676,13 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "get") {
     const [kind, id] = args;
     const path = kind === "assets" && id ? `/assets/${encodeURIComponent(id)}/usage` : id ? `/${kind}/${encodeURIComponent(id)}` : `/${kind}`;
-    console.log(JSON.stringify(await requireOk("get", await call("GET", path)), null, 2));
+    process.stdout.write(`${JSON.stringify(await requireOk("get", await call("GET", path)), null, 2)}\n`);
   } else if (cmd === "delete") {
     const [kind, id] = args;
     const meta = await getMeta(kind, id);
     if (!meta) throw new CliError(`${kind}/${id} not found`);
     await requireOk("delete", await call("DELETE", `/${kind}/${encodeURIComponent(id)}`, { baseRev: meta.headRev }), [204]);
-    console.log(`deleted ${kind}/${id}`);
+    report(`deleted ${kind}/${id}`, { command: "delete", kind, id, deleted: true });
   } else if (cmd === "shoot") {
     const [id, outputDir = `author-shots/${id}`] = args;
     const draft = await requireOk("draft", await call("GET", `/prototypes/${encodeURIComponent(id)}/draft`));
@@ -540,38 +695,22 @@ export async function main(argv = process.argv.slice(2)) {
     await context.addCookies([{ name, value, url: API.replace(/\/api$/, "") }]);
     const page = await context.newPage();
     const errors = [];
+    const shots = [];
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     const base = API.replace(/\/api$/, "");
     for (const screen of draft.doc.screens) {
       await page.goto(`${base}/p/${id}/s/${screen.id}`, { waitUntil: "networkidle" });
       await page.screenshot({ path: `${outputDir}/${screen.id}.png` });
-      console.log(`${outputDir}/${screen.id}.png`);
+      shots.push({ screenId: screen.id, path: `${outputDir}/${screen.id}.png` });
+      out(`${outputDir}/${screen.id}.png`);
     }
     await context.close();
     await browser.close();
+    if (jsonMode) report(null, { command: "shoot", prototypeId: id, outputDir, shots, errors });
     if (errors.length) throw new CliError(`browser errors:\n${errors.join("\n")}`);
-  } else if (cmd === "snap") {
-    const [id, outputDir = `author-shots/${id}`] = args;
-    const draft = await requireOk("draft", await call("GET", `/prototypes/${encodeURIComponent(id)}/draft`));
-    await mkdir(outputDir, { recursive: true });
-    let hadErrors = false;
-    for (const screen of draft.doc.screens) {
-      const queued = await requireOk(`screenshot ${screen.id}`, await call("POST", `/prototypes/${encodeURIComponent(id)}/screens/${encodeURIComponent(screen.id)}/screenshot`, { viewport: { width: 480, height: 800 } }), [202]);
-      const state = await pollJob(`/screenshot-jobs/${encodeURIComponent(queued.jobId)}`, { deadlineMs: 60_000 });
-      if (state.status !== "done") { console.error(`${screen.id}: ${JSON.stringify(state)}`); hadErrors = true; continue; }
-      await downloadImage(state.result.imageUrl, `${outputDir}/${screen.id}.png`);
-      console.log(`${outputDir}/${screen.id}.png`);
-      const errors = [...(state.result.consoleErrors ?? []), ...(state.result.pageErrors ?? [])];
-      if (errors.length) { console.error(`${screen.id} browser errors:`, JSON.stringify(errors)); hadErrors = true; }
-    }
-    if (hadErrors) throw new CliError("one or more screenshots failed");
-  } else if (cmd === "status") {
-    const [id, screenId] = args;
-    const result = await requireOk("render-status", await call("GET", `/prototypes/${encodeURIComponent(id)}/screens/${encodeURIComponent(screenId)}/render-status`));
-    console.log(JSON.stringify(result, null, 2));
-    if (!result.renderable) throw new CliError("prototype screen is not renderable");
-  }
+  } else if (cmd === "snap") await runSnap(args);
+  else if (cmd === "status") await runStatus(args, flags);
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : null;
@@ -579,6 +718,6 @@ if (invokedPath === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     if (error?.usage) console.error(usageLine);
-    process.exitCode = 1;
+    process.exitCode = error?.exitCode ?? EXIT.failed;
   });
 }

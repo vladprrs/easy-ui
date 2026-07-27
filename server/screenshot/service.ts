@@ -1,9 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import type { CaptureExpected } from "../../src/capture/protocol";
-import type { GeometryCollection, GeometryRect } from "../../src/capture/geometry.mjs";
+import type { GeometryCollection, GeometryRect, GeometryRole } from "../../src/capture/geometry.mjs";
 import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
 import type { SpaceToken } from "../../src/designSystems/types";
+import { analyzeScreenRegions } from "../../src/prototype/runtimeSpec";
 import { REPEAT_RENDER_COST_BUDGET } from "../../src/prototype/validate";
 import { getDesignSystemVersion, getLatestDesignSystemContent } from "../designSystems";
 import type { ThemeContent } from "../designSystemsMeta";
@@ -12,18 +13,31 @@ import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
 import { PrototypeRepo } from "../repos/prototypes";
 import { buildStaticAllowedUrls, rendererBuildFrom } from "./allowedUrls";
+import { classifyCaptureErrors } from "./noise";
 import { CaptureSessionStore, JOB_DEADLINE_MS } from "./sessions";
 
 export interface Viewport { width: number; height: number }
+/**
+ * Additive capture-quality contract (wave 7.1): `consoleErrors`/`pageErrors`
+ * stay populated verbatim for backward compatibility, while `productErrors` /
+ * `infraNoise` / `captureClean` say whether the *prototype* misbehaved.
+ */
+export interface CaptureQuality {
+  captureClean: boolean;
+  productErrors: string[];
+  infraNoise: string[];
+  runtimeWarnings: string[];
+}
 export interface JobStatus { status: "queued" | "running" | "done" | "error"; result?: ScreenshotResult; error?: { code: string; message: string } }
-export interface ScreenshotImageResult {
+export interface ScreenshotImageResult extends CaptureQuality {
   kind: "image";
   imageUrl: string; assetId: string; width: number; height: number;
+  imageProduced: boolean;
   consoleErrors: string[]; pageErrors: string[];
   bundleHash?: string; componentPins?: { id: string; version: number; bundleHash: string }[];
   rendererBuild: string | null; browserVersion: string;
 }
-export interface ScreenshotGeometryResult {
+export interface ScreenshotGeometryResult extends CaptureQuality {
   kind: "geometry";
   resolvedRev: number;
   prototypeInstanceId: string;
@@ -35,6 +49,13 @@ export interface ScreenshotGeometryResult {
   rects: GeometryRect[];
   truncated: boolean;
   total: number;
+  safeArea: GeometryCollection["safeArea"];
+  roleRects: GeometryCollection["roleRects"];
+  frame: GeometryCollection["frame"];
+  content: GeometryCollection["content"];
+  scroll: GeometryCollection["scroll"];
+  viewportOwnership: GeometryCollection["viewportOwnership"];
+  issues: GeometryCollection["issues"];
 }
 export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult;
 
@@ -42,12 +63,12 @@ export interface WorkerJob {
   captureOrigin: string; captureUrl: string; token: string;
   bootstrap: { kind: "prototype" | "component"; target: Record<string, unknown>; props?: Record<string, unknown>; expected: CaptureExpected };
   allowedUrls: string[]; viewport: Viewport; deviceScaleFactor: number; colorScheme: "light" | "dark"; waitForFonts: boolean; expected: CaptureExpected;
-  probe?: "geometry"; geometryLimit?: number;
+  probe?: "geometry"; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
 }
-export type WorkerImageOk = { ok: true; pngBase64: string; width: number; height: number; consoleErrors: string[]; pageErrors: string[]; browserVersion: string };
-export type WorkerGeometryOk = { ok: true; geometry: GeometryCollection; consoleErrors: string[]; pageErrors: string[]; browserVersion: string };
+export type WorkerImageOk = { ok: true; pngBase64: string; width: number; height: number; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string };
+export type WorkerGeometryOk = { ok: true; geometry: GeometryCollection; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string };
 export type WorkerOk = WorkerImageOk | WorkerGeometryOk;
-export type WorkerErr = { ok: false; error: string; consoleErrors?: string[]; pageErrors?: string[] };
+export type WorkerErr = { ok: false; error: string; consoleErrors?: string[]; consoleWarnings?: string[]; pageErrors?: string[] };
 export type WorkerResult = WorkerOk | WorkerErr;
 export type RunJob = (job: WorkerJob, deadlineMs: number) => Promise<WorkerResult>;
 
@@ -56,8 +77,39 @@ interface InternalJob {
   expected: CaptureExpected; allowedUrls: string[]; props?: Record<string, unknown>;
   captureUrl: string; viewport: Viewport; dsf: number; theme: "light" | "dark"; waitForFonts: boolean;
   componentPins?: { id: string; version: number; bundleHash: string }[];
-  probe?: "geometry"; resolvedSpaceScale?: Record<SpaceToken, string>;
+  probe?: "geometry"; resolvedSpaceScale?: Record<SpaceToken, string>; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
   result?: ScreenshotResult; error?: { code: string; message: string }; resultExpiresAt?: number;
+}
+
+/**
+ * Region/panel roles a geometry probe reports rects for. Regions come from the
+ * authored spec (the capture surface renders them inline, without the player's
+ * `data-eui-region` slots), the panel is the screen root subtree.
+ */
+export function geometryRoleKeysOf(doc: unknown, screenId: string): Partial<Record<GeometryRole, string>> {
+  const screens = (doc as { screens?: { id: string; canvas?: { width: number; height: number }; spec: { root: string; elements: Record<string, unknown> } }[] }).screens ?? [];
+  const screen = screens.find((item) => item.id === screenId);
+  if (!screen) return {};
+  const roleKeys: Partial<Record<GeometryRole, string>> = { panel: screen.spec.root };
+  const analysis = analyzeScreenRegions(screen as Parameters<typeof analyzeScreenRegions>[0]);
+  for (const [kind, key] of Object.entries(analysis.regionElements)) {
+    if (typeof key === "string") roleKeys[`region:${kind}` as GeometryRole] = key;
+  }
+  return roleKeys;
+}
+
+/** Defaults for pre-7.1 worker payloads: the geometry shape stays additive-only. */
+function emptyGeometryShape(): Pick<ScreenshotGeometryResult, "safeArea" | "roleRects" | "frame" | "content" | "scroll" | "viewportOwnership" | "issues"> {
+  const zero = { x: 0, y: 0, width: 0, height: 0 };
+  return {
+    safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+    roleRects: {},
+    frame: { ...zero, source: "surface" },
+    content: zero,
+    scroll: { width: 0, height: 0 },
+    viewportOwnership: { frame: null, content: null, scroll: null, scrollable: false, owners: [], unownedPct: 0 },
+    issues: [],
+  };
 }
 
 export const MAX_QUEUE = 5;
@@ -163,6 +215,7 @@ export class ScreenshotService {
         : getDesignSystemVersion(this.deps.db, designSystem, full.designSystemMetaVersion);
       return resolveSpacingScale(designSystem, themeContent?.tokens ?? {});
     })() : undefined;
+    const geometryRoleKeys = opts.probe === "geometry" ? geometryRoleKeysOf(full.doc, screenId) : undefined;
     const theme = opts.theme === "dark" ? "dark" : "light";
     const expected: CaptureExpected = { kind: "prototype", prototypeInstanceId:full.prototypeInstanceId, rev: snap.rev, componentManifestHash: full.componentManifestHash, builtinCatalogHash: full.builtinCatalogHash, dsMetaVersion: full.designSystemMetaVersion ?? null, rendererBuild: this.rendererBuild };
     const allowedUrls = this.prototypeAllowedUrls(
@@ -178,7 +231,7 @@ export class ScreenshotService {
     if (opts.version !== undefined) query.set("version", String(opts.version)); else query.set("rev", String(snap.rev));
     query.set("theme", theme); query.set("dsf", String(dsf));
     const captureUrl = `/capture/${encodeURIComponent(id)}/s/${encodeURIComponent(screenId)}?${query}`;
-    const {jobId}=this.push({ kind: "prototype", expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}) });
+    const {jobId}=this.push({ kind: "prototype", expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
     return {jobId,expected};
   }
 
@@ -295,14 +348,16 @@ export class ScreenshotService {
         captureOrigin: this.deps.captureOrigin, captureUrl: job.captureUrl, token: session.token,
         bootstrap: { kind: job.kind, target: this.targetOf(job), ...(job.props ? { props: job.props } : {}), expected: job.expected },
         allowedUrls: job.allowedUrls, viewport: job.viewport, deviceScaleFactor: job.dsf, colorScheme: job.theme, waitForFonts: job.waitForFonts, expected: job.expected,
-        ...(job.probe ? { probe: job.probe, geometryLimit: GEOMETRY_RECT_LIMIT } : {}),
+        ...(job.probe ? { probe: job.probe, geometryLimit: GEOMETRY_RECT_LIMIT, ...(job.geometryRoleKeys ? { geometryRoleKeys: job.geometryRoleKeys } : {}) } : {}),
       };
       const result = await this.deps.runJob(workerJob, JOB_DEADLINE_MS);
       if (!result.ok) { job.status = "error"; job.error = { code: "capture_failed", message: result.error }; this.expire(job); return; }
+      const quality = this.qualityOf(result);
       if (job.probe === "geometry") {
         if (!("geometry" in result) || job.expected.kind !== "prototype") throw new Error("geometry worker result mismatch");
         job.result = {
           kind: "geometry",
+          ...quality,
           resolvedRev: job.expected.rev,
           prototypeInstanceId: job.expected.prototypeInstanceId,
           componentPins: job.componentPins ?? [],
@@ -310,6 +365,7 @@ export class ScreenshotService {
           resolvedSpaceScale: job.resolvedSpaceScale!,
           viewport: job.viewport,
           dpr: job.dsf,
+          ...emptyGeometryShape(),
           ...result.geometry,
         };
         job.status = "done";
@@ -322,6 +378,8 @@ export class ScreenshotService {
       const ingest = await assetRepo.ingest(new Uint8Array(bytes), "image/png", "screenshot.png");
       job.result = {
         kind: "image",
+        ...quality,
+        imageProduced: true,
         imageUrl: `/api/assets/${ingest.asset.id}`, assetId: ingest.asset.id, width: result.width, height: result.height,
         consoleErrors: result.consoleErrors, pageErrors: result.pageErrors,
         ...(job.expected.kind === "component" ? { bundleHash: job.expected.bundleHash } : { componentPins: job.componentPins }),
@@ -336,6 +394,13 @@ export class ScreenshotService {
     } finally {
       this.sessions.revoke(session.token);
     }
+  }
+
+  /** Classify browser output once per job; capture-clean means no product errors. */
+  private qualityOf(result: WorkerOk): CaptureQuality {
+    const messages = [...(result.consoleErrors ?? []), ...(result.pageErrors ?? [])];
+    const { productErrors, infraNoise } = classifyCaptureErrors(messages, { captureOrigin: this.deps.captureOrigin });
+    return { captureClean: productErrors.length === 0, productErrors, infraNoise, runtimeWarnings: [...(result.consoleWarnings ?? [])] };
   }
 
   private targetOf(job: InternalJob): Record<string, unknown> {

@@ -29,10 +29,12 @@ node driver.mjs get prototypes        # smoke-проверка доступа
 node driver.mjs catalog yandex-pay /tmp/catalog.json   # 1. актуальные exact definitions
 # 2. написать doc.json (см. examples/yp-checkout-demo.json)
 node driver.mjs prototype my-flow.json                 # 3. create-or-update по doc.id
-node driver.mjs status my-flow <screenId>              # 4. renderable + пины/бандлы
-node driver.mjs geometry my-flow <screenId>            # 5. численные rect'ы/gap'ы
+node driver.mjs status my-flow --all-screens            # 4. renderable + пины/бандлы по всем экранам
+node driver.mjs geometry my-flow <screenId>            # 5. численные rect'ы/gap'ы/роли/issues
 node driver.mjs snap my-flow ./shots                   # 6. серверные PNG на каждый экран
 ```
+
+Exit codes `snap`: `0` — PNG на всех экранах и product-ошибок нет, `2` — PNG есть, но прототип логировал ошибки, `1` — PNG не создан (инфраструктура; драйвер уже сделал 2 попытки на экран). Любой verb принимает `--json`.
 
 Записи каталога: `{id, name, version, atomicLevel, description, events[], slots[], example, propsJsonSchema}`. Props валидируются строго по `propsJsonSchema` — неизвестный ключ = 422. `designSystem: "yandex-pay"` в корне документа обязателен.
 
@@ -91,8 +93,8 @@ node interact.mjs yp-skill-demo ./interact-shots
 
 - **`state` — обычный вложенный объект, ключи БЕЗ слэша.** `{"/method": "card"}` сохранится (это только warnings!), но каждый `$state: "/method"` даст «state path is not present in document state» и не будет работать. Правильно: `{"method": "card"}` — пойнтеры резолвятся *внутрь* объекта. Не игнорировать warnings в выводе save.
 - **Login rate-limit (429).** Драйвер логинится при **каждом** вызове (cookie живёт в памяти процесса, `scripts/easyui-auth.mjs`). 3+ вызова подряд → `HTTP 429 rate_limited`. Между вызовами делать паузы (30–60 с) либо объединять проверки; при 429 подождать минуту и повторить.
-- **`snap` флакает по-экранно.** Печатает `browser errors: [... 127.0.0.1:8787/assets/shadcn-v1-compat.css ... /api/auth/me]` и `one or more screenshots failed`, при этом часть PNG пишется, часть нет. Эти ошибки — шум capture-окружения сервера, не ошибка прототипа. Проверять, какие PNG реально появились (`ls -la shots/`), недостающие — повторным `snap`. Смотреть PNG глазами обязательно.
-- **`geometry` exit 2 + `gaps: n/a (flow is not declared)`** — не ошибка нулевого зазора, а «flow-контекст недоказуем». Полезная часть — rect'ы: по ним ловится и растянутый YpBox, и уехавший футер.
+- **`snap` больше не путает шум с провалом (волна 7.1).** Инфраструктурные ошибки capture-окружения (favicon, расширения, `ERR_NETWORK_CHANGED`, `ResizeObserver loop`, посторонние origin'ы) уходят в `infraNoise` и не меняют exit code; сам драйвер ретраит инфраструктурный сбой один раз. Если exit `2` — смотреть `productErrors` (это реальная ошибка прототипа/компонента), PNG при этом уже записаны. Exit `1` — PNG не создан вообще. Смотреть PNG глазами обязательно в любом случае.
+- **`gaps: n/a (flow is not declared)`** — не ошибка нулевого зазора, а «flow-контекст недоказуем»; на exit code `geometry` не влияет. Полезная часть — rect'ы и `issues[]` (`content-clipped-by-frame`, `overlapping-regions`, `footer-owns-page`): по ним ловится и растянутый YpBox, и уехавший футер.
 - **Warnings ≠ blocker.** Save проходит с предупреждениями (state path, repeat не-массив) — но каждое из них означает неработающую директиву в рантайме. Чистый прототип не шумит.
 - **Snap с FlowRoot-футером режет CTA.** `fullscreen: true` даёт контенту min-height 100vh; capture складывает контент+region-футер (390×955 на вьюпорте 844) — нижняя часть футера уходит за фолд PNG. Это артефакт capture-поверхности: в mobile fluid present футер пинится корректно (проверено interact-скриншотами плеера).
 

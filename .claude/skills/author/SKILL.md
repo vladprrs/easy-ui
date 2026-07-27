@@ -137,6 +137,8 @@ node driver.mjs geometry <protoId> <screenId>
 
 Наблюдаемые зазоры и computed CSS gap должны совпадать с `resolvedSpaceScale` выбранной DS. `gaps: n/a` означает, что flow/wrap/DOM-контекст нельзя доказать, а не нулевой зазор.
 
+Кроме rect'ов вывод содержит роли (`panel`, `frame`, `region:header|footer|statusBar`), `safeArea`, `viewportOwnership` (какую долю фрейма занимает каждая роль) и `issues[]` — структурные предупреждения `content-clipped-by-frame`, `overlapping-regions`, `footer-owns-page`. Это предупреждения, а не ошибки: exit code `geometry` они не меняют.
+
 `className` — best-effort escape hatch: Tailwind-утилита может отсутствовать в собранном CSS. Не применять `className` для позиционирования или spacing между siblings; использовать layout props и Overlay. Статические positioning/inset/z-index/margin utilities дают advisory warning `layout/classname-positioning`.
 
 ### Ассеты
@@ -160,7 +162,7 @@ curl -u "$EASYUI_LEGACY_BASIC_AUTH" -b /tmp/easyui.cookies -X POST \
 
 ### Проверка рендеримости
 
-`node driver.mjs status <id> <screenId>` — машинный `render-status`: `{renderable, status: {document, bundles, route}, resolvedPins, warnings, errors}` (exit 1, если не renderable). Ответ save также содержит канонические URL всех экранов — драйвер их печатает.
+`node driver.mjs status <id> <screenId>` — машинный `render-status`: `{renderable, status: {document, bundles, route}, resolvedPins, warnings, errors}` (exit 1, если не renderable). `node driver.mjs status <id> --all-screens [--json]` проходит по всем экранам драфта разом и падает списком нерендеримых. Ответ save также содержит канонические URL всех экранов — драйвер их печатает.
 
 ### Версии и публикация прототипа
 
@@ -213,13 +215,24 @@ node driver.mjs prototype examples/rating-demo.json
 
 Ссылка `…/p/<id>` из вывода драйвера открывается в браузере под теми же кредами; экраны — `…/p/<id>/s/<screenId>`. Отладка интеракций — добавить `?debug=1`: inspector-панель показывает события с payload, экшены, диффы стейта и статусы шрифтов.
 
-Скриншоты — два способа, **предпочитать `snap`** (серверный рендер, playwright в окружении агента не нужен; падает при ошибках консоли браузера):
+Скриншоты — два способа, **предпочитать `snap`** (серверный рендер, playwright в окружении агента не нужен):
 
 ```bash
-node driver.mjs snap my-flow ./shots     # server-side: job API + PNG из asset registry
-node driver.mjs shoot my-flow ./shots    # локальный playwright, если установлен
+node driver.mjs snap my-flow ./shots                 # server-side: job API + PNG из asset registry
+node driver.mjs snap my-flow ./shots --all-screens --json   # машинный отчёт по всем экранам
+node driver.mjs shoot my-flow ./shots                # локальный playwright, если установлен
 # ./shots/<screenId>.png на каждый экран
 ```
+
+**Exit codes `snap`:**
+
+| Код | Значение | Что делать |
+|---|---|---|
+| `0` | PNG создан на всех экранах, product-ошибок нет | ничего; PNG всё равно смотреть глазами |
+| `2` | PNG создан, но прототип логировал ошибки (`productErrors`) | чинить прототип/компонент; PNG уже лежат в `./shots` |
+| `1` | PNG не создан (job error/timeout, 5xx, 501) | инфраструктура/окружение; драйвер уже сделал 2 попытки на экран |
+
+Инфраструктурный шум (favicon, расширения браузера, `ERR_NETWORK_CHANGED`, `ResizeObserver loop`, посторонние origin'ы) сервер отдаёт в `infraNoise` и он **не** влияет на exit code. `--json` печатает по экрану `{screenId, path, imageProduced, captureClean, productErrors, infraNoise, runtimeWarnings, attempts}`. Флаг `--json` есть у всех verb'ов, логин выполняется один раз на процесс, GET'ы и постановка job'а ретраятся на 5xx.
 
 Серверные скриншоты также доступны сырым API (`POST /prototypes/:id/screens/:sid/screenshot {viewport,...}` → 202 `{jobId}` → `GET /screenshot-jobs/:jobId`; параметры theme/deviceScaleFactor/rev/version), включая скриншот одного компонента: `POST /components/:id/versions/:v/screenshot {props? | exampleName?, viewport}`.
 
