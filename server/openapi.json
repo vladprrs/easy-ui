@@ -5917,11 +5917,16 @@
           "content": {
             "application/json": {
               "schema": {
-                "properties": {
-                  "baseStatusRev": {
+                "$defs": {
+                  "__schema0": {
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991,
                     "type": "integer"
+                  }
+                },
+                "properties": {
+                  "baseStatusRev": {
+                    "$ref": "#/$defs/__schema0"
                   },
                   "reason": {
                     "type": "string"
@@ -5934,6 +5939,9 @@
                       "archived"
                     ],
                     "type": "string"
+                  },
+                  "supersededBy": {
+                    "$ref": "#/$defs/__schema0"
                   }
                 },
                 "required": [

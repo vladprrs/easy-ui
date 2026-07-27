@@ -1281,7 +1281,8 @@ export const getCompositionVersionContract = registerContract({
 export const setCompositionVersionStatusContract = registerContract({
   method: "POST", path: "/api/compositions/{id}/versions/{version}/status",
   summary: "Manual status transition of a composition version (CAS on baseStatusRev).",
-  requestSchema: z.object({ status: z.enum(["active", "deprecated", "superseded", "archived"]), reason: z.string().optional(), baseStatusRev: positiveInt }),
+  // `supersededBy` обязателен для перехода в `superseded` (проверяется в репозитории, как у компонентов).
+  requestSchema: z.object({ status: z.enum(["active", "deprecated", "superseded", "archived"]), reason: z.string().optional(), supersededBy: positiveInt.optional(), baseStatusRev: positiveInt }),
   responseSchema: z.looseObject({ status: z.string(), statusRev: z.number() }),
   errors: [errorCatalog.invalidRequest, errorCatalog.notFound, errorCatalog.versionNotFound, { status: 409, code: "status_conflict" }, { status: 422, code: "invalid_transition" }],
 });
