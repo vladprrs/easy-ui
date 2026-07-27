@@ -8781,6 +8781,9 @@
                     "maximum": 9007199254740991,
                     "type": "integer"
                   },
+                  "force": {
+                    "type": "boolean"
+                  },
                   "message": {
                     "type": "string"
                   }
@@ -8866,7 +8869,7 @@
                 }
               }
             },
-            "description": "revision_conflict | already_published"
+            "description": "revision_conflict | already_published | publish_blocked (One or more enabled readiness gates block publication; the report is in error.details.report.)"
           },
           "422": {
             "content": {
@@ -8879,7 +8882,346 @@
             "description": "validation_failed"
           }
         },
-        "summary": "Publish the head revision as the next immutable version; returns canonical screen URLs.",
+        "summary": "Publish the head revision as the next immutable version; returns canonical screen URLs. Blocked gates (EASYUI_PUBLISH_GATES) answer 409 publish_blocked unless force:true.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/prototypes/{id}/readiness": {
+      "get": {
+        "operationId": "get_prototypes_id_readiness",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "blocking": {
+                      "items": {
+                        "enum": [
+                          "architecture",
+                          "schema",
+                          "screens",
+                          "assets",
+                          "pins",
+                          "deprecated",
+                          "visual",
+                          "capture",
+                          "interactions",
+                          "publishDiff"
+                        ],
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "enabledGates": {
+                      "additionalProperties": {
+                        "enum": [
+                          "fail",
+                          "warn"
+                        ],
+                        "type": "string"
+                      },
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "gates": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "id": {
+                            "enum": [
+                              "architecture",
+                              "schema",
+                              "screens",
+                              "assets",
+                              "pins",
+                              "deprecated",
+                              "visual",
+                              "capture",
+                              "interactions",
+                              "publishDiff"
+                            ],
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "pass",
+                              "warn",
+                              "fail",
+                              "unknown"
+                            ],
+                            "type": "string"
+                          },
+                          "summary": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "status",
+                          "summary"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "prototypeId": {
+                      "type": "string"
+                    },
+                    "publishable": {
+                      "type": "boolean"
+                    },
+                    "rev": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "prototypeId",
+                    "rev",
+                    "generatedAt",
+                    "gates",
+                    "blocking",
+                    "publishable",
+                    "enabledGates"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found | revision_not_found"
+          }
+        },
+        "summary": "Ready-to-publish report for the head revision: one row per gate, plus the blocking set. Read-only — it never enqueues screenshot or visual jobs.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/prototypes/{id}/repin": {
+      "post": {
+        "operationId": "post_prototypes_id_repin",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dryRun",
+            "required": false,
+            "schema": {
+              "enum": [
+                "1"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": {},
+                "properties": {},
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "bundleHash": {
+                          "type": "string"
+                        },
+                        "bundleUrl": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "version",
+                        "bundleUrl",
+                        "bundleHash"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "after": {
+                      "items": {
+                        "$ref": "#/$defs/__schema0"
+                      },
+                      "type": "array"
+                    },
+                    "before": {
+                      "items": {
+                        "$ref": "#/$defs/__schema0"
+                      },
+                      "type": "array"
+                    },
+                    "changed": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "component": {
+                            "type": "string"
+                          },
+                          "from": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "to": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "component",
+                          "from",
+                          "to"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "dryRun": {
+                      "type": "boolean"
+                    },
+                    "rev": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "dryRun",
+                    "rev",
+                    "before",
+                    "after",
+                    "changed"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "revision_conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "Re-save the head document so component pins move to the latest active publishes; ?dryRun=1 returns the diff without writing.",
         "x-easyui-validated": false
       }
     },

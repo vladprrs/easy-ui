@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { inputPrototypeDocSchema, REGION_KINDS } from "../src/prototype/schema";
 import { COMPONENT_SCOPES } from "../src/designSystems/scope";
-import { PROTOTYPE_KINDS } from "../src/api/client";
+import { PROTOTYPE_KINDS, READINESS_GATE_IDS } from "../src/api/client";
 import { atomicLevels, layoutSpacingProps, spaceTokens } from "../src/designSystems/types";
 import { importReportSchema } from "../src/bundle/schema";
 import { ApiError } from "./http";
@@ -600,6 +600,9 @@ export const deletePrototypeContract = registerContract({
   errors: [errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict],
 });
 
+// Пин компонента ревизии; `status` добавлен волной 3 и опционален для старых ответов.
+const componentPinSchema = z.looseObject({ id: z.string(), name: z.string(), version: z.number(), bundleUrl: z.string(), bundleHash: z.string(), status: z.string().optional() });
+
 const prototypeRevisionCoreSchema = z.looseObject({
   doc: z.looseObject({ id: z.string(), version: z.literal(1), screens: z.array(z.unknown()) }),
   rev: z.number(), builtinCatalogHash: z.string(), componentManifestHash: z.string(),
@@ -733,13 +736,55 @@ export const restorePrototypeContract = registerContract({
   errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revisionNotFound, errorCatalog.revConflict, errorCatalog.validationFailed],
 });
 
+// --- Ready-to-publish report (волна 4) ---
+// Детали гейта разложены в тот же объект (форма зависит от гейта), поэтому looseObject.
+export const readinessGateSchema = z.looseObject({
+  id: z.enum(READINESS_GATE_IDS),
+  status: z.enum(["pass", "warn", "fail", "unknown"]),
+  summary: z.string(),
+});
+
+export const readinessReportSchema = z.strictObject({
+  prototypeId: z.string(),
+  rev: positiveInt,
+  generatedAt: isoDate,
+  gates: z.array(readinessGateSchema),
+  blocking: z.array(z.enum(READINESS_GATE_IDS)),
+  publishable: z.boolean(),
+  enabledGates: z.record(z.string(), z.enum(["fail", "warn"])),
+});
+
+export const getPrototypeReadinessContract = registerContract({
+  method: "GET", path: "/api/prototypes/{id}/readiness",
+  summary: "Ready-to-publish report for the head revision: one row per gate, plus the blocking set. Read-only — it never enqueues screenshot or visual jobs.",
+  responseSchema: readinessReportSchema,
+  errors: [errorCatalog.prototypeNotFound, errorCatalog.revisionNotFound],
+});
+
+export const repinPrototypeQuerySchema = z.strictObject({ dryRun: z.enum(["1"]).optional() });
+
+export const repinPrototypeContract = registerContract({
+  method: "POST", path: "/api/prototypes/{id}/repin",
+  summary: "Re-save the head document so component pins move to the latest active publishes; ?dryRun=1 returns the diff without writing.",
+  query: repinPrototypeQuerySchema,
+  requestSchema: z.looseObject({}),
+  responseSchema: z.strictObject({
+    dryRun: z.boolean(),
+    rev: positiveInt,
+    before: z.array(componentPinSchema),
+    after: z.array(componentPinSchema),
+    changed: z.array(z.strictObject({ component: z.string(), from: z.number().nullable(), to: z.number().nullable() })),
+  }),
+  errors: [errorCatalog.invalidRequest, { status: 403, code: "forbidden" }, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.validationFailed],
+});
+
 export const publishPrototypeContract = registerContract({
   method: "POST", path: "/api/prototypes/{id}/publish",
-  summary: "Publish the head revision as the next immutable version; returns canonical screen URLs.",
+  summary: "Publish the head revision as the next immutable version; returns canonical screen URLs. Blocked gates (EASYUI_PUBLISH_GATES) answer 409 publish_blocked unless force:true.",
   status: 201,
-  requestSchema: z.object(casBody),
+  requestSchema: z.object({ ...casBody, force: z.boolean().optional() }),
   responseSchema: z.looseObject({ version: z.number(), rev: z.number(), screens: z.array(screenUrlSchema) }),
-  errors: [errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, errorCatalog.validationFailed],
+  errors: [errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, { status: 409, code: "publish_blocked", description: "One or more enabled readiness gates block publication; the report is in error.details.report." }, errorCatalog.validationFailed],
 });
 
 export const setPrototypeStatusContract = registerContract({

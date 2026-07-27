@@ -69,7 +69,9 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 | `GET /prototypes/:id/revisions/:rev` | `{rev,doc,components:ComponentPin[],assets:AssetPin[],message:string|null,createdAt}` |
 | `GET /prototypes/:id/revisions/:rev/diff?against=n` | Структурный diff ревизий; без `against` сравнивает с `rev-1` |
 | `POST /prototypes/:id/restore` | `{rev,baseRev}` → `{rev}` (номер новой head-ревизии) |
-| `POST /prototypes/:id/publish` | `{message?,baseRev}` → 201 `{version,rev,screens}` и `Location` |
+| `GET /prototypes/:id/readiness` | Ready-to-publish отчёт головной ревизии — см. [Готовность к публикации](#готовность-к-публикации) |
+| `POST /prototypes/:id/repin?dryRun=1` | owner-only; пере-сохраняет head-документ, чтобы пины ушли на последние active-публикации → `{dryRun,rev,before,after,changed:[{component,from,to}]}` |
+| `POST /prototypes/:id/publish` | `{message?,baseRev,force?}` → 201 `{version,rev,screens}` и `Location`; включённый гейт готовности → `409 publish_blocked` |
 | `POST /prototypes/:id/status` | owner-only `{status:"private"|"published"|"archived"}`; граф `private↔published`, `private|published→archived`, `archived→private` |
 | `POST /prototypes/:id/lifecycle` | owner-only `{kind?,tags?,derivedFrom?}` → `{kind,tags,derivedFrom}`; аддитивный патч, см. [Lifecycle](#lifecycle-прототипа) |
 | `GET /prototypes/:id/versions` | `PrototypeVersion[]`: `{version,rev,publishedAt}` |
@@ -80,7 +82,7 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 
 `PUT /prototypes/:id` — это осознанный checkpoint, а не no-op. Даже если `doc` не изменился, успешный запрос с актуальным `baseRev` создаёт новую ревизию: сервер заново разрешает и фиксирует пины active custom-бандлов, текущей версии темы дизайн-системы и ассетов, а также сохраняет переданный `message`. CAS по `baseRev` действует как обычно. Сервер намеренно не дедуплицирует такие ревизии, потому что повторное сохранение выражает явное решение зафиксировать актуальное окружение документа.
 
-`ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её render/validation-контракт. Дескриптор включает обязательный `renderContractVersion` (сейчас `4`), actions, имена/descriptions/events/slots, input JSON Schema пропсов, `layout`/`layoutNeutral`, host-примитивы, включая `@eui/FlowRoot`, и resolved spacing scale из **pinned** `design_system_meta_version`. Restore копирует версию темы исходной ревизии, поэтому восстанавливает и соответствующий hash. Хеш остаётся детектором несовместимости, а не pin: рантайм не сравнивает и не блокирует mismatch.
+`ComponentPin` — `{id,name,version,bundleUrl,bundleHash,status}` (`status` — статус публикации закреплённой версии, аддитивно добавлен волной 3). `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её render/validation-контракт. Дескриптор включает обязательный `renderContractVersion` (сейчас `4`), actions, имена/descriptions/events/slots, input JSON Schema пропсов, `layout`/`layoutNeutral`, host-примитивы, включая `@eui/FlowRoot`, и resolved spacing scale из **pinned** `design_system_meta_version`. Restore копирует версию темы исходной ревизии, поэтому восстанавливает и соответствующий hash. Хеш остаётся детектором несовместимости, а не pin: рантайм не сравнивает и не блокирует mismatch.
 
 ### Lifecycle прототипа
 
@@ -102,6 +104,41 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 `GET /prototypes?kind=` фильтрует список: значение — **CSV** (`?kind=evidence,experiment`); повторение параметра не поддерживается (побеждает последнее вхождение). Пустое значение (`?kind=`) означает «фильтра нет». Неизвестный вид в списке → `422 validation_failed`.
 
 Галерея использует ту же таксономию: служебные виды (`composition-fixture`, `component-gallery`, `evidence`, `visual-reference`) скрыты из табов «Мои»/«Общие» и живут в табе «Служебные»; `derivedFrom` показывается строкой на карточке.
+
+### Готовность к публикации
+
+`GET /prototypes/:id/readiness` (read-доступ) отдаёт отчёт по головной ревизии. Запрос **ничего не запускает**: ни screenshot-job'ов, ни visual-прогонов — только читает уже накопленные данные.
+
+```json
+{ "prototypeId": "...", "rev": 12, "generatedAt": "...",
+  "gates": [{ "id": "architecture", "status": "warn", "summary": "architecture_warnings", "...": "детали гейта разложены в тот же объект" }],
+  "blocking": [], "publishable": true, "enabledGates": {} }
+```
+
+Статусы: `pass | warn | fail | unknown`. `unknown` означает «данных нет» и **никогда** не блокирует публикацию.
+
+| gate | Источник | Статусы |
+|---|---|---|
+| `architecture` | `arch/*`-предупреждения `validatePrototype` + `architecture.exempted` | `pass`/`warn`; `unknown`, если определения не разрешились |
+| `schema` | `validatePrototype.errors` / не-архитектурные warnings | `fail`/`warn`/`pass` |
+| `screens` | `classifyRevision` — документ + бандлы каждого экрана | `pass`/`fail` |
+| `assets` | ссылки документа × `assets` × `prototype_revision_assets` | `fail` (нет в реестре) / `warn` (нет пина) / `pass` |
+| `pins` | `bundleReadiness` ревизии | `fail`/`warn`/`pass` |
+| `deprecated` | пины со статусом `deprecated`/`superseded` + `replacement` компонента | `warn`/`pass` |
+| `visual` | последний `visual_baseline_sets` + последние `visual_runs` по его эталонам | `unknown`/`warn`/`fail`/`pass` |
+| `capture` | последний screenshot-job, если он персистентен | сейчас всегда `unknown` |
+| `interactions` | сценарии (волна 6) | сейчас всегда `unknown` |
+| `publishDiff` | наличие diff головы против последней опубликованной версии | `unknown`/`warn`/`pass` |
+
+Гейт `screens` **не** использует флаг `route` из render-status: тот равен `Boolean(SERVE_DIST)` и в dev/тестах/e2e всегда `false`. Route-готовность вынесена в информационное подполе `screens.route = {served, informational:true}`.
+
+Гейт `capture` описан контрактом, но сегодня всегда `unknown`: очередь `ScreenshotService` живёт только в памяти процесса и не пишет результаты в БД. Идентификатор гейта и форма отчёта зафиксированы, чтобы включение персистентности не ломало клиентов.
+
+**Конфигурация.** Единственная переменная окружения `EASYUI_PUBLISH_GATES` — CSV идентификаторов гейтов. Запись `pins` блокирует публикацию при статусе `fail`, запись `screens:warn` — уже при `warn`. Неизвестные идентификаторы игнорируются. **По умолчанию переменная пуста**, поэтому `blocking: []`, `publishable: true` и поведение `publish` в точности прежнее. Так и задумано: publish исторически не валидировал документ, и dry-run по прод-данным (`scripts/readiness-dryrun.ts`) показывает, что включённый гейт `schema` заблокировал бы больше половины прототипов.
+
+**Publish.** `POST /prototypes/:id/publish` считает отчёт в роут-ветке **до** `repo.publish` (та — синхронная транзакция и не может выполнить асинхронный `snapshotDefinitions`), сверяет `report.rev === baseRev` (расхождение → `409 revision_conflict`) и при непустом `blocking` отвечает `409 publish_blocked` с полным отчётом в поле `report` конверта ошибки. `{"force": true}` от владельца/админа проходит гейты и пишет audit-событие `prototype.publish.forced`.
+
+**Repin.** `POST /prototypes/:id/repin` — тонкая обёртка над обычным сохранением головы (`updatePrototypeFromDoc`), которое и так пере-пинует документ на последние active-публикации. Отдельного pin-writer'а нет. `?dryRun=1` считает diff без записи; запись пропускается и когда diff пуст, поэтому повторный вызов не плодит пустые ревизии. Успешная запись пишет audit `prototype.repinned`.
 
 ### Diff ревизий
 

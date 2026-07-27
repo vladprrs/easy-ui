@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useBlocker } from "react-router";
-import { ApiError, getPrototypeDraft, getPrototypeRevisionFull, listPrototypeVersions, publishPrototype, restorePrototype, savePrototype, type FigmaProvenance, type PrototypeDraft } from "../api/client";
+import { ApiError, getPrototypeDraft, getPrototypeRevisionFull, listPrototypeVersions, publishPrototype, restorePrototype, savePrototype, type FigmaProvenance, type PrototypeDraft, type ReadinessLocation } from "../api/client";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { createPlayerRuntime } from "../catalog/runtime";
 import { hostPrimitiveDefinitions } from "../catalog/hostPrimitives/definitions";
@@ -17,6 +17,7 @@ import { createEditorState, editorReducer } from "./editorReducer";
 import { EditorScreenStrip } from "./EditorScreenStrip";
 import { InspectorPanel } from "./InspectorPanel";
 import { HistoryPanel } from "./HistoryPanel";
+import { ReadinessPanel } from "./ReadinessPanel";
 import { diffDocs, formatDocChange, humanizeIssues, type DisplayIssue, type DocChange } from "./docDiff";
 import { DocEpochContext } from "./propsForm/PropsForm";
 
@@ -46,6 +47,7 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
   const [publishedVersion, setPublishedVersion] = useState<number | null>(null);
   const [currentFigma, setCurrentFigma] = useState<FigmaProvenance | null>(loaded.figma ?? null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [readinessOpen, setReadinessOpen] = useState(false);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [restoringRev, setRestoringRev] = useState<number | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<RestoreTarget | null>(null);
@@ -99,6 +101,12 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
     return () => controller.abort();
   }, [loaded.doc.id, loaded.rev]);
 
+  // Ссылка из readiness-отчёта: выделяем экран и, если он указан, элемент.
+  const selectLocation = useCallback((location: ReadinessLocation) => {
+    if (location.screenId) dispatch({ type: "select-screen", screenId: location.screenId });
+    if (location.elementKey) dispatch({ type: "select-element", elementKey: location.elementKey });
+  }, []);
+
   const runPublish = useCallback(async (baseRev: number, message?: string) => {
     setIssues([]); setPublishNotice(null); setPublishing(true);
     try {
@@ -106,7 +114,12 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
       setPublishedVersion(result.version);
       setHistoryRefreshKey((key) => key + 1);
     } catch (error) {
-      if (error instanceof ApiError && error.code === "already_published" && error.currentVersion !== undefined) {
+      if (error instanceof ApiError && error.code === "publish_blocked") {
+        // Гейты вернули 409: раскрываем панель, чтобы список замечаний был перед глазами.
+        setReadinessOpen(true);
+        const blocking = (error.report as { blocking?: string[] } | undefined)?.blocking ?? [];
+        setPublishNotice(editor.readinessBlocked(blocking.map((id) => editor.readinessGateNames[id] ?? id).join(", ")));
+      } else if (error instanceof ApiError && error.code === "already_published" && error.currentVersion !== undefined) {
         setPublishedVersion(error.currentVersion);
         setPublishNotice(editor.alreadyPublished(error.currentVersion));
       } else if (error instanceof ApiError) {
@@ -243,6 +256,7 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
         <button type="button" disabled={!canUndo} onClick={() => dispatch({ type: "undo" })} title={editor.undoTitle} aria-label={editor.undoTitle} className={`${pillGhost} disabled:opacity-50`}>{editor.undo}</button>
         <button type="button" disabled={!canRedo} onClick={() => dispatch({ type: "redo" })} title={editor.redoTitle} aria-label={editor.redoTitle} className={`${pillGhost} disabled:opacity-50`}>{editor.redo}</button>
         <button type="button" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)} className={pillGhost}>{editor.history}</button>
+        <button type="button" aria-expanded={readinessOpen} onClick={() => setReadinessOpen((open) => !open)} className={pillGhost}>{editor.readiness}</button>
         <button type="button" disabled={saving} onClick={save} className={`${pillPrimary} disabled:opacity-50`}>{editor.save}</button>
         <button type="button" disabled={saving || publishing} onClick={() => { setPublishNotice(null); setPublishDialogOpen(true); }} className={`${pillPrimary} disabled:opacity-50`}>{publishing ? editor.publishing : editor.publish}</button>
       </>}
@@ -250,12 +264,14 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
     {publishNotice ? <div role="status" className="border-b border-eui-ink/10 bg-eui-lilac-100 px-6 py-3 font-eui-ui text-sm text-eui-slate-500">{publishNotice}</div> : null}
     {issues.length > 0 ? <div className="border-b border-eui-ink/10 bg-white px-6 py-3 font-eui-ui"><Issues issues={issues} /></div> : null}
     {historyOpen ? <HistoryPanel prototypeId={state.doc.id} headRev={state.baseRev} refreshKey={historyRefreshKey} restoringRev={restoringRev} onRestore={requestRestore} /> : null}
+    {readinessOpen ? <ReadinessPanel prototypeId={state.doc.id} refreshKey={historyRefreshKey} onSelectLocation={selectLocation} /> : null}
     <EditorScreenStrip doc={state.doc} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedScreenId={screen.id} onSelect={(screenId) => dispatch({ type: "select-screen", screenId })} customTypes={customTypes} customDefinitions={customDefinitions} themeContent={themeContent} />
     <div className="flex min-h-0 flex-1"><section className="min-w-0 flex-1 overflow-auto bg-eui-lav p-6" aria-label={editor.canvasAria}><EditorCanvas doc={state.doc} screen={screen} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedKey={state.selection.elementKey} onSelect={(elementKey) => dispatch({ type: "select-element", elementKey })} customTypes={customTypes} customDefinitions={customDefinitions} themeContent={themeContent} /></section><DocEpochContext.Provider value={state.docEpoch}><InspectorPanel state={state} definitions={definitions} dispatch={dispatch} pins={loaded.components} /></DocEpochContext.Provider></div>
     {publishDialogOpen ? <div role="dialog" aria-modal="true" aria-label={editor.publishDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
       <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
         <h2 className="font-eui-display text-lg font-medium">{editor.publishDialogTitle}</h2>
         <p className="mt-1 text-sm text-eui-slate-500">{editor.publishDialogBody}</p>
+        <div className="-mx-5 mt-3 border-y border-eui-ink/10"><ReadinessPanel prototypeId={state.doc.id} refreshKey={historyRefreshKey} /></div>
         <label className="mt-4 block text-sm font-medium">{editor.publishMessageLabel}<textarea value={publishMessage} onChange={(event) => setPublishMessage(event.target.value)} placeholder={editor.publishMessagePlaceholder} className="mt-2 min-h-24 w-full rounded-xl border border-eui-ink/15 bg-white p-3 font-eui-ui text-sm" /></label>
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" className={pillGhost} onClick={() => { setPublishDialogOpen(false); setPublishMessage(""); }}>{editor.publishCancel}</button>

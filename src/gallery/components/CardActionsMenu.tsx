@@ -1,8 +1,10 @@
 import { useRef, useState, type ReactElement } from "react";
+import { createPortal } from "react-dom";
 import { ApiError, PROTOTYPE_KINDS, prototypeKindOf, setPrototypeLifecycle, setPrototypeStatus, type PrototypeKind, type PrototypeStatus, type PrototypeSummary } from "../../api/client";
 import { downloadBundle } from "../../api/bundles";
 import { inputBase, pillGhost, pillPrimary } from "../../app/chrome";
 import { gallery } from "../../app/strings/gallery";
+import { ReadinessPanel } from "../../editor/ReadinessPanel";
 import { useDismissableDetails } from "../useDismissableDetails";
 
 export interface CardActionsMenuProps {
@@ -26,6 +28,7 @@ export function CardActionsMenu({ prototype, isOwner, onChanged }: CardActionsMe
   const [downloading, setDownloading] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [lifecycle, setLifecycle] = useState<LifecycleDialogState | null>(null);
+  const [publishOpen, setPublishOpen] = useState(false);
   useDismissableDetails(ref, { locked: busy });
 
   const { latestVersion } = prototype;
@@ -60,6 +63,13 @@ export function CardActionsMenu({ prototype, isOwner, onChanged }: CardActionsMe
     }
   };
 
+  // Публикация из галереи — через диалог с readiness-отчётом (волна 4): решение
+  // «делать прототип видимым» принимается, глядя на готовность головной ревизии.
+  const openPublish = () => {
+    if (ref.current) ref.current.open = false;
+    setPublishOpen(true);
+  };
+
   const openLifecycle = () => {
     if (ref.current) ref.current.open = false;
     setLifecycle({ kind: prototypeKindOf(prototype), tags: (prototype.tags ?? []).join(", "), saving: false, error: false });
@@ -84,7 +94,7 @@ export function CardActionsMenu({ prototype, isOwner, onChanged }: CardActionsMe
       </summary>
       <div className="absolute right-0 z-20 mt-2 w-56 rounded-2xl border border-eui-ink/10 bg-white p-2 shadow-xl">
         {isOwner ? <>
-          {prototype.status === "private" ? <button type="button" className={menuItem} disabled={busy} onClick={() => void changeStatus("published")}>{gallery.publish}</button> : null}
+          {prototype.status === "private" ? <button type="button" className={menuItem} disabled={busy} onClick={openPublish}>{gallery.publish}</button> : null}
           {prototype.status === "published" ? <button type="button" className={menuItem} disabled={busy} onClick={() => void changeStatus("private")}>{gallery.unpublish}</button> : null}
           {prototype.status !== "archived" ? <button type="button" className={menuItem} disabled={busy} onClick={() => void changeStatus("archived")}>{gallery.archive}</button> : null}
           {prototype.status === "archived" ? <button type="button" className={menuItem} disabled={busy} onClick={() => void changeStatus("private")}>{gallery.restore}</button> : null}
@@ -92,6 +102,18 @@ export function CardActionsMenu({ prototype, isOwner, onChanged }: CardActionsMe
         </> : <button type="button" className={menuItem} disabled={downloading} onClick={() => void runExport()}>{downloading ? gallery.exporting : gallery.exportLatest}</button>}
       </div>
     </details>
+    {publishOpen ? createPortal(<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
+      <section role="dialog" aria-modal="true" aria-label={gallery.publishDialogAria} className="w-full max-w-lg rounded-3xl bg-white p-6 text-left shadow-2xl">
+        <h2 className="font-eui-display text-xl font-medium">{gallery.publishDialogTitle}</h2>
+        <p className="mt-1 text-sm text-eui-slate-500">{gallery.publishDialogBody}</p>
+        <div className="-mx-6 mt-4 border-y border-eui-ink/10"><ReadinessPanel prototypeId={prototype.id} /></div>
+        {error ? <p role="alert" className="mt-3 text-sm text-eui-magenta">{error}</p> : null}
+        <div className="flex flex-wrap justify-end gap-2 pt-4">
+          <button type="button" className={pillGhost} disabled={busy} onClick={() => setPublishOpen(false)}>{gallery.cancel}</button>
+          <button type="button" className={pillPrimary} disabled={busy} onClick={() => void changeStatus("published").then(() => setPublishOpen(false))}>{busy ? gallery.publishing : gallery.publishConfirm}</button>
+        </div>
+      </section>
+    </div>, document.body) : null}
     {lifecycle ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
       <section role="dialog" aria-modal="true" aria-label={gallery.lifecycleDialogAria} className="w-full max-w-md rounded-3xl bg-white p-6 text-left shadow-2xl">
         <h2 className="font-eui-display text-xl font-medium">{gallery.lifecycleDialogTitle}</h2>

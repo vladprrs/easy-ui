@@ -17,6 +17,7 @@ import { requirePrototypeOwner, requirePrototypeRead, requireUser } from "../aut
 import { writeAuditEvent } from "../audit";
 import { BundleClosure } from "../bundle/exporter";
 import { zipResponse } from "./bundles";
+import { computeReadiness } from "../readiness";
 
 const headScreens = (doc:PrototypeDoc) => doc.screens.map(s=>({id:s.id,url:headScreenUrl(doc.id,s.id)}));
 
@@ -155,7 +156,53 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
     db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,result.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:result.rev,restore:true}});
     return json(result,200,noStore);
   }
-  if(tail[0]==="publish"&&tail.length===1) { if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed"); const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); const result=repo.publish(id,baseRev(b),message(b)); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.version.published",subjectType:"prototype",subjectId:id,detail:result}); const published=repo.version(id,result.version); return json({...result,screens:published.doc.screens.map(s=>({id:s.id,url:versionScreenUrl(id,result.version,s.id)}))},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(id)}/versions/${result.version}`}); }
+  if(tail[0]==="readiness"&&tail.length===1) {
+    if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed");
+    requirePrototypeRead(db,id,principal);
+    return json(await computeReadiness(db,id,{dataDir,serveDist}),200,noStore);
+  }
+  // Перепин головы на актуальные active-публикации. Тонкая обёртка: пины пересчитывает
+  // `snapshotDefinitions` внутри `updatePrototypeFromDoc`, параллельного pin-writer'а нет.
+  // `?dryRun=1` считает diff без записи; запись пропускается и когда diff пуст.
+  if(tail[0]==="repin"&&tail.length===1) {
+    if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed");
+    const actor=requirePrototypeOwner(db,id,principal);
+    const dryRun=new URL(request.url).searchParams.get("dryRun")==="1";
+    const head=repo.draft(id);
+    const before=head.components;
+    const snapshot=await snapshotDefinitions(db,head.doc,dataDir);
+    const beforeByName=new Map(before.map(pin=>[pin.name,pin.version]));
+    const afterByName=new Map(snapshot.pins.map(pin=>[pin.name,pin.version]));
+    const names=[...new Set([...beforeByName.keys(),...afterByName.keys()])].sort();
+    const changed=names.filter(name=>beforeByName.get(name)!==afterByName.get(name))
+      .map(name=>({component:name,from:beforeByName.get(name)??null,to:afterByName.get(name)??null}));
+    // `snapshotDefinitions` резолвит только active-публикации, поэтому статус проекции — active.
+    const projected=snapshot.pins.map(pin=>({id:pin.id,name:pin.name,version:pin.version,bundleHash:pin.bundleHash,status:"active",
+      bundleUrl:`/api/components/${encodeURIComponent(pin.id)}/versions/${pin.version}/bundle.js`}));
+    if(dryRun||!changed.length) return json({dryRun,rev:head.rev,before,after:projected,changed},200,noStore);
+    await updatePrototypeFromDoc(db,repo,id,head.doc,head.rev,dataDir,actor.userId,{message:"Repin components"});
+    const after=repo.draft(id);
+    writeAuditEvent(db,{actorId:actor.userId,action:"prototype.repinned",subjectType:"prototype",subjectId:id,detail:{rev:after.rev,changed}});
+    return json({dryRun:false,rev:after.rev,before,after:after.components,changed},200,noStore);
+  }
+  if(tail[0]==="publish"&&tail.length===1) {
+    if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed");
+    const actor=requirePrototypeOwner(db,id,principal);
+    const b=objectBody(await readJson(request));
+    const base=baseRev(b);
+    if(b.force!==undefined&&typeof b.force!=="boolean") throw new ApiError(400,"invalid_request","force must be a boolean");
+    const force=b.force===true;
+    // Readiness считается здесь, а не в `repo.publish`: тот — синхронная db.transaction,
+    // а `snapshotDefinitions` асинхронен (M5 ревью). TOCTOU снимается сверкой rev.
+    const report=await computeReadiness(db,id,{dataDir,serveDist});
+    if(report.rev!==base) throw new ApiError(409,"revision_conflict","Prototype revision has changed",{currentRev:report.rev});
+    if(report.blocking.length&&!force) throw new ApiError(409,"publish_blocked","Prototype is not ready to publish",{report});
+    if(report.blocking.length&&force) writeAuditEvent(db,{actorId:actor.userId,action:"prototype.publish.forced",subjectType:"prototype",subjectId:id,detail:{rev:report.rev,blocking:report.blocking}});
+    const result=repo.publish(id,base,message(b));
+    writeAuditEvent(db,{actorId:actor.userId,action:"prototype.version.published",subjectType:"prototype",subjectId:id,detail:result});
+    const published=repo.version(id,result.version);
+    return json({...result,screens:published.doc.screens.map(s=>({id:s.id,url:versionScreenUrl(id,result.version,s.id)}))},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(id)}/versions/${result.version}`});
+  }
   if(tail[0]==="status"&&tail.length===1) { if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed"); const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); if(b.status!=="private"&&b.status!=="published"&&b.status!=="archived") throw new ApiError(422,"validation_failed","Invalid prototype status",{issues:[{path:["status"],message:"must be private, published, or archived"}]}); const result=repo.setStatus(id,b.status); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.status.changed",subjectType:"prototype",subjectId:id,detail:result}); return json(result,200,noStore); }
   if(tail[0]==="lifecycle"&&tail.length===1) {
     if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed");

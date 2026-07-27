@@ -13,8 +13,10 @@ import type { Principal } from "../auth";
 import { prototypeAccess, requirePrototypeRead } from "../authorization";
 import { classifyRevision, type RevisionClassification } from "../classify";
 
-type Pin = { id: string; name: string; version: number; bundleUrl: string; bundleHash: string };
-export type ResolvedPin = Pin & { status: string };
+// `status` — статус публикации закреплённой версии (волна 3): включает бейдж «устарел»
+// в дереве компонентов редактора. Поле аддитивное, старые клиенты его игнорируют.
+type Pin = { id: string; name: string; version: number; bundleUrl: string; bundleHash: string; status: string };
+export type ResolvedPin = Pin;
 export type BundleReadiness = { resolvedPins: ResolvedPin[]; bundles: boolean; bundleStatus: "ready" | "failed"; warnings: { code: string; message: string }[]; errors: { code: string; message: string }[] };
 // Statuses that still render (K adds deprecated/superseded later; tolerated ahead of that migration).
 const RENDERABLE_PIN_STATUS = new Set(["active", "deprecated", "superseded"]);
@@ -54,13 +56,14 @@ export class PrototypeRepo {
     return row;
   }
   private pins(id: string, rev: number): Pin[] {
-    const rows = this.db.query(`SELECT c.id, c.name, prc.component_version version, cp.bundle_hash bundleHash
+    const rows = this.db.query(`SELECT c.id, c.name, prc.component_version version, cp.bundle_hash bundleHash, cp.status
       FROM prototype_revision_components prc JOIN components c ON c.id=prc.component_id
       JOIN component_publishes cp ON cp.component_id=prc.component_id AND cp.version=prc.component_version
       WHERE prc.prototype_id=? AND prc.rev=? ORDER BY c.id`).all(id, rev) as Omit<Pin,"bundleUrl">[];
     return rows.map(p => ({ ...p, bundleUrl: `/api/components/${encodeURIComponent(p.id)}/versions/${p.version}/bundle.js` }));
   }
-  private bundleReadiness(id: string, rev: number): BundleReadiness {
+  /** Публичный вход для readiness-отчёта (волна 4): статусы пинов и их рендерабельность. */
+  bundleReadiness(id: string, rev: number): BundleReadiness {
     const rows = this.db.query(`SELECT c.id, c.name, prc.component_version version, cp.bundle_hash bundleHash, cp.status
       FROM prototype_revision_components prc JOIN components c ON c.id=prc.component_id
       JOIN component_publishes cp ON cp.component_id=prc.component_id AND cp.version=prc.component_version

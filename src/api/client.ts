@@ -16,6 +16,8 @@ export interface ApiErrorBody {
   warnings?: unknown[];
   currentRev?: number;
   currentVersion?: number;
+  /** 409 publish_blocked (волна 4): полный readiness-отчёт заблокированной публикации. */
+  report?: unknown;
 }
 
 export interface AuthUser {
@@ -42,6 +44,7 @@ export class ApiError extends Error {
   readonly warnings?: unknown[];
   readonly currentRev?: number;
   readonly currentVersion?: number;
+  readonly report?: unknown;
 
   constructor(status: number, error: ApiErrorBody) {
     super(error.message);
@@ -52,6 +55,7 @@ export class ApiError extends Error {
     this.warnings = error.warnings;
     this.currentRev = error.currentRev;
     this.currentVersion = error.currentVersion;
+    this.report = error.report;
   }
 }
 
@@ -123,7 +127,9 @@ export interface PrototypeMeta {
   tags?: string[];
   derivedFrom?: string | null;
 }
-export interface PrototypeComponentPin { id: string; name: string; version: number; bundleUrl: string; bundleHash: string }
+// `status` — статус публикации закреплённой версии компонента (волна 3). Опционален:
+// старые ответы/фикстуры его не несут, инспектор рисует бейдж «устарел» только когда он есть.
+export interface PrototypeComponentPin { id: string; name: string; version: number; bundleUrl: string; bundleHash: string; status?: ComponentStatus }
 export interface AssetPin { id: string; sha256: string; mime: string; size: number }
 export interface UploadedAsset extends AssetPin { url: string; width?: number; height?: number; deduplicated?: true }
 export interface EditorAsset extends AssetPin { name?: string }
@@ -396,6 +402,32 @@ export const restorePrototype = async (id: string, rev: number, baseRev: number,
   return restored;
 };
 export const publishPrototype = (id: string, baseRev: number, message?: string, signal?: AbortSignal) => request<PublishPrototypeResult>(`${prototypePath(id)}/publish`, { method: "POST", body: { baseRev, message }, signal });
+// --- Ready-to-publish report (волна 4) ---
+export const READINESS_GATE_IDS = ["architecture", "schema", "screens", "assets", "pins", "deprecated", "visual", "capture", "interactions", "publishDiff"] as const;
+export type ReadinessGateId = (typeof READINESS_GATE_IDS)[number];
+export type ReadinessGateStatus = "pass" | "warn" | "fail" | "unknown";
+/** Ссылка на проблемное место отчёта: JSON-pointer + разрешённые экран/элемент. */
+export interface ReadinessLocation { path: string; message: string; screenId?: string; elementKey?: string; code?: string }
+/** Детали гейта разложены в тот же объект — форма зависит от гейта, поэтому индексная сигнатура. */
+export interface ReadinessGate { id: ReadinessGateId; status: ReadinessGateStatus; summary: string; [detail: string]: unknown }
+export interface ReadinessReport {
+  prototypeId: string;
+  rev: number;
+  generatedAt: string;
+  gates: ReadinessGate[];
+  blocking: ReadinessGateId[];
+  publishable: boolean;
+  enabledGates: Record<string, "fail" | "warn">;
+}
+export const getPrototypeReadiness = (id: string, signal?: AbortSignal) =>
+  request<ReadinessReport>(`${prototypePath(id)}/readiness`, { signal });
+
+/** Перепин головного документа на актуальные active-публикации (волна 3). */
+export interface RepinChange { component: string; from: number | null; to: number | null }
+export interface RepinResult { dryRun: boolean; rev: number; before: PrototypeComponentPin[]; after: PrototypeComponentPin[]; changed: RepinChange[] }
+export const repinPrototype = (id: string, options: { dryRun?: boolean } = {}, signal?: AbortSignal) =>
+  request<RepinResult>(`${prototypePath(id)}/repin${options.dryRun ? "?dryRun=1" : ""}`, { method: "POST", body: {}, signal });
+
 export const setPrototypeStatus = (id: string, status: PrototypeStatus, signal?: AbortSignal) =>
   request<{ status: PrototypeStatus }>(`${prototypePath(id)}/status`, { method: "POST", body: { status }, signal });
 export const listPrototypeVersions = (id: string, signal?: AbortSignal) => request<PrototypeVersionSummary[]>(`${prototypePath(id)}/versions`, { signal });
