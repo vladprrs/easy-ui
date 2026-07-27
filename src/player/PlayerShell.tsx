@@ -11,6 +11,7 @@ import { EasyUiActionRuntime } from "./actionRuntime";
 import { InspectorLog, InspectorLoggerSink } from "./inspector/log";
 import { PlayerNavigationProvider, usePlayerNavigation } from "./navigation";
 import { PrototypeLoader } from "./PrototypeLoader";
+import { emptyScenarioDraft, type ScenarioDraft, type ScenarioPanelController } from "./scenarioPanel";
 export { LoadError, MissingPrototype } from "./PrototypeLoader";
 
 const Devtools = lazy(async () => ({ default: (await import("@json-render/devtools-react")).JsonRenderDevtools }));
@@ -34,6 +35,8 @@ export interface PlayerOutletContext {
     log: InspectorLog;
     toggle: () => void;
   };
+  /** Панель сценариев (волна 6): черновик записи переживает переходы между экранами. */
+  scenarios: ScenarioPanelController;
 }
 
 function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; metaVersion: number | null | undefined; debug: boolean; versions: PlayerOutletContext["versions"] }) {
@@ -94,6 +97,16 @@ function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions }:
   }, [inspectorSession]);
   const toggleInspector = useCallback(() => setInspectorHidden((hidden) => !hidden), []);
 
+  // Черновик сценария живёт в шелле, а не во вью экрана: запись обязана переживать
+  // переходы между экранами (именно переходы и попадают в шаги).
+  const [scenarioOpen, setScenarioOpen] = useState(false);
+  const [scenarioDraft, setScenarioDraft] = useState<ScenarioDraft>(emptyScenarioDraft);
+  const toggleScenarios = useCallback(() => setScenarioOpen((open) => !open), []);
+  const scenarioController = useMemo<ScenarioPanelController>(
+    () => ({ enabled: true, open: scenarioOpen, toggle: toggleScenarios, draft: scenarioDraft, setDraft: setScenarioDraft }),
+    [scenarioOpen, toggleScenarios, scenarioDraft],
+  );
+
   return <JSONUIProvider key={`${runtimeKey}:${navigation.sessionNonce}`} registry={runtime.registry} handlers={runtime.handlers} store={inspectorSession.actionRuntime.store}>
     <ThemeStyle content={themeContent} />
     <Outlet context={{
@@ -107,6 +120,7 @@ function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions }:
       themeContent,
       versions,
       inspector: { enabled: debug, visible: inspectorVisible, log: inspectorSession.log, toggle: toggleInspector },
+      scenarios: scenarioController,
     } satisfies PlayerOutletContext} />
     {import.meta.env.DEV && import.meta.env.MODE !== "test" ? <Suspense fallback={null}><Devtools /></Suspense> : null}
   </JSONUIProvider>;

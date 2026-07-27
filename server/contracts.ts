@@ -4,6 +4,7 @@ import { COMPONENT_SCOPES } from "../src/designSystems/scope";
 import { PROTOTYPE_KINDS, READINESS_GATE_IDS } from "../src/api/client";
 import { atomicLevels, layoutSpacingProps, spaceTokens } from "../src/designSystems/types";
 import { importReportSchema } from "../src/bundle/schema";
+import { scenarioInputSchema, scenarioStepsSchema } from "../src/prototype/scenario";
 import { ApiError } from "./http";
 import { figmaSchema } from "./figma";
 
@@ -759,6 +760,53 @@ export const getPrototypeReadinessContract = registerContract({
   summary: "Ready-to-publish report for the head revision: one row per gate, plus the blocking set. Read-only — it never enqueues screenshot or visual jobs.",
   responseSchema: readinessReportSchema,
   errors: [errorCatalog.prototypeNotFound, errorCatalog.revisionNotFound],
+});
+
+// --- Сценарии взаимодействия (волна 6) ---
+// Шаги валидируются схемой из `src/prototype/scenario.ts` — единый источник для рекордера,
+// клиентского раннера и сервера. Прогонов на сервере нет: раннер живёт в браузере.
+const scenarioResponseSchema = z.strictObject({
+  id: z.string(), prototypeId: z.string(), name: z.string(),
+  steps: scenarioStepsSchema, author: z.string().nullable(),
+  createdAt: isoDate, updatedAt: isoDate,
+});
+
+export const listPrototypeScenariosContract = registerContract({
+  method: "GET", path: "/api/prototypes/{id}/scenarios",
+  summary: "List recorded interaction scenarios of a prototype (readable by anyone who can read the prototype).",
+  responseSchema: z.strictObject({ scenarios: z.array(scenarioResponseSchema) }),
+  errors: [errorCatalog.prototypeNotFound, errorCatalog.methodNotAllowed],
+});
+
+export const createPrototypeScenarioContract = registerContract({
+  method: "POST", path: "/api/prototypes/{id}/scenarios",
+  summary: "Create an interaction scenario (owner or admin); `id` is an optional slug, generated when omitted.",
+  status: 201,
+  requestSchema: z.object({ id: slugString.max(64).optional(), ...scenarioInputSchema.shape }),
+  responseSchema: scenarioResponseSchema,
+  errors: [errorCatalog.invalidRequest, { status: 403, code: "forbidden" }, errorCatalog.prototypeNotFound, errorCatalog.alreadyExists, errorCatalog.validationFailed],
+});
+
+export const getPrototypeScenarioContract = registerContract({
+  method: "GET", path: "/api/prototypes/{id}/scenarios/{scenarioId}",
+  summary: "Read one interaction scenario.",
+  responseSchema: scenarioResponseSchema,
+  errors: [errorCatalog.prototypeNotFound, { status: 404, code: "scenario_not_found" }],
+});
+
+export const savePrototypeScenarioContract = registerContract({
+  method: "PUT", path: "/api/prototypes/{id}/scenarios/{scenarioId}",
+  summary: "Replace an interaction scenario's name and steps (owner or admin).",
+  requestSchema: scenarioInputSchema,
+  responseSchema: scenarioResponseSchema,
+  errors: [errorCatalog.invalidRequest, { status: 403, code: "forbidden" }, errorCatalog.prototypeNotFound, { status: 404, code: "scenario_not_found" }, errorCatalog.validationFailed],
+});
+
+export const deletePrototypeScenarioContract = registerContract({
+  method: "DELETE", path: "/api/prototypes/{id}/scenarios/{scenarioId}",
+  summary: "Delete an interaction scenario (owner or admin). Responds 204 without a body.",
+  status: 204,
+  errors: [{ status: 403, code: "forbidden" }, errorCatalog.prototypeNotFound, { status: 404, code: "scenario_not_found" }],
 });
 
 export const repinPrototypeQuerySchema = z.strictObject({ dryRun: z.enum(["1"]).optional() });

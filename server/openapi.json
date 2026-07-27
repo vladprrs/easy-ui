@@ -823,6 +823,7 @@
                               "asset",
                               "designSystem",
                               "component",
+                              "composition",
                               "prototype"
                             ],
                             "type": "string"
@@ -12382,6 +12383,1554 @@
           }
         },
         "summary": "Compare two immutable prototype revisions, including document, pin and render-input changes.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/prototypes/{id}/scenarios": {
+      "get": {
+        "operationId": "get_prototypes_id_scenarios",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "elementKey": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "label": {
+                              "maxLength": 120,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "click",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "elementKey"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "screenId": {
+                              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "expectScreen",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "screenId"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "text": {
+                              "maxLength": 300,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "expectText",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "text"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "pointer": {
+                              "$ref": "#/$defs/__schema2"
+                            },
+                            "type": {
+                              "const": "setState",
+                              "type": "string"
+                            },
+                            "value": {
+                              "$ref": "#/$defs/__schema3"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "pointer",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "pointer": {
+                              "$ref": "#/$defs/__schema2"
+                            },
+                            "type": {
+                              "const": "expectState",
+                              "type": "string"
+                            },
+                            "value": {
+                              "$ref": "#/$defs/__schema3"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "pointer",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "elementKey": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "type": {
+                              "const": "expectDisabled",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "elementKey"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "__schema1": {
+                      "maxLength": 300,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "__schema2": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "__schema3": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "items": {
+                            "$ref": "#/$defs/__schema3"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/__schema3"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "__schema4": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "scenarios": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "author": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "$ref": "#/$defs/__schema4"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "prototypeId": {
+                            "type": "string"
+                          },
+                          "steps": {
+                            "items": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "maxItems": 200,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "updatedAt": {
+                            "$ref": "#/$defs/__schema4"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "prototypeId",
+                          "name",
+                          "steps",
+                          "author",
+                          "createdAt",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "scenarios"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          }
+        },
+        "summary": "List recorded interaction scenarios of a prototype (readable by anyone who can read the prototype).",
+        "x-easyui-validated": false
+      },
+      "post": {
+        "operationId": "post_prototypes_id_scenarios",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "elementKey": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "label": {
+                            "maxLength": 120,
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "click",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "elementKey"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "screenId": {
+                            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "expectScreen",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "screenId"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "text": {
+                            "maxLength": 300,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "expectText",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "text"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "pointer": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "type": {
+                            "const": "setState",
+                            "type": "string"
+                          },
+                          "value": {
+                            "$ref": "#/$defs/__schema3"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "pointer",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "pointer": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "type": {
+                            "const": "expectState",
+                            "type": "string"
+                          },
+                          "value": {
+                            "$ref": "#/$defs/__schema3"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "pointer",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "elementKey": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "type": {
+                            "const": "expectDisabled",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "elementKey"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "__schema1": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "__schema2": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "__schema3": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "items": {
+                          "$ref": "#/$defs/__schema3"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "additionalProperties": {
+                          "$ref": "#/$defs/__schema3"
+                        },
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "properties": {
+                  "id": {
+                    "maxLength": 64,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "steps": {
+                    "items": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "maxItems": 200,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "name",
+                  "steps"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "elementKey": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "label": {
+                              "maxLength": 120,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "click",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "elementKey"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "screenId": {
+                              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "expectScreen",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "screenId"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "text": {
+                              "maxLength": 300,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "expectText",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "text"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "pointer": {
+                              "$ref": "#/$defs/__schema2"
+                            },
+                            "type": {
+                              "const": "setState",
+                              "type": "string"
+                            },
+                            "value": {
+                              "$ref": "#/$defs/__schema3"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "pointer",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "pointer": {
+                              "$ref": "#/$defs/__schema2"
+                            },
+                            "type": {
+                              "const": "expectState",
+                              "type": "string"
+                            },
+                            "value": {
+                              "$ref": "#/$defs/__schema3"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "pointer",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "elementKey": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "type": {
+                              "const": "expectDisabled",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "elementKey"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "__schema1": {
+                      "maxLength": 300,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "__schema2": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "__schema3": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "items": {
+                            "$ref": "#/$defs/__schema3"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/__schema3"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "__schema4": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "author": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema4"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "prototypeId": {
+                      "type": "string"
+                    },
+                    "steps": {
+                      "items": {
+                        "$ref": "#/$defs/__schema0"
+                      },
+                      "maxItems": 200,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "updatedAt": {
+                      "$ref": "#/$defs/__schema4"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "prototypeId",
+                    "name",
+                    "steps",
+                    "author",
+                    "createdAt",
+                    "updatedAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "already_exists"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "Create an interaction scenario (owner or admin); `id` is an optional slug, generated when omitted.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/prototypes/{id}/scenarios/{scenarioId}": {
+      "delete": {
+        "operationId": "delete_prototypes_id_scenarios_scenarioId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "scenarioId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No content"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found | scenario_not_found"
+          }
+        },
+        "summary": "Delete an interaction scenario (owner or admin). Responds 204 without a body.",
+        "x-easyui-validated": false
+      },
+      "get": {
+        "operationId": "get_prototypes_id_scenarios_scenarioId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "scenarioId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "elementKey": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "label": {
+                              "maxLength": 120,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "click",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "elementKey"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "screenId": {
+                              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "expectScreen",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "screenId"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "text": {
+                              "maxLength": 300,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "expectText",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "text"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "pointer": {
+                              "$ref": "#/$defs/__schema2"
+                            },
+                            "type": {
+                              "const": "setState",
+                              "type": "string"
+                            },
+                            "value": {
+                              "$ref": "#/$defs/__schema3"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "pointer",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "pointer": {
+                              "$ref": "#/$defs/__schema2"
+                            },
+                            "type": {
+                              "const": "expectState",
+                              "type": "string"
+                            },
+                            "value": {
+                              "$ref": "#/$defs/__schema3"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "pointer",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "elementKey": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "type": {
+                              "const": "expectDisabled",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "elementKey"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "__schema1": {
+                      "maxLength": 300,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "__schema2": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "__schema3": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "items": {
+                            "$ref": "#/$defs/__schema3"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/__schema3"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "__schema4": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "author": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema4"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "prototypeId": {
+                      "type": "string"
+                    },
+                    "steps": {
+                      "items": {
+                        "$ref": "#/$defs/__schema0"
+                      },
+                      "maxItems": 200,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "updatedAt": {
+                      "$ref": "#/$defs/__schema4"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "prototypeId",
+                    "name",
+                    "steps",
+                    "author",
+                    "createdAt",
+                    "updatedAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found | scenario_not_found"
+          }
+        },
+        "summary": "Read one interaction scenario.",
+        "x-easyui-validated": false
+      },
+      "put": {
+        "operationId": "put_prototypes_id_scenarios_scenarioId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "scenarioId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "elementKey": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "label": {
+                            "maxLength": 120,
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "click",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "elementKey"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "screenId": {
+                            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "expectScreen",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "screenId"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "text": {
+                            "maxLength": 300,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "expectText",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "text"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "pointer": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "type": {
+                            "const": "setState",
+                            "type": "string"
+                          },
+                          "value": {
+                            "$ref": "#/$defs/__schema3"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "pointer",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "pointer": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "type": {
+                            "const": "expectState",
+                            "type": "string"
+                          },
+                          "value": {
+                            "$ref": "#/$defs/__schema3"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "pointer",
+                          "value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "elementKey": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "type": {
+                            "const": "expectDisabled",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "elementKey"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "__schema1": {
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "__schema2": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "__schema3": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "items": {
+                          "$ref": "#/$defs/__schema3"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "additionalProperties": {
+                          "$ref": "#/$defs/__schema3"
+                        },
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "steps": {
+                    "items": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "maxItems": 200,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "name",
+                  "steps"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "elementKey": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "label": {
+                              "maxLength": 120,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "click",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "elementKey"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "screenId": {
+                              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "expectScreen",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "screenId"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "text": {
+                              "maxLength": 300,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": {
+                              "const": "expectText",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "text"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "pointer": {
+                              "$ref": "#/$defs/__schema2"
+                            },
+                            "type": {
+                              "const": "setState",
+                              "type": "string"
+                            },
+                            "value": {
+                              "$ref": "#/$defs/__schema3"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "pointer",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "pointer": {
+                              "$ref": "#/$defs/__schema2"
+                            },
+                            "type": {
+                              "const": "expectState",
+                              "type": "string"
+                            },
+                            "value": {
+                              "$ref": "#/$defs/__schema3"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "pointer",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "elementKey": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "type": {
+                              "const": "expectDisabled",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "elementKey"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "__schema1": {
+                      "maxLength": 300,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "__schema2": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "__schema3": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "items": {
+                            "$ref": "#/$defs/__schema3"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/__schema3"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "__schema4": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "author": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema4"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "prototypeId": {
+                      "type": "string"
+                    },
+                    "steps": {
+                      "items": {
+                        "$ref": "#/$defs/__schema0"
+                      },
+                      "maxItems": 200,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "updatedAt": {
+                      "$ref": "#/$defs/__schema4"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "prototypeId",
+                    "name",
+                    "steps",
+                    "author",
+                    "createdAt",
+                    "updatedAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found | scenario_not_found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "Replace an interaction scenario's name and steps (owner or admin).",
         "x-easyui-validated": false
       }
     },

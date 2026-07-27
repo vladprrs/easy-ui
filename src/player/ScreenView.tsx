@@ -17,6 +17,7 @@ import { InspectorPanel } from "./inspector/InspectorPanel";
 import { getPrototypeVersion, type PrototypeDraft } from "../api/client";
 import { ShareDialog } from "./ShareDialog";
 import { ScenarioBar } from "./ScenarioBar";
+import { ScenarioPanel, ScenarioToggle } from "./scenarioPanel";
 
 export function stripScenarioSearch(search: string): string {
   const params = new URLSearchParams(search);
@@ -79,7 +80,7 @@ export function PlayerHotkeysHelp({ onClose, present = false, canExitPresent = p
 }
 
 export function ScreenView() {
-  const { doc, runtimeKey, registry, runtime, customTypes, customDefinitions, onError, themeContent, inspector, versions } = useOutletContext<PlayerOutletContext>();
+  const { doc, runtimeKey, registry, runtime, customTypes, customDefinitions, onError, themeContent, inspector, versions, scenarios } = useOutletContext<PlayerOutletContext>();
   const { screenId } = useParams();
   const { version } = useParams();
   const navigation = usePlayerNavigation();
@@ -244,6 +245,7 @@ export function ScreenView() {
       <button type="button" onClick={navigation.back} disabled={navigation.flowDepth === 0} className={`${pillGhost} disabled:opacity-50`}>{player.back}</button>
       <button type="button" onClick={navigation.restart} className={pillGhost}>{player.restart}</button>
       {screen?.note ? <button type="button" aria-expanded={noteScreenId === screenId} aria-controls="player-screen-note" onClick={() => setNoteScreenId((open) => open === screenId ? null : screenId ?? null)} className={pillGhost}>{player.note}</button> : null}
+      <ScenarioToggle controller={scenarios} />
       {inspector.enabled && <button type="button" aria-pressed={inspector.visible} onClick={inspector.toggle} className={pillGhost}>{inspectorStrings.title}</button>}
     </>}
   />;
@@ -273,6 +275,7 @@ export function ScreenView() {
       <DeviceFrame device={device} canvas={screen.canvas} zoom={zoomValue} onEffectiveScale={stageZoom.onEffectiveScale} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} statusBarHidden={statusBarHidden} scrollResetKey={screen.id}>
         <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>{rendered}</ScreenErrorBoundary>
       </DeviceFrame>
+      {scenarios.open ? <ScenarioPanel doc={doc} screenId={screen.id} controller={scenarios} /> : null}
       {inspector.enabled && inspector.visible ? <InspectorPanel log={inspector.log} spec={screen.spec} definitions={customDefinitions} /> : null}
     </div>
   </main>;

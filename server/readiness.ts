@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { ApiError } from "./http";
 import { parseStoredPrototypeDoc, PrototypeRepo } from "./repos/prototypes";
 import { classifyRevision } from "./classify";
+import { ScenarioRepo } from "./repos/scenarios";
 import { collectAssetIds, snapshotDefinitions } from "./validation";
 import { validatePrototype } from "../src/prototype/validate";
 import type { ArchitectureExemptedIssue, ValidationIssue } from "../src/prototype/types";
@@ -176,7 +177,7 @@ export async function computeReadiness(db: Database, prototypeId: string, option
     deprecatedGate(db, prototypeId, rev),
     visualGate(db, prototypeId, rev),
     captureGate(prototypeId, rev, options.capture),
-    interactionsGate(),
+    interactionsGate(db, prototypeId),
     publishDiffGate(db, prototypeId, rev),
   ];
 
@@ -325,9 +326,23 @@ function captureGate(prototypeId: string, rev: number, capture?: CaptureLookup):
   return gate("capture", status, bad.length ? "capture_failed" : dirty.length ? "capture_noisy" : "clean", { screens: jobs, persisted: true });
 }
 
-/** `interactions` — заполняется волной 6 (сценарии). Идентификатор гейта стабилен уже сейчас. */
-function interactionsGate(): ReadinessGate {
-  return gate("interactions", "unknown", "no_scenarios", { scenarios: 0, wave: 6 });
+/**
+ * `interactions` — записанные сценарии прототипа (волна 6).
+ *
+ * Гейт **никогда не запускает** прогон: раннер клиентский, а флакующий replay не имеет
+ * права блокировать публикацию (триаж ревью плана). Отчёт строится только по наличию
+ * сценариев: нет ни одного → `unknown`; есть, но все пустые/сломанные → `warn`; иначе `pass`.
+ */
+function interactionsGate(db: Database, prototypeId: string): ReadinessGate {
+  const scenarios = new ScenarioRepo(db).list(prototypeId);
+  if (!scenarios.length) return gate("interactions", "unknown", "no_scenarios", { scenarios: [], scenarioCount: 0 });
+  const items = scenarios.map((scenario) => ({ id: scenario.id, name: scenario.name, steps: scenario.steps.length, updatedAt: scenario.updatedAt }));
+  const empty = items.filter((item) => item.steps === 0);
+  return gate("interactions", empty.length === items.length ? "warn" : "pass", empty.length ? "scenarios_incomplete" : "scenarios_recorded", {
+    scenarios: items,
+    scenarioCount: items.length,
+    emptyScenarios: empty.map((item) => item.id),
+  });
 }
 
 /** `publishDiff` — доступен ли diff головной ревизии против последней опубликованной версии. */

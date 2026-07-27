@@ -6,6 +6,7 @@ import { createPlayerRuntime } from "../catalog/runtime";
 import { prototypeDocSchema } from "../prototype/schema";
 import { EasyUiActionRuntime } from "./actionRuntime";
 import { InspectorLog } from "./inspector/log";
+import { emptyScenarioDraft } from "./scenarioPanel";
 import { ScreenErrorBoundary } from "./ScreenView";
 import { ScreenView } from "./ScreenView";
 
@@ -39,7 +40,7 @@ function renderPlayer(doc: ReturnType<typeof prototypeDocSchema.parse>, initialP
   const deps = { navigate: navigation.navigate, back: navigation.back, openUrl() {}, restart: navigation.restart };
   const runtime = createPlayerRuntime(deps);
   const actionRuntime = new EasyUiActionRuntime({ initialState: doc.state, screenIds: new Set(doc.screens.map((s) => s.id)), deps });
-  const context = { doc, registry: runtime.registry, runtime: actionRuntime, customTypes: new Set<string>(), customDefinitions: {}, onError: () => {}, inspector: { enabled: false, visible: false, log: new InspectorLog(), toggle: () => {} } };
+  const context = { doc, registry: runtime.registry, runtime: actionRuntime, customTypes: new Set<string>(), customDefinitions: {}, onError: () => {}, inspector: { enabled: false, visible: false, log: new InspectorLog(), toggle: () => {} }, scenarios: { enabled: true, open: false, toggle: () => {}, draft: emptyScenarioDraft, setDraft: () => {} } };
   const router = createMemoryRouter([{
     path: "/p/:protoId",
     element: <JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}><Outlet context={context} /></JSONUIProvider>,
@@ -277,7 +278,7 @@ describe("ScreenView canvas", () => {
     const deps = { navigate: navigation.navigate, back: navigation.back, openUrl() {}, restart: navigation.restart };
     const runtime = createPlayerRuntime(deps);
     const actionRuntime = new EasyUiActionRuntime({ initialState: doc.state, screenIds: new Set(doc.screens.map((s) => s.id)), deps });
-    const context = { doc, registry: runtime.registry, runtime: actionRuntime, customTypes: new Set<string>(), customDefinitions: {}, onError: () => {}, inspector: { enabled: false, visible: false, log: new InspectorLog(), toggle: () => {} } };
+    const context = { doc, registry: runtime.registry, runtime: actionRuntime, customTypes: new Set<string>(), customDefinitions: {}, onError: () => {}, inspector: { enabled: false, visible: false, log: new InspectorLog(), toggle: () => {} }, scenarios: { enabled: true, open: false, toggle: () => {}, draft: emptyScenarioDraft, setDraft: () => {} } };
     const router = createMemoryRouter([{
       path: "/p/:protoId",
       element: <JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}><Outlet context={context} /></JSONUIProvider>,

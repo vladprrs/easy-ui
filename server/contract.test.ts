@@ -138,6 +138,13 @@ function orderedCases(): [string, Case][] {
     ["POST /api/prototypes/{id}/lifecycle", { run: () => call("POST", "/api/prototypes/contract-proto/lifecycle", { kind: "evidence", tags: ["contract"], derivedFrom: null }), expected: ok() }],
     ["GET /api/prototypes/{id}/readiness", { run: () => call("GET", "/api/prototypes/contract-proto/readiness"), expected: ok() }],
     ["POST /api/prototypes/{id}/repin", { run: () => call("POST", "/api/prototypes/contract-proto/repin?dryRun=1", {}), expected: ok() }],
+    // Сценарии взаимодействия (волна 6)
+    ["POST /api/prototypes/{id}/scenarios", { run: () => call("POST", "/api/prototypes/contract-proto/scenarios", { id: "contract-scenario", name: "Contract scenario", steps: [{ type: "expectScreen", screenId: state.screenId }, { type: "expectText", text: "Hello" }] }), expected: ok(201) }],
+    ["GET /api/prototypes/{id}/scenarios", { run: () => call("GET", "/api/prototypes/contract-proto/scenarios"), expected: ok() }],
+    ["GET /api/prototypes/{id}/scenarios/{scenarioId}", { run: () => call("GET", "/api/prototypes/contract-proto/scenarios/contract-scenario"), expected: ok() }],
+    ["PUT /api/prototypes/{id}/scenarios/{scenarioId}", { run: () => call("PUT", "/api/prototypes/contract-proto/scenarios/contract-scenario", { name: "Contract scenario v2", steps: [{ type: "expectScreen", screenId: state.screenId }] }), expected: ok() }],
+    ["GET /api/prototypes/{id}/scenarios/{scenarioId}", { run: () => call("GET", "/api/prototypes/contract-proto/scenarios/missing"), expected: err(404, "scenario_not_found") }],
+    ["DELETE /api/prototypes/{id}/scenarios/{scenarioId}", { run: () => call("DELETE", "/api/prototypes/contract-proto/scenarios/contract-scenario"), expected: ok(204) }],
     ["POST /api/prototypes/{id}/status", { run: () => call("POST", "/api/prototypes/contract-proto/status", { status: "published" }), expected: ok() }],
     ["POST /api/prototypes/{id}/publish", { run: () => call("POST", "/api/prototypes/contract-proto/publish", { baseRev: 3 }), expected: ok(201) }],
     ["GET /api/prototypes/{id}/versions", { run: () => call("GET", "/api/prototypes/contract-proto/versions"), expected: ok() }],

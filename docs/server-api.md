@@ -127,7 +127,7 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 | `deprecated` | пины со статусом `deprecated`/`superseded` + `replacement` компонента | `warn`/`pass` |
 | `visual` | последний `visual_baseline_sets` + последние `visual_runs` по его эталонам | `unknown`/`warn`/`fail`/`pass` |
 | `capture` | последний screenshot-job, если он персистентен | сейчас всегда `unknown` |
-| `interactions` | сценарии (волна 6) | сейчас всегда `unknown` |
+| `interactions` | сценарии прототипа (`prototype_scenarios`, волна 6) | `unknown` (сценариев нет) / `warn` (все сценарии пустые) / `pass` |
 | `publishDiff` | наличие diff головы против последней опубликованной версии | `unknown`/`warn`/`pass` |
 
 Гейт `screens` **не** использует флаг `route` из render-status: тот равен `Boolean(SERVE_DIST)` и в dev/тестах/e2e всегда `false`. Route-готовность вынесена в информационное подполе `screens.route = {served, informational:true}`.
@@ -139,6 +139,33 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 **Publish.** `POST /prototypes/:id/publish` считает отчёт в роут-ветке **до** `repo.publish` (та — синхронная транзакция и не может выполнить асинхронный `snapshotDefinitions`), сверяет `report.rev === baseRev` (расхождение → `409 revision_conflict`) и при непустом `blocking` отвечает `409 publish_blocked` с полным отчётом в поле `report` конверта ошибки. `{"force": true}` от владельца/админа проходит гейты и пишет audit-событие `prototype.publish.forced`.
 
 **Repin.** `POST /prototypes/:id/repin` — тонкая обёртка над обычным сохранением головы (`updatePrototypeFromDoc`), которое и так пере-пинует документ на последние active-публикации. Отдельного pin-writer'а нет. `?dryRun=1` считает diff без записи; запись пропускается и когда diff пуст, поэтому повторный вызов не плодит пустые ревизии. Успешная запись пишет audit `prototype.repinned`.
+
+### Сценарии взаимодействия
+
+Записанный в плеере сценарий хранится рядом с прототипом (`prototype_scenarios`, миграция v19) и переигрывается **клиентом** (`src/player/scenarioRunner.ts`). Серверного headless-прогона и таблицы прогонов нет сознательно: флакующий replay не имеет права блокировать публикацию.
+
+| Метод | Путь | Доступ |
+|---|---|---|
+| `GET` | `/prototypes/:id/scenarios` | read-доступ к прототипу |
+| `POST` | `/prototypes/:id/scenarios` | владелец/админ, `201` + `Location` |
+| `GET` | `/prototypes/:id/scenarios/:scenarioId` | read-доступ |
+| `PUT` | `/prototypes/:id/scenarios/:scenarioId` | владелец/админ (полная замена `name`/`steps`) |
+| `DELETE` | `/prototypes/:id/scenarios/:scenarioId` | владелец/админ, `204` |
+
+Тело записи: `{ "id"?: slug, "name": string, "steps": Step[] }`. `id` необязателен — сервер генерирует slug. Шаги (`src/prototype/scenario.ts`, strict-схемы):
+
+```json
+[{ "type": "click", "elementKey": "cta", "label": "Продолжить" },
+ { "type": "expectScreen", "screenId": "done" },
+ { "type": "expectText", "text": "124 бонуса начислены" },
+ { "type": "setState", "pointer": "/selected", "value": [1, 2] },
+ { "type": "expectState", "pointer": "/count", "value": 5 },
+ { "type": "expectDisabled", "elementKey": "sixth-option" }]
+```
+
+Лимиты: 200 шагов на сценарий, 50 сценариев на прототип, 120 символов имени. `pointer` — безопасный абсолютный RFC 6901 указатель (те же правила, что у действий рантайма). Сценарии удаляются вместе с прототипом (FK `ON DELETE CASCADE`) и **не** входят в ZIP-бандл экспорта.
+
+`elementKey` — ключ **раскрытого** документа: внутренности композиции адресуются как `<hostKey>$<innerKey>`. Ключи скоупны ревизии, поэтому исчезнувший ключ (или исчезнувший `on.press`) даёт шагу статус `stale`, а не `fail`: раннер отдаёт `{index, status: "pass"|"fail"|"stale", message?}` на шаг, и `stale` не роняет прогон.
 
 ### Diff ревизий
 
@@ -337,12 +364,12 @@ Meta-ответы прототипов и компонентов additively не
 | `POST /compositions/:id/publish` | `{message?,baseRev}` → 201 `{version,rev}` и `Location`; повторная публикация той же ревизии → `409 already_published` |
 | `GET /compositions/:id/versions` | `CompositionVersion[]`: `{version,rev,status,statusReason:string\|null,supersededBy:number\|null,statusRev,sourceHash,publishedAt}` |
 | `GET /compositions/:id/versions/:version` | Метадата версии любого статуса + замороженный документ: `CompositionVersion & {doc,designSystem}`; immutable |
-| `POST /compositions/:id/versions/:version/status` | `{status,reason?,baseStatusRev}` → 200 `{status,statusRev}`; CAS по `statusRev` |
+| `POST /compositions/:id/versions/:version/status` | `{status,reason?,supersededBy?,baseStatusRev}` → 200 `{status,statusRev}`; CAS по `statusRev`; `status:"superseded"` требует `supersededBy` |
 | `GET /compositions/:id/usages` | `{currentHeadUsages:[{prototypeId,name,kind,rev,version}],immutableUsages:[{prototypeId,version,compositionVersion}],safeToRemove}` |
 
 **Авторизация.** Чтение (list/meta/revisions/versions/usages) доступно любому аутентифицированному пользователю; анонимный доступ, share и capture-scope — нет (строка «Остальной API» в матрице принципалов). `POST` требует владения **дизайн-системой** композиции, остальные мутации — владения самой композицией (или прав админа). Audit-события: `composition.revision.saved`, `composition.version.published`, `composition.status.changed`, `composition.deleted`.
 
-**CAS.** Все мутации существующей композиции требуют `baseRev` (отсутствует → `400 base_rev_required`, расхождение → `409 revision_conflict` с `currentRev`); переход статуса версии — `baseStatusRev` (расхождение → `409 status_conflict` с `currentStatusRev`). Матрица переходов: `active → deprecated|superseded|archived`, `deprecated → archived|active`, `superseded → archived|active`, `archived` терминальный; иное → `422 invalid_transition`. Поле `supersededBy` присутствует в DTO, но этим endpoint'ом не задаётся.
+**CAS.** Все мутации существующей композиции требуют `baseRev` (отсутствует → `400 base_rev_required`, расхождение → `409 revision_conflict` с `currentRev`); переход статуса версии — `baseStatusRev` (расхождение → `409 status_conflict` с `currentStatusRev`). Матрица переходов: `active → deprecated|superseded|archived`, `deprecated → archived|active`, `superseded → archived|active`, `archived` терминальный; иное → `422 invalid_transition`. Переход в `superseded` требует `supersededBy` — ровно как у компонента: отсутствие/не-целое → `422 validation_failed` с `issues[].path = ["supersededBy"]`, ссылка на себя, на несуществующую версию или образующая цикл по цепочке `superseded_by` — тоже `422`.
 
 **Каталог композиции.** Каждый тип элемента документа обязан быть host-примитивом либо **опубликованным** компонентом той же дизайн-системы — проверка выполняется на `POST` и `PUT` (`422 validation_failed`). Иначе раскрытие в save-пути прототипа не нашло бы пина компонента.
 
@@ -371,47 +398,52 @@ Meta-ответы прототипов и компонентов additively не
 
 ### Формат бандла
 
-`formatVersion: 1`, zod-валидируемый `manifest.json`. Layout архива:
+`formatVersion: 1 | 2`, zod-валидируемый `manifest.json`. Layout архива:
 
 ```
 manifest.json
 prototypes/<prototypeId>.json          # точный doc экспортируемой ревизии
+compositions/<compositionId>.json      # замороженный doc закреплённой версии композиции (format 2)
 components/<componentId>/source.tsx    # TSX-исходник
 assets/<sha256>                        # сырые байты, имя = sha256 (store); JSON/TSX — deflate
 ```
+
+**Версии формата.** `1` — исходный набор секций; `2` — добавляет `compositions[]` и `prototypes[].compositionPins`. Экспорт выставляет `2` **только** если бандл реально несёт композиции, поэтому бандлы без композиций остаются форматом `1` и читаются сервером, который о композициях не знает. Обратная совместимость чтения — в обе стороны: старый бандл без `compositions`/`compositionPins` импортируется как раньше (поля опциональны с `default []`), а бандл формата `2` на старом сервере отвергается целиком (`z.literal(1)` → `400 invalid_bundle` с `issues[].path = ["formatVersion"]`) **до единой записи в БД** — частичного импорта без композиций не бывает. Неизвестная будущая версия (`3+`) отвергается так же.
 
 `manifest.json`:
 
 - `kind` (`prototype|component|bulk`, информационно — импортёр един), `exportedAt` (ISO).
 - `source { origin, apiVersion, renderContractVersion, builtinCatalogHash }` — compat-сигнал источника для диагностики межверсионного импорта.
-- `prototypes[]`: `{ id, name, designSystem, exported {selector: "draft"|"version", rev, version|null}, docPath, componentPins [{id, version}], assetIds[], designSystemMetaVersion|null }`.
+- `prototypes[]`: `{ id, name, designSystem, exported {selector: "draft"|"version", rev, version|null}, docPath, componentPins [{id, version}], compositionPins [{id, version}] (format 2), assetIds[], designSystemMetaVersion|null }`.
 - `components[]`: `{ id, name, designSystem, sourcePath, sourceHash (sha256 источника), exported {rev, version|null}, assetIds[] }`.
+- `compositions[]` (format 2): `{ id, name, designSystem, docPath, sourceHash (sha256 канонического JSON документа), exported {rev, version|null} }`.
 - `designSystems[]`: `{ id, name, description?, builtin, theme {metaVersion, tokens, fonts, icons} | null }`.
 - `assets[]`: `{ id (asset_<64hex>), sha256, mime, size, originalName|null }` — каждый ассет в архиве один раз по sha.
 
 **Пины компонентов и DS meta-version в манифесте информационные.** На импорте они не восстанавливаются буквально: пины пересчитываются резолвом по `name+designSystem` к последней active-версии на цели, тема перепиновывается. Точная **version-fidelity не гарантируется** — импорт эквивалентен свежему POST (см. [Конфликт-политика](#конфликт-политика-импорта)). Пины ассетов ревизии — единственный источник asset-замыкания (walk по `props`); `$asset` в `state`/`stateOverrides`/`flows` рантаймом не резолвится и не пинуется — это осознанно **не** пробел.
 
-**Композиции в бандл не входят** (v1): манифест не описывает ресурс `compositions`, поэтому прототип со ссылкой `@eui/Composition` импортируется только на цель, где эта композиция уже опубликована; иначе save-путь отклоняет документ и элемент попадает в отчёт как error. В `mode=dry-run` это не видно — раскрытие выполняется только на `apply`.
+**Композиции входят в замыкание** (format 2). Для каждого прототипа экспортируются **закреплённые** версии композиций (`prototype_revision_compositions`) вместе с их замороженными документами; bulk-экспорт дополнительно берёт все owned-композиции (последняя active-версия, иначе head draft — как у компонентов). Компоненты и ассеты, используемые **только внутри** композиции, отдельного обхода не требуют: пины ревизии считаются по **раскрытому** документу, поэтому уже покрывают их (тот же инвариант B3, что и на save). На импорте композиция создаётся/переиспользуется по компонентной конфликт-политике и публикуется, после чего save-путь прототипа резолвит её по id к последней active-версии.
 
 **Что НЕ экспортируется** (осознанно): `compiled_js`/`bundle_hash`/host-ABI (цель перекомпилирует через publish-пайплайн), история ревизий, скриншоты и visual-бейзлайны, share-гранты, `figma_json`, owner/audit-данные, статус прототипа (импорт всегда приватный). Прототипный и bulk-бандл **включает TSX всех запинованных компонентов независимо от их владельца** — это консистентно с текущим `GET /components/:id/source` (читается любым аутентифицированным пользователем) и зафиксировано как продуктовое решение.
 
 ### Конфликт-политика импорта
 
-Импорт **не атомарен** (компиляция компонентов идёт в сабпроцессах, глобального rollback нет). Поэтому отчёт — по-элементный: `{ mode, ok, items: [{type, id, name?, action: "created"|"reused"|"skipped"|"error", detail?, remappedTo?, version?}], summary {created, reused, skipped, errors} }`. Порядок обработки: ассеты → дизайн-системы → компоненты → прототипы (зависимость сверху вниз). Элемент-ошибка выставляет `ok: false`, но остальные элементы обрабатываются.
+Импорт **не атомарен** (компиляция компонентов идёт в сабпроцессах, глобального rollback нет). Поэтому отчёт — по-элементный: `{ mode, ok, items: [{type: "asset"|"designSystem"|"component"|"composition"|"prototype", id, name?, action: "created"|"reused"|"skipped"|"error", detail?, remappedTo?, version?}], summary {created, reused, skipped, errors} }`. Порядок обработки: ассеты → дизайн-системы → компоненты → **композиции** → прототипы (зависимость сверху вниз). Элемент-ошибка выставляет `ok: false`, но остальные элементы обрабатываются.
 
 | Фаза | created | reused | skipped | error (typed `detail`) |
 |---|---|---|---|---|
 | **Ассеты** | новый sha ingest'ится | sha уже есть (`ingest` идемпотентен) | — | байты не сходятся с заявленным sha256, либо `id ≠ asset_<sha>` |
 | **Дизайн-системы** | custom id свободен → создаётся (owner = импортёр); своя тема пишется как version 1 после `validateThemeAssets` | id существует → **reuse by reference** (реестр глобальный); своя (owner=импортёр) отличающаяся тема → новая версия `latest+1`; чужая отличающаяся тема → reuse + `detail` «theme drift: not owner…» | — | builtin отсутствует на цели → `design_system_missing` |
 | **Компоненты** | оба свободны → `create`+publish; свой id/name с отличающимся source → новая версия; `compiled_js` бандла **не** используется — только `publishComponent` | свой id/name, head sourceHash совпадает и есть active publish | — | чужой занятый name → `name_conflict`; soft-deleted строка по id/name → `deleted_conflict` (v1 без revive); имя = builtin-каталог → `builtin_name_reserved`; провал publish-пайплайна → его сообщение |
-| **Прототипы** | id свободен → created; чужой/tombstone id → remap `<id>-imported-<n>` (`remappedTo` в отчёте) | — | свой id, doc идентичен head | зависимость (DS/компонент) не разрешима → `dependency_failed: …`; невалидный doc при `renderContractVersion`/`builtinCatalogHash` новее целевых → `format_too_new: …` |
+| **Композиции** | оба свободны → `create`+`publish`; свой id с отличающимся документом → новая ревизия + новая версия | свой id, `sourceHash` головы совпадает и есть active-публикация | — | чужой занятый id/name либо совпадение по имени под **другим** id → `name_conflict` (remap невозможен: прототип адресует композицию по id); soft-deleted строка → `deleted_conflict`; недоступная система или неопубликованный внутренний тип → `dependency_failed: …`; невалидный документ → `invalid_document: …` |
+| **Прототипы** | id свободен → created; чужой/tombstone id → remap `<id>-imported-<n>` (`remappedTo` в отчёте) | — | свой id, doc идентичен head | зависимость (DS/компонент/композиция) не разрешима → `dependency_failed: …` / `dependency_failed: composition …`; невалидный doc при `renderContractVersion`/`builtinCatalogHash` новее целевых → `format_too_new: …` |
 
 **`mode=dry-run`** ничего не пишет и не компилирует: действия предсказываются по хешам/именам/id. Строки dry-run-отчёта **предварительные** — компиляция компонентов оценивается только на `apply`, поэтому провал пайплайна в предпросмотре не виден. UI помечает предпросмотр явно.
 
 ### Лимиты
 
 - **Экспорт**: раскрытый (uncompressed) объём ≤ **512 MiB**. Кап проверяется **до материализации** архива — сумма размеров ассетов (из БД) + длины doc/source; превышение → `413 export_too_large`. ZIP собирается целиком в памяти (streaming — совместимый follow-up).
-- **Импорт**: аплоад ≤ **256 MiB**; бюджет распаковки читается из central directory (заявленные uncompressed-размеры) — суммарно ≤ **512 MiB**, entries ≤ **4096** — и отклоняется **до инфляции** (защита от zip-бомбы); после инфляции фактические длины сверяются с заявленными (расхождение → `400 invalid_bundle`). Пути — по allowlist-regexp (`manifest.json | prototypes/<slug>.json | components/<slug>/source.tsx | assets/<64hex>`), перекрёстно сверяются манифест↔архив, байты ассетов перехешируются.
+- **Импорт**: аплоад ≤ **256 MiB**; бюджет распаковки читается из central directory (заявленные uncompressed-размеры) — суммарно ≤ **512 MiB**, entries ≤ **4096** — и отклоняется **до инфляции** (защита от zip-бомбы); после инфляции фактические длины сверяются с заявленными (расхождение → `400 invalid_bundle`). Пути — по allowlist-regexp (`manifest.json | prototypes/<slug>.json | compositions/<slug>.json | components/<slug>/source.tsx | assets/<64hex>`), перекрёстно сверяются манифест↔архив, байты ассетов перехешируются.
 
 ## Figma provenance
 

@@ -429,6 +429,19 @@ const migrations = [
       FOREIGN KEY (composition_id, composition_version)
         REFERENCES composition_publishes(composition_id, version) ON DELETE RESTRICT)`);
   },
+  (db:Database) => {
+    // v19: сценарии взаимодействия прототипа (волна 6, план 2026-07-27 §«Волна 6»).
+    // Сценарий принадлежит прототипу и умирает вместе с ним — ON DELETE CASCADE, как у
+    // `prototype_revisions`/`prototype_publishes`. Составной PK (prototype_id, id): id
+    // уникален в пределах прототипа, а не глобально. Шаги хранятся JSON-массивом —
+    // схема живёт в `src/prototype/scenario.ts` и валидируется на границе API.
+    // Таблицы прогонов нет сознательно: раннер клиентский (триаж ревью).
+    db.run(`CREATE TABLE prototype_scenarios (
+      prototype_id TEXT NOT NULL REFERENCES prototypes(id) ON DELETE CASCADE,
+      id TEXT NOT NULL, name TEXT NOT NULL, steps_json TEXT NOT NULL,
+      author TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY (prototype_id, id))`);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

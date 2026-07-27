@@ -3,6 +3,7 @@ import type { CompositionDoc } from "../prototype/composition";
 import { expandCompositions } from "../prototype/composition";
 import type { ComponentLayout, SpaceToken } from "../designSystems/types";
 import type { ComponentScope } from "../designSystems/scope";
+import type { PrototypeScenario, ScenarioInput } from "../prototype/scenario";
 
 export interface ValidationIssue {
   path: string | (string | number)[];
@@ -487,6 +488,18 @@ export interface ReadinessReport {
 }
 export const getPrototypeReadiness = (id: string, signal?: AbortSignal) =>
   request<ReadinessReport>(`${prototypePath(id)}/readiness`, { signal });
+
+// --- Сценарии взаимодействия (волна 6) ---
+const scenariosPath = (id: string) => `${prototypePath(id)}/scenarios`;
+const scenarioPath = (id: string, scenarioId: string) => `${scenariosPath(id)}/${encodeURIComponent(scenarioId)}`;
+export const listPrototypeScenarios = (id: string, signal?: AbortSignal) =>
+  request<{ scenarios: PrototypeScenario[] }>(scenariosPath(id), { signal }).then((response) => response.scenarios);
+export const createPrototypeScenario = (id: string, input: ScenarioInput & { id?: string }, signal?: AbortSignal) =>
+  request<PrototypeScenario>(scenariosPath(id), { method: "POST", body: input, signal });
+export const savePrototypeScenario = (id: string, scenarioId: string, input: ScenarioInput, signal?: AbortSignal) =>
+  request<PrototypeScenario>(scenarioPath(id, scenarioId), { method: "PUT", body: input, signal });
+export const deletePrototypeScenario = (id: string, scenarioId: string, signal?: AbortSignal) =>
+  request<void>(scenarioPath(id, scenarioId), { method: "DELETE", signal });
 
 /** Перепин головного документа на актуальные active-публикации (волна 3). */
 export interface RepinChange { component: string; from: number | null; to: number | null }
