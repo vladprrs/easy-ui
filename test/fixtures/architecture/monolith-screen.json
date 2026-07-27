@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "id": "ctyp-payment-success",
+  "name": "CTYP payment success",
+  "description": "Мотивирующий кейс волны 2: экран формы собран одним custom-компонентом со scope screen под @eui/FlowRoot.",
+  "designSystem": "yandex-pay",
+  "device": "mobile",
+  "startScreen": "success",
+  "state": {},
+  "screens": [
+    {
+      "id": "success",
+      "name": "Success",
+      "spec": {
+        "root": "root",
+        "elements": {
+          "root": { "type": "@eui/FlowRoot", "props": {}, "children": ["screen"] },
+          "screen": { "type": "YpCtypMagnitPaymentSuccess", "props": { "amount": "1 234 ₽" } }
+        }
+      }
+    }
+  ]
+}

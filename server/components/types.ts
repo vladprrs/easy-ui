@@ -1,8 +1,29 @@
 import type { ComponentType } from "react";
 import type { z } from "zod";
+import type { ComponentOwnership, ComponentScope } from "../../src/designSystems/scope";
 import type { AtomicLevel, ComponentLayout } from "../../src/designSystems/types";
 
 export type ComponentCapabilities = { typedEvents?: true; namedSlots?: true };
+
+/**
+ * Architecture metadata (план 2026-07-27, волна 2 §2.1) — additive и полностью
+ * опциональная. Объявляется на `definition` в TSX и сериализуется в
+ * `DefinitionMeta` (version DTO + catalog manifest) без изменения существующих полей.
+ */
+export type ArchitectureMetadata = {
+  /** Какой частью экрана компонент владеет: primitive | section | shell | screen. */
+  scope?: ComponentScope;
+  /** Явное разрешение/запрет быть корнем экрана. */
+  allowedAsRoot?: boolean;
+  /** Slug'и продуктовых ролей, для которых компонент канонический. */
+  canonicalFor?: string[];
+  /** Компонент сам задаёт геометрию экрана (h-screen/100vh/fixed inset-0). */
+  sourceBounded?: boolean;
+  /** Обоснование владения экраном/каркасом. */
+  ownership?: ComponentOwnership;
+  /** Имя компонента-замены в той же дизайн-системе. */
+  replacement?: string;
+};
 
 export type CustomComponentDefinition<Props extends Record<string, unknown> = Record<string, unknown>> = {
   props: z.ZodType<Props>;
@@ -22,7 +43,7 @@ export type CustomComponentDefinition<Props extends Record<string, unknown> = Re
   interactive?: boolean;
   accessibleLabelProps?: string[];
   urlProps?: string[];
-};
+} & ArchitectureMetadata;
 
 export type CustomComponentModule<Props extends Record<string, unknown> = Record<string, unknown>> = {
   definition: CustomComponentDefinition<Props>;
@@ -46,4 +67,4 @@ export type DefinitionMeta = {
   interactive?: boolean;
   accessibleLabelProps?: string[];
   urlProps?: string[];
-};
+} & ArchitectureMetadata;

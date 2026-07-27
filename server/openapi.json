@@ -1240,6 +1240,9 @@
                       "items": {
                         "additionalProperties": {},
                         "properties": {
+                          "allowedAsRoot": {
+                            "type": "boolean"
+                          },
                           "atomicLevel": {
                             "enum": [
                               "atom",
@@ -1255,6 +1258,12 @@
                           },
                           "bundleUrl": {
                             "type": "string"
+                          },
+                          "canonicalFor": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
                           },
                           "capabilities": {
                             "additionalProperties": false,
@@ -1434,12 +1443,42 @@
                           "name": {
                             "type": "string"
                           },
+                          "ownership": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "provenance": {
+                                "type": "string"
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "reason"
+                            ],
+                            "type": "object"
+                          },
                           "propsJsonSchema": {},
+                          "replacement": {
+                            "type": "string"
+                          },
+                          "scope": {
+                            "enum": [
+                              "primitive",
+                              "section",
+                              "shell",
+                              "screen"
+                            ],
+                            "type": "string"
+                          },
                           "slots": {
                             "items": {
                               "type": "string"
                             },
                             "type": "array"
+                          },
+                          "sourceBounded": {
+                            "type": "boolean"
                           },
                           "version": {
                             "type": "number"
@@ -2973,6 +3012,9 @@
                   },
                   "additionalProperties": {},
                   "properties": {
+                    "allowedAsRoot": {
+                      "type": "boolean"
+                    },
                     "assets": {
                       "items": {
                         "additionalProperties": false,
@@ -3012,6 +3054,12 @@
                     },
                     "bundleHash": {
                       "type": "string"
+                    },
+                    "canonicalFor": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
                     },
                     "capabilities": {
                       "additionalProperties": false,
@@ -3228,12 +3276,39 @@
                     "layoutNeutral": {
                       "type": "boolean"
                     },
+                    "ownership": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "provenance": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "reason"
+                      ],
+                      "type": "object"
+                    },
                     "propsJsonSchema": {},
                     "publishedAt": {
                       "type": "string"
                     },
+                    "replacement": {
+                      "type": "string"
+                    },
                     "rev": {
                       "type": "number"
+                    },
+                    "scope": {
+                      "enum": [
+                        "primitive",
+                        "section",
+                        "shell",
+                        "screen"
+                      ],
+                      "type": "string"
                     },
                     "slots": {
                       "items": {
@@ -3243,6 +3318,9 @@
                     },
                     "source": {
                       "type": "string"
+                    },
+                    "sourceBounded": {
+                      "type": "boolean"
                     },
                     "version": {
                       "type": "number"
@@ -3686,6 +3764,45 @@
                       "type": "object"
                     },
                     "__schema11": {},
+                    "__schema12": {
+                      "enum": [
+                        "primitive",
+                        "section",
+                        "shell",
+                        "screen"
+                      ],
+                      "type": "string"
+                    },
+                    "__schema13": {
+                      "type": "boolean"
+                    },
+                    "__schema14": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "__schema15": {
+                      "type": "boolean"
+                    },
+                    "__schema16": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "provenance": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "reason"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema17": {
+                      "type": "string"
+                    },
                     "__schema2": {
                       "additionalProperties": false,
                       "properties": {
@@ -3871,8 +3988,14 @@
                             "items": {
                               "additionalProperties": {},
                               "properties": {
+                                "allowedAsRoot": {
+                                  "$ref": "#/$defs/__schema13"
+                                },
                                 "atomicLevel": {
                                   "$ref": "#/$defs/__schema0"
+                                },
+                                "canonicalFor": {
+                                  "$ref": "#/$defs/__schema14"
                                 },
                                 "capabilities": {
                                   "$ref": "#/$defs/__schema7"
@@ -3901,11 +4024,23 @@
                                 "name": {
                                   "type": "string"
                                 },
+                                "ownership": {
+                                  "$ref": "#/$defs/__schema16"
+                                },
                                 "propsJsonSchema": {
                                   "$ref": "#/$defs/__schema11"
                                 },
+                                "replacement": {
+                                  "$ref": "#/$defs/__schema17"
+                                },
+                                "scope": {
+                                  "$ref": "#/$defs/__schema12"
+                                },
                                 "slots": {
                                   "$ref": "#/$defs/__schema8"
+                                },
+                                "sourceBounded": {
+                                  "$ref": "#/$defs/__schema15"
                                 }
                               },
                               "required": [
@@ -3957,8 +4092,14 @@
                             "items": {
                               "additionalProperties": {},
                               "properties": {
+                                "allowedAsRoot": {
+                                  "$ref": "#/$defs/__schema13"
+                                },
                                 "atomicLevel": {
                                   "$ref": "#/$defs/__schema0"
+                                },
+                                "canonicalFor": {
+                                  "$ref": "#/$defs/__schema14"
                                 },
                                 "capabilities": {
                                   "$ref": "#/$defs/__schema7"
@@ -3987,11 +4128,23 @@
                                 "name": {
                                   "type": "string"
                                 },
+                                "ownership": {
+                                  "$ref": "#/$defs/__schema16"
+                                },
                                 "propsJsonSchema": {
                                   "$ref": "#/$defs/__schema11"
                                 },
+                                "replacement": {
+                                  "$ref": "#/$defs/__schema17"
+                                },
+                                "scope": {
+                                  "$ref": "#/$defs/__schema12"
+                                },
                                 "slots": {
                                   "$ref": "#/$defs/__schema8"
+                                },
+                                "sourceBounded": {
+                                  "$ref": "#/$defs/__schema15"
                                 }
                               },
                               "required": [
@@ -4220,6 +4373,45 @@
                       "type": "object"
                     },
                     "__schema11": {},
+                    "__schema12": {
+                      "enum": [
+                        "primitive",
+                        "section",
+                        "shell",
+                        "screen"
+                      ],
+                      "type": "string"
+                    },
+                    "__schema13": {
+                      "type": "boolean"
+                    },
+                    "__schema14": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "__schema15": {
+                      "type": "boolean"
+                    },
+                    "__schema16": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "provenance": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "reason"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema17": {
+                      "type": "string"
+                    },
                     "__schema2": {
                       "additionalProperties": false,
                       "properties": {
@@ -4401,8 +4593,14 @@
                       "items": {
                         "additionalProperties": {},
                         "properties": {
+                          "allowedAsRoot": {
+                            "$ref": "#/$defs/__schema13"
+                          },
                           "atomicLevel": {
                             "$ref": "#/$defs/__schema0"
+                          },
+                          "canonicalFor": {
+                            "$ref": "#/$defs/__schema14"
                           },
                           "capabilities": {
                             "$ref": "#/$defs/__schema7"
@@ -4431,11 +4629,23 @@
                           "name": {
                             "type": "string"
                           },
+                          "ownership": {
+                            "$ref": "#/$defs/__schema16"
+                          },
                           "propsJsonSchema": {
                             "$ref": "#/$defs/__schema11"
                           },
+                          "replacement": {
+                            "$ref": "#/$defs/__schema17"
+                          },
+                          "scope": {
+                            "$ref": "#/$defs/__schema12"
+                          },
                           "slots": {
                             "$ref": "#/$defs/__schema8"
+                          },
+                          "sourceBounded": {
+                            "$ref": "#/$defs/__schema15"
                           }
                         },
                         "required": [
@@ -4487,8 +4697,14 @@
                       "items": {
                         "additionalProperties": {},
                         "properties": {
+                          "allowedAsRoot": {
+                            "$ref": "#/$defs/__schema13"
+                          },
                           "atomicLevel": {
                             "$ref": "#/$defs/__schema0"
+                          },
+                          "canonicalFor": {
+                            "$ref": "#/$defs/__schema14"
                           },
                           "capabilities": {
                             "$ref": "#/$defs/__schema7"
@@ -4517,11 +4733,23 @@
                           "name": {
                             "type": "string"
                           },
+                          "ownership": {
+                            "$ref": "#/$defs/__schema16"
+                          },
                           "propsJsonSchema": {
                             "$ref": "#/$defs/__schema11"
                           },
+                          "replacement": {
+                            "$ref": "#/$defs/__schema17"
+                          },
+                          "scope": {
+                            "$ref": "#/$defs/__schema12"
+                          },
                           "slots": {
                             "$ref": "#/$defs/__schema8"
+                          },
+                          "sourceBounded": {
+                            "$ref": "#/$defs/__schema15"
                           }
                         },
                         "required": [
@@ -4746,6 +4974,45 @@
                       "type": "object"
                     },
                     "__schema11": {},
+                    "__schema12": {
+                      "enum": [
+                        "primitive",
+                        "section",
+                        "shell",
+                        "screen"
+                      ],
+                      "type": "string"
+                    },
+                    "__schema13": {
+                      "type": "boolean"
+                    },
+                    "__schema14": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "__schema15": {
+                      "type": "boolean"
+                    },
+                    "__schema16": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "provenance": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "reason"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema17": {
+                      "type": "string"
+                    },
                     "__schema2": {
                       "additionalProperties": false,
                       "properties": {
@@ -4927,8 +5194,14 @@
                       "items": {
                         "additionalProperties": {},
                         "properties": {
+                          "allowedAsRoot": {
+                            "$ref": "#/$defs/__schema13"
+                          },
                           "atomicLevel": {
                             "$ref": "#/$defs/__schema0"
+                          },
+                          "canonicalFor": {
+                            "$ref": "#/$defs/__schema14"
                           },
                           "capabilities": {
                             "$ref": "#/$defs/__schema7"
@@ -4957,11 +5230,23 @@
                           "name": {
                             "type": "string"
                           },
+                          "ownership": {
+                            "$ref": "#/$defs/__schema16"
+                          },
                           "propsJsonSchema": {
                             "$ref": "#/$defs/__schema11"
                           },
+                          "replacement": {
+                            "$ref": "#/$defs/__schema17"
+                          },
+                          "scope": {
+                            "$ref": "#/$defs/__schema12"
+                          },
                           "slots": {
                             "$ref": "#/$defs/__schema8"
+                          },
+                          "sourceBounded": {
+                            "$ref": "#/$defs/__schema15"
                           }
                         },
                         "required": [
@@ -5013,8 +5298,14 @@
                       "items": {
                         "additionalProperties": {},
                         "properties": {
+                          "allowedAsRoot": {
+                            "$ref": "#/$defs/__schema13"
+                          },
                           "atomicLevel": {
                             "$ref": "#/$defs/__schema0"
+                          },
+                          "canonicalFor": {
+                            "$ref": "#/$defs/__schema14"
                           },
                           "capabilities": {
                             "$ref": "#/$defs/__schema7"
@@ -5043,11 +5334,23 @@
                           "name": {
                             "type": "string"
                           },
+                          "ownership": {
+                            "$ref": "#/$defs/__schema16"
+                          },
                           "propsJsonSchema": {
                             "$ref": "#/$defs/__schema11"
                           },
+                          "replacement": {
+                            "$ref": "#/$defs/__schema17"
+                          },
+                          "scope": {
+                            "$ref": "#/$defs/__schema12"
+                          },
                           "slots": {
                             "$ref": "#/$defs/__schema8"
+                          },
+                          "sourceBounded": {
+                            "$ref": "#/$defs/__schema15"
                           }
                         },
                         "required": [
@@ -5977,16 +6280,69 @@
                     "type": "object"
                   },
                   "__schema13": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "exemptions": {
+                        "items": {
+                          "$ref": "#/$defs/__schema14"
+                        },
+                        "maxItems": 200,
+                        "type": "array"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "__schema14": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "elementKey": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "provenance": {
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "reason": {
+                        "maxLength": 500,
+                        "minLength": 8,
+                        "type": "string"
+                      },
+                      "rule": {
+                        "enum": [
+                          "arch/monolith-root",
+                          "arch/root-not-allowed",
+                          "arch/screen-scope-nested",
+                          "arch/region-owns-page",
+                          "arch/ownership-unexplained",
+                          "arch/bounded-as-owner"
+                        ],
+                        "type": "string"
+                      },
+                      "screenId": {
+                        "$ref": "#/$defs/__schema1"
+                      }
+                    },
+                    "required": [
+                      "rule",
+                      "screenId",
+                      "reason"
+                    ],
+                    "type": "object"
+                  },
+                  "__schema15": {
                     "maxLength": 64,
                     "minLength": 1,
                     "pattern": "^[A-Za-z0-9:._-]+$",
                     "type": "string"
                   },
-                  "__schema14": {
+                  "__schema16": {
                     "pattern": "^asset_[0-9a-f]{64}$",
                     "type": "string"
                   },
-                  "__schema15": {
+                  "__schema17": {
                     "maxLength": 32,
                     "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
                     "type": "string"
@@ -6241,6 +6597,9 @@
                   "doc": {
                     "additionalProperties": false,
                     "properties": {
+                      "architecture": {
+                        "$ref": "#/$defs/__schema13"
+                      },
                       "description": {
                         "$ref": "#/$defs/__schema3"
                       },
@@ -6299,7 +6658,7 @@
                       },
                       "nodeIds": {
                         "items": {
-                          "$ref": "#/$defs/__schema13"
+                          "$ref": "#/$defs/__schema15"
                         },
                         "maxItems": 50,
                         "minItems": 1,
@@ -6307,7 +6666,7 @@
                       },
                       "referenceScreenshots": {
                         "items": {
-                          "$ref": "#/$defs/__schema14"
+                          "$ref": "#/$defs/__schema16"
                         },
                         "maxItems": 50,
                         "type": "array"
@@ -6335,7 +6694,7 @@
                   },
                   "tags": {
                     "items": {
-                      "$ref": "#/$defs/__schema15"
+                      "$ref": "#/$defs/__schema17"
                     },
                     "maxItems": 16,
                     "type": "array"
@@ -6959,12 +7318,65 @@
                     "type": "object"
                   },
                   "__schema13": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "exemptions": {
+                        "items": {
+                          "$ref": "#/$defs/__schema14"
+                        },
+                        "maxItems": 200,
+                        "type": "array"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "__schema14": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "elementKey": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "provenance": {
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "reason": {
+                        "maxLength": 500,
+                        "minLength": 8,
+                        "type": "string"
+                      },
+                      "rule": {
+                        "enum": [
+                          "arch/monolith-root",
+                          "arch/root-not-allowed",
+                          "arch/screen-scope-nested",
+                          "arch/region-owns-page",
+                          "arch/ownership-unexplained",
+                          "arch/bounded-as-owner"
+                        ],
+                        "type": "string"
+                      },
+                      "screenId": {
+                        "$ref": "#/$defs/__schema1"
+                      }
+                    },
+                    "required": [
+                      "rule",
+                      "screenId",
+                      "reason"
+                    ],
+                    "type": "object"
+                  },
+                  "__schema15": {
                     "maxLength": 64,
                     "minLength": 1,
                     "pattern": "^[A-Za-z0-9:._-]+$",
                     "type": "string"
                   },
-                  "__schema14": {
+                  "__schema16": {
                     "pattern": "^asset_[0-9a-f]{64}$",
                     "type": "string"
                   },
@@ -7211,6 +7623,9 @@
                   "doc": {
                     "additionalProperties": false,
                     "properties": {
+                      "architecture": {
+                        "$ref": "#/$defs/__schema13"
+                      },
                       "description": {
                         "$ref": "#/$defs/__schema3"
                       },
@@ -7269,7 +7684,7 @@
                       },
                       "nodeIds": {
                         "items": {
-                          "$ref": "#/$defs/__schema13"
+                          "$ref": "#/$defs/__schema15"
                         },
                         "maxItems": 50,
                         "minItems": 1,
@@ -7277,7 +7692,7 @@
                       },
                       "referenceScreenshots": {
                         "items": {
-                          "$ref": "#/$defs/__schema14"
+                          "$ref": "#/$defs/__schema16"
                         },
                         "maxItems": 50,
                         "type": "array"

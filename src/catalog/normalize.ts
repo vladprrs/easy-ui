@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ComponentOwnership, ComponentScope } from "../designSystems/scope";
 import { layoutSpacingProps, spaceTokens, type AtomicLevel, type ComponentLayout, type LayoutJsonScalar } from "../designSystems/types";
 import { isJsonScalar, zodObjectShape, zodScalarValues } from "./zodIntrospect";
 
@@ -40,6 +41,24 @@ export type ComponentDefinition = {
   accessibleLabelProps?: string[];
   /** Prop names whose value is a URL (checked for local-path availability). */
   urlProps?: string[];
+
+  /**
+   * Architecture metadata (additive; план 2026-07-27, волна 2 §2.1).
+   * Всё опционально; правила `architectureLints` смотрят только на **явно**
+   * объявленные значения и никогда не выводят их из `atomicLevel`.
+   */
+  /** Какой частью экрана компонент владеет. */
+  scope?: ComponentScope;
+  /** Явный запрет/разрешение быть корнем экрана. */
+  allowedAsRoot?: boolean;
+  /** Slug'и продуктовых ролей, для которых компонент — канонический выбор. */
+  canonicalFor?: string[];
+  /** Исходник компонента сам задаёт геометрию экрана (h-screen/100vh/fixed inset-0). */
+  sourceBounded?: boolean;
+  /** Обоснование владения экраном/каркасом. */
+  ownership?: ComponentOwnership;
+  /** Имя компонента-замены (для deprecated/устаревших). */
+  replacement?: string;
 };
 
 const isZodType = (value: unknown): value is z.ZodType => value instanceof z.ZodType;

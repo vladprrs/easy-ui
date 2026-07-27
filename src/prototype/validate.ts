@@ -12,6 +12,7 @@ import { hostPrimitiveDefinitions, hostPrimitiveNames } from "../catalog/hostPri
 import { validateOverlayRules } from "./overlayRules";
 import { buildNavigationGraph, verifyEdge } from "./navigationGraph";
 import { validateRegionRules } from "./regionRules";
+import { lintPrototypeArchitecture } from "./architectureLints";
 
 type Obj = Record<string, unknown>;
 const terminals = new Set(["navigate", "back", "restart", "openUrl"]);
@@ -230,7 +231,9 @@ export function validateElementProps({
 
 export function validatePrototype(
   doc: PrototypeDoc,
-  options?: { definitions?: Record<string, ComponentDefinition> },
+  // `kind` — вид прототипа (волна 0). Служебные виды выключают архитектурные
+  // правила целиком; без значения правила работают как обычно.
+  options?: { definitions?: Record<string, ComponentDefinition>; kind?: string },
 ): PrototypeValidationResult {
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
   errors.push(...validateOverlayRules(doc));
@@ -243,6 +246,9 @@ export function validatePrototype(
   const suppliedDefinitions = options?.definitions && Object.keys(options.definitions).length ? options.definitions : undefined;
   const definitions: Record<string, ComponentDefinition> = { ...(suppliedDefinitions ?? testDefinitions ?? {}), ...hostPrimitiveDefinitions };
   const builtinNames = new Set<string>();
+  // Архитектурный lint считается до обхода экранов: его результат подавляет
+  // дублирующий atomic-nesting warning на тех же элементах.
+  const architecture = lintPrototypeArchitecture(doc, definitions, { kind: options?.kind });
   const screenIds = new Set(doc.screens.map((screen) => screen.id));
   const navigation = buildNavigationGraph(doc);
   for (const [screenIndex, screen] of doc.screens.entries()) {
@@ -480,7 +486,8 @@ export function validatePrototype(
       const element = elements[key];
       const definition = element ? definitions[element.type] : undefined;
       const level = definition?.atomicLevel;
-      if (element && level && !definition.layoutNeutral && ancestorLevel && atomicRank[level] > atomicRank[ancestorLevel]) {
+      if (element && level && !definition.layoutNeutral && ancestorLevel && atomicRank[level] > atomicRank[ancestorLevel]
+        && !architecture.nestingReported.has(`${screenIndex}/${key}`)) {
         issue(warnings, [...base, "elements", key], `atomic-design: ${element.type} (${level}) should not be nested inside a ${ancestorLevel}`);
       }
       const nextAncestor = level && !definition?.layoutNeutral ? level : ancestorLevel;
@@ -490,15 +497,8 @@ export function validatePrototype(
     };
     dfs(screen.spec.root, 1);
 
-    // Monolithic screen: the whole screen is a single custom organism/page with no children —
-    // a hint that the screen reconstructs a page in one component instead of composing the system.
-    const rootElement = elements[screen.spec.root];
-    const rootDefinition = rootElement ? definitions[rootElement.type] : undefined;
-    const rootIsCustom = Boolean(rootElement) && !builtinNames.has(rootElement!.type) && !hostPrimitiveNames.has(rootElement!.type) && Boolean(rootDefinition);
-    const rootLevel = rootDefinition?.atomicLevel;
-    if (rootIsCustom && (rootLevel === "organism" || rootLevel === "page") && !(rootElement!.children?.length) && Object.keys(elements).length === 1) {
-      issue(warnings, [...base, "elements", screen.spec.root], `monolithic screen: root ${rootElement!.type} is a single custom ${rootLevel} with no children; consider composing it from design-system elements`);
-    }
+    // Monolithic-screen warning живёт в `architectureLints.ts` (`arch/monolith-root`):
+    // там же его ветка, видящая обёртку `@eui/FlowRoot`.
   }
   const reachableScreens = new Set<string>();
   const visitScreen = (id: string) => { if (reachableScreens.has(id)) return; reachableScreens.add(id); navigation.edges.get(id)?.forEach(visitScreen); };
@@ -526,7 +526,8 @@ export function validatePrototype(
     });
   }
   warnings.push(...lintPrototypeLayouts(doc, definitions));
-  return { errors, warnings };
+  warnings.push(...architecture.warnings);
+  return { errors, warnings, ...(architecture.exempted.length ? { architecture: { exempted: architecture.exempted } } : {}) };
 }
 
 const isAssetDirective = (value: unknown): value is { $asset: unknown } => object(value) && Object.keys(value).length === 1 && Object.hasOwn(value, "$asset");

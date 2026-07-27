@@ -103,7 +103,9 @@ describe("buildScreenArchitectureTree", () => {
     const tree = buildScreenArchitectureTree({ spec }, {
       definitions: {
         YpCard: definition({ scope: "section", canonicalFor: ["ctyp-card"], sourceBounded: true, replacement: "YpCard2" }),
-        YpBox: definition({ scope: "not-a-scope", canonicalFor: [1], sourceBounded: "yes" }),
+        // Волна 2 типизировала эти поля — здесь намеренно передаём мусор через каст,
+        // чтобы проверить защитное чтение метаданных.
+        YpBox: definition({ scope: "not-a-scope", canonicalFor: [1], sourceBounded: "yes" } as unknown as Partial<ComponentDefinition>),
       },
     });
     expect(tree.byKey.get("card")!).toMatchObject({ scope: "section", canonicalFor: ["ctyp-card"], sourceBounded: true, replacement: "YpCard2" });

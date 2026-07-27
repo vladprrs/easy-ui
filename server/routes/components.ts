@@ -36,6 +36,31 @@ async function checkSource(source:string,path:string,smoke=false){
   return extracted;
 }
 
+// Screen-geometry маркеры в исходнике. Скан включается **только** при
+// sourceBounded:true: канонические каркасы (yp-screen/yp-panel/yp-app-home-shell/
+// yp-scroll-area) законно несут геометрию экрана и предупреждать о ней нельзя.
+const SCREEN_GEOMETRY_PATTERNS:ReadonlyArray<readonly [label:string,pattern:RegExp]>=[
+  ["h-screen",/\bh-screen\b/],["min-h-screen",/\bmin-h-screen\b/],["100vh",/100vh/],["100dvh",/100dvh/],["fixed inset-0",/fixed\s+inset-0/],
+];
+
+/** Publish-time архитектурные предупреждения (волна 2 §2.4) — warn-only, никогда не блокируют. */
+export function architectureWarnings(db:Database,id:string,meta:{scope?:string;ownership?:{reason?:string};sourceBounded?:boolean;replacement?:string},source:string):string[]{
+  const warnings:string[]=[];
+  if((meta.scope==="screen"||meta.scope==="shell")&&!meta.ownership?.reason){
+    warnings.push(`Component declares scope "${meta.scope}" without ownership.reason; document why it owns the whole ${meta.scope}`);
+  }
+  if(meta.replacement){
+    const designSystem=(db.query("SELECT design_system FROM component_revisions WHERE component_id=? ORDER BY rev DESC LIMIT 1").get(id) as {design_system:string}|null)?.design_system;
+    const found=designSystem===undefined?null:db.query("SELECT 1 ok FROM components c JOIN component_revisions cr ON cr.component_id=c.id WHERE c.name=? AND cr.design_system=? AND c.deleted_at IS NULL LIMIT 1").get(meta.replacement,designSystem);
+    if(!found) warnings.push(`definition.replacement references an unknown component in this design system: ${meta.replacement}`);
+  }
+  if(meta.sourceBounded===true){
+    const hits=SCREEN_GEOMETRY_PATTERNS.filter(([,pattern])=>pattern.test(source)).map(([label])=>label);
+    if(hits.length) warnings.push(`Component declares sourceBounded: true but its source carries screen geometry (${hits.join(", ")}); a bounded component must not size itself to the viewport`);
+  }
+  return warnings;
+}
+
 export type PublishHooks={afterStage?:(x:{id:string;version:number;rev:number})=>void|Promise<void>;beforeImport?:(x:{id:string;version:number;rev:number})=>void|Promise<void>};
 export async function publishComponent(db:Database,repo:ComponentRepo,id:string,baseRev:number,dataDir:string,message?:string,hooks:PublishHooks={}){
   reserveHostPrimitiveName(repo.meta(id).name);
@@ -52,6 +77,7 @@ export async function publishComponent(db:Database,repo:ComponentRepo,id:string,
   recordValidation(db,{resourceType:"component",resourceId:id,rev:staged.rev,catalogHash:compiled.bundleHash,ok:true,issues:extracted.warnings.map(message=>({path:"/",message}))});
   const warnings=[...extracted.warnings];
   if(!extracted.meta!.atomicLevel) warnings.push("Atomic design level is not provided; component will be classified as Other");
+  warnings.push(...architectureWarnings(db,id,extracted.meta!,revision.source));
   return {version:staged.version,hostAbiVersion:compiled.hostAbiVersion,warnings};
 }
 

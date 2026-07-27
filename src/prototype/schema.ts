@@ -77,6 +77,40 @@ const flowSchema = z.strictObject({
   steps: z.array(flowStepSchema).min(1).max(FLOW_STEPS_LIMIT),
 });
 
+/**
+ * Идентификаторы архитектурных lint-правил (`src/prototype/architectureLints.ts`).
+ * Живут здесь, потому что документ ссылается на них в `architecture.exemptions`;
+ * `architectureLints.ts` реэкспортирует список как `architectureLintCodes`.
+ */
+export const ARCHITECTURE_LINT_CODES = [
+  "arch/monolith-root",
+  "arch/root-not-allowed",
+  "arch/screen-scope-nested",
+  "arch/region-owns-page",
+  "arch/ownership-unexplained",
+  "arch/bounded-as-owner",
+] as const;
+export type ArchitectureLintCode = (typeof ARCHITECTURE_LINT_CODES)[number];
+
+export const ARCHITECTURE_EXEMPTIONS_LIMIT = 200;
+export const ARCHITECTURE_EXEMPTION_REASON_MIN = 8;
+
+/**
+ * Именованное исключение из архитектурного правила. Снимает warning с конкретного
+ * экрана (и, опционально, элемента) и попадает в readiness-отчёт как `exempted`.
+ */
+const architectureExemptionSchema = z.strictObject({
+  rule: z.enum(ARCHITECTURE_LINT_CODES),
+  screenId: slugSchema,
+  elementKey: z.string().min(1).max(200).optional(),
+  reason: z.string().trim().min(ARCHITECTURE_EXEMPTION_REASON_MIN).max(500),
+  provenance: z.string().trim().min(1).max(500).optional(),
+});
+
+const architectureSchema = z.strictObject({
+  exemptions: z.array(architectureExemptionSchema).max(ARCHITECTURE_EXEMPTIONS_LIMIT).optional(),
+});
+
 const prototypeDocShape = {
   version: z.literal(1),
   id: slugSchema,
@@ -87,6 +121,8 @@ const prototypeDocShape = {
   state: z.record(z.string(), jsonValueSchema),
   screens: z.array(screenSchema).min(1),
   flows: z.array(flowSchema).min(1).max(FLOWS_LIMIT).optional(),
+  /** Архитектурные исключения (волна 2): аддитивно, документ без поля ведёт себя как раньше. */
+  architecture: architectureSchema.optional(),
 } as const;
 
 const refinePrototypeDoc = <T extends {
@@ -162,5 +198,6 @@ export const storedPrototypeDocSchema = z.strictObject({
 export const prototypeDocSchema = storedPrototypeDocSchema;
 
 export type PrototypeDoc = z.output<typeof storedPrototypeDocSchema>;
+export type ArchitectureExemption = z.output<typeof architectureExemptionSchema>;
 export type Flow = z.output<typeof flowSchema>;
 export type FlowStep = z.output<typeof flowStepSchema>;

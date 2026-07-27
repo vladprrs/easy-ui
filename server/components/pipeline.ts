@@ -1,7 +1,7 @@
 import { link, mkdir, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
-import type { ComponentCapabilities, DefinitionMeta } from "./types";
+import type { ArchitectureMetadata, ComponentCapabilities, DefinitionMeta } from "./types";
 import { normalizeEvents } from "../../src/catalog/normalize";
 import type { AtomicLevel, ComponentLayout } from "../../src/designSystems/types";
 
@@ -88,7 +88,19 @@ function isJsonSafe(value:unknown):boolean {
   return false;
 }
 
-export function definitionMeta(definition:{events?:readonly string[]|Record<string,z.ZodType>;slots?:string[];capabilities?:ComponentCapabilities;description:string;example?:Record<string,unknown>;examples?:Record<string,Record<string,unknown>>;atomicLevel?:AtomicLevel;layoutNeutral?:boolean;layout?:ComponentLayout;interactive?:boolean;accessibleLabelProps?:string[];urlProps?:string[];props:z.ZodType}):DefinitionMeta {
+/** Architecture metadata (волна 2 §2.1) — перечисляем поля явно, как и остальную meta. */
+function architectureMeta(definition:ArchitectureMetadata):ArchitectureMetadata {
+  return {
+    ...(definition.scope!==undefined?{scope:definition.scope}:{}),
+    ...(definition.allowedAsRoot!==undefined?{allowedAsRoot:definition.allowedAsRoot}:{}),
+    ...(definition.canonicalFor?.length?{canonicalFor:[...definition.canonicalFor].sort()}:{}),
+    ...(definition.sourceBounded!==undefined?{sourceBounded:definition.sourceBounded}:{}),
+    ...(definition.ownership?{ownership:{reason:definition.ownership.reason,...(definition.ownership.provenance?{provenance:definition.ownership.provenance}:{})}}:{}),
+    ...(definition.replacement?{replacement:definition.replacement}:{}),
+  };
+}
+
+export function definitionMeta(definition:{events?:readonly string[]|Record<string,z.ZodType>;slots?:string[];capabilities?:ComponentCapabilities;description:string;example?:Record<string,unknown>;examples?:Record<string,Record<string,unknown>>;atomicLevel?:AtomicLevel;layoutNeutral?:boolean;layout?:ComponentLayout;interactive?:boolean;accessibleLabelProps?:string[];urlProps?:string[];props:z.ZodType}&ArchitectureMetadata):DefinitionMeta {
   let propsJsonSchema:unknown;
   try { propsJsonSchema=z.toJSONSchema(definition.props,{io:"input"}); } catch { /* best effort metadata */ }
   const {events,eventPayloadSchemas}=normalizeEvents(definition.events as Parameters<typeof normalizeEvents>[0]);
@@ -106,5 +118,5 @@ export function definitionMeta(definition:{events?:readonly string[]|Record<stri
   }
   const capabilities=definition.capabilities&&typeof definition.capabilities==="object"?definition.capabilities:undefined;
   const examples=definition.examples?Object.fromEntries(Object.entries(definition.examples).sort(([a],[b])=>a.localeCompare(b))):undefined;
-  return {events,slots:definition.slots??[],description:definition.description,...(eventPayloads?{eventPayloads}:{}),...(capabilities?{capabilities}:{}),...(definition.example?{example:definition.example}:{}),...(examples?{examples}:{}),...(definition.atomicLevel?{atomicLevel:definition.atomicLevel}:{}),...(definition.layoutNeutral?{layoutNeutral:true as const}:{}),...(definition.layout?{layout:definition.layout}:{}),...(definition.interactive!==undefined?{interactive:definition.interactive}:{}),...(definition.accessibleLabelProps?{accessibleLabelProps:definition.accessibleLabelProps}:{}),...(definition.urlProps?{urlProps:definition.urlProps}:{}),...(propsJsonSchema?{propsJsonSchema}:{})};
+  return {events,slots:definition.slots??[],description:definition.description,...(eventPayloads?{eventPayloads}:{}),...(capabilities?{capabilities}:{}),...(definition.example?{example:definition.example}:{}),...(examples?{examples}:{}),...(definition.atomicLevel?{atomicLevel:definition.atomicLevel}:{}),...(definition.layoutNeutral?{layoutNeutral:true as const}:{}),...(definition.layout?{layout:definition.layout}:{}),...(definition.interactive!==undefined?{interactive:definition.interactive}:{}),...(definition.accessibleLabelProps?{accessibleLabelProps:definition.accessibleLabelProps}:{}),...(definition.urlProps?{urlProps:definition.urlProps}:{}),...(propsJsonSchema?{propsJsonSchema}:{}),...architectureMeta(definition)};
 }

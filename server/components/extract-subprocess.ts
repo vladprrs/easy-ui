@@ -5,6 +5,7 @@ import { z } from "zod";
 import { definitionMeta } from "./pipeline";
 import { validateExample, validateExamplesByteLimit } from "./exampleValidate";
 import type { ComponentDefinition } from "../../src/catalog/normalize";
+import { COMPONENT_SCOPES } from "../../src/designSystems/scope";
 
 const atomicLevel=z.enum(["atom","molecule","organism","template","page"]);
 const capabilitiesSchema=z.strictObject({typedEvents:z.literal(true).optional(),namedSlots:z.literal(true).optional()});
@@ -12,7 +13,12 @@ const jsonScalar=z.union([z.string(),z.number(),z.boolean(),z.null()]);
 const domain=z.array(jsonScalar);
 const flowSchema=z.strictObject({kind:z.literal("flex"),direction:z.union([z.enum(["vertical","horizontal"]),z.strictObject({prop:z.string(),vertical:domain,horizontal:domain,none:domain.optional()})]),wrap:z.strictObject({prop:z.string(),enabled:domain}).optional(),slot:z.string().optional()});
 const layoutSchema=z.strictObject({version:z.literal(1),spacing:z.array(z.enum(["gap","padding","paddingX","paddingY"])).optional(),spacer:z.literal(true).optional(),flow:flowSchema.optional()});
-const metaSchema=z.strictObject({events:z.array(z.string()),eventPayloads:z.record(z.string(),z.unknown()).optional(),slots:z.array(z.string()),capabilities:capabilitiesSchema.optional(),description:z.string(),example:z.record(z.string(),z.unknown()).optional(),examples:z.record(z.string(),z.record(z.string(),z.unknown())).optional(),atomicLevel:atomicLevel.optional(),layoutNeutral:z.literal(true).optional(),layout:layoutSchema.optional(),interactive:z.boolean().optional(),accessibleLabelProps:z.array(z.string()).optional(),urlProps:z.array(z.string()).optional(),propsJsonSchema:z.unknown().optional()});
+const componentScope=z.enum(COMPONENT_SCOPES);
+const ownershipSchema=z.strictObject({reason:z.string().min(1).max(500),provenance:z.string().min(1).max(500).optional()});
+// Architecture metadata (волна 2 §2.1) — одинаковый набор полей для definition в
+// дочернем процессе и для сериализованной meta; strict-схемы правятся комплектом.
+const architectureFields={scope:componentScope.optional(),allowedAsRoot:z.boolean().optional(),canonicalFor:z.array(z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/,"must be a slug")).max(12).optional(),sourceBounded:z.boolean().optional(),ownership:ownershipSchema.optional(),replacement:z.string().min(1).max(64).optional()};
+const metaSchema=z.strictObject({events:z.array(z.string()),eventPayloads:z.record(z.string(),z.unknown()).optional(),slots:z.array(z.string()),capabilities:capabilitiesSchema.optional(),description:z.string(),example:z.record(z.string(),z.unknown()).optional(),examples:z.record(z.string(),z.record(z.string(),z.unknown())).optional(),atomicLevel:atomicLevel.optional(),layoutNeutral:z.literal(true).optional(),layout:layoutSchema.optional(),interactive:z.boolean().optional(),accessibleLabelProps:z.array(z.string()).optional(),urlProps:z.array(z.string()).optional(),propsJsonSchema:z.unknown().optional(),...architectureFields});
 const resultSchema=z.strictObject({ok:z.boolean(),meta:metaSchema.optional(),serverOnly:z.strictObject({conformanceProps:z.literal(true).optional()}).optional(),warnings:z.array(z.string()).default([]),error:z.string().optional()});
 export type ExtractResult=z.output<typeof resultSchema>;
 
@@ -69,7 +75,7 @@ async function child(sourcePath:string,resultPath:string,smoke:boolean) {
     const d=mod.definition;
     if(!d || typeof d!=="object" || !(d.props instanceof z.ZodType)) throw new Error("definition.props must be a ZodType");
     const eventsSchema=z.union([z.array(z.string()),z.record(z.string(),z.instanceof(z.ZodType))]);
-    const metadata=z.strictObject({events:eventsSchema.optional(),slots:z.array(z.string()).optional(),capabilities:capabilitiesSchema.optional(),description:z.string().min(1),example:z.record(z.string(),z.unknown()).optional(),examples:z.unknown().optional(),conformanceProps:z.record(z.string(),z.unknown()).optional(),atomicLevel:atomicLevel.optional(),layoutNeutral:z.boolean().optional(),layout:layoutSchema.optional(),interactive:z.boolean().optional(),accessibleLabelProps:z.array(z.string()).optional(),urlProps:z.array(z.string()).optional(),props:z.instanceof(z.ZodType)}).parse(d);
+    const metadata=z.strictObject({events:eventsSchema.optional(),slots:z.array(z.string()).optional(),capabilities:capabilitiesSchema.optional(),description:z.string().min(1),example:z.record(z.string(),z.unknown()).optional(),examples:z.unknown().optional(),conformanceProps:z.record(z.string(),z.unknown()).optional(),atomicLevel:atomicLevel.optional(),layoutNeutral:z.boolean().optional(),layout:layoutSchema.optional(),interactive:z.boolean().optional(),accessibleLabelProps:z.array(z.string()).optional(),urlProps:z.array(z.string()).optional(),props:z.instanceof(z.ZodType),...architectureFields}).parse(d);
     if(metadata.example) metadata.props.parse(metadata.example);
     if(metadata.conformanceProps!==undefined) validateExample(metadata.conformanceProps,"definition.conformanceProps");
     await validateLayoutMetadata(metadata);

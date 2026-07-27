@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { prototypeActionSchemas } from "../../src/catalog/actions";
 import { atomicLevels } from "../../src/designSystems/types";
+import { COMPONENT_SCOPES } from "../../src/designSystems/scope";
 import { layoutSpacingProps, spaceTokens } from "../../src/designSystems/types";
 import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
 import {
@@ -221,6 +222,18 @@ export function buildComponentDefinitionSchema(): JsonObject {
       interactive: { type: "boolean" },
       accessibleLabelProps: { type: "array", items: { type: "string" } },
       urlProps: { type: "array", items: { type: "string" } },
+      // Architecture metadata (волна 2): все поля опциональны; архитектурные lint-правила
+      // прототипа смотрят только на явно объявленные значения.
+      scope: { enum: [...COMPONENT_SCOPES], $comment: "Какой частью экрана компонент владеет: primitive | section | shell | screen." },
+      allowedAsRoot: { type: "boolean", $comment: "false запрещает использовать компонент в корневой позиции экрана." },
+      canonicalFor: { type: "array", maxItems: 12, items: { type: "string", pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }, $comment: "Slug'и продуктовых ролей, для которых компонент — канонический выбор." },
+      sourceBounded: { type: "boolean", $comment: "Компонент не должен сам задавать геометрию экрана; publish сканирует исходник только при true." },
+      ownership: {
+        type: "object", additionalProperties: false, required: ["reason"],
+        properties: { reason: { type: "string", maxLength: 500 }, provenance: { type: "string", maxLength: 500 } },
+        $comment: "Обоснование владения экраном/каркасом; обязательно для scope shell/screen (иначе publish-warning).",
+      },
+      replacement: { type: "string", maxLength: 64, $comment: "Имя компонента-замены в той же дизайн-системе." },
     },
   };
 }

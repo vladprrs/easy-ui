@@ -188,6 +188,8 @@ Share-cookie авторизует исключительно `GET`/`HEAD` по e
 
 Sever ведёт неизменяемый журнал валидаций `validation_records(resource_type, resource_id, rev, validator_version, catalog_hash, ok, issues_json, created_at)`. Запись создаётся при `POST`/`PUT` прототипа (проверка прошла → `ok=1`, warnings в `issues_json`), при `restore` (restore теперь заново прогоняет `validatePrototype` против живого каталога и пишет результат, не блокируя восстановление), а также на publish-стадиях компонентов (`ok=1` при активации, `ok=0` при провале импорта).
 
+`warnings` в ответах save/create включают архитектурные предупреждения `arch/*` (см. `docs/prototype-format.md#architecture-warnings`). Они warn-only и не меняют условия 422. Документ может нести `architecture.exemptions` — снятые ими issue'ы не попадают в `warnings`. `validatePrototype` принимает опциональный `options.kind`, выключающий архитектурные правила для служебных видов (`component-gallery`, `evidence`, `visual-reference`, `composition-fixture`); проброс `kind` из строки прототипа в этот вызов делает волна 4 в `server/routes/prototypes.ts` — без него правила работают для всех видов.
+
 Meta-ответы прототипов и компонентов additively несут lifecycle-поля:
 
 - `draftRevision` — текущая head-ревизия;
@@ -217,7 +219,7 @@ Meta-ответы прототипов и компонентов additively не
 | `POST /components/:id/restore` | `{rev,baseRev}` → `{rev}` |
 | `POST /components/:id/publish` | `{message?,baseRev}` → 201 `{version,hostAbiVersion,warnings}` и `Location` |
 | `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,statusReason:string\|null,supersededBy:number\|null,statusRev,designSystem,publishedAt}` |
-| `GET /components/:id/versions/:version` | Метадата версии **любого статуса**: `{version,rev,status,statusReason,supersededBy,statusRev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; `propsJsonSchema` описывает input (до Zod defaults/transforms); immutable |
+| `GET /components/:id/versions/:version` | Метадата версии **любого статуса**: `{version,rev,status,statusReason,supersededBy,statusRev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?,scope?,allowedAsRoot?,canonicalFor?,sourceBounded?,ownership?,replacement?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; `propsJsonSchema` описывает input (до Zod defaults/transforms); immutable |
 | `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); отдаётся при статусе `active\|deprecated\|superseded`, иначе `404 bundle_unavailable`; immutable |
 | `POST /components/:id/versions/:version/status` | `{status, reason?, supersededBy?, baseStatusRev}` → 200 `{status, statusRev}`; см. [Статусы версий](#статусы-версий-компонентов) |
 
@@ -378,7 +380,7 @@ Production-миграция выполняется по явному manifest с
 | Метод и путь | Ответ |
 |---|---|
 | `GET /health` | `{status:"ready"}` после миграций, seed и ABI-проверки; до готовности 503 `starting` |
-| `GET /catalog/manifest?designSystem=<slug>` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?}]}` — последняя active-версия каждого неудалённого custom-компонента для каждой системы или только указанной системы; host-примитивы намеренно не входят |
+| `GET /catalog/manifest?designSystem=<slug>` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?,scope?,allowedAsRoot?,canonicalFor?,sourceBounded?,ownership?,replacement?}]}` — последняя active-версия каждого неудалённого custom-компонента для каждой системы или только указанной системы; host-примитивы намеренно не входят |
 | `GET /shims/v1/:name.js` | ESM-шим host ABI v1; immutable |
 | `GET /shims/v2/:name.js` | ESM-шим host ABI v2 (v1 + `easy-ui-runtime.js`); immutable |
 
@@ -583,7 +585,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 
 - `GET /api/openapi.json` — OpenAPI 3.1-документ. Отдаётся закоммиченный артефакт `server/openapi.json`, сгенерированный из реестра контрактов `server/contracts.ts` командой `npm run generate:openapi`. Дрифт ловится в `npm run verify` (`verify:openapi`) и contract-тестом. Операции несут расширение `x-easyui-validated`: `true` — handler валидирует вход по схемам контракта (`parseWith`/`parseQuery`), `false` — контракт документационный, handler валидирует вход самостоятельно.
 - `GET /api/schemas/prototype-document.json` — JSON Schema (draft 2020-12) формата документа прототипа, производная от `prototypeDocSchema`. Директивы props (`$state`, `$bindState`, `$template`, `$cond`, `$asset`) и param sources событий (`$event`, `$elementId`, `$itemIndex`, `$itemKey`) описаны в `$defs` как `anyOf` с `$comment` — их семантика enforce'ится валидатором `src/prototype/validate.ts`, а не самой схемой.
-- `GET /api/schemas/component-definition.json` — JSON Schema контракта `definition` кастомного компонента (props/events/slots/capabilities/description/example/examples/atomicLevel и прочая metadata).
+- `GET /api/schemas/component-definition.json` — JSON Schema контракта `definition` кастомного компонента (props/events/slots/capabilities/description/example/examples/atomicLevel, architecture metadata `scope`/`allowedAsRoot`/`canonicalFor`/`sourceBounded`/`ownership`/`replacement` и прочая metadata).
 - `GET /api/capabilities` — фичи и лимиты инстанса:
 
 ```json
@@ -612,6 +614,12 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 ## Контракт кастомного компонента
 
 Модуль TSX экспортирует named `definition` и default plain function component. `definition.props` — Zod-схема; допустимы `events`, `slots?: string[]`, `capabilities?`, обязательный `description: string`, legacy `example?: Record<string, unknown>`, именованные `examples?: Record<string, Record<string, unknown>>`, `atomicLevel?: "atom" | "molecule" | "organism" | "template" | "page"`, `layoutNeutral?: boolean` и `layout?` контракта v1. `DefinitionMeta`, сохранённый для published-версии, содержит нормализованные `events`, `slots`, `description` и опциональные `eventPayloads`, `capabilities`, `example`, `examples`, input-`propsJsonSchema`, `atomicLevel`, `layoutNeutral`, `layout`; те же метаданные входят в version DTO и manifest. У custom-компонента уровень опционален для ABI v1 backward compatibility, но publish без него возвращает warning `Atomic design level is not provided; component will be classified as Other` и Library классифицирует компонент как `Other`. Default получает `BaseComponentProps` — объект `{props, emit}`. `memo` и `forwardRef` не поддерживаются.
+
+#### Architecture metadata
+
+Аддитивный набор полей definition (волна 2 плана 2026-07-27), полностью опциональный: `scope?: "primitive" | "section" | "shell" | "screen"` (какой частью экрана компонент владеет), `allowedAsRoot?: boolean`, `canonicalFor?: string[]` (до 12 slug'ов продуктовых ролей), `sourceBounded?: boolean`, `ownership?: {reason: string; provenance?: string}` (≤500 символов на поле), `replacement?: string` (имя компонента-замены, ≤64 символа). Значения проходят те же strict-схемы, что и остальная metadata (дочерний процесс extract, `metaSchema`, `definition_meta` контракта), сохраняются в `DefinitionMeta` и отдаются в version DTO, `/catalog/manifest` и `GET /api/schemas/component-definition.json`. `canonicalFor` сортируется при сериализации.
+
+Publish добавляет **только warnings** (никогда не блокирует): `scope: "screen"|"shell"` без `ownership.reason`; `replacement`, указывающий на компонент, которого нет в той же дизайн-системе; и — **только при `sourceBounded: true`** — скан исходника на screen-геометрию (`h-screen`, `min-h-screen`, `100vh`, `100dvh`, `fixed inset-0`). Канонические каркасы (`yp-screen`, `yp-panel`, `yp-app-home-shell`, `yp-scroll-area`) законно несут такую геометрию и не объявляют `sourceBounded`, поэтому молчат. Архитектурные правила прототипа, читающие эти поля, описаны в `docs/prototype-format.md#architecture-warnings`; проставить `scope` по каталогу помогает `scripts/backfill-component-scope.ts` (по умолчанию dry-run, запись — только с `--apply`).
 
 #### Named examples
 

@@ -4,7 +4,7 @@ Prototype files live in `prototypes/*.json`. A file is a self-contained flow; it
 
 ## Document and screens
 
-The root is a strict object with `version: 1`, slug `id`, human-readable `name`, optional `description`, slug `designSystem` (default `"shadcn"`), `device` (`mobile`, `tablet`, or `desktop`, default `desktop`), slug `startScreen`, `state`, and a non-empty `screens` array. Screen IDs are unique slugs and `startScreen` must exist. The SQLite `design_systems` registry is the single source of registered systems; an unknown system is an error. `shadcn` and `wireframe` registry entries have code-backed builtin providers. A registry entry without a provider starts with no builtin definitions and can use published custom components assigned to it. The default remains `shadcn`, so existing documents without `designSystem` retain their meaning. Version 1 evolves additively: new fields are optional, so existing v1 documents remain valid.
+The root is a strict object with `version: 1`, slug `id`, human-readable `name`, optional `description`, slug `designSystem` (default `"shadcn"`), `device` (`mobile`, `tablet`, or `desktop`, default `desktop`), slug `startScreen`, `state`, a non-empty `screens` array, and the optional additive fields `flows` and `architecture` (see [Architecture warnings](#architecture-warnings)). Screen IDs are unique slugs and `startScreen` must exist. The SQLite `design_systems` registry is the single source of registered systems; an unknown system is an error. `shadcn` and `wireframe` registry entries have code-backed builtin providers. A registry entry without a provider starts with no builtin definitions and can use published custom components assigned to it. The default remains `shadcn`, so existing documents without `designSystem` retain their meaning. Version 1 evolves additively: new fields are optional, so existing v1 documents remain valid.
 
 Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, optional non-blank `note` (at most 500 characters), optional `stateOverrides`, and `spec`. `note` is the author's caption below the screen in the CJM view. Screens appear in CJM in their `screens` array order. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, optional `on`, optional `repeat`, optional `slot`, and optional `region`. Its type and props must match the normalized definition in the document's selected design system. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
 
@@ -285,8 +285,60 @@ The warnings are:
 - **Repeated element reads `$event` from a payload without item identity** — inside a `repeat` subtree, an event that binds `$event` while its declared payload schema has none of the identity fields `itemId`, `id`, `key`, `value` cannot tell which item was acted on.
 - **Large inline base64** — any string prop longer than 100 KB that is a `data:` URL or bare base64 should be uploaded as an asset (`$asset`) instead. (A `data:` URL in `Image.src`/`Link.href` remains a hard error; this warning covers every other string prop.)
 - **Multiple screens with no inter-screen navigation** — two or more screens but no `navigate` action targeting a *different* screen (`back`/`restart`/`openUrl` do not count) suggests disconnected screens.
-- **Monolithic screen** — a screen whose sole element is a single custom `organism`/`page` component with no children likely reconstructs a page in one component instead of composing it from design-system elements.
+- **Monolithic screen** (`arch/monolith-root`) — a screen whose sole element is a single custom `organism`/`page` component with no children likely reconstructs a page in one component instead of composing it from design-system elements. See [Architecture warnings](#architecture-warnings) for the `@eui/FlowRoot`-aware branch of the same rule.
 - **URL prop with a non-public local path** — a `urlProps` value that begins with `/` but not with a runtime-served public prefix (`/api/assets/`, `/design/`, `/fonts/`, `/images/`) may be unavailable to the player runtime.
+
+## Architecture warnings
+
+Architecture rules (`src/prototype/architectureLints.ts`) answer one question the atomic levels cannot: **which part of the screen does a component own?** They are additive to format v1 and behave like every other warning — they never block validation, saving, or publishing.
+
+They read optional **architecture metadata** on a component definition (all fields optional, serialized into `DefinitionMeta`, the version DTO and the catalog manifest):
+
+| field | meaning |
+|---|---|
+| `scope: "primitive" \| "section" \| "shell" \| "screen"` | which part of the screen the component owns |
+| `allowedAsRoot: boolean` | explicit permission/prohibition to sit in a root position of a screen |
+| `canonicalFor: string[]` | slugs of product roles for which this component is the canonical choice |
+| `sourceBounded: boolean` | the component must not size itself to the viewport (publish scans the source for screen geometry only when `true`) |
+| `ownership: { reason: string; provenance?: string }` | why the component is allowed to own a whole screen/shell |
+| `replacement: string` | name of the replacing component in the same design system |
+
+**Every rule fires only on an explicitly declared value.** Nothing is inferred from `atomicLevel`: `inferScopeFromAtomicLevel` (`src/designSystems/scope.ts`) exists for display in the inspector and library only. A component without architecture metadata produces no architecture warnings.
+
+| id | fires on |
+|---|---|
+| `arch/monolith-root` | the screen is a single component: the root — or the only child of an `@eui/FlowRoot` root — is a custom component with `scope ∈ {section, shell, screen}`, no children and no filled slots. The legacy `organism`/`page` branch (direct root only, no metadata required) is part of the same rule |
+| `arch/root-not-allowed` | an element in a root position whose definition declares `allowedAsRoot: false` |
+| `arch/screen-scope-nested` | a `scope: "screen"` component used somewhere other than a root position of the screen |
+| `arch/region-owns-page` | an element inside a `statusBar`/`header`/`footer` region subtree carries `scope ∈ {shell, screen}` — a region must not own the page |
+| `arch/ownership-unexplained` | a custom component with `scope ∈ {shell, screen}` whose definition declares no `ownership.reason` |
+| `arch/bounded-as-owner` | a `sourceBounded: true` component used as the screen root or as the owner of a region |
+
+Root positions are `spec.root` itself and, when the root is `@eui/FlowRoot`, its direct children (regions and top-level content live there).
+
+The rules are skipped entirely for service prototypes — `kind ∈ {component-gallery, evidence, visual-reference, composition-fixture}` (the `kind` comes from the prototype lifecycle field and is passed to `validatePrototype` by the server). When `arch/screen-scope-nested` or `arch/region-owns-page` fires on an element, the atomic-nesting warning for that same element is suppressed as a duplicate.
+
+### `architecture.exemptions`
+
+The document root accepts an optional strict `architecture` object with one field, `exemptions` — at most 200 entries:
+
+```json
+{
+  "architecture": {
+    "exemptions": [
+      {
+        "rule": "arch/monolith-root",
+        "screenId": "success",
+        "elementKey": "screen",
+        "reason": "legacy import from Figma; recomposed in wave 5",
+        "provenance": "docs/plans/2026-07-27-product-improvements-v2.md"
+      }
+    ]
+  }
+}
+```
+
+`rule` is one of the six ids above, `screenId` is a slug, `elementKey` is optional (absent means «every element of that screen»), `reason` is a trimmed string of at least 8 and at most 500 characters, and the optional `provenance` is at most 500 characters. A matching exemption removes the warning and is reported separately as `exempted` (the readiness report surfaces it), so an exemption is a documented decision rather than a silenced diagnostic.
 
 ## Author checklist
 
@@ -297,6 +349,7 @@ The warnings are:
 - `designSystem` is registered and every component belongs to its per-system allowlist.
 - Atomic nesting warnings have been reviewed, even though they do not block validation.
 - Semantic warnings (interactive handlers/labels, item identity, inline base64, screen connectivity, monolithic screens, local URL paths) have been reviewed.
+- Architecture warnings (`arch/*`) have been reviewed; every remaining one is either fixed or covered by a documented `architecture.exemptions` entry.
 - Directives, conditions, actions, and params use only the closed v1 grammar.
 - State paths are valid, non-reserved JSON Pointers; bound initial values are in `state` where appropriate.
 - Terminal actions are unique and last; navigating links prevent their default browser action.

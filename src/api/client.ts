@@ -1,5 +1,6 @@
 import type { PrototypeDoc, RegionKind } from "../prototype/schema";
 import type { ComponentLayout, SpaceToken } from "../designSystems/types";
+import type { ComponentScope } from "../designSystems/scope";
 
 export interface ValidationIssue {
   path: string | (string | number)[];
@@ -167,6 +168,13 @@ export interface SerializedComponentDefinition {
   example?: Record<string, unknown>;
   examples?: Record<string, Record<string, unknown>>;
   propsJsonSchema?: unknown;
+  /** Архитектурные метаданные (волна 2): владение и допустимая позиция компонента. */
+  scope?: ComponentScope;
+  allowedAsRoot?: boolean;
+  canonicalFor?: string[];
+  sourceBounded?: boolean;
+  ownership?: { reason: string; provenance?: string };
+  replacement?: string;
 }
 export interface CatalogComponent extends SerializedComponentDefinition { id: string; name: string; designSystem: string; version: number; bundleUrl: string; bundleHash: string; hostAbiVersion: number; description: string }
 export interface CatalogManifest { components: CatalogComponent[] }

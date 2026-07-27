@@ -51,12 +51,14 @@ function parseDoc(value:unknown,pathId?:string):PrototypeDoc {
 }
 
 // Task 3 can resolve exact custom-version pins and pass the merged definitions here.
-export function validatePrototypeForSave(doc:PrototypeDoc, definitions?:Record<string,ComponentDefinition>) {
+// `kind` — вид прототипа (волна 0). Архитектурные линты волны 2 не применяются к служебным
+// видам: галереи компонентов и evidence-экраны законно состоят из одного компонента.
+export function validatePrototypeForSave(doc:PrototypeDoc, definitions?:Record<string,ComponentDefinition>, kind?:string) {
   // API saves always pass the registry-backed snapshot. This fallback is only for
   // bundled seed documents, which support provider systems and no custom types.
   const resolved=definitions??designSystems[doc.designSystem as keyof typeof designSystems]?.definitions;
   if(!resolved) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["designSystem"],message:`unknown design system: ${doc.designSystem}`}]});
-  const result=validatePrototype(doc,{definitions:resolved});
+  const result=validatePrototype(doc,{definitions:resolved,kind});
   if(result.errors.length) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:result.errors,warnings:result.warnings});
   return result.warnings;
 }
@@ -72,7 +74,7 @@ function recordPrototypeValidation(db:Database,id:string,rev:number,issues:{path
 // importer reuses the exact snapshot/validation/audit/ledger sequence). Behaviour of POST is unchanged.
 export async function createPrototypeFromDoc(db:Database,repo:PrototypeRepo,doc:PrototypeDoc,dataDir:string,ownerId:string,opts:{message?:string;figmaInput?:unknown;lifecycle?:PrototypeLifecyclePatch}={}) {
   const snapshot=await snapshotDefinitions(db,doc,dataDir);
-  const warnings=validatePrototypeForSave(doc,snapshot.definitions);
+  const warnings=validatePrototypeForSave(doc,snapshot.definitions,opts.lifecycle?.kind);
   const assetIds=collectAndValidateAssetRefs(db,doc);
   const figma=parseFigmaInput(db,opts.figmaInput,"figma");
   const result=repo.create(doc,opts.message,snapshot.pins,assetIds,figma,ownerId,opts.lifecycle);
@@ -86,7 +88,7 @@ export async function createPrototypeFromDoc(db:Database,repo:PrototypeRepo,doc:
 // document differs from head). Mirrors the PUT save sequence; the route's PUT branch is unchanged.
 export async function updatePrototypeFromDoc(db:Database,repo:PrototypeRepo,id:string,doc:PrototypeDoc,baseRev:number,dataDir:string,ownerId:string,opts:{message?:string;figmaInput?:unknown}={}) {
   const snapshot=await snapshotDefinitions(db,doc,dataDir);
-  const warnings=validatePrototypeForSave(doc,snapshot.definitions);
+  const warnings=validatePrototypeForSave(doc,snapshot.definitions,repo.lifecycle(id).kind);
   const assetIds=collectAndValidateAssetRefs(db,doc);
   const figma=parseFigmaInput(db,opts.figmaInput,"figma");
   const saved=repo.save(id,doc,baseRev,opts.message,snapshot.pins,assetIds,figma);
@@ -106,7 +108,7 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
   const id=segments[1]!; const tail=segments.slice(2);
   if(!tail.length) {
     if(request.method==="GET") return json(repo.meta(id,principal),200,noStore);
-    if(request.method==="PUT") { const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions); const assetIds=collectAndValidateAssetRefs(db,doc); const figma=parseFigmaInput(db,b.figma,"figma"); const saved=repo.save(id,doc,base,message(b),snapshot.pins,assetIds,figma); db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,saved.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}}); recordPrototypeValidation(db,id,saved.rev,warnings); return json({...saved,warnings,screens:headScreens(doc)},200,noStore); }
+    if(request.method==="PUT") { const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions,repo.lifecycle(id).kind); const assetIds=collectAndValidateAssetRefs(db,doc); const figma=parseFigmaInput(db,b.figma,"figma"); const saved=repo.save(id,doc,base,message(b),snapshot.pins,assetIds,figma); db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,saved.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}}); recordPrototypeValidation(db,id,saved.rev,warnings); return json({...saved,warnings,screens:headScreens(doc)},200,noStore); }
     if(request.method==="DELETE") { requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); repo.delete(id,baseRev(b)); return new Response(null,{status:204,headers:noStore}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }

@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { z } from "zod";
 import type { ComponentDefinition } from "../catalog/definitions";
 import { normalizeEvents, type ComponentCapabilities } from "../catalog/normalize";
+import { isComponentScope, type ComponentOwnership } from "../designSystems/scope";
 import { atomicLevels } from "../designSystems/types";
 import { ensureEasyUiShared } from "./shared";
 
@@ -33,6 +34,11 @@ export class FullDocumentReloadRequiredError extends Error {
     this.name = "FullDocumentReloadRequiredError";
   }
 }
+
+const isOwnership = (value: unknown): value is ComponentOwnership =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+  && typeof (value as { reason?: unknown }).reason === "string"
+  && ((value as { provenance?: unknown }).provenance === undefined || typeof (value as { provenance?: unknown }).provenance === "string");
 
 function validateBundleUrl(url: string) {
   if (!url.startsWith("/api/") || url.startsWith("//") || url.includes("\\")) {
@@ -79,6 +85,15 @@ export async function loadCustomComponents(refs: CustomComponentRef[], importMod
         ...(typeof definition.interactive === "boolean" ? { interactive: definition.interactive } : {}),
         ...(Array.isArray(definition.accessibleLabelProps) ? { accessibleLabelProps: definition.accessibleLabelProps as string[] } : {}),
         ...(Array.isArray(definition.urlProps) ? { urlProps: definition.urlProps as string[] } : {}),
+        // Architecture metadata (волна 2): без этого копирования `scope` и соседи
+        // теряются на клиенте и архитектурный lint в редакторе становится инертным.
+        ...(isComponentScope(definition.scope) ? { scope: definition.scope } : {}),
+        ...(typeof definition.allowedAsRoot === "boolean" ? { allowedAsRoot: definition.allowedAsRoot } : {}),
+        ...(Array.isArray(definition.canonicalFor) && definition.canonicalFor.every((role) => typeof role === "string")
+          ? { canonicalFor: definition.canonicalFor as string[] } : {}),
+        ...(typeof definition.sourceBounded === "boolean" ? { sourceBounded: definition.sourceBounded } : {}),
+        ...(isOwnership(definition.ownership) ? { ownership: definition.ownership } : {}),
+        ...(typeof definition.replacement === "string" && definition.replacement ? { replacement: definition.replacement } : {}),
       };
       components[ref.name] = module.default as ComponentType;
     } catch (error) {

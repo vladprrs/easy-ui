@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { inputPrototypeDocSchema, REGION_KINDS } from "../src/prototype/schema";
+import { COMPONENT_SCOPES } from "../src/designSystems/scope";
 import { PROTOTYPE_KINDS } from "../src/api/client";
 import { atomicLevels, layoutSpacingProps, spaceTokens } from "../src/designSystems/types";
 import { importReportSchema } from "../src/bundle/schema";
@@ -146,6 +147,13 @@ const serializedDefinitionFields = {
   example: z.record(z.string(), z.unknown()).optional(),
   examples: componentExamplesSchema.optional(),
   propsJsonSchema: z.unknown().optional(),
+  // Architecture metadata (волна 2 §2.1) — additive, все поля опциональны.
+  scope: z.enum(COMPONENT_SCOPES).optional(),
+  allowedAsRoot: z.boolean().optional(),
+  canonicalFor: z.array(z.string()).optional(),
+  sourceBounded: z.boolean().optional(),
+  ownership: z.object({ reason: z.string(), provenance: z.string().optional() }).optional(),
+  replacement: z.string().optional(),
 };
 
 export const renderStatusQuerySchema = z

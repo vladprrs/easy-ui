@@ -13,6 +13,32 @@ describe("custom component loader", () => {
       .rejects.toThrow("RatingStars v2: definition.props is not a host zod schema");
   });
 
+  it("carries architecture metadata through the definition allowlist", async () => {
+    const architectural = {
+      definition: {
+        props: z.object({}), description: "Screen",
+        scope: "screen", allowedAsRoot: true, canonicalFor: ["ctyp-success"], sourceBounded: false,
+        ownership: { reason: "owns the whole success screen", provenance: "figma:123" }, replacement: "RatingStarsV2",
+      },
+      default: () => null,
+    };
+    const loaded = await loadCustomComponents([ref()], async () => architectural);
+    expect(loaded.definitions.RatingStars).toMatchObject({
+      scope: "screen", allowedAsRoot: true, canonicalFor: ["ctyp-success"], sourceBounded: false,
+      ownership: { reason: "owns the whole success screen", provenance: "figma:123" }, replacement: "RatingStarsV2",
+    });
+  });
+
+  it("drops malformed architecture metadata instead of failing the load", async () => {
+    const malformed = {
+      definition: { props: z.object({}), description: "Stars", scope: "page", canonicalFor: [1], ownership: { reason: 5 }, replacement: "" },
+      default: () => null,
+    };
+    const loaded = await loadCustomComponents([ref()], async () => malformed);
+    const definition = loaded.definitions.RatingStars as Record<string, unknown>;
+    for (const key of ["scope", "canonicalFor", "ownership", "replacement"]) expect(definition[key]).toBeUndefined();
+  });
+
   it("caches immutable modules by bundle URL", async () => {
     const importer = vi.fn(async () => validModule);
     await loadCustomComponents([ref()], importer);
