@@ -54,6 +54,32 @@ export class ApiError extends Error {
   }
 }
 
+// Lifecycle taxonomy (волна 0). Единственный источник правды и для сервера
+// (`server/contracts.ts` строит из него zod-enum), и для галереи.
+export const PROTOTYPE_KINDS = [
+  "product-flow",
+  "composition-fixture",
+  "component-gallery",
+  "evidence",
+  "visual-reference",
+  "experiment",
+] as const;
+export type PrototypeKind = (typeof PROTOTYPE_KINDS)[number];
+export const DEFAULT_PROTOTYPE_KIND: PrototypeKind = "product-flow";
+/** Служебные виды: скрыты из основной витрины галереи за отдельным табом. */
+export const SERVICE_PROTOTYPE_KINDS = ["composition-fixture", "component-gallery", "evidence", "visual-reference"] as const;
+export type ServicePrototypeKind = (typeof SERVICE_PROTOTYPE_KINDS)[number];
+export const PRODUCT_PROTOTYPE_KINDS = PROTOTYPE_KINDS.filter((kind) => !(SERVICE_PROTOTYPE_KINDS as readonly string[]).includes(kind));
+export const isServicePrototypeKind = (kind: string | undefined): kind is ServicePrototypeKind =>
+  (SERVICE_PROTOTYPE_KINDS as readonly string[]).includes(kind ?? "");
+/** Прототип без явного `kind` (старый клиент/старая строка) читается как product-flow. */
+export const prototypeKindOf = (prototype: { kind?: string | null }): PrototypeKind =>
+  (PROTOTYPE_KINDS as readonly string[]).includes(prototype.kind ?? "") ? prototype.kind as PrototypeKind : DEFAULT_PROTOTYPE_KIND;
+
+/** Патч lifecycle-метаданных: `derivedFrom: null` очищает связь. */
+export interface PrototypeLifecycleInput { kind?: PrototypeKind; tags?: string[]; derivedFrom?: string | null }
+export interface PrototypeLifecycle { kind: PrototypeKind; tags: string[]; derivedFrom: string | null }
+
 export interface PrototypeSummary {
   id: string;
   name: string;
@@ -66,6 +92,10 @@ export interface PrototypeSummary {
   updatedAt: string;
   status: PrototypeStatus;
   owner: ResourceOwner;
+  // Lifecycle (волна 0). Опциональны в типе: фикстуры тестов их опускают, сервер всегда шлёт.
+  kind?: PrototypeKind;
+  tags?: string[];
+  derivedFrom?: string | null;
 }
 
 export interface ResourceOwner { id: string; name: string }
@@ -88,6 +118,9 @@ export interface PrototypeMeta {
   figma?: FigmaProvenance | null;
   status: PrototypeStatus;
   owner: ResourceOwner;
+  kind?: PrototypeKind;
+  tags?: string[];
+  derivedFrom?: string | null;
 }
 export interface PrototypeComponentPin { id: string; name: string; version: number; bundleUrl: string; bundleHash: string }
 export interface AssetPin { id: string; sha256: string; mime: string; size: number }
@@ -263,7 +296,9 @@ export async function uploadAsset(file: File, signal?: AbortSignal): Promise<Upl
 const prototypePath = (id: string) => `/api/prototypes/${encodeURIComponent(id)}`;
 const componentPath = (id: string) => `/api/components/${encodeURIComponent(id)}`;
 
-export const listPrototypes = (signal?: AbortSignal) => request<PrototypeSummary[]>("/api/prototypes", { signal });
+/** `kinds` сериализуется в CSV-параметр `?kind=` (см. docs/server-api.md). */
+export const listPrototypes = (signal?: AbortSignal, kinds?: readonly PrototypeKind[]) =>
+  request<PrototypeSummary[]>(kinds?.length ? `/api/prototypes?kind=${encodeURIComponent(kinds.join(","))}` : "/api/prototypes", { signal });
 export const listDesignSystems = (signal?: AbortSignal) => request<{designSystems: DesignSystemSummary[]}>("/api/design-systems", { signal });
 export const getCapabilities = (signal?: AbortSignal) => request<Capabilities>("/api/capabilities", { signal });
 export const getCatalogManifest = (signal?: AbortSignal) => request<CatalogManifest>("/api/catalog/manifest", { signal });
@@ -288,7 +323,11 @@ export const listVisualReferences = (params: { scope?: "prototype-screen" | "com
 };
 export const listComponents = (signal?: AbortSignal) => request<ComponentSummary[]>("/api/components", { signal });
 export const getComponentMeta = (id: string, signal?: AbortSignal) => request<ComponentMeta>(componentPath(id), { signal });
-export const createPrototype = (doc: PrototypeDoc, message?: string, signal?: AbortSignal) => request<{id: string; rev: 1; warnings: unknown[]}>("/api/prototypes", { method: "POST", body: { doc, message }, signal });
+export const createPrototype = (doc: PrototypeDoc, message?: string, signal?: AbortSignal, lifecycle?: PrototypeLifecycleInput) =>
+  request<{id: string; rev: 1; warnings: unknown[]}>("/api/prototypes", { method: "POST", body: { doc, message, ...(lifecycle ?? {}) }, signal });
+/** Owner/admin-патч lifecycle-метаданных; пустой патч возвращает текущее состояние. */
+export const setPrototypeLifecycle = (id: string, patch: PrototypeLifecycleInput, signal?: AbortSignal) =>
+  request<PrototypeLifecycle>(`${prototypePath(id)}/lifecycle`, { method: "POST", body: patch, signal });
 export const getPrototypeMeta = (id: string, signal?: AbortSignal) => request<PrototypeMeta>(prototypePath(id), { signal });
 export const getPrototypeDraft = async (id: string, signal?: AbortSignal) => rememberDraftAssets(id, await request<PrototypeDraft>(`${prototypePath(id)}/draft`, { signal }));
 // `figma` is intentionally a required argument (WF-5): the caller must pass either the provenance

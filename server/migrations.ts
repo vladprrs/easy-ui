@@ -370,6 +370,19 @@ const migrations = [
     const deleteSessions=db.query("DELETE FROM share_sessions WHERE grant_id=?");
     for(const id of impact.shareGrantsToRevoke) { revoke.run(at,id); deleteSessions.run(id); }
   },
+  (db:Database) => {
+    // v16: prototype lifecycle metadata (волна 0). Три плоских ADD COLUMN, без перестройки
+    // таблицы — существующие строки становятся 'product-flow', и галерея не пустеет.
+    // `kind` намеренно без CHECK: SQLite принял бы column-level CHECK в ADD COLUMN, но тогда
+    // расширение таксономии потребовало бы полной перестройки таблицы. Допустимые значения
+    // живут в одном месте — `PROTOTYPE_KINDS` (src/api/client.ts) — и проверяются zod-контрактом
+    // на входе API (server/contracts.ts).
+    db.run("ALTER TABLE prototypes ADD COLUMN kind TEXT NOT NULL DEFAULT 'product-flow'");
+    // JSON-массив slug-тегов (NULL == тегов нет). Валидация формата — в zod-контракте.
+    db.run("ALTER TABLE prototypes ADD COLUMN tags TEXT");
+    // Идентификатор прототипа-источника. Без FK: линия происхождения переживает удаление источника.
+    db.run("ALTER TABLE prototypes ADD COLUMN derived_from TEXT");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

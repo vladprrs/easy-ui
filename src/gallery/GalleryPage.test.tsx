@@ -1,12 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, createPrototype, getCatalogManifest, getPrototypeDraft, listDesignSystems, listPrototypes, listPrototypeVersions, setPrototypeStatus, type PrototypeSummary } from "../api/client";
+import { ApiError, createPrototype, getCatalogManifest, getPrototypeDraft, listDesignSystems, listPrototypes, listPrototypeVersions, setPrototypeLifecycle, setPrototypeStatus, type PrototypeKind, type PrototypeSummary } from "../api/client";
 import { filterAndSortPrototypes, GalleryPage } from "./GalleryPage";
+import type { GalleryTab } from "./galleryModel";
 
 vi.mock("../api/client", async (importOriginal) => {
   const original = await importOriginal<typeof import("../api/client")>();
-  return { ...original, createPrototype: vi.fn(), getCatalogManifest: vi.fn(), getPrototypeDraft: vi.fn(), listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn(), setPrototypeStatus: vi.fn() };
+  return { ...original, createPrototype: vi.fn(), getCatalogManifest: vi.fn(), getPrototypeDraft: vi.fn(), listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn(), setPrototypeLifecycle: vi.fn(), setPrototypeStatus: vi.fn() };
 });
 vi.mock("../auth", () => ({ useAuth: () => ({ user: { userId: "user-me", name: "Я", isAdmin: false }, loading: false }) }));
 vi.mock("./GalleryShareDialog", () => ({
@@ -70,6 +71,7 @@ describe("GalleryPage", () => {
     vi.mocked(getCatalogManifest).mockReset();
     vi.mocked(getPrototypeDraft).mockReset();
     vi.mocked(setPrototypeStatus).mockReset();
+    vi.mocked(setPrototypeLifecycle).mockReset();
     vi.mocked(getPrototypeDraft).mockResolvedValue(draft);
     intersectionObservers = [];
     vi.stubGlobal("IntersectionObserver", class {
@@ -276,6 +278,57 @@ describe("GalleryPage", () => {
     expect(ids("mine")).toEqual(["own-private", "own-published"]);
     expect(ids("shared")).toEqual(["foreign-published", "own-published"]);
     expect(ids("archive")).toEqual(["own-archived"]);
+  });
+
+  it("hides service kinds from the product tabs and shows them under «Служебные»", () => {
+    const rows: PrototypeSummary[] = [
+      { ...summary, id: "flow", name: "Flow", status: "private" },
+      { ...summary, id: "legacy-no-kind", name: "Legacy", status: "private", kind: undefined },
+      { ...summary, id: "fixture", name: "Fixture", status: "private", kind: "composition-fixture" },
+      { ...summary, id: "evidence", name: "Evidence", status: "published", kind: "evidence" },
+      { ...summary, id: "experiment", name: "Experiment", status: "private", kind: "experiment" },
+    ];
+    const ids = (tab: GalleryTab, kind: PrototypeKind | null = null) =>
+      filterAndSortPrototypes(rows, { tab, userId: "user-me", systemId: null, query: "", sort: "name", kind }).map(({ id }) => id);
+    // Прототип без kind остаётся product-flow — витрина не пустеет.
+    expect(ids("mine")).toEqual(["experiment", "flow", "legacy-no-kind"]);
+    expect(ids("shared")).toEqual([]);
+    expect(ids("service")).toEqual(["evidence", "fixture"]);
+    expect(ids("mine", "experiment")).toEqual(["experiment"]);
+    expect(ids("service", "evidence")).toEqual(["evidence"]);
+  });
+
+  it("filters the grid by kind chips and shows the kind and lineage on the card", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([
+      { ...summary, id: "flow", name: "Флоу" },
+      { ...summary, id: "lab", name: "Лаборатория", kind: "experiment", tags: ["draft"], derivedFrom: "flow" },
+    ]);
+    renderGallery();
+    const lab = (await screen.findByRole("heading", { name: "Лаборатория" })).closest("li")!;
+    expect(within(lab).getByText("Эксперимент")).toBeTruthy();
+    expect(within(lab).getByText("Производный от: flow")).toBeTruthy();
+    expect(within(lab).getByText("draft")).toBeTruthy();
+    // Продуктовый флоу не показывает бейдж вида по умолчанию.
+    expect(within(screen.getByRole("heading", { name: "Флоу" }).closest("li")!).queryByText("Продуктовый флоу")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Эксперимент" }));
+    expect(screen.queryByRole("heading", { name: "Флоу" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Лаборатория" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Все виды" }));
+    expect(screen.getByRole("heading", { name: "Флоу" })).toBeTruthy();
+  });
+
+  it("sets kind and tags from the card actions menu", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([{ ...summary, id: "own", name: "Свой", kind: "product-flow", tags: [] }]);
+    vi.mocked(setPrototypeLifecycle).mockResolvedValue({ kind: "evidence", tags: ["proof"], derivedFrom: null });
+    renderGallery();
+    const card = (await screen.findByRole("heading", { name: "Свой" })).closest("li")!;
+    fireEvent.click(within(openCardMenu(card)).getByRole("button", { name: "Вид и теги…" }));
+    const dialog = screen.getByRole("dialog", { name: "Вид и теги прототипа" });
+    fireEvent.change(within(dialog).getByLabelText("Вид"), { target: { value: "evidence" } });
+    fireEvent.change(within(dialog).getByLabelText("Теги (через запятую)"), { target: { value: "proof, Proof , " } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Сохранить" }));
+    await waitFor(() => expect(setPrototypeLifecycle).toHaveBeenCalledWith("own", { kind: "evidence", tags: ["proof"] }));
   });
 
   it("renders mutation controls only for the owner and changes status through the API", async () => {

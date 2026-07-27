@@ -11,6 +11,8 @@ function v14():Database {
   const db=new Database(":memory:");migrate(db);
   for(const name of RETIRED_DESIGN_SYSTEM_TRIGGER_NAMES) db.run(`DROP TRIGGER ${name}`);
   db.run("ALTER TABLE design_systems DROP COLUMN retired");
+  // v16 lifecycle-колонки тоже надо снять, иначе повторный migrate() упрётся в duplicate column.
+  for(const column of ["kind","tags","derived_from"] as const) db.run(`ALTER TABLE prototypes DROP COLUMN ${column}`);
   db.run("PRAGMA user_version=14");
   return db;
 }

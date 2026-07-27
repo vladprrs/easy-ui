@@ -1,7 +1,8 @@
 import type { ReactElement } from "react";
+import { PROTOTYPE_KINDS, type PrototypeKind } from "../../api/client";
 import { chip, chipActive, inputBase } from "../../app/chrome";
 import { gallery } from "../../app/strings/gallery";
-import type { GallerySort, GalleryTab } from "../galleryModel";
+import { kindsForTab, type GallerySort, type GalleryTab } from "../galleryModel";
 
 export interface GalleryToolbarProps {
   tab: GalleryTab;
@@ -9,6 +10,8 @@ export interface GalleryToolbarProps {
   systems: { id: string; name: string }[];
   selectedSystem: string | null;
   onSystemChange: (id: string | null) => void;
+  kind: PrototypeKind | null;
+  onKindChange: (kind: PrototypeKind | null) => void;
   query: string;
   onQueryChange: (query: string) => void;
   sort: GallerySort;
@@ -20,6 +23,7 @@ const TABS: readonly [GalleryTab, string][] = [
   ["mine", gallery.tabMine],
   ["shared", gallery.tabShared],
   ["archive", gallery.tabArchive],
+  ["service", gallery.tabService],
 ];
 
 export function GalleryToolbar(props: GalleryToolbarProps): ReactElement {
@@ -29,17 +33,21 @@ export function GalleryToolbar(props: GalleryToolbarProps): ReactElement {
     systems,
     selectedSystem,
     onSystemChange,
+    kind,
+    onKindChange,
     query,
     onQueryChange,
     sort,
     onSortChange,
     showSearch,
   } = props;
+  // Архив показывает прототипы любого вида, поэтому чипы там перечисляют всю таксономию.
+  const kinds = tab === "archive" ? [...PROTOTYPE_KINDS] : kindsForTab(tab, PROTOTYPE_KINDS);
 
   return (
     <section className="mt-6 rounded-3xl bg-eui-lav p-4 sm:p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="inline-flex rounded-full bg-white p-1" aria-label={gallery.tabsAria}>
+        <div className="inline-flex max-w-full flex-nowrap overflow-x-auto rounded-full bg-white p-1" aria-label={gallery.tabsAria}>
           {TABS.map(([id, label]) => (
             <button
               key={id}
@@ -48,8 +56,8 @@ export function GalleryToolbar(props: GalleryToolbarProps): ReactElement {
               onClick={() => onTabChange(id)}
               className={
                 tab === id
-                  ? chipActive + " rounded-full px-4 py-2 text-sm"
-                  : "rounded-full px-4 py-2 text-sm font-medium text-eui-ink transition-colors hover:bg-eui-lav focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand"
+                  ? chipActive + " shrink-0 rounded-full px-4 py-2 text-sm"
+                  : "shrink-0 rounded-full px-4 py-2 text-sm font-medium text-eui-ink transition-colors hover:bg-eui-lav focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand"
               }
             >
               {label}
@@ -105,7 +113,7 @@ export function GalleryToolbar(props: GalleryToolbarProps): ReactElement {
             </button>
           ))}
         </div>
-        <label className="mt-3 flex shrink-0 items-center gap-2 text-sm font-medium sm:mt-0">
+        <label className="mt-3 flex shrink-0 items-center gap-2 text-sm font-medium max-sm:w-full sm:mt-0">
           {gallery.sortLabel}
           <select
             className={`${inputBase} bg-white`}
@@ -116,6 +124,27 @@ export function GalleryToolbar(props: GalleryToolbarProps): ReactElement {
             <option value="name">{gallery.sortName}</option>
           </select>
         </label>
+      </div>
+      <div className="mt-3 flex flex-nowrap gap-2 overflow-x-auto sm:flex-wrap" aria-label={gallery.kindsAria}>
+        <button
+          type="button"
+          aria-pressed={kind === null}
+          onClick={() => onKindChange(null)}
+          className={kind === null ? chipActive : chip}
+        >
+          {gallery.allKinds}
+        </button>
+        {kinds.map((id) => (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={kind === id}
+            onClick={() => onKindChange(kind === id ? null : id)}
+            className={kind === id ? chipActive : chip}
+          >
+            {gallery.kindNames[id] ?? id}
+          </button>
+        ))}
       </div>
     </section>
   );

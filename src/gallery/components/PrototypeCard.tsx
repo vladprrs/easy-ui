@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { Link } from "react-router";
-import type { PrototypeStatus, PrototypeSummary } from "../../api/client";
+import { prototypeKindOf, type PrototypeStatus, type PrototypeSummary } from "../../api/client";
 import { pillGhost } from "../../app/chrome";
 import { deviceNames, gallery } from "../../app/strings/gallery";
 import { loader } from "../../app/strings/player";
@@ -27,6 +27,7 @@ function PrototypeStatusBadge({ status }: { status: PrototypeStatus }): ReactEle
 
 export function PrototypeCard({ prototype, isOwner, systemName, previewsEnabled, onShare, onChanged }: PrototypeCardProps): ReactElement {
   const { latestVersion } = prototype;
+  const kind = prototypeKindOf(prototype);
   return <li className="group relative flex min-w-0 flex-col rounded-3xl bg-white ring-1 ring-eui-ink/5 transition hover:-translate-y-0.5 hover:shadow-xl focus-within:z-20 focus-within:shadow-xl motion-reduce:transform-none">
     <div className="relative overflow-hidden rounded-t-3xl bg-eui-lav p-4">
       {prototype.status === "archived"
@@ -65,7 +66,16 @@ export function PrototypeCard({ prototype, isOwner, systemName, previewsEnabled,
           <dt className="sr-only">{gallery.updatedLabel}</dt>
           <dd><time dateTime={prototype.updatedAt}>{formatGalleryUpdatedAt(prototype.updatedAt)}</time></dd>
         </div>
+        {kind === "product-flow" ? null : <div className="inline-flex min-w-0 items-center gap-1 rounded-full bg-eui-lilac-100 px-2.5 py-1" data-prototype-kind={kind}>
+          <dt className="sr-only">{gallery.kindLabel}</dt>
+          <dd className="max-w-full break-all">{gallery.kindNames[kind] ?? kind}</dd>
+        </div>}
+        {prototype.tags?.length ? <div className="inline-flex min-w-0 items-center gap-1 rounded-full bg-eui-lav px-2.5 py-1">
+          <dt className="sr-only">{gallery.tagsLabel}</dt>
+          <dd className="max-w-full break-all">{prototype.tags.join(", ")}</dd>
+        </div> : null}
       </dl>
+      {prototype.derivedFrom ? <p className="mt-2 min-w-0 text-xs text-eui-slate-500 [overflow-wrap:anywhere]">{gallery.derivedFrom(prototype.derivedFrom)}</p> : null}
       <div className="relative z-10 mt-auto flex flex-wrap items-center gap-2 pt-4">
         <Link className={`${pillGhost} bg-white ring-1 ring-eui-brand/30 text-eui-brand`} to={`/p/${prototype.id}/present`}>{gallery.presentLink}</Link>
         <Link className={pillGhost} to={`/p/${prototype.id}/cjm`}>CJM</Link>

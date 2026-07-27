@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { createPrototype, getCatalogManifest, listDesignSystems, listPrototypes } from "../api/client";
+import { createPrototype, getCatalogManifest, listDesignSystems, listPrototypes, type PrototypeKind } from "../api/client";
 import { useApi } from "../api/hooks";
 import { inputBase, pillGhost, pillPrimary } from "../app/chrome";
 import { gallery } from "../app/strings/gallery";
@@ -37,6 +37,7 @@ export function GalleryPage() {
   const catalog = useApi(getCatalogManifest, []);
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [tab, setTab] = useState<GalleryTab>("mine");
+  const [selectedKind, setSelectedKind] = useState<PrototypeKind | null>(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<GallerySort>("updated");
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null);
@@ -59,8 +60,8 @@ export function GalleryPage() {
     ? systems.filter((system) => hasUsableComponents(system.id, catalog.data.components))
     : [], [catalog, systems]);
   const visiblePrototypes = useMemo(() => prototypes.status === "ready"
-    ? filterAndSortPrototypes(prototypes.data, { tab, userId: user?.userId ?? "", systemId: selectedSystem, query, sort })
-    : [], [prototypes, query, selectedSystem, sort, tab, user?.userId]);
+    ? filterAndSortPrototypes(prototypes.data, { tab, userId: user?.userId ?? "", systemId: selectedSystem, query, sort, kind: selectedKind })
+    : [], [prototypes, query, selectedKind, selectedSystem, sort, tab, user?.userId]);
   const previewsEnabled = GALLERY_PREVIEWS_ENABLED && new URLSearchParams(location.search).get("galleryPreviews") !== "off";
   const loading = authLoading || prototypes.status === "loading" || designSystems.status === "loading" || catalog.status === "loading";
   const failed = prototypes.status === "error" || designSystems.status === "error" || catalog.status === "error";
@@ -105,10 +106,12 @@ export function GalleryPage() {
     {!loading && !failed && catalog.status === "ready" && !usableSystems.length ? <NoUsableSystems /> : null}
     {!loading && !failed ? <GalleryToolbar
       tab={tab}
-      onTabChange={setTab}
+      onTabChange={(next) => { setTab(next); setSelectedKind(null); }}
       systems={systems}
       selectedSystem={selectedSystem}
       onSystemChange={setSelectedSystem}
+      kind={selectedKind}
+      onKindChange={setSelectedKind}
       query={query}
       onQueryChange={setQuery}
       sort={sort}

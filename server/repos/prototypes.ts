@@ -18,11 +18,24 @@ export type ResolvedPin = Pin & { status: string };
 export type BundleReadiness = { resolvedPins: ResolvedPin[]; bundles: boolean; bundleStatus: "ready" | "failed"; warnings: { code: string; message: string }[]; errors: { code: string; message: string }[] };
 // Statuses that still render (K adds deprecated/superseded later; tolerated ahead of that migration).
 const RENDERABLE_PIN_STATUS = new Set(["active", "deprecated", "superseded"]);
-type PrototypeRow = { id:string; name:string; description:string|null; device:string; screen_count:number; head_rev:number; design_system:string; instance_id:string; created_at:string; updated_at:string; owner_id:string; status:"private"|"published"|"archived" };
+type PrototypeRow = { id:string; name:string; description:string|null; device:string; screen_count:number; head_rev:number; design_system:string; instance_id:string; created_at:string; updated_at:string; owner_id:string; status:"private"|"published"|"archived"; kind:string; tags:string|null; derived_from:string|null };
 type RevisionRow = { rev:number; doc:string; builtin_catalog_hash:string; design_system_meta_version:number|null; figma_json:string|null; message:string|null; created_at:string };
 
 const now = () => new Date().toISOString();
 const missing = () => new ApiError(404, "prototype_not_found", "Prototype not found");
+
+// --- Lifecycle metadata (миграция v16) ---
+export const DEFAULT_PROTOTYPE_KIND = "product-flow";
+export type PrototypeLifecyclePatch = { kind?:string; tags?:string[]; derivedFrom?:string|null };
+export type PrototypeLifecycle = { kind:string; tags:string[]; derivedFrom:string|null };
+/** Столбец `tags` хранит JSON-массив; повреждённое значение читается как «тегов нет». */
+const parseTags = (raw:string|null):string[] => {
+  if(!raw) return [];
+  try { const parsed=JSON.parse(raw); return Array.isArray(parsed)?parsed.filter((tag):tag is string=>typeof tag==="string"):[]; }
+  catch { return []; }
+};
+const lifecycleOf = (row:{kind?:string|null;tags?:string|null;derived_from?:string|null}):PrototypeLifecycle =>
+  ({ kind: row.kind ?? DEFAULT_PROTOTYPE_KIND, tags: parseTags(row.tags ?? null), derivedFrom: row.derived_from ?? null });
 export const parseStoredPrototypeDoc = (json:string,id:string,rev:number):PrototypeDoc => {
   try { return storedPrototypeDocSchema.parse(JSON.parse(json)); }
   catch { throw new ApiError(422,"invalid_stored_revision",`Stored prototype revision is invalid: ${id} rev ${rev}`); }
@@ -126,12 +139,13 @@ export class PrototypeRepo {
     return this.db.query(`SELECT a.id,a.sha256,a.mime,a.size FROM prototype_revision_assets pra
       JOIN assets a ON a.id=pra.asset_id WHERE pra.prototype_id=? AND pra.rev=? ORDER BY a.id`).all(id,rev) as {id:string;sha256:string;mime:string;size:number}[];
   }
-  create(doc: PrototypeDoc, message?: string,pins:ComponentPin[]=[],assetIds:string[]=[],figmaJson:string|null=null,ownerId:string|null=null): {id:string;rev:1} {
+  create(doc: PrototypeDoc, message?: string,pins:ComponentPin[]=[],assetIds:string[]=[],figmaJson:string|null=null,ownerId:string|null=null,lifecycle:PrototypeLifecyclePatch={}): {id:string;rev:1} {
     return this.db.transaction(() => {
       if (this.db.query("SELECT 1 ok FROM prototypes WHERE id=?").get(doc.id)) throw new ApiError(409,"already_exists","Prototype already exists");
       const at=now();
-      this.db.query(`INSERT INTO prototypes (id,name,description,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at,owner_id)
-        VALUES (?,?,?,?,?,1,?,?,?,?,?)`).run(doc.id,doc.name,doc.description??null,doc.device,doc.screens.length,doc.designSystem,crypto.randomUUID(),at,at,ownerId);
+      this.db.query(`INSERT INTO prototypes (id,name,description,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at,owner_id,kind,tags,derived_from)
+        VALUES (?,?,?,?,?,1,?,?,?,?,?,?,?,?)`).run(doc.id,doc.name,doc.description??null,doc.device,doc.screens.length,doc.designSystem,crypto.randomUUID(),at,at,ownerId,
+        lifecycle.kind??DEFAULT_PROTOTYPE_KIND,lifecycle.tags?.length?JSON.stringify(lifecycle.tags):null,lifecycle.derivedFrom??null);
       this.insertRevision(doc.id,1,doc,message??null,at,undefined,figmaJson);
       this.insertPins(doc.id,1,pins);
       this.insertAssetPins(doc.id,1,assetIds);
@@ -204,13 +218,17 @@ export class PrototypeRepo {
     this.db.query("DELETE FROM visual_baseline_sets WHERE prototype_id=?").run(id);
     this.db.query("DELETE FROM prototypes WHERE id=?").run(id);
   })(); }
-  list(principal?: Principal) {
+  // `kinds` — необязательный фильтр по lifecycle-виду (?kind= CSV на роуте). Пустой/отсутствующий
+  // список означает «все виды», поэтому старые клиенты видят ровно то же, что и раньше.
+  list(principal?: Principal, kinds?: readonly string[]) {
     const userId=principal?.kind==="user"?principal.userId:"";
-    return (this.db.query(`SELECT p.*,u.id owner_user_id,u.name owner_name,
+    const filter=kinds?.length?` AND COALESCE(p.kind,'${DEFAULT_PROTOTYPE_KIND}') IN (${kinds.map(()=>"?").join(",")})`:"";
+    const rows=this.db.query(`SELECT p.*,u.id owner_user_id,u.name owner_name,
       (SELECT MAX(version) FROM prototype_publishes x WHERE x.prototype_id=p.id) latest_version
       FROM prototypes p JOIN users u ON u.id=p.owner_id
-      WHERE ?=1 OR p.owner_id=? OR p.status='published' ORDER BY p.updated_at DESC,p.id`).all(principal?0:1,userId) as (PrototypeRow&{latest_version:number|null;owner_user_id:string;owner_name:string})[])
-      .map(r=>({id:r.id,name:r.name,description:r.description??undefined,device:r.device,designSystem:r.design_system,screenCount:r.screen_count,headRev:r.head_rev,latestVersion:r.latest_version,updatedAt:r.updated_at,status:r.status,owner:{id:r.owner_user_id,name:r.owner_name}}));
+      WHERE (?=1 OR p.owner_id=? OR p.status='published')${filter} ORDER BY p.updated_at DESC,p.id`)
+      .all(principal?0:1,userId,...(kinds??[])) as (PrototypeRow&{latest_version:number|null;owner_user_id:string;owner_name:string})[];
+    return rows.map(r=>({id:r.id,name:r.name,description:r.description??undefined,device:r.device,designSystem:r.design_system,screenCount:r.screen_count,headRev:r.head_rev,latestVersion:r.latest_version,updatedAt:r.updated_at,status:r.status,owner:{id:r.owner_user_id,name:r.owner_name},...lifecycleOf(r)}));
   }
   meta(id:string,principal?:Principal) {
     const access=principal?requirePrototypeRead(this.db,id,principal):{owner:true};
@@ -228,8 +246,23 @@ export class PrototypeRepo {
       renderable:{head:headClassification.renderable,published:publishedClassification?.renderable??null},
       renderErrors:{head:headClassification.error,published:publishedClassification?.error??null},
       status:r.status,owner:{id:r.owner_id??"",name:(this.db.query("SELECT name FROM users WHERE id=?").get(r.owner_id) as {name:string}|null)?.name??"Unknown"},
+      ...lifecycleOf(r),
       ...(access.owner?{figma:parseFigmaStored(this.revisionRow(id,r.head_rev).figma_json)}:{}),
     };
+  }
+  lifecycle(id:string):PrototypeLifecycle { return lifecycleOf(this.row(id)); }
+  /** Аддитивный патч: отсутствующее поле не меняется, `derivedFrom: null` очищает связь. */
+  setLifecycle(id:string,patch:PrototypeLifecyclePatch):PrototypeLifecycle {
+    const row=this.row(id);
+    if(patch.derivedFrom===id) throw new ApiError(422,"validation_failed","Prototype lifecycle is invalid",{issues:[{path:["derivedFrom"],message:"must not reference the prototype itself"}]});
+    const next:PrototypeLifecycle={
+      kind:patch.kind??row.kind??DEFAULT_PROTOTYPE_KIND,
+      tags:patch.tags??parseTags(row.tags),
+      derivedFrom:patch.derivedFrom===undefined?row.derived_from??null:patch.derivedFrom,
+    };
+    this.db.query("UPDATE prototypes SET kind=?,tags=?,derived_from=?,updated_at=? WHERE id=?")
+      .run(next.kind,next.tags.length?JSON.stringify(next.tags):null,next.derivedFrom,now(),id);
+    return next;
   }
   draft(id:string,principal?:Principal) { const r=this.row(id); const access=principal?requirePrototypeRead(this.db,id,principal):{owner:true}; const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev); const classification=this.classifyRevision(id,r.head_rev); return {doc:parseStoredPrototypeDoc(x.doc,id,x.rev),rev:x.rev,prototypeInstanceId:r.instance_id,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,r.head_rev),designSystemMetaVersion:x.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(access.owner?{figma:parseFigmaStored(x.figma_json)}:{})}; }
   revisions(id:string,limit:number,before?:number) { this.row(id); const sql=`SELECT rev,message,created_at FROM prototype_revisions WHERE prototype_id=? ${before!==undefined?"AND rev < ?":""} ORDER BY rev DESC LIMIT ?`; const rows=(before!==undefined?this.db.query(sql).all(id,before,limit):this.db.query(sql).all(id,limit)) as {rev:number;message:string|null;created_at:string}[]; return rows.map(r=>({rev:r.rev,message:r.message,createdAt:r.created_at})); }

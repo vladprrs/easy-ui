@@ -5757,6 +5757,16 @@
     "/api/prototypes": {
       "get": {
         "operationId": "get_prototypes",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -5765,6 +5775,16 @@
                   "items": {
                     "additionalProperties": {},
                     "properties": {
+                      "derivedFrom": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "designSystem": {
                         "type": "string"
                       },
@@ -5775,6 +5795,17 @@
                         "type": "number"
                       },
                       "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "product-flow",
+                          "composition-fixture",
+                          "component-gallery",
+                          "evidence",
+                          "visual-reference",
+                          "experiment"
+                        ],
                         "type": "string"
                       },
                       "latestVersion": {
@@ -5817,6 +5848,12 @@
                         ],
                         "type": "string"
                       },
+                      "tags": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
                       "updatedAt": {
                         "type": "string"
                       }
@@ -5831,7 +5868,10 @@
                       "latestVersion",
                       "updatedAt",
                       "status",
-                      "owner"
+                      "owner",
+                      "kind",
+                      "tags",
+                      "derivedFrom"
                     ],
                     "type": "object"
                   },
@@ -5850,9 +5890,19 @@
               }
             },
             "description": "method_not_allowed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
           }
         },
-        "summary": "List prototypes with head revision and latest published version.",
+        "summary": "List prototypes with head revision and latest published version; optional CSV lifecycle-kind filter.",
         "x-easyui-validated": false
       },
       "post": {
@@ -5934,6 +5984,11 @@
                   },
                   "__schema14": {
                     "pattern": "^asset_[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "__schema15": {
+                    "maxLength": 32,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
                     "type": "string"
                   },
                   "__schema2": {
@@ -6171,6 +6226,18 @@
                   }
                 },
                 "properties": {
+                  "derivedFrom": {
+                    "anyOf": [
+                      {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "doc": {
                     "additionalProperties": false,
                     "properties": {
@@ -6252,8 +6319,26 @@
                     ],
                     "type": "object"
                   },
+                  "kind": {
+                    "enum": [
+                      "product-flow",
+                      "composition-fixture",
+                      "component-gallery",
+                      "evidence",
+                      "visual-reference",
+                      "experiment"
+                    ],
+                    "type": "string"
+                  },
                   "message": {
                     "type": "string"
+                  },
+                  "tags": {
+                    "items": {
+                      "$ref": "#/$defs/__schema15"
+                    },
+                    "maxItems": 16,
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -6530,6 +6615,16 @@
                   },
                   "additionalProperties": {},
                   "properties": {
+                    "derivedFrom": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "designSystem": {
                       "type": "string"
                     },
@@ -6583,6 +6678,17 @@
                       "type": "number"
                     },
                     "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "product-flow",
+                        "composition-fixture",
+                        "component-gallery",
+                        "evidence",
+                        "visual-reference",
+                        "experiment"
+                      ],
                       "type": "string"
                     },
                     "latestVersion": {
@@ -6688,6 +6794,12 @@
                       ],
                       "type": "string"
                     },
+                    "tags": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
                     "updatedAt": {
                       "$ref": "#/$defs/__schema0"
                     },
@@ -6740,7 +6852,10 @@
                     "renderable",
                     "renderErrors",
                     "status",
-                    "owner"
+                    "owner",
+                    "kind",
+                    "tags",
+                    "derivedFrom"
                   ],
                   "type": "object"
                 }
@@ -7625,6 +7740,160 @@
         },
         "summary": "Export a prototype revision (owner draft or a published version) with its full dependency closure as a ZIP bundle.",
         "x-easyui-validated": false
+      }
+    },
+    "/api/prototypes/{id}/lifecycle": {
+      "post": {
+        "operationId": "post_prototypes_id_lifecycle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "maxLength": 32,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "properties": {
+                  "derivedFrom": {
+                    "anyOf": [
+                      {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "kind": {
+                    "enum": [
+                      "product-flow",
+                      "composition-fixture",
+                      "component-gallery",
+                      "evidence",
+                      "visual-reference",
+                      "experiment"
+                    ],
+                    "type": "string"
+                  },
+                  "tags": {
+                    "items": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "maxItems": 16,
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "derivedFrom": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "kind": {
+                      "enum": [
+                        "product-flow",
+                        "composition-fixture",
+                        "component-gallery",
+                        "evidence",
+                        "visual-reference",
+                        "experiment"
+                      ],
+                      "type": "string"
+                    },
+                    "tags": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "tags",
+                    "derivedFrom"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_not_found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "Patch prototype lifecycle metadata (kind/tags/derivedFrom); owner or admin only.",
+        "x-easyui-validated": true
       }
     },
     "/api/prototypes/{id}/publish": {

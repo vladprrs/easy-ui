@@ -5,7 +5,8 @@ import { designSystems } from "../../src/designSystems";
 import { inputPrototypeDocSchema, type PrototypeDoc } from "../../src/prototype/schema";
 import { validatePrototype } from "../../src/prototype/validate";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
-import { PrototypeRepo } from "../repos/prototypes";
+import { PrototypeRepo, type PrototypeLifecyclePatch } from "../repos/prototypes";
+import { parseWith, prototypeKindSchema, prototypeLifecycleSchema } from "../contracts";
 import { collectAndValidateAssetRefs, snapshotDefinitions } from "../validation";
 import { headScreenUrl, renderStatus, versionScreenUrl } from "./renderStatus";
 import { recordValidation } from "../validationRecords";
@@ -18,6 +19,24 @@ import { BundleClosure } from "../bundle/exporter";
 import { zipResponse } from "./bundles";
 
 const headScreens = (doc:PrototypeDoc) => doc.screens.map(s=>({id:s.id,url:headScreenUrl(doc.id,s.id)}));
+
+// Lifecycle-метаданные (миграция v16). На POST /api/prototypes они приезжают рядом с
+// doc/message/figma, поэтому там их сначала вычленяют, а тело /lifecycle валидируется целиком
+// (strictObject → неизвестный ключ даёт 422).
+const parseLifecycle = (raw:Record<string,unknown>):PrototypeLifecyclePatch => parseWith(prototypeLifecycleSchema,raw,"Prototype lifecycle is invalid");
+function lifecycleFields(body:Record<string,unknown>):PrototypeLifecyclePatch {
+  const raw:Record<string,unknown>={};
+  for(const key of ["kind","tags","derivedFrom"] as const) if(Object.hasOwn(body,key)) raw[key]=body[key];
+  return parseLifecycle(raw);
+}
+// `?kind=` — CSV-список видов (повторение параметра не поддерживается; см. docs/server-api.md).
+function kindFilter(url:URL):string[]|undefined {
+  const raw=url.searchParams.get("kind");
+  if(raw===null) return undefined;
+  const kinds=raw.split(",").map(part=>part.trim()).filter(part=>part.length>0);
+  if(!kinds.length) return undefined;
+  return parseWith(z.array(prototypeKindSchema),kinds,"Query parameters are invalid");
+}
 
 const bodyObject = z.record(z.string(),z.unknown());
 function objectBody(value:unknown): Record<string,unknown> { const p=bodyObject.safeParse(value); if(!p.success) throw new ApiError(400,"invalid_request","Request body must be an object"); return p.data; }
@@ -51,12 +70,12 @@ function recordPrototypeValidation(db:Database,id:string,rev:number,issues:{path
 
 // Create a prototype from a fully-formed document (extracted from the POST branch so the bundle
 // importer reuses the exact snapshot/validation/audit/ledger sequence). Behaviour of POST is unchanged.
-export async function createPrototypeFromDoc(db:Database,repo:PrototypeRepo,doc:PrototypeDoc,dataDir:string,ownerId:string,opts:{message?:string;figmaInput?:unknown}={}) {
+export async function createPrototypeFromDoc(db:Database,repo:PrototypeRepo,doc:PrototypeDoc,dataDir:string,ownerId:string,opts:{message?:string;figmaInput?:unknown;lifecycle?:PrototypeLifecyclePatch}={}) {
   const snapshot=await snapshotDefinitions(db,doc,dataDir);
   const warnings=validatePrototypeForSave(doc,snapshot.definitions);
   const assetIds=collectAndValidateAssetRefs(db,doc);
   const figma=parseFigmaInput(db,opts.figmaInput,"figma");
-  const result=repo.create(doc,opts.message,snapshot.pins,assetIds,figma,ownerId);
+  const result=repo.create(doc,opts.message,snapshot.pins,assetIds,figma,ownerId,opts.lifecycle);
   db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(ownerId,doc.id,result.rev);
   writeAuditEvent(db,{actorId:ownerId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:doc.id,detail:{rev:result.rev}});
   recordPrototypeValidation(db,doc.id,result.rev,warnings);
@@ -80,8 +99,8 @@ export async function updatePrototypeFromDoc(db:Database,repo:PrototypeRepo,id:s
 export async function routePrototypes(request:Request,db:Database,segments:string[],principal:Principal,dataDir=process.env.DATA_DIR||"data",serveDist?:string):Promise<Response> {
   const repo=new PrototypeRepo(db);
   if(segments.length===1) {
-    if(request.method==="GET") return json(repo.list(principal),200,noStore);
-    if(request.method==="POST") { const actor=requireUser(principal); const b=objectBody(await readJson(request)); const doc=parseDoc(b.doc); const result=await createPrototypeFromDoc(db,repo,doc,dataDir,actor.userId,{message:message(b),figmaInput:b.figma}); return json({...result,screens:headScreens(doc)},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(result.id)}`}); }
+    if(request.method==="GET") return json(repo.list(principal,kindFilter(new URL(request.url))),200,noStore);
+    if(request.method==="POST") { const actor=requireUser(principal); const b=objectBody(await readJson(request)); const doc=parseDoc(b.doc); const result=await createPrototypeFromDoc(db,repo,doc,dataDir,actor.userId,{message:message(b),figmaInput:b.figma,lifecycle:lifecycleFields(b)}); return json({...result,screens:headScreens(doc)},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(result.id)}`}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }
   const id=segments[1]!; const tail=segments.slice(2);
@@ -136,6 +155,16 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
   }
   if(tail[0]==="publish"&&tail.length===1) { if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed"); const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); const result=repo.publish(id,baseRev(b),message(b)); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.version.published",subjectType:"prototype",subjectId:id,detail:result}); const published=repo.version(id,result.version); return json({...result,screens:published.doc.screens.map(s=>({id:s.id,url:versionScreenUrl(id,result.version,s.id)}))},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(id)}/versions/${result.version}`}); }
   if(tail[0]==="status"&&tail.length===1) { if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed"); const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); if(b.status!=="private"&&b.status!=="published"&&b.status!=="archived") throw new ApiError(422,"validation_failed","Invalid prototype status",{issues:[{path:["status"],message:"must be private, published, or archived"}]}); const result=repo.setStatus(id,b.status); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.status.changed",subjectType:"prototype",subjectId:id,detail:result}); return json(result,200,noStore); }
+  if(tail[0]==="lifecycle"&&tail.length===1) {
+    if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed");
+    const actor=requirePrototypeOwner(db,id,principal);
+    const patch=parseLifecycle(objectBody(await readJson(request)));
+    // Пустой патч — read-back без записи и без audit-события.
+    if(!Object.keys(patch).length) return json(repo.lifecycle(id),200,noStore);
+    const result=repo.setLifecycle(id,patch);
+    writeAuditEvent(db,{actorId:actor.userId,action:"prototype.lifecycle.changed",subjectType:"prototype",subjectId:id,detail:result});
+    return json(result,200,noStore);
+  }
   if(tail[0]==="versions") {
     if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed");
     requirePrototypeRead(db,id,principal);

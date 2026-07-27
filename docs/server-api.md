@@ -58,9 +58,9 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 
 | Метод и путь | Тело / ответ |
 |---|---|
-| `GET /prototypes` | свои прототипы любого статуса + чужие `published`; `PrototypeListItem[]`: `{id,name,description?,device,designSystem,screenCount,headRev,latestVersion,status,owner:{id,name},updatedAt}` |
-| `POST /prototypes` | `{doc,message?}` → 201 `{id,rev,warnings,screens}` и `Location` |
-| `GET /prototypes/:id` | `{id,name,designSystem,headRev,latestVersion:number|null,versions:PrototypeVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable}` |
+| `GET /prototypes?kind=` | свои прототипы любого статуса + чужие `published`; `PrototypeListItem[]`: `{id,name,description?,device,designSystem,screenCount,headRev,latestVersion,status,owner:{id,name},updatedAt,kind,tags,derivedFrom}`; `kind` — CSV-фильтр по видам (см. [Lifecycle](#lifecycle-прототипа)) |
+| `POST /prototypes` | `{doc,message?,kind?,tags?,derivedFrom?}` → 201 `{id,rev,warnings,screens}` и `Location` |
+| `GET /prototypes/:id` | `{id,name,designSystem,headRev,latestVersion:number|null,versions:PrototypeVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable,kind,tags,derivedFrom}` |
 | `GET /prototypes/:id/draft` | `{doc,rev,builtinCatalogHash,componentManifestHash,components:ComponentPin[],assets:AssetPin[]}` |
 | `GET /prototypes/:id/screens/:screenId/render-status?version=n\|rev=n` | Готовность экрана к рендеру — см. [Render status](#render-status) |
 | `PUT /prototypes/:id` | `{doc,message?,baseRev}` → `{rev,warnings,screens}`; `doc.id` обязан совпадать с `:id` |
@@ -71,6 +71,7 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 | `POST /prototypes/:id/restore` | `{rev,baseRev}` → `{rev}` (номер новой head-ревизии) |
 | `POST /prototypes/:id/publish` | `{message?,baseRev}` → 201 `{version,rev,screens}` и `Location` |
 | `POST /prototypes/:id/status` | owner-only `{status:"private"|"published"|"archived"}`; граф `private↔published`, `private|published→archived`, `archived→private` |
+| `POST /prototypes/:id/lifecycle` | owner-only `{kind?,tags?,derivedFrom?}` → `{kind,tags,derivedFrom}`; аддитивный патч, см. [Lifecycle](#lifecycle-прототипа) |
 | `GET /prototypes/:id/versions` | `PrototypeVersion[]`: `{version,rev,publishedAt}` |
 | `GET /prototypes/:id/versions/:version` | `{version,rev,doc,builtinCatalogHash,componentManifestHash,components:ComponentPin[],assets:AssetPin[],publishedAt}`; immutable |
 | `POST /prototypes/:id/share` | `{version,ttlSeconds}` → 201 `{id,prototypeId,version,url,createdAt,expiresAt,activeSessions}`; bearer-token присутствует только в одноразово возвращённом `url` |
@@ -80,6 +81,27 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 `PUT /prototypes/:id` — это осознанный checkpoint, а не no-op. Даже если `doc` не изменился, успешный запрос с актуальным `baseRev` создаёт новую ревизию: сервер заново разрешает и фиксирует пины active custom-бандлов, текущей версии темы дизайн-системы и ассетов, а также сохраняет переданный `message`. CAS по `baseRev` действует как обычно. Сервер намеренно не дедуплицирует такие ревизии, потому что повторное сохранение выражает явное решение зафиксировать актуальное окружение документа.
 
 `ComponentPin` — `{id,name,version,bundleUrl,bundleHash}`. `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её render/validation-контракт. Дескриптор включает обязательный `renderContractVersion` (сейчас `4`), actions, имена/descriptions/events/slots, input JSON Schema пропсов, `layout`/`layoutNeutral`, host-примитивы, включая `@eui/FlowRoot`, и resolved spacing scale из **pinned** `design_system_meta_version`. Restore копирует версию темы исходной ревизии, поэтому восстанавливает и соответствующий hash. Хеш остаётся детектором несовместимости, а не pin: рантайм не сравнивает и не блокирует mismatch.
+
+### Lifecycle прототипа
+
+Миграция **v16** добавила в `prototypes` три колонки: `kind TEXT NOT NULL DEFAULT 'product-flow'`, `tags TEXT` (JSON-массив slug'ов, `NULL` == тегов нет) и `derived_from TEXT`. Изменение аддитивное: строки, созданные до миграции, читаются как `product-flow` с пустыми тегами, а клиент, который никогда не шлёт `kind`, работает как раньше.
+
+`kind` ∈ `product-flow | composition-fixture | component-gallery | evidence | visual-reference | experiment`.
+
+- Значения перечислены **только** в контракте (`prototypeKindSchema` в `server/contracts.ts`, построен из `PROTOTYPE_KINDS` в `src/api/client.ts`). Колонка намеренно **без** `CHECK`: SQLite принял бы column-level `CHECK` в `ADD COLUMN`, но тогда любое расширение таксономии потребовало бы полной перестройки таблицы. Точка контроля — zod на входе API; запись мимо API (ручной SQL, миграции) не проверяется.
+- `tags` — до 16 уникальных slug'ов (`^[a-z0-9]+(?:-[a-z0-9]+)*$`, ≤ 32 символов).
+- `derivedFrom` — id прототипа-источника, до 128 символов. **Без FK и без проверки существования**: линия происхождения переживает удаление источника. Запрещена только ссылка на самого себя (`422 validation_failed`).
+
+`POST /prototypes/:id/lifecycle` — owner/admin (та же authz, что у `/status`), тело `strictObject` `{kind?,tags?,derivedFrom?}`:
+
+- отсутствующее поле не меняется; `derivedFrom: null` очищает связь; `tags: []` очищает теги;
+- пустое тело `{}` — read-back без записи и без audit-события;
+- успешная запись бампает `updated_at` и пишет audit `prototype.lifecycle.changed`;
+- неизвестный ключ, неизвестный `kind`, «грязный» тег или > 16 тегов → `422 validation_failed`; не-владелец → `403 forbidden`; отсутствующий прототип → `404 prototype_not_found`; любой метод, кроме POST → `405`.
+
+`GET /prototypes?kind=` фильтрует список: значение — **CSV** (`?kind=evidence,experiment`); повторение параметра не поддерживается (побеждает последнее вхождение). Пустое значение (`?kind=`) означает «фильтра нет». Неизвестный вид в списке → `422 validation_failed`.
+
+Галерея использует ту же таксономию: служебные виды (`composition-fixture`, `component-gallery`, `evidence`, `visual-reference`) скрыты из табов «Мои»/«Общие» и живут в табе «Служебные»; `derivedFrom` показывается строкой на карточке.
 
 ### Diff ревизий
 
@@ -401,7 +423,11 @@ Cursor — каноническая строка `<ISO-8601>~<asset_id>`, нап
 | `POST /components/:id/versions/:version/screenshot` | `{props?\|exampleName?, viewport, deviceScaleFactor?, theme?, waitForFonts?}` → `202 {jobId}`; `props` и `exampleName` взаимоисключающие |
 | `GET /screenshot-jobs/:jobId` | `{status: queued\|running\|done\|error, result?, error?}` |
 
-`result` (при `done`) — discriminated union. Image-ветка сохраняет прежние поля и получает discriminator: `{kind:"image", imageUrl, assetId, width, height, consoleErrors, pageErrors, rendererBuild, browserVersion, componentPins?|bundleHash?}`. Geometry-ветка:
+`result` (при `done`) — discriminated union. Image-ветка сохраняет прежние поля и получает discriminator: `{kind:"image", imageUrl, assetId, width, height, consoleErrors, pageErrors, rendererBuild, browserVersion, componentPins?|bundleHash?}`.
+
+**Capture-контракт (волна 7.1, аддитивно).** Обе ветки результата дополнительно несут `captureClean`, `productErrors[]`, `infraNoise[]`, `runtimeWarnings[]`; image-ветка ещё и `imageProduced: true`. `consoleErrors`/`pageErrors` остаются прежними (полный сырой список) — старые клиенты не ломаются. Классификация — единый allowlist в `server/screenshot/noise.ts`: `favicon.ico`, origin'ы браузерных расширений (`chrome-|moz-|safari-web-extension://`), `ERR_NETWORK_CHANGED`, `ResizeObserver loop …`, а также любое сообщение, все абсолютные URL которого ведут не на capture origin. Всё остальное — `productErrors`, то есть дефект самого прототипа; `captureClean === productErrors.length === 0`. `runtimeWarnings` — console-warning'и страницы (`[overlay] …` и подобные), они никогда не являются причиной провала.
+
+Geometry-ветка:
 
 ```json
 {
@@ -419,9 +445,27 @@ Cursor — каноническая строка `<ISO-8601>~<asset_id>`, нап
     "layoutContext":{"display":"flex","flexDirection":"column","flexWrap":"nowrap","rowGap":"12px","columnGap":"12px"}
   }],
   "truncated": false,
-  "total": 2
+  "total": 2,
+  "safeArea": {"top":0,"right":0,"bottom":0,"left":0},
+  "roleRects": {
+    "panel": {"x":0,"y":0,"width":390,"height":844,"source":"key","key":"root"},
+    "region:header": {"x":0,"y":0,"width":390,"height":56,"source":"key","key":"head"},
+    "region:footer": {"x":0,"y":760,"width":390,"height":84,"source":"selector"}
+  },
+  "frame": {"x":0,"y":0,"width":390,"height":844,"source":"surface"},
+  "content": {"x":0,"y":0,"width":390,"height":844},
+  "scroll": {"width":390,"height":1180},
+  "viewportOwnership": {
+    "frame": {"width":390,"height":844}, "content": {"width":390,"height":844}, "scroll": {"width":390,"height":1180},
+    "scrollable": true,
+    "owners": [{"role":"region:header","areaPct":6.64,"heightPct":6.64},{"role":"region:footer","areaPct":9.95,"heightPct":9.95}],
+    "unownedPct": 83.41
+  },
+  "issues": [{"code":"content-clipped-by-frame","severity":"warn","message":"…","detail":{"overflowRight":0,"overflowBottom":336}}]
 }
 ```
+
+Поля `safeArea`/`roleRects`/`frame`/`content`/`scroll`/`viewportOwnership`/`issues` добавлены волной 7.1 и аддитивны: прежние `rects`/`truncated`/`total` не изменились. `roleRects` покрывает роли `panel`, `frame`, `region:header`, `region:footer`, `region:statusBar`; каждая опциональна. Источник роли (`source`) — `key` (rect авторского элемента: `panel` = root экрана, регионы — из `region`-разметки спеки), `selector` (DOM-слот `[data-eui-region=…]`, `[data-eui-stage-viewport]`, `[data-eui-content-scroller]`) или `surface` (fallback фрейма на `#eui-capture-surface`). `safeArea` читается из `env(safe-area-inset-*)` временным probe-элементом (в capture-окружении обычно нули). `viewportOwnership` показывает, какую долю фрейма занимает каждая роль (`areaPct`/`heightPct`) и сколько остаётся контенту (`unownedPct`), плюс `scrollable` (scrollHeight выше фрейма). `issues[]` — структурные проверки (все `severity:"warn"`, ничего не блокируют): `content-clipped-by-frame` (контент выходит за фрейм), `overlapping-regions` (две роли пересекаются), `footer-owns-page` (футер занимает ≥50% высоты фрейма). Анализ чистый и живёт в `analyzeGeometry` (`src/capture/geometry.mjs`), сам замер — в `collectGeometry`.
 
 Worker обходит production-маркеры `span[data-eui-key]` после `__EUI_CAPTURE_READY__`. `instance` — нулевой ordinal одинакового `key` в DOM-порядке (в том числе для repeat), `parentKey`/`parentInstance` указывают ближайший ancestor-маркер, `domIndex` — общий DOM-порядок. Координаты округлены до 0.01 CSS px и отсчитаны от border box `#eui-capture-surface`; `dpr` не масштабирует их. Rect — union видимых box'ов DOM-поддерева маркера. Портал вне этого поддерева не включается; Overlay-layer включается, потому что его маркеры находятся внутри capture surface; fixed box целиком вне surface отбрасывается. Clipping/scroll не обрезает исходный layout rect.
 
@@ -429,7 +473,9 @@ Worker обходит production-маркеры `span[data-eui-key]` после 
 
 Layout owner вычисляется только из DOM: для непосредственных child-маркеров slot-группы берётся ближайший общий non-`display:contents` предок внутри parent-маркера. Fragment, несколько DOM roots или переход через marker делают owner неоднозначным, поэтому `layoutContext:null`. Из однозначного owner возвращаются computed `display`, `flexDirection`, `flexWrap`, `rowGap`, `columnGap`.
 
-`driver.mjs geometry <protoId> <screenId>` печатает rect и layoutContext. Observed clearance между соседними rect по оси и CSS gap owner'а выводятся только когда definition декларирует `layout.flow`, направление статически известно, owner подтверждает non-wrapped flex нужной оси и группа не содержит repeat/named slots. Во всех остальных случаях печатается `gaps: n/a (<причина>)`. Observed clearance намеренно может отличаться от CSS gap из-за margins.
+`driver.mjs geometry <protoId> <screenId>` печатает rect, layoutContext, роли, safeArea, ownership и `issues`. Observed clearance между соседними rect по оси и CSS gap owner'а выводятся только когда definition декларирует `layout.flow`, направление статически известно, owner подтверждает non-wrapped flex нужной оси и группа не содержит repeat/named slots. Во всех остальных случаях печатается `gaps: n/a (<причина>)`. Observed clearance намеренно может отличаться от CSS gap из-за margins.
+
+**CLI-контракт `driver.mjs` (волна 7.1/7.2).** `snap` завершается с кодом `0`, если PNG создан на всех экранах и `productErrors` пуст; `2`, если PNG создан, но есть product-ошибки; `1`, если PNG не создан вовсе. Инфраструктурный сбой (job `error`/`timeout`, 5xx) повторяется автоматически — ровно 2 попытки на экран; product-ошибки не повторяются никогда. `status` и `snap` принимают `--all-screens`, любой verb — `--json` (машинный документ в stdout вместо человеческих строк). Логин выполняется один раз на процесс (`scripts/easyui-auth.mjs`), GET-запросы и постановка screenshot-job'а ретраятся на 5xx с backoff 500/1500 мс.
 
 Для component screenshot `exampleName` выбирается строго из `definition.examples`: неизвестное имя или отсутствие `examples` → `422 unknown_example`, одновременные `props` и `exampleName` → `400 invalid_request`. После выбора набор проходит обычную валидацию props и участвует в `propsHash`.
 

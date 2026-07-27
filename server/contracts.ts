@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { inputPrototypeDocSchema, REGION_KINDS } from "../src/prototype/schema";
+import { PROTOTYPE_KINDS } from "../src/api/client";
 import { atomicLevels, layoutSpacingProps, spaceTokens } from "../src/designSystems/types";
 import { importReportSchema } from "../src/bundle/schema";
 import { ApiError } from "./http";
@@ -507,26 +508,43 @@ const issueSchema = validationIssueSchema.loose();
 const screenUrlSchema = z.object({ id: z.string(), url: z.string() });
 const casBody = { baseRev: positiveInt, message: z.string().optional() };
 
+// --- Prototype lifecycle metadata (миграция v16) ---
+// Таксономия `kind` живёт в одном месте (src/api/client.ts) и здесь превращается в zod-enum:
+// столбец `prototypes.kind` намеренно без CHECK, поэтому именно контракт — точка контроля.
+export const prototypeKindSchema = z.enum(PROTOTYPE_KINDS);
+export const prototypeTagSchema = slugString.max(32);
+export const PROTOTYPE_TAGS_LIMIT = 16;
+export const prototypeLifecycleSchema = z.strictObject({
+  kind: prototypeKindSchema.optional(),
+  tags: z.array(prototypeTagSchema).max(PROTOTYPE_TAGS_LIMIT).optional(),
+  derivedFrom: z.string().min(1).max(128).nullable().optional(),
+});
+const prototypeLifecycleResponseSchema = z.strictObject({
+  kind: prototypeKindSchema, tags: z.array(z.string()), derivedFrom: z.string().nullable(),
+});
+
 // --- Prototypes CRUD / revisions / versions / publish / restore ---
 
 const prototypeListItemSchema = z.looseObject({
   id: z.string(), name: z.string(), designSystem: z.string(), device: z.string(),
   screenCount: z.number(), headRev: z.number(), latestVersion: z.number().nullable(), updatedAt: isoDate,
   status:z.enum(["private","published","archived"]),owner:z.strictObject({id:z.string(),name:z.string()}),
+  kind: prototypeKindSchema, tags: z.array(z.string()), derivedFrom: z.string().nullable(),
 });
 
 export const listPrototypesContract = registerContract({
   method: "GET", path: "/api/prototypes",
-  summary: "List prototypes with head revision and latest published version.",
+  summary: "List prototypes with head revision and latest published version; optional CSV lifecycle-kind filter.",
+  query: z.object({ kind: z.string().optional() }),
   responseSchema: z.array(prototypeListItemSchema),
-  errors: [errorCatalog.methodNotAllowed],
+  errors: [errorCatalog.validationFailed, errorCatalog.methodNotAllowed],
 });
 
 export const createPrototypeContract = registerContract({
   method: "POST", path: "/api/prototypes",
   summary: "Create a prototype from a document (revision 1); validates against the design-system catalog.",
   status: 201,
-  requestSchema: z.object({ doc: inputPrototypeDocSchema, message: z.string().optional(), figma: figmaSchema.optional() }),
+  requestSchema: z.object({ doc: inputPrototypeDocSchema, message: z.string().optional(), figma: figmaSchema.optional(), ...prototypeLifecycleSchema.shape }),
   responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
   errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }],
 });
@@ -544,8 +562,18 @@ export const getPrototypeContract = registerContract({
     publishedVersion: z.number().nullable(), renderable: renderableSchema,
     renderErrors:z.object({head:prototypeRenderErrorSchema.nullable(),published:prototypeRenderErrorSchema.nullable()}), figma: figmaResponseSchema.optional(),
     status:z.enum(["private","published","archived"]),owner:z.strictObject({id:z.string(),name:z.string()}),
+    kind: prototypeKindSchema, tags: z.array(z.string()), derivedFrom: z.string().nullable(),
   }),
   errors: [errorCatalog.prototypeNotFound],
+});
+
+export const setPrototypeLifecycleContract = registerContract({
+  method: "POST", path: "/api/prototypes/{id}/lifecycle",
+  summary: "Patch prototype lifecycle metadata (kind/tags/derivedFrom); owner or admin only.",
+  validated: true,
+  requestSchema: prototypeLifecycleSchema,
+  responseSchema: prototypeLifecycleResponseSchema,
+  errors: [errorCatalog.invalidRequest, { status: 403, code: "forbidden" }, errorCatalog.prototypeNotFound, errorCatalog.validationFailed],
 });
 
 export const savePrototypeContract = registerContract({
