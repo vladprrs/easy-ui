@@ -17,7 +17,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] | component-move <id> --design-system <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] | status <prototypeId> [screenId] [--all-screens]\nevery verb accepts --json; snap exits 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG)";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] | component-move <id> --design-system <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id>\nevery verb accepts --json; snap exits 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -86,6 +86,10 @@ export const flagSpecs = Object.freeze({
   shoot: { ...jsonFlag },
   snap: { ...jsonFlag, ...allScreensFlag },
   status: { ...jsonFlag, ...allScreensFlag },
+  readiness: { ...jsonFlag },
+  publish: { ...jsonFlag, "--verify": { value: false, key: "verify" }, "--force": { value: false, key: "force" } },
+  usages: { ...jsonFlag, "--tree": { value: false, key: "tree" } },
+  audit: { ...jsonFlag, "--design-system": { value: true, key: "designSystem" } },
 });
 
 const ranges = Object.freeze({
@@ -103,6 +107,10 @@ const ranges = Object.freeze({
   shoot: [1, 2],
   snap: [1, 2],
   status: [1, 2],
+  readiness: [1, 1],
+  publish: [1, 1],
+  usages: [1, 1],
+  audit: [0, 0],
 });
 
 export function parseArgs(argv) {
@@ -134,6 +142,7 @@ export function parseArgs(argv) {
   }
   if (positionals.length < range[0] || positionals.length > range[1]) invalid(`invalid arguments for ${command}`);
   if (command === "component-move" && flags.designSystem === undefined) invalid("component-move requires --design-system <id>");
+  if (command === "audit" && flags.designSystem === undefined) invalid("audit requires --design-system <id>");
   if (command === "status" && positionals.length < 2 && !flags.allScreens) invalid("status requires <screenId> or --all-screens");
   return { cmd: command, args: positionals, flags };
 }
@@ -615,6 +624,176 @@ async function runCheck(args, flags) {
   if (rows.some((row) => !["pass"].includes(row.status))) throw new CliError("visual check failed");
 }
 
+/** Gates the server reports as hard failures; `--verify` refuses to publish while any exists. */
+export function failingGates(report) {
+  return (report?.gates ?? []).filter((gate) => gate.status === "fail");
+}
+
+/**
+ * readiness contract: 2 when the server says the prototype is not publishable or any gate
+ * failed (a product-level problem with a full report), 0 otherwise. Transport errors are 1
+ * and never reach here.
+ */
+export function readinessExitCode(report) {
+  if (report?.publishable === false) return EXIT.productErrors;
+  if ((report?.blocking ?? []).length) return EXIT.productErrors;
+  return failingGates(report).length ? EXIT.productErrors : EXIT.ok;
+}
+
+export function readinessLines(report) {
+  const header = `readiness ${report.prototypeId} rev=${report.rev} publishable=${report.publishable ? "yes" : "no"} blocking=${report.blocking.length ? report.blocking.join(",") : "-"}`;
+  return [
+    header,
+    "gate\tstatus\tsummary",
+    ...report.gates.map((gate) => `${gate.id}\t${gate.status}\t${gate.summary}`),
+  ];
+}
+
+async function fetchReadiness(id) {
+  return requireOk("readiness", await call("GET", `/prototypes/${encodeURIComponent(id)}/readiness`));
+}
+
+async function runReadiness(args) {
+  const [id] = args;
+  const readiness = await fetchReadiness(id);
+  const exitCode = readinessExitCode(readiness);
+  report(readinessLines(readiness), { command: "readiness", exitCode, ...readiness });
+  if (exitCode !== EXIT.ok) {
+    throw new CliError(`prototype ${id} is not ready to publish: ${(readiness.blocking.length ? readiness.blocking : failingGates(readiness).map((gate) => gate.id)).join(", ")}`, { exitCode });
+  }
+}
+
+async function runPublish(args, flags) {
+  const [id] = args;
+  const encoded = encodeURIComponent(id);
+  const readiness = await fetchReadiness(id);
+  const failing = failingGates(readiness);
+  if (flags.verify && failing.length) {
+    report(
+      ["publish refused by --verify", ...readinessLines(readiness)],
+      { command: "publish", prototypeId: id, published: false, exitCode: EXIT.productErrors, refusedBy: failing.map((gate) => gate.id), readiness },
+    );
+    throw new CliError(`publish refused: failing gates ${failing.map((gate) => gate.id).join(", ")}`, { exitCode: EXIT.productErrors });
+  }
+  const response = await call("POST", `/prototypes/${encoded}/publish`, { baseRev: readiness.rev, ...(flags.force ? { force: true } : {}) });
+  if (response.status === 409 && errorCode(response) === "publish_blocked") {
+    const blocked = response.json.error.report ?? readiness;
+    report(
+      ["publish blocked by readiness gates", ...readinessLines(blocked)],
+      { command: "publish", prototypeId: id, published: false, exitCode: EXIT.productErrors, blocking: blocked.blocking ?? [], readiness: blocked },
+    );
+    throw new CliError(`publish blocked: ${(blocked.blocking ?? []).join(", ") || "readiness gates"}; re-run with --force to override`, { exitCode: EXIT.productErrors });
+  }
+  const published = await requireOk("publish", response, [201]);
+  const base = API.replace(/\/api$/, "");
+  report(
+    [
+      `published ${id} version ${published.version} (rev ${published.rev})`,
+      ...(published.screens ?? []).map((screen) => `screen:  ${base}${screen.url}`),
+    ],
+    {
+      command: "publish", prototypeId: id, published: true, exitCode: EXIT.ok,
+      version: published.version, rev: published.rev, forced: flags.force === true, verified: flags.verify === true,
+      screens: (published.screens ?? []).map((screen) => ({ ...screen, url: `${base}${screen.url}` })),
+      readiness,
+    },
+  );
+}
+
+function usageLines(usages) {
+  const lines = [`usages ${usages.componentId} (${usages.name}) versions=${usages.versionsInUse.join(",") || "-"} safeToRemove=${usages.safeToRemove ? "yes" : "no"}`];
+  lines.push(`head usages: ${usages.currentHeadUsages.length}`);
+  for (const usage of usages.currentHeadUsages) {
+    const screens = usage.screens.map((screen) => `${screen.screenId}[${screen.elementKeys.join(",")}]`).join(" ") || "-";
+    lines.push(`  ${usage.prototypeId} rev=${usage.rev} v${usage.componentVersion} kind=${usage.kind} screens: ${screens}`);
+  }
+  lines.push(`immutable usages: ${usages.immutableUsages.length}`);
+  for (const usage of usages.immutableUsages) lines.push(`  ${usage.prototypeId} version ${usage.version} v${usage.componentVersion}`);
+  return lines;
+}
+
+function treeLines(tree, nodes = tree.nodes, depth = 0) {
+  if (depth === 0) {
+    return [
+      `usages ${tree.componentId} (${tree.name}) versions=${tree.versionsInUse.join(",") || "-"} safeToRemove=${tree.safeToRemove ? "yes" : "no"}`,
+      ...treeLines(tree, tree.nodes, 1),
+      `immutable usages: ${tree.immutableUsages.length}`,
+      ...tree.immutableUsages.map((usage) => `  ${usage.prototypeId} version ${usage.version} v${usage.componentVersion}`),
+    ];
+  }
+  return nodes.flatMap((node) => [`${"  ".repeat(depth)}${node.kind} ${node.label}`, ...treeLines(tree, node.children ?? [], depth + 1)]);
+}
+
+async function runUsages(args, flags) {
+  const [id] = args;
+  const query = flags.tree ? "?format=tree" : "";
+  const usages = await requireOk("usages", await call("GET", `/components/${encodeURIComponent(id)}/usages${query}`));
+  report(flags.tree ? treeLines(usages) : usageLines(usages), { command: "usages", ...usages });
+}
+
+/**
+ * Catalog-wide sweep: one row per published component of the design system, joining the
+ * manifest (version, deprecated, architecture metadata) with the usage index (which head
+ * revisions pin it). Pure so the exit-code mapping is testable without a server.
+ */
+export function auditRows(manifest, usages) {
+  const byId = new Map((usages.components ?? []).map((entry) => [entry.componentId, entry]));
+  return (manifest.components ?? []).map((component) => {
+    const usage = byId.get(component.id);
+    return {
+      id: component.id,
+      name: component.name,
+      version: component.version,
+      status: component.deprecated ? "deprecated" : "active",
+      deprecated: component.deprecated === true,
+      scope: component.scope ?? null,
+      canonicalFor: component.canonicalFor ?? null,
+      replacement: component.replacement ?? null,
+      headUsageCount: usage?.headUsageCount ?? component.headUsageCount ?? 0,
+      prototypes: (usage?.prototypes ?? []).map((prototype) => prototype.prototypeId),
+    };
+  });
+}
+
+/** Deprecated components still pinned by a head revision are the actionable finding. */
+export function auditFindings(rows) {
+  return {
+    deprecatedInUse: rows.filter((row) => row.deprecated && row.headUsageCount > 0).map((row) => row.id),
+    unused: rows.filter((row) => row.headUsageCount === 0).map((row) => row.id),
+  };
+}
+
+export const auditExitCode = (findings) => (findings.deprecatedInUse.length ? EXIT.productErrors : EXIT.ok);
+
+function auditLines(designSystem, rows, findings) {
+  return [
+    `audit ${designSystem}: ${rows.length} components, ${findings.deprecatedInUse.length} deprecated in use, ${findings.unused.length} unused`,
+    "component\tversion\tstatus\tscope\tcanonicalFor\theadUsages",
+    ...rows.map((row) => `${row.id}\tv${row.version}\t${row.status}\t${row.scope ?? "-"}\t${row.canonicalFor?.join(",") || "-"}\t${row.headUsageCount}`),
+    ...(findings.deprecatedInUse.length ? [`deprecated with head usages: ${findings.deprecatedInUse.join(", ")}`] : []),
+    ...(findings.unused.length ? [`no head usages: ${findings.unused.join(", ")}`] : []),
+  ];
+}
+
+async function runAudit(flags) {
+  const encoded = encodeURIComponent(flags.designSystem);
+  const [manifest, usages] = await Promise.all([
+    call("GET", `/catalog/manifest?designSystem=${encoded}`),
+    call("GET", `/catalog/usages?designSystem=${encoded}`),
+  ]);
+  if (manifest.status === 404 || usages.status === 404) {
+    throw new CliError(`design system ${flags.designSystem} not found; hint: run 'driver.mjs get design-systems'`);
+  }
+  const rows = auditRows(
+    await requireOk("catalog manifest", manifest),
+    await requireOk("catalog usages", usages),
+  );
+  const findings = auditFindings(rows);
+  const exitCode = auditExitCode(findings);
+  report(auditLines(flags.designSystem, rows, findings), { command: "audit", designSystem: flags.designSystem, exitCode, components: rows, findings });
+  if (exitCode !== EXIT.ok) throw new CliError(`deprecated components are still used by head revisions: ${findings.deprecatedInUse.join(", ")}`, { exitCode });
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const { cmd, args, flags } = parseArgs(argv);
   jsonMode = flags.json === true;
@@ -711,6 +890,10 @@ export async function main(argv = process.argv.slice(2)) {
     if (errors.length) throw new CliError(`browser errors:\n${errors.join("\n")}`);
   } else if (cmd === "snap") await runSnap(args);
   else if (cmd === "status") await runStatus(args, flags);
+  else if (cmd === "readiness") await runReadiness(args);
+  else if (cmd === "publish") await runPublish(args, flags);
+  else if (cmd === "usages") await runUsages(args, flags);
+  else if (cmd === "audit") await runAudit(flags);
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : null;

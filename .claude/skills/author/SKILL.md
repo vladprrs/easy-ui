@@ -166,7 +166,7 @@ curl -u "$EASYUI_LEGACY_BASIC_AUTH" -b /tmp/easyui.cookies -X POST \
 
 ### Версии и публикация прототипа
 
-Каждое сохранение — неизменяемая ревизия (драфт). Плеер показывает драфт сразу — publish не обязателен. Зафиксировать версию (v1, v2, …): `POST /prototypes/:id/publish` c `{baseRev}` через тот же cookie jar, `Origin` и, если включён, внешний Basic-заголовок.
+Каждое сохранение — неизменяемая ревизия (драфт). Плеер показывает драфт сразу — publish не обязателен. Зафиксировать версию (v1, v2, …): `node driver.mjs publish <id> --verify` (драйвер сам подставляет `baseRev` головы) или сырым `POST /prototypes/:id/publish` c `{baseRev}` через тот же cookie jar, `Origin` и, если включён, внешний Basic-заголовок. Подробности — «Готовность, публикация, аудит».
 
 ## Сценарий 2: кастомный компонент + прототип
 
@@ -251,6 +251,29 @@ node driver.mjs check my-flow --threshold 0.1
 Viewport выбирается для каждого экрана так: `--viewport` → `screen.canvas` (округление и clamp) → canonical device (`mobile 390×844`, `tablet 834×1112`) → desktop `1280×800`. Соблюдать лимит 20 Mpx с учётом `dsf²`.
 
 `check` последовательно сравнивает каждый member активного набора с текущей draft-ревизией и завершается с non-zero при любом несовпадении/ошибке. `--json` даёт машинный результат.
+
+## Готовность, публикация, аудит
+
+```bash
+node driver.mjs readiness my-flow                    # таблица гейтов; --json — полный отчёт
+node driver.mjs publish my-flow --verify             # отказ, если хоть один гейт fail
+node driver.mjs publish my-flow --force              # публиковать вопреки блокирующим гейтам
+node driver.mjs usages rating-stars --tree           # где компонент используется (head + immutable)
+node driver.mjs audit --design-system yandex-pay     # свод по каталогу: версии, deprecated, usages
+```
+
+| Verb | Флаги | API | Exit 0 | Exit 2 | Exit 1 |
+|---|---|---|---|---|---|
+| `readiness <protoId>` | `--json` | `GET /prototypes/:id/readiness` | `publishable: true` | не publishable или есть гейт `fail` | транспорт/404/5xx |
+| `publish <protoId>` | `--verify`, `--force`, `--json` | `GET …/readiness` + `POST …/publish` | опубликовано (печатает версию и URL экранов) | `--verify` нашёл `fail`-гейт (публикации не было) или сервер ответил `409 publish_blocked` | транспорт, `revision_conflict`, `already_published` |
+| `usages <componentId>` | `--tree`, `--json` | `GET /components/:id/usages[?format=tree]` | всегда при успешном ответе | — | транспорт/404 |
+| `audit --design-system <ds>` | `--json` | `GET /catalog/manifest` + `GET /catalog/usages` | deprecated-компонентов в использовании нет | есть deprecated-компоненты, которые всё ещё пинуются головными ревизиями | транспорт, неизвестная дизайн-система |
+
+- `readiness` печатает по строке на гейт (`id`, `status` из `pass|warn|fail|unknown`, `summary`) плюс заголовок `publishable=…`/`blocking=…`. Гейты, при которых publish блокируется, включаются на **сервере** переменной `EASYUI_PUBLISH_GATES` (CSV, `id` — блокировать при `fail`, `id:warn` — уже при `warn`); по умолчанию пусто, и отчёт носит информационный характер. `unknown` не блокирует никогда.
+- `publish --verify` — клиентская проверка: она отказывает при любом `fail`-гейте, даже если сервер этот гейт не включил. `--force` уходит в тело как `{force: true}` и переживает серверную блокировку (но не `--verify`: сначала снять `--verify`).
+- При `409 publish_blocked` драйвер печатает **отчёт из ответа**, а не сырую ошибку.
+- `usages` показывает head-использования (что сломается сейчас) и immutable-использования (пины опубликованных версий — они делают компонент неудаляемым). `--tree` печатает прототип → экран → элемент.
+- `audit` показывает по компоненту: версию, `active|deprecated`, `scope`/`canonicalFor` (если объявлены) и число головных использований; отдельными строками — deprecated в использовании и компоненты без использований.
 
 ## Инспекция и удаление
 

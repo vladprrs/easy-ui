@@ -2,12 +2,18 @@ import { createTestHandler } from "./test-auth";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
+import type { Database } from "bun:sqlite";
 import { openDatabase } from "./db";
 import { ensureBootstrapAdmin } from "./users";
 import { prototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
 import { ScreenshotService, type RunJob } from "./screenshot/service";
 import {
   assertViewportPixelBudget,
+  auditExitCode,
+  auditFindings,
+  auditRows,
+  failingGates,
+  readinessExitCode,
   snapExitCode,
   summarizeCapture,
   analyzeGeometryGaps,
@@ -15,6 +21,7 @@ import {
   buildBaselinePlan,
   parseDiffArguments,
   resolveViewport,
+  type DriverReadinessGate,
 } from "../.claude/skills/author/driver.mjs";
 
 const driver = resolve(".claude/skills/author/driver.mjs");
@@ -263,6 +270,196 @@ describe("author driver snap contract", () => {
   });
 });
 
+// --- Wave 7.2 verbs: readiness / publish --verify / usages / audit --------------------------
+
+/** A document whose only image references an uploaded asset, so the asset gate can be broken. */
+async function assetDoc(id: string, assetId: string): Promise<PrototypeDoc> {
+  const base = await fixture(id);
+  const screen = base.screens[0]!;
+  return {
+    ...base,
+    screens: [{ ...screen, spec: { root: "image", elements: { image: { type: "Image", props: { src: { $asset: assetId }, alt: "Fixture" } } } } }],
+  } as PrototypeDoc;
+}
+
+async function uploadAsset(api: string): Promise<string> {
+  const response = await fetch(`${api}/assets`, { method: "POST", headers: { "content-type": "image/png" }, body: new Blob([png() as BlobPart]) });
+  expect(response.status).toBe(201);
+  return (await response.json() as { id: string }).id;
+}
+
+/** Referenced asset disappears from the registry — `assets` gate turns `fail`. */
+function dropAssets(db: Database) {
+  db.run("DELETE FROM prototype_revision_assets");
+  db.run("DELETE FROM assets");
+}
+
+const DEFINITION_META = JSON.stringify({ description: "seeded", events: [], slots: [], scope: "screen", canonicalFor: ["payment-success"] });
+
+/** Seeds a published component (optionally with a later deprecated version) directly in the DB. */
+function seedComponent(db: Database, id: string, name: string, { deprecated = false } = {}) {
+  db.query("INSERT INTO components (id,name,head_rev,design_system,deleted_at,owner_id,created_at,updated_at) VALUES (?,?,?,'yandex-pay',NULL,'user_admin','now','now')")
+    .run(id, name, deprecated ? 2 : 1);
+  const versions: [number, string][] = deprecated ? [[1, "active"], [2, "deprecated"]] : [[1, "active"]];
+  for (const [version, status] of versions) {
+    db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES (?,?,'export const definition={}','yandex-pay','now')").run(id, version);
+    db.query(`INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at)
+      VALUES (?,?,?,?,'',?,'sh','bh',2,'now')`).run(id, version, version, status, DEFINITION_META);
+  }
+}
+
+function seedPinnedPrototype(db: Database, id: string, componentId: string, componentName: string) {
+  const doc = JSON.stringify({
+    version: 1, id, name: id, designSystem: "yandex-pay", device: "mobile", startScreen: "home",
+    screens: [{ id: "home", name: "HOME", spec: { root: "root", elements: { root: { type: componentName, props: {} } } } }],
+  });
+  db.query(`INSERT INTO prototypes (id,name,device,screen_count,head_rev,design_system,instance_id,owner_id,status,kind,created_at,updated_at)
+    VALUES (?,?,'mobile',1,1,'yandex-pay',?,'user_admin','private','product-flow','now','now')`).run(id, id, `instance-${id}`);
+  db.query("INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,created_at) VALUES (?,1,?,'h','now')").run(id, doc);
+  db.query("INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version) VALUES (?,1,?,1)").run(id, componentId);
+}
+
+describe("author driver readiness and publish verbs", () => {
+  test("readiness prints a gate table, exits 0 when publishable and 2 when a gate fails", async () => {
+    const { api, db } = await setup();
+    await saveDoc(api, await fixture("ready-clean"));
+    const human = await run(api, ["readiness", "ready-clean"]);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).toContain("gate\tstatus\tsummary");
+    expect(human.stdout).toContain("publishable=yes");
+    expect(human.stdout).toMatch(/architecture\t(pass|warn)\t/);
+
+    const assetId = await uploadAsset(api);
+    await saveDoc(api, await assetDoc("ready-broken", assetId));
+    dropAssets(db);
+    const broken = await run(api, ["readiness", "ready-broken", "--json"]);
+    expect(broken.exitCode).toBe(2);
+    const payload = JSON.parse(broken.stdout) as { exitCode: number; publishable: boolean; gates: { id: string; status: string }[] };
+    expect(payload.exitCode).toBe(2);
+    expect(payload.gates.find((gate) => gate.id === "assets")).toMatchObject({ status: "fail" });
+    expect(broken.stderr).toContain("not ready to publish");
+  });
+
+  test("publish --verify refuses a failing prototype without publishing, --force overrides a blocked gate", async () => {
+    const { api, db } = await setup();
+    const assetId = await uploadAsset(api);
+    await saveDoc(api, await assetDoc("verify-broken", assetId));
+    dropAssets(db);
+
+    const refused = await run(api, ["publish", "verify-broken", "--verify", "--json"]);
+    expect(refused.exitCode).toBe(2);
+    const payload = JSON.parse(refused.stdout) as { published: boolean; refusedBy: string[]; exitCode: number };
+    expect(payload).toMatchObject({ published: false, exitCode: 2 });
+    expect(payload.refusedBy).toContain("assets");
+    expect(await (await fetch(`${api}/prototypes/verify-broken/versions`)).json()).toEqual([]);
+
+    // The same prototype publishes once the server-side gate is overridden with --force.
+    process.env.EASYUI_PUBLISH_GATES = "assets";
+    try {
+      const blocked = await run(api, ["publish", "verify-broken", "--json"]);
+      expect(blocked.exitCode).toBe(2);
+      const blockedPayload = JSON.parse(blocked.stdout) as { published: boolean; blocking: string[] };
+      expect(blockedPayload).toMatchObject({ published: false });
+      expect(blockedPayload.blocking).toContain("assets");
+      expect(blocked.stderr).toContain("--force");
+
+      const forced = await run(api, ["publish", "verify-broken", "--force", "--json"]);
+      expect(forced.exitCode).toBe(0);
+      expect(JSON.parse(forced.stdout)).toMatchObject({ published: true, version: 1, forced: true });
+    } finally {
+      delete process.env.EASYUI_PUBLISH_GATES;
+    }
+  });
+
+  test("publish reports the new version and surfaces 409 publish_blocked as a report", async () => {
+    const { api } = await setup();
+    await saveDoc(api, await fixture("publish-ok"));
+    const published = await run(api, ["publish", "publish-ok", "--verify", "--json"]);
+    expect(published.exitCode).toBe(0);
+    expect(JSON.parse(published.stdout)).toMatchObject({ command: "publish", published: true, version: 1, rev: 1, verified: true });
+
+    // Head is now identical to the published version: the publishDiff gate warns, and a
+    // `warn` threshold turns that warning into a server-side 409 publish_blocked.
+    process.env.EASYUI_PUBLISH_GATES = "publishDiff:warn";
+    try {
+      const blocked = await run(api, ["publish", "publish-ok"]);
+      expect(blocked.exitCode).toBe(2);
+      expect(blocked.stdout).toContain("publish blocked by readiness gates");
+      expect(blocked.stdout).toContain("publishDiff");
+    } finally {
+      delete process.env.EASYUI_PUBLISH_GATES;
+    }
+  });
+});
+
+describe("author driver usages and audit verbs", () => {
+  test("usages prints head and immutable usages, --tree switches the server format", async () => {
+    const { api, db } = await setup();
+    seedComponent(db, "stars", "Stars");
+    seedPinnedPrototype(db, "checkout", "stars", "Stars");
+    const flat = await run(api, ["usages", "stars"]);
+    expect(flat.exitCode).toBe(0);
+    expect(flat.stdout).toContain("head usages: 1");
+    expect(flat.stdout).toContain("checkout rev=1 v1");
+    expect(flat.stdout).toContain("immutable usages: 0");
+
+    const tree = await run(api, ["usages", "stars", "--tree", "--json"]);
+    expect(tree.exitCode).toBe(0);
+    expect(JSON.parse(tree.stdout)).toMatchObject({ command: "usages", format: "tree", nodes: [{ kind: "prototype", id: "checkout" }] });
+
+    const humanTree = await run(api, ["usages", "stars", "--tree"]);
+    expect(humanTree.stdout).toContain("prototype checkout");
+    expect(humanTree.stdout).toContain("element root");
+  });
+
+  test("audit sweeps a design system and exits 2 on deprecated components still used at head", async () => {
+    const { api, db } = await setup();
+    seedComponent(db, "stars", "Stars");
+    seedComponent(db, "old-card", "OldCard", { deprecated: true });
+    seedComponent(db, "orphan", "Orphan");
+    seedPinnedPrototype(db, "checkout", "stars", "Stars");
+    seedPinnedPrototype(db, "legacy", "old-card", "OldCard");
+
+    const result = await run(api, ["audit", "--design-system", "yandex-pay", "--json"]);
+    expect(result.exitCode).toBe(2);
+    const payload = JSON.parse(result.stdout) as {
+      exitCode: number;
+      components: { id: string; version: number; status: string; scope: string | null; headUsageCount: number }[];
+      findings: { deprecatedInUse: string[]; unused: string[] };
+    };
+    expect(payload.exitCode).toBe(2);
+    expect(payload.components.find((row) => row.id === "old-card")).toMatchObject({ status: "deprecated", version: 1, headUsageCount: 1, scope: "screen" });
+    expect(payload.components.find((row) => row.id === "stars")).toMatchObject({ status: "active", headUsageCount: 1 });
+    expect(payload.findings).toEqual({ deprecatedInUse: ["old-card"], unused: ["orphan"] });
+
+    const human = await run(api, ["audit", "--design-system", "yandex-pay"]);
+    expect(human.exitCode).toBe(2);
+    expect(human.stdout).toContain("component\tversion\tstatus\tscope\tcanonicalFor\theadUsages");
+    expect(human.stdout).toContain("deprecated with head usages: old-card");
+    expect(human.stdout).toContain("no head usages: orphan");
+
+    const missing = await run(api, ["audit", "--design-system", "missing-system"]);
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain("get design-systems");
+  });
+
+  test("parser guards the new verbs", async () => {
+    const { api } = await setup();
+    const noSystem = await run(api, ["audit"]);
+    expect(noSystem.exitCode).toBe(1);
+    expect(noSystem.stderr).toContain("audit requires --design-system");
+    const extra = await run(api, ["readiness", "a", "b"]);
+    expect(extra.exitCode).toBe(1);
+    expect(extra.stderr).toContain("invalid arguments for readiness");
+    const unknownFlag = await run(api, ["usages", "stars", "--wat"]);
+    expect(unknownFlag.exitCode).toBe(1);
+    expect(unknownFlag.stderr).toContain("unknown flag for usages");
+    const badVerb = await run(api, ["publish"]);
+    expect(badVerb.exitCode).toBe(1);
+    expect(badVerb.stderr).toContain("invalid arguments for publish");
+  });
+});
+
 describe("author driver planners", () => {
   test("capture summaries classify results and map onto exit codes", () => {
     expect(summarizeCapture({ imageProduced: true, captureClean: true, productErrors: [], infraNoise: ["favicon"], runtimeWarnings: ["w"] }))
@@ -323,6 +520,42 @@ describe("author driver planners", () => {
       { ...plan.surfaces[0], assetId: "asset-b" },
       { ...plan.surfaces[1], assetId: "asset-a" },
     ]);
+  });
+
+  test("readiness exit codes follow publishable, blocking and failing gates", () => {
+    const gates: DriverReadinessGate[] = [{ id: "schema", status: "pass", summary: "clean" }, { id: "assets", status: "warn", summary: "assets_unpinned" }];
+    expect(readinessExitCode({ publishable: true, blocking: [], gates })).toBe(0);
+    expect(readinessExitCode({ publishable: true, blocking: [], gates: [...gates, { id: "pins", status: "fail", summary: "pins_unrenderable" }] })).toBe(2);
+    expect(readinessExitCode({ publishable: false, blocking: ["assets"], gates })).toBe(2);
+    expect(failingGates({ gates: [...gates, { id: "pins", status: "fail", summary: "x" }] }).map((gate) => gate.id)).toEqual(["pins"]);
+    expect(failingGates(undefined)).toEqual([]);
+  });
+
+  test("audit joins the manifest with the usage index and flags deprecated components in use", () => {
+    const manifest = {
+      components: [
+        { id: "a", name: "A", version: 3, deprecated: false, scope: "block", canonicalFor: ["cta"], headUsageCount: 9 },
+        { id: "b", name: "B", version: 1, deprecated: true, replacement: "a", headUsageCount: 9 },
+        { id: "c", name: "C", version: 2, deprecated: true },
+      ],
+    };
+    const usages = {
+      components: [
+        { componentId: "a", headUsageCount: 2, prototypes: [{ prototypeId: "p1" }, { prototypeId: "p2" }] },
+        { componentId: "b", headUsageCount: 1, prototypes: [{ prototypeId: "p3" }] },
+        { componentId: "c", headUsageCount: 0, prototypes: [] },
+      ],
+    };
+    const rows = auditRows(manifest, usages);
+    // The usage index wins over the manifest counter: both come from the same cache, but the
+    // index is the one that carries the prototype list the row prints.
+    expect(rows[0]).toMatchObject({ id: "a", status: "active", scope: "block", canonicalFor: ["cta"], headUsageCount: 2, prototypes: ["p1", "p2"] });
+    expect(rows[1]).toMatchObject({ id: "b", status: "deprecated", replacement: "a", headUsageCount: 1, scope: null });
+    expect(rows[2]).toMatchObject({ id: "c", status: "deprecated", headUsageCount: 0 });
+    const findings = auditFindings(rows);
+    expect(findings).toEqual({ deprecatedInUse: ["b"], unused: ["c"] });
+    expect(auditExitCode(findings)).toBe(2);
+    expect(auditExitCode({ deprecatedInUse: [] })).toBe(0);
   });
 
   test("plans all diff argument forms", () => {

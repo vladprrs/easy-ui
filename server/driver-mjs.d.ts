@@ -43,4 +43,33 @@ declare module "*/author/driver.mjs" {
   }
   export function summarizeCapture(result: Record<string, unknown> | null | undefined): DriverCaptureSummary;
   export function snapExitCode(rows: readonly { imageProduced: boolean; productErrors: readonly string[] }[]): 0 | 1 | 2;
+  export interface DriverReadinessGate { id: string; status: "pass" | "warn" | "fail" | "unknown"; summary: string }
+  export interface DriverReadinessReport {
+    prototypeId: string;
+    rev: number;
+    gates: DriverReadinessGate[];
+    blocking: string[];
+    publishable: boolean;
+  }
+  export function failingGates(report: Partial<DriverReadinessReport> | null | undefined): DriverReadinessGate[];
+  export function readinessExitCode(report: Partial<DriverReadinessReport> | null | undefined): 0 | 1 | 2;
+  export function readinessLines(report: DriverReadinessReport): string[];
+  export interface DriverAuditRow {
+    id: string;
+    name: string;
+    version: number;
+    status: "active" | "deprecated";
+    deprecated: boolean;
+    scope: string | null;
+    canonicalFor: string[] | null;
+    replacement: string | null;
+    headUsageCount: number;
+    prototypes: string[];
+  }
+  export function auditRows(
+    manifest: { components?: readonly Record<string, unknown>[] },
+    usages: { components?: readonly { componentId: string; headUsageCount: number; prototypes?: readonly { prototypeId: string }[] }[] },
+  ): DriverAuditRow[];
+  export function auditFindings(rows: readonly DriverAuditRow[]): { deprecatedInUse: string[]; unused: string[] };
+  export function auditExitCode(findings: { deprecatedInUse: readonly string[] }): 0 | 2;
 }
