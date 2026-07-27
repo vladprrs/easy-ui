@@ -5,6 +5,7 @@ import { GalleryPage } from "../gallery/GalleryPage";
 import { LibraryPage } from "../library/LibraryPage";
 import { ComponentPage } from "../library/componentPage";
 import { VisualPage } from "../visual/VisualPage";
+import { AssetsPage } from "../assets/AssetsPage";
 import { SmokeSpec } from "../smoke/SmokeSpec";
 import { PlayerShell } from "../player/PlayerShell";
 import { PresentShell } from "../player/PresentShell";
@@ -57,6 +58,7 @@ export const routeObjects: RouteObject[] = [{
       { path: "library", element: <LibraryPage /> },
       { path: "library/c/:componentId", element: <ComponentPage /> },
       { path: "visual", element: <VisualPage /> },
+      { path: "assets", element: <AssetsPage /> },
       { path: "debug", element: <SmokeSpec /> },
       { path: "users", element: <UsersPage /> },
       {

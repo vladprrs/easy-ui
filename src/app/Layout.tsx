@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useAuth } from "../auth";
 import { pillGhost } from "./chrome";
 import { appShell } from "./strings/common";
+import { assetsStrings } from "./strings/assets";
 
 function LayoutContent() {
   // На /p/* единственный хедер — PrototypeChrome (WF-4): глобальный app-header
@@ -18,6 +19,7 @@ function LayoutContent() {
           <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/" end>{appShell.navGallery}</NavLink>
           <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/library">{appShell.navLibrary}</NavLink>
           <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/visual">{appShell.navVisual}</NavLink>
+          <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/assets">{assetsStrings.navLabel}</NavLink>
           <a className="hover:text-eui-brand" href="/api/openapi.json">{appShell.navApiDocs}</a>
           {import.meta.env.DEV ? <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/debug">{appShell.navDebug}</NavLink> : null}
           {user?.isAdmin ? <NavLink className={({ isActive }) => isActive ? "border-b-2 border-eui-brand pb-0.5 font-bold text-eui-brand" : "hover:text-eui-brand"} to="/users">Пользователи</NavLink> : null}
