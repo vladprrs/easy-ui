@@ -1,0 +1,126 @@
+{
+  "components": [
+    {
+      "id": "demo-action-footer",
+      "name": "DemoActionFooter",
+      "designSystem": "sdk-demo",
+      "version": 3,
+      "bundleUrl": "/api/components/demo-action-footer/versions/3/bundle.js",
+      "bundleHash": "0000000000000000000000000000000000000000000000000000000000000003",
+      "hostAbiVersion": 2,
+      "description": "Pinned footer with a primary action and optional secondary links.",
+      "atomicLevel": "molecule",
+      "interactive": true,
+      "events": ["press", "secondaryPress"],
+      "eventPayloads": {
+        "press": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": { "itemId": { "type": "string" } },
+          "required": ["itemId"],
+          "additionalProperties": false
+        },
+        "secondaryPress": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      "capabilities": { "typedEvents": true },
+      "slots": [],
+      "propsJsonSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "primaryLabel": { "type": "string", "minLength": 1 },
+          "disabled": { "type": "boolean", "default": false },
+          "links": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": { "id": { "type": "string" }, "label": { "type": "string" } },
+              "required": ["id", "label"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["primaryLabel"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "demo-badge",
+      "name": "DemoBadge",
+      "designSystem": "sdk-demo",
+      "version": 1,
+      "bundleUrl": "/api/components/demo-badge/versions/1/bundle.js",
+      "bundleHash": "0000000000000000000000000000000000000000000000000000000000000001",
+      "hostAbiVersion": 2,
+      "description": "Small status badge.",
+      "atomicLevel": "atom",
+      "events": [],
+      "slots": [],
+      "propsJsonSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" },
+          "count": { "anyOf": [{ "type": "number" }, { "type": "string" }] },
+          "meta": { "type": "object", "properties": {}, "additionalProperties": { "type": "string" } },
+          "origin": { "type": "array", "prefixItems": [{ "type": "number" }, { "type": "number" }] }
+        },
+        "required": ["text"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "demo-nav-bar",
+      "name": "DemoNavBar",
+      "designSystem": "sdk-demo",
+      "version": 2,
+      "bundleUrl": "/api/components/demo-nav-bar/versions/2/bundle.js",
+      "bundleHash": "0000000000000000000000000000000000000000000000000000000000000002",
+      "hostAbiVersion": 2,
+      "description": "Source-exact navigation bar with a title and an optional back affordance.",
+      "atomicLevel": "organism",
+      "urlProps": ["logoUrl"],
+      "events": [],
+      "slots": [],
+      "propsJsonSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "minLength": 1 },
+          "tone": { "type": "string", "enum": ["light", "dark"] },
+          "showBack": { "type": "boolean", "default": true },
+          "logoUrl": { "type": "string", "pattern": "^\\/api\\/assets\\/asset_[a-f0-9]{64}$" }
+        },
+        "required": ["title", "tone"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "demo-screen-shell",
+      "name": "DemoScreenShell",
+      "designSystem": "sdk-demo",
+      "version": 1,
+      "bundleUrl": "/api/components/demo-screen-shell/versions/1/bundle.js",
+      "bundleHash": "0000000000000000000000000000000000000000000000000000000000000004",
+      "hostAbiVersion": 2,
+      "description": "Named-slot shell: header, content and footer regions of a screen.",
+      "atomicLevel": "template",
+      "layoutNeutral": true,
+      "events": [],
+      "capabilities": { "namedSlots": true },
+      "slots": ["header", "content", "footer"],
+      "propsJsonSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": { "background": { "type": "string", "enum": ["surface", "elevated"] } },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

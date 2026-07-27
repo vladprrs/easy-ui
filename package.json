@@ -16,6 +16,8 @@
     "validate:templates": "tsx scripts/validate-templates.ts",
     "generate:openapi": "tsx scripts/generate-openapi.ts",
     "verify:openapi": "tsx scripts/check-openapi-drift.ts",
+    "generate:sdk": "tsx scripts/generate-sdk.ts",
+    "verify:sdk": "tsc --noEmit -p sdk/tsconfig.json && tsx scripts/check-sdk-drift.ts && vitest run --config sdk/vitest.config.ts",
     "check:css": "node scripts/check-css.mjs",
     "preview": "vite preview",
     "server:dev": "ADMIN_NAME=admin ADMIN_PASSWORD=easy-ui-dev-password bun --watch server/main.ts",
@@ -24,7 +26,7 @@
     "migration:v15:report": "bun server/cli/migrationV15Report.ts",
     "serve": "SERVE_DIST=dist PORT=4173 bun server/main.ts",
     "e2e": "playwright test",
-    "verify": "npm run typecheck && npm run server:typecheck && npm run lint && npm run test -- --run && npm run server:test && npm run validate:templates && npm run verify:openapi && npm run build && npm run check:css"
+    "verify": "npm run typecheck && npm run server:typecheck && npm run lint && npm run test -- --run && npm run server:test && npm run validate:templates && npm run verify:openapi && npm run verify:sdk && npm run build && npm run check:css"
   },
   "dependencies": {
     "@json-render/core": "0.19.0",
