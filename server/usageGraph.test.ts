@@ -73,6 +73,28 @@ describe("component usage graph", () => {
     expect(componentUsages(db, "orphan")).toMatchObject({ currentHeadUsages: [], immutableUsages: [], versionsInUse: [], safeToRemove: true });
   });
 
+  // Компонент, живущий только внутри композиции, не встречается в авторском документе —
+  // пин на него есть, а drill-down без раскрытия композиции был бы пустым.
+  test("resolves element keys of a component used only inside a pinned composition", async () => {
+    const { db } = await fixture();
+    component(db, "inner-badge", "InnerBadge");
+    db.query("INSERT INTO compositions (id,name,head_rev,design_system,deleted_at,owner_id,created_at,updated_at) VALUES ('sum','Summary',1,'yandex-pay',NULL,'user_admin','now','now')").run();
+    db.query(`INSERT INTO composition_revisions (composition_id,rev,doc,design_system,created_at) VALUES ('sum',1,?,'yandex-pay','now')`)
+      .run(JSON.stringify({ version: 1, name: "Summary", params: {}, slots: [], spec: { root: "box", elements: { box: { type: "VfBox", props: {} }, badge: { type: "InnerBadge", props: {} } } } }));
+    db.query("INSERT INTO composition_publishes (composition_id,version,rev,status,source_hash,published_at) VALUES ('sum',1,1,'active','sh','now')").run();
+    prototype(db, "host", 1, JSON.stringify({
+      version: 1, id: "host", name: "host", designSystem: "yandex-pay", device: "mobile", startScreen: "home",
+      screens: [{ id: "home", name: "HOME", spec: { root: "root", elements: { root: { type: "VfBox", props: {} }, comp: { type: "@eui/Composition", props: { composition: "sum" } } } } }],
+    }));
+    pin(db, "host", 1, "inner-badge", 1);
+    db.query("INSERT INTO prototype_revision_compositions (prototype_id,rev,composition_id,composition_version) VALUES ('host',1,'sum',1)").run();
+
+    const report = componentUsages(db, "inner-badge");
+    expect(report.currentHeadUsages[0]!.screens).toEqual([{ screenId: "home", screenName: "HOME", elementKeys: ["comp$badge"] }]);
+    expect(report.safeToRemove).toBeFalse();
+    db.close();
+  });
+
   test("tree format groups head usages as prototype → screen → element", async () => {
     const { db } = await fixture();
     component(db, "stars", "Stars");

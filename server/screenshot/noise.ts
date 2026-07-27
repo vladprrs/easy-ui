@@ -18,6 +18,10 @@ export const INFRA_NOISE_PATTERNS: readonly RegExp[] = Object.freeze([
   /\bERR_NETWORK_CHANGED\b/,
   /ResizeObserver loop completed with undelivered notifications/i,
   /ResizeObserver loop limit exceeded/i,
+  // The capture sandbox deliberately blocks the session probe: a capture principal has no
+  // user session, and `AuthProvider` already treats the rejection as "anonymous". The
+  // resulting request failure is the sandbox's own doing, never a defect of the prototype.
+  /\/api\/auth\/me\b/,
 ]);
 
 const URL_PATTERN = /\bhttps?:\/\/[^\s)"']+/gi;

@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { ApiError } from "./http";
 import { DEFAULT_PROTOTYPE_KIND } from "../src/api/client";
+import { COMPOSITION_TYPE } from "../src/catalog/hostPrimitives/composition.definition";
 
 // Граф использования компонентов (волна 3 §3.1). Источник правды — таблица пинов
 // `prototype_revision_components`: она пишется на save/publish и точно отражает, какая
@@ -41,11 +42,37 @@ export interface ComponentUsageTree extends Omit<ComponentUsageReport, "currentH
 interface StoredScreen { id?: unknown; name?: unknown; spec?: { elements?: Record<string, { type?: unknown }> } }
 
 /**
- * Ключи элементов головного документа, чей `type` совпадает с именем компонента.
- * Разбор намеренно оборонительный (без zod): даже если сохранённый документ не проходит
- * строгую схему, использование компонента остаётся видимым — это диагностический граф.
+ * Внутренние элементы композиций, закреплённых за ревизией: `id композиции → ключи
+ * элементов нужного типа`. Нужно, потому что документ хранится авторским — компонент,
+ * использованный только внутри композиции, в самом документе не встречается, хотя пин
+ * на него есть (пины считаются с раскрытого документа). Без этого drill-down по такому
+ * компоненту был бы пустым.
  */
-function screensUsing(docJson: string, componentName: string): ComponentScreenUsage[] {
+function compositionInnerKeys(db: Database, prototypeId: string, rev: number, componentName: string): Map<string, string[]> {
+  const rows = db.query(`SELECT prc.composition_id compositionId,cr.doc
+    FROM prototype_revision_compositions prc
+    JOIN composition_publishes cp ON cp.composition_id=prc.composition_id AND cp.version=prc.composition_version
+    JOIN composition_revisions cr ON cr.composition_id=cp.composition_id AND cr.rev=cp.rev
+    WHERE prc.prototype_id=? AND prc.rev=?`).all(prototypeId, rev) as { compositionId: string; doc: string }[];
+  const result = new Map<string, string[]>();
+  for (const row of rows) {
+    let doc: { spec?: { elements?: Record<string, { type?: unknown }> } };
+    try { doc = JSON.parse(row.doc) as typeof doc; } catch { continue; }
+    const elements = doc?.spec?.elements;
+    if (!elements || typeof elements !== "object") continue;
+    const keys = Object.entries(elements).filter(([, element]) => element?.type === componentName).map(([key]) => key).sort();
+    if (keys.length) result.set(row.compositionId, keys);
+  }
+  return result;
+}
+
+/**
+ * Ключи элементов головного документа, чей `type` совпадает с именем компонента, плюс
+ * ключи внутри раскрытых композиций. Разбор намеренно оборонительный (без zod): даже
+ * если сохранённый документ не проходит строгую схему, использование компонента остаётся
+ * видимым — это диагностический граф.
+ */
+function screensUsing(docJson: string, componentName: string, compositionKeys?: Map<string, string[]>): ComponentScreenUsage[] {
   let doc: { screens?: unknown };
   try { doc = JSON.parse(docJson) as { screens?: unknown }; } catch { return []; }
   if (!Array.isArray(doc.screens)) return [];
@@ -54,8 +81,14 @@ function screensUsing(docJson: string, componentName: string): ComponentScreenUs
     const elements = raw?.spec?.elements;
     if (!elements || typeof elements !== "object") continue;
     const elementKeys = Object.entries(elements)
-      .filter(([, element]) => element?.type === componentName)
-      .map(([key]) => key)
+      .flatMap(([key, element]) => {
+        if (element?.type === componentName) return [key];
+        // Раскрытая композиция: ключи вида `<hostKey>$<inner>` — тот же контракт, что и в рантайме.
+        if (element?.type !== COMPOSITION_TYPE || !compositionKeys?.size) return [];
+        const reference = (element as { props?: { composition?: unknown } }).props?.composition;
+        if (typeof reference !== "string") return [];
+        return (compositionKeys.get(reference) ?? []).map((inner) => `${key}$${inner}`);
+      })
       .sort();
     if (!elementKeys.length) continue;
     result.push({
@@ -88,7 +121,7 @@ export function componentUsages(db: Database, componentId: string): ComponentUsa
     kind: row.kind ?? DEFAULT_PROTOTYPE_KIND,
     rev: row.rev,
     componentVersion: row.componentVersion,
-    screens: screensUsing(row.doc, component.name),
+    screens: screensUsing(row.doc, component.name, compositionInnerKeys(db, row.prototypeId, row.rev, component.name)),
   }));
   const immutableUsages = db.query(`SELECT pp.prototype_id prototypeId,p.name,pp.version,prc.component_version componentVersion
     FROM prototype_publishes pp

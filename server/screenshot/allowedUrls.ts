@@ -1,6 +1,14 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+/**
+ * Immutable CSS contract for already-published component bundles. It is emitted by a Vite
+ * plugin (`vite.config.ts`) and linked directly from `index.html`, so it never appears in
+ * the Vite manifest — both allowlists below must add it explicitly, or captures and share
+ * sessions silently render without the compat layer.
+ */
+const COMPAT_CSS_URL = "/assets/shadcn-v1-compat.css";
+
 /** Reads the SPA build's entry file name as a stable rendererBuild id, or null. */
 export function rendererBuildFrom(serveDist: string | undefined): string | null {
   if (!serveDist) return null;
@@ -19,7 +27,7 @@ export function rendererBuildFrom(serveDist: string | undefined): string | null 
  */
 export function buildStaticAllowedUrls(serveDist: string | undefined): string[] {
   if (!serveDist) return [];
-  const out = new Set<string>(["/index.html"]);
+  const out = new Set<string>(["/index.html", COMPAT_CSS_URL]);
   let manifestOk = false;
   try {
     const manifest = JSON.parse(readFileSync(resolve(serveDist, ".vite/manifest.json"), "utf8")) as Record<string, { file?: string; css?: string[] }>;
@@ -45,7 +53,7 @@ export function buildStaticAllowedUrls(serveDist: string | undefined): string[] 
 export function buildShareStaticAllowedUrls(serveDist: string | undefined): string[] {
   if (!serveDist) return [];
   const root = resolve(serveDist);
-  const out = new Set<string>(["/index.html"]);
+  const out = new Set<string>(["/index.html", COMPAT_CSS_URL]);
   try {
     const manifest = JSON.parse(readFileSync(resolve(root, ".vite/manifest.json"), "utf8")) as Record<string, { file?: string; css?: string[]; assets?: string[] }>;
     for (const entry of Object.values(manifest)) {

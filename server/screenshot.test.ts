@@ -197,6 +197,8 @@ describe("capture error classification", () => {
       "ResizeObserver loop completed with undelivered notifications.",
       "ResizeObserver loop limit exceeded",
       "Refused to connect to https://analytics.example.com/collect",
+      // Песочница снимка сама блокирует пробу сессии: у capture-принципала нет пользователя.
+      `Failed to load resource: net::ERR_FAILED (${origin}/api/auth/me)`,
     ]) expect(isInfraNoise(message, origin)).toBe(true);
   });
 
@@ -284,6 +286,9 @@ describe("allowedUrls builder", () => {
   test("includes index.html and assets, tolerating a missing dist build", () => {
     const urls = buildStaticAllowedUrls("dist");
     expect(urls).toContain("/index.html");
+    // Иммутабельный compat-CSS линкуется прямо из index.html и не попадает в vite-манифест:
+    // без явной записи снимок рендерится без него (тихая потеря стилей опубликованных бандлов).
+    expect(urls).toContain("/assets/shadcn-v1-compat.css");
     // Either exact manifest entries (/assets/xxx.js) or the /assets/ prefix fallback.
     expect(urls.some((u) => u.startsWith("/assets/"))).toBe(true);
     const rb = rendererBuildFrom("dist");

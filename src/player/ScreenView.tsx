@@ -80,7 +80,7 @@ export function PlayerHotkeysHelp({ onClose, present = false, canExitPresent = p
 }
 
 export function ScreenView() {
-  const { doc, runtimeKey, registry, runtime, customTypes, customDefinitions, onError, themeContent, inspector, versions, scenarios } = useOutletContext<PlayerOutletContext>();
+  const { doc, runtimeKey, registry, runtime, customTypes, customDefinitions, onError, themeContent, inspector, versions, scenarios, pins } = useOutletContext<PlayerOutletContext>();
   const { screenId } = useParams();
   const { version } = useParams();
   const navigation = usePlayerNavigation();
@@ -276,7 +276,7 @@ export function ScreenView() {
         <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>{rendered}</ScreenErrorBoundary>
       </DeviceFrame>
       {scenarios.open ? <ScenarioPanel doc={doc} screenId={screen.id} controller={scenarios} /> : null}
-      {inspector.enabled && inspector.visible ? <InspectorPanel log={inspector.log} spec={screen.spec} definitions={customDefinitions} /> : null}
+      {inspector.enabled && inspector.visible ? <InspectorPanel log={inspector.log} spec={screen.spec} definitions={customDefinitions} pins={pins} /> : null}
     </div>
   </main>;
 }

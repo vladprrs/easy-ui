@@ -1,7 +1,7 @@
 import { JSONUIProvider } from "@json-render/react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useParams, useSearchParams } from "react-router";
-import { getPrototypeDraft, listPrototypeVersions, type PrototypeDraft, type PrototypeVersionSummary, type ThemeContent } from "../api/client";
+import { getPrototypeDraft, listPrototypeVersions, type PrototypeComponentPin, type PrototypeDraft, type PrototypeVersionSummary, type ThemeContent } from "../api/client";
 import { useApi } from "../api/hooks";
 import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
 import type { ComponentDefinition } from "../catalog/definitions";
@@ -37,9 +37,11 @@ export interface PlayerOutletContext {
   };
   /** Панель сценариев (волна 6): черновик записи переживает переходы между экранами. */
   scenarios: ScenarioPanelController;
+  /** Пины ревизии: дают вкладке «Дерево» версию и статус публикации компонента. */
+  pins: PrototypeComponentPin[];
 }
 
-function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; metaVersion: number | null | undefined; debug: boolean; versions: PlayerOutletContext["versions"] }) {
+function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions, pins }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; metaVersion: number | null | undefined; debug: boolean; versions: PlayerOutletContext["versions"]; pins: PrototypeComponentPin[] }) {
   const themeContent = useDesignSystemTheme(doc.designSystem, metaVersion);
   const navigation = usePlayerNavigation();
   const navigationRef = useRef(navigation);
@@ -121,6 +123,7 @@ function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions }:
       versions,
       inspector: { enabled: debug, visible: inspectorVisible, log: inspectorSession.log, toggle: toggleInspector },
       scenarios: scenarioController,
+      pins,
     } satisfies PlayerOutletContext} />
     {import.meta.env.DEV && import.meta.env.MODE !== "test" ? <Suspense fallback={null}><Devtools /></Suspense> : null}
   </JSONUIProvider>;
@@ -136,7 +139,7 @@ function ReadyPlayer({ loaded, custom, runtimeKey, routeBase, metaVersion, debug
   }, [loaded.doc.id, loaded.rev, version]);
   const versions = versionsState.status === "ready" ? versionsState.data : null;
   return <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} routeBase={routeBase}>
-    <LoadedPlayer key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} metaVersion={metaVersion} debug={debug} versions={versions} />
+    <LoadedPlayer key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} metaVersion={metaVersion} debug={debug} versions={versions} pins={loaded.components} />
   </PlayerNavigationProvider>;
 }
 
