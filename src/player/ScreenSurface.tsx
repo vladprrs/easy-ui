@@ -24,7 +24,8 @@ export interface ScreenSurfaceProps {
   hostPrimitivesAllowed?: boolean;
 }
 
-interface HighlightRect {
+/** Экранный прямоугольник одного вхождения элемента (repeat даёт несколько). */
+export interface HighlightRect {
   key: string;
   instance: number;
   left: number;
@@ -53,6 +54,56 @@ function unionMarkerRect(marker: HTMLElement): Omit<HighlightRect, "key" | "inst
   const right = Math.max(...visible.map((rect) => rect.right));
   const bottom = Math.max(...visible.map((rect) => rect.bottom));
   return { left, top, width: right - left, height: bottom - top };
+}
+
+/**
+ * Замеряет экранные прямоугольники всех `[data-eui-key]`-маркеров с указанными
+ * ключами внутри `root`. Общая механика подсветки: используется и misclick-хинтами,
+ * и вкладкой «Дерево» debug-инспектора (волна 1).
+ */
+export function measureMarkerRects(root: ParentNode, keys: ReadonlySet<string>): HighlightRect[] {
+  const instances = new Map<string, number>();
+  return Array.from(root.querySelectorAll<HTMLElement>(markerSelector)).flatMap((marker) => {
+    const key = marker.getAttribute(EUI_KEY_ATTRIBUTE);
+    if (key === null || !keys.has(key)) return [];
+    const rect = unionMarkerRect(marker);
+    if (rect === null) return [];
+    const instance = instances.get(key) ?? 0;
+    instances.set(key, instance + 1);
+    return [{ key, instance, ...rect }];
+  });
+}
+
+/**
+ * Слой подсветки поверх сцены: fixed-портал в `document.body`, без событий мыши.
+ * Порталится, чтобы координаты `getBoundingClientRect` не зависели от трансформов
+ * и скролла стейджа.
+ */
+export function HighlightLayer({ rects, visible = true, testId, className }: {
+  rects: readonly HighlightRect[];
+  visible?: boolean;
+  testId: string;
+  className: string;
+}) {
+  if (rects.length === 0) return null;
+  return createPortal(
+    <div className="pointer-events-none fixed inset-0" style={{ zIndex: 60 }} aria-hidden="true" data-testid={testId}>
+      {rects.map((rect) => <div
+        key={`${rect.key}:${rect.instance}`}
+        data-eui-highlight-key={rect.key}
+        className={`fixed ${className}`}
+        style={{
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+          opacity: visible ? 1 : 0,
+          transition: "opacity 100ms ease-out",
+        }}
+      />)}
+    </div>,
+    document.body,
+  );
 }
 
 function hasSelectedText(): boolean {
@@ -89,16 +140,7 @@ function MisclickHighlightSurface({ metadata, children }: { metadata: Record<str
       if (key !== null && keys.has(key)) return;
     }
 
-    const instances = new Map<string, number>();
-    const next = Array.from(root.querySelectorAll<HTMLElement>(markerSelector)).flatMap((marker) => {
-      const key = marker.getAttribute(EUI_KEY_ATTRIBUTE);
-      if (key === null || !keys.has(key)) return [];
-      const rect = unionMarkerRect(marker);
-      if (rect === null) return [];
-      const instance = instances.get(key) ?? 0;
-      instances.set(key, instance + 1);
-      return [{ key, instance, ...rect }];
-    });
+    const next = measureMarkerRects(root, keys);
     if (!next.length) return;
 
     cancelAnimation();
@@ -120,24 +162,12 @@ function MisclickHighlightSurface({ metadata, children }: { metadata: Record<str
 
   return <div ref={rootRef} style={{ display: "contents" }} onClick={handleClick}>
     {children}
-    {rects.length > 0 ? createPortal(
-      <div className="pointer-events-none fixed inset-0" style={{ zIndex: 60 }} aria-hidden="true" data-testid="misclick-highlights">
-        {rects.map((rect) => <div
-          key={`${rect.key}:${rect.instance}`}
-          data-eui-highlight-key={rect.key}
-          className="fixed rounded-md border-2 border-eui-orange bg-eui-orange/15 shadow-[0_0_0_1px_rgba(255,255,255,0.65)]"
-          style={{
-            left: rect.left,
-            top: rect.top,
-            width: rect.width,
-            height: rect.height,
-            opacity: visible ? 1 : 0,
-            transition: "opacity 100ms ease-out",
-          }}
-        />)}
-      </div>,
-      document.body,
-    ) : null}
+    <HighlightLayer
+      rects={rects}
+      visible={visible}
+      testId="misclick-highlights"
+      className="rounded-md border-2 border-eui-orange bg-eui-orange/15 shadow-[0_0_0_1px_rgba(255,255,255,0.65)]"
+    />
   </div>;
 }
 

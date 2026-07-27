@@ -273,7 +273,7 @@ export function ScreenView() {
       <DeviceFrame device={device} canvas={screen.canvas} zoom={zoomValue} onEffectiveScale={stageZoom.onEffectiveScale} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} statusBarHidden={statusBarHidden} scrollResetKey={screen.id}>
         <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>{rendered}</ScreenErrorBoundary>
       </DeviceFrame>
-      {inspector.enabled && inspector.visible ? <InspectorPanel log={inspector.log} /> : null}
+      {inspector.enabled && inspector.visible ? <InspectorPanel log={inspector.log} spec={screen.spec} definitions={customDefinitions} /> : null}
     </div>
   </main>;
 }

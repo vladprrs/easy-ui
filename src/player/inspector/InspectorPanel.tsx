@@ -1,11 +1,15 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { InspectorEntry, InspectorLog } from "./log";
 import { inspector } from "../../app/strings/player";
+import type { ComponentDefinition } from "../../catalog/definitions";
+import type { ComponentPinInfo, ScreenSpec } from "../../architecture/screenTree";
+import { TreeTab } from "./TreeTab";
 
 // Interaction inspector panel (plan H.1, feedback §12). Rendered by the player
 // shell when the route carries `?debug=1`: a ledger in the player stage with
 // the latest entries first, a kind filter, a clear button and a
-// live `document.fonts` status section.
+// live `document.fonts` status section. Волна 1 (план 2026-07-27) добавила
+// вкладку «Дерево» — архитектурное дерево экрана с подсветкой DOM по data-eui-key.
 
 const FILTERS = ["all", "event", "action", "runtime-error"] as const;
 type Filter = (typeof FILTERS)[number];
@@ -77,10 +81,21 @@ const kindLabel: Record<InspectorEntry["kind"], string> = {
   "runtime-error": "error",
 };
 
-export function InspectorPanel({ log }: { log: InspectorLog }) {
+const TABS = ["log", "tree"] as const;
+type Tab = (typeof TABS)[number];
+const tabLabel: Record<Tab, string> = { log: inspector.tabLog, tree: inspector.tabTree };
+
+export function InspectorPanel({ log, spec, definitions, pins }: {
+  log: InspectorLog;
+  /** Authored-спека текущего экрана — источник вкладки «Дерево» (волна 1). */
+  spec?: ScreenSpec;
+  definitions?: Record<string, ComponentDefinition>;
+  pins?: readonly ComponentPinInfo[];
+}) {
   const entries = useSyncExternalStore(log.subscribe, log.getSnapshot, log.getSnapshot);
   const fonts = useFontStatuses();
   const [filter, setFilter] = useState<Filter>("all");
+  const [tab, setTab] = useState<Tab>("log");
 
   const visible = [...entries].reverse().filter((entry) => filter === "all" || entry.kind === filter);
 
@@ -88,17 +103,47 @@ export function InspectorPanel({ log }: { log: InspectorLog }) {
     aria-label={inspector.panelAria}
     className="flex h-full w-80 shrink-0 flex-col overflow-hidden border-l border-white/20 bg-eui-graphite font-mono text-xs text-white"
   >
+    <div role="tablist" aria-label={inspector.tabsAria} className="flex shrink-0 border-b border-white/15">
+      {TABS.map((item) => <button
+        key={item}
+        type="button"
+        role="tab"
+        aria-selected={tab === item}
+        onClick={() => setTab(item)}
+        className="flex-1 px-3 py-1.5 text-white/60 aria-selected:border-b-2 aria-selected:border-eui-brand aria-selected:font-semibold aria-selected:text-white"
+      >{tabLabel[item]}</button>)}
+    </div>
+    {tab === "tree"
+      ? <TreeTab spec={spec} definitions={definitions} pins={pins} />
+      : <LogTab
+        visible={visible}
+        fonts={fonts}
+        filter={filter}
+        onFilter={setFilter}
+        onClear={log.clear}
+      />}
+  </aside>;
+}
+
+function LogTab({ visible, fonts, filter, onFilter, onClear }: {
+  visible: InspectorEntry[];
+  fonts: FontStatus[];
+  filter: Filter;
+  onFilter: (filter: Filter) => void;
+  onClear: () => void;
+}) {
+  return <>
     <header className="flex items-center gap-2 border-b border-white/15 px-3 py-2">
       <span className="font-semibold">{inspector.title}</span>
       <select
         aria-label={inspector.filterAria}
         value={filter}
-        onChange={(event) => setFilter(event.target.value as Filter)}
+        onChange={(event) => onFilter(event.target.value as Filter)}
         className="ml-auto rounded border border-white/20 bg-transparent px-1 py-0.5 text-xs"
       >
         {FILTERS.map((item) => <option key={item} value={item} className="bg-eui-graphite">{item}</option>)}
       </select>
-      <button type="button" onClick={log.clear} className="rounded border border-white/20 px-2 py-0.5 hover:bg-white/10">{inspector.clear}</button>
+      <button type="button" onClick={onClear} className="rounded border border-white/20 px-2 py-0.5 hover:bg-white/10">{inspector.clear}</button>
     </header>
     <ol aria-label={inspector.entriesAria} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
       {visible.length === 0 ? <li className="py-2 text-white/50">{inspector.empty}</li> : null}
@@ -117,5 +162,5 @@ export function InspectorPanel({ log }: { log: InspectorLog }) {
         ? <p className="text-white/50">{inspector.fontsEmpty}</p>
         : fonts.map((font, index) => <Field key={`${font.family}-${index}`} label={font.family} value={font.status} />)}
     </section>
-  </aside>;
+  </>;
 }

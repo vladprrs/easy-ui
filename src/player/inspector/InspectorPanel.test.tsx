@@ -124,6 +124,21 @@ describe("player integration (?debug=1)", () => {
     image.remove();
   });
 
+  it("switches to the tree tab and lists the screen elements", async () => {
+    renderAt("/p/hello-world/s/welcome?debug=1");
+    await screen.findByLabelText("Name");
+    const panel = screen.getByRole("complementary", { name: "Инспектор взаимодействий" });
+    fireEvent.click(within(panel).getByRole("tab", { name: "Дерево" }));
+    const tree = within(panel).getByRole("list", { name: "Дерево компонентов экрана" });
+    expect(within(tree).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Card · cardcustom", "Input · namecustom", "Text · greetingcustom", "Button · nextcustom",
+    ]);
+    expect(within(panel).queryByLabelText("Записи инспектора")).toBeNull();
+
+    fireEvent.click(within(panel).getByRole("tab", { name: "Журнал" }));
+    expect(within(panel).getByLabelText("Записи инспектора")).toBeTruthy();
+  });
+
   it("does not render the panel without the debug flag", async () => {
     renderAt("/p/hello-world/s/welcome");
     await screen.findByLabelText("Name");

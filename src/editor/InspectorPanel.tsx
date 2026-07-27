@@ -5,10 +5,13 @@ import { deviceNames } from "../app/strings/common";
 import { editor } from "../app/strings/editor";
 import type { ComponentDefinition } from "../catalog/definitions";
 import { regionEligibility } from "../prototype/regionRules";
+import type { ValidationIssue } from "../prototype/types";
 import { jsonValueSchema, REGION_KINDS, type JsonValue, type PrototypeDoc, type RegionKind } from "../prototype/schema";
 import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "../prototype/stateOverrides";
 import type { EditorAction, EditorState } from "./editorReducer";
-import { ElementTree, getElementPath } from "./ElementTree";
+import { getElementPath } from "../architecture/screenTree";
+import type { ComponentPinInfo } from "../architecture/screenTree";
+import { ComponentTreeInspector } from "./ComponentTreeInspector";
 import { PropsForm } from "./propsForm/PropsForm";
 import { suggestRegion } from "./regionSuggestion";
 
@@ -93,7 +96,15 @@ function CanvasEditor({ canvas, onCommit }: { canvas?: { width: number; height: 
   return <fieldset className="font-eui-ui"><legend className="text-xs text-eui-slate-500">{editor.canvasLegend}</legend><div className="mt-1 grid grid-cols-2 gap-2"><label className="text-xs text-eui-slate-500">{editor.widthLabel}<input aria-label={editor.canvasWidthAria} type="number" className={`${inputClass} text-eui-ink`} value={width} onChange={(event) => setWidth(event.target.value)} onBlur={commit} /></label><label className="text-xs text-eui-slate-500">{editor.heightLabel}<input aria-label={editor.canvasHeightAria} type="number" className={`${inputClass} text-eui-ink`} value={height} onChange={(event) => setHeight(event.target.value)} onBlur={commit} /></label></div>{error ? <p role="alert" className="mt-1 text-xs text-eui-magenta">{error}</p> : null}</fieldset>;
 }
 
-export function InspectorPanel({ state, definitions, dispatch }: { state: EditorState; definitions: Record<string, ComponentDefinition>; dispatch: Dispatch<EditorAction> }) {
+export function InspectorPanel({ state, definitions, dispatch, pins, issues }: {
+  state: EditorState;
+  definitions: Record<string, ComponentDefinition>;
+  dispatch: Dispatch<EditorAction>;
+  /** Пины компонентов ревизии — версии/статусы и ссылки на библиотеку в дереве. */
+  pins?: readonly ComponentPinInfo[];
+  /** Issue'ы валидации документа, раскладываемые по элементам дерева. */
+  issues?: { errors?: readonly ValidationIssue[]; warnings?: readonly ValidationIssue[] };
+}) {
   const screenIndex = state.doc.screens.findIndex((item) => item.id === state.selection.screenId);
   const screen = state.doc.screens[screenIndex];
   if (!screen) return <aside className="w-90 shrink-0 border-l border-eui-ink/10 bg-white p-4"><p className="font-eui-ui text-sm text-eui-slate-500">{editor.screenMissing}</p></aside>;
@@ -120,7 +131,7 @@ export function InspectorPanel({ state, definitions, dispatch }: { state: Editor
 
   return <aside className="w-90 shrink-0 overflow-y-auto border-l border-eui-ink/10 bg-white" aria-label={editor.inspectorAria}>
     <Section title={editor.sectionElement}>
-      <ElementTree key={screen.id} spec={screen.spec} selectedKey={elementKey} onSelect={(key) => dispatch({ type: "select-element", elementKey: key })} />
+      <ComponentTreeInspector key={screen.id} spec={screen.spec} selectedKey={elementKey} onSelect={(key) => dispatch({ type: "select-element", elementKey: key })} definitions={definitions} pins={pins} issues={issues} />
       {element ? <div className="mt-4 border-t border-eui-ink/10 pt-4">
         <nav aria-label={editor.elementBreadcrumbsAria} className="mb-3 flex flex-wrap items-center gap-1 font-eui-ui text-xs text-eui-slate-500">
           <button type="button" className="rounded px-1 py-0.5 hover:bg-eui-lilac-100 hover:text-eui-ink" onClick={() => dispatch({ type: "select-element", elementKey: null })}>{editor.screenBreadcrumb}</button>
