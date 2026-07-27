@@ -15,6 +15,8 @@ function v14():Database {
   for(const column of ["kind","tags","derived_from"] as const) db.run(`ALTER TABLE prototypes DROP COLUMN ${column}`);
   // То же для v17 tombstone-колонок на components.
   for(const column of ["delete_reason","replacement_component_id"] as const) db.run(`ALTER TABLE components DROP COLUMN ${column}`);
+  // v18 завёл новые таблицы композиций — их надо снести, иначе повторный migrate() упрётся в "table already exists".
+  for(const table of ["prototype_revision_compositions","composition_publishes","composition_revisions","compositions"] as const) db.run(`DROP TABLE IF EXISTS ${table}`);
   db.run("PRAGMA user_version=14");
   return db;
 }

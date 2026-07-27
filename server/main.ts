@@ -4,6 +4,7 @@ import { ApiError, errorResponse, json, noStore } from "./http";
 import { routePrototypes } from "./routes/prototypes";
 import { resolveStaticRequest, serveResolvedStatic } from "./static";
 import { routeComponents, catalogManifest, routeCatalogUsages } from "./routes/components";
+import { routeCompositions } from "./routes/compositions";
 import { routeAssets } from "./routes/assets";
 import { routeDesignSystems } from "./routes/designSystems";
 import { routeShims } from "./routes/shims";
@@ -156,6 +157,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         const bundles=await routeBundles(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"); if(bundles) return finish(bundles);
         if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),principal,options.dataDir,options.serveDist));
         if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
+        if(segments[1]==="compositions") return finish(await routeCompositions(request,db,segments.slice(1),principal));
         if(segments[1]==="assets") return finish(await routeAssets(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
         if(segments[1]==="design-systems") return finish(await routeDesignSystems(request,db,segments.slice(1),principal));
         if(segments[1]==="catalog"&&segments[2]==="manifest"&&segments.length===3) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); const {designSystem}=parseQuery(catalogManifestQuerySchema,requestUrl.searchParams); const system=designSystem===undefined?null:getIncludingRetired(db,designSystem); if(designSystem!==undefined&&(!system||system.retired)) throw new ApiError(404,"not_found","Design system not found"); return finish(json({components:catalogManifest(db,designSystem)},200,noStore)); }

@@ -61,12 +61,12 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 | `GET /prototypes?kind=` | свои прототипы любого статуса + чужие `published`; `PrototypeListItem[]`: `{id,name,description?,device,designSystem,screenCount,headRev,latestVersion,status,owner:{id,name},updatedAt,kind,tags,derivedFrom}`; `kind` — CSV-фильтр по видам (см. [Lifecycle](#lifecycle-прототипа)) |
 | `POST /prototypes` | `{doc,message?,kind?,tags?,derivedFrom?}` → 201 `{id,rev,warnings,screens}` и `Location` |
 | `GET /prototypes/:id` | `{id,name,designSystem,headRev,latestVersion:number|null,versions:PrototypeVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable,kind,tags,derivedFrom}` |
-| `GET /prototypes/:id/draft` | `{doc,rev,builtinCatalogHash,componentManifestHash,components:ComponentPin[],assets:AssetPin[]}` |
+| `GET /prototypes/:id/draft` | `{doc,rev,builtinCatalogHash,componentManifestHash,components:ComponentPin[],compositions:CompositionPin[],assets:AssetPin[]}` |
 | `GET /prototypes/:id/screens/:screenId/render-status?version=n\|rev=n` | Готовность экрана к рендеру — см. [Render status](#render-status) |
 | `PUT /prototypes/:id` | `{doc,message?,baseRev}` → `{rev,warnings,screens}`; `doc.id` обязан совпадать с `:id` |
 | `DELETE /prototypes/:id` | `{baseRev}` → 204; hard delete с каскадом ревизий |
 | `GET /prototypes/:id/revisions?limit&before` | `{rev,message:string|null,createdAt}[]`; `limit` по умолчанию 20, максимум 100 |
-| `GET /prototypes/:id/revisions/:rev` | `{rev,doc,components:ComponentPin[],assets:AssetPin[],message:string|null,createdAt}` |
+| `GET /prototypes/:id/revisions/:rev` | `{rev,doc,components:ComponentPin[],compositions:CompositionPin[],assets:AssetPin[],message:string|null,createdAt}` |
 | `GET /prototypes/:id/revisions/:rev/diff?against=n` | Структурный diff ревизий; без `against` сравнивает с `rev-1` |
 | `POST /prototypes/:id/restore` | `{rev,baseRev}` → `{rev}` (номер новой head-ревизии) |
 | `GET /prototypes/:id/readiness` | Ready-to-publish отчёт головной ревизии — см. [Готовность к публикации](#готовность-к-публикации) |
@@ -75,14 +75,14 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 | `POST /prototypes/:id/status` | owner-only `{status:"private"|"published"|"archived"}`; граф `private↔published`, `private|published→archived`, `archived→private` |
 | `POST /prototypes/:id/lifecycle` | owner-only `{kind?,tags?,derivedFrom?}` → `{kind,tags,derivedFrom}`; аддитивный патч, см. [Lifecycle](#lifecycle-прототипа) |
 | `GET /prototypes/:id/versions` | `PrototypeVersion[]`: `{version,rev,publishedAt}` |
-| `GET /prototypes/:id/versions/:version` | `{version,rev,doc,builtinCatalogHash,componentManifestHash,components:ComponentPin[],assets:AssetPin[],publishedAt}`; immutable |
+| `GET /prototypes/:id/versions/:version` | `{version,rev,doc,builtinCatalogHash,componentManifestHash,components:ComponentPin[],compositions:CompositionPin[],assets:AssetPin[],publishedAt}`; immutable |
 | `POST /prototypes/:id/share` | `{version,ttlSeconds}` → 201 `{id,prototypeId,version,url,createdAt,expiresAt,activeSessions}`; bearer-token присутствует только в одноразово возвращённом `url` |
 | `GET /prototypes/:id/share` | `{shares: ShareGrant[]}` — только активные/неистёкшие grants, без bearer-token |
 | `DELETE /prototypes/:id/share/:shareId` | 204; revoke grant и всех выданных им sessions |
 
 `PUT /prototypes/:id` — это осознанный checkpoint, а не no-op. Даже если `doc` не изменился, успешный запрос с актуальным `baseRev` создаёт новую ревизию: сервер заново разрешает и фиксирует пины active custom-бандлов, текущей версии темы дизайн-системы и ассетов, а также сохраняет переданный `message`. CAS по `baseRev` действует как обычно. Сервер намеренно не дедуплицирует такие ревизии, потому что повторное сохранение выражает явное решение зафиксировать актуальное окружение документа.
 
-`ComponentPin` — `{id,name,version,bundleUrl,bundleHash,status}` (`status` — статус публикации закреплённой версии, аддитивно добавлен волной 3). `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её render/validation-контракт. Дескриптор включает обязательный `renderContractVersion` (сейчас `4`), actions, имена/descriptions/events/slots, input JSON Schema пропсов, `layout`/`layoutNeutral`, host-примитивы, включая `@eui/FlowRoot`, и resolved spacing scale из **pinned** `design_system_meta_version`. Restore копирует версию темы исходной ревизии, поэтому восстанавливает и соответствующий hash. Хеш остаётся детектором несовместимости, а не pin: рантайм не сравнивает и не блокирует mismatch.
+`ComponentPin` — `{id,name,version,bundleUrl,bundleHash,status}` (`status` — статус публикации закреплённой версии, аддитивно добавлен волной 3). `CompositionPin` — `{id,name,version,sourceHash,doc}` (пины ревизии из `prototype_revision_compositions` вместе с замороженным документом композиции; клиент раскрывает по ним авторский документ — см. [Композиции](#endpoints-композиций)). `AssetPin` — `{id,sha256,mime,size}` (пины ревизии из `prototype_revision_assets`; см. [Ассеты](#ассеты)). `componentManifestHash` — SHA-256 канонически отсортированных пинов. `builtinCatalogHash` вычисляется отдельно для системы из документа ревизии и идентифицирует её render/validation-контракт. Дескриптор включает обязательный `renderContractVersion` (сейчас `4`), actions, имена/descriptions/events/slots, input JSON Schema пропсов, `layout`/`layoutNeutral`, host-примитивы, включая `@eui/FlowRoot`, и resolved spacing scale из **pinned** `design_system_meta_version`. Restore копирует версию темы исходной ревизии, поэтому восстанавливает и соответствующий hash. Хеш остаётся детектором несовместимости, а не pin: рантайм не сравнивает и не блокирует mismatch.
 
 ### Lifecycle прототипа
 
@@ -314,6 +314,44 @@ Meta-ответы прототипов и компонентов additively не
 
 Миграция v8 расширяет `CHECK(status)` строгим rebuild-алгоритмом `component_publishes`: снапшот всех FK-child (`prototype_revision_components` RESTRICT, `component_publish_assets` CASCADE) → drop children → rebuild parent → recreate children → restore rows → `PRAGMA foreign_key_check`.
 
+## Endpoints композиций
+
+Композиция — версионированный декларативный фрагмент экрана с параметрами и именованными слотами; грамматика документа и правила раскрытия — в [формате прототипа](prototype-format.md#versioned-compositions). Ресурс зеркалит компонентный: slug-`id`, глобально уникальное `name`, `headRev` + ревизии + неизменяемые публикации + мягкое удаление. Отличие одно: компилировать нечего — артефактом публикации является сам документ, а `sourceHash` считается как sha256 его канонического JSON (ключи отсортированы, `undefined` отброшены).
+
+Миграция **v18** добавила четыре таблицы (только `CREATE TABLE`, перестройка существующих не требуется):
+
+- `compositions(id PK, name UNIQUE, head_rev, design_system FK→design_systems, owner_id FK→users, deleted_at, delete_reason, created_at, updated_at)`;
+- `composition_revisions(composition_id, rev, doc, design_system, message, author, created_at)`, PK `(composition_id, rev)`;
+- `composition_publishes(composition_id, version, rev, status, status_reason, superseded_by, status_rev, source_hash, message, published_at)`, PK `(composition_id, version)`, `UNIQUE (composition_id, rev)`, `CHECK(status IN ('active','deprecated','superseded','archived'))` — компонентных `staging`/`failed` здесь нет, сборки у композиции не существует;
+- `prototype_revision_compositions(prototype_id, rev, composition_id, composition_version)` — пины ревизии прототипа; FK на `prototype_revisions` — `ON DELETE CASCADE`, FK на `composition_publishes` — **`ON DELETE RESTRICT`**, тот же инвариант, что у компонентных пинов: опубликованная версия прототипа не может ссылаться на исчезающую публикацию композиции.
+
+| Метод и путь | Тело / ответ |
+|---|---|
+| `GET /compositions` | `{id,name,designSystem,headRev,latestVersion:number|null,updatedAt,description?,params:string[],slots:string[]}[]` (последняя active-версия в `latestVersion`); `?includeDeleted=1` дополнительно возвращает надгробия с `{deleted:true,deletedAt,reason}` |
+| `POST /compositions` | `{id,doc,designSystem,message?}` → 201 `{id,rev:1}` и `Location`; неизвестное поле тела → `400 invalid_request`; `id` не slug → `422`; занятые `id`/`name` → `409 already_exists` |
+| `GET /compositions/:id` | `{id,name,designSystem,headRev,versions:CompositionVersion[],updatedAt,publishedVersion:number|null,doc}`; мягко удалённая композиция — **404**, если не передан `?includeDeleted=1` (тогда meta дополняется `{deleted:true,deletedAt,reason}`) |
+| `PUT /compositions/:id` | `{doc,message?,baseRev}` → `{rev}`; конфликт имени с другой композицией → `409 already_exists` |
+| `DELETE /compositions/:id` | `{baseRev,reason?,force?}` → 204; `409 composition_in_use`, пока композицию пинуют головные ревизии прототипов (обход — `force:true` от админа, иначе `403 admin_required`) |
+| `GET /compositions/:id/revisions` | `{rev,message:string|null,createdAt}[]`, новые первыми |
+| `GET /compositions/:id/revisions/:rev` | `{rev,doc,designSystem,message:string|null,createdAt}` |
+| `POST /compositions/:id/publish` | `{message?,baseRev}` → 201 `{version,rev}` и `Location`; повторная публикация той же ревизии → `409 already_published` |
+| `GET /compositions/:id/versions` | `CompositionVersion[]`: `{version,rev,status,statusReason:string\|null,supersededBy:number\|null,statusRev,sourceHash,publishedAt}` |
+| `GET /compositions/:id/versions/:version` | Метадата версии любого статуса + замороженный документ: `CompositionVersion & {doc,designSystem}`; immutable |
+| `POST /compositions/:id/versions/:version/status` | `{status,reason?,baseStatusRev}` → 200 `{status,statusRev}`; CAS по `statusRev` |
+| `GET /compositions/:id/usages` | `{currentHeadUsages:[{prototypeId,name,kind,rev,version}],immutableUsages:[{prototypeId,version,compositionVersion}],safeToRemove}` |
+
+**Авторизация.** Чтение (list/meta/revisions/versions/usages) доступно любому аутентифицированному пользователю; анонимный доступ, share и capture-scope — нет (строка «Остальной API» в матрице принципалов). `POST` требует владения **дизайн-системой** композиции, остальные мутации — владения самой композицией (или прав админа). Audit-события: `composition.revision.saved`, `composition.version.published`, `composition.status.changed`, `composition.deleted`.
+
+**CAS.** Все мутации существующей композиции требуют `baseRev` (отсутствует → `400 base_rev_required`, расхождение → `409 revision_conflict` с `currentRev`); переход статуса версии — `baseStatusRev` (расхождение → `409 status_conflict` с `currentStatusRev`). Матрица переходов: `active → deprecated|superseded|archived`, `deprecated → archived|active`, `superseded → archived|active`, `archived` терминальный; иное → `422 invalid_transition`. Поле `supersededBy` присутствует в DTO, но этим endpoint'ом не задаётся.
+
+**Каталог композиции.** Каждый тип элемента документа обязан быть host-примитивом либо **опубликованным** компонентом той же дизайн-системы — проверка выполняется на `POST` и `PUT` (`422 validation_failed`). Иначе раскрытие в save-пути прототипа не нашло бы пина компонента.
+
+**Разрешение ссылок и пины.** Прототип ссылается на композицию элементом `@eui/Composition`. При сохранении прототипа сервер резолвит каждую ссылку в **последнюю `active`-публикацию** живой композиции той же дизайн-системы; неизвестная, неопубликованная или чужая по системе композиция → `422 validation_failed`. Раскрытие (`expandPrototypeForSave`) выполняется **до** `snapshotDefinitions` и `collectAndValidateAssetRefs`, поэтому компонент или ассет, встречающийся только внутри композиции, всё равно попадает в `prototype_revision_components` / `prototype_revision_assets`. В БД сохраняется **авторский** документ, пины — от раскрытого; `restore` копирует пины композиций исходной ревизии, а удаление композиции параллельно сохранению даёт `409 composition_changed`. `publish` прототипа дополнительно требует, чтобы каждая упомянутая композиция была запинована (`422 validation_failed`, «Unpinned composition»).
+
+**Чтение прототипа.** `GET /prototypes/:id/draft`, `…/revisions/:rev` и `…/versions/:v` additively отдают `compositions: CompositionPin[]` — `{id,name,version,sourceHash,doc}` по пинам ревизии. Клиент раскрывает авторский документ этими документами перед построением runtime-спека, поэтому плеер и capture видят ровно ту версию композиции, что была закреплена.
+
+**Мягкое удаление.** `DELETE` только помечает `deleted_at`/`delete_reason`: композиция исчезает из списка и не доступна новым сохранениям, но уже закреплённые публикации продолжают читаться по версии (их защищает FK RESTRICT), а `usages` остаётся читаемым и для надгробия. Повреждённая строка ревизии при чтении даёт `422 invalid_stored_revision`.
+
 ## Bundles (экспорт/импорт ZIP)
 
 Перенос прототипов и custom-компонентов наружу (между серверами/аккаунтами, локальный архив, обмен) — через ZIP-бандлы. Три вида экспорта (прототип, компонент, всё owned) описываются **одним манифестом** и импортируются **единым** endpoint'ом. Схемы (`bundleManifestSchema`, `importReportSchema`) живут в `src/bundle/schema.ts` и общие для сервера и клиента; ZIP-кодек (`fflate`) — только на сервере и в клиентских download-хелперах, никогда в shared-схеме или SPA-рендере.
@@ -352,6 +390,8 @@ assets/<sha256>                        # сырые байты, имя = sha256 
 - `assets[]`: `{ id (asset_<64hex>), sha256, mime, size, originalName|null }` — каждый ассет в архиве один раз по sha.
 
 **Пины компонентов и DS meta-version в манифесте информационные.** На импорте они не восстанавливаются буквально: пины пересчитываются резолвом по `name+designSystem` к последней active-версии на цели, тема перепиновывается. Точная **version-fidelity не гарантируется** — импорт эквивалентен свежему POST (см. [Конфликт-политика](#конфликт-политика-импорта)). Пины ассетов ревизии — единственный источник asset-замыкания (walk по `props`); `$asset` в `state`/`stateOverrides`/`flows` рантаймом не резолвится и не пинуется — это осознанно **не** пробел.
+
+**Композиции в бандл не входят** (v1): манифест не описывает ресурс `compositions`, поэтому прототип со ссылкой `@eui/Composition` импортируется только на цель, где эта композиция уже опубликована; иначе save-путь отклоняет документ и элемент попадает в отчёт как error. В `mode=dry-run` это не видно — раскрытие выполняется только на `apply`.
 
 **Что НЕ экспортируется** (осознанно): `compiled_js`/`bundle_hash`/host-ABI (цель перекомпилирует через publish-пайплайн), история ревизий, скриншоты и visual-бейзлайны, share-гранты, `figma_json`, owner/audit-данные, статус прототипа (импорт всегда приватный). Прототипный и bulk-бандл **включает TSX всех запинованных компонентов независимо от их владельца** — это консистентно с текущим `GET /components/:id/source` (читается любым аутентифицированным пользователем) и зафиксировано как продуктовое решение.
 
@@ -405,7 +445,7 @@ assets/<sha256>                        # сырые байты, имя = sha256 
 | `PATCH /design-systems/:id` | Тема (см. §Тема) `{tokens?,fonts?,icons?,baseVersion}` → 200 `DesignSystemSummary`; builtin → `405`; CAS-конфликт → `409 version_conflict` |
 | `GET /design-systems/:id/versions/:v` | Immutable `{systemId,version,tokens,fonts,icons,createdAt}`; отсутствует → `404 not_found` |
 
-`DesignSystemSummary` имеет `{id,name,description,builtinCatalogHash,resolvedSpaceScale,components,hostPrimitives}` плюс additively `latestMetaVersion` и содержимое последней версии темы `{tokens,fonts,icons}`; provider не раскрывается. `components[]` сериализует `propsJsonSchema` (input), `layout?` и явный `layoutNeutral`; `hostPrimitives[]` использует ту же generic-схему дескриптора и содержит host-owned `Image`, `Hotspot`, `Overlay` и `@eui/FlowRoot` для каждой системы. Они доступны runtime независимо от custom bundle и намеренно не входят в `/catalog/manifest`. `resolvedSpaceScale` — итоговые девять `none..4xl` для последней merged-темы системы. Malformed JSON/body не-object даёт `400 invalid_request`; неизвестные поля, неверные типы, невалидный slug, пустые или слишком длинные значения — `422 validation_failed` с `issues[].path`. `PUT` и `DELETE` на collection или `:id`, а также `PATCH` на collection дают `405 method_not_allowed`: registry metadata в этом API неизменяемы. Повтор идентичного POST не идемпотентен и также даёт 409.
+`DesignSystemSummary` имеет `{id,name,description,builtinCatalogHash,resolvedSpaceScale,components,hostPrimitives}` плюс additively `latestMetaVersion` и содержимое последней версии темы `{tokens,fonts,icons}`; provider не раскрывается. `components[]` сериализует `propsJsonSchema` (input), `layout?` и явный `layoutNeutral`; `hostPrimitives[]` использует ту же generic-схему дескриптора и содержит host-owned `Image`, `Hotspot`, `Overlay`, `@eui/FlowRoot`, а также `@eui/Composition` и `@eui/Slot` (волна 5) для каждой системы. Они доступны runtime независимо от custom bundle и намеренно не входят в `/catalog/manifest`. `resolvedSpaceScale` — итоговые девять `none..4xl` для последней merged-темы системы. Malformed JSON/body не-object даёт `400 invalid_request`; неизвестные поля, неверные типы, невалидный slug, пустые или слишком длинные значения — `422 validation_failed` с `issues[].path`. `PUT` и `DELETE` на collection или `:id`, а также `PATCH` на collection дают `405 method_not_allowed`: registry metadata в этом API неизменяемы. Повтор идентичного POST не идемпотентен и также даёт 409.
 
 #### Тема дизайн-системы (tokens/fonts/icons) и версии
 
@@ -795,5 +835,7 @@ Compose healthcheck обращается без credentials к открытом�
 При выкладке поддержки `doc.flows` действует отдельное правило совместимости: в течение rollback-window нельзя персистить **ни одной** ревизии с `flows` — ни через create, ни через save, ни через restore. Старый образ не умеет читать такой документ, поэтому наличие flows-ревизии делает безопасный rollback образа невозможным. После окончания окна откат на образ без поддержки `flows` выполняется только вместе с откатом данных на совместимый backup.
 
 Для screen regions действует та же rollback-политика. Перед деплоем обязателен проверенный логический бэкап данных, совместимый со старым образом; его сохраняют на весь rollback-window. Несовместимость возникает в двух независимых случаях: строгая схема старого сервера не распарсит документ с полем элемента `region`, а документ с `@eui/FlowRoot` старый runtime не сможет отрендерить, поскольку у него нет ни host-рендерера, ни component pin для этого типа. Поэтому в течение rollback-window нельзя персистить через create, save или restore ни одной ревизии, содержащей `region` или `@eui/FlowRoot`. После первой такой записи откат на образ без screen regions допустим только вместе с восстановлением совместимого бэкапа.
+
+Для композиций (миграция v18) действует та же rollback-политика, что для flows и screen regions: старый образ не знает host-примитивов `@eui/Composition`/`@eui/Slot` и не умеет раскрывать документ, поэтому в течение rollback-window нельзя персистить ни одной ревизии прототипа со ссылкой на композицию. Сама миграция только добавляет таблицы и старому образу не мешает.
 
 SQLite работает в WAL-режиме: корректный backup должен учитывать основной `.db` вместе с файлами `-wal` и `-shm` либо выполняться штатным SQLite backup-механизмом. `docker compose down -v` удаляет named volume и все постоянные данные — на production эту команду применять нельзя.

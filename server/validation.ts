@@ -6,6 +6,8 @@ import { importPublished } from "./components/pipeline";
 import { requireActiveDesignSystem } from "./designSystems";
 import { ApiError } from "./http";
 import { hostPrimitiveDefinitions, hostPrimitiveNames } from "../src/catalog/hostPrimitives/definitions";
+import { collectCompositionRefs, expandCompositions, type CompositionDoc } from "../src/prototype/composition";
+import { resolveCompositionPins } from "./repos/compositions";
 
 // Walks every element prop looking for {"$asset":"<id>"} directives, returning the referenced ids.
 export function collectAssetIds(doc:PrototypeDoc):string[] {
@@ -43,6 +45,31 @@ export function collectAndValidateComponentAssetRefs(db:Database,source:string):
   const missing=ids.filter(id=>!db.query("SELECT 1 ok FROM assets WHERE id=?").get(id));
   if(missing.length) throw new ApiError(422,"asset_not_found","Component references assets that do not exist",{issues:missing.map(id=>({path:["source"],message:`unknown asset: ${id}`}))});
   return ids;
+}
+
+export type CompositionPin={id:string;name:string;version:number;sourceHash:string};
+
+/**
+ * Раскрытие композиций в **save-пути** (волна 5, B3 адверсариального ревью).
+ *
+ * Порядок обязателен: сначала раскрытие, потом `snapshotDefinitions` и
+ * `collectAndValidateAssetRefs`. Компонент или ассет, встречающийся только внутри
+ * композиции, обязан попасть в `prototype_revision_components` /
+ * `prototype_revision_assets` — иначе FK-RESTRICT инвариант этих таблиц обходится
+ * и неизменяемая опубликованная версия ссылается на удаляемый компонент.
+ *
+ * В БД сохраняется **авторский** документ (с `@eui/Composition`), пины — от раскрытого.
+ */
+export function expandPrototypeForSave(db:Database,doc:PrototypeDoc):{doc:PrototypeDoc;pins:CompositionPin[];compositions:Record<string,CompositionDoc>} {
+  const refs=collectCompositionRefs(doc);
+  if(!refs.length) return {doc,pins:[],compositions:{}};
+  const {docs,pins,missing}=resolveCompositionPins(db,refs.map(ref=>ref.compositionId),doc.designSystem);
+  if(missing.length) throw new ApiError(422,"validation_failed","Prototype references compositions that are unavailable",
+    {issues:missing.map(entry=>({path:["screens"],message:entry.reason}))});
+  const expanded=expandCompositions(doc,{compositions:docs});
+  if(expanded.issues.length) throw new ApiError(422,"validation_failed","Prototype document is invalid",
+    {issues:expanded.issues.map(issue=>({path:issue.path.split("/").filter(Boolean),message:issue.message}))});
+  return {doc:expanded.doc,pins,compositions:docs};
 }
 
 export type ComponentPin={id:string;name:string;version:number;bundleHash:string;sourcePath:string};

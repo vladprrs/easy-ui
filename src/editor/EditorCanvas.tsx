@@ -49,6 +49,8 @@ export interface EditorCanvasProps {
   customTypes?: ReadonlySet<string>;
   /** Custom component definitions, exposed to the runtime side-channel. */
   customDefinitions?: Record<string, ComponentDefinition>;
+  /** Раскрытый ключ → происхождение из композиции (`expandCompositions().expandedFrom`). */
+  compositionRefs?: Record<string, { compositionId: string; hostKey: string; innerKey: string }>;
   themeContent?: ThemeContent | null;
 }
 
@@ -123,7 +125,7 @@ class EditorCanvasErrorBoundary extends Component<{ prototypeId: string; screenI
   }
 }
 
-export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stateEpoch, selectedKey, onSelect, customTypes, customDefinitions, themeContent }: EditorCanvasProps) {
+export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stateEpoch, selectedKey, onSelect, customTypes, customDefinitions, compositionRefs, themeContent }: EditorCanvasProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const previewRootRef = useRef<HTMLDivElement>(null);
   const markerCacheRef = useRef(new Map<string, HTMLElement>());
@@ -136,7 +138,7 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
 
   // Inert runtime tree: events are stripped from both the spec and the metadata,
   // so neither builtin `on` nor custom `emit` can dispatch actions from the canvas.
-  const tree = useMemo(() => stripEvents(toRuntimeSpec(screen.spec, { customTypes })), [customTypes, screen.spec]);
+  const tree = useMemo(() => stripEvents(toRuntimeSpec(screen.spec, { customTypes, compositionRefs })), [compositionRefs, customTypes, screen.spec]);
   const spec = tree.spec;
   const hasRoot = Boolean(spec.root && spec.elements[spec.root]);
   const specs = useMemo(() => {

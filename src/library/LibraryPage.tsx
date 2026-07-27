@@ -6,10 +6,21 @@ import { chip, chipActive, headingBar, inputBase, kicker, pillPrimary } from "..
 import { figmaBadgeTitle, levelSection, library } from "../app/strings/library";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { applicableLibraryStatusKeys, atomicLevelLabel, componentLibraryStatus, groupLibraryEntries, libraryStatusLabel, matchesLibraryFilter, searchComponents, selectionForComponent, selectionKey, similarComponents, tokenize, type ComponentLibraryStatus, type LibrarySelection, type LibraryStatusKey } from "./libraryModel";
+import { CompositionsSection } from "./CompositionsSection";
 import { componentStatusBadge } from "./statusBadge";
 import { UsageTree } from "./UsageTree";
 
 const levelOrder = ["Layout", "Atoms", "Molecules", "Organisms", "Templates", "Pages", "Other"];
+
+/** Разделы библиотеки: каталог компонентов и витрина композиций (волна 5). */
+type LibraryTab = "components" | "compositions";
+
+function SectionTabs({ tab, onSelect }: { tab: LibraryTab; onSelect: (tab: LibraryTab) => void }) {
+  return <div className="mt-4 flex flex-wrap gap-2 p-0 lg:mt-3" aria-label={library.sectionsAria}>
+    <button type="button" aria-pressed={tab === "components"} className={tab === "components" ? chipActive : `${chip} hover:bg-eui-lilac-100/60`} onClick={() => onSelect("components")}>{library.tabComponents}</button>
+    <button type="button" aria-pressed={tab === "compositions"} className={tab === "compositions" ? chipActive : `${chip} hover:bg-eui-lilac-100/60`} onClick={() => onSelect("compositions")}>{library.tabCompositions}</button>
+  </div>;
+}
 
 interface LibraryStatusEntry { status: ComponentLibraryStatus; figma: FigmaProvenance | null }
 const EMPTY_STATUS = new Map<string, LibraryStatusEntry>();
@@ -39,6 +50,7 @@ export function LibraryPage() {
   useDocumentTitle(library.title);
   const registry = useApi(listDesignSystems, []);
   const manifest = useApi(getCatalogManifest, []);
+  const [tab, setTab] = useState<LibraryTab>("components");
   const [activeSystem, setActiveSystem] = useState<string | null>(null);
   const [selection, setSelection] = useState<LibrarySelection | null>(null);
   const [filters, setFilters] = useState<Set<LibraryStatusKey>>(new Set());
@@ -85,9 +97,18 @@ export function LibraryPage() {
     ? selection : active ? firstSelection(active.components) : null;
   const selectedComponent = selected ? active?.components.find((component) => component.id === selected.componentId && component.designSystem === selected.designSystem) : undefined;
 
+  if (tab === "compositions") return <main className="flex h-full min-h-0 flex-col font-eui-ui">
+    <div className="border-b px-5 pt-5 pb-4">
+      <h1 className={headingBar}>{library.title}</h1>
+      <SectionTabs tab={tab} onSelect={setTab} />
+    </div>
+    <CompositionsSection />
+  </main>;
+
   return <main className="flex h-full min-h-0 flex-col lg:flex-row">
     <aside className="w-full shrink-0 border-b p-5 font-eui-ui lg:w-72 lg:border-b-0 lg:border-r">
       <h1 className={headingBar}>{library.title}</h1>
+      <SectionTabs tab={tab} onSelect={setTab} />
       {registry.status === "loading" ? <p className="mt-4 text-sm text-eui-slate-500" role="status">{library.loadingSystems}</p> : null}
       {registry.status === "error" ? <SourceError label={library.systemsUnavailable} retry={registry.reload} /> : null}
       <div className="mt-4 flex flex-wrap gap-2" aria-label={library.designSystemsAria}>

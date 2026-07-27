@@ -5,10 +5,17 @@ import { Overlay } from "./Overlay";
 import { Hotspot } from "./content/hotspot";
 import { Image } from "./content/image";
 import type { HostPrimitiveName } from "./definitions";
+import { CompositionPlaceholder, SlotPlaceholder } from "./Composition";
+import { COMPOSITION_TYPE, SLOT_TYPE } from "./composition.definition";
 
 export { HostStageSurface, useHostStageSurface, type HostStageSurfaceContract } from "./HostStageSurface";
 export { FlowRoot } from "./FlowRoot";
 export { FLOW_ROOT_TYPE, flowRootDefinition } from "./flowRoot.definition";
+export { CompositionPlaceholder, SlotPlaceholder } from "./Composition";
+export {
+  COMPOSITION_KEY_SEPARATOR, COMPOSITION_TYPE, SLOT_TYPE,
+  compositionDefinition, compositionPrimitiveDefinitions, slotDefinition,
+} from "./composition.definition";
 export { Overlay } from "./Overlay";
 export { overlayDefinition, overlayPlacements, type OverlayProps } from "./overlay.definition";
 export { Hotspot } from "./content/hotspot";
@@ -27,4 +34,6 @@ export const hostPrimitiveComponents = {
   Image,
   Hotspot,
   [FLOW_ROOT_TYPE]: FlowRoot,
+  [COMPOSITION_TYPE]: CompositionPlaceholder,
+  [SLOT_TYPE]: SlotPlaceholder,
 } satisfies Record<HostPrimitiveName, ComponentType<never>>;

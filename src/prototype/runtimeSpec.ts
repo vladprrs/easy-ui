@@ -1,6 +1,7 @@
 import type { Spec } from "@json-render/core";
 import { FLOW_ROOT_TYPE } from "../catalog/hostPrimitives/flowRoot.definition";
 import { extractionPrimitiveNames } from "../catalog/hostPrimitives/definitions";
+import { COMPOSITION_TYPE } from "../catalog/hostPrimitives/composition.definition";
 import { REGION_KINDS, type PrototypeDoc, type RegionKind } from "./schema";
 
 type PrototypeSpec = PrototypeDoc["screens"][number]["spec"];
@@ -20,6 +21,12 @@ export interface ElementMetadata {
   slotIndices?: Record<string, number[]>;
   /** Authored screen-region marker, stripped from the runtime spec. */
   region?: RegionKind;
+  /**
+   * Происхождение элемента из раскрытой композиции (волна 5). Заполняется, когда
+   * `toRuntimeSpec` получает карту `compositionRefs` от `expandCompositions`:
+   * дерево компонентов показывает композицию как раскрываемый узел.
+   */
+  compositionRef?: { compositionId: string; hostKey: string; innerKey: string };
 }
 
 /**
@@ -150,6 +157,8 @@ export function analyzeScreenRegions(screen: RegionScreen): ScreenRegionAnalysis
 export interface ToRuntimeSpecOptions {
   /** Element types treated as custom components (their `on` is removed from the runtime spec). */
   customTypes?: ReadonlySet<string>;
+  /** Карта раскрытых ключей → происхождение из композиции (`expandCompositions().expandedFrom`). */
+  compositionRefs?: Record<string, { compositionId: string; hostKey: string; innerKey: string }>;
 }
 
 function isObject(value: unknown): value is JsonObject {
@@ -229,12 +238,16 @@ export function toRuntimeSpec(spec: PrototypeSpec, options: ToRuntimeSpecOptions
     delete (bare as { region?: unknown }).region;
     const meta: ElementMetadata = { type: element.type };
     if (element.region !== undefined) meta.region = element.region;
+    const compositionRef = options.compositionRefs?.[key];
+    if (compositionRef) meta.compositionRef = compositionRef;
     if (element.on && Object.keys(element.on).length) meta.on = element.on as Record<string, RawActionBinding>;
     const repeatKey = repeatKeyOf.get(key);
     if (isCustom && repeatKey !== undefined) meta.repeatKey = repeatKey;
     // Named-slot child map: index-of-position in element.children per slot ("default" when no slot).
+    // `@eui/Composition` — тоже slot-родитель (волна 5, B5): его дети раскрываются в слоты
+    // композиции, поэтому индексы обязаны переживать структурные сплиты (`remapMetadata`).
     const children = element.children ?? [];
-    if (isCustom && children.some((childKey) => slotOf(childKey) !== undefined)) {
+    if ((isCustom || element.type === COMPOSITION_TYPE) && children.some((childKey) => slotOf(childKey) !== undefined)) {
       const slotIndices: Record<string, number[]> = {};
       children.forEach((childKey, index) => {
         const slotName = slotOf(childKey) ?? "default";

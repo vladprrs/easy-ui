@@ -1123,6 +1123,128 @@ export const createDesignSystemContract = registerContract({
   errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed],
 });
 
+
+// --- Compositions (волна 5 §5.4): версионированные фрагменты экрана ---
+
+const compositionParamSchema = z.looseObject({
+  type: z.enum(["string", "number", "boolean", "json", "asset"]),
+  required: z.boolean().optional(), default: z.json().optional(), description: z.string().optional(),
+});
+const compositionDocumentSchema = z.looseObject({
+  version: z.literal(1), name: z.string(), description: z.string().optional(),
+  params: z.record(z.string(), compositionParamSchema), slots: z.array(z.string()),
+  spec: z.looseObject({ root: z.string(), elements: z.record(z.string(), z.unknown()) }),
+});
+const compositionVersionSchema = z.looseObject({
+  version: positiveInt, rev: positiveInt, status: z.string(), statusReason: z.string().nullable(),
+  supersededBy: z.number().nullable(), statusRev: z.number(), sourceHash: z.string(), publishedAt: isoDate,
+});
+const compositionUsagesSchema = z.looseObject({
+  currentHeadUsages: z.array(z.looseObject({ prototypeId: z.string(), name: z.string(), kind: z.string(), rev: z.number(), version: z.number() })),
+  immutableUsages: z.array(z.looseObject({ prototypeId: z.string(), version: z.number(), compositionVersion: z.number() })),
+  safeToRemove: z.boolean(),
+});
+
+export const listCompositionsContract = registerContract({
+  method: "GET", path: "/api/compositions",
+  summary: "List compositions with head revision, latest active version, declared params and slots. `includeDeleted=1` additionally returns tombstones.",
+  query: includeDeletedQuerySchema,
+  responseSchema: z.array(z.looseObject({
+    id: z.string(), name: z.string(), designSystem: z.string(), headRev: z.number(),
+    latestVersion: z.number().nullable(), updatedAt: isoDate, params: z.array(z.string()), slots: z.array(z.string()),
+  })),
+  errors: [errorCatalog.methodNotAllowed],
+});
+
+export const createCompositionContract = registerContract({
+  method: "POST", path: "/api/compositions",
+  summary: "Create a composition from a composition document (params, slots and a spec whose element types must be published components of the design system).",
+  status: 201,
+  requestSchema: z.object({ id: slugString, doc: compositionDocumentSchema, designSystem: slugString, message: z.string().optional() }),
+  responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1) }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, errorCatalog.notFound],
+});
+
+export const getCompositionContract = registerContract({
+  method: "GET", path: "/api/compositions/{id}",
+  summary: "Composition meta: head revision, its document, versions and the latest active version. Soft-deleted compositions stay 404 unless `includeDeleted=1`.",
+  query: includeDeletedQuerySchema,
+  responseSchema: z.looseObject({
+    id: z.string(), name: z.string(), designSystem: z.string(), headRev: z.number(),
+    versions: z.array(compositionVersionSchema), updatedAt: isoDate, publishedVersion: z.number().nullable(),
+    doc: compositionDocumentSchema,
+  }),
+  errors: [errorCatalog.notFound],
+});
+
+export const saveCompositionContract = registerContract({
+  method: "PUT", path: "/api/compositions/{id}",
+  summary: "Save a new head revision of the composition document (CAS on baseRev).",
+  requestSchema: z.object({ doc: compositionDocumentSchema, ...casBody }),
+  responseSchema: z.looseObject({ rev: z.number() }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.alreadyExists, errorCatalog.validationFailed],
+});
+
+export const deleteCompositionContract = registerContract({
+  method: "DELETE", path: "/api/compositions/{id}",
+  summary: "Soft-delete a composition (CAS on baseRev). 409 composition_in_use while head revisions still pin it; an admin may pass force:true. Responds 204 without a body.",
+  status: 204,
+  requestSchema: z.object({ baseRev: positiveInt, reason: z.string().optional(), force: z.boolean().optional() }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, { status: 403, code: "admin_required" }, { status: 409, code: "composition_in_use" }],
+});
+
+export const listCompositionRevisionsContract = registerContract({
+  method: "GET", path: "/api/compositions/{id}/revisions",
+  summary: "List composition revisions (newest first).",
+  responseSchema: z.array(z.looseObject({ rev: z.number(), message: z.string().nullable(), createdAt: isoDate })),
+  errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed],
+});
+
+export const getCompositionRevisionContract = registerContract({
+  method: "GET", path: "/api/compositions/{id}/revisions/{rev}",
+  summary: "Read one composition revision document.",
+  responseSchema: z.looseObject({ rev: z.number(), doc: compositionDocumentSchema, designSystem: z.string(), message: z.string().nullable(), createdAt: isoDate }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.notFound, errorCatalog.revisionNotFound],
+});
+
+export const publishCompositionContract = registerContract({
+  method: "POST", path: "/api/compositions/{id}/publish",
+  summary: "Publish the head revision as an immutable composition version (CAS on baseRev).",
+  status: 201,
+  requestSchema: z.object(casBody),
+  responseSchema: z.looseObject({ version: positiveInt, rev: positiveInt }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.alreadyPublished],
+});
+
+export const listCompositionVersionsContract = registerContract({
+  method: "GET", path: "/api/compositions/{id}/versions",
+  summary: "List immutable composition versions with their statuses.",
+  responseSchema: z.array(compositionVersionSchema),
+  errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed],
+});
+
+export const getCompositionVersionContract = registerContract({
+  method: "GET", path: "/api/compositions/{id}/versions/{version}",
+  summary: "Read one immutable composition version, including its frozen document.",
+  responseSchema: compositionVersionSchema.extend({ doc: compositionDocumentSchema, designSystem: z.string() }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.notFound, errorCatalog.versionNotFound],
+});
+
+export const setCompositionVersionStatusContract = registerContract({
+  method: "POST", path: "/api/compositions/{id}/versions/{version}/status",
+  summary: "Manual status transition of a composition version (CAS on baseStatusRev).",
+  requestSchema: z.object({ status: z.enum(["active", "deprecated", "superseded", "archived"]), reason: z.string().optional(), baseStatusRev: positiveInt }),
+  responseSchema: z.looseObject({ status: z.string(), statusRev: z.number() }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.notFound, errorCatalog.versionNotFound, { status: 409, code: "status_conflict" }, { status: 422, code: "invalid_transition" }],
+});
+
+export const compositionUsagesContract = registerContract({
+  method: "GET", path: "/api/compositions/{id}/usages",
+  summary: "Where a composition is used: head revisions of prototypes and immutable prototype publications that pin it.",
+  responseSchema: compositionUsagesSchema,
+  errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed],
+});
+
 // --- Catalog manifest / shims / health ---
 
 export const catalogManifestQuerySchema = z.strictObject({ designSystem: slugString.optional() });

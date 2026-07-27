@@ -7,7 +7,7 @@ import { validatePrototype } from "../../src/prototype/validate";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
 import { PrototypeRepo, type PrototypeLifecyclePatch } from "../repos/prototypes";
 import { parseWith, prototypeKindSchema, prototypeLifecycleSchema } from "../contracts";
-import { collectAndValidateAssetRefs, snapshotDefinitions } from "../validation";
+import { collectAndValidateAssetRefs, expandPrototypeForSave, snapshotDefinitions } from "../validation";
 import { headScreenUrl, renderStatus, versionScreenUrl } from "./renderStatus";
 import { recordValidation } from "../validationRecords";
 import { parseFigmaInput } from "../figma";
@@ -74,11 +74,14 @@ function recordPrototypeValidation(db:Database,id:string,rev:number,issues:{path
 // Create a prototype from a fully-formed document (extracted from the POST branch so the bundle
 // importer reuses the exact snapshot/validation/audit/ledger sequence). Behaviour of POST is unchanged.
 export async function createPrototypeFromDoc(db:Database,repo:PrototypeRepo,doc:PrototypeDoc,dataDir:string,ownerId:string,opts:{message?:string;figmaInput?:unknown;lifecycle?:PrototypeLifecyclePatch}={}) {
-  const snapshot=await snapshotDefinitions(db,doc,dataDir);
-  const warnings=validatePrototypeForSave(doc,snapshot.definitions,opts.lifecycle?.kind);
-  const assetIds=collectAndValidateAssetRefs(db,doc);
+  // Композиции раскрываются ПЕРЕД снимком определений и сбором ассетов (B3): пины полны.
+  const expansion=expandPrototypeForSave(db,doc);
+  const snapshot=await snapshotDefinitions(db,expansion.doc,dataDir);
+  const warnings=validatePrototypeForSave(expansion.doc,snapshot.definitions,opts.lifecycle?.kind);
+  const assetIds=collectAndValidateAssetRefs(db,expansion.doc);
   const figma=parseFigmaInput(db,opts.figmaInput,"figma");
-  const result=repo.create(doc,opts.message,snapshot.pins,assetIds,figma,ownerId,opts.lifecycle);
+  // В БД едет авторский документ, пины — от раскрытого.
+  const result=repo.create(doc,opts.message,snapshot.pins,assetIds,figma,ownerId,opts.lifecycle,expansion.pins);
   db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(ownerId,doc.id,result.rev);
   writeAuditEvent(db,{actorId:ownerId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:doc.id,detail:{rev:result.rev}});
   recordPrototypeValidation(db,doc.id,result.rev,warnings);
@@ -88,11 +91,12 @@ export async function createPrototypeFromDoc(db:Database,repo:PrototypeRepo,doc:
 // Save a new head revision from a document (used by the bundle importer for an owned id whose
 // document differs from head). Mirrors the PUT save sequence; the route's PUT branch is unchanged.
 export async function updatePrototypeFromDoc(db:Database,repo:PrototypeRepo,id:string,doc:PrototypeDoc,baseRev:number,dataDir:string,ownerId:string,opts:{message?:string;figmaInput?:unknown}={}) {
-  const snapshot=await snapshotDefinitions(db,doc,dataDir);
-  const warnings=validatePrototypeForSave(doc,snapshot.definitions,repo.lifecycle(id).kind);
-  const assetIds=collectAndValidateAssetRefs(db,doc);
+  const expansion=expandPrototypeForSave(db,doc);
+  const snapshot=await snapshotDefinitions(db,expansion.doc,dataDir);
+  const warnings=validatePrototypeForSave(expansion.doc,snapshot.definitions,repo.lifecycle(id).kind);
+  const assetIds=collectAndValidateAssetRefs(db,expansion.doc);
   const figma=parseFigmaInput(db,opts.figmaInput,"figma");
-  const saved=repo.save(id,doc,baseRev,opts.message,snapshot.pins,assetIds,figma);
+  const saved=repo.save(id,doc,baseRev,opts.message,snapshot.pins,assetIds,figma,expansion.pins);
   db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(ownerId,id,saved.rev);
   writeAuditEvent(db,{actorId:ownerId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}});
   recordPrototypeValidation(db,id,saved.rev,warnings);
@@ -109,7 +113,7 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
   const id=segments[1]!; const tail=segments.slice(2);
   if(!tail.length) {
     if(request.method==="GET") return json(repo.meta(id,principal),200,noStore);
-    if(request.method==="PUT") { const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const snapshot=await snapshotDefinitions(db,doc,dataDir); const warnings=validatePrototypeForSave(doc,snapshot.definitions,repo.lifecycle(id).kind); const assetIds=collectAndValidateAssetRefs(db,doc); const figma=parseFigmaInput(db,b.figma,"figma"); const saved=repo.save(id,doc,base,message(b),snapshot.pins,assetIds,figma); db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,saved.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}}); recordPrototypeValidation(db,id,saved.rev,warnings); return json({...saved,warnings,screens:headScreens(doc)},200,noStore); }
+    if(request.method==="PUT") { const actor=requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); const base=baseRev(b); const doc=parseDoc(b.doc,id); const expansion=expandPrototypeForSave(db,doc); const snapshot=await snapshotDefinitions(db,expansion.doc,dataDir); const warnings=validatePrototypeForSave(expansion.doc,snapshot.definitions,repo.lifecycle(id).kind); const assetIds=collectAndValidateAssetRefs(db,expansion.doc); const figma=parseFigmaInput(db,b.figma,"figma"); const saved=repo.save(id,doc,base,message(b),snapshot.pins,assetIds,figma,expansion.pins); db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,saved.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:saved.rev}}); recordPrototypeValidation(db,id,saved.rev,warnings); return json({...saved,warnings,screens:headScreens(doc)},200,noStore); }
     if(request.method==="DELETE") { requirePrototypeOwner(db,id,principal); const b=objectBody(await readJson(request)); repo.delete(id,baseRev(b)); return new Response(null,{status:204,headers:noStore}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }
@@ -150,7 +154,7 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
     const b=objectBody(await readJson(request)); const result=repo.restore(id,integer(b.rev,"rev"),baseRev(b));
     // Re-validate the restored document against the live catalog and record the result.
     const draft=repo.draft(id); let ok=true; let issues:{path:string;message:string}[]=[];
-    try { const snapshot=await snapshotDefinitions(db,draft.doc,dataDir); const validation=validatePrototype(draft.doc,{definitions:snapshot.definitions}); ok=validation.errors.length===0; issues=[...validation.errors,...validation.warnings]; }
+    try { const expansion=expandPrototypeForSave(db,draft.doc); const snapshot=await snapshotDefinitions(db,expansion.doc,dataDir); const validation=validatePrototype(expansion.doc,{definitions:snapshot.definitions}); ok=validation.errors.length===0; issues=[...validation.errors,...validation.warnings]; }
     catch(error) { ok=false; issues=[{path:"/",message:error instanceof ApiError?error.message:"Restored document failed validation"}]; }
     recordPrototypeValidation(db,id,result.rev,issues,ok);
     db.query("UPDATE prototype_revisions SET author=? WHERE prototype_id=? AND rev=?").run(actor.userId,id,result.rev); writeAuditEvent(db,{actorId:actor.userId,action:"prototype.revision.saved",subjectType:"prototype",subjectId:id,detail:{rev:result.rev,restore:true}});
@@ -170,7 +174,7 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
     const dryRun=new URL(request.url).searchParams.get("dryRun")==="1";
     const head=repo.draft(id);
     const before=head.components;
-    const snapshot=await snapshotDefinitions(db,head.doc,dataDir);
+    const snapshot=await snapshotDefinitions(db,expandPrototypeForSave(db,head.doc).doc,dataDir);
     const beforeByName=new Map(before.map(pin=>[pin.name,pin.version]));
     const afterByName=new Map(snapshot.pins.map(pin=>[pin.name,pin.version]));
     const names=[...new Set([...beforeByName.keys(),...afterByName.keys()])].sort();

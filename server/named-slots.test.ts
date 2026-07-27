@@ -32,6 +32,68 @@ const panelDoc = (slot: string) => ({
   }],
 });
 
+// Волна 5 (B5): `@eui/Composition` — тоже допустимый slot-родитель. Список слотов берётся
+// из документа композиции, а не из `definition.slots`, а раскрытие переносит размещение
+// `@eui/Slot` на маршрутизированных детей — так named slots переживают раскрытие.
+const compositionDoc = {
+  version: 1,
+  name: "SlottedPanelComposition",
+  params: { title: { type: "string", required: true } },
+  slots: ["header", "items"],
+  spec: {
+    root: "panel",
+    elements: {
+      panel: { type: "NamedSlotsPanel", props: { title: { $param: "title" } }, children: ["h", "i"] },
+      h: { type: "@eui/Slot", props: { name: "header" }, slot: "header" },
+      i: { type: "@eui/Slot", props: { name: "items" }, slot: "items" },
+    },
+  },
+};
+
+const compositionScreen = (slot: string) => ({
+  version: 1, id: "slotted-composed", name: "Slotted composed", designSystem: "yandex-pay", device: "desktop", startScreen: "home", state: {},
+  screens: [{
+    id: "home", name: "Home",
+    spec: {
+      root: "c",
+      elements: {
+        c: { type: "@eui/Composition", props: { composition: "slotted-panel", params: { title: "Hi" } }, children: ["h", "i"] },
+        h: { type: "Image", props: { src: "/header.png", alt: "Header" }, slot: "header" },
+        i: { type: "Image", props: { src: "/item.png", alt: "Item" }, slot },
+      },
+    },
+  }],
+});
+
+describe("named slots on @eui/Composition (волна 5)", () => {
+  test("routes slotted children through the composition into the panel's own named slots", async () => {
+    const { db, handler } = await setup();
+    expect((await publishPanel(handler)).status).toBe(201);
+    expect((await handler(req("/compositions", "POST", { id: "slotted-panel", designSystem: "yandex-pay", doc: compositionDoc }))).status).toBe(201);
+    expect((await handler(req("/compositions/slotted-panel/publish", "POST", { baseRev: 1 }))).status).toBe(201);
+
+    const created = await handler(req("/prototypes", "POST", { doc: compositionScreen("items") }));
+    expect(created.status).toBe(201);
+    // Пин компонента приехал через композицию, а сам документ остался авторским.
+    expect(db.query("SELECT component_id id FROM prototype_revision_components WHERE prototype_id='slotted-composed' AND rev=1").all()).toEqual([{ id: "panel" }]);
+    const stored = (db.query("SELECT doc FROM prototype_revisions WHERE prototype_id='slotted-composed' AND rev=1").get() as { doc: string }).doc;
+    expect(stored).toContain("@eui/Composition");
+    expect(stored).not.toContain("NamedSlotsPanel");
+    db.close();
+  });
+
+  test("rejects a child routed into a slot the composition does not declare", async () => {
+    const { db, handler } = await setup();
+    expect((await publishPanel(handler)).status).toBe(201);
+    expect((await handler(req("/compositions", "POST", { id: "slotted-panel", designSystem: "yandex-pay", doc: compositionDoc }))).status).toBe(201);
+    expect((await handler(req("/compositions/slotted-panel/publish", "POST", { baseRev: 1 }))).status).toBe(201);
+    const response = await handler(req("/prototypes", "POST", { doc: compositionScreen("footer") }));
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ error: { code: "validation_failed", issues: [{ message: "unknown slot for composition slotted-panel: footer" }] } });
+    db.close();
+  });
+});
+
 describe("named slots component + prototype save", () => {
   test("publishes a namedSlots component as ABI 2 by capability", async () => {
     const { db, handler } = await setup();

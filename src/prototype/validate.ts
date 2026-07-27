@@ -13,6 +13,8 @@ import { validateOverlayRules } from "./overlayRules";
 import { buildNavigationGraph, verifyEdge } from "./navigationGraph";
 import { validateRegionRules } from "./regionRules";
 import { lintPrototypeArchitecture } from "./architectureLints";
+import { COMPOSITION_TYPE, SLOT_TYPE } from "../catalog/hostPrimitives/composition.definition";
+import type { CompositionDoc } from "./composition";
 
 type Obj = Record<string, unknown>;
 const terminals = new Set(["navigate", "back", "restart", "openUrl"]);
@@ -233,7 +235,9 @@ export function validatePrototype(
   doc: PrototypeDoc,
   // `kind` — вид прототипа (волна 0). Служебные виды выключают архитектурные
   // правила целиком; без значения правила работают как обычно.
-  options?: { definitions?: Record<string, ComponentDefinition>; kind?: string },
+  // `compositions` — документы композиций, на которые ссылается документ (волна 5):
+  // из них берётся список слотов для `@eui/Composition`-родителя.
+  options?: { definitions?: Record<string, ComponentDefinition>; kind?: string; compositions?: Record<string, CompositionDoc> },
 ): PrototypeValidationResult {
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
   errors.push(...validateOverlayRules(doc));
@@ -349,10 +353,20 @@ export function validatePrototype(
         const parent = parentKey ? elements[parentKey] : undefined;
         const parentDef = parent ? definitions[parent.type] : undefined;
         const parentIsCustom = Boolean(parent) && !builtinNames.has(parent!.type) && !hostPrimitiveNames.has(parent!.type) && Boolean(parentDef);
+        // `@eui/Composition` — тоже допустимый slot-родитель (волна 5, B5 ревью):
+        // список слотов берётся из документа композиции, а не из definition.slots.
+        const parentComposition = parent?.type === COMPOSITION_TYPE && typeof parent.props.composition === "string"
+          ? options?.compositions?.[parent.props.composition] : undefined;
         if (!parent) issue(errors, [...ep, "slot"], "slot requires a parent element");
+        else if (parent.type === COMPOSITION_TYPE) {
+          // Композиция не разрешена (не передана в options) — имя слота проверит save-путь.
+          if (parentComposition && !parentComposition.slots.includes(childSlot)) issue(errors, [...ep, "slot"], `unknown slot for composition ${parent.props.composition as string}: ${childSlot}`);
+        }
         else if (!parentIsCustom || parentDef?.capabilities?.namedSlots !== true) issue(errors, [...ep, "slot"], "slot is only allowed on a child of a custom component with named slots");
         else if (!(parentDef.slots ?? []).includes(childSlot)) issue(errors, [...ep, "slot"], `unknown slot for ${parent.type}: ${childSlot}`);
       }
+      // `@eui/Slot` живёт только внутри документа композиции.
+      if (element.type === SLOT_TYPE) issue(errors, [...ep, "type"], `${SLOT_TYPE} is only allowed inside a composition document`);
       // A repeat element renders its children as a single RepeatChildren node, so slot indices are
       // inapplicable: named-slot custom parents may not also repeat.
       if (element.repeat && definition.capabilities?.namedSlots === true) issue(errors, [...ep, "repeat"], "repeat is not allowed on a custom component with named slots");

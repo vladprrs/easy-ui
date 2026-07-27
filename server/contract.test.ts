@@ -77,6 +77,16 @@ async function flowDoc(id: string, screenIds = ["home", "a", "b"]): Promise<Prot
 
 const componentSource = await Bun.file("server/fixtures/rating-stars.tsx").text();
 
+// Композиция контрактного теста держится только на host-примитивах: `assertKnownTypes`
+// требует опубликованных компонентов, а contract-stars намеренно остаётся неопубликованным.
+const compositionDoc = {
+  version: 1,
+  name: "Contract Composition",
+  params: { alt: { type: "string", required: true } },
+  slots: [],
+  spec: { root: "root", elements: { root: { type: "Image", props: { src: "/contract.png", alt: { $param: "alt" } } } } },
+};
+
 type Expectation =
   | { kind: "success"; status?: number; contentType?: string }
   | { kind: "error"; status: number; code: string };
@@ -171,6 +181,19 @@ function orderedCases(): [string, Case][] {
     ["GET /api/components/{id}/usages", { run: () => call("GET", "/api/components/contract-stars/usages"), expected: ok() }],
     ["GET /api/components/{id}/usages", { run: () => call("GET", "/api/components/contract-stars/usages?format=tree"), expected: ok() }],
     ["GET /api/components/{id}/usages", { run: () => call("GET", "/api/components/contract-missing/usages"), expected: err(404, "not_found") }],
+    // Compositions (волна 5): create -> read -> save -> publish -> versions -> status -> usages
+    ["POST /api/compositions", { run: () => call("POST", "/api/compositions", { id: "contract-composition", designSystem: "contract-ds", doc: compositionDoc }), expected: ok(201) }],
+    ["GET /api/compositions", { run: () => call("GET", "/api/compositions"), expected: ok() }],
+    ["GET /api/compositions/{id}", { run: () => call("GET", "/api/compositions/contract-composition"), expected: ok() }],
+    ["PUT /api/compositions/{id}", { run: () => call("PUT", "/api/compositions/contract-composition", { doc: { ...compositionDoc, description: "v2" }, baseRev: 1, message: "save" }), expected: ok() }],
+    ["GET /api/compositions/{id}/revisions", { run: () => call("GET", "/api/compositions/contract-composition/revisions"), expected: ok() }],
+    ["GET /api/compositions/{id}/revisions/{rev}", { run: () => call("GET", "/api/compositions/contract-composition/revisions/1"), expected: ok() }],
+    ["POST /api/compositions/{id}/publish", { run: () => call("POST", "/api/compositions/contract-composition/publish", { baseRev: 2 }), expected: ok(201) }],
+    ["GET /api/compositions/{id}/versions", { run: () => call("GET", "/api/compositions/contract-composition/versions"), expected: ok() }],
+    ["GET /api/compositions/{id}/versions/{version}", { run: () => call("GET", "/api/compositions/contract-composition/versions/1"), expected: ok() }],
+    ["POST /api/compositions/{id}/versions/{version}/status", { run: () => call("POST", "/api/compositions/contract-composition/versions/1/status", { status: "deprecated", baseStatusRev: 1 }), expected: ok() }],
+    ["GET /api/compositions/{id}/usages", { run: () => call("GET", "/api/compositions/contract-composition/usages"), expected: ok() }],
+    ["DELETE /api/compositions/{id}", { run: () => call("DELETE", "/api/compositions/contract-composition", { baseRev: 2 }), expected: ok(204) }],
     // Catalog / shims
     ["GET /api/catalog/usages", { run: () => call("GET", "/api/catalog/usages"), expected: ok() }],
     ["GET /api/catalog/usages", { run: () => call("GET", "/api/catalog/usages?designSystem=contract-ds"), expected: ok() }],

@@ -38,7 +38,7 @@ const repeatSchema = z.strictObject({
   key: z.string().min(1).optional(),
 });
 
-const elementSchema = z.strictObject({
+export const elementSchema = z.strictObject({
   type: z.string().min(1),
   props: z.record(z.string(), z.unknown()),
   children: z.array(z.string()).optional(),
@@ -51,19 +51,38 @@ const elementSchema = z.strictObject({
   slot: slugSchema.optional(),
 });
 
-const specSchema = z.strictObject({
+/**
+ * Ключ элемента в **авторском** документе (волна 5, M5). `$` зарезервирован под
+ * разделитель раскрытых композиций (`<hostKey>$<innerKey>`), поэтому запрещён на
+ * входе — так коллизии ключей после раскрытия исключены по построению.
+ * Ключи доезжают до `__euiKey` → `data-eui-key` (geometry, misclick-подсветка),
+ * контракт зафиксирован в `docs/prototype-format.md`.
+ */
+export const authoredElementKeySchema = z.string().min(1)
+  .refine((key) => !key.includes("$"), "element key must not contain '$' (reserved for composition expansion)");
+
+const storedSpecSchema = z.strictObject({
   root: z.string().min(1),
   elements: z.record(z.string(), elementSchema),
 });
 
-const screenSchema = z.strictObject({
+/** Строгая спека для входных документов: ключи элементов без `$`. */
+export const authoredSpecSchema = z.strictObject({
+  root: z.string().min(1),
+  elements: z.record(authoredElementKeySchema, elementSchema),
+});
+
+const screenShape = <S extends z.ZodType>(spec: S) => ({
   id: slugSchema,
   name: z.string().min(1),
   note: z.string().trim().min(1).max(500).optional(),
   stateOverrides: z.record(z.string(), jsonValueSchema).optional(),
   canvas: z.strictObject({ width: z.number().positive(), height: z.number().positive() }).optional(),
-  spec: specSchema,
+  spec,
 });
+
+const screenSchema = z.strictObject(screenShape(storedSpecSchema));
+const authoredScreenSchema = z.strictObject(screenShape(authoredSpecSchema));
 
 const flowStepSchema = z.strictObject({
   screenId: slugSchema,
@@ -111,7 +130,7 @@ const architectureSchema = z.strictObject({
   exemptions: z.array(architectureExemptionSchema).max(ARCHITECTURE_EXEMPTIONS_LIMIT).optional(),
 });
 
-const prototypeDocShape = {
+const prototypeDocShape = <S extends z.ZodType>(screens: S) => ({
   version: z.literal(1),
   id: slugSchema,
   name: z.string().min(1),
@@ -119,11 +138,11 @@ const prototypeDocShape = {
   device: z.enum(["mobile", "tablet", "desktop"]).default("desktop"),
   startScreen: slugSchema,
   state: z.record(z.string(), jsonValueSchema),
-  screens: z.array(screenSchema).min(1),
+  screens,
   flows: z.array(flowSchema).min(1).max(FLOWS_LIMIT).optional(),
   /** Архитектурные исключения (волна 2): аддитивно, документ без поля ведёт себя как раньше. */
   architecture: architectureSchema.optional(),
-} as const;
+}) as const;
 
 const refinePrototypeDoc = <T extends {
   screens: { id: string }[];
@@ -183,13 +202,17 @@ const refinePrototypeDoc = <T extends {
 
 /** Strict schema for create/save inputs. New revisions must choose a design system explicitly. */
 export const inputPrototypeDocSchema = z.strictObject({
-  ...prototypeDocShape,
+  ...prototypeDocShape(z.array(authoredScreenSchema).min(1)),
   designSystem: slugSchema,
 }).superRefine(refinePrototypeDoc);
 
-/** Tolerant parser for immutable legacy rows that predate the designSystem field. */
+/**
+ * Tolerant parser for immutable legacy rows that predate the designSystem field.
+ * Ключи элементов здесь **не** ограничены: уже сохранённые документы должны читаться,
+ * а раскрытый документ (ключи `<hostKey>$<inner>`) валиден для этого парсера.
+ */
 export const storedPrototypeDocSchema = z.strictObject({
-  ...prototypeDocShape,
+  ...prototypeDocShape(z.array(screenSchema).min(1)),
   designSystem: slugSchema.default("shadcn"),
 }).superRefine(refinePrototypeDoc);
 

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createPlayerRuntime } from "../runtime";
 import { HostStageSurface } from "./HostStageSurface";
 import { Overlay } from "./Overlay";
-import { extractionPrimitiveNames, FLOW_ROOT_TYPE, hostContentTypeNames, hostPrimitiveDefinitions, hostPrimitiveNames } from ".";
+import { COMPOSITION_TYPE, extractionPrimitiveNames, FLOW_ROOT_TYPE, hostContentTypeNames, hostPrimitiveDefinitions, hostPrimitiveNames, SLOT_TYPE } from ".";
 
 const noopDeps = { navigate() {}, back() {}, openUrl() {}, restart() {} };
 const eventHandle = () => ({ shouldPreventDefault: false, emit() {} });
@@ -13,7 +13,8 @@ describe("Overlay host primitive", () => {
   it("is merged into provider-backed and custom-only runtime registries", () => {
     expect(extractionPrimitiveNames).toEqual(new Set(["Overlay"]));
     expect(hostContentTypeNames).toEqual(new Set(["Image", "Hotspot"]));
-    expect(hostPrimitiveNames).toEqual(new Set(["Overlay", "Image", "Hotspot", FLOW_ROOT_TYPE]));
+    // Волна 5 добавила композиционные примитивы: они раскрываются до рендера, но имена зарезервированы.
+    expect(hostPrimitiveNames).toEqual(new Set(["Overlay", "Image", "Hotspot", COMPOSITION_TYPE, SLOT_TYPE, FLOW_ROOT_TYPE]));
     expect(hostPrimitiveDefinitions.Overlay).toMatchObject({ slots: ["default"], atomicLevel: "atom", layoutNeutral: true });
     expect(hostPrimitiveDefinitions.Overlay.props.parse({ placement: "top" })).toEqual({ placement: "top", inset: "md", scrim: false });
     expect(createPlayerRuntime(noopDeps, undefined, "shadcn").registry.Overlay).toBeDefined();

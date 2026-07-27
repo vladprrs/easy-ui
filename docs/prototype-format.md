@@ -8,6 +8,8 @@ The root is a strict object with `version: 1`, slug `id`, human-readable `name`,
 
 Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, optional non-blank `note` (at most 500 characters), optional `stateOverrides`, and `spec`. `note` is the author's caption below the screen in the CJM view. Screens appear in CJM in their `screens` array order. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, optional `on`, optional `repeat`, optional `slot`, and optional `region`. Its type and props must match the normalized definition in the document's selected design system. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
 
+**Element keys in an authored document must not contain `$`.** The character is reserved as the separator of expanded composition keys (`<hostKey>$<innerKey>`) and is rejected by `inputPrototypeDocSchema` — see [Versioned compositions](#versioned-compositions). The tolerant parser used for already stored rows (`storedPrototypeDocSchema`) does not apply that restriction, so existing revisions and expanded documents keep reading.
+
 ### Per-system component allowlist
 
 Component names are resolved only inside the selected system, plus published custom components assigned to that same system. Builtin allowlists are:
@@ -91,6 +93,86 @@ A child element may carry `slot: "<slug>"` to route it into a named region of it
 - `repeat` on a custom component with named slots is a validation error: a repeated element hands the library a single repeated-children node, so positional slot routing does not apply. `repeat` is allowed on a child *inside* a slot.
 - Legacy custom components (without `capabilities.namedSlots`) receive their children unchanged, exactly as before.
 
+## Versioned compositions
+
+A **composition** is a versioned declarative fragment of a screen with parameters and named slots. It is a separate server resource with its own revisions and immutable published versions (see [server API](server-api.md#endpoints-композиций)); a prototype references it through two host-owned primitives.
+
+`@eui/Composition` — a reference to a composition inside a screen:
+
+```json
+{
+  "type": "@eui/Composition",
+  "props": {
+    "composition": "ctyp-payment-success",
+    "params": { "accrual-amount": "12 ₽" }
+  },
+  "children": ["nav", "merchant", "offer"]
+}
+```
+
+`composition` is the slug id of a published composition; `params` carries values for its declared parameters. The element's children are routed into the composition's slots: `@eui/Composition` is a valid named-slot parent, but its slot names come from the referenced **composition document**, not from `definition.slots`. A child without `slot` lands in the `default` slot. `repeat` on a composition reference is an error.
+
+`@eui/Slot` — the insertion point for slotted children. It is valid **only inside a composition document**; an `@eui/Slot` element in a screen is a validation error.
+
+Both names are host-owned: they are reserved from component publication, are served through the `hostPrimitives` discovery section of every design system, and never appear in `components`, component pins, or the component manifest.
+
+### Composition document v1
+
+```json
+{
+  "version": 1,
+  "name": "CtypPaymentSuccessComposition",
+  "description": "…",
+  "params": {
+    "accrual-amount": { "type": "string", "required": true, "description": "…" }
+  },
+  "slots": ["nav", "merchant", "accrual", "offer", "payment-method", "footer"],
+  "spec": {
+    "root": "shell",
+    "elements": {
+      "shell": { "type": "CtypSuccessShell", "props": { "tone": "success" }, "children": ["nav", "merchant", "badge", "footer"] },
+      "nav": { "type": "@eui/Slot", "props": { "name": "nav" } },
+      "merchant": { "type": "@eui/Slot", "props": { "name": "merchant" } },
+      "badge": { "type": "CtypAccrualBadge", "props": { "amount": { "$param": "accrual-amount" } } },
+      "footer": { "type": "@eui/Slot", "props": { "name": "footer" } }
+    }
+  },
+  "provenance": { "source": "…", "figmaNodeId": "…" }
+}
+```
+
+The root object is strict: `version: 1`, `name` (1–120 characters), optional `description` (≤500), `params` (default `{}`), `slots` (default `[]`), `spec`, and optional `provenance` with optional `source`/`figmaNodeId` (≤500/≤200). Slot names are unique slugs. A parameter declares `type` ∈ `string | number | boolean | json | asset` plus optional `required`, `default` (a JSON value) and `description` (≤300). Limits are 50 params, 20 slots and 300 elements. Elements use exactly the same grammar as screen elements, and their keys carry the same no-`$` restriction.
+
+**Parameters substitute props only.** A prop value (at any nesting depth) may be the strict directive `{ "$param": "name" }`; it is replaced at expansion by the value supplied by the referencing element, or by the parameter's `default`. An optional parameter with neither value nor default removes that props key entirely. Parameters never produce state pointers: `on` handlers and `$state`/`$bindState` inside a composition address the **host prototype's** `doc.state` exactly as they would on a normal screen.
+
+The reference itself is checked at expansion: an unknown parameter name in `props.params`, a missing `required` parameter, a value whose type does not match the declaration (`asset` expects `{"$asset":"asset_<sha256>"}`, `json` accepts anything), a `$param` naming an undeclared parameter, or a child routed into a slot the composition does not declare are all errors.
+
+### v1 restrictions
+
+`compositionDocSchema` enforces all of the following:
+
+- **No `region` markers.** A composition never carries `statusBar`/`header`/`footer` markers. Regions stay authored on the screen: `analyzeScreenRegions` works on the **authored** screen spec, and a `region` on the `@eui/Composition` element itself is carried onto the root of the expanded composition — so a composition can still fill a region, but only as marked by the screen that references it.
+- **No `@eui/FlowRoot`** — it is the screen root only.
+- **No nesting**: an `@eui/Composition` element inside a composition document is rejected in v1.
+- `@eui/Slot` cannot be the composition root and cannot declare `children`.
+- Every declared slot needs exactly one matching `@eui/Slot` element (a `@eui/Slot` whose `name` is not declared, a duplicate slot element, or a declared slot without an element are errors); `name` must be a static string.
+- The `root` must reference an existing element, must not itself be a child, and every element has at most one parent; unknown children are errors.
+
+### Expansion and element keys
+
+Before rendering, every `@eui/Composition` element is replaced by the composition's elements:
+
+- inner keys are prefixed: an inner element `badge` inside host element `screen` becomes **`screen$badge`**;
+- `{ "$param": … }` directives are substituted as described above;
+- the host element's children are routed to the `@eui/Slot` matching their `slot`; the `@eui/Slot` elements themselves disappear, the routed children are reparented to the slot's parent, and each routed child's own `slot` field is replaced by the placement of the `@eui/Slot` element (or dropped when it had none);
+- the host element disappears and is replaced in its parent (or as `spec.root`) by the root of the expanded composition; the host element's `region`, `visible` and `slot` move onto that root, so region markers and named-slot placement keep working.
+
+The key contract is **load-bearing**: expanded keys are `<hostKey>$<innerKey>`, and `$` is therefore rejected in authored element keys by `inputPrototypeDocSchema`, which makes collisions impossible by construction. Keys flow into `__euiKey` → `data-eui-key`, and geometry capture, misclick highlighting and the component tree read them. The stored-document parser stays permissive so existing rows and expanded documents still read.
+
+### Where expansion happens
+
+Expansion runs in the **save path** on the server (`expandPrototypeForSave`), **before** `snapshotDefinitions` and `collectAndValidateAssetRefs` — so a component or asset that occurs only inside a composition still lands in `prototype_revision_components` / `prototype_revision_assets` and cannot be deleted out from under a published revision. The database stores the **authored** document (with `@eui/Composition`); component, asset and composition pins are derived from the **expanded** one, and publishing additionally requires every referenced composition to be pinned. The client (`src/prototype/loader.ts`) performs the same expansion using the composition documents returned alongside the draft/revision/version, so player, CJM, capture and gallery all render the expanded tree while the editor keeps the authored one.
+
 ## Spacing & layout contract v1
 
 Layout-aware component definitions use the standard spacing props `gap`, `padding`, `paddingX`, and `paddingY`. Each declared prop is an enum over all or part of the canonical token scale:
@@ -167,6 +249,8 @@ Validation enforces all of the following:
 - A region element cannot have `repeat` or `slot`; `visible` is allowed.
 - `Hotspot` is forbidden anywhere inside a region subtree.
 - `@eui/FlowRoot` cannot be nested or used anywhere except as a screen root.
+
+A region marker may sit on an `@eui/Composition` element; it is carried onto the root of the expanded composition. Composition documents themselves carry no region markers — see [Versioned compositions](#versioned-compositions).
 
 ## Overlay host primitive
 
@@ -350,6 +434,7 @@ The document root accepts an optional strict `architecture` object with one fiel
 - Atomic nesting warnings have been reviewed, even though they do not block validation.
 - Semantic warnings (interactive handlers/labels, item identity, inline base64, screen connectivity, monolithic screens, local URL paths) have been reviewed.
 - Architecture warnings (`arch/*`) have been reviewed; every remaining one is either fixed or covered by a documented `architecture.exemptions` entry.
+- Element keys contain no `$`; every referenced composition is published and its required params are supplied.
 - Directives, conditions, actions, and params use only the closed v1 grammar.
 - State paths are valid, non-reserved JSON Pointers; bound initial values are in `state` where appropriate.
 - Terminal actions are unique and last; navigating links prevent their default browser action.

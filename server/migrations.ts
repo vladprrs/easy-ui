@@ -393,6 +393,42 @@ const migrations = [
     // надгробие обязано пережить это, как и `prototypes.derived_from` в v16.
     db.run("ALTER TABLE components ADD COLUMN replacement_component_id TEXT");
   },
+  (db:Database) => {
+    // v18: версионированные композиции (волна 5, план 2026-07-27 §5.1). Четыре новые таблицы,
+    // зеркало компонентных: head_rev + ревизии + публикации + пины ревизии прототипа.
+    // Перестройка существующих таблиц не требуется (только CREATE TABLE), поэтому
+    // child-snapshot порядок из комментария v8 здесь неприменим.
+    db.run(`CREATE TABLE compositions (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, head_rev INTEGER NOT NULL,
+      design_system TEXT NOT NULL REFERENCES design_systems(id),
+      owner_id TEXT REFERENCES users(id),
+      deleted_at TEXT, delete_reason TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
+    db.run(`CREATE TABLE composition_revisions (
+      composition_id TEXT NOT NULL REFERENCES compositions(id), rev INTEGER NOT NULL,
+      doc TEXT NOT NULL, design_system TEXT NOT NULL,
+      message TEXT, author TEXT, created_at TEXT NOT NULL,
+      PRIMARY KEY (composition_id, rev))`);
+    // Публикация композиции неизменяема: `source_hash` — sha256 канонического JSON документа.
+    // Статусы зеркалят компонентные (K.2/K.3) минус staging/failed: сборки у композиции нет.
+    db.run(`CREATE TABLE composition_publishes (
+      composition_id TEXT NOT NULL REFERENCES compositions(id), version INTEGER NOT NULL,
+      rev INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active'
+        CHECK(status IN ('active','deprecated','superseded','archived')),
+      status_reason TEXT, superseded_by INTEGER, status_rev INTEGER NOT NULL DEFAULT 1,
+      source_hash TEXT NOT NULL, message TEXT, published_at TEXT NOT NULL,
+      PRIMARY KEY (composition_id, version), UNIQUE (composition_id, rev),
+      FOREIGN KEY (composition_id, rev) REFERENCES composition_revisions(composition_id, rev))`);
+    // Пины композиций ревизии прототипа. FK RESTRICT — тот же инвариант, что у компонентов:
+    // опубликованная версия прототипа не может ссылаться на удаляемую публикацию композиции.
+    db.run(`CREATE TABLE prototype_revision_compositions (
+      prototype_id TEXT NOT NULL, rev INTEGER NOT NULL, composition_id TEXT NOT NULL,
+      composition_version INTEGER NOT NULL, PRIMARY KEY (prototype_id, rev, composition_id),
+      FOREIGN KEY (prototype_id, rev) REFERENCES prototype_revisions(prototype_id, rev) ON DELETE CASCADE,
+      FOREIGN KEY (composition_id, composition_version)
+        REFERENCES composition_publishes(composition_id, version) ON DELETE RESTRICT)`);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

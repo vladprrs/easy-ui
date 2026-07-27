@@ -81,6 +81,32 @@ export function setElementRegion(
   return { ...doc, screens };
 }
 
+/**
+ * Named-slot размещение ребёнка (волна 5): для детей `@eui/Composition` это выбор
+ * слота композиции, куда ребёнок попадёт при раскрытии.
+ */
+export function setElementSlot(
+  doc: PrototypeDoc,
+  screenId: string,
+  elementKey: string,
+  slot: string | undefined,
+): PrototypeDoc {
+  const screenIndex = doc.screens.findIndex((screen) => screen.id === screenId);
+  if (screenIndex < 0) return doc;
+  const screen = doc.screens[screenIndex]!;
+  const element = screen.spec.elements[elementKey];
+  if (!element || element.slot === slot) return doc;
+
+  const nextElement = { ...element, slot };
+  if (slot === undefined) delete nextElement.slot;
+  const screens = [...doc.screens];
+  screens[screenIndex] = {
+    ...screen,
+    spec: { ...screen.spec, elements: { ...screen.spec.elements, [elementKey]: nextElement } },
+  };
+  return { ...doc, screens };
+}
+
 export function patchScreen(doc: PrototypeDoc, screenId: string, patch: ScreenPatch): PrototypeDoc {
   const screenIndex = doc.screens.findIndex((screen) => screen.id === screenId);
   if (screenIndex < 0) return doc;

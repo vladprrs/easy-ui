@@ -6,6 +6,7 @@ import { createPlayerRuntime } from "../catalog/runtime";
 import { hostPrimitiveDefinitions } from "../catalog/hostPrimitives/definitions";
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import { prototypeDocSchema } from "../prototype/schema";
+import { hostKeyOf, type CompositionDoc } from "../prototype/composition";
 import { validatePrototype } from "../prototype/validate";
 import { pillGhost, pillPrimary } from "../app/chrome";
 import { PrototypeChrome } from "../app/PrototypeChrome";
@@ -13,6 +14,7 @@ import { formatApiError } from "../app/strings/common";
 import { editor, editorDocumentTitle } from "../app/strings/editor";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { EditorCanvas } from "./EditorCanvas";
+import { compositionMapFromPins, expandForEditor } from "./compositions";
 import { createEditorState, editorReducer } from "./editorReducer";
 import { EditorScreenStrip } from "./EditorScreenStrip";
 import { InspectorPanel } from "./InspectorPanel";
@@ -39,7 +41,9 @@ function ChangeList({ title, changes }: { title: string; changes: DocChange[] })
 }
 
 export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: PrototypeDraft; custom?: CustomPlayerRuntime; runtimeKey: string; onReload: () => void }) {
-  const [state, dispatch] = useReducer(editorReducer, loaded, createEditorState);
+  // Редактор владеет **авторским** документом: раскрытые ключи `<hostKey>$<innerKey>`
+  // живут только в render-пути (см. expansion ниже), а в save уходит state.doc.
+  const [state, dispatch] = useReducer(editorReducer, loaded, (draft: PrototypeDraft) => createEditorState({ doc: draft.authoredDoc ?? draft.doc, rev: draft.rev }));
   useDocumentTitle(editorDocumentTitle(state.doc.name));
   const [issues, setIssues] = useState<DisplayIssue[]>([]);
   const [saving, setSaving] = useState(false);
@@ -67,9 +71,25 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
     ...hostPrimitiveDefinitions,
   }), [custom]);
   const customTypes = useMemo(() => new Set(Object.keys(custom?.definitions ?? {})), [custom]);
+  // Композиции: пины ревизии + созданные в этой сессии (вставка/извлечение).
+  const [sessionCompositions, setSessionCompositions] = useState<Record<string, CompositionDoc>>({});
+  const compositions = useMemo(
+    () => ({ ...compositionMapFromPins(loaded.compositions), ...sessionCompositions }),
+    [loaded.compositions, sessionCompositions],
+  );
+  const registerComposition = useCallback((id: string, doc: CompositionDoc) => {
+    setSessionCompositions((current) => ({ ...current, [id]: doc }));
+  }, []);
+  // Раскрытие пересчитывается на каждую правку: холст и лента рендерят раскрытый документ.
+  const expansion = useMemo(() => expandForEditor(state.doc, compositions), [compositions, state.doc]);
   const customDefinitions = custom?.definitions;
   const themeContent = useDesignSystemTheme(state.doc.designSystem, loaded.designSystemMetaVersion);
   const screen = state.doc.screens.find((item) => item.id === state.selection.screenId) ?? state.doc.screens[0]!;
+  const renderedScreen = expansion.doc.screens.find((item) => item.id === screen.id) ?? screen;
+  // Выделен авторский host-ключ — на холсте подсвечивается корень раскрытой композиции.
+  const canvasSelectedKey = state.selection.elementKey === null
+    ? null
+    : expansion.hostRootKeys[state.selection.elementKey] ?? state.selection.elementKey;
   const canUndo = state.past.length > 0;
   const canRedo = state.future.length > 0;
 
@@ -158,7 +178,8 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
         // local = текущие правки, remote = свежезагруженный серверный драфт.
         try {
           const remote = await getPrototypeDraft(state.doc.id);
-          setConflict({ remoteRev: remote.rev, remoteChanges: diffDocs(state.savedDoc, remote.doc), localChanges: diffDocs(state.savedDoc, parsed.data) });
+          const remoteDoc = remote.authoredDoc ?? remote.doc;
+          setConflict({ remoteRev: remote.rev, remoteChanges: diffDocs(state.savedDoc, remoteDoc), localChanges: diffDocs(state.savedDoc, parsed.data) });
         } catch {
           publishIntentRef.current = null;
           setIssues([{ path: editor.diffDocLabel, message: formatApiError(error.code, { message: error.message, status: error.status, currentRev: error.currentRev }) }]);
@@ -219,7 +240,7 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
       // сетевого шага, ошибка которого оставит клиент на старом baseRev.
       const revision = await getPrototypeRevisionFull(state.doc.id, rev);
       const restored = await restorePrototype(state.doc.id, rev, state.baseRev);
-      dispatch({ type: "rebase", rev: restored.rev, doc: revision.doc });
+      dispatch({ type: "rebase", rev: restored.rev, doc: revision.authoredDoc ?? revision.doc });
       setCurrentFigma(revision.figma ?? null);
       savedSinceLoadRef.current = true;
       setPublishedVersion(null);
@@ -265,8 +286,8 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
     {issues.length > 0 ? <div className="border-b border-eui-ink/10 bg-white px-6 py-3 font-eui-ui"><Issues issues={issues} /></div> : null}
     {historyOpen ? <HistoryPanel prototypeId={state.doc.id} headRev={state.baseRev} refreshKey={historyRefreshKey} restoringRev={restoringRev} onRestore={requestRestore} /> : null}
     {readinessOpen ? <ReadinessPanel prototypeId={state.doc.id} refreshKey={historyRefreshKey} onSelectLocation={selectLocation} /> : null}
-    <EditorScreenStrip doc={state.doc} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedScreenId={screen.id} onSelect={(screenId) => dispatch({ type: "select-screen", screenId })} customTypes={customTypes} customDefinitions={customDefinitions} themeContent={themeContent} />
-    <div className="flex min-h-0 flex-1"><section className="min-w-0 flex-1 overflow-auto bg-eui-lav p-6" aria-label={editor.canvasAria}><EditorCanvas doc={state.doc} screen={screen} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedKey={state.selection.elementKey} onSelect={(elementKey) => dispatch({ type: "select-element", elementKey })} customTypes={customTypes} customDefinitions={customDefinitions} themeContent={themeContent} /></section><DocEpochContext.Provider value={state.docEpoch}><InspectorPanel state={state} definitions={definitions} dispatch={dispatch} pins={loaded.components} /></DocEpochContext.Provider></div>
+    <EditorScreenStrip doc={expansion.doc} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedScreenId={screen.id} onSelect={(screenId) => dispatch({ type: "select-screen", screenId })} customTypes={customTypes} customDefinitions={customDefinitions} compositionRefs={expansion.compositionRefs} themeContent={themeContent} />
+    <div className="flex min-h-0 flex-1"><section className="min-w-0 flex-1 overflow-auto bg-eui-lav p-6" aria-label={editor.canvasAria}><EditorCanvas doc={expansion.doc} screen={renderedScreen} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedKey={canvasSelectedKey} onSelect={(elementKey) => dispatch({ type: "select-element", elementKey: elementKey === null ? null : hostKeyOf(elementKey) })} customTypes={customTypes} customDefinitions={customDefinitions} compositionRefs={expansion.compositionRefs} themeContent={themeContent} /></section><DocEpochContext.Provider value={state.docEpoch}><InspectorPanel state={state} definitions={definitions} dispatch={dispatch} pins={loaded.components} compositions={compositions} compositionPins={loaded.compositions} onCompositionRegistered={registerComposition} /></DocEpochContext.Provider></div>
     {publishDialogOpen ? <div role="dialog" aria-modal="true" aria-label={editor.publishDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
       <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
         <h2 className="font-eui-display text-lg font-medium">{editor.publishDialogTitle}</h2>

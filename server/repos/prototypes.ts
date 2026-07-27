@@ -5,7 +5,9 @@ import { builtinCatalogHashFor, emptyComponentManifestHash } from "../builtinHas
 import { getDesignSystemVersion, latestDesignSystemMetaVersion, requireActiveDesignSystem } from "../designSystems";
 import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
 import { ApiError } from "../http";
-import type { ComponentPin } from "../validation";
+import type { ComponentPin, CompositionPin } from "../validation";
+import { pinnedCompositionDocs } from "./compositions";
+import { collectCompositionRefs } from "../../src/prototype/composition";
 import { latestValidatedRev } from "../validationRecords";
 import { parseFigmaStored } from "../figma";
 import { hostPrimitiveNames } from "../../src/catalog/hostPrimitives/definitions";
@@ -131,6 +133,22 @@ export class PrototypeRepo {
       this.db.query("INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version) VALUES (?,?,?,?)").run(id,rev,pin.id,pin.version);
     }
   }
+  /**
+   * Пины композиций ревизии (волна 5). FK RESTRICT на `composition_publishes`
+   * гарантирует, что закреплённая публикация композиции не исчезнет из-под ревизии.
+   */
+  private insertCompositionPins(id:string,rev:number,pins:CompositionPin[]):void {
+    for(const pin of pins) {
+      const alive=this.db.query("SELECT 1 ok FROM compositions WHERE id=? AND deleted_at IS NULL").get(pin.id);
+      if(!alive) throw new ApiError(409,"composition_changed","A composition was deleted while saving");
+      this.db.query("INSERT INTO prototype_revision_compositions (prototype_id,rev,composition_id,composition_version) VALUES (?,?,?,?)").run(id,rev,pin.id,pin.version);
+    }
+  }
+  /** Закреплённые композиции ревизии вместе с их документами (для раскрытия на клиенте). */
+  private compositions(id:string,rev:number) {
+    const {docs,pins}=pinnedCompositionDocs(this.db,id,rev);
+    return pins.map(pin=>({...pin,doc:docs[pin.id]!}));
+  }
   private insertAssetPins(id:string,rev:number,assetIds:string[]):void {
     for(const assetId of assetIds) {
       const exists=this.db.query("SELECT 1 ok FROM assets WHERE id=?").get(assetId);
@@ -142,7 +160,7 @@ export class PrototypeRepo {
     return this.db.query(`SELECT a.id,a.sha256,a.mime,a.size FROM prototype_revision_assets pra
       JOIN assets a ON a.id=pra.asset_id WHERE pra.prototype_id=? AND pra.rev=? ORDER BY a.id`).all(id,rev) as {id:string;sha256:string;mime:string;size:number}[];
   }
-  create(doc: PrototypeDoc, message?: string,pins:ComponentPin[]=[],assetIds:string[]=[],figmaJson:string|null=null,ownerId:string|null=null,lifecycle:PrototypeLifecyclePatch={}): {id:string;rev:1} {
+  create(doc: PrototypeDoc, message?: string,pins:ComponentPin[]=[],assetIds:string[]=[],figmaJson:string|null=null,ownerId:string|null=null,lifecycle:PrototypeLifecyclePatch={},compositionPins:CompositionPin[]=[]): {id:string;rev:1} {
     return this.db.transaction(() => {
       if (this.db.query("SELECT 1 ok FROM prototypes WHERE id=?").get(doc.id)) throw new ApiError(409,"already_exists","Prototype already exists");
       const at=now();
@@ -151,15 +169,17 @@ export class PrototypeRepo {
         lifecycle.kind??DEFAULT_PROTOTYPE_KIND,lifecycle.tags?.length?JSON.stringify(lifecycle.tags):null,lifecycle.derivedFrom??null);
       this.insertRevision(doc.id,1,doc,message??null,at,undefined,figmaJson);
       this.insertPins(doc.id,1,pins);
+      this.insertCompositionPins(doc.id,1,compositionPins);
       this.insertAssetPins(doc.id,1,assetIds);
       return {id:doc.id,rev:1 as const};
     })();
   }
-  save(id:string, doc:PrototypeDoc, baseRev:number, message?:string,pins:ComponentPin[]=[],assetIds:string[]=[],figmaJson:string|null=null): {rev:number} {
+  save(id:string, doc:PrototypeDoc, baseRev:number, message?:string,pins:ComponentPin[]=[],assetIds:string[]=[],figmaJson:string|null=null,compositionPins:CompositionPin[]=[]): {rev:number} {
     return this.db.transaction(() => {
       const head=this.cas(id,baseRev); const rev=head.head_rev+1; const at=now();
       this.insertRevision(id,rev,doc,message??null,at,undefined,figmaJson);
       this.insertPins(id,rev,pins);
+      this.insertCompositionPins(id,rev,compositionPins);
       this.insertAssetPins(id,rev,assetIds);
       this.db.query(`UPDATE prototypes SET name=?,description=?,device=?,screen_count=?,head_rev=?,design_system=?,updated_at=? WHERE id=?`)
         .run(doc.name,doc.description??null,doc.device,doc.screens.length,rev,doc.designSystem,at,id);
@@ -183,6 +203,8 @@ export class PrototypeRepo {
         SELECT prototype_id,?,component_id,component_version FROM prototype_revision_components WHERE prototype_id=? AND rev=?`).run(rev,id,sourceRev);
       this.db.query(`INSERT INTO prototype_revision_assets (prototype_id,rev,asset_id)
         SELECT prototype_id,?,asset_id FROM prototype_revision_assets WHERE prototype_id=? AND rev=?`).run(rev,id,sourceRev);
+      this.db.query(`INSERT INTO prototype_revision_compositions (prototype_id,rev,composition_id,composition_version)
+        SELECT prototype_id,?,composition_id,composition_version FROM prototype_revision_compositions WHERE prototype_id=? AND rev=?`).run(rev,id,sourceRev);
       this.db.query(`UPDATE prototypes SET name=?,description=?,device=?,screen_count=?,head_rev=?,design_system=?,updated_at=? WHERE id=?`)
         .run(doc.name,doc.description??null,doc.device,doc.screens.length,rev,doc.designSystem,at,id);
       return {rev};
@@ -203,6 +225,10 @@ export class PrototypeRepo {
       if(mismatched) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["screens"],message:`Component pin belongs to a different design system: ${mismatched.name}`}]});
       const pinned=new Set(pinRows.map(x=>x.name));
       for(const type of customTypes) if(!Object.hasOwn(definitions,type)&&!hostPrimitiveNames.has(type)&&!pinned.has(type)) throw new ApiError(422,"validation_failed","Prototype references an unpublished custom component",{issues:[{path:["screens"],message:`Unpublished custom component: ${type}`}]});
+      // Композиции публикуемой ревизии обязаны быть закреплены: раскрытие идёт в save-пути,
+      // поэтому отсутствующий пин означает документ, сохранённый в обход (B3).
+      const pinnedCompositions=new Set((this.db.query("SELECT composition_id id FROM prototype_revision_compositions WHERE prototype_id=? AND rev=?").all(id,head.head_rev) as {id:string}[]).map(row=>row.id));
+      for(const ref of collectCompositionRefs(doc)) if(!pinnedCompositions.has(ref.compositionId)) throw new ApiError(422,"validation_failed","Prototype references an unpinned composition",{issues:[{path:["screens"],message:`Unpinned composition: ${ref.compositionId}`}]});
       const duplicate=this.db.query("SELECT version FROM prototype_publishes WHERE prototype_id=? AND rev=?").get(id,head.head_rev) as {version:number}|null;
       if (duplicate) throw new ApiError(409,"already_published","This revision is already published",{currentRev:head.head_rev,currentVersion:duplicate.version});
       const latest=this.db.query("SELECT MAX(version) version FROM prototype_publishes WHERE prototype_id=?").get(id) as {version:number|null};
@@ -267,12 +293,12 @@ export class PrototypeRepo {
       .run(next.kind,next.tags.length?JSON.stringify(next.tags):null,next.derivedFrom,now(),id);
     return next;
   }
-  draft(id:string,principal?:Principal) { const r=this.row(id); const access=principal?requirePrototypeRead(this.db,id,principal):{owner:true}; const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev); const classification=this.classifyRevision(id,r.head_rev); return {doc:parseStoredPrototypeDoc(x.doc,id,x.rev),rev:x.rev,prototypeInstanceId:r.instance_id,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,r.head_rev),designSystemMetaVersion:x.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(access.owner?{figma:parseFigmaStored(x.figma_json)}:{})}; }
+  draft(id:string,principal?:Principal) { const r=this.row(id); const access=principal?requirePrototypeRead(this.db,id,principal):{owner:true}; const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev); const classification=this.classifyRevision(id,r.head_rev); return {doc:parseStoredPrototypeDoc(x.doc,id,x.rev),rev:x.rev,prototypeInstanceId:r.instance_id,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,r.head_rev),assets:this.assets(id,r.head_rev),designSystemMetaVersion:x.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(access.owner?{figma:parseFigmaStored(x.figma_json)}:{})}; }
   revisions(id:string,limit:number,before?:number) { this.row(id); const sql=`SELECT rev,message,created_at FROM prototype_revisions WHERE prototype_id=? ${before!==undefined?"AND rev < ?":""} ORDER BY rev DESC LIMIT ?`; const rows=(before!==undefined?this.db.query(sql).all(id,before,limit):this.db.query(sql).all(id,limit)) as {rev:number;message:string|null;created_at:string}[]; return rows.map(r=>({rev:r.rev,message:r.message,createdAt:r.created_at})); }
   private revisionRow(id:string,rev:number): RevisionRow { const r=this.db.query("SELECT rev,doc,builtin_catalog_hash,design_system_meta_version,figma_json,message,created_at FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,rev) as RevisionRow|null; if(!r) throw new ApiError(404,"revision_not_found","Prototype revision not found"); return r; }
-  revision(id:string,rev:number,principal?:Principal) { const proto=this.row(id); const owner=!principal||prototypeAccess(this.db,id,principal).owner; const r=this.revisionRow(id,rev); const components=this.pins(id,rev); const classification=this.classifyRevision(id,rev); return {rev:r.rev,prototypeInstanceId:proto.instance_id,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,rev),designSystemMetaVersion:r.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(owner?{figma:parseFigmaStored(r.figma_json)}:{}),message:r.message,createdAt:r.created_at}; }
+  revision(id:string,rev:number,principal?:Principal) { const proto=this.row(id); const owner=!principal||prototypeAccess(this.db,id,principal).owner; const r=this.revisionRow(id,rev); const components=this.pins(id,rev); const classification=this.classifyRevision(id,rev); return {rev:r.rev,prototypeInstanceId:proto.instance_id,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,rev),assets:this.assets(id,rev),designSystemMetaVersion:r.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(owner?{figma:parseFigmaStored(r.figma_json)}:{}),message:r.message,createdAt:r.created_at}; }
   versions(id:string) { this.row(id); return (this.db.query("SELECT version,rev,published_at FROM prototype_publishes WHERE prototype_id=? ORDER BY version").all(id) as {version:number;rev:number;published_at:string}[]).map(r=>{const classification=this.classifyRevision(id,r.rev);return {version:r.version,rev:r.rev,publishedAt:r.published_at,renderable:classification.renderable,renderError:classification.error};}); }
-  version(id:string,version:number,principal?:Principal) { const proto=this.row(id); const owner=!principal||requirePrototypeRead(this.db,id,principal).owner; const p=this.db.query("SELECT rev,published_at FROM prototype_publishes WHERE prototype_id=? AND version=?").get(id,version) as {rev:number;published_at:string}|null; if(!p) throw new ApiError(404,"version_not_found","Prototype version not found"); const r=this.revisionRow(id,p.rev); const components=this.pins(id,p.rev); const classification=this.classifyRevision(id,p.rev); return {version,rev:p.rev,prototypeInstanceId:proto.instance_id,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,assets:this.assets(id,p.rev),designSystemMetaVersion:r.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(owner?{figma:parseFigmaStored(r.figma_json)}:{}),publishedAt:p.published_at}; }
+  version(id:string,version:number,principal?:Principal) { const proto=this.row(id); const owner=!principal||requirePrototypeRead(this.db,id,principal).owner; const p=this.db.query("SELECT rev,published_at FROM prototype_publishes WHERE prototype_id=? AND version=?").get(id,version) as {rev:number;published_at:string}|null; if(!p) throw new ApiError(404,"version_not_found","Prototype version not found"); const r=this.revisionRow(id,p.rev); const components=this.pins(id,p.rev); const classification=this.classifyRevision(id,p.rev); return {version,rev:p.rev,prototypeInstanceId:proto.instance_id,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,p.rev),assets:this.assets(id,p.rev),designSystemMetaVersion:r.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(owner?{figma:parseFigmaStored(r.figma_json)}:{}),publishedAt:p.published_at}; }
   setStatus(id:string,status:"private"|"published"|"archived") {
     const row=this.row(id); if(row.status===status) throw new ApiError(422,"invalid_transition",`Cannot transition ${row.status} → ${status}`);
     const allowed:Record<PrototypeRow["status"],PrototypeRow["status"][]>={private:["published","archived"],published:["private","archived"],archived:["private"]};

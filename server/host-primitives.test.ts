@@ -77,7 +77,8 @@ describe("host primitive API lifecycle", () => {
     };
     expect(discovery.designSystems.length).toBeGreaterThanOrEqual(2);
     for (const system of discovery.designSystems) {
-      expect(system.hostPrimitives).toHaveLength(4);
+      // 6 = Overlay, Image, Hotspot, @eui/FlowRoot + композиционные @eui/Composition и @eui/Slot (волна 5).
+      expect(system.hostPrimitives).toHaveLength(6);
       expect(system.hostPrimitives).toEqual(expect.arrayContaining([expect.objectContaining({
         name: "Overlay",
         description: "Viewport-anchored content rendered into the current stage host.",

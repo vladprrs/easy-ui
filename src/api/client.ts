@@ -1,4 +1,6 @@
 import type { PrototypeDoc, RegionKind } from "../prototype/schema";
+import type { CompositionDoc } from "../prototype/composition";
+import { expandCompositions } from "../prototype/composition";
 import type { ComponentLayout, SpaceToken } from "../designSystems/types";
 import type { ComponentScope } from "../designSystems/scope";
 
@@ -140,6 +142,12 @@ export interface PrototypeDraft {
   builtinCatalogHash: string;
   componentManifestHash: string;
   components: PrototypeComponentPin[];
+  /** Закреплённые композиции ревизии с их документами (волна 5); отсутствуют в старых фикстурах. */
+  compositions?: PrototypeCompositionPin[];
+  /** Авторский документ до раскрытия композиций — заполняет `src/prototype/loader.ts`. */
+  authoredDoc?: PrototypeDoc;
+  /** Раскрытый ключ → происхождение из композиции (для дерева компонентов). */
+  compositionRefs?: Record<string, { compositionId: string; hostKey: string; innerKey: string }>;
   designSystemMetaVersion?: number | null;
   // Asset pins and figma provenance of the revision (WF-5). Optional in the type because test
   // fixtures elide them, but the server always includes both (figma is null for legacy revisions).
@@ -149,6 +157,51 @@ export interface PrototypeDraft {
   renderError?: PrototypeRenderError | null;
 }
 export interface PrototypeVersion extends PrototypeDraft { version: number; publishedAt: string }
+
+// --- Композиции (волна 5) ---
+export type CompositionStatus = "active" | "deprecated" | "superseded" | "archived";
+export interface CompositionSummary {
+  id: string; name: string; designSystem: string; headRev: number;
+  latestVersion: number | null; updatedAt: string; description?: string;
+  params: string[]; slots: string[];
+  deleted?: true; deletedAt?: string; reason?: string | null;
+}
+export interface CompositionVersionSummary {
+  version: number; rev: number; status: CompositionStatus; statusReason: string | null;
+  supersededBy: number | null; statusRev: number; sourceHash: string; publishedAt: string;
+}
+export interface CompositionMeta {
+  id: string; name: string; designSystem: string; headRev: number; updatedAt: string;
+  publishedVersion: number | null; versions: CompositionVersionSummary[]; doc: CompositionDoc;
+}
+export interface CompositionRevisionSummary { rev: number; message: string | null; createdAt: string }
+export interface CompositionUsageReport {
+  currentHeadUsages: { prototypeId: string; name: string; kind: string; rev: number; version: number }[];
+  immutableUsages: { prototypeId: string; version: number; compositionVersion: number }[];
+  safeToRemove: boolean;
+}
+/** Пин композиции в ревизии прототипа: документ приезжает вместе с пином для раскрытия на клиенте. */
+export interface PrototypeCompositionPin { id: string; name: string; version: number; sourceHash: string; doc: CompositionDoc }
+
+const compositionPath = (id: string) => `/api/compositions/${encodeURIComponent(id)}`;
+export const listCompositions = (signal?: AbortSignal) => request<CompositionSummary[]>("/api/compositions", { signal });
+export const getComposition = (id: string, signal?: AbortSignal) => request<CompositionMeta>(compositionPath(id), { signal });
+export const createComposition = (id: string, doc: CompositionDoc, designSystem: string, message?: string, signal?: AbortSignal) =>
+  request<{ id: string; rev: 1 }>("/api/compositions", { method: "POST", body: { id, doc, designSystem, message }, signal });
+export const saveComposition = (id: string, doc: CompositionDoc, baseRev: number, message?: string, signal?: AbortSignal) =>
+  request<{ rev: number }>(compositionPath(id), { method: "PUT", body: { doc, baseRev, message }, signal });
+export const publishComposition = (id: string, baseRev: number, message?: string, signal?: AbortSignal) =>
+  request<{ version: number; rev: number }>(`${compositionPath(id)}/publish`, { method: "POST", body: { baseRev, message }, signal });
+export const deleteComposition = (id: string, baseRev: number, options: { reason?: string; force?: boolean } = {}, signal?: AbortSignal) =>
+  request<void>(compositionPath(id), { method: "DELETE", body: { baseRev, ...options }, signal });
+export const listCompositionRevisions = (id: string, signal?: AbortSignal) =>
+  request<CompositionRevisionSummary[]>(`${compositionPath(id)}/revisions`, { signal });
+export const listCompositionVersions = (id: string, signal?: AbortSignal) =>
+  request<CompositionVersionSummary[]>(`${compositionPath(id)}/versions`, { signal });
+export const getCompositionVersion = (id: string, version: number, signal?: AbortSignal) =>
+  request<CompositionVersionSummary & { doc: CompositionDoc; designSystem: string }>(`${compositionPath(id)}/versions/${version}`, { signal });
+export const getCompositionUsages = (id: string, signal?: AbortSignal) =>
+  request<CompositionUsageReport>(`${compositionPath(id)}/usages`, { signal });
 export interface PrototypeRevisionSummary { rev: number; message: string | null; createdAt: string }
 export interface PrototypeRevision extends PrototypeDraft { message: string | null; createdAt: string }
 export interface SavePrototypeResult { rev: number; warnings: unknown[] }
@@ -370,7 +423,20 @@ export const createPrototype = (doc: PrototypeDoc, message?: string, signal?: Ab
 export const setPrototypeLifecycle = (id: string, patch: PrototypeLifecycleInput, signal?: AbortSignal) =>
   request<PrototypeLifecycle>(`${prototypePath(id)}/lifecycle`, { method: "POST", body: patch, signal });
 export const getPrototypeMeta = (id: string, signal?: AbortSignal) => request<PrototypeMeta>(prototypePath(id), { signal });
-export const getPrototypeDraft = async (id: string, signal?: AbortSignal) => rememberDraftAssets(id, await request<PrototypeDraft>(`${prototypePath(id)}/draft`, { signal }));
+/**
+ * Раскрывает композиции ревизии тем же кодом, что и save-путь сервера (волна 5).
+ * `doc` становится раскрытым — плеер, галерея, CJM и capture рендерят его без изменений;
+ * авторский документ (с `@eui/Composition`) остаётся в `authoredDoc` для редактора.
+ * Ревизия без композиций возвращается как есть.
+ */
+function expandRevisionResponse<T extends { doc: PrototypeDoc; compositions?: PrototypeCompositionPin[] }>(response: T): T {
+  if (!response.compositions?.length) return response;
+  const compositions = Object.fromEntries(response.compositions.map((pin) => [pin.id, pin.doc]));
+  const expanded = expandCompositions(response.doc, { compositions });
+  return { ...response, doc: expanded.doc, authoredDoc: response.doc, compositionRefs: expanded.expandedFrom };
+}
+
+export const getPrototypeDraft = async (id: string, signal?: AbortSignal) => rememberDraftAssets(id, expandRevisionResponse(await request<PrototypeDraft>(`${prototypePath(id)}/draft`, { signal })));
 // `figma` is intentionally a required argument (WF-5): the caller must pass either the provenance
 // loaded with the draft (pass-through so an editor save does not silently erase it) or an explicit
 // null meaning "the document never had one". Null is never sent to the server — the contract only
@@ -384,10 +450,10 @@ export const listPrototypeRevisions = (id: string, options: {limit?: number; bef
   const suffix = query.size ? `?${query}` : "";
   return request<PrototypeRevisionSummary[]>(`${prototypePath(id)}/revisions${suffix}`, { signal: options.signal });
 };
-export const getPrototypeRevision = (id: string, rev: number, signal?: AbortSignal) => request<PrototypeRevision>(`${prototypePath(id)}/revisions/${rev}`, { signal });
+export const getPrototypeRevision = async (id: string, rev: number, signal?: AbortSignal) => expandRevisionResponse(await request<PrototypeRevision>(`${prototypePath(id)}/revisions/${rev}`, { signal }));
 export type PrototypeRevisionFull = PrototypeRevision;
 export const getPrototypeRevisionFull = async (id: string, rev: number, signal?: AbortSignal) => {
-  const revision = await request<PrototypeRevisionFull>(`${prototypePath(id)}/revisions/${rev}`, { signal });
+  const revision = expandRevisionResponse(await request<PrototypeRevisionFull>(`${prototypePath(id)}/revisions/${rev}`, { signal }));
   const cached = revisionAssetsByPrototype.get(id) ?? new Map<number, EditorAsset[]>();
   cached.set(rev, revision.assets ?? []);
   revisionAssetsByPrototype.set(id, cached);
@@ -431,4 +497,4 @@ export const repinPrototype = (id: string, options: { dryRun?: boolean } = {}, s
 export const setPrototypeStatus = (id: string, status: PrototypeStatus, signal?: AbortSignal) =>
   request<{ status: PrototypeStatus }>(`${prototypePath(id)}/status`, { method: "POST", body: { status }, signal });
 export const listPrototypeVersions = (id: string, signal?: AbortSignal) => request<PrototypeVersionSummary[]>(`${prototypePath(id)}/versions`, { signal });
-export const getPrototypeVersion = (id: string, version: number, signal?: AbortSignal) => request<PrototypeVersion>(`${prototypePath(id)}/versions/${version}`, { signal });
+export const getPrototypeVersion = async (id: string, version: number, signal?: AbortSignal) => expandRevisionResponse(await request<PrototypeVersion>(`${prototypePath(id)}/versions/${version}`, { signal }));

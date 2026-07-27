@@ -1,5 +1,7 @@
-import type { PrototypeDoc, RegionKind } from "../prototype/schema";
-import { patchDocMeta, patchScreen, setElementProps, setElementRegion, type Screen } from "./docMutations";
+import type { CompositionDoc } from "../prototype/composition";
+import type { JsonValue, PrototypeDoc, RegionKind } from "../prototype/schema";
+import { insertComposition, replaceSubtreeWithComposition } from "./compositions";
+import { patchDocMeta, patchScreen, setElementProps, setElementRegion, setElementSlot, type Screen } from "./docMutations";
 
 /** Максимум undo-снапшотов authored-документа (W2-2). */
 export const HISTORY_LIMIT = 50;
@@ -47,6 +49,9 @@ export type EditorAction =
   | { type: "select-element"; screenId?: string; elementKey: string | null }
   | { type: "set-element-props"; screenId: string; elementKey: string; props: Record<string, unknown> }
   | { type: "set-element-region"; screenId: string; elementKey: string; region: RegionKind | undefined }
+  | { type: "set-element-slot"; screenId: string; elementKey: string; slot: string | undefined }
+  | { type: "insert-composition"; screenId: string; parentKey: string | null; compositionId: string; composition: CompositionDoc }
+  | { type: "extract-composition"; screenId: string; rootKey: string; compositionId: string; composition: CompositionDoc; keptChildren?: readonly string[]; params?: Record<string, JsonValue> }
   | { type: "set-screen-meta"; screenId: string; patch: Partial<Pick<Screen, "name" | "note" | "stateOverrides" | "canvas">> }
   | { type: "set-doc-meta"; patch: DocMetaPatch }
   | { type: "undo" }
@@ -91,6 +96,29 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "set-element-region": {
       const doc = setElementRegion(state.doc, action.screenId, action.elementKey, action.region);
       return doc === state.doc ? state : commitDoc(state, doc, false);
+    }
+    case "set-element-slot": {
+      const doc = setElementSlot(state.doc, action.screenId, action.elementKey, action.slot);
+      return doc === state.doc ? state : commitDoc(state, doc, false);
+    }
+    case "insert-composition": {
+      const { doc, elementKey } = insertComposition(state.doc, action.screenId, {
+        parentKey: action.parentKey, compositionId: action.compositionId, composition: action.composition,
+      });
+      if (doc === state.doc) return state;
+      // Вставленная ссылка сразу становится выделением: инспектор открывает её параметры.
+      return { ...commitDoc(state, doc, false), selection: { screenId: action.screenId, elementKey } };
+    }
+    case "extract-composition": {
+      const doc = replaceSubtreeWithComposition(state.doc, action.screenId, action.rootKey, {
+        compositionId: action.compositionId,
+        keptChildren: action.keptChildren,
+        // Имя слота берётся из документа композиции: оставленные дети едут именно в него.
+        slotName: action.composition.slots[0],
+        params: action.params,
+      });
+      if (doc === state.doc) return state;
+      return { ...commitDoc(state, doc, false), selection: { screenId: action.screenId, elementKey: action.rootKey } };
     }
     case "set-screen-meta": {
       const previous = state.doc.screens.find((screen) => screen.id === action.screenId);

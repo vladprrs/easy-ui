@@ -4174,6 +4174,1846 @@
         "x-easyui-validated": false
       }
     },
+    "/api/compositions": {
+      "get": {
+        "operationId": "get_compositions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "includeDeleted",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "designSystem": {
+                        "type": "string"
+                      },
+                      "headRev": {
+                        "type": "number"
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "latestVersion": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "slots": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "updatedAt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "designSystem",
+                      "headRev",
+                      "latestVersion",
+                      "updatedAt",
+                      "params",
+                      "slots"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          }
+        },
+        "summary": "List compositions with head revision, latest active version, declared params and slots. `includeDeleted=1` additionally returns tombstones.",
+        "x-easyui-validated": false
+      },
+      "post": {
+        "operationId": "post_compositions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "type": "string"
+                  },
+                  "__schema1": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "items": {
+                          "$ref": "#/$defs/__schema1"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "additionalProperties": {
+                          "$ref": "#/$defs/__schema1"
+                        },
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "properties": {
+                  "designSystem": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "doc": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "description": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "additionalProperties": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "default": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "required": {
+                              "type": "boolean"
+                            },
+                            "type": {
+                              "enum": [
+                                "string",
+                                "number",
+                                "boolean",
+                                "json",
+                                "asset"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "slots": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "spec": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "elements": {
+                            "additionalProperties": {},
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "type": "object"
+                          },
+                          "root": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "root",
+                          "elements"
+                        ],
+                        "type": "object"
+                      },
+                      "version": {
+                        "const": 1,
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "name",
+                      "params",
+                      "slots",
+                      "spec"
+                    ],
+                    "type": "object"
+                  },
+                  "id": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "doc",
+                  "designSystem"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "rev": {
+                      "const": 1,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "rev"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "already_exists"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "Create a composition from a composition document (params, slots and a spec whose element types must be published components of the design system).",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/compositions/{id}": {
+      "delete": {
+        "operationId": "delete_compositions_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "baseRev": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "force": {
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "baseRev"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No content"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request | base_rev_required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "admin_required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "revision_conflict | composition_in_use"
+          }
+        },
+        "summary": "Soft-delete a composition (CAS on baseRev). 409 composition_in_use while head revisions still pin it; an admin may pass force:true. Responds 204 without a body.",
+        "x-easyui-validated": false
+      },
+      "get": {
+        "operationId": "get_compositions_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "includeDeleted",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "__schema1": {
+                      "type": "string"
+                    },
+                    "__schema2": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "items": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": {},
+                  "properties": {
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "doc": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "params": {
+                          "additionalProperties": {
+                            "additionalProperties": {},
+                            "properties": {
+                              "default": {
+                                "$ref": "#/$defs/__schema2"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "required": {
+                                "type": "boolean"
+                              },
+                              "type": {
+                                "enum": [
+                                  "string",
+                                  "number",
+                                  "boolean",
+                                  "json",
+                                  "asset"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ],
+                            "type": "object"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "slots": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "spec": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "elements": {
+                              "additionalProperties": {},
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "root": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "root",
+                            "elements"
+                          ],
+                          "type": "object"
+                        },
+                        "version": {
+                          "const": 1,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "name",
+                        "params",
+                        "slots",
+                        "spec"
+                      ],
+                      "type": "object"
+                    },
+                    "headRev": {
+                      "type": "number"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "publishedVersion": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "updatedAt": {
+                      "$ref": "#/$defs/__schema1"
+                    },
+                    "versions": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "publishedAt": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "rev": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "sourceHash": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "statusReason": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "statusRev": {
+                            "type": "number"
+                          },
+                          "supersededBy": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "version": {
+                            "$ref": "#/$defs/__schema0"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "rev",
+                          "status",
+                          "statusReason",
+                          "supersededBy",
+                          "statusRev",
+                          "sourceHash",
+                          "publishedAt"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "designSystem",
+                    "headRev",
+                    "versions",
+                    "updatedAt",
+                    "publishedVersion",
+                    "doc"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          }
+        },
+        "summary": "Composition meta: head revision, its document, versions and the latest active version. Soft-deleted compositions stay 404 unless `includeDeleted=1`.",
+        "x-easyui-validated": false
+      },
+      "put": {
+        "operationId": "put_compositions_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "items": {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "additionalProperties": {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "properties": {
+                  "baseRev": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "doc": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "description": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "additionalProperties": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "default": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "required": {
+                              "type": "boolean"
+                            },
+                            "type": {
+                              "enum": [
+                                "string",
+                                "number",
+                                "boolean",
+                                "json",
+                                "asset"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "slots": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "spec": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "elements": {
+                            "additionalProperties": {},
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "type": "object"
+                          },
+                          "root": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "root",
+                          "elements"
+                        ],
+                        "type": "object"
+                      },
+                      "version": {
+                        "const": 1,
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "name",
+                      "params",
+                      "slots",
+                      "spec"
+                    ],
+                    "type": "object"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "doc",
+                  "baseRev"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "properties": {
+                    "rev": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "rev"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request | base_rev_required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "revision_conflict | already_exists"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "Save a new head revision of the composition document (CAS on baseRev).",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/compositions/{id}/publish": {
+      "post": {
+        "operationId": "post_compositions_id_publish",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "baseRev": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "baseRev"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "additionalProperties": {},
+                  "properties": {
+                    "rev": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "version": {
+                      "$ref": "#/$defs/__schema0"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "rev"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request | base_rev_required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "revision_conflict | already_published"
+          }
+        },
+        "summary": "Publish the head revision as an immutable composition version (CAS on baseRev).",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/compositions/{id}/revisions": {
+      "get": {
+        "operationId": "get_compositions_id_revisions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "createdAt": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "rev": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "rev",
+                      "message",
+                      "createdAt"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          }
+        },
+        "summary": "List composition revisions (newest first).",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/compositions/{id}/revisions/{rev}": {
+      "get": {
+        "operationId": "get_compositions_id_revisions_rev",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rev",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "items": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": {},
+                  "properties": {
+                    "createdAt": {
+                      "type": "string"
+                    },
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "doc": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "params": {
+                          "additionalProperties": {
+                            "additionalProperties": {},
+                            "properties": {
+                              "default": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "required": {
+                                "type": "boolean"
+                              },
+                              "type": {
+                                "enum": [
+                                  "string",
+                                  "number",
+                                  "boolean",
+                                  "json",
+                                  "asset"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ],
+                            "type": "object"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "slots": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "spec": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "elements": {
+                              "additionalProperties": {},
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "root": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "root",
+                            "elements"
+                          ],
+                          "type": "object"
+                        },
+                        "version": {
+                          "const": 1,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "name",
+                        "params",
+                        "slots",
+                        "spec"
+                      ],
+                      "type": "object"
+                    },
+                    "message": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rev": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "rev",
+                    "doc",
+                    "designSystem",
+                    "message",
+                    "createdAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found | revision_not_found"
+          }
+        },
+        "summary": "Read one composition revision document.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/compositions/{id}/usages": {
+      "get": {
+        "operationId": "get_compositions_id_usages",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "properties": {
+                    "currentHeadUsages": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "prototypeId": {
+                            "type": "string"
+                          },
+                          "rev": {
+                            "type": "number"
+                          },
+                          "version": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "prototypeId",
+                          "name",
+                          "kind",
+                          "rev",
+                          "version"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "immutableUsages": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "compositionVersion": {
+                            "type": "number"
+                          },
+                          "prototypeId": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "prototypeId",
+                          "version",
+                          "compositionVersion"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "safeToRemove": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "currentHeadUsages",
+                    "immutableUsages",
+                    "safeToRemove"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          }
+        },
+        "summary": "Where a composition is used: head revisions of prototypes and immutable prototype publications that pin it.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/compositions/{id}/versions": {
+      "get": {
+        "operationId": "get_compositions_id_versions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "items": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "publishedAt": {
+                        "type": "string"
+                      },
+                      "rev": {
+                        "$ref": "#/$defs/__schema0"
+                      },
+                      "sourceHash": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "statusReason": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "statusRev": {
+                        "type": "number"
+                      },
+                      "supersededBy": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "version": {
+                        "$ref": "#/$defs/__schema0"
+                      }
+                    },
+                    "required": [
+                      "version",
+                      "rev",
+                      "status",
+                      "statusReason",
+                      "supersededBy",
+                      "statusRev",
+                      "sourceHash",
+                      "publishedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          }
+        },
+        "summary": "List immutable composition versions with their statuses.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/compositions/{id}/versions/{version}": {
+      "get": {
+        "operationId": "get_compositions_id_versions_version",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991,
+                      "type": "integer"
+                    },
+                    "__schema1": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "items": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": {},
+                  "properties": {
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "doc": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "params": {
+                          "additionalProperties": {
+                            "additionalProperties": {},
+                            "properties": {
+                              "default": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "required": {
+                                "type": "boolean"
+                              },
+                              "type": {
+                                "enum": [
+                                  "string",
+                                  "number",
+                                  "boolean",
+                                  "json",
+                                  "asset"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ],
+                            "type": "object"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "slots": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "spec": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "elements": {
+                              "additionalProperties": {},
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "root": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "root",
+                            "elements"
+                          ],
+                          "type": "object"
+                        },
+                        "version": {
+                          "const": 1,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "name",
+                        "params",
+                        "slots",
+                        "spec"
+                      ],
+                      "type": "object"
+                    },
+                    "publishedAt": {
+                      "type": "string"
+                    },
+                    "rev": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "sourceHash": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "statusReason": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "statusRev": {
+                      "type": "number"
+                    },
+                    "supersededBy": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "version": {
+                      "$ref": "#/$defs/__schema0"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "rev",
+                    "status",
+                    "statusReason",
+                    "supersededBy",
+                    "statusRev",
+                    "sourceHash",
+                    "publishedAt",
+                    "doc",
+                    "designSystem"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found | version_not_found"
+          }
+        },
+        "summary": "Read one immutable composition version, including its frozen document.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/compositions/{id}/versions/{version}/status": {
+      "post": {
+        "operationId": "post_compositions_id_versions_version_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "baseStatusRev": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "deprecated",
+                      "superseded",
+                      "archived"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "status",
+                  "baseStatusRev"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "statusRev": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "statusRev"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found | version_not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "status_conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_transition"
+          }
+        },
+        "summary": "Manual status transition of a composition version (CAS on baseStatusRev).",
+        "x-easyui-validated": false
+      }
+    },
     "/api/design-systems": {
       "get": {
         "operationId": "get_design_systems",
@@ -6971,6 +8811,7 @@
                               "type": "object"
                             },
                             "propertyNames": {
+                              "minLength": 1,
                               "type": "string"
                             },
                             "type": "object"
@@ -8004,6 +9845,7 @@
                               "type": "object"
                             },
                             "propertyNames": {
+                              "minLength": 1,
                               "type": "string"
                             },
                             "type": "object"

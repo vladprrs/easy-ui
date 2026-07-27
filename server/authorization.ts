@@ -30,13 +30,17 @@ export function requirePrototypeOwner(db: Database, id: string, principal: Princ
   throw new ApiError(404, "prototype_not_found", "Prototype not found");
 }
 
-export function resourceOwner(db: Database, table: "components" | "design_systems", id: string): string {
+const RESOURCE_LABEL: Record<ResourceTable, string> = { components: "Component", design_systems: "Design system", compositions: "Composition" };
+/** Таблицы ресурсов с колонкой owner_id (волна 5 добавила `compositions`). */
+export type ResourceTable = "components" | "design_systems" | "compositions";
+
+export function resourceOwner(db: Database, table: ResourceTable, id: string): string {
   const row = db.query(`SELECT owner_id ownerId FROM ${table} WHERE id=?`).get(id) as { ownerId: string | null } | null;
-  if (!row || !row.ownerId) throw new ApiError(404, "not_found", table === "components" ? "Component not found" : "Design system not found");
+  if (!row || !row.ownerId) throw new ApiError(404, "not_found", `${RESOURCE_LABEL[table]} not found`);
   return row.ownerId;
 }
 
-export function requireResourceOwner(db: Database, table: "components" | "design_systems", id: string, principal: Principal): UserPrincipal {
+export function requireResourceOwner(db: Database, table: ResourceTable, id: string, principal: Principal): UserPrincipal {
   const user = requireUser(principal);
   if (!user.isAdmin && resourceOwner(db, table, id) !== user.userId) throw new ApiError(403, "forbidden", "Only the resource owner may perform this operation");
   return user;

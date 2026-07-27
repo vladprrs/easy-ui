@@ -48,18 +48,19 @@ function StripFrame({ nativeWidth, nativeHeight, resetKey, designSystem, themeTo
   </div>;
 }
 
-function ScreenTile({ doc, screen, registry, handlers, runtimeKey, stateEpoch, selected, onSelect, customTypes, customDefinitions, themeContent }: {
+function ScreenTile({ doc, screen, registry, handlers, runtimeKey, stateEpoch, selected, onSelect, customTypes, customDefinitions, compositionRefs, themeContent }: {
   doc: PrototypeDoc; screen: Screen; registry: ComponentRegistry; handlers: JSONUIProviderProps["handlers"];
   runtimeKey: string; stateEpoch: number; selected: boolean; onSelect: () => void;
   customTypes?: ReadonlySet<string>; customDefinitions?: Record<string, ComponentDefinition>;
+  compositionRefs?: Record<string, { compositionId: string; hostKey: string; innerKey: string }>;
   themeContent?: ThemeContent | null;
 }) {
   // Inert runtime tree: events are stripped from spec and metadata alike.
   const tree = useMemo<RuntimeTree | null>(() => {
-    const inert = stripEvents(toRuntimeSpec(screen.spec, { customTypes }));
+    const inert = stripEvents(toRuntimeSpec(screen.spec, { customTypes, compositionRefs }));
     if (!inert.spec.root || !inert.spec.elements[inert.spec.root]) return null;
     return inert;
-  }, [customTypes, screen.spec]);
+  }, [compositionRefs, customTypes, screen.spec]);
   const specs = useMemo(() => {
     if (!tree) return null;
     return buildScreenRenderPlan(tree, { canvas: screen.canvas, renderHotspots: !screen.canvas });
@@ -83,10 +84,11 @@ function ScreenTile({ doc, screen, registry, handlers, runtimeKey, stateEpoch, s
   </article>;
 }
 
-export function EditorScreenStrip({ doc, registry, handlers, runtimeKey, stateEpoch, selectedScreenId, onSelect, customTypes, customDefinitions, themeContent }: {
+export function EditorScreenStrip({ doc, registry, handlers, runtimeKey, stateEpoch, selectedScreenId, onSelect, customTypes, customDefinitions, compositionRefs, themeContent }: {
   doc: PrototypeDoc; registry: ComponentRegistry; handlers: JSONUIProviderProps["handlers"]; runtimeKey: string;
   stateEpoch: number; selectedScreenId: string; onSelect: (screenId: string) => void;
   customTypes?: ReadonlySet<string>; customDefinitions?: Record<string, ComponentDefinition>;
+  compositionRefs?: Record<string, { compositionId: string; hostKey: string; innerKey: string }>;
   themeContent?: ThemeContent | null;
 }) {
   const staticRegistry = useMemo(() => createCjmRegistry(registry), [registry]);
@@ -106,7 +108,7 @@ export function EditorScreenStrip({ doc, registry, handlers, runtimeKey, stateEp
         </li>)}
       </ol>
       : <ol className="flex items-start gap-6 overflow-x-auto px-6 py-3">
-        {doc.screens.map((screen) => <li className="shrink-0" key={screen.id}><ScreenTile doc={doc} screen={screen} registry={staticRegistry} handlers={handlers} runtimeKey={runtimeKey} stateEpoch={stateEpoch} selected={screen.id === selectedScreenId} onSelect={() => onSelect(screen.id)} customTypes={customTypes} customDefinitions={customDefinitions} themeContent={themeContent} /></li>)}
+        {doc.screens.map((screen) => <li className="shrink-0" key={screen.id}><ScreenTile doc={doc} screen={screen} registry={staticRegistry} handlers={handlers} runtimeKey={runtimeKey} stateEpoch={stateEpoch} selected={screen.id === selectedScreenId} onSelect={() => onSelect(screen.id)} customTypes={customTypes} customDefinitions={customDefinitions} compositionRefs={compositionRefs} themeContent={themeContent} /></li>)}
       </ol>}
   </section>;
 }

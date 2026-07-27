@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "ctyp-payment-success-composed",
+  "name": "CTYP payment success (composed)",
+  "description": "Тот же экран, что и monolith-screen.json, но собранный из композиции со слотами: внутренности видны в дереве и линтуются.",
+  "designSystem": "yandex-pay",
+  "device": "mobile",
+  "startScreen": "success",
+  "state": {},
+  "screens": [
+    {
+      "id": "success",
+      "name": "Success",
+      "spec": {
+        "root": "root",
+        "elements": {
+          "root": { "type": "@eui/FlowRoot", "props": {}, "children": ["screen"] },
+          "screen": {
+            "type": "@eui/Composition",
+            "props": {
+              "composition": "ctyp-payment-success",
+              "params": { "accrual-amount": "12 ₽" }
+            },
+            "children": ["nav", "merchant", "offer", "method", "footer"]
+          },
+          "nav": { "type": "Image", "props": { "src": "/nav.png", "alt": "Навигация" }, "slot": "nav" },
+          "merchant": { "type": "Image", "props": { "src": "/merchant.png", "alt": "Магнит" }, "slot": "merchant" },
+          "offer": { "type": "Image", "props": { "src": "/offer.png", "alt": "Оффер" }, "slot": "offer" },
+          "method": { "type": "Image", "props": { "src": "/card.png", "alt": "Карта" }, "slot": "payment-method" },
+          "footer": { "type": "Image", "props": { "src": "/footer.png", "alt": "Футер" }, "slot": "footer" }
+        }
+      }
+    }
+  ]
+}

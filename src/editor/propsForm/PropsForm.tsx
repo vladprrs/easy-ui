@@ -5,7 +5,7 @@ import { propsForm as sharedStrings } from "../../app/strings/propsForm";
 import { getEditorAssetsSnapshot, subscribeEditorAssets, uploadAsset, type EditorAsset } from "../../api/client";
 import type { ComponentDefinition } from "../../catalog/definitions";
 import { isDynamicValue, validateElementProps } from "../../prototype/validate";
-import { PropsForm as CorePropsForm, type PropField, type PropsValidation } from "../../propsForm/PropsForm";
+import { PropsForm as CorePropsForm, type PropsValidation } from "../../propsForm/PropsForm";
 
 type PropsFormProps = {
   definition: ComponentDefinition;
@@ -39,7 +39,7 @@ function formatBytes(size: number): string {
   return `${Math.round(size / (1024 * 102.4)) / 10} МБ`;
 }
 
-function AssetField({ field, value, assets, commit }: { field: PropField; value: unknown; assets: EditorAsset[]; commit: (value: unknown) => boolean }) {
+function AssetField({ field, value, assets, commit }: { field: { name: string }; value: unknown; assets: EditorAsset[]; commit: (value: unknown) => boolean }) {
   const directive = isAssetDirective(value) ? value : null;
   const [mode, setMode] = useState<"url" | "asset">(directive ? "asset" : "url");
   const valueUrl = typeof value === "string" ? value : undefined;
@@ -75,6 +75,22 @@ function AssetField({ field, value, assets, commit }: { field: PropField; value:
       {uploadError ? <p role="alert" className="text-xs font-normal text-eui-magenta">{uploadError}</p> : null}
     </>}
   </div>;
+}
+
+/**
+ * Автономное поле ассета (волна 5): тот же контрол, что и в форме пропов, но для
+ * значения вне схемы компонента — например параметра композиции типа `asset`.
+ */
+export function AssetValueField({ name, value, onCommit }: { name: string; value: unknown; onCommit: (value: unknown) => void }) {
+  const assets = useSyncExternalStore(subscribeEditorAssets, getEditorAssetsSnapshot, getEditorAssetsSnapshot);
+  const docEpoch = useContext(DocEpochContext);
+  return <AssetField
+    key={`${docEpoch}:${name}:${isAssetDirective(value) ? "asset" : "url"}`}
+    field={{ name }}
+    value={value}
+    assets={assets}
+    commit={(next) => { onCommit(next); return true; }}
+  />;
 }
 
 export function PropsForm({ definition, values, effectiveState, onCommit, path = ["props"] }: PropsFormProps) {

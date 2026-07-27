@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "name": "CtypPaymentSuccessComposition",
+  "description": "Мотивирующий кейс волны 5: экран CTYP payment success, пересобранный как версионированная композиция со слотами вместо одного screen-компонента.",
+  "params": {
+    "accrual-amount": { "type": "string", "required": true, "description": "Сумма начисленного кэшбэка" }
+  },
+  "slots": ["nav", "merchant", "accrual", "offer", "payment-method", "footer"],
+  "spec": {
+    "root": "shell",
+    "elements": {
+      "shell": {
+        "type": "CtypSuccessShell",
+        "props": { "tone": "success" },
+        "children": ["nav", "merchant", "accrual", "badge", "offer", "payment-method", "footer"]
+      },
+      "nav": { "type": "@eui/Slot", "props": { "name": "nav" } },
+      "merchant": { "type": "@eui/Slot", "props": { "name": "merchant" } },
+      "accrual": { "type": "@eui/Slot", "props": { "name": "accrual" } },
+      "badge": { "type": "CtypAccrualBadge", "props": { "amount": { "$param": "accrual-amount" } } },
+      "offer": { "type": "@eui/Slot", "props": { "name": "offer" } },
+      "payment-method": { "type": "@eui/Slot", "props": { "name": "payment-method" } },
+      "footer": { "type": "@eui/Slot", "props": { "name": "footer" } }
+    }
+  },
+  "provenance": { "source": "test/fixtures/architecture/monolith-screen.json" }
+}

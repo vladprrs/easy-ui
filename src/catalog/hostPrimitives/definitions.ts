@@ -2,6 +2,7 @@ import type { ComponentDefinition } from "../definitions";
 import { FLOW_ROOT_TYPE, flowRootDefinition } from "./flowRoot.definition";
 import { hostContentTypeDefinitions } from "./content/definitions";
 import { extractionPrimitiveDefinitions } from "./extraction/definitions";
+import { compositionPrimitiveDefinitions } from "./composition.definition";
 
 /**
  * Complete host-owned catalog. The legacy name is retained for the discovery API,
@@ -10,6 +11,7 @@ import { extractionPrimitiveDefinitions } from "./extraction/definitions";
 export const hostPrimitiveDefinitions = {
   ...extractionPrimitiveDefinitions,
   ...hostContentTypeDefinitions,
+  ...compositionPrimitiveDefinitions,
   [FLOW_ROOT_TYPE]: flowRootDefinition,
 } satisfies Record<string, ComponentDefinition>;
 
@@ -19,3 +21,7 @@ export const hostPrimitiveNames: ReadonlySet<string> = new Set(Object.keys(hostP
 
 export { extractionPrimitiveDefinitions, extractionPrimitiveNames, type ExtractionPrimitiveName } from "./extraction/definitions";
 export { hostContentTypeDefinitions, hostContentTypeNames, type HostContentTypeName } from "./content/definitions";
+export {
+  COMPOSITION_KEY_SEPARATOR, COMPOSITION_TYPE, SLOT_TYPE,
+  compositionDefinition, compositionPrimitiveDefinitions, slotDefinition,
+} from "./composition.definition";

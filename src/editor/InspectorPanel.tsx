@@ -11,7 +11,12 @@ import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } fr
 import type { EditorAction, EditorState } from "./editorReducer";
 import { getElementPath } from "../architecture/screenTree";
 import type { ComponentPinInfo } from "../architecture/screenTree";
+import { COMPOSITION_TYPE } from "../catalog/hostPrimitives/composition.definition";
+import type { CompositionDoc } from "../prototype/composition";
+import type { PrototypeCompositionPin } from "../api/client";
 import { ComponentTreeInspector } from "./ComponentTreeInspector";
+import { CompositionPanel } from "./CompositionPanel";
+import { ExtractCompositionDialog, InsertCompositionDialog } from "./CompositionDialogs";
 import { PropsForm } from "./propsForm/PropsForm";
 import { suggestRegion } from "./regionSuggestion";
 
@@ -96,7 +101,7 @@ function CanvasEditor({ canvas, onCommit }: { canvas?: { width: number; height: 
   return <fieldset className="font-eui-ui"><legend className="text-xs text-eui-slate-500">{editor.canvasLegend}</legend><div className="mt-1 grid grid-cols-2 gap-2"><label className="text-xs text-eui-slate-500">{editor.widthLabel}<input aria-label={editor.canvasWidthAria} type="number" className={`${inputClass} text-eui-ink`} value={width} onChange={(event) => setWidth(event.target.value)} onBlur={commit} /></label><label className="text-xs text-eui-slate-500">{editor.heightLabel}<input aria-label={editor.canvasHeightAria} type="number" className={`${inputClass} text-eui-ink`} value={height} onChange={(event) => setHeight(event.target.value)} onBlur={commit} /></label></div>{error ? <p role="alert" className="mt-1 text-xs text-eui-magenta">{error}</p> : null}</fieldset>;
 }
 
-export function InspectorPanel({ state, definitions, dispatch, pins, issues }: {
+export function InspectorPanel({ state, definitions, dispatch, pins, issues, compositions, compositionPins, onCompositionRegistered }: {
   state: EditorState;
   definitions: Record<string, ComponentDefinition>;
   dispatch: Dispatch<EditorAction>;
@@ -104,7 +109,14 @@ export function InspectorPanel({ state, definitions, dispatch, pins, issues }: {
   pins?: readonly ComponentPinInfo[];
   /** Issue'ы валидации документа, раскладываемые по элементам дерева. */
   issues?: { errors?: readonly ValidationIssue[]; warnings?: readonly ValidationIssue[] };
+  /** Документы композиций, доступных документу (пины ревизии + созданные в сессии). */
+  compositions?: Record<string, CompositionDoc>;
+  /** Пины композиций ревизии — версии для панели композиции. */
+  compositionPins?: readonly PrototypeCompositionPin[];
+  /** Новая композиция (вставленная или извлечённая) — поднимается в EditorView для раскрытия. */
+  onCompositionRegistered?: (id: string, doc: CompositionDoc) => void;
 }) {
+  const [dialog, setDialog] = useState<"insert" | "extract" | null>(null);
   const screenIndex = state.doc.screens.findIndex((item) => item.id === state.selection.screenId);
   const screen = state.doc.screens[screenIndex];
   if (!screen) return <aside className="w-90 shrink-0 border-l border-eui-ink/10 bg-white p-4"><p className="font-eui-ui text-sm text-eui-slate-500">{editor.screenMissing}</p></aside>;
@@ -129,9 +141,24 @@ export function InspectorPanel({ state, definitions, dispatch, pins, issues }: {
     dispatch({ type: "set-screen-meta", screenId: screen.id, patch: { canvas } });
   };
 
+  // Композиции (волна 5): host-элемент редактируется как ссылка (параметры + слоты),
+  // вставка и извлечение работают относительно текущего выделения.
+  const compositionId = element?.type === COMPOSITION_TYPE && typeof element.props.composition === "string" ? element.props.composition : null;
+  const insertParentKey = elementKey && screen.spec.elements[elementKey] ? elementKey : screen.spec.root;
+  const registerComposition = (id: string, doc: CompositionDoc) => { onCompositionRegistered?.(id, doc); };
+
   return <aside className="w-90 shrink-0 overflow-y-auto border-l border-eui-ink/10 bg-white" aria-label={editor.inspectorAria}>
     <Section title={editor.sectionElement}>
       <ComponentTreeInspector key={screen.id} spec={screen.spec} selectedKey={elementKey} onSelect={(key) => dispatch({ type: "select-element", elementKey: key })} definitions={definitions} pins={pins} issues={issues} />
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" className={`${pillGhost} px-3 py-1 text-xs`} onClick={() => setDialog("insert")}>{editor.compositionInsert}</button>
+        <button
+          type="button"
+          className={`${pillGhost} px-3 py-1 text-xs disabled:opacity-50`}
+          disabled={!element || element.type === COMPOSITION_TYPE}
+          onClick={() => setDialog("extract")}
+        >{editor.compositionExtract}</button>
+      </div>
       {element ? <div className="mt-4 border-t border-eui-ink/10 pt-4">
         <nav aria-label={editor.elementBreadcrumbsAria} className="mb-3 flex flex-wrap items-center gap-1 font-eui-ui text-xs text-eui-slate-500">
           <button type="button" className="rounded px-1 py-0.5 hover:bg-eui-lilac-100 hover:text-eui-ink" onClick={() => dispatch({ type: "select-element", elementKey: null })}>{editor.screenBreadcrumb}</button>
@@ -162,8 +189,19 @@ export function InspectorPanel({ state, definitions, dispatch, pins, issues }: {
             <button type="button" className={`${pillGhost} shrink-0 px-3 py-1 text-xs`} onClick={() => dispatch({ type: "set-element-region", screenId: screen.id, elementKey: elementKey!, region: suggestion })}>{editor.applyRegionSuggestion}</button>
           </div> : null}
         </div> : null}
-        {definition ? <PropsForm definition={definition} values={element.props} effectiveState={effectiveState} path={elementPath} onCommit={(props) => dispatch({ type: "set-element-props", screenId: screen.id, elementKey: elementKey!, props })} />
-          : <JsonEditor label="Props (JSON)" value={element.props} onCommit={(props) => dispatch({ type: "set-element-props", screenId: screen.id, elementKey: elementKey!, props })} />}
+        {compositionId !== null
+          ? <CompositionPanel
+            screen={screen}
+            elementKey={elementKey!}
+            element={element}
+            compositionId={compositionId}
+            composition={compositions?.[compositionId]}
+            version={compositionPins?.find((pin) => pin.id === compositionId)?.version}
+            dispatch={dispatch}
+            onSelectElement={(key) => dispatch({ type: "select-element", elementKey: key })}
+          />
+          : definition ? <PropsForm definition={definition} values={element.props} effectiveState={effectiveState} path={elementPath} onCommit={(props) => dispatch({ type: "set-element-props", screenId: screen.id, elementKey: elementKey!, props })} />
+            : <JsonEditor label="Props (JSON)" value={element.props} onCommit={(props) => dispatch({ type: "set-element-props", screenId: screen.id, elementKey: elementKey!, props })} />}
         {element.on && Object.keys(element.on).length ? <ElementEvents on={element.on} screenNames={screenNames} /> : null}
       </div> : <p className="mt-3 font-eui-ui text-sm text-eui-slate-500">{editor.selectElementHint}</p>}
     </Section>
@@ -179,5 +217,26 @@ export function InspectorPanel({ state, definitions, dispatch, pins, issues }: {
       <label className="block font-eui-ui text-xs text-eui-slate-500">{editor.startScreenLabel}<select className={`${inputClass} text-eui-ink`} value={state.doc.startScreen} onChange={(event) => dispatch({ type: "set-doc-meta", patch: { startScreen: event.target.value } })}>{state.doc.screens.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <label className="block font-eui-ui text-xs text-eui-slate-500">{editor.deviceLabel}<select className={`${inputClass} text-eui-ink`} value={state.doc.device} onChange={(event) => dispatch({ type: "set-doc-meta", patch: { device: event.target.value as EditorState["doc"]["device"] } })}><option value="mobile">{deviceNames.mobile}</option><option value="tablet">{deviceNames.tablet}</option><option value="desktop">{deviceNames.desktop}</option></select></label>
     </div></Section>
+    {dialog === "insert" ? <InsertCompositionDialog
+      designSystem={state.doc.designSystem}
+      parentKey={insertParentKey}
+      onCancel={() => setDialog(null)}
+      onPick={(id, doc) => {
+        registerComposition(id, doc);
+        dispatch({ type: "insert-composition", screenId: screen.id, parentKey: insertParentKey, compositionId: id, composition: doc });
+        setDialog(null);
+      }}
+    /> : null}
+    {dialog === "extract" && elementKey && element ? <ExtractCompositionDialog
+      screen={screen}
+      rootKey={elementKey}
+      designSystem={state.doc.designSystem}
+      onCancel={() => setDialog(null)}
+      onExtracted={(id, doc, keptChildren) => {
+        registerComposition(id, doc);
+        dispatch({ type: "extract-composition", screenId: screen.id, rootKey: elementKey, compositionId: id, composition: doc, keptChildren });
+        setDialog(null);
+      }}
+    /> : null}
   </aside>;
 }
