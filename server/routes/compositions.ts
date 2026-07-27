@@ -138,7 +138,8 @@ export async function routeCompositions(request: Request, db: Database, segments
       const version = int(Number(tail[1]), "version");
       const input = body(await readJson(request));
       if (!Object.hasOwn(input, "baseStatusRev")) throw new ApiError(400, "invalid_request", "baseStatusRev is required");
-      const result = repo.setStatus(id, version, { status: text(input.status, "status")!, reason: text(input.reason, "reason", false), baseStatusRev: int(input.baseStatusRev, "baseStatusRev") });
+      const supersededBy = input.supersededBy === undefined ? undefined : int(input.supersededBy, "supersededBy");
+      const result = repo.setStatus(id, version, { status: text(input.status, "status")!, reason: text(input.reason, "reason", false), supersededBy, baseStatusRev: int(input.baseStatusRev, "baseStatusRev") });
       writeAuditEvent(db, { actorId: actor.userId, action: "composition.status.changed", subjectType: "composition", subjectId: id, detail: { version, ...result } });
       return json(result, 200, noStore);
     }

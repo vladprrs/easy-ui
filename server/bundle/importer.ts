@@ -3,6 +3,7 @@ import { unzipSync, type UnzipFileInfo } from "fflate";
 import {
   bundleManifestSchema,
   type BundleComponent,
+  type BundleComposition,
   type BundleDesignSystem,
   type BundleManifest,
   type BundlePrototype,
@@ -10,12 +11,14 @@ import {
   type ImportReportItem,
 } from "../../src/bundle/schema";
 import { inputPrototypeDocSchema, type PrototypeDoc } from "../../src/prototype/schema";
+import { collectCompositionRefs, compositionDocSchema, type CompositionDoc } from "../../src/prototype/composition";
 import { hostPrimitiveNames } from "../../src/catalog/hostPrimitives/definitions";
 import { designSystems } from "../../src/designSystems";
 import { ApiError } from "../http";
 import { RENDER_CONTRACT_VERSION, builtinCatalogHash } from "../builtinHash";
 import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
+import { CompositionRepo, compositionSourceHash } from "../repos/compositions";
 import { PrototypeRepo } from "../repos/prototypes";
 import { sha256 } from "../components/pipeline";
 import { getDesignSystemVersion, getIncludingRetired, latestDesignSystemMetaVersion } from "../designSystems";
@@ -37,7 +40,7 @@ const MAX_ENTRIES = 4096;
 
 // The only paths a well-formed bundle may contain; anything else (traversal, absolute, symlink) is rejected.
 const PATH_ALLOWLIST =
-  /^(manifest\.json|prototypes\/[a-z0-9]+(?:-[a-z0-9]+)*\.json|components\/[a-z0-9]+(?:-[a-z0-9]+)*\/source\.tsx|assets\/[0-9a-f]{64})$/;
+  /^(manifest\.json|prototypes\/[a-z0-9]+(?:-[a-z0-9]+)*\.json|compositions\/[a-z0-9]+(?:-[a-z0-9]+)*\.json|components\/[a-z0-9]+(?:-[a-z0-9]+)*\/source\.tsx|assets\/[0-9a-f]{64})$/;
 
 const invalid = (message: string): never => { throw new ApiError(400, "invalid_bundle", message); };
 
@@ -82,6 +85,7 @@ function crossCheck(manifest: BundleManifest, files: Record<string, Uint8Array>)
   const referenced = new Set<string>(["manifest.json"]);
   for (const proto of manifest.prototypes) { referenced.add(proto.docPath); if (!files[proto.docPath]) invalid(`Bundle is missing ${proto.docPath}`); }
   for (const component of manifest.components) { referenced.add(component.sourcePath); if (!files[component.sourcePath]) invalid(`Bundle is missing ${component.sourcePath}`); }
+  for (const composition of manifest.compositions) { referenced.add(composition.docPath); if (!files[composition.docPath]) invalid(`Bundle is missing ${composition.docPath}`); }
   for (const asset of manifest.assets) { const path = `assets/${asset.sha256}`; referenced.add(path); if (!files[path]) invalid(`Bundle is missing ${path}`); }
   for (const name of Object.keys(files)) if (!referenced.has(name)) invalid(`Bundle contains an unreferenced file: ${name}`);
 }
@@ -121,6 +125,17 @@ function activeComponentByName(db: Database, name: string, designSystem: string)
     JOIN component_publishes cp ON cp.component_id=c.id AND cp.status='active'
     JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
     WHERE c.name=? AND cr.design_system=? AND c.deleted_at IS NULL LIMIT 1`).get(name, designSystem));
+}
+
+function activeCompositionVersion(db: Database, id: string): number | null {
+  return (db.query("SELECT MAX(version) v FROM composition_publishes WHERE composition_id=? AND status='active'").get(id) as { v: number | null }).v;
+}
+
+/** An importable composition on the target: alive, of the same design system and actively published. */
+function activeCompositionById(db: Database, id: string, designSystem: string): boolean {
+  return Boolean(db.query(`SELECT 1 ok FROM compositions c
+    JOIN composition_publishes cp ON cp.composition_id=c.id AND cp.status='active'
+    WHERE c.id=? AND c.design_system=? AND c.deleted_at IS NULL LIMIT 1`).get(id, designSystem));
 }
 
 function builtinNameReserved(name: string): boolean {
@@ -240,6 +255,68 @@ async function importComponent(db: Database, dataDir: string, component: BundleC
   }
 }
 
+// --- Phase: compositions ----------------------------------------------------
+
+interface CompositionRow { id: string; name: string; head_rev: number; deleted_at: string | null; owner_id: string | null }
+
+/**
+ * Композиции восстанавливаются между фазой компонентов и фазой прототипов: их документ
+ * ссылается на published-компоненты цели, а save-путь прототипа резолвит композицию к
+ * последней active-публикации. Конфликт-политика — компонентная, с одним отличием:
+ * прототип адресует композицию **по id**, поэтому remap id невозможен и занятый чужой
+ * id/name — это `name_conflict`, а не `<id>-imported-<n>`.
+ */
+function importComposition(db: Database, bundle: BundleComposition, docJson: string, importerId: string, mode: ImportMode, availableComponents: Set<string>, availableDs: Set<string>, report: Report): boolean {
+  const base = { type: "composition" as const, id: bundle.id, name: bundle.name };
+  let doc: CompositionDoc;
+  try { doc = compositionDocSchema.parse(JSON.parse(docJson)); }
+  catch (error) { report.push({ ...base, action: "error", detail: `invalid_document: ${error instanceof Error ? error.message : String(error)}` }); return false; }
+
+  const system = getIncludingRetired(db, bundle.designSystem);
+  const systemUsable = (system !== null && !system.retired) || availableDs.has(bundle.designSystem);
+  if (!systemUsable) { report.push({ ...base, action: "error", detail: "dependency_failed: design system unavailable" }); return false; }
+
+  // Каждый внутренний тип обязан быть host-примитивом либо активным компонентом цели
+  // (в том числе только что импортированным) — иначе раскрытие прототипа не найдёт пин.
+  const missing = [...new Set(Object.values(doc.spec.elements).map((element) => element.type))]
+    .filter((type) => !hostPrimitiveNames.has(type))
+    .filter((type) => !availableComponents.has(`${bundle.designSystem}::${type}`) && !activeComponentByName(db, type, bundle.designSystem));
+  if (missing.length) { report.push({ ...base, action: "error", detail: `dependency_failed: ${missing.join(", ")}` }); return false; }
+
+  const repo = new CompositionRepo(db);
+  const byId = db.query("SELECT id,name,head_rev,deleted_at,owner_id FROM compositions WHERE id=?").get(bundle.id) as CompositionRow | null;
+  const byName = db.query("SELECT id,name,head_rev,deleted_at,owner_id FROM compositions WHERE name=?").get(bundle.name) as CompositionRow | null;
+  if (byId?.deleted_at || byName?.deleted_at) { report.push({ ...base, action: "error", detail: "deleted_conflict" }); return false; }
+  const target = byId ?? byName;
+  if (target) {
+    if (target.owner_id !== importerId || target.id !== bundle.id) { report.push({ ...base, action: "error", detail: "name_conflict" }); return false; }
+    const head = repo.revision(target.id);
+    const sameDoc = compositionSourceHash(head.doc) === bundle.sourceHash;
+    const active = activeCompositionVersion(db, target.id);
+    if (sameDoc && active !== null) { report.push({ ...base, action: "reused", version: active }); return true; }
+    if (mode === "dry-run") { report.push({ ...base, action: "created", version: (active ?? 0) + 1 }); return true; }
+    try {
+      const baseRev = sameDoc ? head.rev : repo.save(target.id, doc, head.rev, "Imported from bundle", importerId).rev;
+      const result = repo.publish(target.id, baseRev, "Imported from bundle");
+      report.push({ ...base, action: "created", version: result.version });
+      return true;
+    } catch (error) {
+      report.push({ ...base, action: "error", detail: error instanceof ApiError ? error.message : String(error) });
+      return false;
+    }
+  }
+  if (mode === "dry-run") { report.push({ ...base, action: "created", version: 1 }); return true; }
+  try {
+    repo.create(bundle.id, doc, bundle.designSystem, "Imported from bundle", importerId);
+    const result = repo.publish(bundle.id, 1, "Imported from bundle");
+    report.push({ ...base, action: "created", version: result.version });
+    return true;
+  } catch (error) {
+    report.push({ ...base, action: "error", detail: error instanceof ApiError ? error.message : String(error) });
+    return false;
+  }
+}
+
 // --- Phase: prototypes ------------------------------------------------------
 
 function nextFreeId(db: Database, id: string): string {
@@ -249,7 +326,7 @@ function nextFreeId(db: Database, id: string): string {
   }
 }
 
-async function importPrototype(db: Database, dataDir: string, bundle: BundlePrototype, docBytes: Uint8Array, manifest: BundleManifest, importerId: string, mode: ImportMode, available: Set<string>, availableDs: Set<string>, report: Report): Promise<void> {
+async function importPrototype(db: Database, dataDir: string, bundle: BundlePrototype, docBytes: Uint8Array, manifest: BundleManifest, importerId: string, mode: ImportMode, available: Set<string>, availableDs: Set<string>, availableCompositions: Set<string>, report: Report): Promise<void> {
   const repo = new PrototypeRepo(db);
   const base = { type: "prototype" as const, id: bundle.id, name: bundle.name };
   const formatTooNew = manifest.source.renderContractVersion > RENDER_CONTRACT_VERSION || manifest.source.builtinCatalogHash !== builtinCatalogHash;
@@ -268,6 +345,11 @@ async function importPrototype(db: Database, dataDir: string, bundle: BundleProt
     .filter((type) => !Object.hasOwn(builtin, type) && !hostPrimitiveNames.has(type)));
   const missing = [...customTypes].filter((type) => !available.has(`${doc.designSystem}::${type}`) && !activeComponentByName(db, type, doc.designSystem));
   if (missing.length) { report.push({ ...base, action: "error", detail: `dependency_failed: ${missing.join(", ")}` }); return; }
+  // Композиции: `@eui/Composition` — host-примитив, поэтому в customTypes его нет; ссылка
+  // адресует ресурс по id и обязана резолвиться в active-публикацию той же системы.
+  const missingCompositions = [...new Set(collectCompositionRefs(doc).map((ref) => ref.compositionId))]
+    .filter((id) => !availableCompositions.has(id) && !activeCompositionById(db, id, doc.designSystem));
+  if (missingCompositions.length) { report.push({ ...base, action: "error", detail: `dependency_failed: composition ${missingCompositions.join(", ")}` }); return; }
 
   const existing = db.query("SELECT owner_id o,head_rev h FROM prototypes WHERE id=?").get(bundle.id) as { o: string | null; h: number } | null;
   try {
@@ -321,8 +403,16 @@ export async function importBundle(db: Database, dataDir: string, zip: Uint8Arra
     if (outcome && (outcome.action === "created" || outcome.action === "reused")) available.add(`${component.designSystem}::${component.name}`);
   }
 
+  // Compositions sit between components and prototypes: they consume published components
+  // and are consumed by the prototype save path (which resolves them to their active version).
+  const availableCompositions = new Set<string>();
+  for (const composition of manifest.compositions) {
+    const resolved = importComposition(db, composition, new TextDecoder().decode(files[composition.docPath]!), importerId, mode, available, availableDs, report);
+    if (resolved) availableCompositions.add(composition.id);
+  }
+
   for (const bundle of manifest.prototypes) {
-    await importPrototype(db, dataDir, bundle, files[bundle.docPath]!, manifest, importerId, mode, available, availableDs, report);
+    await importPrototype(db, dataDir, bundle, files[bundle.docPath]!, manifest, importerId, mode, available, availableDs, availableCompositions, report);
   }
   return report.finish(mode);
 }

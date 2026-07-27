@@ -89,6 +89,33 @@ describe("composition resource lifecycle", () => {
   });
 });
 
+describe("composition version status transitions", () => {
+  test("superseded requires a valid supersededBy, exactly like a component version", async () => {
+    const { db, handler } = await seed();
+    // Вторая публикация — цель для supersededBy.
+    expect((await handler(req("/compositions/ctyp-payment-success", "PUT", { doc: { ...compositionDoc, description: "v2" }, baseRev: 1 }))).status).toBe(200);
+    expect((await handler(req("/compositions/ctyp-payment-success/publish", "POST", { baseRev: 2 }))).status).toBe(201);
+
+    const status = (body: unknown, version = 1) => handler(req(`/compositions/ctyp-payment-success/versions/${version}/status`, "POST", body));
+    // Без supersededBy — 422, а не молчаливый переход.
+    const missing = await status({ status: "superseded", baseStatusRev: 1 });
+    expect(missing.status).toBe(422);
+    expect(await json<{ error: { issues: { path: string[] }[] } }>(missing)).toMatchObject({ error: { issues: [{ path: ["supersededBy"] }] } });
+    // Сам на себя и на несуществующую версию — тоже 422.
+    expect((await status({ status: "superseded", supersededBy: 1, baseStatusRev: 1 })).status).toBe(422);
+    expect((await status({ status: "superseded", supersededBy: 99, baseStatusRev: 1 })).status).toBe(422);
+
+    const ok = await status({ status: "superseded", supersededBy: 2, baseStatusRev: 1 });
+    expect(ok.status).toBe(200);
+    const versions = await json<{ version: number; status: string; supersededBy: number | null }[]>(await handler(req("/compositions/ctyp-payment-success/versions")));
+    expect(versions[0]).toMatchObject({ version: 1, status: "superseded", supersededBy: 2 });
+
+    // Цикл 2 → 1 при уже существующем 1 → 2 отклоняется.
+    expect((await status({ status: "superseded", supersededBy: 1, baseStatusRev: 1 }, 2)).status).toBe(422);
+    db.close();
+  });
+});
+
 describe("acceptance: CTYP payment success rebuilt as a composition", () => {
   test("saves the authored doc, pins every component reachable through the composition, and publishes clean", async () => {
     const { db, handler } = await seed();

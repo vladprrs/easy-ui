@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { hostPrimitiveDefinitions, hostPrimitiveNames } from "../src/catalog/hostPrimitives/definitions";
+import { COMPOSITION_TYPE } from "../src/catalog/hostPrimitives/composition.definition";
 import { storedPrototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
 import { mergeScreenState } from "../src/prototype/stateOverrides";
 import { validateElementProps } from "../src/prototype/validate";
@@ -44,12 +45,32 @@ export function classifyRevision(db:Database,prototypeId:string,rev:number):Revi
     JOIN component_publishes cp ON cp.component_id=prc.component_id AND cp.version=prc.component_version
     WHERE prc.prototype_id=? AND prc.rev=?`).all(prototypeId,rev) as {name:string;status:string}[];
   const pinsByName=new Map(pins.map(pin=>[pin.name,pin]));
+  // Пины композиций (волна 5) трактуются ровно как компонентные: отсутствующий пин или
+  // пин на нерендеримую публикацию делает ревизию нерендеримой. Раскрытие идёт в save-пути,
+  // поэтому внутренние типы композиции уже покрыты компонентными пинами выше.
+  // Читаются лениво: до миграции v18 таблиц композиций не существует.
+  let compositionPinsById:Map<string,{id:string;status:string}>|null=null;
+  const compositionPin=(compositionId:string) => {
+    compositionPinsById??=new Map((db.query(`SELECT prc.composition_id id,cp.status
+      FROM prototype_revision_compositions prc
+      JOIN composition_publishes cp ON cp.composition_id=prc.composition_id AND cp.version=prc.composition_version
+      WHERE prc.prototype_id=? AND prc.rev=?`).all(prototypeId,rev) as {id:string;status:string}[]).map(pin=>[pin.id,pin]));
+    return compositionPinsById.get(compositionId);
+  };
   const issues:RevisionRenderError["issues"]=[];
 
   for(const [screenIndex,screen] of doc.screens.entries()) {
     const state=mergeScreenState(doc.state,screen.stateOverrides);
     for(const [elementId,element] of Object.entries(screen.spec.elements)) {
       const path=`/screens/${screenIndex}/spec/elements/${elementId}`;
+      if(element.type===COMPOSITION_TYPE) {
+        const compositionId=element.props.composition;
+        const pin=typeof compositionId==="string"?compositionPin(compositionId):undefined;
+        if(typeof compositionId!=="string") issues.push({path:`${path}/props/composition`,message:"Composition reference is missing a composition id"});
+        else if(!pin) issues.push({path:`${path}/props/composition`,message:`Composition ${compositionId} is not pinned by this revision`});
+        else if(!RENDERABLE_PIN_STATUSES.has(pin.status)) issues.push({path:`${path}/props/composition`,message:`Pinned composition ${compositionId} is not renderable (status ${pin.status})`});
+        continue;
+      }
       if(hostPrimitiveNames.has(element.type)) {
         const definition=hostPrimitiveDefinitions[element.type as keyof typeof hostPrimitiveDefinitions];
         const result=validateElementProps({definition,props:element.props,state,path:["screens",screenIndex,"spec","elements",elementId,"props"]});

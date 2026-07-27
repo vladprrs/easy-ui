@@ -160,16 +160,35 @@ export class CompositionRepo {
       doc: parseStoredCompositionDoc(row.doc, id, row.rev), publishedAt: row.published_at,
     };
   }
-  setStatus(id: string, version: number, change: { status: string; reason?: string; baseStatusRev: number }) {
+  /**
+   * Ручной переход статуса версии. Валидация зеркалит компонентную (`ComponentRepo.setStatus`):
+   * `superseded` требует `supersededBy` на существующую версию, не на себя и без цикла по цепочке.
+   */
+  setStatus(id: string, version: number, change: { status: string; reason?: string; supersededBy?: number; baseStatusRev: number }) {
     return this.db.transaction(() => {
       this.row(id);
       const current = this.db.query("SELECT status,status_rev FROM composition_publishes WHERE composition_id=? AND version=?").get(id, version) as { status: string; status_rev: number } | null;
       if (!current) throw new ApiError(404, "version_not_found", "Composition version not found");
       if (current.status_rev !== change.baseStatusRev) throw new ApiError(409, "status_conflict", "Composition version status has changed", { currentStatusRev: current.status_rev });
       if (!(TRANSITIONS[current.status] ?? []).includes(change.status)) throw new ApiError(422, "invalid_transition", `Cannot transition ${current.status} → ${change.status}`, { issues: [{ path: ["status"], message: `invalid transition from ${current.status}` }] });
+      let supersededBy: number | null = null;
+      if (change.status === "superseded") {
+        const target = change.supersededBy;
+        if (typeof target !== "number" || !Number.isInteger(target) || target < 1) throw new ApiError(422, "validation_failed", "supersededBy is required to supersede a version", { issues: [{ path: ["supersededBy"], message: "supersededBy must reference a version" }] });
+        if (target === version) throw new ApiError(422, "validation_failed", "A version cannot supersede itself", { issues: [{ path: ["supersededBy"], message: "cannot supersede self" }] });
+        if (!this.db.query("SELECT 1 ok FROM composition_publishes WHERE composition_id=? AND version=?").get(id, target)) throw new ApiError(422, "validation_failed", "supersededBy references a version that does not exist", { issues: [{ path: ["supersededBy"], message: `unknown version ${target}` }] });
+        // Идём по цепочке superseded_by от цели: возврат к `version` означал бы цикл.
+        let cursor: number | null = target; const seen = new Set<number>([version]);
+        while (cursor !== null) {
+          if (seen.has(cursor)) throw new ApiError(422, "validation_failed", "supersededBy would create a cycle", { issues: [{ path: ["supersededBy"], message: "cycle detected" }] });
+          seen.add(cursor);
+          cursor = (this.db.query("SELECT superseded_by n FROM composition_publishes WHERE composition_id=? AND version=?").get(id, cursor) as { n: number | null } | null)?.n ?? null;
+        }
+        supersededBy = target;
+      }
       const nextRev = current.status_rev + 1;
-      this.db.query("UPDATE composition_publishes SET status=?,status_reason=?,status_rev=? WHERE composition_id=? AND version=?")
-        .run(change.status, change.reason?.trim() || null, nextRev, id, version);
+      this.db.query("UPDATE composition_publishes SET status=?,status_reason=?,superseded_by=?,status_rev=? WHERE composition_id=? AND version=?")
+        .run(change.status, change.reason?.trim() || null, supersededBy, nextRev, id, version);
       return { status: change.status, statusRev: nextRev };
     })();
   }

@@ -17,6 +17,8 @@ function v14():Database {
   for(const column of ["delete_reason","replacement_component_id"] as const) db.run(`ALTER TABLE components DROP COLUMN ${column}`);
   // v18 завёл новые таблицы композиций — их надо снести, иначе повторный migrate() упрётся в "table already exists".
   for(const table of ["prototype_revision_compositions","composition_publishes","composition_revisions","compositions"] as const) db.run(`DROP TABLE IF EXISTS ${table}`);
+  // v19 завела таблицу сценариев — тот же приём, иначе повторный migrate() упрётся в "table already exists".
+  db.run("DROP TABLE IF EXISTS prototype_scenarios");
   db.run("PRAGMA user_version=14");
   return db;
 }
@@ -85,5 +87,50 @@ test("v15 triggers reject new references to retired systems and allow active sys
   expect(()=>db.run("INSERT INTO prototypes (id,name,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at,status) VALUES ('bad','Bad','desktop',1,1,'wireframe','instance','now','now','private')")).toThrow("retired design system reference");
   db.run("INSERT INTO prototypes (id,name,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at,status) VALUES ('ok','Ok','desktop',1,1,'yandex-pay','instance','now','now','private')");
   expect(()=>db.query("INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,created_at) VALUES ('ok',1,?,'h','now')").run(JSON.stringify(typed("ok","Button")))).toThrow("retired design system reference");
+  db.close();
+});
+
+// --- Композиционные пины (волна 5) ------------------------------------------
+// Пин композиции трактуется как компонентный: отсутствие пина или пин на
+// нерендеримую публикацию делают ревизию нерендеримой.
+
+const composed=(id:string,compositionId="ctyp-shell")=>({
+  version:1,id,name:"Composed",designSystem:"yandex-pay",device:"mobile",startScreen:"home",state:{},
+  screens:[{id:"home",name:"Home",spec:{root:"root",elements:{root:{type:"@eui/Composition",props:{composition:compositionId}}}}}],
+});
+
+function composedRevision(db:Database,id:string,doc:unknown):void {
+  db.query("INSERT INTO prototypes (id,name,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at,status) VALUES (?,?,'mobile',1,1,'yandex-pay',?,'now','now','published')").run(id,id,`${id}-instance`);
+  db.query("INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,created_at) VALUES (?,1,?,'h','now')").run(id,JSON.stringify(doc));
+}
+
+function compositionPin(db:Database,prototypeId:string,rev:number,status:string,compositionId="ctyp-shell"):void {
+  if(!db.query("SELECT 1 ok FROM compositions WHERE id=?").get(compositionId)) {
+    db.query("INSERT INTO compositions (id,name,head_rev,design_system,created_at,updated_at) VALUES (?,?,1,'yandex-pay','now','now')").run(compositionId,`Composition ${compositionId}`);
+    db.query("INSERT INTO composition_revisions (composition_id,rev,doc,design_system,created_at) VALUES (?,1,'{}','yandex-pay','now')").run(compositionId);
+    db.query("INSERT INTO composition_publishes (composition_id,version,rev,status,source_hash,published_at) VALUES (?,1,1,?,'hash','now')").run(compositionId,status);
+  }
+  db.query("INSERT INTO prototype_revision_compositions (prototype_id,rev,composition_id,composition_version) VALUES (?,?,?,1)").run(prototypeId,rev,compositionId);
+}
+
+test("classifyRevision honours composition pins exactly like component pins",()=>{
+  const db=new Database(":memory:");migrate(db);
+
+  composedRevision(db,"comp-active",composed("comp-active"));compositionPin(db,"comp-active",1,"active");
+  expect(classifyRevision(db,"comp-active",1)).toMatchObject({renderable:true,error:null});
+
+  // Пина нет вовсе — ревизия нерендерима (документ сохранён в обход save-пути).
+  composedRevision(db,"comp-unpinned",composed("comp-unpinned","missing-shell"));
+  const unpinned=classifyRevision(db,"comp-unpinned",1);
+  expect(unpinned.renderable).toBeFalse();
+  expect(unpinned.error?.issues[0]).toMatchObject({path:"/screens/0/spec/elements/root/props/composition",message:expect.stringContaining("is not pinned")});
+
+  // deprecated/superseded рендерятся (как у компонентов), archived — нет.
+  composedRevision(db,"comp-deprecated",composed("comp-deprecated","deprecated-shell"));compositionPin(db,"comp-deprecated",1,"deprecated","deprecated-shell");
+  expect(classifyRevision(db,"comp-deprecated",1).renderable).toBeTrue();
+  composedRevision(db,"comp-archived",composed("comp-archived","archived-shell"));compositionPin(db,"comp-archived",1,"archived","archived-shell");
+  const archived=classifyRevision(db,"comp-archived",1);
+  expect(archived.renderable).toBeFalse();
+  expect(archived.error?.issues[0]!.message).toContain("status archived");
   db.close();
 });

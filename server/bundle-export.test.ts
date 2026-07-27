@@ -76,6 +76,85 @@ async function seed(f: Awaited<ReturnType<typeof fixture>>) {
   return { fontAsset, componentAsset, protoAsset };
 }
 
+
+// --- Composition fixture (bundle format 2) ----------------------------------
+// Мотивирующий кейс: компонент BundleBadge встречается ТОЛЬКО внутри композиции,
+// поэтому доказывает, что замыкание экспорта достаёт его через раскрытые пины.
+const SHELL_SRC = `import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+export const definition = {
+  props: z.strictObject({ tone: z.string().optional() }),
+  events: [],
+  slots: [],
+  description: "Bundle composition shell",
+  example: {},
+};
+
+type Props = z.output<typeof definition.props>;
+
+export default function BundleShell({ props, children }: EasyUIComponentProps<Props>) {
+  return <section data-tone={props.tone ?? "plain"}>{children}</section>;
+}
+`;
+const BADGE_SRC = `import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+export const definition = {
+  props: z.strictObject({ amount: z.string().min(1) }),
+  events: [],
+  slots: [],
+  description: "Bundle composition badge",
+  example: { amount: "12" },
+};
+
+type Props = z.output<typeof definition.props>;
+
+export default function BundleBadge({ props }: EasyUIComponentProps<Props>) {
+  return <span>{props.amount}</span>;
+}
+`;
+
+const compositionDoc = {
+  version: 1,
+  name: "BundleShellComposition",
+  params: { amount: { type: "string", required: true } },
+  slots: ["body"],
+  spec: {
+    root: "shell",
+    elements: {
+      shell: { type: "BundleShell", props: { tone: "plain" }, children: ["body", "badge"] },
+      body: { type: "@eui/Slot", props: { name: "body" } },
+      badge: { type: "BundleBadge", props: { amount: { $param: "amount" } } },
+    },
+  },
+};
+
+const composedDoc = {
+  version: 1, id: "bundle-composed", name: "Bundle composed", designSystem: "bundle-ds", device: "mobile", startScreen: "s", state: {},
+  screens: [{
+    id: "s", name: "S", spec: {
+      root: "root",
+      elements: {
+        root: { type: "@eui/FlowRoot", props: {}, children: ["frag"] },
+        frag: { type: "@eui/Composition", props: { composition: "bundle-shell", params: { amount: "12" } }, children: ["body"] },
+        body: { type: "Image", props: { src: "/body.png", alt: "body" }, slot: "body" },
+      },
+    },
+  }],
+};
+
+/** Publishes the two composition components, the composition and the prototype that uses it. */
+async function seedComposition(call: (who: "alice" | "bob" | null, method: string, path: string, body?: unknown, contentType?: string) => Promise<Response>) {
+  expect((await call("alice", "POST", "/components", { id: "bundle-shell-component", name: "BundleShell", source: SHELL_SRC, designSystem: "bundle-ds" })).status).toBe(201);
+  expect((await call("alice", "POST", "/components/bundle-shell-component/publish", { baseRev: 1 })).status).toBe(201);
+  expect((await call("alice", "POST", "/components", { id: "bundle-badge", name: "BundleBadge", source: BADGE_SRC, designSystem: "bundle-ds" })).status).toBe(201);
+  expect((await call("alice", "POST", "/components/bundle-badge/publish", { baseRev: 1 })).status).toBe(201);
+  expect((await call("alice", "POST", "/compositions", { id: "bundle-shell", designSystem: "bundle-ds", doc: compositionDoc })).status).toBe(201);
+  expect((await call("alice", "POST", "/compositions/bundle-shell/publish", { baseRev: 1 })).status).toBe(201);
+  expect((await call("alice", "POST", "/prototypes", { doc: composedDoc })).status).toBe(201);
+}
+
 describe("bundle export", () => {
   test("prototype export closes over pins, prototype/component assets and the DS theme", async () => {
     const f = await fixture();
@@ -183,4 +262,43 @@ describe("bundle export", () => {
     expect(bobBulk.components).toEqual([]);
     f.db.close();
   });
+
+  test("a prototype referencing a composition exports it, its document and the components reachable only through it", async () => {
+    const f = await fixture();
+    await seed(f);
+    await seedComposition(f.call);
+    const { entries, manifest } = await unzip(await f.call("alice", "GET", "/prototypes/bundle-composed/export"));
+
+    // Format 2 — бандл несёт композиции; без них экспорт остаётся форматом 1.
+    expect(manifest.formatVersion).toBe(2);
+    const proto = manifest.prototypes[0]!;
+    expect(proto.compositionPins).toEqual([{ id: "bundle-shell", version: 1 }]);
+
+    const composition = manifest.compositions[0]!;
+    expect(composition).toMatchObject({ id: "bundle-shell", name: "BundleShellComposition", designSystem: "bundle-ds", exported: { rev: 1, version: 1 } });
+    const doc = JSON.parse(strFromU8(entries[composition.docPath]!)) as { slots: string[]; spec: { elements: Record<string, { type: string }> } };
+    expect(doc.slots).toEqual(["body"]);
+
+    // BundleBadge встречается только внутри композиции — и всё равно попал в бандл,
+    // потому что пины ревизии считаются по РАСКРЫТОМУ документу.
+    expect(JSON.stringify(proto)).not.toContain("BundleBadge");
+    expect(manifest.components.map((component) => component.id).sort()).toEqual(["bundle-badge", "bundle-shell-component"]);
+    expect(proto.componentPins.map((pin) => pin.id).sort()).toEqual(["bundle-badge", "bundle-shell-component"]);
+
+    // Композиция-free экспорт того же сервера остаётся форматом 1 (читается старым сервером).
+    const plain = (await unzip(await f.call("alice", "GET", "/prototypes/bundle-proto/export"))).manifest;
+    expect(plain.formatVersion).toBe(1);
+    expect(plain.compositions).toEqual([]);
+    f.db.close();
+  }, 60_000);
+
+  test("bulk export carries owned compositions", async () => {
+    const f = await fixture();
+    await seed(f);
+    await seedComposition(f.call);
+    const bulk = (await unzip(await f.call("alice", "GET", "/bundles/export"))).manifest;
+    expect(bulk.compositions.map((composition) => composition.id)).toEqual(["bundle-shell"]);
+    expect(bulk.formatVersion).toBe(2);
+    f.db.close();
+  }, 60_000);
 });

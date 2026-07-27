@@ -3,18 +3,23 @@ import { strToU8, zipSync, type Zippable } from "fflate";
 import type {
   BundleAsset,
   BundleComponent,
+  BundleComposition,
   BundleDesignSystem,
   BundleKind,
   BundleManifest,
   BundlePrototype,
 } from "../../src/bundle/schema";
-import { bundleManifestSchema } from "../../src/bundle/schema";
+import {
+  BUNDLE_FORMAT_VERSION_COMPOSITIONS, BUNDLE_FORMAT_VERSION_LEGACY, bundleManifestSchema,
+} from "../../src/bundle/schema";
 import type { PrototypeDoc } from "../../src/prototype/schema";
 import { RENDER_CONTRACT_VERSION, builtinCatalogHash } from "../builtinHash";
 import { getDesignSystemVersion, getIncludingRetired, latestDesignSystemMetaVersion } from "../designSystems";
 import { sha256 } from "../components/pipeline";
 import { ApiError } from "../http";
 import { ComponentRepo } from "../repos/components";
+import { CompositionRepo, compositionSourceHash } from "../repos/compositions";
+import type { CompositionDoc } from "../../src/prototype/composition";
 import { PrototypeRepo } from "../repos/prototypes";
 import { AssetRepo } from "../repos/assets";
 import { collectAssetIdsFromSource } from "../validation";
@@ -46,18 +51,21 @@ interface AssetEntry { entry: BundleAsset; sha256: string }
 export class BundleClosure {
   private readonly prototypes: BundlePrototype[] = [];
   private readonly components = new Map<string, BundleComponent>();
+  private readonly compositions = new Map<string, BundleComposition>();
   private readonly designSystems = new Map<string, BundleDesignSystem>();
   private readonly assets = new Map<string, AssetEntry>();
   private readonly docs = new Map<string, string>();
   private readonly sources = new Map<string, string>();
   private readonly assetRepo: AssetRepo;
   private readonly componentRepo: ComponentRepo;
+  private readonly compositionRepo: CompositionRepo;
   private readonly prototypeRepo: PrototypeRepo;
   private rawBytes = 0;
 
   constructor(private readonly db: Database, dataDir: string) {
     this.assetRepo = new AssetRepo(db, dataDir);
     this.componentRepo = new ComponentRepo(db);
+    this.compositionRepo = new CompositionRepo(db);
     this.prototypeRepo = new PrototypeRepo(db);
   }
 
@@ -152,9 +160,52 @@ export class BundleClosure {
     return (this.db.query("SELECT MAX(version) v FROM component_publishes WHERE component_id=? AND status='active'").get(id) as { v: number | null }).v;
   }
 
+  /**
+   * Adds one pinned composition version (bundle format 2). The artifact is the frozen
+   * document itself — there is nothing to compile. Components and assets used *only*
+   * inside a composition need no extra walk here: the prototype's pins are computed
+   * from the **expanded** document on save, so they already cover them.
+   */
+  private addCompositionVersion(id: string, version: number): void {
+    if (this.compositions.has(id)) return;
+    const detail = this.compositionRepo.version(id, version);
+    this.storeComposition(id, detail.designSystem, detail.doc, detail.sourceHash, { rev: detail.rev, version: detail.version });
+  }
+
+  private addCompositionDraft(id: string): void {
+    if (this.compositions.has(id)) return;
+    const row = this.compositionRepo.row(id);
+    const head = this.compositionRepo.revision(id);
+    this.storeComposition(id, row.design_system, head.doc, compositionSourceHash(head.doc), { rev: head.rev, version: null });
+  }
+
+  private storeComposition(id: string, designSystem: string, doc: CompositionDoc, sourceHash: string, exported: { rev: number; version: number | null }): void {
+    const docPath = `compositions/${id}.json`;
+    const docJson = JSON.stringify(doc);
+    this.compositions.set(id, { id, name: doc.name, designSystem, docPath, sourceHash, exported });
+    this.docs.set(docPath, docJson);
+    this.rawBytes += strToU8(docJson).byteLength;
+    this.addDesignSystem(designSystem, null);
+  }
+
+  /** Adds a composition by its latest active version, falling back to the head draft. */
+  addComposition(id: string, version?: number): { rev: number; version: number | null } {
+    if (version !== undefined) this.addCompositionVersion(id, version);
+    else {
+      const latest = this.latestActiveCompositionVersion(id);
+      if (latest !== null) this.addCompositionVersion(id, latest);
+      else this.addCompositionDraft(id);
+    }
+    return this.compositions.get(id)!.exported;
+  }
+
+  private latestActiveCompositionVersion(id: string): number | null {
+    return (this.db.query("SELECT MAX(version) v FROM composition_publishes WHERE composition_id=? AND status='active'").get(id) as { v: number | null }).v;
+  }
+
   /** Adds a prototype revision (owner draft or a published version) and its full dependency closure. */
   addPrototype(id: string, selector: PrototypeSelector): ExportedResource {
-    let snapshot: { doc: PrototypeDoc; rev: number; components: { id: string; version: number }[]; assets: { id: string }[]; designSystemMetaVersion: number | null };
+    let snapshot: { doc: PrototypeDoc; rev: number; components: { id: string; version: number }[]; compositions: { id: string; version: number }[]; assets: { id: string }[]; designSystemMetaVersion: number | null };
     let exported: ExportedResource;
     if (selector.version !== undefined) {
       const version = this.prototypeRepo.version(id, selector.version);
@@ -181,12 +232,14 @@ export class BundleClosure {
       exported,
       docPath,
       componentPins: snapshot.components.map((pin) => ({ id: pin.id, version: pin.version })),
+      compositionPins: snapshot.compositions.map((pin) => ({ id: pin.id, version: pin.version })),
       assetIds: snapshot.assets.map((asset) => asset.id),
       designSystemMetaVersion: snapshot.designSystemMetaVersion,
     });
     this.docs.set(docPath, docJson);
     this.rawBytes += strToU8(docJson).byteLength;
     this.addDesignSystem(doc.designSystem, snapshot.designSystemMetaVersion);
+    for (const pin of snapshot.compositions) this.addCompositionVersion(pin.id, pin.version);
     for (const pin of snapshot.components) this.addComponentVersion(pin.id, pin.version);
     for (const asset of snapshot.assets) this.addAsset(asset.id);
     return exported;
@@ -204,12 +257,15 @@ export class BundleClosure {
 
   private manifest(kind: BundleKind, origin: string): BundleManifest {
     const manifest: BundleManifest = {
-      formatVersion: 1,
+      // Format 2 only when the bundle actually carries compositions, so composition-free
+      // exports stay readable by servers that predate wave 5.
+      formatVersion: this.compositions.size ? BUNDLE_FORMAT_VERSION_COMPOSITIONS : BUNDLE_FORMAT_VERSION_LEGACY,
       kind,
       exportedAt: new Date().toISOString(),
       source: { origin, apiVersion: 1, renderContractVersion: RENDER_CONTRACT_VERSION, builtinCatalogHash },
       prototypes: this.prototypes,
       components: [...this.components.values()],
+      compositions: [...this.compositions.values()],
       designSystems: [...this.designSystems.values()],
       assets: [...this.assets.values()].map((asset) => asset.entry),
     };

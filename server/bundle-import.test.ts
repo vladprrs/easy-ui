@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import { unzipSync, zipSync, strToU8 } from "fflate";
+import { unzipSync, zipSync, strToU8, strFromU8 } from "fflate";
 import { openDatabase } from "./db";
 import { createHandler } from "./main";
 import { createTestHandler } from "./test-auth";
@@ -86,6 +86,97 @@ async function importZip(server: Server, who: string, zip: Uint8Array, mode?: "d
 
 const itemFor = (report: ImportReport, type: string, id: string) => report.items.find((item) => item.type === type && (item.id === id || item.name === id));
 const count = (db: Server["db"], table: string) => (db.query(`SELECT COUNT(*) c FROM ${table}`).get() as { c: number }).c;
+
+
+// --- Composition fixture (bundle format 2) ----------------------------------
+// BundleBadge используется ТОЛЬКО внутри композиции: он доказывает, что на импорте
+// доезжают и компоненты, достижимые исключительно через раскрытие.
+const SHELL_SRC = `import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+export const definition = {
+  props: z.strictObject({ tone: z.string().optional() }),
+  events: [],
+  slots: [],
+  description: "Bundle composition shell",
+  example: {},
+};
+
+type Props = z.output<typeof definition.props>;
+
+export default function BundleShell({ props, children }: EasyUIComponentProps<Props>) {
+  return <section data-tone={props.tone ?? "plain"}>{children}</section>;
+}
+`;
+const BADGE_SRC = `import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+export const definition = {
+  props: z.strictObject({ amount: z.string().min(1) }),
+  events: [],
+  slots: [],
+  description: "Bundle composition badge",
+  example: { amount: "12" },
+};
+
+type Props = z.output<typeof definition.props>;
+
+export default function BundleBadge({ props }: EasyUIComponentProps<Props>) {
+  return <span>{props.amount}</span>;
+}
+`;
+
+const compositionDoc = {
+  version: 1,
+  name: "BundleShellComposition",
+  params: { amount: { type: "string", required: true } },
+  slots: ["body"],
+  spec: {
+    root: "shell",
+    elements: {
+      shell: { type: "BundleShell", props: { tone: "plain" }, children: ["body", "badge"] },
+      body: { type: "@eui/Slot", props: { name: "body" } },
+      badge: { type: "BundleBadge", props: { amount: { $param: "amount" } } },
+    },
+  },
+};
+
+const composedDoc = {
+  version: 1, id: "bundle-composed", name: "Bundle composed", designSystem: "bundle-ds", device: "mobile", startScreen: "s", state: {},
+  screens: [{
+    id: "s", name: "S", spec: {
+      root: "root",
+      elements: {
+        root: { type: "@eui/FlowRoot", props: {}, children: ["frag"] },
+        frag: { type: "@eui/Composition", props: { composition: "bundle-shell", params: { amount: "12" } }, children: ["body"] },
+        body: { type: "Image", props: { src: "/body.png", alt: "body" }, slot: "body" },
+      },
+    },
+  }],
+};
+
+/** Requires `seed()` first (it owns bundle-ds). Publishes both components, the composition and the prototype. */
+async function seedComposition(server: Server, who: string) {
+  const { call } = server;
+  expect((await call(who, "POST", "/components", { id: "bundle-shell-component", name: "BundleShell", source: SHELL_SRC, designSystem: "bundle-ds" })).status).toBe(201);
+  expect((await call(who, "POST", "/components/bundle-shell-component/publish", { baseRev: 1 })).status).toBe(201);
+  expect((await call(who, "POST", "/components", { id: "bundle-badge", name: "BundleBadge", source: BADGE_SRC, designSystem: "bundle-ds" })).status).toBe(201);
+  expect((await call(who, "POST", "/components/bundle-badge/publish", { baseRev: 1 })).status).toBe(201);
+  expect((await call(who, "POST", "/compositions", { id: "bundle-shell", designSystem: "bundle-ds", doc: compositionDoc })).status).toBe(201);
+  expect((await call(who, "POST", "/compositions/bundle-shell/publish", { baseRev: 1 })).status).toBe(201);
+  expect((await call(who, "POST", "/prototypes", { doc: composedDoc })).status).toBe(201);
+}
+
+/** Rewrites a bundle into the pre-wave-5 shape: no `compositions[]`, no `compositionPins`. */
+function stripCompositions(zip: Uint8Array): Uint8Array {
+  const entries = unzipSync(zip);
+  const manifest = JSON.parse(strFromU8(entries["manifest.json"]!)) as Record<string, unknown> & { prototypes: Record<string, unknown>[] };
+  delete manifest.compositions;
+  for (const proto of manifest.prototypes) delete proto.compositionPins;
+  manifest.formatVersion = 1;
+  entries["manifest.json"] = strToU8(JSON.stringify(manifest));
+  return zipSync(entries);
+}
 
 describe("bundle import", () => {
   test("round-trip: export from A imports into B, renders and rebinds; re-import is reused/skipped", async () => {
@@ -247,6 +338,104 @@ describe("bundle import", () => {
     expect(tamperResult.report.ok).toBe(false);
     expect(tamperResult.report.items.some((item) => item.type === "asset" && item.action === "error")).toBe(true);
     expect(sha256hex(new TextEncoder().encode("tampered bytes not matching the sha"))).not.toBe(assetPath.slice("assets/".length));
+    a.db.close(); b.db.close();
+  }, 60_000);
+
+  test("round-trip: a prototype referencing a composition imports onto a fresh database", async () => {
+    const a = await makeServer("a", ["alice"]);
+    await seed(a, "alice");
+    await seedComposition(a, "alice");
+    const zip = await exportZip(a, "alice", "/prototypes/bundle-composed/export");
+
+    const b = await makeServer("b", ["bob"]);
+    const first = await importZip(b, "bob", zip);
+    expect(first.status).toBe(200);
+    expect(first.report.ok).toBe(true);
+    expect(itemFor(first.report, "composition", "bundle-shell")).toMatchObject({ action: "created", version: 1 });
+    // Компонент, достижимый только через композицию, тоже приехал и опубликован.
+    expect(itemFor(first.report, "component", "bundle-badge")!.action).toBe("created");
+    expect(itemFor(first.report, "prototype", "bundle-composed")!.action).toBe("created");
+
+    // На цели композиция опубликована, а прототип рендерим и запинован на неё.
+    const composition = await (await b.call("bob", "GET", "/compositions/bundle-shell")).json() as { publishedVersion: number; doc: { slots: string[] } };
+    expect(composition).toMatchObject({ publishedVersion: 1 });
+    expect(composition.doc.slots).toEqual(["body"]);
+    const draft = await (await b.call("bob", "GET", "/prototypes/bundle-composed/draft")).json() as { renderable: boolean; compositions: { id: string; version: number }[]; components: { id: string }[] };
+    expect(draft.renderable).toBe(true);
+    expect(draft.compositions.map((pin) => ({ id: pin.id, version: pin.version }))).toEqual([{ id: "bundle-shell", version: 1 }]);
+    expect(draft.components.map((pin) => pin.id).sort()).toEqual(["bundle-badge", "bundle-shell-component"]);
+    // Документ в БД остался авторским — раскрытие живёт в save-пути.
+    const stored = (b.db.query("SELECT doc FROM prototype_revisions WHERE prototype_id='bundle-composed' AND rev=1").get() as { doc: string }).doc;
+    expect(stored).toContain("@eui/Composition");
+
+    // Повторный импорт ничего не создаёт.
+    const again = await importZip(b, "bob", zip);
+    expect(itemFor(again.report, "composition", "bundle-shell")!.action).toBe("reused");
+    expect(itemFor(again.report, "prototype", "bundle-composed")!.action).toBe("skipped");
+    a.db.close(); b.db.close();
+  }, 120_000);
+
+  test("dry-run predicts the composition without writing it", async () => {
+    const a = await makeServer("a", ["alice"]);
+    await seed(a, "alice");
+    await seedComposition(a, "alice");
+    const zip = await exportZip(a, "alice", "/prototypes/bundle-composed/export");
+
+    const b = await makeServer("b", ["bob"]);
+    const dry = await importZip(b, "bob", zip, "dry-run");
+    expect(dry.report.ok).toBe(true);
+    expect(itemFor(dry.report, "composition", "bundle-shell")).toMatchObject({ action: "created", version: 1 });
+    expect(itemFor(dry.report, "prototype", "bundle-composed")!.action).toBe("created");
+    expect(count(b.db, "compositions")).toBe(0);
+    expect(count(b.db, "composition_publishes")).toBe(0);
+    a.db.close(); b.db.close();
+  }, 120_000);
+
+  test("a composition whose name is taken by another owner is a name_conflict cascading into the prototype", async () => {
+    const a = await makeServer("a", ["alice"]);
+    await seed(a, "alice");
+    await seedComposition(a, "alice");
+    const zip = await exportZip(a, "alice", "/prototypes/bundle-composed/export");
+
+    const b = await makeServer("b", ["bob", "carol"]);
+    expect((await importZip(b, "bob", zip)).report.ok).toBe(true);
+    // Carol re-imports: composition id and name belong to Bob.
+    const carol = await importZip(b, "carol", zip);
+    expect(itemFor(carol.report, "composition", "bundle-shell")).toMatchObject({ action: "error", detail: "name_conflict" });
+    const prototype = itemFor(carol.report, "prototype", "bundle-composed")!;
+    // Композиция всё равно резолвится: на цели она опубликована и активна, поэтому прототип импортируется.
+    expect(prototype.action).toBe("created");
+    expect(prototype.remappedTo).toBe("bundle-composed-imported-1");
+    a.db.close(); b.db.close();
+  }, 120_000);
+
+  test("backward compatibility: an old bundle without a compositions section still imports", async () => {
+    const a = await makeServer("a", ["alice"]);
+    await seed(a, "alice");
+    const legacy = stripCompositions(await exportZip(a, "alice"));
+
+    const b = await makeServer("b", ["bob"]);
+    const result = await importZip(b, "bob", legacy);
+    expect(result.status).toBe(200);
+    expect(result.report.ok).toBe(true);
+    expect(result.report.items.some((item) => item.type === "composition")).toBe(false);
+    expect(itemFor(result.report, "prototype", "bundle-proto")!.action).toBe("created");
+    a.db.close(); b.db.close();
+  }, 60_000);
+
+  test("an unknown future formatVersion is rejected whole, before any write", async () => {
+    const a = await makeServer("a", ["alice"]);
+    await seed(a, "alice");
+    const entries = unzipSync(await exportZip(a, "alice"));
+    const manifest = JSON.parse(strFromU8(entries["manifest.json"]!)) as Record<string, unknown>;
+    manifest.formatVersion = 3;
+    entries["manifest.json"] = strToU8(JSON.stringify(manifest));
+
+    const b = await makeServer("b", ["bob"]);
+    const before = count(b.db, "prototypes");
+    const result = await importZip(b, "bob", zipSync(entries));
+    expect(result.status).toBe(400);
+    expect(count(b.db, "prototypes")).toBe(before);
     a.db.close(); b.db.close();
   }, 60_000);
 });

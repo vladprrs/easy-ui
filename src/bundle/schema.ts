@@ -67,6 +67,8 @@ const bundlePrototypeSchema = z.object({
   exported: prototypeExportedSchema,
   docPath: z.string(),
   componentPins: z.array(componentPinSchema),
+  // Пины композиций ревизии (format 2). Отсутствуют в бандлах format 1 — отсюда default.
+  compositionPins: z.array(componentPinSchema).default([]),
   assetIds: z.array(bundleAssetIdSchema),
   designSystemMetaVersion: z.number().nullable(),
 });
@@ -86,6 +88,22 @@ const bundleComponentSchema = z.object({
   assetIds: z.array(bundleAssetIdSchema),
 });
 
+const compositionExportedSchema = z.object({
+  rev: z.number(),
+  version: z.number().nullable(),
+});
+
+// Композиция бандла (format 2). Артефакт — сам документ (`compositions/<id>.json`),
+// компилировать нечего; `sourceHash` — sha256 канонического JSON документа.
+const bundleCompositionSchema = z.object({
+  id: slugSchema,
+  name: z.string(),
+  designSystem: slugSchema,
+  docPath: z.string(),
+  sourceHash: z.string(),
+  exported: compositionExportedSchema,
+});
+
 const bundleDesignSystemSchema = z.object({
   id: slugSchema,
   name: z.string(),
@@ -102,20 +120,35 @@ const bundleAssetSchema = z.object({
   originalName: z.string().nullable(),
 });
 
+/**
+ * Версия формата бандла.
+ * - `1` — исходный формат (прототипы, компоненты, дизайн-системы, ассеты);
+ * - `2` — добавляет секцию `compositions[]` и `prototypes[].compositionPins`.
+ *
+ * Экспорт выставляет `2` **только** когда в бандле есть композиции: бандлы без них
+ * остаются форматом `1` и читаются старым сервером. Бандл формата `2` старый сервер
+ * (`z.literal(1)`) отвергает целиком — `400 invalid_bundle` до единой записи в БД.
+ */
+export const BUNDLE_FORMAT_VERSION_LEGACY = 1 as const;
+export const BUNDLE_FORMAT_VERSION_COMPOSITIONS = 2 as const;
+const bundleFormatVersionSchema = z.union([z.literal(BUNDLE_FORMAT_VERSION_LEGACY), z.literal(BUNDLE_FORMAT_VERSION_COMPOSITIONS)]);
+
 export const bundleManifestSchema = z.object({
-  formatVersion: z.literal(1),
+  formatVersion: bundleFormatVersionSchema,
   kind: bundleKindSchema,
   exportedAt: z.string(),
   source: bundleSourceSchema,
   prototypes: z.array(bundlePrototypeSchema),
   components: z.array(bundleComponentSchema),
+  // Format 1 не знает композиций: default сохраняет обратную совместимость чтения.
+  compositions: z.array(bundleCompositionSchema).default([]),
   designSystems: z.array(bundleDesignSystemSchema),
   assets: z.array(bundleAssetSchema),
 });
 
 // --- Import report ----------------------------------------------------------
 
-export const importItemTypeSchema = z.enum(["asset", "designSystem", "component", "prototype"]);
+export const importItemTypeSchema = z.enum(["asset", "designSystem", "component", "composition", "prototype"]);
 export const importActionSchema = z.enum(["created", "reused", "skipped", "error"]);
 
 const importItemSchema = z.object({
@@ -149,6 +182,7 @@ export type BundleTheme = z.infer<typeof bundleThemeSchema>;
 export type BundleManifest = z.infer<typeof bundleManifestSchema>;
 export type BundlePrototype = z.infer<typeof bundlePrototypeSchema>;
 export type BundleComponent = z.infer<typeof bundleComponentSchema>;
+export type BundleComposition = z.infer<typeof bundleCompositionSchema>;
 export type BundleDesignSystem = z.infer<typeof bundleDesignSystemSchema>;
 export type BundleAsset = z.infer<typeof bundleAssetSchema>;
 export type BundleSource = z.infer<typeof bundleSourceSchema>;

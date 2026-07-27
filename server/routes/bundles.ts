@@ -44,6 +44,9 @@ export async function routeBundles(request: Request, db: Database, segments: str
     for (const { id } of prototypeIds) closure.addOwnedPrototype(id);
     const componentIds = db.query("SELECT id FROM components WHERE owner_id=? AND deleted_at IS NULL ORDER BY id").all(actor.userId) as { id: string }[];
     for (const { id } of componentIds) closure.addComponent(id);
+    // Композиции — такой же owned-ресурс, как компоненты: последняя active-версия, иначе head draft.
+    const compositionIds = db.query("SELECT id FROM compositions WHERE owner_id=? AND deleted_at IS NULL ORDER BY id").all(actor.userId) as { id: string }[];
+    for (const { id } of compositionIds) closure.addComposition(id);
     const bytes = await closure.buildZip("bulk", origin);
     const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
     return zipResponse(bytes, `easy-ui-export-${stamp}.zip`);

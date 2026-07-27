@@ -80,6 +80,22 @@ describe("diffPrototypeDocs", () => {
     expect(result.from.message.truncated.preview.length).toBeLessThanOrEqual(120);
   });
 
+  test("reports composition pin changes next to component pins", () => {
+    const a = revision(1, doc(), { components: [{ id: "x", version: 1 }], compositions: [{ id: "shell", version: 1 }, { id: "gone", version: 3 }] });
+    const b = revision(2, doc(), { components: [{ id: "x", version: 1 }], compositions: [{ id: "shell", version: 2 }, { id: "fresh", version: 1 }] });
+    const result = diffPrototypeDocs(a, b) as any;
+    expect(result.pins).toEqual({ compositions: {
+      added: [{ id: "fresh", version: 1 }],
+      removed: [{ id: "gone", version: 3 }],
+      changed: [{ id: "shell", from: 1, to: 2 }],
+    } });
+    expect(result.summary.identical).toBe(false);
+    // Одинаковые пины композиций не порождают секцию и не ломают identity.
+    const same = diffPrototypeDocs(a, revision(2, doc(), { components: [{ id: "x", version: 1 }], compositions: [{ id: "gone", version: 3 }, { id: "shell", version: 1 }] })) as any;
+    expect(same.pins).toBeUndefined();
+    expect(same.summary.identical).toBe(true);
+  });
+
   test("bounds every string, applies the global budget, and enforces the UTF-8 byte cap", () => {
     const a = doc(), b = doc();
     const hugeKey = "ключ😀".repeat(20_000), hugeType = "тип😀".repeat(20_000);

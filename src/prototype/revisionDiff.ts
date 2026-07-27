@@ -13,6 +13,8 @@ export interface PrototypeRevisionForDiff {
   componentManifestHash?: string | null;
   designSystemMetaVersion?: number | null;
   components?: { id: string; version: number }[];
+  /** Пины композиций ревизии (волна 5): показываются рядом с компонентными. */
+  compositions?: { id: string; version: number }[];
   assets?: { id: string }[];
 }
 
@@ -200,8 +202,9 @@ function screensDiff(fromDoc: PrototypeDoc, toDoc: PrototypeDoc, ctx: BuildConte
   return Object.keys(result).length ? result : undefined;
 }
 
-function pinsDiff(from: PrototypeRevisionForDiff, to: PrototypeRevisionForDiff, ctx: BuildContext): MutableRecord | undefined {
-  const components: MutableRecord = {}, a = byId(from.components), b = byId(to.components);
+/** Version-pin diff of one id-keyed pin set (components / compositions share the shape). */
+function versionPinsDiff(fromPins: unknown, toPins: unknown, ctx: BuildContext): MutableRecord {
+  const section: MutableRecord = {}, a = byId(fromPins), b = byId(toPins);
   const added: MutableRecord[] = [], removed: MutableRecord[] = [], changed: MutableRecord[] = [];
   for (const id of [...new Set([...a.keys(), ...b.keys()])].sort()) {
     const before = a.get(id), after = b.get(id), output = boundedString(id, ctx);
@@ -209,13 +212,22 @@ function pinsDiff(from: PrototypeRevisionForDiff, to: PrototypeRevisionForDiff, 
     else if (!after) { removed.push({ id: output, version: before.version }); count(ctx, "pins"); }
     else if (before.version !== after.version) { changed.push({ id: output, from: before.version, to: after.version }); count(ctx, "pins"); }
   }
-  if (added.length) components.added = added; if (removed.length) components.removed = removed; if (changed.length) components.changed = changed;
+  if (added.length) section.added = added; if (removed.length) section.removed = removed; if (changed.length) section.changed = changed;
+  return section;
+}
+
+function pinsDiff(from: PrototypeRevisionForDiff, to: PrototypeRevisionForDiff, ctx: BuildContext): MutableRecord | undefined {
+  const components = versionPinsDiff(from.components, to.components, ctx);
+  const compositions = versionPinsDiff(from.compositions, to.compositions, ctx);
   const assetA = new Set((from.assets ?? []).map(x => x.id)), assetB = new Set((to.assets ?? []).map(x => x.id));
   const assetsAdded = [...assetB].filter(x => !assetA.has(x)).sort().map(x => boundedString(x, ctx));
   const assetsRemoved = [...assetA].filter(x => !assetB.has(x)).sort().map(x => boundedString(x, ctx));
   count(ctx, "pins", assetsAdded.length + assetsRemoved.length);
   const assets: MutableRecord = {}; if (assetsAdded.length) assets.added = assetsAdded; if (assetsRemoved.length) assets.removed = assetsRemoved;
-  const result: MutableRecord = {}; if (Object.keys(components).length) result.components = components; if (Object.keys(assets).length) result.assets = assets;
+  const result: MutableRecord = {};
+  if (Object.keys(components).length) result.components = components;
+  if (Object.keys(compositions).length) result.compositions = compositions;
+  if (Object.keys(assets).length) result.assets = assets;
   return Object.keys(result).length ? result : undefined;
 }
 
@@ -235,7 +247,10 @@ function serializedBytes(value: unknown): number { return new TextEncoder().enco
 export function diffPrototypeDocs(from: PrototypeRevisionForDiff, to: PrototypeRevisionForDiff, opts: RevisionDiffOptions = {}): DocDiff {
   const ctx: BuildContext = { truncated: false, leafCounts: new Map() };
   const docIdentical = equal(from.doc, to.doc);
-  const pinsEqual = equal((from.components ?? []).map(x => ({ id: x.id, version: x.version })).sort((a,b)=>a.id.localeCompare(b.id)), (to.components ?? []).map(x => ({ id: x.id, version: x.version })).sort((a,b)=>a.id.localeCompare(b.id))) && equal((from.assets ?? []).map(x=>x.id).sort(), (to.assets ?? []).map(x=>x.id).sort());
+  const versionPins = (pins: { id: string; version: number }[] | undefined) => (pins ?? []).map(x => ({ id: x.id, version: x.version })).sort((a, b) => a.id.localeCompare(b.id));
+  const pinsEqual = equal(versionPins(from.components), versionPins(to.components))
+    && equal(versionPins(from.compositions), versionPins(to.compositions))
+    && equal((from.assets ?? []).map(x=>x.id).sort(), (to.assets ?? []).map(x=>x.id).sort());
   const renderKeys = ["builtinCatalogHash", "componentManifestHash", "designSystemMetaVersion"];
   const renderInputsEqual = renderKeys.every(key => equal(own(from, key), own(to, key)));
   const summary: MutableRecord = { screensAdded: 0, screensRemoved: 0, screensChanged: 0, staticElementsAdded: 0, staticElementsRemoved: 0, staticElementsChanged: 0, identical: docIdentical && pinsEqual && renderInputsEqual, docIdentical, truncated: false, omittedSections: [] };

@@ -125,7 +125,7 @@ export const gallery = {
   importColId: "Идентификатор",
   importColAction: "Результат",
   importColDetail: "Детали",
-  importItemTypes: { asset: "Ассет", designSystem: "Дизайн-система", component: "Компонент", prototype: "Прототип" },
+  importItemTypes: { asset: "Ассет", designSystem: "Дизайн-система", component: "Компонент", composition: "Композиция", prototype: "Прототип" },
   importActions: { created: "создан", reused: "переиспользован", skipped: "пропущен", error: "ошибка" },
   importRemappedTo: (id: string) => `новый id: ${id}`,
 } as const;
