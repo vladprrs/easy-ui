@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogComponent, ComponentVersionSummary, DesignSystemSummary, VisualReference } from "../api/client";
-import { applicableLibraryStatusKeys, componentLibraryStatus, groupLibraryEntries, matchesLibraryFilter, selectionForComponent, selectionKey } from "./libraryModel";
+import { applicableLibraryStatusKeys, componentLibraryStatus, groupLibraryEntries, matchesLibraryFilter, searchComponents, searchScore, selectionForComponent, selectionKey, similarComponents, tokenize } from "./libraryModel";
 
 const systems: DesignSystemSummary[] = [
   { id: "shadcn", name: "Shadcn", description: "", builtinCatalogHash: "one", components: [] },
@@ -63,5 +63,42 @@ describe("component library status", () => {
     expect(applicableLibraryStatusKeys([verified])).toEqual([]);
     expect(applicableLibraryStatusKeys([verified, verified])).toEqual([]);
     expect(applicableLibraryStatusKeys([])).toEqual([]);
+  });
+});
+
+// --- Поиск по product job и «похожие компоненты» (волна 3 §3.3) ---
+
+const searchable = (id: string, name: string, extra: Partial<{ description: string; canonicalFor: string[]; scope: string; atomicLevel: string }> = {}) =>
+  ({ id, name, ...extra });
+
+describe("library product-job search", () => {
+  const navbar = searchable("ctyp-navbar", "CtypNavbar", { canonicalFor: ["ctyp-success-navbar"], scope: "section", atomicLevel: "organism", description: "Шапка экрана успеха" });
+  const button = searchable("pay-button", "PayButton", { scope: "primitive", atomicLevel: "atom", description: "Кнопка оплаты с навбаром рядом" });
+  const all = [navbar, button];
+
+  it("splits a query into unicode tokens", () => {
+    expect(tokenize("ctyp-success navbar")).toEqual(["ctyp", "success", "navbar"]);
+    expect(tokenize("  ")).toEqual([]);
+  });
+
+  it("ranks an exact role above a name match and a name match above a description match", () => {
+    expect(searchScore(navbar, "ctyp-success-navbar")).toBeGreaterThan(searchScore(navbar, "ctypnavbar"));
+    expect(searchScore(navbar, "ctypnavbar")).toBeGreaterThan(searchScore(button, "навбаром"));
+  });
+
+  it("requires every query token to match and orders results by rank", () => {
+    expect(searchComponents(all, "navbar").map((entry) => entry.id)).toEqual(["ctyp-navbar"]);
+    // Словаря синонимов нет: латинский navbar не матчит русское «навбаром» — матчинг по подстрокам токенов.
+    expect(searchComponents(all, "навбаром оплаты").map((entry) => entry.id)).toEqual(["pay-button"]);
+    expect(searchComponents(all, "нетакого")).toEqual([]);
+    // Пустой запрос не фильтрует и не пересортировывает.
+    expect(searchComponents(all, "   ")).toBe(all);
+  });
+
+  it("suggests components sharing a role, or the same scope with overlapping name tokens", () => {
+    const alternative = searchable("ctyp-navbar-v2", "CtypNavbar2", { canonicalFor: ["ctyp-success-navbar"], scope: "section" });
+    const unrelated = searchable("misc", "Misc", { scope: "section" });
+    expect(similarComponents(navbar, [alternative, unrelated, button]).map((entry) => entry.id)).toEqual(["ctyp-navbar-v2"]);
+    expect(similarComponents(navbar, [navbar])).toEqual([]);
   });
 });

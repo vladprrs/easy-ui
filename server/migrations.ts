@@ -383,6 +383,16 @@ const migrations = [
     // Идентификатор прототипа-источника. Без FK: линия происхождения переживает удаление источника.
     db.run("ALTER TABLE prototypes ADD COLUMN derived_from TEXT");
   },
+  (db:Database) => {
+    // v17: tombstone-метаданные мягко удалённых компонентов (волна 3 §3.2). Два плоских
+    // ADD COLUMN: `components` не имеет FK-детей с RESTRICT на себя (пины ссылаются на
+    // component_publishes), поэтому перестройка таблицы по паттерну v8 здесь не нужна.
+    // Причина удаления — свободный текст автора DELETE.
+    db.run("ALTER TABLE components ADD COLUMN delete_reason TEXT");
+    // Идентификатор компонента-замены. Без FK: замена может быть удалена позже, и
+    // надгробие обязано пережить это, как и `prototypes.derived_from` в v16.
+    db.run("ALTER TABLE components ADD COLUMN replacement_component_id TEXT");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

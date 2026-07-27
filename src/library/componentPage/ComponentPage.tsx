@@ -3,6 +3,7 @@ import { useParams, useSearchParams } from "react-router";
 import { z } from "zod";
 import {
   ApiError,
+  getComponentUsages,
   getComponentVersion,
   getDesignSystemById,
   type ApiErrorBody,
@@ -12,7 +13,7 @@ import {
   type ThemeContent,
 } from "../../api/client";
 import { downloadBundle } from "../../api/bundles";
-import { chip, chipActive, headingPage, inputBase, kicker, pillGhost, pillPrimary } from "../../app/chrome";
+import { chip, chipActive, headingPage, inputBase, kicker, kickerOnDark, pillGhost, pillPrimary } from "../../app/chrome";
 import { componentPage as strings, componentStatusLabels } from "../../app/strings/componentPage";
 import { useDocumentTitle } from "../../app/useDocumentTitle";
 import type { ComponentDefinition } from "../../catalog/definitions";
@@ -34,6 +35,7 @@ import {
   statusForVersion,
 } from "./model";
 import { useKeyedRequest, type KeyedRequestState } from "./useKeyedRequest";
+import { UsageTree } from "../UsageTree";
 
 const PLACEHOLDER_NAME = "__preview_placeholder__";
 const EMPTY_SCREEN_IDS = new Set<string>();
@@ -160,7 +162,11 @@ export function ComponentPage() {
           <MetaSection meta={version.data} />
         </section>
         <section className="rounded-3xl bg-eui-ink p-6 text-sm text-white" role="tabpanel" id="component-panel-2" aria-labelledby="component-tab-2" hidden={activeTab !== 2}>
+          <ProvenanceBlock version={version.data} />
           <SourceView source={version.data.source} />
+        </section>
+        <section className="rounded-3xl bg-eui-lav p-6" role="tabpanel" id="component-panel-3" aria-labelledby="component-tab-3" hidden={activeTab !== 3}>
+          <UsagesTab componentId={componentId} active={activeTab === 3} />
         </section>
       </>}
   </PageFrame>;
@@ -237,6 +243,50 @@ function Tabs({ active, onChange }: { active: number; onChange: (index: number) 
       onKeyDown={(event) => selectFromKeyboard(event, index)}
       key={label}
     >{label}</button>)}
+  </div>;
+}
+
+/**
+ * Блок происхождения рядом с активным исходником (волна 3 §3.3): архитектурные метаданные
+ * волны 2 объясняют, чем компонент владеет и почему — это ровно тот контекст, который
+ * нужен читателю кода.
+ */
+function ProvenanceBlock({ version }: { version: ComponentVersion }) {
+  const rows: [string, string][] = [
+    [strings.provenanceSource, `v${version.version} · rev ${version.rev} · ${version.designSystem}`],
+    [strings.provenanceScope, version.scope ?? strings.provenanceNotSet],
+    [strings.provenanceCanonicalFor, version.canonicalFor?.length ? version.canonicalFor.join(", ") : strings.provenanceNotSet],
+    [strings.provenanceSourceBounded, version.sourceBounded === undefined ? strings.provenanceNotSet : String(version.sourceBounded)],
+    ...(version.replacement ? [[strings.provenanceReplacement, version.replacement] as [string, string]] : []),
+  ];
+  return <section aria-labelledby="component-provenance-title" className="mb-5 rounded-2xl bg-white/5 p-4">
+    <h2 id="component-provenance-title" className={kickerOnDark}>{strings.provenanceTitle}</h2>
+    <dl className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
+      {rows.map(([label, value]) => <div key={label}><dt className="text-eui-ondark-2">{label}</dt><dd className="mt-0.5 font-medium">{value}</dd></div>)}
+    </dl>
+    {version.ownership?.reason ? <p className="mt-3 text-xs"><span className="text-eui-ondark-2">{strings.provenanceOwnership}: </span>{version.ownership.reason}{version.ownership.provenance ? ` (${version.ownership.provenance})` : ""}</p> : null}
+  </section>;
+}
+
+/** Вкладка «Usages»: граф использования компонента, загружается по открытию вкладки. */
+function UsagesTab({ componentId, active }: { componentId: string; active: boolean }) {
+  const usages = useKeyedRequest(active ? `usages:${componentId}` : null, (signal) => getComponentUsages(componentId, signal));
+  if (usages.status === "loading" || usages.status === "idle") return <LoadingState>{strings.usagesLoading}</LoadingState>;
+  if (usages.status === "error") return <ErrorState message={strings.usagesError} retry={usages.reload} />;
+  const report = usages.data;
+  return <div className="space-y-5">
+    <h2 className="font-eui-display text-xl font-medium">{strings.usagesTitle}</h2>
+    <p className="text-sm text-eui-slate-500">{strings.usagesVersionsInUse}: {report.versionsInUse.length ? report.versionsInUse.map((value) => `v${value}`).join(", ") : "—"}</p>
+    <section aria-labelledby="component-usages-head-title">
+      <h3 id="component-usages-head-title" className={kicker}>{strings.usagesHead}</h3>
+      {report.currentHeadUsages.length
+        ? <UsageTree usages={report.currentHeadUsages} />
+        : <p className="mt-2 text-sm text-eui-slate-500">{report.safeToRemove ? strings.usagesSafeToRemove : strings.usagesNone}</p>}
+    </section>
+    {report.immutableUsages.length ? <section aria-labelledby="component-usages-immutable-title">
+      <h3 id="component-usages-immutable-title" className={kicker}>{strings.usagesImmutable}</h3>
+      <ul className="mt-2 space-y-1 text-sm text-eui-slate-500">{report.immutableUsages.map((usage) => <li key={`${usage.prototypeId}@${usage.version}`}>{usage.name} · v{usage.version} → {strings.versionSelector} {usage.componentVersion}</li>)}</ul>
+    </section> : null}
   </div>;
 }
 

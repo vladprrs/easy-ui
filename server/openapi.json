@@ -1279,6 +1279,9 @@
                             },
                             "type": "object"
                           },
+                          "deprecated": {
+                            "type": "boolean"
+                          },
                           "description": {
                             "type": "string"
                           },
@@ -1318,6 +1321,9 @@
                               "type": "string"
                             },
                             "type": "object"
+                          },
+                          "headUsageCount": {
+                            "type": "number"
                           },
                           "hostAbiVersion": {
                             "type": "number"
@@ -1494,7 +1500,9 @@
                           "hostAbiVersion",
                           "description",
                           "events",
-                          "slots"
+                          "slots",
+                          "headUsageCount",
+                          "deprecated"
                         ],
                         "type": "object"
                       },
@@ -1541,13 +1549,145 @@
             "description": "validation_failed"
           }
         },
-        "summary": "Manifest of the latest active custom-component versions across design systems.",
+        "summary": "Manifest of the latest active custom-component versions across design systems, with head-usage counts and a deprecated flag for discovery.",
+        "x-easyui-validated": true
+      }
+    },
+    "/api/catalog/usages": {
+      "get": {
+        "operationId": "get_catalog_usages",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "designSystem",
+            "required": false,
+            "schema": {
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "components": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "componentId": {
+                            "type": "string"
+                          },
+                          "designSystem": {
+                            "type": "string"
+                          },
+                          "headUsageCount": {
+                            "type": "number"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "prototypes": {
+                            "items": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "prototypeId": {
+                                  "type": "string"
+                                },
+                                "rev": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "prototypeId",
+                                "name",
+                                "kind",
+                                "rev"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "componentId",
+                          "name",
+                          "designSystem",
+                          "headUsageCount",
+                          "prototypes"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "components"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "Aggregate usage index: every live component with the head-revision prototypes that pin it. Cached against MAX(prototypes.updated_at).",
         "x-easyui-validated": true
       }
     },
     "/api/components": {
       "get": {
         "operationId": "get_components",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "includeDeleted",
+            "required": false,
+            "schema": {
+              "const": "1",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1609,7 +1749,7 @@
             "description": "method_not_allowed"
           }
         },
-        "summary": "List custom components with head revision and latest active version.",
+        "summary": "List custom components with head revision and latest active version. `includeDeleted=1` additionally returns tombstones {deleted,deletedAt,reason,replacement}.",
         "x-easyui-validated": false
       },
       "post": {
@@ -1791,6 +1931,16 @@
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991,
                     "type": "integer"
+                  },
+                  "force": {
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "replacement": {
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -1814,7 +1964,17 @@
                 }
               }
             },
-            "description": "base_rev_required"
+            "description": "invalid_request | base_rev_required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "admin_required"
           },
           "404": {
             "content": {
@@ -1834,10 +1994,20 @@
                 }
               }
             },
-            "description": "revision_conflict"
+            "description": "revision_conflict | component_in_use"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
           }
         },
-        "summary": "Soft-delete a component (CAS on baseRev). Responds 204 without a body.",
+        "summary": "Soft-delete a component with an optional tombstone (CAS on baseRev). 409 component_in_use while head revisions still pin it; an admin may pass force:true. Responds 204 without a body.",
         "x-easyui-validated": false
       },
       "get": {
@@ -1848,6 +2018,15 @@
             "name": "id",
             "required": true,
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "includeDeleted",
+            "required": false,
+            "schema": {
+              "const": "1",
               "type": "string"
             }
           }
@@ -1975,7 +2154,7 @@
             "description": "not_found"
           }
         },
-        "summary": "Component lifecycle meta: head revision, versions, validated revision, renderable.",
+        "summary": "Component lifecycle meta: head revision, versions, validated revision, renderable. Soft-deleted components stay 404 unless `includeDeleted=1`, which adds the tombstone {deleted,deletedAt,reason,replacement}.",
         "x-easyui-validated": false
       },
       "put": {
@@ -2887,6 +3066,274 @@
         },
         "summary": "Read the head revision source.",
         "x-easyui-validated": false
+      }
+    },
+    "/api/components/{id}/usages": {
+      "get": {
+        "operationId": "get_components_id_usages",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "enum": [
+                "flat",
+                "tree"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "componentVersion": {
+                          "type": "number"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "prototypeId": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "prototypeId",
+                        "name",
+                        "version",
+                        "componentVersion"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema1": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "children": {
+                          "items": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "type": "array"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "prototype",
+                            "screen",
+                            "element"
+                          ],
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id",
+                        "label"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "anyOf": [
+                    {
+                      "additionalProperties": {},
+                      "properties": {
+                        "componentId": {
+                          "type": "string"
+                        },
+                        "currentHeadUsages": {
+                          "items": {
+                            "additionalProperties": {},
+                            "properties": {
+                              "componentVersion": {
+                                "type": "number"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "prototypeId": {
+                                "type": "string"
+                              },
+                              "rev": {
+                                "type": "number"
+                              },
+                              "screens": {
+                                "items": {
+                                  "additionalProperties": {},
+                                  "properties": {
+                                    "elementKeys": {
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "screenId": {
+                                      "type": "string"
+                                    },
+                                    "screenName": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "screenId",
+                                    "screenName",
+                                    "elementKeys"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "prototypeId",
+                              "name",
+                              "kind",
+                              "rev",
+                              "componentVersion",
+                              "screens"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "immutableUsages": {
+                          "items": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "type": "array"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "safeToRemove": {
+                          "type": "boolean"
+                        },
+                        "versionsInUse": {
+                          "items": {
+                            "type": "number"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "componentId",
+                        "name",
+                        "currentHeadUsages",
+                        "immutableUsages",
+                        "versionsInUse",
+                        "safeToRemove"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": {},
+                      "properties": {
+                        "componentId": {
+                          "type": "string"
+                        },
+                        "format": {
+                          "const": "tree",
+                          "type": "string"
+                        },
+                        "immutableUsages": {
+                          "items": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "type": "array"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "nodes": {
+                          "items": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "type": "array"
+                        },
+                        "safeToRemove": {
+                          "type": "boolean"
+                        },
+                        "versionsInUse": {
+                          "items": {
+                            "type": "number"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "format",
+                        "componentId",
+                        "name",
+                        "nodes",
+                        "immutableUsages",
+                        "versionsInUse",
+                        "safeToRemove"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "Usage graph of a component: head-revision usages with exact screen/element keys, immutable usages pinned by prototype publications, versions in use and a safe-to-remove verdict. `format=tree` groups head usages as prototype → screen → element.",
+        "x-easyui-validated": true
       }
     },
     "/api/components/{id}/versions": {

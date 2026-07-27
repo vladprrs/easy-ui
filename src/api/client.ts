@@ -176,8 +176,31 @@ export interface SerializedComponentDefinition {
   ownership?: { reason: string; provenance?: string };
   replacement?: string;
 }
-export interface CatalogComponent extends SerializedComponentDefinition { id: string; name: string; designSystem: string; version: number; bundleUrl: string; bundleHash: string; hostAbiVersion: number; description: string }
+export interface CatalogComponent extends SerializedComponentDefinition {
+  id: string; name: string; designSystem: string; version: number; bundleUrl: string; bundleHash: string; hostAbiVersion: number; description: string;
+  /** Волна 3: сколько головных ревизий прототипов пинуют компонент (кэш по MAX(prototypes.updated_at)). */
+  headUsageCount?: number;
+  /** Волна 3: последняя публикация компонента в статусе deprecated/superseded. */
+  deprecated?: boolean;
+}
 export interface CatalogManifest { components: CatalogComponent[] }
+
+// --- Граф использования компонентов (волна 3 §3.1) ---
+export interface ComponentScreenUsage { screenId: string; screenName: string; elementKeys: string[] }
+export interface ComponentHeadUsage { prototypeId: string; name: string; kind: string; rev: number; componentVersion: number; screens: ComponentScreenUsage[] }
+export interface ComponentImmutableUsage { prototypeId: string; name: string; version: number; componentVersion: number }
+export interface ComponentUsageReport {
+  componentId: string; name: string;
+  currentHeadUsages: ComponentHeadUsage[];
+  immutableUsages: ComponentImmutableUsage[];
+  versionsInUse: number[];
+  safeToRemove: boolean;
+}
+export interface UsageTreeNode { kind: "prototype" | "screen" | "element"; id: string; label: string; children?: UsageTreeNode[] }
+export interface ComponentUsageTree extends Omit<ComponentUsageReport, "currentHeadUsages"> { format: "tree"; nodes: UsageTreeNode[] }
+export interface CatalogUsagePrototype { prototypeId: string; name: string; kind: string; rev: number }
+export interface CatalogUsageEntry { componentId: string; name: string; designSystem: string; headUsageCount: number; prototypes: CatalogUsagePrototype[] }
+export interface CatalogUsageIndex { components: CatalogUsageEntry[] }
 export interface DesignSystemComponent extends SerializedComponentDefinition { name: string; layoutNeutral: boolean; description: string }
 export interface HostPrimitiveDescriptor extends SerializedComponentDefinition { name: string; description: string }
 export interface ThemeFont { family: string; src: string; weight?: number | string; style?: string }
@@ -310,6 +333,10 @@ export const listPrototypes = (signal?: AbortSignal, kinds?: readonly PrototypeK
 export const listDesignSystems = (signal?: AbortSignal) => request<{designSystems: DesignSystemSummary[]}>("/api/design-systems", { signal });
 export const getCapabilities = (signal?: AbortSignal) => request<Capabilities>("/api/capabilities", { signal });
 export const getCatalogManifest = (signal?: AbortSignal) => request<CatalogManifest>("/api/catalog/manifest", { signal });
+export const getCatalogUsages = (signal?: AbortSignal, designSystem?: string) =>
+  request<CatalogUsageIndex>(designSystem ? `/api/catalog/usages?designSystem=${encodeURIComponent(designSystem)}` : "/api/catalog/usages", { signal });
+export const getComponentUsages = (id: string, signal?: AbortSignal) => request<ComponentUsageReport>(`${componentPath(id)}/usages`, { signal });
+export const getComponentUsageTree = (id: string, signal?: AbortSignal) => request<ComponentUsageTree>(`${componentPath(id)}/usages?format=tree`, { signal });
 export const getDesignSystemById = (id: string, signal?: AbortSignal) => request<DesignSystemSummary>(`/api/design-systems/${encodeURIComponent(id)}`, { signal });
 export const createDesignSystem = (id: string, name: string, description: string, signal?: AbortSignal) => request<DesignSystemSummary>("/api/design-systems", { method: "POST", body: { id, name, description }, signal });
 export const getDesignSystemVersion = (id: string, version: number, signal?: AbortSignal) => request<DesignSystemVersion>(`/api/design-systems/${encodeURIComponent(id)}/versions/${version}`, { signal });

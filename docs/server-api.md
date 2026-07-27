@@ -201,17 +201,18 @@ Meta-ответы прототипов и компонентов additively не
 
 ## Endpoints компонентов
 
-Идентификатор — slug, имя — уникальное `^[A-Z][A-Za-z0-9]*$`, не конфликтующее со встроенным каталогом ни одной зарегистрированной системы с builtin provider. Имена компонентов глобально уникальны, а не уникальны в паре с системой: поэтому и в custom-системе нельзя создать `Button`, `Card` и другие builtin-имена. Это ограничение MVP связано с pins, registry и `components.name UNIQUE`. Имя после создания неизменно; систему head можно сменить. Удаление soft: компонент исчезает из списка/манифеста и не доступен новым сохранениям, но ранее опубликованные bundle и пины продолжают работать.
+Идентификатор — slug, имя — уникальное `^[A-Z][A-Za-z0-9]*$`, не конфликтующее со встроенным каталогом ни одной зарегистрированной системы с builtin provider. Имена компонентов глобально уникальны, а не уникальны в паре с системой: поэтому и в custom-системе нельзя создать `Button`, `Card` и другие builtin-имена. Это ограничение MVP связано с pins, registry и `components.name UNIQUE`. Имя после создания неизменно; систему head можно сменить. Удаление soft: компонент исчезает из списка/манифеста и не доступен новым сохранениям, но ранее опубликованные bundle и пины продолжают работать. Удаление записывает надгробие (`deleted_at`, `delete_reason`, `replacement_component_id`, миграция v17), видимое **только** под `?includeDeleted=1`; голый `GET /components/:id` для удалённого компонента остаётся `404` — на это поведение завязаны `driver.mjs` и SPA-клиент. Удалить компонент, который пинуют головные ревизии прототипов, нельзя: `409 component_in_use` с телом графа использования, обход — `force:true` от админа.
 
 При добавлении builtin-системы коллизия любого её имени с существующим custom-компонентом является dev-time блокером. Startup-инвариант сравнивает объединение builtin-имён всех зарегистрированных систем со всей таблицей `components` и останавливает сервер с явной ошибкой; grandfathering устраняется вручную до регистрации системы. Композитный ключ `(designSystem, name)` отложен на post-MVP.
 
 | Метод и путь | Тело / ответ |
 |---|---|
-| `GET /components` | `{id,name,designSystem,headRev,latestVersion:number|null,updatedAt}[]` |
+| `GET /components` | `{id,name,designSystem,headRev,latestVersion:number|null,updatedAt}[]`; `?includeDeleted=1` дополнительно возвращает надгробия с `{deleted:true,deletedAt,reason,replacement}` |
 | `POST /components` | `{id,name,source,designSystem?,message?}` → 201 `{id,rev}` и `Location`; `designSystem` по умолчанию `shadcn` |
-| `GET /components/:id` | `{id,name,designSystem,headRev,versions:ComponentVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable}` (lifecycle-поля — см. [Lifecycle-модель](#lifecycle-модель)) |
+| `GET /components/:id` | `{id,name,designSystem,headRev,versions:ComponentVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable}` (lifecycle-поля — см. [Lifecycle-модель](#lifecycle-модель)); мягко удалённый компонент — **404**, если не передан `?includeDeleted=1` (тогда meta дополняется `{deleted:true,deletedAt,reason,replacement}`) |
 | `PUT /components/:id` | `{source?,designSystem?,message?,baseRev}` → `{rev}`; хотя бы одно из `source`/`designSystem`, смена системы наследует текущий source |
-| `DELETE /components/:id` | `{baseRev}` → 204 |
+| `DELETE /components/:id` | `{baseRev, reason?, replacement?, force?}` → 204; `409 component_in_use` пока компонент пинуют головные ревизии (обход — `force:true` от админа, иначе `403 admin_required`); `replacement` — id живого компонента, иначе `422` |
+| `GET /components/:id/usages` | Граф использования; `?format=tree` — то же деревом. См. [Граф использования](#граф-использования-компонентов) |
 | `GET /components/:id/source` | Текущий `{rev,source,designSystem,message:string|null,createdAt}` |
 | `GET /components/:id/draft` | Alias текущего source DTO |
 | `GET /components/:id/revisions` | `{rev,designSystem,message:string|null,createdAt}[]` |
@@ -222,6 +223,31 @@ Meta-ответы прототипов и компонентов additively не
 | `GET /components/:id/versions/:version` | Метадата версии **любого статуса**: `{version,rev,status,statusReason,supersededBy,statusRev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?,scope?,allowedAsRoot?,canonicalFor?,sourceBounded?,ownership?,replacement?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; `propsJsonSchema` описывает input (до Zod defaults/transforms); immutable |
 | `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); отдаётся при статусе `active\|deprecated\|superseded`, иначе `404 bundle_unavailable`; immutable |
 | `POST /components/:id/versions/:version/status` | `{status, reason?, supersededBy?, baseStatusRev}` → 200 `{status, statusRev}`; см. [Статусы версий](#статусы-версий-компонентов) |
+
+### Граф использования компонентов
+
+`GET /components/:id/usages` отвечает на вопрос «что сломается, если это тронуть». Источник правды — таблица пинов `prototype_revision_components`; документ головной ревизии разбирается поверх пинов только ради точных ключей экрана/элемента.
+
+```json
+{
+  "componentId": "yp-button", "name": "YpButton",
+  "currentHeadUsages": [{
+    "prototypeId": "checkout", "name": "Checkout", "kind": "product-flow", "rev": 12, "componentVersion": 4,
+    "screens": [{ "screenId": "home", "screenName": "Home", "elementKeys": ["pay", "retry"] }]
+  }],
+  "immutableUsages": [{ "prototypeId": "checkout", "name": "Checkout", "version": 3, "componentVersion": 2 }],
+  "versionsInUse": [2, 4],
+  "safeToRemove": false
+}
+```
+
+- `currentHeadUsages` — пины на **головных** ревизиях: то, что живо прямо сейчас.
+- `immutableUsages` — пины на ревизиях, на которые ссылаются `prototype_publishes`. Их бандлы обязаны исполняться вечно, поэтому любая такая ссылка снимает `safeToRemove`.
+- `safeToRemove` = обе оси пусты.
+- `?format=tree` возвращает `{format:"tree", nodes:[{kind:"prototype"|"screen"|"element", id, label, children?}], …}` — те же данные, сгруппированные путями (используется кнопкой «Показать usages» в библиотеке). SPA-ссылки строит клиент.
+- Компонент-надгробие тоже имеет читаемый граф: `usages` не фильтрует по `deleted_at`.
+
+`GET /catalog/usages?designSystem=` — агрегированный индекс: `{components:[{componentId,name,designSystem,headUsageCount,prototypes:[{prototypeId,name,kind,rev}]}]}`. Ответ кэшируется в памяти; ключ инвалидации — `MAX(prototypes.updated_at)` (плюс `COUNT(*)`, чтобы поймать удаление прототипа, которое не двигает максимум). Тот же кэш питает поля `headUsageCount`/`deprecated` в `GET /catalog/manifest`, где `deprecated` означает «последняя публикация компонента переведена в `deprecated`/`superseded`» (строка манифеста по построению всегда `active`).
 
 ### Статусы версий компонентов
 
@@ -380,7 +406,8 @@ Production-миграция выполняется по явному manifest с
 | Метод и путь | Ответ |
 |---|---|
 | `GET /health` | `{status:"ready"}` после миграций, seed и ABI-проверки; до готовности 503 `starting` |
-| `GET /catalog/manifest?designSystem=<slug>` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?,scope?,allowedAsRoot?,canonicalFor?,sourceBounded?,ownership?,replacement?}]}` — последняя active-версия каждого неудалённого custom-компонента для каждой системы или только указанной системы; host-примитивы намеренно не входят |
+| `GET /catalog/manifest?designSystem=<slug>` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?,scope?,allowedAsRoot?,canonicalFor?,sourceBounded?,ownership?,replacement?,headUsageCount,deprecated}]}` — последняя active-версия каждого неудалённого custom-компонента для каждой системы или только указанной системы; host-примитивы намеренно не входят; `headUsageCount`/`deprecated` — см. [Граф использования](#граф-использования-компонентов) |
+| `GET /catalog/usages?designSystem=<slug>` | Агрегированный индекс использования, см. [Граф использования](#граф-использования-компонентов) |
 | `GET /shims/v1/:name.js` | ESM-шим host ABI v1; immutable |
 | `GET /shims/v2/:name.js` | ESM-шим host ABI v2 (v1 + `easy-ui-runtime.js`); immutable |
 

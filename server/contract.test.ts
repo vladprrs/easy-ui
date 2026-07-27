@@ -165,7 +165,14 @@ function orderedCases(): [string, Case][] {
     ["GET /api/components/{id}/versions/{version}", { run: () => call("GET", "/api/components/contract-stars/versions/1"), expected: err(404, "not_found") }],
     ["GET /api/components/{id}/versions/{version}/bundle.js", { run: () => call("GET", "/api/components/contract-stars/versions/1/bundle.js"), expected: err(404, "not_found") }],
     ["POST /api/components/{id}/versions/{version}/status", { run: () => call("POST", "/api/components/contract-stars/versions/1/status", { status: "deprecated", baseStatusRev: 1 }), expected: err(404, "not_found") }],
+    // Usage graph (волна 3)
+    ["GET /api/components/{id}/usages", { run: () => call("GET", "/api/components/contract-stars/usages"), expected: ok() }],
+    ["GET /api/components/{id}/usages", { run: () => call("GET", "/api/components/contract-stars/usages?format=tree"), expected: ok() }],
+    ["GET /api/components/{id}/usages", { run: () => call("GET", "/api/components/contract-missing/usages"), expected: err(404, "not_found") }],
     // Catalog / shims
+    ["GET /api/catalog/usages", { run: () => call("GET", "/api/catalog/usages"), expected: ok() }],
+    ["GET /api/catalog/usages", { run: () => call("GET", "/api/catalog/usages?designSystem=contract-ds"), expected: ok() }],
+    ["GET /api/catalog/usages", { run: () => call("GET", "/api/catalog/usages?designSystem=missing-system"), expected: err(404, "not_found") }],
     ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest"), expected: ok() }],
     ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest?designSystem=contract-ds"), expected: ok() }],
     ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest?designSystem=missing-system"), expected: err(404, "not_found") }],

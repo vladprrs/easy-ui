@@ -13,6 +13,8 @@ function v14():Database {
   db.run("ALTER TABLE design_systems DROP COLUMN retired");
   // v16 lifecycle-колонки тоже надо снять, иначе повторный migrate() упрётся в duplicate column.
   for(const column of ["kind","tags","derived_from"] as const) db.run(`ALTER TABLE prototypes DROP COLUMN ${column}`);
+  // То же для v17 tombstone-колонок на components.
+  for(const column of ["delete_reason","replacement_component_id"] as const) db.run(`ALTER TABLE components DROP COLUMN ${column}`);
   db.run("PRAGMA user_version=14");
   return db;
 }

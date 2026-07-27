@@ -33,6 +33,92 @@ export function selectionKey(selection: LibrarySelection): string {
   return `custom:${selection.componentId}:${selection.designSystem}`;
 }
 
+// --- Поиск по product job (волна 3 §3.3) ---
+//
+// Задача поиска — «найти компонент по работе, которую он делает», а не по точному имени.
+// Поэтому запрос токенизируется и матчится сразу по четырём осям: объявленные роли
+// (`canonicalFor`), имя, описание и классификаторы (scope + atomicLevel). Словаря синонимов
+// нет намеренно (RU/EN вперемешку) — матчинг идёт по подстрокам токенов.
+//
+// Ранжирование фиксировано и документировано, чтобы результат был предсказуем:
+//   точное совпадение роли (100) > префикс роли (60) > имя (50/40) > классификатор (20) > описание (10).
+// Семантика между токенами запроса — И: компонент показывается, только если каждый токен
+// запроса что-то нашёл.
+const ROLE_EXACT = 100, ROLE_PREFIX = 60, NAME_EXACT = 50, NAME_PARTIAL = 40, CLASSIFIER = 20, DESCRIPTION = 10;
+
+export const tokenize = (value: string): string[] =>
+  value.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((token) => token.length > 0);
+
+export interface ComponentSearchFields {
+  name: string;
+  description?: string;
+  canonicalFor?: string[];
+  scope?: string;
+  atomicLevel?: string;
+}
+
+function tokenScore(component: ComponentSearchFields, token: string): number {
+  let score = 0;
+  for (const role of component.canonicalFor ?? []) {
+    const roleTokens = tokenize(role);
+    if (role.toLowerCase() === token || roleTokens.includes(token)) score = Math.max(score, ROLE_EXACT);
+    else if (role.toLowerCase().includes(token) || roleTokens.some((part) => part.startsWith(token))) score = Math.max(score, ROLE_PREFIX);
+  }
+  const nameTokens = tokenize(component.name);
+  if (nameTokens.includes(token)) score = Math.max(score, NAME_EXACT);
+  else if (component.name.toLowerCase().includes(token)) score = Math.max(score, NAME_PARTIAL);
+  for (const classifier of [component.scope, component.atomicLevel]) {
+    if (classifier && classifier.toLowerCase().includes(token)) score = Math.max(score, CLASSIFIER);
+  }
+  if ((component.description ?? "").toLowerCase().includes(token)) score = Math.max(score, DESCRIPTION);
+  return score;
+}
+
+/** Суммарный ранг компонента для запроса; 0 — компонент не подходит (хотя бы один токен не найден). */
+export function searchScore(component: ComponentSearchFields, query: string): number {
+  const tokens = tokenize(query);
+  if (!tokens.length) return 0;
+  let total = 0;
+  for (const token of tokens) {
+    const score = tokenScore(component, token);
+    if (score === 0) return 0;
+    total += score;
+  }
+  return total;
+}
+
+/** Пустой запрос возвращает исходный список без пересортировки. */
+export function searchComponents<T extends ComponentSearchFields>(components: T[], query: string): T[] {
+  if (!tokenize(query).length) return components;
+  return components
+    .map((component) => ({ component, score: searchScore(component, query) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.component.name.localeCompare(b.component.name))
+    .map((entry) => entry.component);
+}
+
+/**
+ * «Похожие компоненты»: та же объявленная роль (`canonicalFor`) либо тот же scope с
+ * пересечением токенов имени. Co-occurrence-майнинг сознательно не используется —
+ * выборки прототипов слишком мало, чтобы он что-то значил.
+ */
+export function similarComponents<T extends ComponentSearchFields & { id: string }>(component: T, all: T[], limit = 6): T[] {
+  const roles = new Set(component.canonicalFor ?? []);
+  const nameTokens = new Set(tokenize(component.name));
+  return all
+    .filter((candidate) => candidate.id !== component.id)
+    .map((candidate) => {
+      const sharedRoles = (candidate.canonicalFor ?? []).filter((role) => roles.has(role)).length;
+      const sharedName = tokenize(candidate.name).filter((token) => nameTokens.has(token)).length;
+      const sameScope = component.scope !== undefined && candidate.scope === component.scope;
+      return { candidate, score: sharedRoles * ROLE_EXACT + (sameScope ? sharedName * CLASSIFIER : 0) };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.candidate.name.localeCompare(b.candidate.name))
+    .slice(0, limit)
+    .map((entry) => entry.candidate);
+}
+
 // --- Library status filters (plan §H.2) ---
 //
 // A custom component maps to a boolean status vector derived from its version history and its

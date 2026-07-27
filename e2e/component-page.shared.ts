@@ -177,19 +177,24 @@ export function componentPageSuite(options: { api: string; seed: boolean; custom
       const component = page.getByRole("tab", { name: "Компонент" });
       const docs = page.getByRole("tab", { name: "Документация" });
       const code = page.getByRole("tab", { name: "Код" });
+      // Волна 3 добавила четвёртую вкладку «Usages» — End/ArrowLeft приземляются на неё.
+      const usages = page.getByRole("tab", { name: "Usages" });
       await component.focus();
       await component.press("ArrowRight");
       await expect(docs).toBeFocused();
       await expect(docs).toHaveAttribute("aria-selected", "true");
-      await docs.press("End");
+      await docs.press("ArrowRight");
       await expect(code).toBeFocused();
       await expect(code).toHaveAttribute("aria-selected", "true");
-      await code.press("Home");
+      await code.press("End");
+      await expect(usages).toBeFocused();
+      await expect(usages).toHaveAttribute("aria-selected", "true");
+      await usages.press("Home");
       await expect(component).toBeFocused();
       await expect(component).toHaveAttribute("aria-selected", "true");
       await component.press("ArrowLeft");
-      await expect(code).toBeFocused();
-      await expect(code).toHaveAttribute("aria-selected", "true");
+      await expect(usages).toBeFocused();
+      await expect(usages).toHaveAttribute("aria-selected", "true");
     });
   });
 }

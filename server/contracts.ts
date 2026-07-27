@@ -818,9 +818,13 @@ const componentListItemSchema = z.looseObject({
   latestVersion: z.number().nullable(), updatedAt: isoDate,
 });
 
+// Надгробия (волна 3 §3.2) видны только под `?includeDeleted=1`; голый GET остаётся 404.
+export const includeDeletedQuerySchema = z.strictObject({ includeDeleted: z.literal("1").optional() });
+
 export const listComponentsContract = registerContract({
   method: "GET", path: "/api/components",
-  summary: "List custom components with head revision and latest active version.",
+  summary: "List custom components with head revision and latest active version. `includeDeleted=1` additionally returns tombstones {deleted,deletedAt,reason,replacement}.",
+  query: includeDeletedQuerySchema,
   responseSchema: z.array(componentListItemSchema),
   errors: [errorCatalog.methodNotAllowed],
 });
@@ -836,7 +840,8 @@ export const createComponentContract = registerContract({
 
 export const getComponentContract = registerContract({
   method: "GET", path: "/api/components/{id}",
-  summary: "Component lifecycle meta: head revision, versions, validated revision, renderable.",
+  summary: "Component lifecycle meta: head revision, versions, validated revision, renderable. Soft-deleted components stay 404 unless `includeDeleted=1`, which adds the tombstone {deleted,deletedAt,reason,replacement}.",
+  query: includeDeletedQuerySchema,
   responseSchema: z.looseObject({
     id: z.string(), name: z.string(), designSystem: z.string(), headRev: z.number(),
     versions: z.array(z.unknown()), updatedAt: isoDate, draftRevision: z.number(), publishedVersion: z.number().nullable(),
@@ -855,10 +860,58 @@ export const saveComponentContract = registerContract({
 
 export const deleteComponentContract = registerContract({
   method: "DELETE", path: "/api/components/{id}",
-  summary: "Soft-delete a component (CAS on baseRev). Responds 204 without a body.",
+  summary: "Soft-delete a component with an optional tombstone (CAS on baseRev). 409 component_in_use while head revisions still pin it; an admin may pass force:true. Responds 204 without a body.",
   status: 204,
-  requestSchema: z.object({ baseRev: positiveInt }),
-  errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict],
+  requestSchema: z.object({ baseRev: positiveInt, reason: z.string().optional(), replacement: slugString.optional(), force: z.boolean().optional() }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, { status: 403, code: "admin_required" }, { status: 409, code: "component_in_use" }, errorCatalog.validationFailed],
+});
+
+// --- Usage graph (волна 3 §3.1) ---
+
+const usageScreenSchema = z.looseObject({ screenId: z.string(), screenName: z.string(), elementKeys: z.array(z.string()) });
+const immutableUsageSchema = z.looseObject({ prototypeId: z.string(), name: z.string(), version: z.number(), componentVersion: z.number() });
+const usageTreeNodeSchema: z.ZodType = z.lazy(() => z.looseObject({
+  kind: z.enum(["prototype", "screen", "element"]), id: z.string(), label: z.string(), children: z.array(usageTreeNodeSchema).optional(),
+}));
+
+export const componentUsagesQuerySchema = z.strictObject({ format: z.enum(["flat", "tree"]).optional() });
+
+export const componentUsagesContract = registerContract({
+  method: "GET", path: "/api/components/{id}/usages",
+  summary: "Usage graph of a component: head-revision usages with exact screen/element keys, immutable usages pinned by prototype publications, versions in use and a safe-to-remove verdict. `format=tree` groups head usages as prototype → screen → element.",
+  query: componentUsagesQuerySchema,
+  validated: true,
+  responseSchema: z.union([
+    z.looseObject({
+      componentId: z.string(), name: z.string(),
+      currentHeadUsages: z.array(z.looseObject({
+        prototypeId: z.string(), name: z.string(), kind: z.string(), rev: z.number(), componentVersion: z.number(),
+        screens: z.array(usageScreenSchema),
+      })),
+      immutableUsages: z.array(immutableUsageSchema),
+      versionsInUse: z.array(z.number()), safeToRemove: z.boolean(),
+    }),
+    z.looseObject({
+      format: z.literal("tree"), componentId: z.string(), name: z.string(),
+      nodes: z.array(usageTreeNodeSchema), immutableUsages: z.array(immutableUsageSchema),
+      versionsInUse: z.array(z.number()), safeToRemove: z.boolean(),
+    }),
+  ]),
+  errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed, errorCatalog.validationFailed],
+});
+
+export const catalogUsagesQuerySchema = z.strictObject({ designSystem: slugString.optional() });
+
+export const catalogUsagesContract = registerContract({
+  method: "GET", path: "/api/catalog/usages",
+  summary: "Aggregate usage index: every live component with the head-revision prototypes that pin it. Cached against MAX(prototypes.updated_at).",
+  query: catalogUsagesQuerySchema,
+  validated: true,
+  responseSchema: z.object({ components: z.array(z.looseObject({
+    componentId: z.string(), name: z.string(), designSystem: z.string(), headUsageCount: z.number(),
+    prototypes: z.array(z.looseObject({ prototypeId: z.string(), name: z.string(), kind: z.string(), rev: z.number() })),
+  })) }),
+  errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed, errorCatalog.validationFailed],
 });
 
 const componentSourceSchema = z.looseObject({ rev: z.number(), source: z.string(), designSystem: z.string(), figma: figmaResponseSchema, message: z.string().nullable(), createdAt: isoDate });
@@ -1031,12 +1084,15 @@ export const catalogManifestQuerySchema = z.strictObject({ designSystem: slugStr
 
 export const catalogManifestContract = registerContract({
   method: "GET", path: "/api/catalog/manifest",
-  summary: "Manifest of the latest active custom-component versions across design systems.",
+  summary: "Manifest of the latest active custom-component versions across design systems, with head-usage counts and a deprecated flag for discovery.",
   query: catalogManifestQuerySchema,
   validated: true,
   responseSchema: z.object({ components: z.array(z.looseObject({
     id: z.string(), name: z.string(), designSystem: z.string(), version: z.number(), bundleUrl: z.string(),
     bundleHash: z.string(), hostAbiVersion: z.number(), ...serializedDefinitionFields,
+    // Волна 3: сколько головных ревизий прототипов пинуют компонент и устарел ли он
+    // (последняя публикация в статусе deprecated/superseded).
+    headUsageCount: z.number(), deprecated: z.boolean(),
   })) }),
   errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed, errorCatalog.validationFailed],
 });
