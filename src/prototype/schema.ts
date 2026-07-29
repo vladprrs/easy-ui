@@ -89,12 +89,25 @@ const flowStepSchema = z.strictObject({
   note: z.string().trim().min(1).max(500).optional(),
 });
 
-const flowSchema = z.strictObject({
+/**
+ * Общая форма флоу. `parentId` — аддитивное поле иерархии сценариев (план
+ * `docs/plans/2026-07-29-scrn-gallery-ux.md` §4/T0): присутствует в обеих ветках,
+ * без валидационных правил (они приходят в T1).
+ * Обе ветки — `strictObject`: `looseObject` добавил бы индексную сигнатуру и
+ * убил бы excess-property-проверки на литералах флоу по всему репозиторию.
+ */
+const flowShape = <Steps extends z.ZodType>(steps: Steps) => ({
   id: slugSchema,
   name: z.string().min(1).max(120),
   description: z.string().max(500).optional(),
-  steps: z.array(flowStepSchema).min(1).max(FLOW_STEPS_LIMIT),
-});
+  parentId: slugSchema.optional(),
+  steps,
+}) as const;
+
+/** Входная ветка: авторские лимиты `.max()` живут только здесь. */
+const inputFlowSchema = z.strictObject(flowShape(z.array(flowStepSchema).min(1).max(FLOW_STEPS_LIMIT)));
+/** Stored-ветка: те же поля, но без авторских лимитов — иначе откат образа ломает чтение. */
+const storedFlowSchema = z.strictObject(flowShape(z.array(flowStepSchema).min(1)));
 
 /**
  * Идентификаторы архитектурных lint-правил (`src/prototype/architectureLints.ts`).
@@ -130,7 +143,7 @@ const architectureSchema = z.strictObject({
   exemptions: z.array(architectureExemptionSchema).max(ARCHITECTURE_EXEMPTIONS_LIMIT).optional(),
 });
 
-const prototypeDocShape = <S extends z.ZodType>(screens: S) => ({
+const prototypeDocShape = <S extends z.ZodType, F extends z.ZodType>(screens: S, flows: F) => ({
   version: z.literal(1),
   id: slugSchema,
   name: z.string().min(1),
@@ -139,16 +152,23 @@ const prototypeDocShape = <S extends z.ZodType>(screens: S) => ({
   startScreen: slugSchema,
   state: z.record(z.string(), jsonValueSchema),
   screens,
-  flows: z.array(flowSchema).min(1).max(FLOWS_LIMIT).optional(),
+  flows: flows.optional(),
   /** Архитектурные исключения (волна 2): аддитивно, документ без поля ведёт себя как раньше. */
   architecture: architectureSchema.optional(),
 }) as const;
 
-const refinePrototypeDoc = <T extends {
+type RefinableDoc = {
   screens: { id: string }[];
   startScreen: string;
   flows?: { id: string; steps: { screenId: string }[] }[];
-}>(doc:T, context:z.RefinementCtx) => {
+};
+
+/**
+ * Структурные инварианты — исполняются **обеими** ветками, потому что на них
+ * напрямую опирается код: уникальность `screen.id`, существование `startScreen`
+ * и `step.screenId`, уникальность `flow.id`.
+ */
+const refinePrototypeDocStructure = <T extends RefinableDoc>(doc: T, context: z.RefinementCtx) => {
   const ids = new Set<string>();
   doc.screens.forEach((screen, index) => {
     if (ids.has(screen.id)) context.addIssue({ code: "custom", path: ["screens", index, "id"], message: "screen id must be unique" });
@@ -158,13 +178,26 @@ const refinePrototypeDoc = <T extends {
 
   if (!doc.flows) return;
   const flowIds = new Set<string>();
-  let totalSteps = 0;
   doc.flows.forEach((flow, flowIndex) => {
     if (flowIds.has(flow.id)) context.addIssue({ code: "custom", path: ["flows", flowIndex, "id"], message: "flow id must be unique" });
     flowIds.add(flow.id);
-    totalSteps += flow.steps.length;
     flow.steps.forEach((step, stepIndex) => {
       if (!ids.has(step.screenId)) context.addIssue({ code: "custom", path: ["flows", flowIndex, "steps", stepIndex, "screenId"], message: "flow step must reference an existing screen" });
+    });
+  });
+};
+
+/**
+ * Авторские правила — **только входная ветка** (план §4). Stored-парс их не исполняет,
+ * чтобы откат образа на предыдущую версию читал, сохранял и восстанавливал документы
+ * без потерь: правила геометрии дорожек и лимиты — вопрос авторинга, не чтения.
+ */
+const refinePrototypeDocAuthoring = <T extends RefinableDoc>(doc: T, context: z.RefinementCtx) => {
+  if (!doc.flows) return;
+  let totalSteps = 0;
+  doc.flows.forEach((flow, flowIndex) => {
+    totalSteps += flow.steps.length;
+    flow.steps.forEach((step, stepIndex) => {
       if (stepIndex > 0 && step.screenId === flow.steps[stepIndex - 1]!.screenId) {
         context.addIssue({ code: "custom", path: ["flows", flowIndex, "steps", stepIndex, "screenId"], message: "adjacent flow steps must reference different screens" });
       }
@@ -202,9 +235,9 @@ const refinePrototypeDoc = <T extends {
 
 /** Strict schema for create/save inputs. New revisions must choose a design system explicitly. */
 export const inputPrototypeDocSchema = z.strictObject({
-  ...prototypeDocShape(z.array(authoredScreenSchema).min(1)),
+  ...prototypeDocShape(z.array(authoredScreenSchema).min(1), z.array(inputFlowSchema).min(1).max(FLOWS_LIMIT)),
   designSystem: slugSchema,
-}).superRefine(refinePrototypeDoc);
+}).superRefine(refinePrototypeDocStructure).superRefine(refinePrototypeDocAuthoring);
 
 /**
  * Tolerant parser for immutable legacy rows that predate the designSystem field.
@@ -212,9 +245,9 @@ export const inputPrototypeDocSchema = z.strictObject({
  * а раскрытый документ (ключи `<hostKey>$<inner>`) валиден для этого парсера.
  */
 export const storedPrototypeDocSchema = z.strictObject({
-  ...prototypeDocShape(z.array(screenSchema).min(1)),
+  ...prototypeDocShape(z.array(screenSchema).min(1), z.array(storedFlowSchema).min(1)),
   designSystem: slugSchema.default("shadcn"),
-}).superRefine(refinePrototypeDoc);
+}).superRefine(refinePrototypeDocStructure);
 
 // Compatibility export for frontend-authored fixtures. Server write paths use
 // inputPrototypeDocSchema explicitly; stored reads use storedPrototypeDocSchema.
@@ -222,5 +255,6 @@ export const prototypeDocSchema = storedPrototypeDocSchema;
 
 export type PrototypeDoc = z.output<typeof storedPrototypeDocSchema>;
 export type ArchitectureExemption = z.output<typeof architectureExemptionSchema>;
-export type Flow = z.output<typeof flowSchema>;
+/** Публичный тип флоу выводится из **строгой input-схемы** — иначе литералы флоу по репозиторию теряют excess-property-проверки. */
+export type Flow = z.output<typeof inputFlowSchema>;
 export type FlowStep = z.output<typeof flowStepSchema>;

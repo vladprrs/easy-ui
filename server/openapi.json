@@ -8542,6 +8542,9 @@
                         "minLength": 1,
                         "type": "string"
                       },
+                      "parentId": {
+                        "$ref": "#/$defs/__schema1"
+                      },
                       "steps": {
                         "items": {
                           "$ref": "#/$defs/__schema12"
@@ -9580,6 +9583,9 @@
                         "maxLength": 120,
                         "minLength": 1,
                         "type": "string"
+                      },
+                      "parentId": {
+                        "$ref": "#/$defs/__schema1"
                       },
                       "steps": {
                         "items": {
