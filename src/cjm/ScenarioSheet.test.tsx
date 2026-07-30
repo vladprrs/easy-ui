@@ -62,7 +62,8 @@ describe("CJM scenarios sheet", () => {
     renderAt("/p/tree/cjm");
     await waitFor(() => expect(sections()).toHaveLength(4));
     expect(sections().map((node) => node.dataset.flowId)).toEqual(["main", "section", "shortcut", "history-line"]);
-    expect(sections().map((node) => node.style.marginInlineStart)).toEqual(["0px", "24px", "48px", "0px"]);
+    // Ступень отступа — 28px на уровень (редизайн 2026-07-30, макет 02).
+    expect(sections().map((node) => node.style.marginInlineStart)).toEqual(["0px", "28px", "56px", "0px"]);
     // Дорожек в дефолтном режиме нет — их язык (рёбра, легенда) простыня не дублирует.
     expect(screen.queryByLabelText("Легенда рёбер сценариев")).toBeNull();
     expect(document.querySelector(".cjm-grid")).toBeNull();
@@ -134,6 +135,27 @@ describe("CJM scenarios sheet", () => {
     // Активация переносит `aria-current` на выбранный сценарий.
     fireEvent.click(within(tree).getByText("История операций"));
     await waitFor(() => expect(treeItems().find((node) => node.getAttribute("aria-current") === "true")?.dataset.flowId).toBe("history-line"));
+  });
+
+  // Лайтбокс экрана (редизайн 2026-07-30, макет 03): открывается кликом по тайлу
+  // ленты, листает шаги ←/→ и закрывается Esc, оставаясь внутри одного сценария.
+  it("opens the screen lightbox from a strip tile and walks the scenario steps", async () => {
+    renderAt("/p/tree/cjm");
+    await waitFor(() => expect(sections()).toHaveLength(4));
+
+    const steps = [...sections()[0]!.querySelectorAll<HTMLElement>("li[data-flow-step]")];
+    fireEvent.click(within(steps[1]!).getByRole("button", { name: /Переводы/ }));
+
+    const dialog = await screen.findByTestId("screen-lightbox");
+    expect(within(dialog).getByText("шаг 2 / 4")).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() => expect(within(dialog).getByText("шаг 3 / 4")).toBeTruthy());
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    await waitFor(() => expect(within(dialog).getByText("шаг 2 / 4")).toBeTruthy());
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("screen-lightbox")).toBeNull());
   });
 
   it("switches to lanes only through ?view=lanes and keeps the scenario query", async () => {

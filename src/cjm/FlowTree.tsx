@@ -115,18 +115,21 @@ export function FlowTree({ roots, activeFlowId, onActivate, label, className }: 
         onKeyDown={(event) => onKeyDown(event, node)}
         onFocus={(event) => { event.stopPropagation(); setFocusId(node.flow.id); }}
         onClick={(event) => onClick(event, node)}
-        className="cjm-flow-tree-item rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand"
+        className="cjm-flow-tree-item rounded-field"
       >
         <span
-          style={{ paddingInlineStart: (node.depth - 1) * 12 }}
-          className={`flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1 font-eui-ui text-sm ${active ? "bg-eui-lilac-100 font-semibold text-eui-brand" : "text-eui-ink hover:bg-eui-lilac-50"}`}
+          // Глубина читается отступом 18px на уровень (макет 02), сам пункт —
+          // пилюля радиуса 14 с паддингом 9/12.
+          style={{ paddingInlineStart: 12 + (node.depth - 1) * 18 }}
+          className={`flex cursor-pointer items-center gap-1.5 rounded-field py-[9px] pr-3 text-sm transition-colors duration-100 ${active ? "bg-pay-lavender font-medium text-eui-ink" : "text-eui-ink hover:bg-pay-lavender-tint"}`}
         >
           {node.children.length === 0 ? null : <span
             aria-hidden="true"
             className="shrink-0 text-eui-slate-400"
             onClick={(event) => { event.stopPropagation(); setCollapsedFor(node.flow.id, !isCollapsed); }}
           >{isCollapsed ? "▸" : "▾"}</span>}
-          <span className="min-w-0 truncate" title={node.flow.name}>{node.flow.name}</span>
+          <span className="min-w-0 flex-1 truncate" title={node.flow.name}>{node.flow.name}</span>
+          <span aria-hidden="true" className={`shrink-0 text-xs tabular-nums ${active ? "text-pay-red" : "text-eui-slate-400"}`}>{node.flow.steps.length}</span>
         </span>
         {node.children.length === 0 || isCollapsed ? null : renderNodes(node.children, true)}
       </li>;

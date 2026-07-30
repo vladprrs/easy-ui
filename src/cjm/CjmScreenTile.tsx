@@ -11,7 +11,7 @@ import { buildScreenRenderPlan, stripEvents, toRuntimeSpec, type RuntimeTree } f
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { buildPlayerPath } from "../player/navigation";
 import { cjm } from "../app/strings/cjm";
-import { previewNativeWidth, previewTileSizes } from "../designSystems/deviceMetrics";
+import { lightboxStageTile, previewNativeWidth, previewTileSizes, sheetStripTile } from "../designSystems/deviceMetrics";
 import type { DeviceKind } from "../designSystems/deviceMetrics";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 import { CanvasLayers } from "../player/CanvasLayers";
@@ -44,12 +44,12 @@ export function getCjmTransitions(screen: PrototypeDoc["screens"][number], scree
   return transitions;
 }
 
-export function CjmFrame({ device, nativeWidth, nativeHeight, resetKey, designSystem, themeTokens, children }: { device: DeviceKind; nativeWidth: number; nativeHeight?: number; resetKey: string; designSystem: string; themeTokens?: ThemeContent["tokens"]; children: ReactNode }) {
+export function CjmFrame({ device, nativeWidth, nativeHeight, resetKey, designSystem, themeTokens, size, children }: { device: DeviceKind; nativeWidth: number; nativeHeight?: number; resetKey: string; designSystem: string; themeTokens?: ThemeContent["tokens"]; size?: { width: number; heightCap: number; fallbackHeight: number }; children: ReactNode }) {
   const innerRef = useRef<HTMLDivElement>(null);
   const [stageHost, setStageHost] = useState<HTMLDivElement | null>(null);
   const stageHostRef = useMemo(() => ({ current: stageHost }), [stageHost]);
   const setInnerRef = useCallback((node: HTMLDivElement | null) => { innerRef.current = node; setStageHost(node); }, []);
-  const tileSize = previewTileSizes[device];
+  const tileSize = size ?? previewTileSizes[device];
   const scale = tileSize.width / nativeWidth;
   const [measuredHeight, setMeasuredHeight] = useState<number>(tileSize.fallbackHeight);
   const [autoHeightCapped, setAutoHeightCapped] = useState(false);
@@ -67,9 +67,15 @@ export function CjmFrame({ device, nativeWidth, nativeHeight, resetKey, designSy
     observer.observe(element);
     return () => observer.disconnect();
   }, [nativeHeight, resetKey, scale, tileSize.heightCap]);
-  const height = nativeHeight === undefined ? measuredHeight : Math.min(nativeHeight * scale, tileSize.heightCap);
-  const capped = nativeHeight === undefined ? autoHeightCapped : nativeHeight * scale > tileSize.heightCap;
-  return <div className={`cjm-frame overflow-hidden rounded-xl bg-background text-foreground${capped ? " cjm-frame-capped" : ""}`} data-testid="cjm-frame" style={{ width: tileSize.width, height }}>
+  // Явный `size` (мини-тайл ленты, телефон лайтбокса) — кадр фиксированной формы:
+  // в ряду одинаковых «телефонов» авто-высота дала бы рваную ленту (макеты 02/03).
+  const height = size !== undefined
+    ? size.heightCap
+    : nativeHeight === undefined ? measuredHeight : Math.min(nativeHeight * scale, tileSize.heightCap);
+  const capped = size !== undefined
+    ? (nativeHeight ?? 0) * scale > size.heightCap || (nativeHeight === undefined && autoHeightCapped)
+    : nativeHeight === undefined ? autoHeightCapped : nativeHeight * scale > tileSize.heightCap;
+  return <div className={`cjm-frame overflow-hidden rounded-field bg-background text-foreground${capped ? " cjm-frame-capped" : ""}`} data-testid="cjm-frame" style={{ width: tileSize.width, height }}>
     <SurfaceSpacingScope systemId={designSystem} themeTokens={themeTokens}>
       <div ref={setInnerRef} data-eui-stage-viewport="cjm" style={{ position: "relative", width: nativeWidth, ...(nativeHeight === undefined ? {} : { height: nativeHeight }), transform: `scale(${scale})`, transformOrigin: "top left" }}><HostStageSurface stageHostRef={stageHostRef}>{children}</HostStageSurface></div>
     </SurfaceSpacingScope>
@@ -87,7 +93,15 @@ export class TileErrorBoundary extends Component<{ prototypeId: string; screenId
   }
 }
 
-export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, routeBase, customTypes, customDefinitions, themeContent, noteOverride, flowId, stepIndex }: { doc: PrototypeDoc; screen: PrototypeDoc["screens"][number]; registry: ComponentRegistry; handlers: NonNullable<JSONUIProviderProps["handlers"]>; runtimeKey: string; routeBase: string; customTypes?: ReadonlySet<string>; customDefinitions?: Record<string, ComponentDefinition>; themeContent?: ThemeContent | null; noteOverride?: string; flowId?: string; stepIndex?: number }) {
+export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, routeBase, customTypes, customDefinitions, themeContent, noteOverride, flowId, stepIndex, variant = "full", onOpen }: { doc: PrototypeDoc; screen: PrototypeDoc["screens"][number]; registry: ComponentRegistry; handlers: NonNullable<JSONUIProviderProps["handlers"]>; runtimeKey: string; routeBase: string; customTypes?: ReadonlySet<string>; customDefinitions?: Record<string, ComponentDefinition>; themeContent?: ThemeContent | null; noteOverride?: string; flowId?: string; stepIndex?: number;
+  /**
+   * `sheet` — мини-тайл ленты «Сценарии» (макет 02): только кадр, подпись рисует лента.
+   * `stage` — телефон лайтбокса (макет 03): кадр 330×640 без ссылки поверх.
+   */
+  variant?: "full" | "sheet" | "stage";
+  /** Если задан — тайл открывает лайтбокс (макет 03) вместо перехода в плеер. */
+  onOpen?: () => void;
+}) {
   // Inert runtime tree: events are stripped from spec and metadata alike.
   const tree = useMemo<RuntimeTree | null>(() => {
     const inert = stripEvents(toRuntimeSpec(screen.spec, { customTypes }));
@@ -110,22 +124,44 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
   const tilePath = flowId === undefined || stepIndex === undefined
     ? playerPath
     : `${playerPath}?${new URLSearchParams({ flow: flowId, step: String(stepIndex) })}`;
-  return <article className="cjm-tile rounded-[20px] bg-white p-3 shadow-sm" style={{ width: tileWidth + 24 }}>
-    <div className="relative">
-      <TileErrorBoundary key={`${runtimeKey}:${screen.id}`} prototypeId={doc.id} screenId={screen.id}>
-        <JSONUIProvider key={`${runtimeKey}:${screen.id}`} registry={registry} handlers={handlers} initialState={initialState}>
-          <div inert>{tree && specs ? <CjmFrame device={doc.device} nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}><EasyUiRuntimeProvider value={runtimeValue}>{screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}</EasyUiRuntimeProvider></CjmFrame> : <div className="flex h-64 items-center justify-center rounded-xl border bg-background font-eui-ui text-sm text-eui-slate-500" style={{ width: tileWidth }}>{cjm.noContent}</div>}</div>
-        </JSONUIProvider>
-      </TileErrorBoundary>
-      <Link to={tilePath} className="cjm-tile-link absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring" aria-label={cjm.openScreenAria(screen.name, doc.name)} />
-    </div>
+  const sheet = variant === "sheet";
+  const stage = variant === "stage";
+  const frameSize = sheet ? sheetStripTile : stage ? lightboxStageTile : undefined;
+  const frame = <>
+    <TileErrorBoundary key={`${runtimeKey}:${screen.id}`} prototypeId={doc.id} screenId={screen.id}>
+      <JSONUIProvider key={`${runtimeKey}:${screen.id}`} registry={registry} handlers={handlers} initialState={initialState}>
+        <div inert>{tree && specs ? <CjmFrame device={doc.device} nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} size={frameSize}><EasyUiRuntimeProvider value={runtimeValue}>{screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}</EasyUiRuntimeProvider></CjmFrame> : <div className="flex items-center justify-center rounded-field bg-background text-center text-[11px] text-eui-slate-500" style={{ width: sheet ? sheetStripTile.width : tileWidth, height: sheet ? sheetStripTile.fallbackHeight : 256 }}>{cjm.noContent}</div>}</div>
+      </JSONUIProvider>
+    </TileErrorBoundary>
+    {/* Лайтбокс (макет 03) перехватывает клик по тайлу; ссылка в плеер остаётся
+        фолбэком, когда обработчика нет — так тайл всегда навигируем. */}
+    {stage ? null : onOpen === undefined
+      ? <Link to={tilePath} className="cjm-tile-link absolute inset-0 rounded-field" aria-label={cjm.openScreenAria(screen.name, doc.name)} />
+      : <button type="button" onClick={onOpen} className="cjm-tile-link absolute inset-0 rounded-field" aria-label={cjm.openScreenAria(screen.name, doc.name)} />}
+  </>;
+
+  if (sheet) {
+    return <article className="cjm-tile relative rounded-field bg-white p-0" style={{ width: sheetStripTile.width }}>{frame}</article>;
+  }
+
+  if (stage) {
+    // Телефон не сжимается флексом (`shrink-0`), но и не выше окна: на ноутбучной
+    // высоте кадр подрезается снизу, а шапка и лента миниатюр остаются видимыми.
+    return <div
+      className="relative shrink-0 overflow-hidden rounded-[28px] bg-white"
+      style={{ width: lightboxStageTile.width, height: `min(${lightboxStageTile.heightCap}px, calc(100dvh - 300px))` }}
+    >{frame}</div>;
+  }
+
+  return <article className="cjm-tile rounded-popover bg-white p-3" style={{ width: tileWidth + 24 }}>
+    <div className="relative">{frame}</div>
     <div className="mt-4 flex items-start justify-between gap-2">
-      <h2 className="min-w-0 truncate font-eui-ui text-lg font-semibold" title={screen.name}>{screen.name}</h2>
-      {screen.stateOverrides === undefined ? null : <span className="shrink-0 rounded-full bg-eui-lilac-100 px-2 py-1 font-eui-ui text-[11px] font-medium text-eui-brand">{cjm.demoState}</span>}
+      <h2 className="min-w-0 truncate text-lg font-medium" title={screen.name}>{screen.name}</h2>
+      {screen.stateOverrides === undefined ? null : <span className="shrink-0 rounded-full bg-pay-lavender px-2 py-1 text-[11px] font-medium text-eui-ink">{cjm.demoState}</span>}
     </div>
-    {noteOverride ?? screen.note ? <p className="mt-1 font-eui-ui text-sm text-eui-slate-500">{noteOverride ?? screen.note}</p> : null}
+    {noteOverride ?? screen.note ? <p className="mt-1 text-[13px] text-eui-slate-500">{noteOverride ?? screen.note}</p> : null}
     {transitions.length ? <ul className="mt-3 flex flex-wrap gap-2" aria-label={cjm.transitionsAria}>
-      {transitions.map((transition) => <li key={transition.kind === "static" ? `static:${transition.screenId}` : "dynamic"} className="rounded-full border border-eui-brand/20 bg-eui-lilac-100 px-2.5 py-1 font-eui-ui text-xs text-eui-brand">
+      {transitions.map((transition) => <li key={transition.kind === "static" ? `static:${transition.screenId}` : "dynamic"} className="rounded-full bg-pay-lavender px-2.5 py-1 text-xs font-medium text-eui-ink">
         {transition.kind === "static" ? cjm.transitionTo(transition.screenName) : cjm.dynamicTransition}
       </li>)}
     </ul> : null}

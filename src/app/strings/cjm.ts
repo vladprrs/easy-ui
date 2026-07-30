@@ -53,4 +53,34 @@ export const cjm = {
   dynamicTransition: "динамический переход",
   demoState: "демо-состояние",
   openScreenAria: (screenName: string, docName: string) => `Открыть экран «${screenName}» прототипа «${docName}» в плеере`,
+  // Ряд счётчиков режима «Сценарии» (макет 02).
+  countersAria: "Сводка прототипа",
+  counterScreens: "экранов",
+  counterFlows: "сценариев",
+  counterChecks: "проверок",
+  readinessReady: "Готов к публикации",
+  readinessGaps: (count: number) => `${count} ${pluralRu(count, ["переход не проверен", "перехода не проверено", "переходов не проверено"])}`,
+  print: "Печать",
+  sheetHint: "Экраны переиспользуются между сценариями: один и тот же экран может быть шагом сразу нескольких.",
+  stepNumber: (index: number) => `шаг ${index}`,
+} as const;
+
+// Лайтбокс экрана (макет 03).
+export const lightbox = {
+  aria: (screenName: string) => `Экран «${screenName}»`,
+  breadcrumbAria: "Путь до экрана",
+  stepOf: (step: number, total: number) => `шаг ${step} / ${total}`,
+  zonesToggle: (visible: boolean) => `Зоны переходов · ${visible ? "вкл" : "выкл"}`,
+  zonesHidden: "Зоны переходов выключены",
+  noTransitions: "С этого экрана переходов нет",
+  targetTo: (screenName: string) => `→ ${screenName}`,
+  targetStep: (step: number) => `шаг ${step}`,
+  targetInFlow: "в текущем сценарии",
+  targetOtherFlow: "вне текущего сценария",
+  targetComputed: "→ цель вычисляется",
+  openInPlayer: "В плеер →",
+  previous: "Предыдущий шаг",
+  next: "Следующий шаг",
+  close: "Закрыть",
+  thumbnailsAria: (flowName: string) => `Шаги сценария «${flowName}»`,
 } as const;

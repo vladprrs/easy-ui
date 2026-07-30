@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { PrototypeChrome } from "../app/PrototypeChrome";
+import { inset, panel, pillGhost, segmentActive, segmentIdle, segmentTrack } from "../app/chrome";
 import { buildPlayerPath } from "../player/navigation";
 import { cjm, cjmDocumentTitle } from "../app/strings/cjm";
 import { useDocumentTitle } from "../app/useDocumentTitle";
@@ -10,6 +11,7 @@ import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import { previewTileSizes } from "../designSystems/deviceMetrics";
 import { buildNavigationGraph } from "../prototype/navigationGraph";
 import type { PrototypeDoc } from "../prototype/schema";
+import { CjmCounters } from "./CjmCounters";
 import { CjmEdgesOverlay, computeLogicalEdgeRoutes } from "./CjmEdgesOverlay";
 import { CjmScreenTile } from "./CjmScreenTile";
 import { createCjmRegistry } from "./cjmRegistry";
@@ -31,17 +33,15 @@ function viewSearch(search: string, mode: CjmViewMode): string {
   return query === "" ? "" : `?${query}`;
 }
 
-const modeBase = "rounded-full px-3 py-1 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand";
-
 function ViewSwitch({ mode, search }: { mode: CjmViewMode; search: string }) {
-  return <nav aria-label={cjm.viewSwitchAria} className="flex items-center gap-1 rounded-full bg-eui-lilac-100 p-1 font-eui-ui text-xs">
+  return <nav aria-label={cjm.viewSwitchAria} className={segmentTrack}>
     {([["scenarios", cjm.viewScenarios], ["lanes", cjm.viewLanes]] as const).map(([id, label]) => <Link
       key={id}
       to={{ search: viewSearch(search, id) }}
       replace
       aria-current={mode === id ? "page" : undefined}
       data-cjm-view={id}
-      className={mode === id ? `${modeBase} bg-white font-bold text-eui-ink shadow-sm` : `${modeBase} text-eui-slate-500 hover:text-eui-ink`}
+      className={mode === id ? segmentActive : segmentIdle}
     >{label}</Link>)}
   </nav>;
 }
@@ -99,8 +99,8 @@ function CjmConnector({ sourceScreenId, targetScreenId }: { sourceScreenId: stri
       viewBox={`0 0 ${geometry.width} ${geometry.height}`}
       fill="none"
     >
-      <path data-testid="cjm-connector-line" d={`M0 ${geometry.sourceY} L${geometry.width} ${geometry.targetY}`} stroke="#844EDC" strokeWidth="2.5" strokeLinecap="round" />
-      <path d={`M${geometry.width - 8} ${geometry.targetY - 7} L${geometry.width} ${geometry.targetY} L${geometry.width - 8} ${geometry.targetY + 7}`} stroke="#844EDC" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path data-testid="cjm-connector-line" d={`M0 ${geometry.sourceY} L${geometry.width} ${geometry.targetY}`} stroke="#2D083A" strokeWidth="2.5" strokeLinecap="round" />
+      <path d={`M${geometry.width - 8} ${geometry.targetY - 7} L${geometry.width} ${geometry.targetY} L${geometry.width - 8} ${geometry.targetY + 7}`} stroke="#2D083A" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>}
   </>;
 }
@@ -109,10 +109,10 @@ function CjmConnector({ sourceScreenId, targetScreenId }: { sourceScreenId: stri
 function UnassignedLane({ layout, tile, placeholder }: { layout: CjmLayout; tile: (screenId: string) => React.ReactNode; placeholder: { width: number; height: number } }) {
   const [open, setOpen] = useState(false);
   if (!layout.unassigned.length) return null;
-  return <section className="cjm-unassigned mx-auto mt-8 max-w-[1600px]">
+  return <section className={`cjm-unassigned mx-auto mt-5 max-w-[1600px] ${inset} p-4`}>
     <button
       type="button"
-      className="font-eui-ui text-sm font-semibold text-eui-brand"
+      className="text-[13px] font-medium text-eui-ink"
       aria-expanded={open}
       onClick={() => setOpen((current) => !current)}
     >
@@ -158,36 +158,39 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
   // Плейсхолдер ленивой обёртки = стартовые габариты самого тайла (`CjmFrame`),
   // поэтому монтирование не двигает геометрию грида и рёбер.
   const placeholder = useMemo(() => ({ width: previewTileSizes[doc.device].width + 24, height: previewTileSizes[doc.device].fallbackHeight }), [doc.device]);
-  const metadata = <dl aria-label={cjm.metadataAria} className="flex flex-wrap items-center gap-2 font-eui-ui text-xs text-eui-slate-500">
-    <div><dt className="sr-only">{cjm.screensLabel}</dt><dd className="rounded-full bg-eui-lilac-100 px-2.5 py-1">{cjm.screensCount(doc.screens.length)}</dd></div>
-    {doc.flows ? <div><dt className="sr-only">{cjm.flowsLabel}</dt><dd className="rounded-full bg-eui-lilac-100 px-2.5 py-1">{cjm.flowsCount(doc.flows.length)}</dd></div> : null}
-    <div><dt className="sr-only">{cjm.designSystemLabel}</dt><dd className="rounded-full bg-eui-lilac-100 px-2.5 py-1">{designSystemName}</dd></div>
+  const metadata = <dl aria-label={cjm.metadataAria} className="flex flex-wrap items-center gap-2 text-xs font-medium text-eui-ink">
+    <div><dt className="sr-only">{cjm.screensLabel}</dt><dd className="rounded-full bg-pay-lavender px-2.5 py-1">{cjm.screensCount(doc.screens.length)}</dd></div>
+    {doc.flows ? <div><dt className="sr-only">{cjm.flowsLabel}</dt><dd className="rounded-full bg-pay-lavender px-2.5 py-1">{cjm.flowsCount(doc.flows.length)}</dd></div> : null}
+    <div><dt className="sr-only">{cjm.designSystemLabel}</dt><dd className="rounded-full bg-pay-lavender px-2.5 py-1">{designSystemName}</dd></div>
   </dl>;
-  const renderTile = (screenId: string, flowId?: string, stepIndex?: number, noteOverride?: string) => {
+  const renderTile = (screenId: string, flowId?: string, stepIndex?: number, noteOverride?: string, variant?: "full" | "sheet" | "stage", onOpen?: () => void) => {
     const screen = screens.get(screenId);
     if (!screen) return null;
-    return <CjmScreenTile doc={doc} screen={screen} registry={registry} handlers={runtime.handlers} runtimeKey={runtimeKey} routeBase={routeBase} customTypes={customTypes} customDefinitions={custom?.definitions} themeContent={themeContent} noteOverride={noteOverride} flowId={flowId} stepIndex={stepIndex} />;
+    return <CjmScreenTile doc={doc} screen={screen} registry={registry} handlers={runtime.handlers} runtimeKey={runtimeKey} routeBase={routeBase} customTypes={customTypes} customDefinitions={custom?.definitions} themeContent={themeContent} noteOverride={noteOverride} flowId={flowId} stepIndex={stepIndex} variant={variant} onOpen={onOpen} />;
   };
   // Единый хром /p/* (WF-4): навигация Плеер/Редактор живёт в сегментах хрома,
   // тело вью — только stage (описание + лента экранов).
   return <main className="cjm-root flex h-full min-h-0 flex-col">
     <ThemeStyle content={themeContent} />
     <PrototypeChrome prototypeId={doc.id} prototypeName={doc.name} view="cjm" version={version} playerPath={playerPath} status={metadata} actions={layout.linear ? undefined : <ViewSwitch mode={mode} search={location.search} />} />
-    <div className="cjm-stage min-h-0 flex-1 overflow-y-auto bg-eui-lav p-6 sm:p-8">
-      {doc.description ? <p className="mx-auto max-w-[1600px] font-eui-ui text-eui-slate-500">{doc.description}</p> : null}
+    <div className="cjm-stage min-h-0 flex-1 overflow-y-auto bg-pay-lavender p-5 font-pay-text">
+      {doc.description ? <p className="mx-auto mb-5 max-w-[1600px] text-eui-slate-500">{doc.description}</p> : null}
       {layout.linear ? <ol className="cjm-list mx-auto mt-8 flex items-start gap-16 overflow-x-auto pb-8" aria-label={cjm.screensAria}>
       {doc.screens.map((screen, index) => <li className="relative shrink-0" key={screen.id} data-screen-id={screen.id}>
         <LazyMount placeholderHeight={placeholder.height} placeholderWidth={placeholder.width}>{renderTile(screen.id)}</LazyMount>
         {index < doc.screens.length - 1 ? <CjmConnector sourceScreenId={screen.id} targetScreenId={doc.screens[index + 1]!.id} /> : null}
       </li>)}
-      </ol> : mode === "scenarios" ? <ScenarioSheet
-        doc={doc}
-        graph={graph}
-        routeBase={routeBase}
-        placeholder={placeholder}
-        renderTile={renderTile}
-      /> : <>
-        <div className="cjm-grid-scroll mt-8 overflow-x-auto pb-8">
+      </ol> : mode === "scenarios" ? <div data-cjm-mode="scenarios" className="flex flex-col gap-5">
+        <CjmCounters doc={doc} graph={graph} />
+        <ScenarioSheet
+          doc={doc}
+          graph={graph}
+          routeBase={routeBase}
+          renderTile={(screenId, flowId, stepIndex, noteOverride, onOpen) => renderTile(screenId, flowId, stepIndex, noteOverride, "sheet", onOpen)}
+          renderStage={(screenId) => renderTile(screenId, undefined, undefined, undefined, "stage")}
+        />
+      </div> : <>
+        <div className={`cjm-grid-scroll ${panel} overflow-x-auto p-5`}>
           <div
             className="cjm-grid relative mx-auto grid w-max items-start"
             aria-label={cjm.lanesAria}
@@ -200,13 +203,13 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
             <CjmEdgesOverlay layout={layout} routing={routing} />
             {layout.lanes.map((lane, laneIndex) => <div
               key={`${lane.key}:label`}
-              className="cjm-lane-label sticky left-0 z-30 self-stretch bg-eui-lav py-3 pr-4 font-eui-ui"
+              className="cjm-lane-label sticky left-0 z-30 self-stretch bg-white py-3 pr-4"
               data-cjm-lane={laneIndex}
               data-testid="cjm-lane-label"
               style={{ gridColumn: 1, gridRow: laneIndex + 1 }}
             >
-              <h2 className="font-semibold">{lane.name ?? cjm.mainLaneName}</h2>
-              {lane.description ? <p className="mt-1 text-sm text-eui-slate-500">{lane.description}</p> : null}
+              <h2 className="text-sm font-medium text-eui-ink">{lane.name ?? cjm.mainLaneName}</h2>
+              {lane.description ? <p className="mt-1 text-xs text-eui-slate-500">{lane.description}</p> : null}
             </div>)}
             {layout.lanes.flatMap((lane) => lane.nodes.map((node) => {
               const stepIndex = Number(node.key.slice(node.key.lastIndexOf(":") + 1));
@@ -225,10 +228,11 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
             }))}
           </div>
         </div>
-        <div className="cjm-edge-legend mx-auto flex max-w-[1600px] flex-wrap gap-4 font-eui-ui text-xs" aria-label={cjm.legendAria}>
+        <div className="cjm-edge-legend mx-auto mt-4 flex max-w-[1600px] flex-wrap items-center gap-4 text-xs text-eui-slate-500" aria-label={cjm.legendAria}>
           <span><i className="cjm-legend-line" />{cjm.verifiedStatic}</span>
           <span><i className="cjm-legend-line" data-verified="dynamic" />{cjm.verifiedDynamic}</span>
           <span><i className="cjm-legend-line" data-verified="missing" />{cjm.verifiedMissing}</span>
+          <button type="button" className={`${pillGhost} ml-auto px-3 py-1.5 text-xs`} onClick={() => window.print()}>{cjm.print}</button>
         </div>
         <UnassignedLane layout={layout} tile={(screenId) => renderTile(screenId)} placeholder={placeholder} />
       </>}
