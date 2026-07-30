@@ -2,7 +2,7 @@ import { useRef, useState, type ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { ApiError, PROTOTYPE_KINDS, prototypeKindOf, setPrototypeLifecycle, setPrototypeStatus, type PrototypeKind, type PrototypeStatus, type PrototypeSummary } from "../../api/client";
 import { downloadBundle } from "../../api/bundles";
-import { inputBase, pillGhost, pillPrimary } from "../../app/chrome";
+import { headingDialog, inputBase, inputLabel, pillGhost, pillPrimary, popover } from "../../app/chrome";
 import { gallery } from "../../app/strings/gallery";
 import { ReadinessPanel } from "../../editor/ReadinessPanel";
 import { useDismissableDetails } from "../useDismissableDetails";
@@ -13,7 +13,7 @@ export interface CardActionsMenuProps {
   onChanged: () => void;
 }
 
-const menuItem = "block w-full rounded-xl px-3 py-2 text-left text-sm hover:bg-eui-lav focus-visible:outline-2 focus-visible:outline-eui-brand disabled:opacity-50";
+const menuItem = "block w-full rounded-item px-3 py-2 text-left text-sm text-eui-ink transition-colors duration-100 hover:bg-pay-lavender disabled:opacity-50";
 
 type LifecycleDialogState = { kind: PrototypeKind; tags: string; saving: boolean; error: boolean };
 
@@ -89,10 +89,10 @@ export function CardActionsMenu({ prototype, isOwner, onChanged }: CardActionsMe
 
   return <>
     <details ref={ref} className="relative">
-      <summary aria-label={gallery.overflowActionsAria} className={`${pillGhost} cursor-pointer list-none bg-white [&::-webkit-details-marker]:hidden`}>
+      <summary aria-label={gallery.overflowActionsAria} className={`${pillGhost} cursor-pointer list-none px-3 py-1.5 [&::-webkit-details-marker]:hidden`}>
         <span aria-hidden="true" className="text-lg leading-none">⋯</span>
       </summary>
-      <div className="absolute right-0 z-20 mt-2 w-56 rounded-2xl border border-eui-ink/10 bg-white p-2 shadow-xl">
+      <div className={`${popover} absolute right-0 z-20 mt-2 w-56`}>
         {isOwner ? <>
           {prototype.status === "private" ? <button type="button" className={menuItem} disabled={busy} onClick={openPublish}>{gallery.publish}</button> : null}
           {prototype.status === "published" ? <button type="button" className={menuItem} disabled={busy} onClick={() => void changeStatus("private")}>{gallery.unpublish}</button> : null}
@@ -102,34 +102,34 @@ export function CardActionsMenu({ prototype, isOwner, onChanged }: CardActionsMe
         </> : <button type="button" className={menuItem} disabled={downloading} onClick={() => void runExport()}>{downloading ? gallery.exporting : gallery.exportLatest}</button>}
       </div>
     </details>
-    {publishOpen ? createPortal(<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
-      <section role="dialog" aria-modal="true" aria-label={gallery.publishDialogAria} className="w-full max-w-lg rounded-3xl bg-white p-6 text-left shadow-2xl">
-        <h2 className="font-eui-display text-xl font-medium">{gallery.publishDialogTitle}</h2>
+    {publishOpen ? createPortal(<div className="fixed inset-0 z-50 flex items-center justify-center bg-pay-deep/55 p-6">
+      <section role="dialog" aria-modal="true" aria-label={gallery.publishDialogAria} className="w-full max-w-[460px] rounded-panel bg-white p-7 text-left">
+        <h2 className={headingDialog}>{gallery.publishDialogTitle}</h2>
         <p className="mt-1 text-sm text-eui-slate-500">{gallery.publishDialogBody}</p>
-        <div className="-mx-6 mt-4 border-y border-eui-ink/10"><ReadinessPanel prototypeId={prototype.id} /></div>
-        {error ? <p role="alert" className="mt-3 text-sm text-eui-magenta">{error}</p> : null}
+        <div className="-mx-7 mt-5 border-y border-pay-lavender"><ReadinessPanel prototypeId={prototype.id} /></div>
+        {error ? <p role="alert" className="mt-3 text-sm text-pay-red">{error}</p> : null}
         <div className="flex flex-wrap justify-end gap-2 pt-4">
           <button type="button" className={pillGhost} disabled={busy} onClick={() => setPublishOpen(false)}>{gallery.cancel}</button>
           <button type="button" className={pillPrimary} disabled={busy} onClick={() => void changeStatus("published").then(() => setPublishOpen(false))}>{busy ? gallery.publishing : gallery.publishConfirm}</button>
         </div>
       </section>
     </div>, document.body) : null}
-    {lifecycle ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
-      <section role="dialog" aria-modal="true" aria-label={gallery.lifecycleDialogAria} className="w-full max-w-md rounded-3xl bg-white p-6 text-left shadow-2xl">
-        <h2 className="font-eui-display text-xl font-medium">{gallery.lifecycleDialogTitle}</h2>
+    {lifecycle ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-pay-deep/55 p-6">
+      <section role="dialog" aria-modal="true" aria-label={gallery.lifecycleDialogAria} className="w-full max-w-[460px] rounded-panel bg-white p-7 text-left">
+        <h2 className={headingDialog}>{gallery.lifecycleDialogTitle}</h2>
         <form className="mt-4 space-y-4" onSubmit={(event) => { event.preventDefault(); void submitLifecycle(); }}>
-          <label className="block text-sm font-medium">{gallery.kindLabel}
-            <select className={`${inputBase} mt-1.5 w-full bg-white`} value={lifecycle.kind} disabled={lifecycle.saving}
+          <label className={inputLabel}>{gallery.kindLabel}
+            <select className={`${inputBase} mt-1.5 w-full`} value={lifecycle.kind} disabled={lifecycle.saving}
               onChange={(event) => setLifecycle((current) => current ? { ...current, kind: event.target.value as PrototypeKind, error: false } : null)}>
               {PROTOTYPE_KINDS.map((kind) => <option key={kind} value={kind}>{gallery.kindNames[kind] ?? kind}</option>)}
             </select>
           </label>
-          <label className="block text-sm font-medium">{gallery.lifecycleTagsLabel}
+          <label className={inputLabel}>{gallery.lifecycleTagsLabel}
             <input className={`${inputBase} mt-1.5 w-full`} value={lifecycle.tags} disabled={lifecycle.saving}
               onChange={(event) => setLifecycle((current) => current ? { ...current, tags: event.target.value, error: false } : null)} />
           </label>
           <p className="text-xs text-eui-slate-500">{gallery.lifecycleTagsHint}</p>
-          {lifecycle.error ? <p role="alert" className="text-sm text-eui-magenta">{gallery.lifecycleFailed}</p> : null}
+          {lifecycle.error ? <p role="alert" className="text-sm text-pay-red">{gallery.lifecycleFailed}</p> : null}
           <div className="flex flex-wrap justify-end gap-2 pt-2">
             <button type="button" className={pillGhost} disabled={lifecycle.saving} onClick={() => setLifecycle(null)}>{gallery.cancel}</button>
             <button type="submit" className={pillPrimary} disabled={lifecycle.saving}>{lifecycle.saving ? gallery.lifecycleSaving : gallery.lifecycleSave}</button>
@@ -138,7 +138,7 @@ export function CardActionsMenu({ prototype, isOwner, onChanged }: CardActionsMe
       </section>
     </div> : null}
     {busy ? <span role="status" className="self-center text-xs text-eui-slate-500">{gallery.statusChanging}</span> : null}
-    {error ? <p role="alert" className="basis-full text-xs text-eui-magenta">{error}</p> : null}
-    {exportError ? <p role="alert" className="basis-full text-xs text-eui-magenta">{exportError}</p> : null}
+    {error ? <p role="alert" className="basis-full text-xs text-pay-red">{error}</p> : null}
+    {exportError ? <p role="alert" className="basis-full text-xs text-pay-red">{exportError}</p> : null}
   </>;
 }

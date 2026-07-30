@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { headingPage, kicker, pillGhost, pillPrimary, plate } from "../../app/chrome";
+import { headingHero, inset, panel, pillGhost, pillPrimary } from "../../app/chrome";
 import { gallery } from "../../app/strings/gallery";
 
 export interface GalleryHeroProps {
@@ -11,21 +11,26 @@ export interface GalleryHeroProps {
   notice: string | null;
 }
 
+/**
+ * Хиро галереи (макет 01): белая панель, заголовок дисплейной гарнитурой 76/0.84,
+ * акцент — ровно один фрагмент (число прототипов) курсивом и красным. Второй
+ * акцент на экране бренд запрещает, поэтому подзаголовок и кнопки нейтральны.
+ */
 export function GalleryHero(props: GalleryHeroProps): ReactElement {
   const { count, showActions, canCreate, onCreate, onImport, notice } = props;
 
   return (
-    <header>
-      <p className={kicker}>{gallery.kicker}</p>
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <h1 className={headingPage}>{gallery.title}</h1>
-          {count !== null ? (
-            <p className="text-sm text-eui-slate-500">{gallery.countLabel(count)}</p>
-          ) : null}
+    <header className={`${panel} px-8 py-9 sm:px-12 sm:py-11`}>
+      <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-6">
+        <div className="min-w-0">
+          <h1 className={`${headingHero} max-sm:text-[46px]`}>
+            <span className="pay-accent">{count === null ? gallery.heroFallback : gallery.heroAccent(count)}</span>{" "}
+            {gallery.heroRest}
+          </h1>
+          <p className="mt-4 text-[19px] font-medium text-eui-slate-700">{gallery.subtitle}</p>
         </div>
         {showActions ? (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             <a className={pillGhost} href="/api/bundles/export">
               {gallery.exportAll}
             </a>
@@ -40,9 +45,8 @@ export function GalleryHero(props: GalleryHeroProps): ReactElement {
           </div>
         ) : null}
       </div>
-      <p className="mt-2 text-eui-slate-500">{gallery.subtitle}</p>
       {notice !== null ? (
-        <p className={`${plate} mt-5 text-sm text-eui-brand`} role="status">
+        <p className={`${inset} mt-7 px-5 py-4 text-[13px]`} role="status">
           {notice}
         </p>
       ) : null}

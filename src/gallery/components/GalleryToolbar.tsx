@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { PROTOTYPE_KINDS, type PrototypeKind } from "../../api/client";
-import { chip, chipActive, inputBase } from "../../app/chrome";
+import { chipActive, pillWhite, segmentActive, segmentIdle, segmentTrack } from "../../app/chrome";
 import { gallery } from "../../app/strings/gallery";
 import { kindsForTab, type GallerySort, type GalleryTab } from "../galleryModel";
 
@@ -26,6 +26,10 @@ const TABS: readonly [GalleryTab, string][] = [
   ["service", gallery.tabService],
 ];
 
+/**
+ * Тулбар галереи (макет 01) живёт прямо на лавандовой канве, а не в панели:
+ * сегмент разделов на приглушённом треке, поиск и фильтры — белые пилюли.
+ */
 export function GalleryToolbar(props: GalleryToolbarProps): ReactElement {
   const {
     tab,
@@ -45,78 +49,37 @@ export function GalleryToolbar(props: GalleryToolbarProps): ReactElement {
   const kinds = tab === "archive" ? [...PROTOTYPE_KINDS] : kindsForTab(tab, PROTOTYPE_KINDS);
 
   return (
-    <section className="mt-6 rounded-3xl bg-eui-lav p-4 sm:p-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="inline-flex max-w-full flex-nowrap overflow-x-auto rounded-full bg-white p-1" aria-label={gallery.tabsAria}>
+    <section className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className={`${segmentTrack} max-w-full flex-nowrap overflow-x-auto`} aria-label={gallery.tabsAria}>
           {TABS.map(([id, label]) => (
             <button
               key={id}
               type="button"
               aria-pressed={tab === id}
               onClick={() => onTabChange(id)}
-              className={
-                tab === id
-                  ? chipActive + " shrink-0 rounded-full px-4 py-2 text-sm"
-                  : "shrink-0 rounded-full px-4 py-2 text-sm font-medium text-eui-ink transition-colors hover:bg-eui-lav focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand"
-              }
+              className={tab === id ? segmentActive : segmentIdle}
             >
               {label}
             </button>
           ))}
         </div>
         {showSearch ? (
-          <label className="flex flex-col gap-1.5 text-sm font-medium max-sm:w-full sm:w-72">
-            {gallery.searchLabel}
-            <span className="relative block">
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 20 20"
-                fill="none"
-                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-eui-slate-400"
-              >
-                <circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="1.6" />
-                <path d="m14 14 3 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-              </svg>
-              <input
-                type="search"
-                className={`${inputBase} w-full bg-white pl-9`}
-                value={query}
-                placeholder={gallery.searchPlaceholder}
-                onChange={(event) => onQueryChange(event.target.value)}
-              />
-            </span>
+          <label className="max-sm:w-full sm:w-80">
+            <span className="sr-only">{gallery.searchLabel}</span>
+            <input
+              type="search"
+              className="w-full rounded-full bg-white px-5 py-2.5 text-sm text-eui-ink placeholder:text-eui-slate-400"
+              value={query}
+              placeholder={gallery.searchPlaceholder}
+              onChange={(event) => onQueryChange(event.target.value)}
+            />
           </label>
         ) : null}
-      </div>
-      <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div
-          className="flex flex-nowrap gap-2 overflow-x-auto sm:flex-wrap"
-          aria-label={gallery.designSystemsAria}
-        >
-          <button
-            type="button"
-            aria-pressed={selectedSystem === null}
-            onClick={() => onSystemChange(null)}
-            className={selectedSystem === null ? chipActive : chip}
-          >
-            {gallery.allSystems}
-          </button>
-          {systems.map((system) => (
-            <button
-              key={system.id}
-              type="button"
-              aria-pressed={selectedSystem === system.id}
-              onClick={() => onSystemChange(system.id)}
-              className={selectedSystem === system.id ? chipActive : chip}
-            >
-              {system.name}
-            </button>
-          ))}
-        </div>
-        <label className="mt-3 flex shrink-0 items-center gap-2 text-sm font-medium max-sm:w-full sm:mt-0">
-          {gallery.sortLabel}
+        <label className="ml-auto flex shrink-0 items-center gap-2 text-sm text-eui-slate-500">
+          <span className="sr-only sm:not-sr-only">{gallery.sortLabel}</span>
           <select
-            className={`${inputBase} bg-white`}
+            className={`${pillWhite} appearance-none pr-4`}
             value={sort}
             onChange={(event) => onSortChange(event.target.value as GallerySort)}
           >
@@ -125,12 +88,33 @@ export function GalleryToolbar(props: GalleryToolbarProps): ReactElement {
           </select>
         </label>
       </div>
-      <div className="mt-3 flex flex-nowrap gap-2 overflow-x-auto sm:flex-wrap" aria-label={gallery.kindsAria}>
+      <div className="flex flex-nowrap gap-2 overflow-x-auto sm:flex-wrap" aria-label={gallery.designSystemsAria}>
+        <button
+          type="button"
+          aria-pressed={selectedSystem === null}
+          onClick={() => onSystemChange(null)}
+          className={selectedSystem === null ? chipActive : `${pillWhite} px-3 py-1 text-xs`}
+        >
+          {gallery.allSystems}
+        </button>
+        {systems.map((system) => (
+          <button
+            key={system.id}
+            type="button"
+            aria-pressed={selectedSystem === system.id}
+            onClick={() => onSystemChange(system.id)}
+            className={selectedSystem === system.id ? chipActive : `${pillWhite} px-3 py-1 text-xs`}
+          >
+            {system.name}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-nowrap gap-2 overflow-x-auto sm:flex-wrap" aria-label={gallery.kindsAria}>
         <button
           type="button"
           aria-pressed={kind === null}
           onClick={() => onKindChange(null)}
-          className={kind === null ? chipActive : chip}
+          className={kind === null ? chipActive : `${pillWhite} px-3 py-1 text-xs`}
         >
           {gallery.allKinds}
         </button>
@@ -140,7 +124,7 @@ export function GalleryToolbar(props: GalleryToolbarProps): ReactElement {
             type="button"
             aria-pressed={kind === id}
             onClick={() => onKindChange(kind === id ? null : id)}
-            className={kind === id ? chipActive : chip}
+            className={kind === id ? chipActive : `${pillWhite} px-3 py-1 text-xs`}
           >
             {gallery.kindNames[id] ?? id}
           </button>

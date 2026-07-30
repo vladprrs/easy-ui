@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { createPrototype, getCatalogManifest, listDesignSystems, listPrototypes, type PrototypeKind } from "../api/client";
 import { useApi } from "../api/hooks";
-import { inputBase, pillGhost, pillPrimary } from "../app/chrome";
+import { headingDialog, inputBase, inputLabel, pillGhost, pillPrimary } from "../app/chrome";
 import { gallery } from "../app/strings/gallery";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { useAuth } from "../auth";
@@ -92,7 +92,8 @@ export function GalleryPage() {
   const ready = prototypes.status === "ready" && !loading && !failed;
   const heroCount = ready && visiblePrototypes.length ? visiblePrototypes.length : null;
 
-  return <main className="mx-auto h-full w-full max-w-6xl p-6 font-eui-ui sm:p-8" data-gallery-ready={!loading && !failed ? "true" : "false"}>
+  // Канва и gutter приходят из Layout: страница — только колонка панелей с gap 20.
+  return <main className="mx-auto flex h-full w-full max-w-[1400px] flex-col gap-5 font-pay-text" data-gallery-ready={!loading && !failed ? "true" : "false"}>
     <GalleryHero
       count={heroCount}
       showActions={!loading && !failed}
@@ -118,9 +119,10 @@ export function GalleryPage() {
       onSortChange={setSort}
       showSearch={prototypes.status === "ready" && prototypes.data.length > 0}
     /> : null}
-    {!loading && !failed && visiblePrototypes.length ? <ul className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-      {visiblePrototypes.map((prototype) => <PrototypeCard
+    {!loading && !failed && visiblePrototypes.length ? <ul className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+      {visiblePrototypes.map((prototype, index) => <PrototypeCard
         key={prototype.id}
+        index={index}
         prototype={prototype}
         isOwner={prototype.owner.id === user?.userId}
         systemName={prototype.designSystem ? systemNames.get(prototype.designSystem) ?? prototype.designSystem : gallery.legacySystem}
@@ -134,20 +136,20 @@ export function GalleryPage() {
       canCreate={usableSystems.length > 0}
       onCreate={openCreateDialog}
     /> : null}
-    {createDialog ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
-      <section role="dialog" aria-modal="true" aria-label={gallery.createDialogAria} className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
-        <h2 className="font-eui-display text-2xl font-medium">{gallery.createDialogTitle}</h2>
-        <form className="mt-5 space-y-4" onSubmit={(event) => { event.preventDefault(); void submitCreate(); }}>
-          <label className="block text-sm font-medium">{gallery.nameLabel}
+    {createDialog ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-pay-deep/55 p-6">
+      <section role="dialog" aria-modal="true" aria-label={gallery.createDialogAria} className="w-full max-w-[460px] rounded-panel bg-white p-7">
+        <h2 className={headingDialog}>{gallery.createDialogTitle}</h2>
+        <form className="mt-6 space-y-4" onSubmit={(event) => { event.preventDefault(); void submitCreate(); }}>
+          <label className={inputLabel}>{gallery.nameLabel}
             <input className={`${inputBase} mt-1.5 w-full`} name="prototype-name" autoFocus required placeholder={gallery.namePlaceholder} value={createDialog.name} disabled={createDialog.status === "creating"} onChange={(event) => setCreateDialog((current) => current ? { ...current, name: event.target.value, error: false } : null)} />
           </label>
-          <label className="block text-sm font-medium">{gallery.systemLabelCreate}
-            <select className={`${inputBase} mt-1.5 w-full bg-white`} name="design-system" value={createDialog.designSystemId} disabled={createDialog.status === "creating"} onChange={(event) => setCreateDialog((current) => current ? { ...current, designSystemId: event.target.value, error: false } : null)}>
+          <label className={inputLabel}>{gallery.systemLabelCreate}
+            <select className={`${inputBase} mt-1.5 w-full`} name="design-system" value={createDialog.designSystemId} disabled={createDialog.status === "creating"} onChange={(event) => setCreateDialog((current) => current ? { ...current, designSystemId: event.target.value, error: false } : null)}>
               {usableSystems.map((system) => <option key={system.id} value={system.id}>{system.name}</option>)}
             </select>
           </label>
-          <p className="text-sm text-eui-slate-500">{gallery.hostStarterReady}</p>
-          {createDialog.error ? <p className="text-sm text-eui-magenta" role="alert">{gallery.createFailed}</p> : null}
+          <p className="text-[13px] text-eui-slate-500">{gallery.hostStarterReady}</p>
+          {createDialog.error ? <p className="text-[13px] text-pay-red" role="alert">{gallery.createFailed}</p> : null}
           <div className="flex flex-wrap justify-end gap-2 pt-2">
             <button type="button" className={pillGhost} disabled={createDialog.status === "creating"} onClick={() => setCreateDialog(null)}>{gallery.cancel}</button>
             <button type="submit" className={pillPrimary} disabled={!canCreate}>{createDialog.status === "creating" ? gallery.creating : gallery.create}</button>

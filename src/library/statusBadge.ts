@@ -7,10 +7,10 @@ import { componentStatusLabels } from "../app/strings/library";
 export interface ComponentStatusBadge { label: string; className: string; title: string }
 
 const BADGES: Partial<Record<ComponentStatus, { label: string; className: string }>> = {
-  deprecated: { label: componentStatusLabels.deprecated, className: "bg-amber-100 text-amber-800" },
-  superseded: { label: componentStatusLabels.superseded, className: "bg-sky-100 text-sky-800" },
-  rejected: { label: componentStatusLabels.rejected, className: "bg-rose-100 text-rose-800" },
-  archived: { label: componentStatusLabels.archived, className: "bg-eui-slate-200 text-eui-slate-600" },
+  deprecated: { label: componentStatusLabels.deprecated, className: "bg-pay-lavender text-eui-ink" },
+  superseded: { label: componentStatusLabels.superseded, className: "bg-pay-lavender-tint text-eui-slate-700" },
+  rejected: { label: componentStatusLabels.rejected, className: "bg-pay-red text-white" },
+  archived: { label: componentStatusLabels.archived, className: "bg-pay-lavender-tint text-eui-slate-500" },
 };
 
 export function componentStatusBadge(status: ComponentStatus, reason?: string | null): ComponentStatusBadge | null {
@@ -20,9 +20,9 @@ export function componentStatusBadge(status: ComponentStatus, reason?: string | 
 }
 
 const PROTOTYPE_BADGES: Record<PrototypeStatus, { label: string; className: string }> = {
-  private: { label: "Личный", className: "bg-white text-eui-slate-600" },
-  published: { label: "Общий", className: "bg-emerald-100 text-emerald-800" },
-  archived: { label: "В архиве", className: "bg-eui-slate-200 text-eui-slate-600" },
+  private: { label: "Личный", className: "bg-white text-eui-slate-500" },
+  published: { label: "Общий", className: "bg-pay-deep text-white" },
+  archived: { label: "В архиве", className: "bg-pay-lavender-tint text-eui-slate-500" },
 };
 
 export function prototypeStatusBadge(status: PrototypeStatus): ComponentStatusBadge {
