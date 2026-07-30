@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router";
 import { buildPrototypeRouteBase } from "../player/navigation";
+import { segmentActive, segmentIdle, segmentTrack } from "./chrome";
 import { prototypeChrome } from "./strings/common";
 
 /** Вью прототипа, между которыми переключает сегмент-контрол хрома. */
@@ -38,10 +39,6 @@ export interface PrototypeChromeProps {
   actions?: ReactNode;
 }
 
-const segmentBase = "inline-flex items-center rounded-full px-3 py-1 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand";
-const segmentActive = `${segmentBase} bg-white font-bold text-eui-ink shadow-sm`;
-const segmentIdle = `${segmentBase} text-eui-slate-500 hover:text-eui-ink`;
-
 function Segment({ active, to, children }: { active: boolean; to: string; children: ReactNode }) {
   return <Link aria-current={active ? "page" : undefined} className={active ? segmentActive : segmentIdle} to={to}>{children}</Link>;
 }
@@ -70,19 +67,19 @@ export function PrototypeChrome({ prototypeId, prototypeName, view, version, pla
   const location = useLocation();
   const playerTarget = transferScenarioQuery(playerPath ?? routeBase, location.search);
   const cjmTarget = transferScenarioQuery(`${routeBase}/cjm`, location.search);
-  return <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-eui-ink/10 bg-white px-4 py-2 font-eui-ui sm:px-6">
+  return <header className="flex flex-wrap items-center gap-x-4 gap-y-2 bg-white px-5 py-3 font-pay-text sm:px-6">
     <nav aria-label={prototypeChrome.breadcrumbAria} className="flex min-w-0 items-center gap-2 text-sm">
-      <Link className="shrink-0 text-eui-slate-500 hover:text-eui-brand" to="/">{prototypeChrome.gallery}</Link>
+      <Link className="shrink-0 text-eui-slate-500 transition-colors duration-100 hover:text-eui-ink" to="/">{prototypeChrome.gallery}</Link>
       <span aria-hidden="true" className="text-eui-slate-400">/</span>
-      <h1 className="truncate font-eui-display text-base font-medium text-eui-ink">{prototypeName}</h1>
-      {version === undefined ? null : <span className="shrink-0 rounded-full bg-eui-lilac-100 px-2.5 py-0.5 text-xs text-eui-slate-500">{prototypeChrome.versionBadge(version)}</span>}
+      <h1 className="truncate text-base font-medium text-eui-ink">{prototypeName}</h1>
+      {version === undefined ? null : <span className="shrink-0 rounded-full bg-pay-lavender px-2.5 py-0.5 text-xs font-medium text-eui-ink">{prototypeChrome.versionBadge(version)}</span>}
     </nav>
-    <nav aria-label={prototypeChrome.viewsAria} className="flex items-center gap-1 rounded-full bg-eui-lilac-100 p-1 text-sm">
+    <nav aria-label={prototypeChrome.viewsAria} className={segmentTrack}>
       <Segment active={view === "player"} to={playerTarget}>{prototypeChrome.player}</Segment>
       <Segment active={view === "cjm"} to={cjmTarget}>{prototypeChrome.cjm}</Segment>
       <Segment active={view === "editor"} to={`/p/${encodeURIComponent(prototypeId)}/edit`}>
         {prototypeChrome.editor}
-        {version === undefined ? null : <span className="ml-1.5 rounded-full border border-eui-magenta/40 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-eui-magenta">{prototypeChrome.draftBadge}</span>}
+        {version === undefined ? null : <span className="ml-1.5 rounded-full bg-pay-lavender px-1.5 py-px text-[10px] font-medium text-eui-ink">{prototypeChrome.draftBadge}</span>}
       </Segment>
     </nav>
     <div className="ml-auto flex flex-wrap items-center gap-3">

@@ -26,6 +26,26 @@
   font-display: swap;
 }
 
+/* Бренд Пэй: дисплейная гарнитура. Бинарники YS Compressed не входят в репозиторий
+   (лицензия Commercial Type) — положить `YSCompressed-Heavy.woff2` и
+   `YSCompressed-HeavyItalic.woff2` в `public/fonts/` из брендового кита. До этого
+   стек падает на YS Text Bold: вёрстка не ломается, теряется только сжатость. */
+@font-face {
+  font-family: "YS Compressed Var";
+  src: url("/fonts/YSCompressed-Heavy.woff2") format("woff2");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "YS Compressed Var";
+  src: url("/fonts/YSCompressed-HeavyItalic.woff2") format("woff2");
+  font-weight: 800;
+  font-style: italic;
+  font-display: swap;
+}
+
 @font-face {
   font-family: "YS Text";
   src: url("/fonts/YS-Text-Regular.woff2") format("woff2");
@@ -50,22 +70,58 @@
   font-display: swap;
 }
 
+/**
+ * Бренд Пэй (редизайн 2026-07-30, handoff «Easy-UI Redesign»).
+ *
+ * Палитра ровно из четырёх брендовых цветов плюс два спец-хромных: серых Tailwind
+ * в интерфейсе нет. Теней, бордеров и градиентов нет — иерархия строится только
+ * цветом (белая панель на лавандовой канве). Единственные исключения — outline 2px
+ * лаванда у поповеров (белое на белом) и 1px лавандовые разделители в меню.
+ *
+ * Легаси-имена `eui-*` сохранены и переведены на брендовые значения: они
+ * встречаются в ~1300 местах, и переименование дало бы огромный шумный дифф без
+ * визуального выигрыша. Новый код пишем на `pay-*`.
+ */
 @theme {
-  /* primitives */
-  --color-eui-ink: #020205;
-  --color-eui-graphite: #2F3033;
-  --color-eui-lav: #F1EBF6;
-  --color-eui-lilac-100: #E8E8FF;
-  --color-eui-lilac-200: #E1CFFF;
-  --color-eui-lilac-300: #D8D0E5;
-  --color-eui-brand: #844EDC;
-  --color-eui-magenta: #C62CD0;
-  --color-eui-orange: #FF9A00;
-  --color-eui-slate-500: #4D5566;
-  --color-eui-slate-400: #8F96A5;
-  --color-eui-ondark-2: #B8BAC0;
-  /* fonts */
-  --font-eui-display: "Coil", Georgia, serif;
+  /* Бренд */
+  --color-pay-lavender: #E6DDFE;
+  --color-pay-lavender-light: #C6B1FD;
+  --color-pay-lavender-tint: #F4F0FE;
+  --color-pay-red: #FF5E29;
+  --color-pay-deep: #2D083A;
+  /* Спец-хром: только аннотации инструмента (проверки), не артворк */
+  --color-pay-valid: #23E13F;
+  --color-pay-invalid: #FF7158;
+
+  /* Легаси-алиасы, переведённые на бренд */
+  --color-eui-ink: #2D083A;
+  --color-eui-graphite: #2D083A;
+  --color-eui-lav: #E6DDFE;
+  --color-eui-lilac-50: #F4F0FE;
+  --color-eui-lilac-100: #E6DDFE;
+  --color-eui-lilac-200: #C6B1FD;
+  --color-eui-lilac-300: #C6B1FD;
+  --color-eui-brand: #FF5E29;
+  --color-eui-magenta: #FF5E29;
+  --color-eui-orange: #FF7158;
+  --color-eui-slate-700: rgb(45 8 58 / 0.8);
+  --color-eui-slate-500: rgb(45 8 58 / 0.6);
+  --color-eui-slate-400: rgb(45 8 58 / 0.45);
+  --color-eui-ondark-2: #E6DDFE;
+
+  /* Радиусы бренда: 24 панели · 20 поповеры · 16 вставки · 14 поля · 12 пункты */
+  --radius-panel: 24px;
+  --radius-popover: 20px;
+  --radius-inset: 16px;
+  --radius-field: 14px;
+  --radius-item: 12px;
+
+  /* Гарнитуры. Дисплейная (YS Compressed Heavy) — только для крупного кегля:
+     хиро, счётчики, заголовки модалок и пустых состояний. Всё остальное — YS Text,
+     поэтому легаси-`font-eui-display` (имена, подзаголовки 16–24px) ведёт в YS Text. */
+  --font-pay-display: "YS Compressed Var", "YS Text", system-ui, sans-serif;
+  --font-pay-text: "YS Text", system-ui, sans-serif;
+  --font-eui-display: "YS Text", system-ui, sans-serif;
   --font-eui-ui: "YS Text", system-ui, sans-serif;
 }
 
@@ -103,25 +159,26 @@
 }
 
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  /* 0.75rem даёт брендовую шкалу через готовые утилиты: rounded-xl 16 · 2xl 20 · 3xl 24 */
+  --radius: 0.75rem;
+  --background: #FFFFFF;
+  --foreground: #2D083A;
+  --card: #FFFFFF;
+  --card-foreground: #2D083A;
+  --popover: #FFFFFF;
+  --popover-foreground: #2D083A;
+  --primary: #FF5E29;
+  --primary-foreground: #FFFFFF;
+  --secondary: #E6DDFE;
+  --secondary-foreground: #2D083A;
+  --muted: #F4F0FE;
+  --muted-foreground: rgb(45 8 58 / 0.6);
+  --accent: #E6DDFE;
+  --accent-foreground: #2D083A;
+  --destructive: #FF7158;
+  --border: #E6DDFE;
+  --input: #E6DDFE;
+  --ring: #FF5E29;
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -158,34 +215,80 @@
 @layer base {
   * { @apply border-border outline-ring/50; }
   html { color-scheme: light; }
-  body { @apply bg-background text-foreground; margin: 0; }
+  body {
+    @apply bg-pay-lavender-tint text-foreground font-pay-text;
+    margin: 0;
+    /* Пропорциональные минускульные цифры — правило брендовой типографики */
+    font-feature-settings: "lnum", "pnum";
+  }
 }
 
 button { cursor: pointer; }
+
+/* Фокус бренда: красный outline 2px с отступом 2px — единый на всё приложение. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-pay-red);
+  outline-offset: 2px;
+}
+
+/* Дисплейная гарнитура всегда идёт с брендовым трекингом и цифрами. */
+.pay-display {
+  font-family: var(--font-pay-display);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-feature-settings: "lnum", "pnum";
+}
+
+/**
+ * Единственный текстовый акцент бренда: курсив И красный вместе, один фрагмент на
+ * заголовок и только оффер/число — никогда прилагательное.
+ */
+/* Единственная анимация в системе: бренд не определяет моушен, поэтому скелетон
+   пульсирует только прозрачностью и ничего не двигает. */
+.pay-skeleton {
+  animation: pay-skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pay-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pay-skeleton { animation: none; }
+}
+
+.pay-accent {
+  color: var(--color-pay-red);
+  font-style: italic;
+}
 
 .cjm-frame-capped {
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 44px), transparent 100%);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 44px), transparent 100%);
 }
 
+/* Цвет коннектора кодирует верификацию перехода (макет 05): проверен — зелёный
+   спец-хром, не проверен — приглушённый пурпур, сломан — ошибочный коралл. */
 .cjm-flow-edge {
-  stroke: #844edc;
-  stroke-width: 2.5;
+  stroke: #23e13f;
+  stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .cjm-edges-overlay [data-verified="dynamic"] .cjm-flow-edge {
+  stroke: rgb(45 8 58 / 0.4);
   stroke-dasharray: 6 4;
 }
 
 .cjm-edges-overlay [data-verified="missing"] .cjm-flow-edge {
-  stroke: #b54708;
+  stroke: #ff7158;
   stroke-dasharray: 2 4;
 }
 
 .cjm-edge-warning {
-  fill: #b54708;
+  fill: #ff7158;
   font: 700 12px/1 sans-serif;
   paint-order: stroke;
   stroke: #fff;
@@ -201,15 +304,15 @@ button { cursor: pointer; }
 .cjm-legend-line {
   display: inline-block;
   width: 32px;
-  border-top: 2.5px solid #844edc;
+  border-top: 2px solid #23e13f;
 }
 
 .cjm-legend-line[data-verified="dynamic"] {
-  border-top-style: dashed;
+  border-top: 2px dashed rgb(45 8 58 / 0.4);
 }
 
 .cjm-legend-line[data-verified="missing"] {
-  border-top: 2.5px dotted #b54708;
+  border-top: 2px dotted #ff7158;
 }
 
 @media print {
@@ -307,7 +410,7 @@ button { cursor: pointer; }
 
   .cjm-tile {
     box-shadow: none !important;
-    border: 1px solid #d8d0e5;
+    border: 1px solid #e6ddfe;
     break-inside: avoid;
     page-break-inside: avoid;
   }
@@ -322,7 +425,7 @@ button { cursor: pointer; }
     display: block;
     width: min-content;
     margin: 2mm 0 0 12mm;
-    color: #844edc;
+    color: #2d083a;
     font: 700 24pt/1 sans-serif;
     print-color-adjust: exact;
   }

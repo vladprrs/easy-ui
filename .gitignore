@@ -45,3 +45,6 @@ work/
 # Артефакты прогонов Playwright (трассы, скриншоты, error-context).
 test-results/
 playwright-report/
+
+# Брендовый кит шрифтов (лицензия Commercial Type) — в репозиторий не кладём
+Шрифты.zip
