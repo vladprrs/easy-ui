@@ -42,10 +42,10 @@ async function ensureFixtures(request: APIRequestContext, options: { api: string
   throw new Error("W5a fixture seed did not publish e2e-props-badge v2 in time");
 }
 
+// Витрина библиотеки: чип системы (с числом компонентов) → карточка-ссылка компонента.
 async function openFixtureCard(page: Page) {
-  await page.locator('[aria-label="Дизайн-системы"]').getByRole("button", { name: "E2E Starter", exact: true }).click();
-  await page.getByRole("navigation", { name: "Компоненты" }).getByRole("button", { name: COMPONENT_NAME, exact: true }).click();
-  const link = page.getByRole("link", { name: "Страница компонента" });
+  await page.locator('[aria-label="Дизайн-системы"]').getByRole("button", { name: /^E2E Starter/ }).click();
+  const link = page.getByRole("link", { name: COMPONENT_NAME, exact: true });
   await expect(link).toHaveAttribute("href", `/library/c/${COMPONENT_PAGE_IDS.propsBadge}?v=${COMPONENT_VERSION}`);
   await link.click();
 }

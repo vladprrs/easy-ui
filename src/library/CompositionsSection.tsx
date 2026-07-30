@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { Link } from "react-router";
 import { getComposition, getCompositionUsages, listCompositions, type CompositionSummary, type CompositionUsageReport } from "../api/client";
 import { useApi } from "../api/hooks";
-import { chip, kicker } from "../app/chrome";
+import { chip, kicker, panel, panelPadded, pillPrimary, transition } from "../app/chrome";
 import { compositions as strings } from "../app/strings/library";
 import { componentStatusBadge } from "./statusBadge";
 
@@ -16,21 +16,23 @@ export function CompositionsSection() {
   const items = list.status === "ready" ? list.data : [];
   const selected = items.find((item) => item.id === selectedId) ?? items[0] ?? null;
 
-  return <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-    <aside className="w-full shrink-0 border-b p-5 font-eui-ui lg:w-72 lg:border-b-0 lg:border-r">
+  // `max-lg:`-варианты, а не `lg:`-оверрайды: compat-CSS глушит responsive-переопределения
+  // базовых утилит (см. memory shadcn-compat-css-cascade).
+  return <div className="flex min-h-0 flex-1 flex-row gap-5 max-lg:flex-col">
+    <aside className={`${panel} w-72 shrink-0 p-6 max-lg:w-full`}>
       <h2 className={kicker}>{strings.title}</h2>
       {list.status === "loading" ? <p className="mt-3 text-sm text-eui-slate-500" role="status">{strings.loading}</p> : null}
-      {list.status === "error" ? <p className="mt-3 rounded-xl bg-eui-lilac-100 p-3 text-sm text-eui-slate-500" role="alert">{strings.unavailable} <button type="button" className="font-bold underline" onClick={list.reload}>{strings.retry}</button></p> : null}
+      {list.status === "error" ? <p className="mt-3 rounded-inset bg-pay-lavender p-3 text-sm text-eui-ink" role="alert">{strings.unavailable} <button type="button" className="font-medium underline" onClick={list.reload}>{strings.retry}</button></p> : null}
       {items.length ? <nav className="mt-3" aria-label={strings.listAria}>
         <ul className="space-y-1">{items.map((item) => <li key={item.id}>
-          <button type="button" aria-pressed={selected?.id === item.id} className={`flex w-full flex-col items-start rounded-lg px-2 py-1 text-left text-sm ${selected?.id === item.id ? "bg-eui-lilac-100 font-bold" : "text-eui-slate-500 hover:bg-eui-lilac-100/60"}`} onClick={() => setSelectedId(item.id)}>
+          <button type="button" aria-pressed={selected?.id === item.id} className={`flex w-full flex-col items-start rounded-item px-3 py-1.5 text-left text-sm ${transition} ${selected?.id === item.id ? "bg-pay-lavender font-medium text-eui-ink" : "text-eui-slate-500 hover:bg-pay-lavender-tint"}`} onClick={() => setSelectedId(item.id)}>
             <span>{item.name}</span>
             <span className={kicker}>{item.latestVersion === null ? strings.notPublished : strings.versionValue(item.latestVersion)}</span>
           </button>
         </li>)}</ul>
       </nav> : null}
     </aside>
-    <section className="flex min-h-0 flex-1 flex-col gap-3 p-4 font-eui-ui">
+    <section className="flex min-h-0 flex-1 flex-col gap-5">
       {list.status === "ready" && !items.length ? <EmptyCompositions /> : null}
       {selected ? <CompositionDetail key={selected.id} summary={selected} /> : null}
     </section>
@@ -38,16 +40,16 @@ export function CompositionsSection() {
 }
 
 function EmptyCompositions() {
-  return <div className="flex flex-1 items-center justify-center rounded-3xl bg-eui-lav p-6">
+  return <div className={`${panelPadded} flex flex-1 items-center justify-center`}>
     <div className="max-w-xl">
       <p className={kicker}>{strings.emptyGuideTitle}</p>
-      <h3 className="mt-2 font-eui-display text-2xl font-medium">{strings.emptyTitle}</h3>
+      <h3 className="pay-display mt-2 text-[30px] leading-[0.9]">{strings.emptyTitle}</h3>
       <p className="mt-3 text-sm leading-6 text-eui-slate-500">{strings.emptyDescription}</p>
       <ol className="mt-5 space-y-3 text-sm">
-        <li><span className="font-bold">1.</span> {strings.emptyCreateStep} <code className="rounded bg-white px-1.5 py-0.5">POST /api/compositions</code></li>
-        <li><span className="font-bold">2.</span> {strings.emptyPublishStep} <code className="rounded bg-white px-1.5 py-0.5">POST /api/compositions/&#123;id&#125;/publish</code></li>
+        <li><span className="font-medium">1.</span> {strings.emptyCreateStep} <code className="rounded-item bg-pay-lavender-tint px-1.5 py-0.5">POST /api/compositions</code></li>
+        <li><span className="font-medium">2.</span> {strings.emptyPublishStep} <code className="rounded-item bg-pay-lavender-tint px-1.5 py-0.5">POST /api/compositions/&#123;id&#125;/publish</code></li>
       </ol>
-      <a className="mt-6 inline-flex rounded-full bg-eui-brand px-4 py-2 text-sm font-bold text-white hover:opacity-90" href="/api/openapi.json">{strings.emptyApiLink}</a>
+      <a className={`${pillPrimary} mt-6`} href="/api/openapi.json">{strings.emptyApiLink}</a>
     </div>
   </div>;
 }
@@ -65,16 +67,16 @@ function CompositionDetail({ summary }: { summary: CompositionSummary }) {
   const slots = doc ? doc.slots : summary.slots;
   const latestVersion = meta.status === "ready" ? meta.data.publishedVersion : summary.latestVersion;
 
-  return <article className="max-w-2xl rounded-3xl bg-eui-lav p-6">
+  return <article className={`${panelPadded} max-w-2xl`}>
     <div className="flex flex-wrap items-center gap-2">
       <p className={kicker}>{strings.title}</p>
       <span className={chip}>{summary.designSystem}</span>
       <span className={chip}>{strings.headRevValue(summary.headRev)}</span>
       <span className={chip}>{latestVersion === null ? strings.notPublished : strings.versionValue(latestVersion)}</span>
     </div>
-    <h3 className="mt-2 font-eui-display text-2xl font-medium">{summary.name}</h3>
+    <h3 className="mt-2 text-2xl font-medium">{summary.name}</h3>
     {meta.status === "loading" ? <p className="mt-2 text-sm text-eui-slate-500" role="status">{strings.loadingDetail}</p> : null}
-    {meta.status === "error" ? <p className="mt-2 text-sm text-eui-slate-500" role="alert">{strings.detailUnavailable} <button type="button" className="font-bold underline" onClick={meta.reload}>{strings.retry}</button></p> : null}
+    {meta.status === "error" ? <p className="mt-2 text-sm text-eui-slate-500" role="alert">{strings.detailUnavailable} <button type="button" className="font-medium underline" onClick={meta.reload}>{strings.retry}</button></p> : null}
     <dl className="mt-5 grid gap-4 text-sm sm:grid-cols-2">
       <Metadata label={strings.metaId} value={summary.id} />
       <Metadata label={strings.metaSystem} value={summary.designSystem} />
@@ -88,7 +90,7 @@ function CompositionDetail({ summary }: { summary: CompositionSummary }) {
       <h4 id={`composition-params-${summary.id}`} className={kicker}>{strings.paramsTitle}</h4>
       {params.length ? <ul className="mt-2 space-y-1 text-sm" aria-label={strings.paramsAria}>
         {params.map(([name, param]) => <li key={name} className="flex flex-wrap items-baseline gap-2">
-          <code className="rounded bg-white px-1.5 py-0.5 font-bold">{name}</code>
+          <code className="rounded-item bg-pay-lavender-tint px-1.5 py-0.5 font-medium">{name}</code>
           {param.type ? <span className="text-eui-slate-500">{param.type}</span> : null}
           <span className={kicker}>{param.required ? strings.paramRequired : strings.paramOptional}</span>
           <span className="text-eui-slate-500">{strings.paramDefault}: {formatDefault(param.default)}</span>
@@ -100,7 +102,7 @@ function CompositionDetail({ summary }: { summary: CompositionSummary }) {
     <section className="mt-5" aria-labelledby={`composition-slots-${summary.id}`}>
       <h4 id={`composition-slots-${summary.id}`} className={kicker}>{strings.slotsTitle}</h4>
       {slots.length ? <ul className="mt-2 flex flex-wrap gap-2 text-sm" aria-label={strings.slotsAria}>
-        {slots.map((slot) => <li key={slot}><code className="rounded bg-white px-1.5 py-0.5">{slot}</code></li>)}
+        {slots.map((slot) => <li key={slot}><code className="rounded-item bg-pay-lavender-tint px-1.5 py-0.5">{slot}</code></li>)}
       </ul> : <p className="mt-2 text-sm text-eui-slate-500">{strings.slotsNone}</p>}
     </section>
 
@@ -113,7 +115,7 @@ function CompositionDetail({ summary }: { summary: CompositionSummary }) {
           const badge = componentStatusBadge(version.status, version.statusReason);
           return <li key={version.version} className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{strings.versionEntry(version.version, version.rev)}</span>
-            {badge ? <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${badge.className}`} title={badge.title}>{badge.label}</span> : null}
+            {badge ? <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`} title={badge.title}>{badge.label}</span> : null}
           </li>;
         })}</ul>
         : meta.status === "ready" ? <p className="mt-2 text-sm text-eui-slate-500">{strings.versionsNone}</p> : null}
@@ -130,10 +132,10 @@ function CompositionUsages({ compositionId }: { compositionId: string }) {
   return <section className="mt-5" aria-labelledby={`composition-usage-${compositionId}`}>
     <div className="flex flex-wrap items-center gap-2">
       <h4 id={`composition-usage-${compositionId}`} className={kicker}>{strings.usageTitle}</h4>
-      {report ? <span className="text-sm font-bold">{strings.usageCount(report.currentHeadUsages.length)}</span> : null}
+      {report ? <span className="text-sm font-medium">{strings.usageCount(report.currentHeadUsages.length)}</span> : null}
     </div>
     {usages.status === "loading" ? <p className="mt-2 text-sm text-eui-slate-500" role="status">{strings.usageLoading}</p> : null}
-    {usages.status === "error" ? <p className="mt-2 text-sm text-eui-slate-500" role="alert">{strings.usageError} <button type="button" className="font-bold underline" onClick={usages.reload}>{strings.retry}</button></p> : null}
+    {usages.status === "error" ? <p className="mt-2 text-sm text-eui-slate-500" role="alert">{strings.usageError} <button type="button" className="font-medium underline" onClick={usages.reload}>{strings.retry}</button></p> : null}
     {report && !report.currentHeadUsages.length ? <p className="mt-2 text-sm text-eui-slate-500">{report.safeToRemove ? strings.usageSafeToRemove : strings.usageNone}</p> : null}
     {report?.currentHeadUsages.length ? <ul className="mt-2 space-y-1 text-sm" aria-label={strings.usageAria}>
       {report.currentHeadUsages.map((usage) => <li key={usage.prototypeId} className="flex flex-wrap items-center gap-2">
