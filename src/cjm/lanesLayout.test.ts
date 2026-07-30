@@ -33,6 +33,34 @@ function makeDoc(main: string[], branches: { id: string; steps: (string | { scre
 
 const layout = (doc: PrototypeDoc) => computeCjmLanes(doc, buildNavigationGraph(doc));
 
+/**
+ * Синтетический документ **мимо zod**: гейт масштабирования для T4 (подъём
+ * `FLOW_TOTAL_STEPS_LIMIT`). Каждый дочерний флоу — вставка `stepsPerFlow`
+ * собственных экранов в gap главной линии; флоу раскладываются по gap'ам по кругу.
+ */
+function syntheticDoc(mainLength: number, flowCount: number, stepsPerFlow: number): PrototypeDoc {
+  const main = Array.from({ length: mainLength }, (_, index) => `main-${index}`);
+  const flows = [
+    { id: "main", name: "Main", steps: main.map((screenId) => ({ screenId })) },
+    ...Array.from({ length: flowCount }, (_, flowIndex) => {
+      const gap = flowIndex % (mainLength - 1);
+      const inner = Array.from({ length: stepsPerFlow }, (_, step) => `branch-${flowIndex}-${step}`);
+      return {
+        id: `branch-${flowIndex}`,
+        name: `Branch ${flowIndex}`,
+        steps: [main[gap]!, ...inner, main[gap + 1]!].map((screenId) => ({ screenId })),
+      };
+    }),
+  ];
+  const ids = [...new Set(flows.flatMap((flow) => flow.steps.map((step) => step.screenId)))];
+  return {
+    version: 1, id: "synthetic", name: "Synthetic", designSystem: "shadcn", device: "mobile",
+    startScreen: main[0]!, state: {}, screens: ids.map(screen), flows,
+  } as unknown as PrototypeDoc;
+}
+
+const authoredSteps = (doc: PrototypeDoc) => doc.flows!.reduce((sum, flow) => sum + flow.steps.length, 0);
+
 function expectCoreInvariants(doc: PrototypeDoc, result: CjmLayout) {
   const nodes = result.lanes.flatMap((lane) => lane.nodes);
   expect(new Set(nodes.map((node) => node.key)).size).toBe(nodes.length);
@@ -134,6 +162,33 @@ describe("computeCjmLanes", () => {
     expect(result.columns).toBe(5);
     expect(result.lanes[0]!.nodes.map((node) => node.column)).toEqual([0, 3, 4]);
     expectCoreInvariants(doc, result);
+  });
+
+  // Гейт масштабирования для T4: рост геометрии — функция шагов и занятых gap'ов,
+  // а не числа флоу (обоснование подъёма FLOWS_LIMIT, план §7 T1).
+  it.each([
+    [6, 3, 2, 6 + 2 * 3, 6 + 3 * 2, 18],
+    [6, 11, 2, 6 + 2 * 5, 6 + 11 * 2, 50],
+    [10, 23, 3, 10 + 3 * 9, 10 + 23 * 3, 125],
+    [20, 20, 12, 20 + 12 * 19, 20 + 20 * 12, 300],
+  ])("scales lanes for main=%i branches=%i inner steps=%i", (mainLength, flowCount, stepsPerFlow, columns, tileCount, steps) => {
+    const doc = syntheticDoc(mainLength, flowCount, stepsPerFlow);
+    expect(authoredSteps(doc)).toBe(steps);
+    const result = layout(doc);
+    expect(result.lanes).toHaveLength(flowCount + 1);
+    expect(result.columns).toBe(columns);
+    expect(result.tileCount).toBe(tileCount);
+    expect(result.unassigned).toEqual([]);
+    expectCoreInvariants(doc, result);
+  });
+
+  it("grows inserted columns with steps per flow, not with the number of flows", () => {
+    const wide = layout(syntheticDoc(6, 5, 4));
+    const manyFlows = layout(syntheticDoc(6, 20, 4));
+    // Пять флоу уже заняли все пять gap'ов: следующие 15 добавляют только дорожки.
+    expect(manyFlows.columns).toBe(wide.columns);
+    expect(manyFlows.lanes).toHaveLength(21);
+    expect(layout(syntheticDoc(6, 5, 8)).columns).toBe(6 + 8 * 5);
   });
 });
 

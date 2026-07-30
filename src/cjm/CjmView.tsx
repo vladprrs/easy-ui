@@ -13,6 +13,7 @@ import type { PrototypeDoc } from "../prototype/schema";
 import { CjmEdgesOverlay, computeLogicalEdgeRoutes } from "./CjmEdgesOverlay";
 import { CjmScreenTile } from "./CjmScreenTile";
 import { createCjmRegistry } from "./cjmRegistry";
+import { LazyMount } from "./LazyMount";
 import { computeCjmLanes, type CjmLayout } from "./lanesLayout";
 
 interface ConnectorGeometry {
@@ -74,26 +75,27 @@ function CjmConnector({ sourceScreenId, targetScreenId }: { sourceScreenId: stri
   </>;
 }
 
-function UnassignedLane({ layout, tile }: { layout: CjmLayout; tile: (screenId: string) => React.ReactNode }) {
+/** Батчинг по 20 снят (T2a): единственный механизм стоимости — IntersectionObserver в `LazyMount`. */
+function UnassignedLane({ layout, tile, placeholder }: { layout: CjmLayout; tile: (screenId: string) => React.ReactNode; placeholder: { width: number; height: number } }) {
   const [open, setOpen] = useState(false);
-  const [visible, setVisible] = useState(20);
   if (!layout.unassigned.length) return null;
-  const shown = open ? layout.unassigned.slice(0, visible) : [];
   return <section className="cjm-unassigned mx-auto mt-8 max-w-[1600px]">
     <button
       type="button"
       className="font-eui-ui text-sm font-semibold text-eui-brand"
       aria-expanded={open}
-      onClick={() => {
-        setOpen((current) => !current);
-        setVisible(20);
-      }}
+      onClick={() => setOpen((current) => !current)}
     >
       {cjm.unassignedCount(layout.unassigned.length)}
     </button>
     {open ? <div className="mt-4 flex items-start gap-6 overflow-x-auto pb-4" aria-label={cjm.unassignedAria}>
-      {shown.map((screenId) => <div key={screenId} className="shrink-0">{tile(screenId)}</div>)}
-      {visible < layout.unassigned.length ? <button type="button" className="shrink-0 self-center rounded-lg border bg-white px-4 py-2 font-eui-ui text-sm text-eui-brand" onClick={() => setVisible((current) => Math.min(current + 20, layout.unassigned.length))}>{cjm.showMore}</button> : null}
+      {layout.unassigned.map((screenId) => <LazyMount
+        key={screenId}
+        className="shrink-0"
+        data-screen-id={screenId}
+        placeholderHeight={placeholder.height}
+        placeholderWidth={placeholder.width}
+      >{tile(screenId)}</LazyMount>)}
     </div> : null}
   </section>;
 }
@@ -120,6 +122,9 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
     return screenId === undefined ? undefined : buildPlayerPath(routeBase, screenId);
   }, [doc.flows, location.search, routeBase]);
   const designSystemName = doc.designSystem;
+  // Плейсхолдер ленивой обёртки = стартовые габариты самого тайла (`CjmFrame`),
+  // поэтому монтирование не двигает геометрию грида и рёбер.
+  const placeholder = useMemo(() => ({ width: previewTileSizes[doc.device].width + 24, height: previewTileSizes[doc.device].fallbackHeight }), [doc.device]);
   const metadata = <dl aria-label={cjm.metadataAria} className="flex flex-wrap items-center gap-2 font-eui-ui text-xs text-eui-slate-500">
     <div><dt className="sr-only">{cjm.screensLabel}</dt><dd className="rounded-full bg-eui-lilac-100 px-2.5 py-1">{cjm.screensCount(doc.screens.length)}</dd></div>
     {doc.flows ? <div><dt className="sr-only">{cjm.flowsLabel}</dt><dd className="rounded-full bg-eui-lilac-100 px-2.5 py-1">{cjm.flowsCount(doc.flows.length)}</dd></div> : null}
@@ -139,7 +144,7 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
       {doc.description ? <p className="mx-auto max-w-[1600px] font-eui-ui text-eui-slate-500">{doc.description}</p> : null}
       {layout.linear ? <ol className="cjm-list mx-auto mt-8 flex items-start gap-16 overflow-x-auto pb-8" aria-label={cjm.screensAria}>
       {doc.screens.map((screen, index) => <li className="relative shrink-0" key={screen.id} data-screen-id={screen.id}>
-        {renderTile(screen.id)}
+        <LazyMount placeholderHeight={placeholder.height} placeholderWidth={placeholder.width}>{renderTile(screen.id)}</LazyMount>
         {index < doc.screens.length - 1 ? <CjmConnector sourceScreenId={screen.id} targetScreenId={doc.screens[index + 1]!.id} /> : null}
       </li>)}
       </ol> : <>
@@ -167,15 +172,17 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
             {layout.lanes.flatMap((lane) => lane.nodes.map((node) => {
               const stepIndex = Number(node.key.slice(node.key.lastIndexOf(":") + 1));
               const flowId = lane.key.slice("flow:".length);
-              return <div
+              return <LazyMount
                 key={node.key}
                 className="relative z-20"
                 data-cjm-node={node.key}
                 data-screen-id={node.screenId}
+                placeholderHeight={placeholder.height}
+                placeholderWidth={placeholder.width}
                 style={{ gridColumn: node.column + 2, gridRow: node.lane + 1 }}
               >
                 {renderTile(node.screenId, flowId, stepIndex, node.note)}
-              </div>;
+              </LazyMount>;
             }))}
           </div>
         </div>
@@ -184,7 +191,7 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
           <span><i className="cjm-legend-line" data-verified="dynamic" />{cjm.verifiedDynamic}</span>
           <span><i className="cjm-legend-line" data-verified="missing" />{cjm.verifiedMissing}</span>
         </div>
-        <UnassignedLane layout={layout} tile={(screenId) => renderTile(screenId)} />
+        <UnassignedLane layout={layout} tile={(screenId) => renderTile(screenId)} placeholder={placeholder} />
       </>}
     </div>
   </main>;

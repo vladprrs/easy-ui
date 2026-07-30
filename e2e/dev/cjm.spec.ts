@@ -17,11 +17,25 @@ test("checkout CJM opens from gallery and preserves player history semantics", a
   const journey = page.getByRole("list", { name: "Экраны CJM" });
   await expect(journey).toBeVisible();
   await expect(journey).not.toHaveAttribute("aria-hidden", "true");
+
+  // Лента ленива (T2a): все пять обёрток в DOM, живых тайлов в покое меньше.
+  await expect(journey.locator("li[data-screen-id]")).toHaveCount(5);
+  await expect(journey.locator("[data-lazy-mounted]")).toHaveCount(5);
+  expect(await journey.locator('[data-lazy-mounted="true"]').count()).toBeLessThan(5);
+
+  // Печать форсирует монтирование: только так печать и Ctrl+F видят весь путь.
+  await page.emulateMedia({ media: "print" });
+  await expect(journey.locator('[data-lazy-mounted="true"]')).toHaveCount(5);
+  await expect(journey.locator("[data-lazy-placeholder]")).toHaveCount(0);
   for (const screenName of ["Каталог", "Товар", "Корзина", "Оформление", "Успех"]) {
-    await expect(page.getByRole("heading", { name: screenName, exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: screenName, exact: true })).toHaveCount(1);
   }
-  for (const note of checkoutNotes) await expect(page.getByText(note, { exact: true })).toBeVisible();
-  await expect(page.getByText("Лёгкие кроссовки × 1", { exact: true })).toBeVisible();
+  for (const note of checkoutNotes) await expect(page.getByText(note, { exact: true })).toHaveCount(1);
+  await expect(page.getByText("Лёгкие кроссовки × 1", { exact: true })).toHaveCount(1);
+
+  // mount-once: экранный режим сохраняет уже смонтированные тайлы и их ссылки.
+  await page.emulateMedia({ media: null });
+  await expect(journey.locator('[data-lazy-mounted="true"]')).toHaveCount(5);
 
   expect(await page.evaluate(() => document.body.style.pointerEvents)).not.toBe("none");
   const cartOverlay = page.getByRole("link", { name: /Открыть экран «Корзина».*в плеере/ });
@@ -74,8 +88,15 @@ test("settings CJM connects measured tile centers and labels authored transition
   const metadata = page.getByLabel("Метаданные CJM");
   await expect(metadata.getByText("3 экрана", { exact: true })).toBeVisible();
   await expect(metadata.getByText("e2e-starter", { exact: true })).toBeVisible();
-  await expect(page.getByText("→ О приложении", { exact: true })).toBeVisible();
-  await expect(page.getByText("→ Конфиденциальность", { exact: true })).toBeVisible();
+
+  // Все три обёртки в DOM с первого layout, поэтому коннекторы меряются и без живых тайлов.
+  const journey = page.getByRole("list", { name: "Экраны CJM" });
+  await expect(journey.locator("[data-lazy-mounted]")).toHaveCount(3);
+  await page.emulateMedia({ media: "print" });
+  await expect(journey.locator('[data-lazy-mounted="true"]')).toHaveCount(3);
+  await expect(page.getByText("→ О приложении", { exact: true })).toHaveCount(1);
+  await expect(page.getByText("→ Конфиденциальность", { exact: true })).toHaveCount(1);
+  await page.emulateMedia({ media: null });
 
   const connectors = page.getByTestId("cjm-connector");
   await expect(connectors).toHaveCount(2);

@@ -111,40 +111,103 @@ test("branch flows reuse each shared main section instead of drawing duplicate e
   await expect(page.locator('.cjm-edges-overlay g[data-from^="flow:bank-declined"][data-to^="flow:bank-declined"]')).toHaveCount(0);
 });
 
-async function mountedUnassigned(section: Locator) {
-  return section.locator(".cjm-tile").count();
+/**
+ * Гейт ленивости (T2a) — **детерминированные счётчики**, а не миллисекунды:
+ * `retries: 0`, проект `dev` гоняет Vite dev-server и development-сборку React,
+ * а CI — общий runner, поэтому wall-clock здесь ничего не доказывает.
+ */
+interface LazyCounters {
+  wrappers: number;
+  mounted: number;
+  tiles: number;
+  placeholders: number;
 }
 
-test("limit fixture keeps unassigned tiles collapsed and reveals one measured batch at a time", async ({ page }) => {
-  test.setTimeout(60_000);
+async function lazyCounters(page: Page, root: string): Promise<LazyCounters> {
+  return page.evaluate((selector) => {
+    const scope = document.querySelector(selector);
+    if (!scope) throw new Error(`Missing scope ${selector}`);
+    return {
+      wrappers: scope.querySelectorAll("[data-lazy-mounted]").length,
+      mounted: scope.querySelectorAll('[data-lazy-mounted="true"]').length,
+      tiles: scope.querySelectorAll(".cjm-tile").length,
+      placeholders: scope.querySelectorAll("[data-lazy-placeholder]").length,
+    };
+  }, root);
+}
+
+const scrollToEnd = (target: Locator) => target.evaluate((node) => {
+  node.scrollLeft = node.scrollWidth;
+  node.scrollTop = node.scrollHeight;
+});
+
+test("limit fixture mounts lane tiles lazily while every node wrapper stays measurable", async ({ page }) => {
   await page.goto("/p/flows-perf/cjm");
 
   await expect(page.getByTestId("cjm-lane-label")).toHaveCount(12);
+  // Обёртки узлов и геометрия грида не зависят от ленивости: рёбра меряют обёртки,
+  // а колонки заданы фиксированным gridTemplateColumns.
   await expect(page.locator("[data-cjm-node]")).toHaveCount(178);
+  await expect(page.locator(".cjm-edges-overlay g[data-edge-kind]")).toHaveCount(188);
+  // layout.columns + 1: первая колонка грида — подписи дорожек.
+  const columns = await page.locator(".cjm-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length);
+  expect(columns).toBe(63);
+
+  const resting = await lazyCounters(page, ".cjm-grid");
+  expect(resting.wrappers).toBe(178);
+  expect(resting.mounted).toBeGreaterThan(0);
+  // Ключевой гейт: в покое живых тайлов на порядок меньше, чем узлов.
+  expect(resting.mounted).toBeLessThanOrEqual(18);
+  expect(resting.tiles).toBe(resting.mounted);
+  expect(resting.placeholders).toBe(178 - resting.mounted);
+
+  await scrollToEnd(page.locator(".cjm-grid-scroll"));
+  await scrollToEnd(page.locator(".cjm-stage"));
+  await expect.poll(async () => (await lazyCounters(page, ".cjm-grid")).mounted).toBeGreaterThan(resting.mounted);
+  const scrolled = await lazyCounters(page, ".cjm-grid");
+  expect(scrolled.wrappers).toBe(178);
+  expect(scrolled.tiles).toBe(scrolled.mounted);
+  expect(scrolled.placeholders).toBe(178 - scrolled.mounted);
+});
+
+test("unassigned screens stay collapsed, then mount lazily without a batch button", async ({ page }) => {
+  await page.goto("/p/flows-perf/cjm");
+  await expect(page.locator("[data-cjm-node]")).toHaveCount(178);
+
   const toggle = page.getByRole("button", { name: "Вне сценариев, 61" });
-  const section = toggle.locator("xpath=..");
+  const section = page.locator(".cjm-unassigned");
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  expect(await mountedUnassigned(section)).toBe(0);
+  expect(await lazyCounters(page, ".cjm-unassigned")).toMatchObject({ wrappers: 0, tiles: 0 });
 
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  await expect(section.locator(".cjm-tile")).toHaveCount(20);
-
-  const elapsed = await section.evaluate(async (node) => {
-    const button = [...node.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === "показать ещё")!;
-    const started = performance.now();
-    button.click();
-    while (node.querySelectorAll(".cjm-tile").length !== 40) {
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    }
-    return performance.now() - started;
-  });
-  expect(elapsed).toBeLessThan(1_500);
-  await expect(section.locator(".cjm-tile")).toHaveCount(40);
-
-  await section.getByRole("button", { name: "показать ещё" }).click();
-  await expect(section.locator(".cjm-tile")).toHaveCount(60);
-  await section.getByRole("button", { name: "показать ещё" }).click();
-  await expect(section.locator(".cjm-tile")).toHaveCount(61);
+  await expect(section.locator("[data-lazy-mounted]")).toHaveCount(61);
+  // Батчинг по 20 снят: IntersectionObserver — единственный механизм.
   await expect(section.getByRole("button", { name: "показать ещё" })).toHaveCount(0);
+
+  const row = section.getByLabel("Экраны вне сценариев");
+  await row.scrollIntoViewIfNeeded();
+  await expect.poll(async () => (await lazyCounters(page, ".cjm-unassigned")).mounted).toBeGreaterThan(0);
+  const revealed = await lazyCounters(page, ".cjm-unassigned");
+  expect(revealed.mounted).toBeLessThanOrEqual(18);
+  expect(revealed.tiles).toBe(revealed.mounted);
+  expect(revealed.placeholders).toBe(61 - revealed.mounted);
+
+  await scrollToEnd(row);
+  await expect.poll(async () => (await lazyCounters(page, ".cjm-unassigned")).mounted).toBeGreaterThan(revealed.mounted);
+});
+
+test("print media forces every lane tile to mount so printing and find-in-page are not empty", async ({ page }) => {
+  await page.goto(branchingPath);
+  await expect(page.locator("[data-cjm-node]")).toHaveCount(10);
+  const resting = await lazyCounters(page, ".cjm-grid");
+  expect(resting.mounted).toBeLessThan(10);
+
+  await page.emulateMedia({ media: "print" });
+  await expect.poll(async () => (await lazyCounters(page, ".cjm-grid")).mounted).toBe(10);
+  expect(await lazyCounters(page, ".cjm-grid")).toMatchObject({ wrappers: 10, mounted: 10, tiles: 10, placeholders: 0 });
+
+  await page.emulateMedia({ media: null });
+  // mount-once: возврат к экранному режиму ничего не размонтирует.
+  expect(await lazyCounters(page, ".cjm-grid")).toMatchObject({ mounted: 10, tiles: 10 });
 });

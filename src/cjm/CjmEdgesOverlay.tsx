@@ -1,5 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cjm } from "../app/strings/cjm";
+import { LAZY_MOUNT_EVENT } from "./LazyMount";
 import type { CjmEdge, CjmLayout, CjmNode } from "./lanesLayout";
 
 export interface LogicalPoint {
@@ -238,8 +239,8 @@ export function CjmEdgesOverlay({ layout, routing }: { layout: CjmLayout; routin
     const svg = svgRef.current;
     const root = svg?.closest<HTMLElement>(".cjm-grid");
     if (!svg || !root || typeof ResizeObserver === "undefined") return;
-    const elements = [...root.querySelectorAll<HTMLElement>("[data-cjm-node]")];
-    const labels = [...root.querySelectorAll<HTMLElement>("[data-cjm-lane]")];
+    let elements: HTMLElement[] = [];
+    let labels: HTMLElement[] = [];
     const measure = () => {
       const rootRect = root.getBoundingClientRect();
       const byKey = new Map(elements.map((element) => [element.dataset.cjmNode!, element]));
@@ -292,10 +293,32 @@ export function CjmEdgesOverlay({ layout, routing }: { layout: CjmLayout; routin
       }));
     };
     const observer = new ResizeObserver(measure);
-    observer.observe(root);
-    for (const element of [...elements, ...labels]) observer.observe(element);
-    measure();
-    return () => observer.disconnect();
+    // Обёртки узлов живут в DOM с первого layout, но их содержимое монтируется лениво
+    // (`LazyMount`), поэтому список наблюдаемых элементов пересобирается по событию
+    // монтирования: иначе новые узлы остались бы без ResizeObserver.
+    const sync = () => {
+      elements = [...root.querySelectorAll<HTMLElement>("[data-cjm-node]")];
+      labels = [...root.querySelectorAll<HTMLElement>("[data-cjm-lane]")];
+      observer.disconnect();
+      observer.observe(root);
+      for (const element of [...elements, ...labels]) observer.observe(element);
+      measure();
+    };
+    let frame = 0;
+    const onLazyMount = () => {
+      if (frame !== 0 || typeof requestAnimationFrame === "undefined") return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        sync();
+      });
+    };
+    root.addEventListener(LAZY_MOUNT_EVENT, onLazyMount);
+    sync();
+    return () => {
+      root.removeEventListener(LAZY_MOUNT_EVENT, onLazyMount);
+      if (frame !== 0) cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, [layout, nodes, routing]);
   const edgeByKey = useMemo(() => new Map(layout.edges.map((edge) => [edge.key, edge])), [layout.edges]);
   return <>

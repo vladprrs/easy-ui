@@ -60,6 +60,8 @@ test("Player to CJM to a step tile round-trip opens that exact scenario occurren
   await page.getByRole("link", { name: "CJM", exact: true }).click();
   await expect(page).toHaveURL(/\/p\/branching-checkout\/cjm\?flow=bank-declined&step=4$/);
 
+  // Тайлы CJM монтируются лениво (T2a): обёртка узла в DOM всегда, тайл — после попадания во вьюпорт.
+  await page.locator('[data-cjm-node][data-screen-id="cancel-reason"]').scrollIntoViewIfNeeded();
   await page.getByRole("link", { name: /Открыть экран «Причина отмены».*в плеере/ }).click();
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/cancel-reason\?flow=cancellation&step=3$/);
   await expect(scenarioBar(page).getByRole("status")).toHaveText("Шаг 4 из 6");

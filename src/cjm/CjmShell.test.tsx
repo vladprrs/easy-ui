@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import type { PrototypeDraft, PrototypeVersion } from "../api/client";
 import { prototypeDocSchema } from "../prototype/schema";
 import { routeObjects } from "../app/routes";
 import { CjmFrame, TileErrorBoundary } from "./CjmScreenTile";
+import { resetPrintMountForce } from "./LazyMount";
 
 const mocks = vi.hoisted(() => ({ getDraft: vi.fn(), getVersion: vi.fn(), getThemeVersion: vi.fn(), getLatestTheme: vi.fn(), loadCustom: vi.fn() }));
 vi.mock("../api/client", async (original) => ({ ...(await original()), getPrototypeDraft: mocks.getDraft, getPrototypeVersion: mocks.getVersion, getDesignSystemVersion: mocks.getThemeVersion, getDesignSystemById: mocks.getLatestTheme }));
@@ -51,7 +52,40 @@ const flowDoc = prototypeDocSchema.parse({
   ],
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  resetPrintMountForce();
+});
+
+// Без IntersectionObserver `LazyMount` монтируется сразу (как в jsdom по умолчанию),
+// поэтому остальные тесты файла ленивостью не затронуты. Тесты ленивости стаб ставят явно.
+type IntersectionCallback = ConstructorParameters<typeof IntersectionObserver>[0];
+let intersectionObservers: { callback: IntersectionCallback; element: Element | null }[] = [];
+
+function stubIntersectionObserver() {
+  intersectionObservers = [];
+  vi.stubGlobal("IntersectionObserver", class {
+    readonly root = null;
+    readonly rootMargin = "0px";
+    readonly thresholds = [0];
+    private record: (typeof intersectionObservers)[number];
+    constructor(callback: IntersectionCallback) {
+      this.record = { callback, element: null };
+      intersectionObservers.push(this.record);
+    }
+    observe(element: Element) { this.record.element = element; }
+    unobserve() {}
+    disconnect() {}
+    takeRecords() { return []; }
+  });
+}
+
+function intersect(element: Element) {
+  const observer = intersectionObservers.find((candidate) => candidate.element === element);
+  if (!observer) throw new Error(`Element is not observed: ${element.outerHTML.slice(0, 120)}`);
+  act(() => observer.callback([{ isIntersecting: true, target: element } as IntersectionObserverEntry], {} as IntersectionObserver));
+}
 
 function renderAt(path: string) {
   const router = createMemoryRouter(routeObjects, { initialEntries: [path] });
@@ -197,7 +231,29 @@ describe("CjmShell", () => {
     expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey?flow=bank-decline&step=9");
   });
 
-  it("mounts unassigned screens in batches of twenty", async () => {
+  it("mounts lane tiles only after intersection and keeps every node wrapper measurable", async () => {
+    stubIntersectionObserver();
+    mocks.getDraft.mockResolvedValue({ ...draft, doc: flowDoc });
+    renderAt("/p/journey/cjm");
+    await screen.findAllByTestId("cjm-lane-label");
+
+    // Обёртки узлов — в DOM с первого layout: на них стоит геометрия рёбер.
+    const wrappers = [...document.querySelectorAll<HTMLElement>("[data-cjm-node]")];
+    expect(wrappers).toHaveLength(3);
+    expect(document.querySelectorAll('[data-cjm-node][data-lazy-mounted="true"]')).toHaveLength(0);
+    expect(document.querySelectorAll(".cjm-grid .cjm-tile")).toHaveLength(0);
+    expect(document.querySelectorAll("[data-cjm-node] [data-lazy-placeholder]")).toHaveLength(3);
+    expect(screen.queryByRole("heading", { name: "Cart" })).toBeNull();
+
+    intersect(wrappers.find((node) => node.dataset.cjmNode === "flow:happy:0")!);
+    expect(document.querySelectorAll(".cjm-grid .cjm-tile")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "Cart" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Declined" })).toBeNull();
+    expect(document.querySelectorAll("[data-cjm-node] [data-lazy-placeholder]")).toHaveLength(2);
+  });
+
+  it("mounts unassigned screens lazily without a manual batch button", async () => {
+    stubIntersectionObserver();
     const extras = Array.from({ length: 21 }, (_, index) => ({
       id: `outside-${index}`,
       name: `Outside ${index}`,
@@ -207,9 +263,31 @@ describe("CjmShell", () => {
     mocks.getDraft.mockResolvedValue({ ...draft, doc: batched });
     renderAt("/p/journey/cjm");
     fireEvent.click(await screen.findByRole("button", { name: "Вне сценариев, 21" }));
-    expect(document.querySelectorAll(".cjm-unassigned .cjm-tile")).toHaveLength(20);
-    fireEvent.click(screen.getByRole("button", { name: "показать ещё" }));
-    expect(document.querySelectorAll(".cjm-unassigned .cjm-tile")).toHaveLength(21);
+
+    const section = document.querySelector(".cjm-unassigned")!;
+    expect(section.querySelectorAll("[data-lazy-mounted]")).toHaveLength(21);
+    expect(section.querySelectorAll(".cjm-tile")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "показать ещё" })).toBeNull();
+
+    intersect(section.querySelector<HTMLElement>('[data-screen-id="outside-7"]')!);
+    expect(section.querySelectorAll(".cjm-tile")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "Outside 7" })).toBeTruthy();
+  });
+
+  it("forces every lane tile to mount before printing", async () => {
+    stubIntersectionObserver();
+    mocks.getDraft.mockResolvedValue({ ...draft, doc: flowDoc });
+    renderAt("/p/journey/cjm");
+    await screen.findAllByTestId("cjm-lane-label");
+    expect(document.querySelectorAll(".cjm-grid .cjm-tile")).toHaveLength(0);
+
+    // Без этого печать и Ctrl+F по CJM давали бы пустой документ. Синхронность коммита
+    // обеспечивает `flushSync`, но в jsdom он может уйти в фолбэк-ветку, поэтому гейт здесь —
+    // сам факт монтирования; синхронность проверяет e2e-гейт печати в Chromium.
+    act(() => { window.dispatchEvent(new Event("beforeprint")); });
+    await waitFor(() => expect(document.querySelectorAll(".cjm-grid .cjm-tile")).toHaveLength(3));
+    expect(document.querySelectorAll("[data-lazy-placeholder]")).toHaveLength(0);
+    for (const name of ["Cart", "Declined", "Success"]) expect(screen.getByRole("heading", { name })).toBeTruthy();
   });
 
   it("omits the description block when the document has no description", async () => {

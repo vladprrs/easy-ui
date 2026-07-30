@@ -19,7 +19,6 @@ export const cjm = {
   unassignedLaneName: "Вне сценариев",
   unassignedCount: (count: number) => `Вне сценариев, ${count}`,
   unassignedAria: "Экраны вне сценариев",
-  showMore: "показать ещё",
   legendAria: "Легенда рёбер сценариев",
   verifiedStatic: "Подтверждённый переход",
   verifiedDynamic: "Динамический переход",

@@ -303,4 +303,10 @@ button { cursor: pointer; }
   .cjm-edges-overlay {
     display: none !important;
   }
+
+  /* Печать форсирует монтирование ленивых обёрток (`usePrintMountForce`);
+     правило страхует от пустых распорок, если форс не успел сработать. */
+  [data-lazy-placeholder] {
+    display: none !important;
+  }
 }
