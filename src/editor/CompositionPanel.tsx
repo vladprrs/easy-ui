@@ -30,7 +30,7 @@ function ParamField({ name, declared, value, onCommit }: {
 }) {
   const docEpoch = useContext(DocEpochContext);
   const label = <span className="font-eui-ui text-xs text-eui-slate-500">
-    {name}{declared.required ? <span className="ml-1 text-eui-magenta">*</span> : null}
+    {name}{declared.required ? <span className="ml-1 text-pay-red">*</span> : null}
     {declared.description ? <span className="ml-1 text-eui-slate-400">— {declared.description}</span> : null}
   </span>;
 
@@ -78,7 +78,7 @@ function ScalarParamField({ name, numeric, value, onCommit, label }: {
       onBlur={commit}
       onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); commit(); event.currentTarget.blur(); } }}
     />
-    {error ? <span role="alert" className="mt-1 block font-eui-ui text-xs text-eui-magenta">{error}</span> : null}
+    {error ? <span role="alert" className="mt-1 block font-eui-ui text-xs text-pay-red">{error}</span> : null}
   </label>;
 }
 
@@ -97,7 +97,7 @@ function JsonParamField({ name, value, onCommit, label }: {
   };
   return <label className="block py-1">{label}
     <textarea aria-label={name} className={`${inputClass} min-h-20 font-mono`} value={text} onChange={(event) => setText(event.target.value)} onBlur={commit} />
-    {error ? <span role="alert" className="mt-1 block font-eui-ui text-xs text-eui-magenta">{error}</span> : null}
+    {error ? <span role="alert" className="mt-1 block font-eui-ui text-xs text-pay-red">{error}</span> : null}
   </label>;
 }
 
@@ -135,7 +135,7 @@ export function CompositionPanel({ screen, elementKey, element, compositionId, c
       {composition ? <div className="flex gap-2"><dt className="text-eui-slate-500">{editor.nameLabel}</dt><dd className="min-w-0 break-words text-eui-ink">{composition.name}</dd></div> : null}
       <div className="flex gap-2"><dt className="text-eui-slate-500">{editor.compositionVersionLabel}</dt><dd className="text-eui-ink">{version === undefined ? editor.compositionVersionUnpinned : editor.versionBadge(version)}</dd></div>
     </dl>
-    {composition ? null : <p role="alert" className="mb-3 font-eui-ui text-xs text-eui-magenta">{editor.compositionUnknown(compositionId)}</p>}
+    {composition ? null : <p role="alert" className="mb-3 font-eui-ui text-xs text-pay-red">{editor.compositionUnknown(compositionId)}</p>}
     <p className="mb-3 font-eui-ui text-xs text-eui-slate-400">{editor.compositionInnerReadonly}</p>
 
     <h4 className="mb-1 font-eui-ui text-xs font-medium text-eui-ink">{editor.compositionParamsTitle}</h4>
@@ -165,7 +165,7 @@ export function CompositionPanel({ screen, elementKey, element, compositionId, c
       ? <ul className="space-y-1">{children.map((key) => <li key={key} className="flex items-center gap-2">
         <button
           type="button"
-          className="min-w-0 flex-1 truncate rounded-lg px-2 py-1 text-left font-eui-ui text-xs text-eui-slate-500 hover:bg-eui-lilac-100"
+          className="min-w-0 flex-1 truncate rounded-item px-2 py-1 text-left font-eui-ui text-xs text-eui-slate-500 hover:bg-eui-lilac-100"
           onClick={() => onSelectElement(key)}
         >{screen.spec.elements[key]!.type} · {key}</button>
         <select

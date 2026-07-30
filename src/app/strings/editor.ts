@@ -4,6 +4,11 @@
 export const editorDocumentTitle = (docName: string) => `${docName} · Редактор`;
 
 export const editor = {
+  // Доступ к редактору (W5): проверка прав и отдельное состояние 403.
+  accessChecking: "Проверяем доступ к редактору…",
+  forbiddenTitle: "Редактор недоступен",
+  forbiddenOpenPlayer: "Открыть в плеере",
+  canvasErrorTitle: "Экран не удалось отобразить",
   dirtyAria: "Есть несохранённые изменения",
   saving: "Сохранение…",
   notSaved: "Не сохранено",

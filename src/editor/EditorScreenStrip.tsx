@@ -41,7 +41,7 @@ function StripFrame({ nativeWidth, nativeHeight, resetKey, designSystem, themeTo
     return () => observer.disconnect();
   }, [nativeHeight, resetKey, scale]);
   const height = nativeHeight === undefined ? measuredHeight : Math.min(nativeHeight * scale, editorStripTile.heightCap);
-  return <div className="overflow-hidden rounded-lg bg-background text-foreground" style={{ width: editorStripTile.width, height }}>
+  return <div className="overflow-hidden rounded-item bg-background text-foreground" style={{ width: editorStripTile.width, height }}>
     <SurfaceSpacingScope systemId={designSystem} themeTokens={themeTokens}>
       <div ref={setInnerRef} data-eui-stage-viewport="editor-strip" style={{ position: "relative", width: nativeWidth, ...(nativeHeight === undefined ? {} : { height: nativeHeight }), transform: `scale(${scale})`, transformOrigin: "top left" }}><HostStageSurface stageHostRef={stageHostRef}>{children}</HostStageSurface></div>
     </SurfaceSpacingScope>
@@ -75,10 +75,10 @@ function ScreenTile({ doc, screen, registry, handlers, runtimeKey, stateEpoch, s
     <div className="relative">
       <TileErrorBoundary key={key} prototypeId={doc.id} screenId={screen.id}>
         <JSONUIProvider key={key} registry={registry} handlers={handlers} initialState={initialState}>
-          <div inert>{tree && specs ? <StripFrame nativeWidth={screen.canvas?.width ?? previewNativeWidth[doc.device]} nativeHeight={screen.canvas?.height} resetKey={key} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}><EasyUiRuntimeProvider value={runtimeValue}>{screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}</EasyUiRuntimeProvider></StripFrame> : <div className="flex items-center justify-center rounded-lg border border-eui-ink/10 bg-white text-sm text-eui-slate-500" style={{ width: editorStripTile.width, height: editorStripTile.heightCap }}>{editor.noContent}</div>}</div>
+          <div inert>{tree && specs ? <StripFrame nativeWidth={screen.canvas?.width ?? previewNativeWidth[doc.device]} nativeHeight={screen.canvas?.height} resetKey={key} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}><EasyUiRuntimeProvider value={runtimeValue}>{screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}</EasyUiRuntimeProvider></StripFrame> : <div className="flex items-center justify-center rounded-item border border-eui-ink/10 bg-white text-sm text-eui-slate-500" style={{ width: editorStripTile.width, height: editorStripTile.heightCap }}>{editor.noContent}</div>}</div>
         </JSONUIProvider>
       </TileErrorBoundary>
-      <button type="button" aria-label={editor.selectScreenAria(screen.name)} aria-pressed={selected} onClick={onSelect} className="absolute inset-0 rounded-lg focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring aria-pressed:ring-4 aria-pressed:ring-primary" />
+      <button type="button" aria-label={editor.selectScreenAria(screen.name)} aria-pressed={selected} onClick={onSelect} className="absolute inset-0 rounded-item focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pay-red aria-pressed:outline-2 aria-pressed:outline-pay-deep" />
     </div>
     <h3 className={`${selected ? chipActive : `${chip} border-eui-ink/10 bg-white`} mt-2 max-w-full font-eui-ui`}><span className="truncate">{screen.name}</span></h3>
   </article>;

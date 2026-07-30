@@ -59,7 +59,7 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 }
 
 function NodeDetails({ node }: { node: ArchitectureNode }) {
-  return <details className="mt-3 rounded-xl bg-eui-lav p-3">
+  return <details className="mt-3 rounded-inset bg-eui-lav p-3">
     <summary className="cursor-pointer font-eui-ui text-xs font-medium text-eui-slate-500">{editor.nodeDetailsSummary}</summary>
     <div className="mt-2 space-y-3 font-eui-ui text-xs">
       <section>
@@ -86,7 +86,7 @@ function NodeDetails({ node }: { node: ArchitectureNode }) {
       {node.issues.length ? <section>
         <h4 className="mb-1 font-medium text-eui-ink">{editor.nodeIssuesTitle}</h4>
         <ul className="list-disc space-y-0.5 pl-4">
-          {node.issues.map((issue, index) => <li key={`${issue.path ?? ""}:${index}`} className={issue.severity === "error" ? "text-eui-magenta" : "text-amber-800"}>{issue.message}</li>)}
+          {node.issues.map((issue, index) => <li key={`${issue.path ?? ""}:${index}`} className={issue.severity === "error" ? "text-pay-red" : "text-amber-800"}>{issue.message}</li>)}
         </ul>
       </section> : null}
       <section>
@@ -149,14 +149,14 @@ export function ComponentTreeInspector({ spec, selectedKey, onSelect, definition
               return next;
             });
           }}
-          className="flex size-7 shrink-0 items-center justify-center rounded-md font-eui-ui text-eui-slate-500 hover:bg-eui-lilac-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-eui-purple"
+          className="flex size-7 shrink-0 items-center justify-center rounded-item font-eui-ui text-eui-slate-500 hover:bg-eui-lilac-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-eui-purple"
         ><span aria-hidden="true" className={`transition-transform ${expanded ? "rotate-90" : ""}`}>›</span></button> : <span className="size-7 shrink-0" aria-hidden="true" />}
         <button
           ref={selectedKey === node.key ? selectedRef : undefined}
           type="button"
           aria-current={selectedKey === node.key ? "true" : undefined}
           onClick={() => onSelect(node.key)}
-          className="min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-left font-eui-ui text-sm text-eui-slate-500 hover:bg-eui-lilac-100 aria-[current=true]:bg-eui-lilac-100 aria-[current=true]:font-bold aria-[current=true]:text-eui-ink"
+          className="min-w-0 flex-1 truncate rounded-item px-2 py-1.5 text-left font-eui-ui text-sm text-eui-slate-500 hover:bg-eui-lilac-100 aria-[current=true]:bg-eui-lilac-100 aria-[current=true]:font-bold aria-[current=true]:text-eui-ink"
         >{node.type} · {node.key}</button>
         <NodeBadges node={node} />
       </div>

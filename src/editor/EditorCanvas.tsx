@@ -1,6 +1,8 @@
 import { markDevtoolsActive } from "@json-render/core";
 import { JSONUIProvider, Renderer, type ComponentRegistry, type JSONUIProviderProps } from "@json-render/react";
 import { Component, type ErrorInfo, type MouseEvent, type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ErrorState } from "../app/states";
+import { editor } from "../app/strings/editor";
 import type { ComponentDefinition } from "../catalog/definitions";
 import { HostStageSurface } from "../catalog/hostPrimitives";
 import type { ThemeContent } from "../api/client";
@@ -98,7 +100,7 @@ export function EditorFrame({ nativeWidth, nativeHeight, designSystem, themeToke
   }, [nativeHeight, previewRootRef]);
 
   return <div ref={hostRef} className="min-w-0 w-full">
-    <div ref={viewportRef} className="relative overflow-hidden rounded-xl border bg-background text-foreground shadow-sm" style={{ width: nativeWidth * scale, height: contentHeight * scale }} onClick={onClick} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}>
+    <div ref={viewportRef} className="relative overflow-hidden rounded-inset border bg-background text-foreground" style={{ width: nativeWidth * scale, height: contentHeight * scale }} onClick={onClick} onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}>
       <SurfaceSpacingScope systemId={designSystem} themeTokens={themeTokens}>
         <div ref={setStageRef} inert data-eui-stage-viewport="editor" style={{ position: "relative", width: nativeWidth, ...(nativeHeight === undefined ? {} : { height: nativeHeight }), transform: `scale(${scale})`, transformOrigin: "top left" }}>
           <HostStageSurface stageHostRef={stageHostRef}><div>{children}</div></HostStageSurface>
@@ -118,10 +120,7 @@ class EditorCanvasErrorBoundary extends Component<{ prototypeId: string; screenI
   }
   render() {
     if (!this.state.error) return this.props.children;
-    return <section role="alert" className="rounded-2xl bg-eui-lilac-100 p-6 text-eui-magenta">
-      <h2 className="font-semibold">Экран не удалось отобразить</h2>
-      <p className="mt-2 text-sm">{this.state.error.message}</p>
-    </section>;
+    return <ErrorState title={editor.canvasErrorTitle} description={this.state.error.message} />;
   }
 }
 
@@ -285,8 +284,8 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
         onMouseLeave={handleMouseLeave}
         overlay={<div className="pointer-events-none absolute inset-0 z-40 cursor-default" data-testid="editor-hit-overlay" />}
         frames={<div className="pointer-events-none absolute inset-0 z-50" aria-hidden="true">
-          {hoverRect && <div data-testid="editor-hover-frame" className="absolute border border-eui-magenta/60" style={hoverRect} />}
-          {selectionRect && <div data-testid="editor-selection-frame" className="absolute border-2 border-eui-magenta" style={selectionRect} />}
+          {hoverRect && <div data-testid="editor-hover-frame" className="absolute border border-pay-red/60" style={hoverRect} />}
+          {selectionRect && <div data-testid="editor-selection-frame" className="absolute border-2 border-pay-red" style={selectionRect} />}
         </div>}
       >{rendered}</EditorFrame>
     </JSONUIProvider>

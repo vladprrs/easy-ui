@@ -6,20 +6,38 @@ import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { loadCustomComponents } from "../customComponents/loader";
 import { loadPrototypeDraft, loadPrototypeVersion } from "../prototype/loader";
 import { buildPrototypeRouteBase } from "./navigation";
+import { pillGhost, pillPrimary } from "../app/chrome";
+import { EmptyState, ErrorState, Skeleton } from "../app/states";
 import { common, formatApiError } from "../app/strings/common";
 import { loader } from "../app/strings/player";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 
-const loaderPlate = "mx-auto max-w-xl rounded-2xl bg-eui-lilac-100 p-6 text-center font-eui-ui text-eui-ink";
+/** Колонка под состояние: сами блоки приходят из общего `app/states.tsx`. */
+const loaderColumn = "mx-auto w-full max-w-xl";
 
 export function MissingPrototype() {
   useDocumentTitle(loader.missingTitle);
-  return <main className={loaderPlate}><h1 className="text-2xl font-bold">{loader.missingTitle}</h1><p className="mt-2">{loader.missingBody}</p><Link className="mt-4 inline-block underline" to="/">{common.backToGallery}</Link></main>;
+  return <main className={loaderColumn}>
+    <EmptyState
+      title={loader.missingTitle}
+      description={loader.missingBody}
+      primary={<Link className={pillPrimary} to="/">{common.backToGallery}</Link>}
+    />
+  </main>;
 }
 
+/**
+ * Архивная ревизия. Состояние рисуется и на всю страницу, и внутри превью карточки
+ * галереи (196px), поэтому это компактная панель без мотив-кругов и дисплейного
+ * заголовка — иначе в плитке оно не помещается.
+ */
 export function ArchivedPrototype() {
   useDocumentTitle(loader.archivedTitle);
-  return <main className={loaderPlate} data-prototype-archived="true" role="status"><h1 className="text-2xl font-bold">{loader.archivedTitle}</h1><p className="mt-2">{loader.archivedBody}</p><Link className="mt-4 inline-block underline" to="/">{common.backToGallery}</Link></main>;
+  return <main className={`${loaderColumn} rounded-panel bg-white p-5 text-center`} data-prototype-archived="true" role="status">
+    <h1 className="text-base font-medium">{loader.archivedTitle}</h1>
+    <p className="mt-2 text-[13px] text-eui-slate-500">{loader.archivedBody}</p>
+    <Link className={`${pillGhost} mt-4`} to="/">{common.backToGallery}</Link>
+  </main>;
 }
 
 // version_not_found (W0-4): the prototype exists, but the requested published version does not.
@@ -28,16 +46,15 @@ export function MissingVersion({ protoId, version }: { protoId: string; version:
   useDocumentTitle(loader.missingVersionTitle(version));
   const location = useLocation();
   const currentPath = location.pathname.replace(`/v/${version}`, "") || buildPrototypeRouteBase(protoId);
-  return (
-    <main className={loaderPlate} role="alert">
-      <h1 className="text-2xl font-bold">{loader.missingVersionTitle(version)}</h1>
-      <p className="mt-2">{loader.missingVersionBody(version)}</p>
-      <p className="mt-4 flex justify-center gap-4">
-        <Link className="underline" to={currentPath}>{loader.openCurrent}</Link>
-        <Link className="underline" to="/">{loader.toGallery}</Link>
-      </p>
-    </main>
-  );
+  return <main className={loaderColumn}>
+    <EmptyState
+      circles={false}
+      title={loader.missingVersionTitle(version)}
+      description={loader.missingVersionBody(version)}
+      primary={<Link className={pillPrimary} to={currentPath}>{loader.openCurrent}</Link>}
+      secondary={<Link className={pillGhost} to="/">{loader.toGallery}</Link>}
+    />
+  </main>;
 }
 
 export function LoadError({ error, retry }: { error: unknown; retry: () => void }) {
@@ -45,7 +62,21 @@ export function LoadError({ error, retry }: { error: unknown; retry: () => void 
   const message = error instanceof ApiError
     ? formatApiError(error.code, { message: error.message, status: error.status, currentRev: error.currentRev, currentVersion: error.currentVersion })
     : error instanceof Error ? error.message : String(error);
-  return <main className={loaderPlate} role="alert"><h1 className="text-2xl font-bold">{loader.loadErrorTitle}</h1><p className="mt-2 whitespace-pre-wrap">{message}</p><button className="mt-4 underline" onClick={retry}>{common.retry}</button></main>;
+  return <main className={loaderColumn}>
+    <ErrorState
+      title={loader.loadErrorTitle}
+      description={<span className="whitespace-pre-wrap">{message}</span>}
+      retryLabel={common.retry}
+      onRetry={retry}
+    />
+  </main>;
+}
+
+/** Одна пульсирующая панель вместо абзаца «Загрузка…»: тот же ритм, что в галерее. */
+function LoaderSkeleton({ label }: { label: string }) {
+  return <main className={loaderColumn}>
+    <Skeleton label={label} count={1} previewHeight={320} gridClassName="grid gap-5" />
+  </main>;
 }
 
 export interface PrototypeLoaderResult {
@@ -73,7 +104,7 @@ function LoadedPrototype({ loaded, routeBase, children }: {
   );
   // Loading-title до готовности; после загрузки title ставит страница-потребитель (undefined = пропуск).
   useDocumentTitle(customState.status === "loading" ? loader.loadingPrototype : undefined);
-  if (customState.status === "loading") return <div className={loaderPlate} role="status" aria-label={loader.loadingComponents}>{loader.loadingPrototype}</div>;
+  if (customState.status === "loading") return <LoaderSkeleton label={loader.loadingComponents} />;
   if (customState.status === "error") return <LoadError error={customState.error} retry={customState.reload} />;
   const revision = "version" in loaded ? `v${loaded.version}` : `r${loaded.rev}`;
   const runtimeKey = `${loaded.doc.id}:${revision}:${loaded.componentManifestHash}:${loaded.doc.designSystem}`;
@@ -91,7 +122,7 @@ export function PrototypeLoader({ protoId, version, allowArchivedPlaceholder = t
   // Loading-title до готовности; после загрузки title ставит страница-потребитель (undefined = пропуск).
   useDocumentTitle(!invalidRoute && prototypeState.status === "loading" ? loader.loadingPrototype : undefined);
   if (invalidRoute) return <MissingPrototype />;
-  if (prototypeState.status === "loading") return <div className={loaderPlate} role="status" aria-label={loader.loadingPrototype}>{loader.loadingPrototype}</div>;
+  if (prototypeState.status === "loading") return <LoaderSkeleton label={loader.loadingPrototype} />;
   if (prototypeState.status === "error") {
     if (prototypeState.error instanceof ApiError && prototypeState.error.status === 404) {
       if (prototypeState.error.code === "version_not_found" && version !== undefined) return <MissingVersion protoId={protoId} version={version} />;

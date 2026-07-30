@@ -33,7 +33,7 @@ function ReportTable({ items }: { items: ImportReportItem[] }) {
             item.remappedTo ? gallery.importRemappedTo(item.remappedTo) : null,
             item.version !== undefined ? `v${item.version}` : null,
           ].filter((value): value is string => Boolean(value));
-          return <tr key={`${item.type}:${item.id}:${index}`} className={`border-t border-eui-ink/10 ${isError ? "text-eui-magenta" : ""}`}>
+          return <tr key={`${item.type}:${item.id}:${index}`} className={`border-t border-eui-ink/10 ${isError ? "text-pay-red" : ""}`}>
             <td className="py-1.5 pr-3 align-top">{gallery.importItemTypes[item.type]}</td>
             <td className="py-1.5 pr-3 align-top break-all font-mono text-xs">{item.name ? `${item.name} (${item.id})` : item.id}</td>
             <td className="py-1.5 pr-3 align-top font-medium">{gallery.importActions[item.action]}</td>
@@ -82,9 +82,9 @@ export function ImportDialog({ onClose, onImported }: { onClose: () => void; onI
   const previewReport = state.status === "preview" ? state.report : null;
 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
-    <section role="dialog" aria-modal="true" aria-label={gallery.importDialogAria} className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-3xl bg-white p-6 shadow-2xl">
+    <section role="dialog" aria-modal="true" aria-label={gallery.importDialogAria} className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-panel bg-white p-6">
       <div className="flex items-center justify-between gap-4">
-        <h2 className="font-eui-display text-2xl font-medium">{gallery.importDialogTitle}</h2>
+        <h2 className="pay-display text-2xl">{gallery.importDialogTitle}</h2>
         <button type="button" aria-label={common.close} title={common.close} disabled={busy} onClick={onClose} className="rounded-full px-2 py-1 text-xl hover:bg-eui-lilac-100 disabled:opacity-50">×</button>
       </div>
 
@@ -92,19 +92,19 @@ export function ImportDialog({ onClose, onImported }: { onClose: () => void; onI
         {state.status === "idle" ? <p className="text-sm text-eui-slate-500">{gallery.importIntro}</p> : null}
         {state.status === "checking" ? <p className="text-sm text-eui-slate-500" aria-live="polite">{gallery.importChecking}</p> : null}
         {state.status === "applying" ? <p className="text-sm text-eui-slate-500" aria-live="polite">{gallery.importApplying}</p> : null}
-        {state.status === "error" ? <p role="alert" className="text-sm text-eui-magenta">{state.message}</p> : null}
+        {state.status === "error" ? <p role="alert" className="text-sm text-pay-red">{state.message}</p> : null}
 
         {previewReport ? <div>
-          <h3 className="font-eui-display text-lg font-medium">{gallery.importPreviewTitle}</h3>
+          <h3 className="pay-display text-lg">{gallery.importPreviewTitle}</h3>
           <p className="mt-1 text-xs text-eui-slate-500">{gallery.importPreviewNote}</p>
-          {!previewReport.ok ? <p role="alert" className="mt-2 text-sm text-eui-magenta">{gallery.importPreviewFailedNote}</p> : null}
+          {!previewReport.ok ? <p role="alert" className="mt-2 text-sm text-pay-red">{gallery.importPreviewFailedNote}</p> : null}
           <p className="mt-2 text-sm text-eui-ink">{gallery.importSummary(previewReport.summary.created, previewReport.summary.reused, previewReport.summary.skipped, previewReport.summary.errors)}</p>
           <ReportTable items={previewReport.items} />
         </div> : null}
 
         {state.status === "done" ? <div>
-          <h3 className="font-eui-display text-lg font-medium">{gallery.importResultTitle}</h3>
-          {!state.report.ok ? <p role="alert" className="mt-2 text-sm text-eui-magenta">{gallery.importFailedNote}</p> : null}
+          <h3 className="pay-display text-lg">{gallery.importResultTitle}</h3>
+          {!state.report.ok ? <p role="alert" className="mt-2 text-sm text-pay-red">{gallery.importFailedNote}</p> : null}
           <p className="mt-2 text-sm text-eui-ink">{gallery.importSummary(state.report.summary.created, state.report.summary.reused, state.report.summary.skipped, state.report.summary.errors)}</p>
           <ReportTable items={state.report.items} />
         </div> : null}

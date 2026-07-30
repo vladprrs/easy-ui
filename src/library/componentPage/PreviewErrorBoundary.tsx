@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from "react";
+import { ErrorState } from "../../app/states";
 import { componentPage as strings } from "../../app/strings/componentPage";
 
 type Props = { children: ReactNode; resetGeneration: number; reportedError: boolean; onErrorStateChange: (errored: boolean) => void };
@@ -25,7 +26,7 @@ export class PreviewErrorBoundary extends Component<Props, State> {
 
   render() {
     return this.state.error
-      ? <div role="alert" className="rounded-2xl bg-eui-lilac-100 p-5 text-sm text-eui-magenta">{strings.previewCrashed}</div>
+      ? <ErrorState title={strings.previewCrashed} />
       : this.props.children;
   }
 }

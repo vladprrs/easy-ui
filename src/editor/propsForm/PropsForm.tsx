@@ -72,7 +72,7 @@ function AssetField({ field, value, assets, commit }: { field: { name: string };
       {directive ? <p className="break-all font-mono text-xs font-normal text-eui-slate-500">{selected?.name ?? directive.$asset}{selected ? <span className="mt-0.5 block font-eui-ui">{editor.assetMeta(selected.mime, formatBytes(selected.size))}</span> : null}</p> : null}
       <button type="button" className={chip} disabled={uploading} onClick={() => fileRef.current?.click()}>{uploading ? editor.assetUploading : editor.assetUpload}</button>
       <input ref={fileRef} type="file" aria-label={editor.assetUploadInput} className="sr-only" disabled={uploading} onChange={(event) => void onFile(event)} />
-      {uploadError ? <p role="alert" className="text-xs font-normal text-eui-magenta">{uploadError}</p> : null}
+      {uploadError ? <p role="alert" className="text-xs font-normal text-pay-red">{uploadError}</p> : null}
     </>}
   </div>;
 }

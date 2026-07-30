@@ -24,7 +24,7 @@ import { diffDocs, formatDocChange, humanizeIssues, type DisplayIssue, type DocC
 import { DocEpochContext } from "./propsForm/PropsForm";
 
 function Issues({ issues }: { issues: DisplayIssue[] }) {
-  return issues.length ? <div role="alert" className="max-h-28 overflow-y-auto rounded-2xl bg-eui-lilac-100 p-3 text-sm text-eui-magenta"><p className="font-medium">{editor.fixIssues}</p><ul className="list-disc pl-5">{issues.map((issue, index) => <li key={`${issue.path}:${index}`}><span className="font-medium">{issue.path}</span>: {issue.message}</li>)}</ul></div> : null;
+  return issues.length ? <div role="alert" className="max-h-28 overflow-y-auto rounded-popover bg-eui-lilac-100 p-3 text-sm text-pay-red"><p className="font-medium">{editor.fixIssues}</p><ul className="list-disc pl-5">{issues.map((issue, index) => <li key={`${issue.path}:${index}`}><span className="font-medium">{issue.path}</span>: {issue.message}</li>)}</ul></div> : null;
 }
 
 /** Диалог 409 (W2-4): трёхсторонний diff base/local/remote и явное подтверждение перезаписи. */
@@ -269,7 +269,7 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
       prototypeName={state.doc.name}
       view="editor"
       status={<>
-        {state.dirty ? <span className="text-eui-magenta" aria-label={editor.dirtyAria}>●</span> : null}
+        {state.dirty ? <span className="text-pay-red" aria-label={editor.dirtyAria}>●</span> : null}
         <span aria-live="polite" className="rounded-full bg-eui-lilac-100 px-3 py-1 text-xs text-eui-slate-500">{saving ? editor.saving : state.dirty ? editor.notSaved : editor.saved}</span>
         {publishedVersion !== null ? <span aria-live="polite" className="rounded-full bg-eui-lilac-100 px-3 py-1 text-xs text-eui-slate-500">{editor.publishedVersion(publishedVersion)}</span> : null}
       </>}
@@ -289,11 +289,11 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
     <EditorScreenStrip doc={expansion.doc} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedScreenId={screen.id} onSelect={(screenId) => dispatch({ type: "select-screen", screenId })} customTypes={customTypes} customDefinitions={customDefinitions} compositionRefs={expansion.compositionRefs} themeContent={themeContent} />
     <div className="flex min-h-0 flex-1"><section className="min-w-0 flex-1 overflow-auto bg-eui-lav p-6" aria-label={editor.canvasAria}><EditorCanvas doc={expansion.doc} screen={renderedScreen} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedKey={canvasSelectedKey} onSelect={(elementKey) => dispatch({ type: "select-element", elementKey: elementKey === null ? null : hostKeyOf(elementKey) })} customTypes={customTypes} customDefinitions={customDefinitions} compositionRefs={expansion.compositionRefs} themeContent={themeContent} /></section><DocEpochContext.Provider value={state.docEpoch}><InspectorPanel state={state} definitions={definitions} dispatch={dispatch} pins={loaded.components} compositions={compositions} compositionPins={loaded.compositions} onCompositionRegistered={registerComposition} /></DocEpochContext.Provider></div>
     {publishDialogOpen ? <div role="dialog" aria-modal="true" aria-label={editor.publishDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
-      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
-        <h2 className="font-eui-display text-lg font-medium">{editor.publishDialogTitle}</h2>
+      <div className="w-full max-w-md rounded-popover bg-white p-5">
+        <h2 className="pay-display text-lg">{editor.publishDialogTitle}</h2>
         <p className="mt-1 text-sm text-eui-slate-500">{editor.publishDialogBody}</p>
         <div className="-mx-5 mt-3 border-y border-eui-ink/10"><ReadinessPanel prototypeId={state.doc.id} refreshKey={historyRefreshKey} /></div>
-        <label className="mt-4 block text-sm font-medium">{editor.publishMessageLabel}<textarea value={publishMessage} onChange={(event) => setPublishMessage(event.target.value)} placeholder={editor.publishMessagePlaceholder} className="mt-2 min-h-24 w-full rounded-xl border border-eui-ink/15 bg-white p-3 font-eui-ui text-sm" /></label>
+        <label className="mt-4 block text-sm font-medium">{editor.publishMessageLabel}<textarea value={publishMessage} onChange={(event) => setPublishMessage(event.target.value)} placeholder={editor.publishMessagePlaceholder} className="mt-2 min-h-24 w-full rounded-inset border border-eui-ink/15 bg-white p-3 font-eui-ui text-sm" /></label>
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" className={pillGhost} onClick={() => { setPublishDialogOpen(false); setPublishMessage(""); }}>{editor.publishCancel}</button>
           <button type="button" className={pillPrimary} onClick={confirmPublish}>{state.dirty ? editor.saveAndPublish : editor.publishConfirm}</button>
@@ -301,22 +301,22 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
       </div>
     </div> : null}
     {restoreTarget ? <div role="dialog" aria-modal="true" aria-label={editor.restoreDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
-      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
-        <h2 className="font-eui-display text-lg font-medium">{editor.restoreDialogTitle(restoreTarget.label)}</h2>
-        <p className="mt-2 text-sm font-medium text-eui-magenta">{editor.restoreDiscardWarning}</p>
+      <div className="w-full max-w-md rounded-popover bg-white p-5">
+        <h2 className="pay-display text-lg">{editor.restoreDialogTitle(restoreTarget.label)}</h2>
+        <p className="mt-2 text-sm font-medium text-pay-red">{editor.restoreDiscardWarning}</p>
         <p className="mt-1 text-sm text-eui-slate-500">{editor.restoreBody}</p>
         <div className="mt-4 flex justify-end gap-2"><button type="button" className={pillGhost} onClick={() => setRestoreTarget(null)}>{editor.restoreCancel}</button><button type="button" className={pillPrimary} onClick={() => void runRestore(restoreTarget)}>{editor.restoreConfirm}</button></div>
       </div>
     </div> : null}
     {conflict ? <div role="dialog" aria-modal="true" aria-label={editor.conflictDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
-      <div className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-xl">
-        <h2 className="font-eui-display text-lg font-medium">{editor.conflictDialogTitle(conflict.remoteRev)}</h2>
+      <div className="w-full max-w-xl rounded-popover bg-white p-5">
+        <h2 className="pay-display text-lg">{editor.conflictDialogTitle(conflict.remoteRev)}</h2>
         <p className="mt-1 text-sm text-eui-slate-500">{editor.conflictBody}</p>
         <div className="mt-4 flex flex-col gap-4">
           <ChangeList title={editor.conflictTheirsTitle} changes={conflict.remoteChanges} />
           <ChangeList title={editor.conflictYoursTitle} changes={conflict.localChanges} />
         </div>
-        <p className="mt-4 text-sm text-eui-magenta">{editor.conflictOverwriteHint}</p>
+        <p className="mt-4 text-sm text-pay-red">{editor.conflictOverwriteHint}</p>
         <div className="mt-4 flex flex-wrap justify-end gap-2">
           <button type="button" className={pillGhost} onClick={copy}>{editor.copyLocalJson}</button>
           <button type="button" className={pillGhost} onClick={onReload}>{editor.reloadDraft}</button>
@@ -326,8 +326,8 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
       </div>
     </div> : null}
     {blocker.state === "blocked" ? <div role="dialog" aria-modal="true" aria-label={editor.leaveDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
-      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
-        <h2 className="font-eui-display text-lg font-medium">{editor.leaveTitle}</h2>
+      <div className="w-full max-w-md rounded-popover bg-white p-5">
+        <h2 className="pay-display text-lg">{editor.leaveTitle}</h2>
         <p className="mt-1 text-sm text-eui-slate-500">{editor.leaveBody}</p>
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" className={pillGhost} onClick={() => blocker.reset()}>{editor.leaveStay}</button>
@@ -335,6 +335,6 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
         </div>
       </div>
     </div> : null}
-    {copyFallback ? <div role="dialog" aria-modal="true" aria-label={editor.copyDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"><div className="w-full max-w-3xl rounded-2xl bg-eui-lilac-100 p-5 shadow-xl"><h2 className="font-eui-display text-lg font-medium">{editor.copyDialogTitle}</h2><p role="status" className="mt-1 font-eui-ui text-sm text-eui-magenta">{editor.copyUnavailable}</p><textarea ref={fallbackRef} readOnly className="mt-4 h-96 w-full rounded-xl border border-eui-ink/15 bg-white p-3 font-mono text-xs" value={JSON.stringify(state.doc, null, 2)} /><button type="button" className={`${pillGhost} mt-3 font-eui-ui`} onClick={() => setCopyFallback(false)}>{editor.close}</button></div></div> : null}
+    {copyFallback ? <div role="dialog" aria-modal="true" aria-label={editor.copyDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"><div className="w-full max-w-3xl rounded-popover bg-eui-lilac-100 p-5"><h2 className="pay-display text-lg">{editor.copyDialogTitle}</h2><p role="status" className="mt-1 font-eui-ui text-sm text-pay-red">{editor.copyUnavailable}</p><textarea ref={fallbackRef} readOnly className="mt-4 h-96 w-full rounded-inset border border-eui-ink/15 bg-white p-3 font-mono text-xs" value={JSON.stringify(state.doc, null, 2)} /><button type="button" className={`${pillGhost} mt-3 font-eui-ui`} onClick={() => setCopyFallback(false)}>{editor.close}</button></div></div> : null}
   </main>;
 }

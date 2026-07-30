@@ -15,8 +15,8 @@ import { editor } from "../app/strings/editor";
 
 const STATUS_CLASS: Record<ReadinessGateStatus, string> = {
   pass: "bg-eui-lilac-100 text-eui-slate-500",
-  warn: "bg-eui-lilac-100 text-eui-magenta",
-  fail: "bg-eui-magenta text-white",
+  warn: "bg-eui-lilac-100 text-pay-red",
+  fail: "bg-pay-red text-white",
   unknown: "bg-eui-lav text-eui-slate-400",
 };
 
@@ -54,7 +54,7 @@ function GateRow({ gate, onSelectLocation }: { gate: ReadinessGate; onSelectLoca
         const label = location.screenId ? editor.readinessLocationLabel(location.screenId, location.elementKey) : location.path;
         return <li key={`${location.path}:${index}`} className="py-0.5">
           {onSelectLocation && location.screenId
-            ? <button type="button" className="underline underline-offset-2 hover:text-eui-magenta" title={editor.readinessOpenLocation(label)} onClick={() => onSelectLocation(location)}>{label}</button>
+            ? <button type="button" className="underline underline-offset-2 hover:text-pay-red" title={editor.readinessOpenLocation(label)} onClick={() => onSelectLocation(location)}>{label}</button>
             : <span className="font-medium">{label}</span>}
           <span> — {location.message}</span>
         </li>;
@@ -79,14 +79,14 @@ export function ReadinessPanel({ prototypeId, refreshKey = 0, onSelectLocation }
 
   return <section aria-label={editor.readinessPanelAria} className="border-b border-eui-ink/10 bg-white px-6 py-3 font-eui-ui max-sm:px-4">
     <div className="flex flex-wrap items-center gap-3">
-      <h2 className="font-eui-display text-base font-medium text-eui-ink">{editor.readinessTitle}</h2>
+      <h2 className="pay-display text-base text-eui-ink">{editor.readinessTitle}</h2>
       {report ? <span className="text-xs text-eui-slate-400">{editor.readinessRev(report.rev)}</span> : null}
       <button type="button" className={`${pillGhost} ml-auto max-sm:ml-0`} disabled={state.status === "loading"} onClick={state.reload}>{editor.readinessRefresh}</button>
     </div>
     {state.status === "loading" ? <p aria-live="polite" className="mt-2 text-sm text-eui-slate-500">{editor.readinessLoading}</p> : null}
-    {state.status === "error" ? <p role="alert" className="mt-2 text-sm text-eui-magenta">{editor.readinessFailed}</p> : null}
+    {state.status === "error" ? <p role="alert" className="mt-2 text-sm text-pay-red">{editor.readinessFailed}</p> : null}
     {report ? <>
-      <p className={`mt-1 text-sm ${report.publishable ? "text-eui-slate-500" : "text-eui-magenta"}`}>
+      <p className={`mt-1 text-sm ${report.publishable ? "text-eui-slate-500" : "text-pay-red"}`}>
         {report.publishable ? editor.readinessPublishable : editor.readinessBlocked(blockedNames)}
       </p>
       {Object.keys(report.enabledGates).length === 0 ? <p className="text-xs text-eui-slate-400">{editor.readinessReportOnly}</p> : null}

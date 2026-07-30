@@ -49,7 +49,7 @@ describe("EditorShell", () => {
     }));
   });
 
-  it("redirects when the owner-only server check rejects access", async () => {
+  it("explains the owner-only rejection in place and offers the player", async () => {
     vi.mocked(fetch).mockImplementation((input) => isEditorGuard(input)
       ? json({ error: { code: "forbidden", message: "forbidden" } }, 403)
       : Promise.reject(new Error(`Unexpected request: ${String(input)}`)));
@@ -58,8 +58,11 @@ describe("EditorShell", () => {
       { path: "/p/:protoId/edit", element: <EditorShell /> },
     ], { initialEntries: ["/p/editor-demo/edit"] });
     render(<RouterProvider router={router} />);
-    expect(await screen.findByText("Редактировать этот прототип может только его владелец.")).toBeTruthy();
-    expect(router.state.location.pathname).toBe("/");
+    expect(await screen.findByRole("heading", { name: "Редактор недоступен" })).toBeTruthy();
+    expect(screen.getByText("Редактировать этот прототип может только его владелец.")).toBeTruthy();
+    // 403 больше не редиректит: объяснение остаётся на месте, а выход ведёт в плеер.
+    expect(router.state.location.pathname).toBe("/p/editor-demo/edit");
+    expect(screen.getByRole("link", { name: "Открыть в плеере" }).getAttribute("href")).toBe("/p/editor-demo");
     expect(fetch).not.toHaveBeenCalledWith("/api/prototypes/editor-demo/draft", expect.anything());
   });
 

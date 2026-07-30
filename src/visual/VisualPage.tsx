@@ -4,7 +4,8 @@ import {
   getComponentMeta, getPrototypeMeta, getPrototypeRevision, getPrototypeVersion, listComponents, listPrototypeRevisions, listPrototypes,
   type PrototypeDraft,
 } from "../api/client";
-import { chip, chipActive, headingBar, headingPage, inputBase, kicker, pillGhost, pillPrimary, plate } from "../app/chrome";
+import { chip, chipActive, headingBar, headingPage, inputBase, kicker, pillGhost, pillPrimary } from "../app/chrome";
+import { ErrorState, Skeleton } from "../app/states";
 import {
   checkVisualReference, deleteVisualReference, enqueueComponentScreenshot, enqueuePrototypeScreenshot, getScreenshotJob,
   getVisualReference, getVisualRun, listVisualReferences, putVisualReference,
@@ -48,17 +49,17 @@ export function VisualPage() {
       {scopeFilters.map((filter) => <button key={filter.label} type="button" aria-pressed={scope === filter.id} className={scope === filter.id ? chipActive : chip} onClick={() => setScope(filter.id)}>{filter.label}</button>)}
     </div>
 
-    {references.status === "loading" ? <p className={`${plate} mt-8 text-eui-slate-500`} aria-live="polite">{visual.loadingReferences}</p> : null}
-    {references.status === "error" ? <div className={`${plate} mt-8 text-eui-magenta`} role="alert"><p>{visual.referencesUnavailable}</p><button className={`${pillGhost} mt-3`} type="button" onClick={references.reload}>{common.retry}</button></div> : null}
+    {references.status === "loading" ? <div className="mt-8"><Skeleton label={visual.loadingReferences} count={1} previewHeight={120} gridClassName="grid gap-5" /></div> : null}
+    {references.status === "error" ? <div className="mt-8"><ErrorState title={visual.referencesUnavailable} retryLabel={common.retry} onRetry={references.reload} /></div> : null}
 
     <div className="mt-6 grid gap-6 lg:grid-cols-[20rem_1fr]">
       <aside className="space-y-2">
         <CaptureReference onCreated={(id) => { references.reload(); setSelectedId(id); }} />
-        {references.status === "ready" && !list.length ? <p className="rounded-xl bg-eui-lav p-3 text-sm text-eui-slate-500">{visual.noReferences}</p> : null}
+        {references.status === "ready" && !list.length ? <p className="rounded-inset bg-eui-lav p-3 text-sm text-eui-slate-500">{visual.noReferences}</p> : null}
         <ul className="space-y-2">
           {list.map((reference) => <li key={reference.id}>
             <button type="button" onClick={() => setSelectedId(reference.id)} aria-pressed={selected === reference.id}
-              className={`w-full rounded-2xl p-3 text-left ${selected === reference.id ? "bg-eui-lilac-100" : "bg-eui-lav hover:bg-eui-lilac-100/60"}`}>
+              className={`w-full rounded-popover p-3 text-left ${selected === reference.id ? "bg-eui-lilac-100" : "bg-eui-lav hover:bg-eui-lilac-100/60"}`}>
               <span className={kicker}>{referenceScope(reference)}</span>
               <span className="mt-1 block text-sm font-medium">{describeFingerprint(reference.fingerprint)}</span>
               {reference.lastRun ? <span className={`mt-2 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${statusTone(reference.lastRun.status)}`}>{statusLabel(reference.lastRun.status)}</span> : <span className="mt-2 inline-block text-xs text-eui-slate-500">{visual.noRunsYet}</span>}
@@ -66,7 +67,7 @@ export function VisualPage() {
           </li>)}
         </ul>
       </aside>
-      <section>{selected ? <ReferenceDetail id={selected} onChanged={references.reload} onDeleted={() => { setSelectedId(null); references.reload(); }} /> : <div className="flex h-full items-center justify-center rounded-3xl bg-eui-lav p-6 text-eui-slate-500">{visual.selectReference}</div>}</section>
+      <section>{selected ? <ReferenceDetail id={selected} onChanged={references.reload} onDeleted={() => { setSelectedId(null); references.reload(); }} /> : <div className="flex h-full items-center justify-center rounded-panel bg-eui-lav p-6 text-eui-slate-500">{visual.selectReference}</div>}</section>
     </div>
   </main>;
 }
@@ -100,13 +101,13 @@ function ReferenceDetail({ id, onChanged, onDeleted }: { id: string; onChanged: 
     finally { setBusy(false); }
   };
 
-  if (detail.status === "loading") return <p className={`${plate} text-eui-slate-500`}>{visual.loadingReference}</p>;
-  if (detail.status === "error") return <div className={`${plate} text-eui-magenta`} role="alert">{visual.referenceUnavailable}</div>;
+  if (detail.status === "loading") return <Skeleton label={visual.loadingReference} count={1} previewHeight={160} gridClassName="grid gap-5" />;
+  if (detail.status === "error") return <ErrorState title={visual.referenceUnavailable} retryLabel={common.retry} onRetry={detail.reload} />;
   const reference: VisualReferenceDetail = detail.data;
   const lastRun = liveRun ?? reference.lastRun;
 
   return <article className="space-y-5">
-    <header className="rounded-3xl bg-eui-lav p-5">
+    <header className="rounded-panel bg-eui-lav p-5">
       <p className={kicker}>{referenceScope(reference)}</p>
       <h2 className={`${headingBar} mt-1`}>{describeFingerprint(reference.fingerprint)}</h2>
       {reference.note ? <p className="mt-2 text-sm text-eui-slate-500">{reference.note}</p> : null}
@@ -115,15 +116,15 @@ function ReferenceDetail({ id, onChanged, onDeleted }: { id: string; onChanged: 
         <button type="button" className={pillPrimary} disabled={busy} onClick={runCheck}>{busy ? visual.checking : visual.check}</button>
         <button type="button" className={pillGhost} disabled={busy} onClick={remove}>{visual.deleteReference}</button>
       </div>
-      {error ? <p className="mt-3 text-sm text-eui-magenta" role="alert">{error}</p> : null}
+      {error ? <p className="mt-3 text-sm text-pay-red" role="alert">{error}</p> : null}
     </header>
 
-    {lastRun ? <RunDetail report={lastRun} /> : <p className="rounded-3xl bg-eui-lav p-5 text-sm text-eui-slate-500">{visual.runNowHint}</p>}
+    {lastRun ? <RunDetail report={lastRun} /> : <p className="rounded-panel bg-eui-lav p-5 text-sm text-eui-slate-500">{visual.runNowHint}</p>}
 
     <section>
       <h3 className={kicker}>{visual.runHistory}</h3>
       <ul className="mt-2 space-y-1">
-        {reference.runs.length ? reference.runs.map((run) => <li key={run.runId} className="flex flex-wrap items-center gap-3 rounded-xl bg-eui-lav px-3 py-2 text-sm">
+        {reference.runs.length ? reference.runs.map((run) => <li key={run.runId} className="flex flex-wrap items-center gap-3 rounded-inset bg-eui-lav px-3 py-2 text-sm">
           <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusTone(run.status)}`}>{statusLabel(run.status)}</span>
           <span className="text-eui-slate-500">{run.referenceStatus === "unknown" ? visual.referenceUnknown : run.metric ?? "—"}</span>
           <span className="font-medium">{formatPercent(run.diffPercent)}</span>
@@ -136,7 +137,7 @@ function ReferenceDetail({ id, onChanged, onDeleted }: { id: string; onChanged: 
 
 function RunDetail({ report }: { report: RunReport }) {
   const denominator = evidenceDenominator(report);
-  return <section className="rounded-3xl bg-eui-lav p-5">
+  return <section className="rounded-panel bg-eui-lav p-5">
     <div className="flex flex-wrap items-center gap-3">
       <span className={`rounded-full px-2.5 py-1 text-sm font-medium ${statusTone(report.status)}`}>{statusLabel(report.status)}</span>
       <span className="text-sm text-eui-slate-500">{report.metric ?? visual.noMetric}</span>
@@ -158,9 +159,9 @@ function RunDetail({ report }: { report: RunReport }) {
 }
 
 function Frame({ title, url, sha, dims, unavailable }: { title: string; url?: string | null; sha?: string; dims?: { width: number | null; height: number | null } | null; unavailable?: string }) {
-  return <figure className="rounded-2xl bg-white p-3">
+  return <figure className="rounded-popover bg-white p-3">
     <figcaption className={kicker}>{title}</figcaption>
-    {url ? <img className="mt-2 max-h-64 w-full rounded-lg object-contain" src={url} alt={visual.screenshotAlt(title)} /> : <div className="mt-2 flex h-24 items-center justify-center rounded-lg bg-eui-lav px-3 text-center text-xs text-eui-slate-500">{unavailable ?? visual.frameUnavailable}</div>}
+    {url ? <img className="mt-2 max-h-64 w-full rounded-item object-contain" src={url} alt={visual.screenshotAlt(title)} /> : <div className="mt-2 flex h-24 items-center justify-center rounded-item bg-eui-lav px-3 text-center text-xs text-eui-slate-500">{unavailable ?? visual.frameUnavailable}</div>}
     {dims && dims.width !== null ? <p className="mt-2 text-xs text-eui-slate-500">{dims.width}×{dims.height}</p> : null}
     {sha ? <p className="mt-1 truncate text-[10px] text-eui-slate-500" title={sha}>sha256 {sha.slice(0, 16)}…</p> : null}
   </figure>;
@@ -315,7 +316,7 @@ function CaptureReference({ onCreated }: { onCreated: (id: string) => void }) {
 
   if (!open) return <button type="button" className={`${pillGhost} w-full bg-eui-lav`} onClick={() => setOpen(true)}>{visual.captureReference}</button>;
   const loadingOptions = prototypes.status === "loading" || components.status === "loading" || references.status === "loading";
-  return <div className="rounded-2xl bg-eui-lav p-4">
+  return <div className="rounded-popover bg-eui-lav p-4">
     <div className="flex items-center justify-between"><h2 className={kicker}>{visual.newReference}</h2><button type="button" className="text-sm text-eui-slate-500 underline" onClick={close}>{visual.close}</button></div>
     <div className="mt-3 space-y-3 text-sm">
       <label className="block"><span className={kicker}>{visual.modeLabel}</span><select aria-label={visual.modeLabel} className={`${inputBase} mt-1`} value={scope} disabled={busy} onChange={(event) => { setScope(event.target.value as ReferenceScope); setError(null); }}><option value="prototype-screen">{visual.optionPrototypeScreen}</option><option value="component">{visual.optionComponent}</option></select></label>
@@ -334,11 +335,11 @@ function CaptureReference({ onCreated }: { onCreated: (id: string) => void }) {
         <label className="min-w-0 flex-1"><span className={kicker}>{visual.scaleLabel}</span><select aria-label={visual.scaleLabel} className={`${inputBase} mt-1`} value={dsf} disabled={busy} onChange={(event) => setDsf(event.target.value)}><option value="1">1×</option><option value="2">2×</option><option value="3">3×</option></select></label>
         <label className="min-w-0 flex-1"><span className={kicker}>{visual.themeLabel}</span><select aria-label={visual.themeLabel} className={`${inputBase} mt-1`} value={theme} disabled={busy} onChange={(event) => setTheme(event.target.value as typeof theme)}><option value="light">{visual.themeLight}</option><option value="dark">{visual.themeDark}</option></select></label>
       </div>
-      <p className="rounded-xl bg-white px-3 py-2 text-eui-slate-500">{viewport ? visual.viewportValue(viewport.width, viewport.height) : visual.viewportUnavailable}</p>
+      <p className="rounded-inset bg-white px-3 py-2 text-eui-slate-500">{viewport ? visual.viewportValue(viewport.width, viewport.height) : visual.viewportUnavailable}</p>
       <label className="block"><span className={kicker}>{visual.noteLabel}</span><input className={`${inputBase} mt-1`} placeholder={visual.notePlaceholder} value={note} disabled={busy} onChange={(event) => setNote(event.target.value)} /></label>
       {loadingOptions ? <p className="text-eui-slate-500" aria-live="polite">{visual.loadingCaptureOptions}</p> : null}
-      {progress ? <div className="rounded-xl bg-white p-3" role="status" aria-live="polite"><p>{progress.stopped ? visual.waitingStopped : progress.status === "queued" ? visual.captureQueued : visual.captureRunning}</p><p className="mt-1 truncate text-xs text-eui-slate-500">{progress.jobId}</p>{progress.stopped ? <button type="button" className={`${pillGhost} mt-2`} disabled={busy} onClick={() => void waitForCapture(progress.jobId, progress.fingerprint)}>{visual.resumeWaiting}</button> : <button type="button" className={`${pillGhost} mt-2`} onClick={stopWaiting}>{visual.stopWaiting}</button>}</div> : null}
-      {error ? <p className="text-eui-magenta" role="alert">{error}</p> : null}
+      {progress ? <div className="rounded-inset bg-white p-3" role="status" aria-live="polite"><p>{progress.stopped ? visual.waitingStopped : progress.status === "queued" ? visual.captureQueued : visual.captureRunning}</p><p className="mt-1 truncate text-xs text-eui-slate-500">{progress.jobId}</p>{progress.stopped ? <button type="button" className={`${pillGhost} mt-2`} disabled={busy} onClick={() => void waitForCapture(progress.jobId, progress.fingerprint)}>{visual.resumeWaiting}</button> : <button type="button" className={`${pillGhost} mt-2`} onClick={stopWaiting}>{visual.stopWaiting}</button>}</div> : null}
+      {error ? <p className="text-pay-red" role="alert">{error}</p> : null}
       <button type="button" className={`${pillPrimary} w-full`} disabled={busy || !fingerprint || progress !== null} onClick={submit}>{busy ? visual.capturing : visual.captureBaseline}</button>
     </div>
   </div>;

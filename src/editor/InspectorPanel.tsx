@@ -85,7 +85,7 @@ function JsonEditor({ label, value, onCommit, objectOnly = false, validate }: { 
     if (treeError) { setError(treeError); return; }
     setError(""); onCommit(parsed.data);
   };
-  return <label className="block font-eui-ui text-xs text-eui-slate-500">{label}<textarea className={`${inputClass} min-h-28 font-mono text-eui-ink`} value={text} onChange={(event) => setText(event.target.value)} onBlur={commit} />{error ? <span role="alert" className="mt-1 block text-xs text-eui-magenta">{error}</span> : null}</label>;
+  return <label className="block font-eui-ui text-xs text-eui-slate-500">{label}<textarea className={`${inputClass} min-h-28 font-mono text-eui-ink`} value={text} onChange={(event) => setText(event.target.value)} onBlur={commit} />{error ? <span role="alert" className="mt-1 block text-xs text-pay-red">{error}</span> : null}</label>;
 }
 
 function CanvasEditor({ canvas, onCommit }: { canvas?: { width: number; height: number }; onCommit: (canvas: { width: number; height: number } | undefined) => void }) {
@@ -98,7 +98,7 @@ function CanvasEditor({ canvas, onCommit }: { canvas?: { width: number; height: 
     if (!width || !height || !Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) { setError(editor.canvasSizeError); return; }
     setError(""); onCommit({ width: w, height: h });
   };
-  return <fieldset className="font-eui-ui"><legend className="text-xs text-eui-slate-500">{editor.canvasLegend}</legend><div className="mt-1 grid grid-cols-2 gap-2"><label className="text-xs text-eui-slate-500">{editor.widthLabel}<input aria-label={editor.canvasWidthAria} type="number" className={`${inputClass} text-eui-ink`} value={width} onChange={(event) => setWidth(event.target.value)} onBlur={commit} /></label><label className="text-xs text-eui-slate-500">{editor.heightLabel}<input aria-label={editor.canvasHeightAria} type="number" className={`${inputClass} text-eui-ink`} value={height} onChange={(event) => setHeight(event.target.value)} onBlur={commit} /></label></div>{error ? <p role="alert" className="mt-1 text-xs text-eui-magenta">{error}</p> : null}</fieldset>;
+  return <fieldset className="font-eui-ui"><legend className="text-xs text-eui-slate-500">{editor.canvasLegend}</legend><div className="mt-1 grid grid-cols-2 gap-2"><label className="text-xs text-eui-slate-500">{editor.widthLabel}<input aria-label={editor.canvasWidthAria} type="number" className={`${inputClass} text-eui-ink`} value={width} onChange={(event) => setWidth(event.target.value)} onBlur={commit} /></label><label className="text-xs text-eui-slate-500">{editor.heightLabel}<input aria-label={editor.canvasHeightAria} type="number" className={`${inputClass} text-eui-ink`} value={height} onChange={(event) => setHeight(event.target.value)} onBlur={commit} /></label></div>{error ? <p role="alert" className="mt-1 text-xs text-pay-red">{error}</p> : null}</fieldset>;
 }
 
 export function InspectorPanel({ state, definitions, dispatch, pins, issues, compositions, compositionPins, onCompositionRegistered }: {

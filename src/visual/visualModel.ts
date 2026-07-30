@@ -9,8 +9,8 @@ export function statusLabel(status: RunStatus): string {
 export function statusTone(status: RunStatus): string {
   switch (status) {
     case "pass": return "bg-eui-lilac-200 text-eui-ink";
-    case "fail": return "bg-eui-magenta/15 text-eui-magenta";
-    case "error": return "bg-white text-eui-magenta";
+    case "fail": return "bg-pay-red/15 text-pay-red";
+    case "error": return "bg-white text-pay-red";
     case "reference_missing": return "bg-white text-eui-slate-500";
     case "reference_unknown": return "bg-white text-eui-slate-500";
     case "running": return "bg-eui-lav text-eui-slate-500";

@@ -48,10 +48,10 @@ export function InsertCompositionDialog({ designSystem, parentKey, onCancel, onP
   };
 
   return <div role="dialog" aria-modal="true" aria-label={editor.compositionInsertDialogAria} className={dialogShell}>
-    <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
-      <h2 className="font-eui-display text-lg font-medium">{editor.compositionInsertTitle}</h2>
+    <div className="w-full max-w-md rounded-popover bg-white p-5">
+      <h2 className="pay-display text-lg">{editor.compositionInsertTitle}</h2>
       <p className="mt-1 text-sm text-eui-slate-500">{editor.compositionInsertHint(designSystem, parentKey)}</p>
-      {error ? <p role="alert" className="mt-2 text-sm text-eui-magenta">{error}</p> : null}
+      {error ? <p role="alert" className="mt-2 text-sm text-pay-red">{error}</p> : null}
       {items === null
         ? <p className="mt-3 text-sm text-eui-slate-500">{editor.compositionListLoading}</p>
         : items.length
@@ -60,7 +60,7 @@ export function InsertCompositionDialog({ designSystem, parentKey, onCancel, onP
               type="button"
               disabled={busyId !== null}
               onClick={() => void pick(item.id)}
-              className="w-full rounded-xl px-3 py-2 text-left hover:bg-eui-lilac-100 disabled:opacity-50"
+              className="w-full rounded-inset px-3 py-2 text-left hover:bg-eui-lilac-100 disabled:opacity-50"
             >
               <span className="block text-sm font-medium text-eui-ink">{item.name}</span>
               <span className="block text-xs text-eui-slate-500">{item.id} · {editor.compositionSummaryMeta(item.params.length, item.slots.length)}</span>
@@ -105,8 +105,8 @@ export function ExtractCompositionDialog({ screen, rootKey, designSystem, onCanc
   };
 
   return <div role="dialog" aria-modal="true" aria-label={editor.compositionExtractDialogAria} className={dialogShell}>
-    <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
-      <h2 className="font-eui-display text-lg font-medium">{editor.compositionExtractTitle(rootKey)}</h2>
+    <div className="w-full max-w-md rounded-popover bg-white p-5">
+      <h2 className="pay-display text-lg">{editor.compositionExtractTitle(rootKey)}</h2>
       <p className="mt-1 text-sm text-eui-slate-500">{editor.compositionExtractBody}</p>
       <label className="mt-3 block text-xs text-eui-slate-500">{editor.compositionExtractIdLabel}
         <input className={inputClass} value={id} onChange={(event) => setId(event.target.value)} />
@@ -124,7 +124,7 @@ export function ExtractCompositionDialog({ screen, rootKey, designSystem, onCanc
       {keepChildren ? <label className="mt-2 block text-xs text-eui-slate-500">{editor.compositionExtractSlotLabel}
         <input className={inputClass} value={slotName} onChange={(event) => setSlotName(event.target.value)} />
       </label> : null}
-      {errors.length ? <div role="alert" className="mt-3 rounded-2xl bg-eui-lilac-100 p-3 text-sm text-eui-magenta">
+      {errors.length ? <div role="alert" className="mt-3 rounded-popover bg-eui-lilac-100 p-3 text-sm text-pay-red">
         <p className="font-medium">{editor.compositionExtractErrorsTitle}</p>
         <ul className="mt-1 list-disc pl-5">{errors.map((message, index) => <li key={index}>{message}</li>)}</ul>
       </div> : null}

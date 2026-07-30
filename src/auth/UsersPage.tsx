@@ -57,7 +57,7 @@ export function UsersPage() {
     <h1 className={`${headingPage} mt-2`}>Пользователи</h1>
     <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
       <section className={plate}>
-        <h2 className="font-eui-display text-xl font-medium">Список пользователей</h2>
+        <h2 className="pay-display text-xl">Список пользователей</h2>
         {loading ? <p className="mt-4 text-sm text-eui-slate-500">Загрузка…</p> : <ul className="mt-4 divide-y divide-eui-ink/10">
           {users.map((item) => <li className="flex items-center gap-3 py-3" key={item.id}>
             <span className="font-medium">{item.name}</span>
@@ -67,12 +67,12 @@ export function UsersPage() {
         </ul>}
       </section>
       <section className={`${plate} bg-white`}>
-        <h2 className="font-eui-display text-xl font-medium">Новый пользователь</h2>
+        <h2 className="pay-display text-xl">Новый пользователь</h2>
         <form className="mt-5 space-y-4" onSubmit={submit}>
           <label className="block text-sm font-medium">Имя<input className={`${inputBase} mt-1.5 w-full`} name="name" required maxLength={64} /></label>
           <label className="block text-sm font-medium">Пароль<input className={`${inputBase} mt-1.5 w-full`} name="password" type="password" required minLength={8} maxLength={256} autoComplete="new-password" /></label>
           <label className="flex items-center gap-2 text-sm"><input name="isAdmin" type="checkbox" /> Администратор</label>
-          {error ? <p className="text-sm text-eui-magenta" role="alert">{error}</p> : null}
+          {error ? <p className="text-sm text-pay-red" role="alert">{error}</p> : null}
           <button className={pillPrimary} type="submit" disabled={creating}>{creating ? "Создаём…" : "Создать"}</button>
         </form>
       </section>

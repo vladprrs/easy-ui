@@ -48,14 +48,14 @@ export function GalleryShareDialog({ prototypeId, latestVersion, onClose }: {
   }
 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
-    <section role="dialog" aria-modal="true" aria-labelledby="gallery-share-dialog-title" className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+    <section role="dialog" aria-modal="true" aria-labelledby="gallery-share-dialog-title" className="w-full max-w-lg rounded-panel bg-white p-6">
       <div className="flex items-center justify-between gap-4">
-        <h2 id="gallery-share-dialog-title" className="font-eui-display text-2xl font-medium">{gallery.shareDialogTitle}</h2>
+        <h2 id="gallery-share-dialog-title" className="pay-display text-2xl">{gallery.shareDialogTitle}</h2>
         <button type="button" aria-label={common.close} title={common.close} onClick={close} className="rounded-full px-2 py-1 text-xl hover:bg-eui-lilac-100">×</button>
       </div>
       {state.status === "loading" ? <p className="mt-5 text-sm text-eui-slate-500" aria-live="polite">{gallery.shareVersionsLoading}</p> : null}
       {state.status === "error" ? <div className="mt-5">
-        <p role="alert" className="text-sm text-eui-magenta">{gallery.shareVersionsLoadFailed}</p>
+        <p role="alert" className="text-sm text-pay-red">{gallery.shareVersionsLoadFailed}</p>
         <button type="button" className={`${pillGhost} mt-3`} onClick={retry}>{common.retry}</button>
       </div> : null}
       {state.status === "ready" && state.versions.length === 0 ? <p className="mt-5 text-sm text-eui-slate-500">{gallery.shareVersionsEmpty}</p> : null}

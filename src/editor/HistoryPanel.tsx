@@ -28,19 +28,19 @@ export function HistoryPanel({ prototypeId, headRev, refreshKey, restoringRev, o
   const history = useApi<HistoryData>(load, [load, refreshKey]);
 
   if (history.status === "loading") return <section aria-label={editor.historyPanelAria} className="border-b border-eui-ink/10 bg-eui-lav px-6 py-4 font-eui-ui"><p aria-live="polite" className="text-sm text-eui-slate-500">{editor.historyLoading}</p></section>;
-  if (history.status === "error") return <section aria-label={editor.historyPanelAria} className="border-b border-eui-ink/10 bg-eui-lav px-6 py-4 font-eui-ui"><p role="alert" className="text-sm text-eui-magenta">{editor.historyLoadFailed}</p><button type="button" className={`${pillGhost} mt-2`} onClick={history.reload}>{common.retry}</button></section>;
+  if (history.status === "error") return <section aria-label={editor.historyPanelAria} className="border-b border-eui-ink/10 bg-eui-lav px-6 py-4 font-eui-ui"><p role="alert" className="text-sm text-pay-red">{editor.historyLoadFailed}</p><button type="button" className={`${pillGhost} mt-2`} onClick={history.reload}>{common.retry}</button></section>;
 
   const versionsByRev = new Map<number, PrototypeVersionSummary[]>();
   for (const version of history.data.versions) versionsByRev.set(version.rev, [...(versionsByRev.get(version.rev) ?? []), version]);
   return <section aria-label={editor.historyPanelAria} className="max-h-72 overflow-auto border-b border-eui-ink/10 bg-eui-lav px-6 py-4 font-eui-ui">
     <div className="grid gap-6 lg:grid-cols-2">
       <div>
-        <h2 className="font-eui-display text-lg font-medium">{editor.draftRevisionsTitle}</h2>
+        <h2 className="pay-display text-lg">{editor.draftRevisionsTitle}</h2>
         <ol className="mt-3 space-y-2">
           {history.data.revisions.map((revision) => {
             const published = versionsByRev.get(revision.rev) ?? [];
             const isHead = revision.rev === headRev;
-            return <li key={revision.rev} className="flex items-start justify-between gap-3 rounded-xl bg-white p-3 text-sm">
+            return <li key={revision.rev} className="flex items-start justify-between gap-3 rounded-inset bg-white p-3 text-sm">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{editor.revisionLabel(revision.rev)}</span>{isHead ? <span className="rounded-full bg-eui-lilac-100 px-2 py-0.5 text-xs">{editor.currentRevision}</span> : null}{published.map((version) => <span key={version.version} className="rounded-full bg-eui-lilac-200 px-2 py-0.5 text-xs">v{version.version}</span>)}</div>
                 <p className="mt-1 break-words text-eui-slate-500">{revision.message ?? editor.noRevisionMessage}</p>
@@ -52,8 +52,8 @@ export function HistoryPanel({ prototypeId, headRev, refreshKey, restoringRev, o
         </ol>
       </div>
       <div>
-        <h2 className="font-eui-display text-lg font-medium">{editor.publishedVersionsTitle}</h2>
-        {history.data.versions.length ? <ol className="mt-3 space-y-2">{history.data.versions.map((version) => <li key={version.version} className="flex items-center justify-between gap-3 rounded-xl bg-white p-3 text-sm"><div><Link className="font-medium text-eui-brand hover:underline" to={`/p/${encodeURIComponent(prototypeId)}/v/${version.version}`}>v{version.version}</Link><p className="mt-1 text-xs text-eui-slate-500">{editor.versionRevision(version.rev)} · <time dateTime={version.publishedAt}>{formatDate(version.publishedAt)}</time></p></div><button type="button" className={`${pillGhost} shrink-0 disabled:opacity-50`} disabled={version.rev === headRev || restoringRev !== null} onClick={() => onRestore(version.rev, editor.versionLabel(version.version))}>{restoringRev === version.rev ? editor.restoring : editor.restore}</button></li>)}</ol> : <p className="mt-3 text-sm text-eui-slate-500">{editor.noPublishedVersions}</p>}
+        <h2 className="pay-display text-lg">{editor.publishedVersionsTitle}</h2>
+        {history.data.versions.length ? <ol className="mt-3 space-y-2">{history.data.versions.map((version) => <li key={version.version} className="flex items-center justify-between gap-3 rounded-inset bg-white p-3 text-sm"><div><Link className="font-medium text-eui-brand hover:underline" to={`/p/${encodeURIComponent(prototypeId)}/v/${version.version}`}>v{version.version}</Link><p className="mt-1 text-xs text-eui-slate-500">{editor.versionRevision(version.rev)} · <time dateTime={version.publishedAt}>{formatDate(version.publishedAt)}</time></p></div><button type="button" className={`${pillGhost} shrink-0 disabled:opacity-50`} disabled={version.rev === headRev || restoringRev !== null} onClick={() => onRestore(version.rev, editor.versionLabel(version.version))}>{restoringRev === version.rev ? editor.restoring : editor.restore}</button></li>)}</ol> : <p className="mt-3 text-sm text-eui-slate-500">{editor.noPublishedVersions}</p>}
       </div>
     </div>
   </section>;

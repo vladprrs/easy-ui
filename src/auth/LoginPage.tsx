@@ -44,7 +44,7 @@ export function LoginPage() {
         <label className="block text-sm font-medium">Пароль
           <input className={`${inputBase} mt-1.5 w-full`} type="password" autoComplete="current-password" required maxLength={256} value={password} onChange={(event) => setPassword(event.target.value)} />
         </label>
-        {error ? <p className="text-sm text-eui-magenta" role="alert">{error}</p> : null}
+        {error ? <p className="text-sm text-pay-red" role="alert">{error}</p> : null}
         <button className={`${pillPrimary} w-full`} type="submit" disabled={submitting}>{submitting ? "Входим…" : "Войти"}</button>
       </form>
     </section>

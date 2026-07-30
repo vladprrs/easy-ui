@@ -400,7 +400,10 @@ describe("GalleryPage", () => {
       { id: "custom-empty", name: "Custom Empty", description: "", builtinCatalogHash: "custom", components: [{ name: "NeedsProps", atomicLevel: "atom", layoutNeutral: false, description: "", events: [], slots: [] }] },
     ] });
     renderGallery();
-    await screen.findByRole("heading", { name: "Создайте первый прототип" });
+    // Пустая галерея без пригодных систем — одно ветвящееся состояние, а не два подряд:
+    // заголовок называет препятствие, главное действие ведёт создавать дизайн-систему.
+    await screen.findByRole("heading", { name: "Нужна дизайн-система с компонентами" });
+    expect(screen.queryByRole("heading", { name: "Создайте первый прототип" })).toBeNull();
     expect(screen.getByRole("link", { name: "Создать дизайн-систему" }).getAttribute("href")).toBe("/library");
     expect(screen.queryByRole("button", { name: "Новый прототип" })).toBeNull();
     expect(createPrototype).not.toHaveBeenCalled();

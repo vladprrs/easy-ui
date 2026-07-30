@@ -66,6 +66,9 @@ export function GalleryPage() {
   const loading = authLoading || prototypes.status === "loading" || designSystems.status === "loading" || catalog.status === "loading";
   const failed = prototypes.status === "error" || designSystems.status === "error" || catalog.status === "error";
   const reload = () => { prototypes.reload(); designSystems.reload(); catalog.reload(); };
+  // Раздел (вкладку) сброс не трогает: пользователь выбирал её осознанно, а
+  // «ничего не найдено» вызывают поиск, система и вид.
+  const resetFilters = () => { setQuery(""); setSelectedKind(null); setSelectedSystem(null); };
   const openCreateDialog = () => {
     const preferred = selectedSystem && usableSystems.some((system) => system.id === selectedSystem) ? selectedSystem : usableSystems[0]?.id ?? "";
     setCreateDialog({ name: "", designSystemId: preferred, status: "editing", error: false });
@@ -104,7 +107,9 @@ export function GalleryPage() {
     />
     {loading ? <GallerySkeletons /> : null}
     {failed ? <GalleryFailed onRetry={reload} /> : null}
-    {!loading && !failed && catalog.status === "ready" && !usableSystems.length ? <NoUsableSystems /> : null}
+    {/* Плашка про системы нужна только когда есть что показывать рядом: на пустой
+        галерее тот же смысл живёт внутри GalleryEmpty, вторым состоянием подряд. */}
+    {!loading && !failed && catalog.status === "ready" && !usableSystems.length && visiblePrototypes.length ? <NoUsableSystems /> : null}
     {!loading && !failed ? <GalleryToolbar
       tab={tab}
       onTabChange={(next) => { setTab(next); setSelectedKind(null); }}
@@ -138,6 +143,8 @@ export function GalleryPage() {
       variant={prototypes.status === "ready" && prototypes.data.length ? (query.trim() ? "search" : "filtered") : "none"}
       canCreate={usableSystems.length > 0}
       onCreate={openCreateDialog}
+      onImport={() => setImportOpen(true)}
+      onReset={resetFilters}
     /> : null}
     {createDialog ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-pay-deep/55 p-6">
       <section role="dialog" aria-modal="true" aria-label={gallery.createDialogAria} className="w-full max-w-[460px] rounded-panel bg-white p-7">

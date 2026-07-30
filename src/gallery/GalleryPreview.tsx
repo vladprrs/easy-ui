@@ -14,6 +14,9 @@ import { CanvasLayers } from "../player/CanvasLayers";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import { ArchivedPrototype } from "../player/PrototypeLoader";
+import { pillGhost } from "../app/chrome";
+import { common } from "../app/strings/common";
+import { gallery } from "../app/strings/gallery";
 
 export const GALLERY_PREVIEWS_ENABLED = true;
 export const GALLERY_PREVIEW_LOAD_LIMIT = 4;
@@ -112,7 +115,7 @@ export function GalleryPreviewFrame({ draft, themeContent: suppliedThemeContent,
   const height = Math.min(scaledHeight, 200);
   const key = `${doc.id}:${draft.rev}:${screen.id}`;
 
-  return <>{manageTheme ? <ThemeStyle content={themeContent} /> : null}<div className="mx-auto max-w-full overflow-hidden rounded-2xl bg-background text-foreground shadow-sm" style={{ width: galleryWidth, height }} data-testid={`gallery-preview-${doc.id}`}>
+  return <>{manageTheme ? <ThemeStyle content={themeContent} /> : null}<div className="mx-auto max-w-full overflow-hidden rounded-inset bg-background text-foreground" style={{ width: galleryWidth, height }} data-testid={`gallery-preview-${doc.id}`}>
     <div style={{ width: tileSize.width, height: height / galleryScale, transform: `scale(${galleryScale})`, transformOrigin: "top left" }}>
       <SurfaceSpacingScope systemId={doc.designSystem} themeTokens={themeContent?.tokens}>
       <div ref={setStageHostRef} inert data-eui-stage-viewport="gallery" style={{ position: "relative", width: nativeWidth, ...(screen.canvas?.height === undefined ? {} : { height: screen.canvas.height }), transform: `scale(${deviceScale})`, transformOrigin: "top left" }}>
@@ -136,8 +139,14 @@ function LoadedGalleryPreview({ prototypeId }: { prototypeId: string }) {
   return <>
     {/* This owner exists while the draft/theme are still loading, so network resolve order cannot set priority. */}
     <ThemeStyle content={themeContent} />
-    {draft.status === "error" ? <div data-gallery-preview-state="error" /> : draft.status === "loading"
-      ? <div className="h-44 animate-pulse rounded-2xl bg-white/60 motion-reduce:animate-none" data-gallery-preview-state="loading" />
+    {draft.status === "error"
+      ? <div className="flex h-44 flex-col items-center justify-center gap-3 rounded-inset bg-white/70 px-4 text-center" data-gallery-preview-state="error" role="status">
+        <p className="text-[13px] text-eui-slate-500">{gallery.previewUnavailable}</p>
+        {/* z-10: у карточки есть перекрывающая ссылка-хитбокс, иначе «Повторить» некликабельна. */}
+        <button type="button" className={`${pillGhost} relative z-10`} onClick={draft.reload}>{common.retry}</button>
+      </div>
+      : draft.status === "loading"
+      ? <div className="h-44 rounded-inset bg-white/70 pay-skeleton motion-reduce:animate-none" data-gallery-preview-state="loading" />
       : draft.data.renderable === false ? <ArchivedPrototype />
         : <GalleryPreviewFrame draft={draft.data} themeContent={themeContent} manageTheme={false} />}
   </>;

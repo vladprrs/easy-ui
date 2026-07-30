@@ -14,6 +14,7 @@ import {
 } from "../../api/client";
 import { downloadBundle } from "../../api/bundles";
 import { chip, chipActive, headingPage, inputBase, kicker, kickerOnDark, pillGhost, pillPrimary } from "../../app/chrome";
+import { ErrorState as StateError, Skeleton } from "../../app/states";
 import { componentPage as strings, componentStatusLabels } from "../../app/strings/componentPage";
 import { useDocumentTitle } from "../../app/useDocumentTitle";
 import type { ComponentDefinition } from "../../catalog/definitions";
@@ -47,7 +48,7 @@ const placeholderDefinition: ComponentDefinition = {
 };
 
 const SlotPlaceholder = (({ props }: { props: { slot: string } }) =>
-  <span data-preview-placeholder={props.slot} className="inline-flex min-h-10 min-w-28 items-center justify-center rounded-xl border border-dashed border-eui-brand/50 bg-eui-lilac-100 px-3 py-2 font-eui-ui text-xs text-eui-brand">
+  <span data-preview-placeholder={props.slot} className="inline-flex min-h-10 min-w-28 items-center justify-center rounded-inset border border-dashed border-eui-brand/50 bg-eui-lilac-100 px-3 py-2 font-eui-ui text-xs text-eui-brand">
     {strings.placeholder(props.slot)}
   </span>) as ComponentType;
 
@@ -71,15 +72,17 @@ async function componentMetaNoStore(id: string, signal: AbortSignal): Promise<Co
 
 function errorIs404(error: unknown): boolean { return error instanceof ApiError && error.status === 404; }
 
+/**
+ * Ошибка и загрузка страницы компонента — общие примитивы `app/states.tsx`.
+ * Пять мест на странице держали пять разных плашек «Загружаем…»; теперь у всех
+ * один ритм скелетона и одна геометрия, а различается только подпись.
+ */
 function ErrorState({ message, retry }: { message: string; retry: () => void }) {
-  return <div role="alert" className="rounded-2xl bg-eui-lilac-100 p-5 text-sm text-eui-slate-500">
-    <p>{message}</p>
-    <button type="button" className={`${pillGhost} mt-3`} onClick={retry}>{strings.retry}</button>
-  </div>;
+  return <StateError title={message} retryLabel={strings.retry} onRetry={retry} />;
 }
 
-function LoadingState({ children }: { children: ReactNode }) {
-  return <p role="status" className="rounded-2xl bg-eui-lav p-5 text-sm text-eui-slate-500">{children}</p>;
+function LoadingState({ label }: { label: string }) {
+  return <Skeleton label={label} count={1} previewHeight={120} gridClassName="grid gap-5" />;
 }
 
 export function ComponentPage() {
@@ -117,7 +120,7 @@ export function ComponentPage() {
   useDocumentTitle(meta.status === "ready" ? `${meta.data.name} · ${strings.title}` : strings.title);
 
   if (query.kind === "invalid") return <PageFrame><h1 className={headingPage}>{strings.invalidAddress}</h1></PageFrame>;
-  if (meta.status === "loading" || meta.status === "idle") return <PageFrame><LoadingState>{strings.loadingMeta}</LoadingState></PageFrame>;
+  if (meta.status === "loading" || meta.status === "idle") return <PageFrame><LoadingState label={strings.loadingMeta} /></PageFrame>;
   if (meta.status === "error") return <PageFrame><ErrorState message={errorIs404(meta.error) ? strings.componentNotFound : strings.metaError} retry={meta.reload} /></PageFrame>;
   if (selectedVersion === null) return <NoRenderableVersions meta={meta.data} onSelect={(value) => setSearch({ v: String(value) })} />;
 
@@ -139,7 +142,7 @@ export function ComponentPage() {
     </header>
     <p className="sr-only" aria-live="polite">{strings.statusAnnouncement(selectedVersion, statusLabel)}</p>
 
-    {version.status === "loading" || version.status === "idle" ? <LoadingState>{strings.loadingVersion}</LoadingState>
+    {version.status === "loading" || version.status === "idle" ? <LoadingState label={strings.loadingVersion} />
       : version.status === "error" ? <ErrorState message={errorIs404(version.error) ? strings.versionNotFound : strings.versionError} retry={version.reload} />
       : <>
         <Tabs active={activeTab} onChange={setActiveTab} />
@@ -155,17 +158,17 @@ export function ComponentPage() {
             bundle={bundle}
           />
         </section>
-        <section className="space-y-7 rounded-3xl bg-eui-lav p-6" role="tabpanel" id="component-panel-1" aria-labelledby="component-tab-1" hidden={activeTab !== 1}>
+        <section className="space-y-7 rounded-panel bg-eui-lav p-6" role="tabpanel" id="component-panel-1" aria-labelledby="component-tab-1" hidden={activeTab !== 1}>
           <PropsTable schema={version.data.propsJsonSchema} />
           <EventsSection events={version.data.events} eventPayloads={version.data.eventPayloads} />
           <SlotsSection slots={version.data.slots} />
           <MetaSection meta={version.data} />
         </section>
-        <section className="rounded-3xl bg-eui-ink p-6 text-sm text-white" role="tabpanel" id="component-panel-2" aria-labelledby="component-tab-2" hidden={activeTab !== 2}>
+        <section className="rounded-panel bg-eui-ink p-6 text-sm text-white" role="tabpanel" id="component-panel-2" aria-labelledby="component-tab-2" hidden={activeTab !== 2}>
           <ProvenanceBlock version={version.data} />
           <SourceView source={version.data.source} />
         </section>
-        <section className="rounded-3xl bg-eui-lav p-6" role="tabpanel" id="component-panel-3" aria-labelledby="component-tab-3" hidden={activeTab !== 3}>
+        <section className="rounded-panel bg-eui-lav p-6" role="tabpanel" id="component-panel-3" aria-labelledby="component-tab-3" hidden={activeTab !== 3}>
           <UsagesTab componentId={componentId} active={activeTab === 3} />
         </section>
       </>}
@@ -196,7 +199,7 @@ function ExportButton({ componentId, version }: { componentId: string; version: 
     <button type="button" className={pillGhost} onClick={onExport} disabled={downloading}>
       {downloading ? strings.exporting : strings.exportVersion}
     </button>
-    {error ? <span role="alert" className="text-xs text-eui-magenta">{error}</span> : null}
+    {error ? <span role="alert" className="text-xs text-pay-red">{error}</span> : null}
   </div>;
 }
 
@@ -205,8 +208,8 @@ function NoRenderableVersions({ meta, onSelect }: { meta: ComponentMeta; onSelec
   return <PageFrame>
     <p className={kicker}>{strings.title}</p>
     <h1 className={headingPage}>{meta.name}</h1>
-    <section className="rounded-3xl bg-eui-lav p-6">
-      <h2 className="font-eui-display text-2xl font-medium">{strings.noRenderableVersions}</h2>
+    <section className="rounded-panel bg-eui-lav p-6">
+      <h2 className="pay-display text-2xl">{strings.noRenderableVersions}</h2>
       <p className="mt-2 text-sm text-eui-slate-500">{strings.noRenderableVersionsBody}</p>
       <h3 className="mt-5 font-bold">{strings.versionsTitle}</h3>
       <ul className="mt-2 space-y-2">{[...meta.versions].sort((a, b) => b.version - a.version).map((entry) => <li key={entry.version}>
@@ -259,7 +262,7 @@ function ProvenanceBlock({ version }: { version: ComponentVersion }) {
     [strings.provenanceSourceBounded, version.sourceBounded === undefined ? strings.provenanceNotSet : String(version.sourceBounded)],
     ...(version.replacement ? [[strings.provenanceReplacement, version.replacement] as [string, string]] : []),
   ];
-  return <section aria-labelledby="component-provenance-title" className="mb-5 rounded-2xl bg-white/5 p-4">
+  return <section aria-labelledby="component-provenance-title" className="mb-5 rounded-popover bg-white/5 p-4">
     <h2 id="component-provenance-title" className={kickerOnDark}>{strings.provenanceTitle}</h2>
     <dl className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
       {rows.map(([label, value]) => <div key={label}><dt className="text-eui-ondark-2">{label}</dt><dd className="mt-0.5 font-medium">{value}</dd></div>)}
@@ -271,11 +274,11 @@ function ProvenanceBlock({ version }: { version: ComponentVersion }) {
 /** Вкладка «Usages»: граф использования компонента, загружается по открытию вкладки. */
 function UsagesTab({ componentId, active }: { componentId: string; active: boolean }) {
   const usages = useKeyedRequest(active ? `usages:${componentId}` : null, (signal) => getComponentUsages(componentId, signal));
-  if (usages.status === "loading" || usages.status === "idle") return <LoadingState>{strings.usagesLoading}</LoadingState>;
+  if (usages.status === "loading" || usages.status === "idle") return <LoadingState label={strings.usagesLoading} />;
   if (usages.status === "error") return <ErrorState message={strings.usagesError} retry={usages.reload} />;
   const report = usages.data;
   return <div className="space-y-5">
-    <h2 className="font-eui-display text-xl font-medium">{strings.usagesTitle}</h2>
+    <h2 className="pay-display text-xl">{strings.usagesTitle}</h2>
     <p className="text-sm text-eui-slate-500">{strings.usagesVersionsInUse}: {report.versionsInUse.length ? report.versionsInUse.map((value) => `v${value}`).join(", ") : "—"}</p>
     <section aria-labelledby="component-usages-head-title">
       <h3 id="component-usages-head-title" className={kicker}>{strings.usagesHead}</h3>
@@ -304,15 +307,15 @@ type ComponentTabProps = {
 function ComponentTab({ componentId, componentName, requestKey, version, status, canExecute, theme, bundle }: ComponentTabProps) {
   if (!canExecute) {
     const label = status ? componentStatusLabels[status] : componentStatusLabels.staging;
-    return <div role="note" className="rounded-3xl bg-eui-lav p-6">
-      <h2 className="font-eui-display text-xl font-medium">{strings.executionForbidden}</h2>
+    return <div role="note" className="rounded-panel bg-eui-lav p-6">
+      <h2 className="pay-display text-xl">{strings.executionForbidden}</h2>
       <p className="mt-2 text-sm text-eui-slate-500">{strings.executionForbiddenBody(label)}</p>
     </div>;
   }
-  if (bundle.status === "loading" || bundle.status === "idle") return <LoadingState>{strings.loadingBundle}</LoadingState>;
+  if (bundle.status === "loading" || bundle.status === "idle") return <LoadingState label={strings.loadingBundle} />;
   if (bundle.status === "error") {
     const reloadRequired = bundle.error instanceof FullDocumentReloadRequiredError;
-    return <div role="alert" className="rounded-3xl bg-eui-lav p-6 text-sm text-eui-slate-500">
+    return <div role="alert" className="rounded-panel bg-eui-lav p-6 text-sm text-eui-slate-500">
       <p>{reloadRequired ? strings.reloadRequired : strings.bundleError}</p>
       <button type="button" className={`${reloadRequired ? pillPrimary : pillGhost} mt-3`} onClick={reloadRequired ? () => window.location.reload() : bundle.reload}>
         {reloadRequired ? strings.reloadPage : strings.retry}
@@ -384,19 +387,19 @@ function ShowcaseRuntime({ componentName, requestKey, version, loaded, theme }: 
   };
 
   return <div className="grid min-h-0 gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
-    <section aria-labelledby="component-preview-title" className="min-w-0 rounded-3xl bg-eui-lav p-4 md:p-6">
+    <section aria-labelledby="component-preview-title" className="min-w-0 rounded-panel bg-eui-lav p-4 md:p-6">
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <h2 id="component-preview-title" className="mr-auto font-eui-display text-xl font-medium">{strings.previewTitle}</h2>
+        <h2 id="component-preview-title" className="mr-auto pay-display text-xl">{strings.previewTitle}</h2>
         <span className="text-xs text-eui-slate-500">{strings.backgroundTitle}</span>
         <button type="button" aria-pressed={!darkBackground} className={!darkBackground ? chipActive : chip} onClick={() => setDarkBackground(false)}>{strings.lightBackground}</button>
         <button type="button" aria-pressed={darkBackground} className={darkBackground ? chipActive : chip} onClick={() => setDarkBackground(true)}>{strings.darkBackground}</button>
       </div>
-      {theme.status === "loading" || theme.status === "idle" ? <LoadingState>{strings.loadingTheme}</LoadingState> : null}
+      {theme.status === "loading" || theme.status === "idle" ? <LoadingState label={strings.loadingTheme} /> : null}
       {theme.status === "error" ? <div className="mb-3"><ErrorState message={strings.themeError} retry={theme.reload} /></div> : null}
       <SurfaceSpacingScope systemId={version.designSystem} themeTokens={theme.status === "ready" ? theme.data.tokens : undefined}>
         <div className="contents">
           <ThemeStyle content={theme.status === "ready" ? theme.data : null} />
-          <div className={`flex min-h-72 items-center justify-center overflow-auto rounded-2xl p-6 transition-colors ${darkBackground ? "bg-eui-ink" : "bg-white"}`}>
+          <div className={`flex min-h-72 items-center justify-center overflow-auto rounded-popover p-6 transition-colors ${darkBackground ? "bg-eui-ink" : "bg-white"}`}>
             {theme.status === "loading" || theme.status === "idle" ? null
               : previewProps === null ? <p className={darkBackground ? "text-white" : "text-eui-slate-500"}>{strings.requiredProps}</p>
               : <PreviewErrorBoundary key={requestKey} resetGeneration={resetGeneration} reportedError={runtimeReportedError} onErrorStateChange={setBoundaryErrored}>
@@ -406,8 +409,8 @@ function ShowcaseRuntime({ componentName, requestKey, version, loaded, theme }: 
         </div>
       </SurfaceSpacingScope>
     </section>
-    <aside aria-labelledby="component-controls-title" className="min-w-0 rounded-3xl bg-eui-lav p-5">
-      <h2 id="component-controls-title" className="font-eui-display text-xl font-medium">{strings.controlsTitle}</h2>
+    <aside aria-labelledby="component-controls-title" className="min-w-0 rounded-panel bg-eui-lav p-5">
+      <h2 id="component-controls-title" className="pay-display text-xl">{strings.controlsTitle}</h2>
       {presets.length ? <div className="mt-4">
         <p className={kicker}>{strings.presetsTitle}</p>
         <div className="mt-2 flex flex-wrap gap-2">{presets.map((preset) => <button
