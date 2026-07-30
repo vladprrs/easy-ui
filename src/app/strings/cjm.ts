@@ -13,9 +13,10 @@ export const cjm = {
   lanesAria: "Дорожки сценариев",
   mainLaneName: "Главный сценарий",
   unassignedLaneName: "Вне сценариев",
-  unassignedCount: (count: number) => `Вне сценариев, ${count}`,
+  // Плашка статична и видна в обоих режимах (W2-6): покрытие сценариями — то самое
+  // число, ради которого экран и открывают, и прятать его за раскрытием нельзя.
+  unassignedCount: (count: number) => `Вне сценариев · ${screensCount(count)}`,
   unassignedAria: "Экраны вне сценариев",
-  legendAria: "Легенда рёбер сценариев",
   verifiedStatic: "Подтверждённый переход",
   verifiedDynamic: "Динамический переход",
   verifiedMissing: "Переход не найден",
@@ -62,10 +63,15 @@ export const cjm = {
     verified === "static" ? "Подтверждённый переход" : verified === "dynamic" ? "Динамический переход" : "Переход не найден",
   tileErrorTitle: "Экран не удалось отобразить",
   noContent: "Нет содержимого",
-  transitionsAria: "Переходы экрана",
-  transitionTo: (screenName: string) => `→ ${screenName}`,
-  dynamicTransition: "динамический переход",
-  demoState: "демо-состояние",
+  // Подписи дорожек — служебные: они про геометрию, а не про смысл сценария
+  // (`flow.description` про смысл и живёт в простыне). Номер шага 1-based — как
+  // «шаг N» в простыне и лайтбоксе (план 2026-07-31, W3-3).
+  laneForkAfter: (step: number) => `ветвится после шага ${step}`,
+  /** Точки ветвления нет: ветка начинается вне главной линии и вливается в неё. */
+  laneMergeBefore: (step: number) => `вливается в главную линию перед шагом ${step}`,
+  laneDetached: "вне главной линии",
+  /** Клик по тайлу дорожек и линейной ленты ведёт в плеер — жест ничем не обозначен. */
+  laneTileHint: "Клик по кадру открывает экран в плеере.",
   openScreenAria: (screenName: string, docName: string) => `Открыть экран «${screenName}» прототипа «${docName}» в плеере`,
   // Ряд счётчиков режима «Сценарии» (макет 02).
   countersAria: "Сводка прототипа",

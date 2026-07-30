@@ -71,7 +71,12 @@ test("branching checkout renders ordered scenario lanes and a verified edge lege
   // Числа переехали из снятых чипов хрома в ряд счётчиков — общую шапку обоих режимов (W1-4).
   // Счёт берём из ячейки сценариев адресно: «3» само по себе в ряду неуникально.
   await expect(page.getByLabel("Сводка прототипа").locator("div", { hasText: "сценариев" })).toContainText("3");
-  await expect(page.getByRole("button", { name: /Вне сценариев/ })).toHaveCount(0);
+  // Плашка непокрытых экранов статична (W2-6): раскрывающей кнопки больше нет, а на
+  // этой фикстуре нет и самих непокрытых экранов.
+  await expect(page.locator(".cjm-unassigned")).toHaveCount(0);
+
+  // Подпись дорожки служебная: где ветка отходит от главной линии (W3-3).
+  await expect(labels.nth(1)).toContainText("ветвится после шага");
 
   const edges = page.locator(".cjm-edges-overlay g[data-edge-kind]");
   await expect(edges).toHaveCount(10);
@@ -89,10 +94,16 @@ test("branching checkout renders ordered scenario lanes and a verified edge lege
   })));
   expect(attributes.every((edge) => edge.kind && edge.verified && edge.from && edge.to)).toBe(true);
 
-  const legend = page.getByLabel("Легенда рёбер сценариев");
+  // Легенда — общий примитив обоих режимов (S3): «Легенда рёбер сценариев» ушла
+  // вместе со штрихами и глифом «!», связность везде описывается одним языком.
+  const legend = page.getByLabel("Легенда связности шагов");
   await expect(legend).toContainText("Подтверждённый переход");
   await expect(legend).toContainText("Динамический переход");
   await expect(legend).toContainText("Переход не найден");
+  // Штрих снят: линия всегда сплошная, состояние кодирует наконечник.
+  const dashes = await page.locator(".cjm-edges-overlay polyline").evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).strokeDasharray));
+  expect(new Set(dashes)).toEqual(new Set(["none"]));
+  await expect(page.locator(".cjm-edge-warning")).toHaveCount(0);
 });
 
 test("overlay endpoints touch endpoint tiles and every orthogonal segment avoids other tiles", async ({ page }) => {
@@ -153,8 +164,16 @@ test("limit fixture mounts lane tiles lazily while every node wrapper stays meas
   await expect(page.locator("[data-cjm-node]")).toHaveCount(178);
   await expect(page.locator(".cjm-edges-overlay g[data-edge-kind]")).toHaveCount(188);
   // layout.columns + 1: первая колонка грида — подписи дорожек.
-  const columns = await page.locator(".cjm-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length);
-  expect(columns).toBe(63);
+  const template = await page.locator(".cjm-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" "));
+  expect(template).toHaveLength(63);
+  // Шаг сетки = `lanesTile.width` + `routing.columnGap`; лейбл — фиксированные 150px (W3-2).
+  expect(template[0]).toBe("150px");
+  expect([...new Set(template.slice(1))]).toEqual(["112px"]);
+  // Гейт M4: плейсхолдер обязан совпадать с тайлом по ширине — иначе грид прыгает на
+  // каждом lazy-mount, а `CjmEdgesOverlay` считает pitch по чужому rect. Смонтированные
+  // и ещё ленивые обёртки меряются здесь вперемешку.
+  const nodeWidths = await page.locator(".cjm-grid [data-cjm-node]").evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().width)));
+  expect([...new Set(nodeWidths)]).toEqual([112]);
 
   const resting = await lazyCounters(page, ".cjm-grid");
   expect(resting.wrappers).toBe(178);
@@ -173,17 +192,15 @@ test("limit fixture mounts lane tiles lazily while every node wrapper stays meas
   expect(scrolled.placeholders).toBe(178 - scrolled.mounted);
 });
 
-test("unassigned screens stay collapsed, then mount lazily without a batch button", async ({ page }) => {
+test("unassigned screens are visible without a toggle and mount lazily", async ({ page }) => {
   await page.goto("/p/flows-perf/cjm?view=lanes");
   await expect(page.locator("[data-cjm-node]")).toHaveCount(178);
 
-  const toggle = page.getByRole("button", { name: "Вне сценариев, 61" });
   const section = page.locator(".cjm-unassigned");
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  expect(await lazyCounters(page, ".cjm-unassigned")).toMatchObject({ wrappers: 0, tiles: 0 });
-
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  // Раскрытия больше нет (W2-6): покрытие сценариями — вывод экрана, а не деталь
+  // за кнопкой. Стоимость держит только `LazyMount`.
+  await expect(section.getByRole("heading", { name: "Вне сценариев · 61 экран" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Вне сценариев/ })).toHaveCount(0);
   await expect(section.locator("[data-lazy-mounted]")).toHaveCount(61);
   // Батчинг по 20 снят: IntersectionObserver — единственный механизм.
   await expect(section.getByRole("button", { name: "показать ещё" })).toHaveCount(0);
@@ -214,7 +231,7 @@ test("the 320-step limit fixture keeps lane geometry deterministic while tiles s
   // layout.columns + 1: первая колонка грида — подписи дорожек.
   const columns = await page.locator(".cjm-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length);
   expect(columns).toBe(275);
-  await expect(page.getByRole("button", { name: /Вне сценариев/ })).toHaveCount(0);
+  await expect(page.locator(".cjm-unassigned")).toHaveCount(0);
 
   const resting = await lazyCounters(page, ".cjm-grid");
   expect(resting.wrappers).toBe(274);

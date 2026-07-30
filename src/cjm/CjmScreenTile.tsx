@@ -11,7 +11,7 @@ import { buildScreenRenderPlan, stripEvents, toRuntimeSpec, type RuntimeTree } f
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { buildPlayerPath } from "../player/navigation";
 import { cjm } from "../app/strings/cjm";
-import { lightboxStageTile, previewNativeWidth, previewTileSizes, sheetStripTile } from "../designSystems/deviceMetrics";
+import { lanesTile, lightboxStageTile, previewNativeWidth, previewTileSizes, sheetStripTile } from "../designSystems/deviceMetrics";
 import type { DeviceKind } from "../designSystems/deviceMetrics";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 import { CanvasLayers } from "../player/CanvasLayers";
@@ -97,8 +97,10 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
   /**
    * `sheet` — мини-тайл ленты «Сценарии» (макет 02): только кадр, подпись рисует лента.
    * `stage` — телефон лайтбокса (макет 03): кадр 330×640 без ссылки поверх.
+   * `lane` — тайл дорожек (макет 05): кадр 112×198 + имя экрана; ширина тайла равна
+   * ширине колонки грида, поэтому паддинга у него нет (см. `lanesTile`).
    */
-  variant?: "full" | "sheet" | "stage";
+  variant?: "full" | "sheet" | "stage" | "lane";
   /** Если задан — тайл открывает лайтбокс (макет 03) вместо перехода в плеер. */
   onOpen?: () => void;
 }) {
@@ -117,7 +119,6 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
     [customDefinitions, specs],
   );
   const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
-  const transitions = useMemo(() => getCjmTransitions(screen, doc.screens), [doc.screens, screen]);
   const nativeWidth = screen.canvas?.width ?? previewNativeWidth[doc.device];
   const tileWidth = previewTileSizes[doc.device].width;
   const playerPath = buildPlayerPath(routeBase, screen.id);
@@ -126,11 +127,12 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
     : `${playerPath}?${new URLSearchParams({ flow: flowId, step: String(stepIndex) })}`;
   const sheet = variant === "sheet";
   const stage = variant === "stage";
-  const frameSize = sheet ? sheetStripTile : stage ? lightboxStageTile : undefined;
+  const lane = variant === "lane";
+  const frameSize = sheet ? sheetStripTile : stage ? lightboxStageTile : lane ? lanesTile : undefined;
   const frame = <>
     <TileErrorBoundary key={`${runtimeKey}:${screen.id}`} prototypeId={doc.id} screenId={screen.id}>
       <JSONUIProvider key={`${runtimeKey}:${screen.id}`} registry={registry} handlers={handlers} initialState={initialState}>
-        <div inert>{tree && specs ? <CjmFrame device={doc.device} nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} size={frameSize}><EasyUiRuntimeProvider value={runtimeValue}>{screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}</EasyUiRuntimeProvider></CjmFrame> : <div className="flex items-center justify-center rounded-field bg-background text-center text-[11px] text-eui-slate-500" style={{ width: sheet ? sheetStripTile.width : tileWidth, height: sheet ? sheetStripTile.fallbackHeight : 256 }}>{cjm.noContent}</div>}</div>
+        <div inert>{tree && specs ? <CjmFrame device={doc.device} nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} size={frameSize}><EasyUiRuntimeProvider value={runtimeValue}>{screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}</EasyUiRuntimeProvider></CjmFrame> : <div className="flex items-center justify-center rounded-field bg-background text-center text-[11px] text-eui-slate-500" style={{ width: frameSize?.width ?? tileWidth, height: frameSize?.fallbackHeight ?? 256 }}>{cjm.noContent}</div>}</div>
       </JSONUIProvider>
     </TileErrorBoundary>
     {/* Лайтбокс (макет 03) перехватывает клик по тайлу; ссылка в плеер остаётся
@@ -153,17 +155,23 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
     >{frame}</div>;
   }
 
-  return <article className="cjm-tile rounded-popover bg-white p-3" style={{ width: tileWidth + 24 }}>
+  if (lane) {
+    // Ширина тайла = ширина колонки грида (`lanesTile.width`), поэтому паддинга нет:
+    // любой лишний пиксель развёл бы шаг сетки и pitch, по которому `CjmEdgesOverlay`
+    // раскладывает рёбра (план 2026-07-31, W3-2).
+    return <article className="cjm-tile rounded-item bg-white" style={{ width: lanesTile.width }}>
+      <div className="relative">{frame}</div>
+      <h2 className="mt-2 truncate text-[11px] font-medium text-eui-ink" title={screen.name}>{screen.name}</h2>
+      {noteOverride ?? screen.note ? <p className="mt-0.5 text-[11px] leading-tight text-eui-slate-500">{noteOverride ?? screen.note}</p> : null}
+    </article>;
+  }
+
+  // Чипы переходов и «демо-состояние» сняты (план 2026-07-31, W3-6): спека тайла
+  // подписей не знает, а перечень переходов дублировал рёбра дорожек и подписи зон
+  // лайтбокса. Радиус — 12 из брендовой шкалы.
+  return <article className="cjm-tile rounded-item bg-white p-3" style={{ width: tileWidth + 24 }}>
     <div className="relative">{frame}</div>
-    <div className="mt-4 flex items-start justify-between gap-2">
-      <h2 className="min-w-0 truncate text-lg font-medium" title={screen.name}>{screen.name}</h2>
-      {screen.stateOverrides === undefined ? null : <span className="shrink-0 rounded-full bg-pay-lavender px-2 py-1 text-[11px] font-medium text-eui-ink">{cjm.demoState}</span>}
-    </div>
+    <h2 className="mt-4 min-w-0 truncate text-lg font-medium" title={screen.name}>{screen.name}</h2>
     {noteOverride ?? screen.note ? <p className="mt-1 text-[13px] text-eui-slate-500">{noteOverride ?? screen.note}</p> : null}
-    {transitions.length ? <ul className="mt-3 flex flex-wrap gap-2" aria-label={cjm.transitionsAria}>
-      {transitions.map((transition) => <li key={transition.kind === "static" ? `static:${transition.screenId}` : "dynamic"} className="rounded-full bg-pay-lavender px-2.5 py-1 text-xs font-medium text-eui-ink">
-        {transition.kind === "static" ? cjm.transitionTo(transition.screenName) : cjm.dynamicTransition}
-      </li>)}
-    </ul> : null}
   </article>;
 }

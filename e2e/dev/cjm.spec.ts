@@ -113,8 +113,9 @@ test("settings CJM connects measured tile centers and labels authored transition
   await expect(journey.locator("[data-lazy-mounted]")).toHaveCount(3);
   await page.emulateMedia({ media: "print" });
   await expect(journey.locator('[data-lazy-mounted="true"]')).toHaveCount(3);
-  await expect(page.getByText("→ О приложении", { exact: true })).toHaveCount(1);
-  await expect(page.getByText("→ Конфиденциальность", { exact: true })).toHaveCount(1);
+  // Чипы-переходы с тайла сняты (W3-6) — форс-монтирование печати проверяем по самим экранам.
+  await expect(journey.getByRole("heading", { name: "О приложении" })).toHaveCount(1);
+  await expect(journey.getByRole("heading", { name: "Конфиденциальность" })).toHaveCount(1);
   await page.emulateMedia({ media: null });
 
   const connectors = page.getByTestId("cjm-connector");
@@ -197,7 +198,7 @@ test("flows-tree opens in the scenarios sheet, reads a child branch end-to-end a
   await expect(page).toHaveURL(/\/p\/flows-tree\/cjm\?view=lanes$/);
   await expect(page.getByTestId("cjm-lane-label")).toHaveCount(2);
   await expect(page.locator(".cjm-sheet")).toHaveCount(0);
-  await expect(page.getByLabel("Легенда рёбер сценариев")).toBeVisible();
+  await expect(page.getByLabel("Легенда связности шагов")).toBeVisible();
   await expect(chromeSegment(page, "Плеер")).toHaveAttribute("href", "/p/flows-tree?view=lanes");
 
   await modeSwitch(page, "Сценарии").click();

@@ -268,8 +268,16 @@ button { cursor: pointer; }
   mask-image: linear-gradient(to bottom, #000 calc(100% - 44px), transparent 100%);
 }
 
-/* Цвет коннектора кодирует верификацию перехода (макет 05): проверен — зелёный
-   спец-хром, не проверен — приглушённый пурпур, сломан — ошибочный коралл. */
+/**
+ * Связи дорожек и линейной ленты (план 2026-07-31, S3): линия всегда сплошная 2px,
+ * три состояния кодируются цветом линии и формой наконечника — подтверждён залитый
+ * зелёный треугольник, динамический полый зелёный, не найден залитый приглушённым
+ * пурпуром. Штрих (`stroke-dasharray`), глиф «!» и его белая обводка 3px (де-факто
+ * бордер, брендом запрещённый) сняты: один факт — один код.
+ *
+ * Динамический — зелёный, потому что это авторская конструкция (`$event`), а не
+ * дефект; отличает его форма, и это работает без цветовосприятия.
+ */
 .cjm-flow-edge {
   stroke: #23e13f;
   stroke-width: 2;
@@ -277,42 +285,26 @@ button { cursor: pointer; }
   stroke-linejoin: round;
 }
 
-.cjm-edges-overlay [data-verified="dynamic"] .cjm-flow-edge {
-  stroke: rgb(45 8 58 / 0.4);
-  stroke-dasharray: 6 4;
+[data-verified="missing"] .cjm-flow-edge {
+  stroke: rgb(45 8 58 / 0.25);
 }
 
-.cjm-edges-overlay [data-verified="missing"] .cjm-flow-edge {
-  stroke: #ff7158;
-  stroke-dasharray: 2 4;
+.cjm-edge-arrow {
+  fill: #23e13f;
+  stroke: none;
 }
 
-.cjm-edge-warning {
-  fill: #ff7158;
-  font: 700 12px/1 sans-serif;
-  paint-order: stroke;
-  stroke: #fff;
-  stroke-width: 3px;
+/* Полый наконечник: заливка белым, а не `none`, — иначе сквозь него просвечивает
+   линия и треугольник перестаёт читаться как контур. */
+.cjm-edge-arrow-dynamic {
+  fill: #fff;
+  stroke: #23e13f;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
 }
 
-.cjm-edge-legend > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.cjm-legend-line {
-  display: inline-block;
-  width: 32px;
-  border-top: 2px solid #23e13f;
-}
-
-.cjm-legend-line[data-verified="dynamic"] {
-  border-top: 2px dashed rgb(45 8 58 / 0.4);
-}
-
-.cjm-legend-line[data-verified="missing"] {
-  border-top: 2px dotted #ff7158;
+.cjm-edge-arrow-missing {
+  fill: rgb(45 8 58 / 0.25);
 }
 
 @media print {
@@ -330,7 +322,11 @@ button { cursor: pointer; }
   }
 
   .cjm-root > header,
-  .cjm-tile-link {
+  .cjm-tile-link,
+  /* Из тулбара канвы на бумаге осмысленна только легенда связности: переключатель
+     режима и кнопка «Печать» — экранные контролы (план 2026-07-31, W3-5). */
+  .cjm-canvas-toolbar > nav,
+  .cjm-canvas-toolbar > button {
     display: none !important;
   }
 

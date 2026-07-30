@@ -131,7 +131,9 @@ describe("CjmShell", () => {
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
     expect(screen.getByRole("link", { name: "Открыть экран «Cart» прототипа «Checkout journey» в плеере" }).getAttribute("href")).toBe("/p/journey/s/cart");
     expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey");
-    expect(screen.getByText("демо-состояние")).toBeTruthy();
+    // Чип «демо-состояние» снят (W3-6): в спеке тайла подписей нет, а `stateOverrides`
+    // видно по самому кадру — он рендерится именно с ними.
+    expect(screen.queryByText("демо-состояние")).toBeNull();
     // Чипы-дубли в хроме сняты (W1-4): числа читаются из ряда счётчиков, который
     // теперь общая шапка обоих режимов и рендерится даже на линейном документе.
     const counters = screen.getByLabelText("Сводка прототипа");
@@ -146,6 +148,11 @@ describe("CjmShell", () => {
   it("renders the linear CJM strip in the default mode and hides the view switch without flows", async () => {
     renderAt("/p/journey/cjm");
     expect(await screen.findByRole("list", { name: "Экраны прототипа" })).toBeTruthy();
+    // Лента без флоу — не «сценарий», а порядок документа: заголовок и пояснение
+    // говорят это прямо, CTA в несуществующий UI нет (W3-3 плана, m3(ux)).
+    expect(screen.getByRole("heading", { name: "Экраны", level: 2 })).toBeTruthy();
+    expect(screen.getByText(/docs\/prototype-format\.md/)).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /Разметить сценарии/ })).toBeNull();
     expect(screen.queryByRole("navigation", { name: "Режим просмотра" })).toBeNull();
     expect(document.querySelector(".cjm-sheet")).toBeNull();
     expect(document.querySelector(".cjm-grid")).toBeNull();
@@ -197,7 +204,7 @@ describe("CjmShell", () => {
     expect(screen.getByRole("button", { name: "CJM host hotspot" })).toBeTruthy();
   });
 
-  it("labels static and dynamic authored navigate transitions without creating edges", async () => {
+  it("keeps authored transitions out of the tile: no chips, no extra tiles", async () => {
     const transitionDoc = prototypeDocSchema.parse({ ...doc, state: { target: "secret" }, screens: [
       { id: "cart", name: "Cart", spec: { root: "actions", elements: {
         actions: { type: "Stack", props: {}, children: ["static", "dynamic"] },
@@ -209,31 +216,50 @@ describe("CjmShell", () => {
     ] });
     mocks.getDraft.mockResolvedValue({ ...draft, doc: transitionDoc });
     renderAt("/p/journey/cjm");
-    expect(await screen.findByText("→ Success")).toBeTruthy();
-    expect(screen.getByText("динамический переход")).toBeTruthy();
-    expect(screen.queryByText("→ Secret")).toBeNull();
+    // Список чипов-переходов снят (W3-6): он дублировал рёбра дорожек и подписи зон
+    // лайтбокса. Число тайлов по-прежнему равно числу экранов документа — переходы
+    // тайлов не создают.
+    expect(await screen.findByRole("heading", { name: "Cart" })).toBeTruthy();
+    expect(screen.getAllByRole("listitem")).toHaveLength(3);
+    expect(screen.queryByLabelText("Переходы экрана")).toBeNull();
+    expect(screen.queryByText("→ Success")).toBeNull();
+    expect(screen.queryByText("динамический переход")).toBeNull();
   });
 
-  it("renders scenario lanes, verified edge styles, legend, flow links, and collapsed unassigned screens", async () => {
+  it("renders scenario lanes with a service caption, verified edges, legend, flow links and a static unassigned plate", async () => {
     mocks.getDraft.mockResolvedValue({ ...draft, doc: flowDoc });
     renderAt("/p/journey/cjm?view=lanes");
     expect(await screen.findAllByTestId("cjm-lane-label")).toHaveLength(2);
     expect(screen.getByText("Успешная оплата")).toBeTruthy();
-    expect(screen.getByText("Основной путь")).toBeTruthy();
     expect(screen.getByText("Отказ банка")).toBeTruthy();
     expect(screen.getByText("Повторить оплату")).toBeTruthy();
+    // Подпись дорожки служебная: авторское описание главного флоу («Основной путь»)
+    // в дорожках больше не печатается, вместо него — точка ветвления (W3-3).
+    expect(screen.queryByText("Основной путь")).toBeNull();
+    expect(screen.getByText("ветвится после шага 1")).toBeTruthy();
     expect(document.querySelector("[data-verified='static']")).not.toBeNull();
     expect(document.querySelector("[data-verified='dynamic']")).not.toBeNull();
     expect(document.querySelector("[data-verified='missing']")).not.toBeNull();
-    expect(screen.getByLabelText("Легенда рёбер сценариев")).toBeTruthy();
+    // Легенда — общий примитив обоих режимов (S3); «Легенда рёбер сценариев» ушла
+    // вместе со штрихами и глифом «!».
+    expect(screen.getByLabelText("Легенда связности шагов")).toBeTruthy();
+    expect(screen.queryByLabelText("Легенда рёбер сценариев")).toBeNull();
     expect(screen.getByText("Подтверждённый переход")).toBeTruthy();
     expect(screen.getByRole("link", { name: /Открыть экран «Cart»/ }).getAttribute("href")).toBe("/p/journey/s/cart?flow=happy&step=0");
     expect(screen.getByRole("link", { name: /Открыть экран «Declined»/ }).getAttribute("href")).toBe("/p/journey/s/declined?flow=bank-decline&step=1");
-    const unassigned = screen.getByRole("button", { name: "Вне сценариев, 1" });
-    expect(unassigned.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByRole("heading", { name: "Secret" })).toBeNull();
-    fireEvent.click(unassigned);
-    expect(await screen.findByRole("heading", { name: "Secret" })).toBeTruthy();
+    // Плашка непокрытых экранов статична: раскрывать нечего, экран сразу виден (W2-6).
+    expect(screen.queryByRole("button", { name: /Вне сценариев/ })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Вне сценариев · 1 экран" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Secret" })).toBeTruthy();
+  });
+
+  it("shows the unassigned plate in the scenarios mode too", async () => {
+    mocks.getDraft.mockResolvedValue({ ...draft, doc: flowDoc });
+    renderAt("/p/journey/cjm");
+    // Покрытие сценариями — то, ради чего разбор открывают: показатель обязан быть
+    // виден в дефолтном режиме, а не только в advanced-дорожках (W2-6).
+    expect(await screen.findByRole("heading", { name: "Вне сценариев · 1 экран" })).toBeTruthy();
+    expect(document.querySelector(".cjm-sheet")).not.toBeNull();
   });
 
   it("points the chrome player segment at the scenario step screen for a valid flow/step pair", async () => {
@@ -282,7 +308,7 @@ describe("CjmShell", () => {
     const batched = prototypeDocSchema.parse({ ...flowDoc, screens: [...flowDoc.screens.filter((item) => item.id !== "secret"), ...extras] });
     mocks.getDraft.mockResolvedValue({ ...draft, doc: batched });
     renderAt("/p/journey/cjm?view=lanes");
-    fireEvent.click(await screen.findByRole("button", { name: "Вне сценариев, 21" }));
+    expect(await screen.findByRole("heading", { name: "Вне сценариев · 21 экран" })).toBeTruthy();
 
     const section = document.querySelector(".cjm-unassigned")!;
     expect(section.querySelectorAll("[data-lazy-mounted]")).toHaveLength(21);

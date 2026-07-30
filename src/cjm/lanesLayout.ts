@@ -18,10 +18,29 @@ export interface CjmEdge {
   verified: EdgeVerification;
 }
 
+/**
+ * Как дорожка относится к главной линии — служебная подпись под именем дорожки
+ * (план 2026-07-31, W3-3). Авторское `flow.description` для этого не годилось:
+ * оно про смысл сценария, а не про геометрию, и повторяло текст простыни.
+ *
+ * Точек ветвления у ветки может быть несколько (каждый разрыв — свой `Segment`),
+ * подписывается **первая** по порядку шагов. `step` — 1-based номер шага главной
+ * линии, чтобы совпадать с подписями «шаг N» в простыне и лайтбоксе.
+ */
+export type CjmLaneOrigin =
+  /** Ветка уходит с главной линии после её шага `step`. */
+  | { kind: "fork"; step: number }
+  /** Точки ветвления нет, но ветка возвращается в главную линию перед шагом `step`. */
+  | { kind: "merge"; step: number }
+  /** Ни одного якоря: ветка вообще не касается главной линии. */
+  | { kind: "detached" };
+
 export interface CjmLane {
   key: string;
   name: string | null;
   description?: string;
+  /** Отсутствует у главной дорожки (индекс 0) — ей не с чем соотноситься. */
+  origin?: CjmLaneOrigin;
   nodes: CjmNode[];
 }
 
@@ -41,6 +60,10 @@ interface Segment {
   gap: number;
   leading: boolean;
   anchorless: boolean;
+  /** Индекс шага главной линии, с которого сегмент ответвился (0-based). */
+  forkIndex?: number;
+  /** Индекс шага главной линии, в который сегмент возвращается (0-based). */
+  returnIndex?: number;
   columns: number[];
 }
 
@@ -69,11 +92,34 @@ function collectSegments(flow: Flow, mainIndexes: ReadonlyMap<string, number>): 
       gap: forkIndex ?? ((returnIndex ?? 0) - 1),
       leading: forkIndex === undefined && returnIndex !== undefined,
       anchorless,
+      forkIndex,
+      returnIndex,
       columns: [],
     });
     start = null;
   }
   return segments;
+}
+
+/**
+ * Как подписать дорожку ветки. Сегментов у ветки несколько, и `gap` для anchorless
+ * равен −1 (см. `collectSegments`), поэтому подпись выводится не из `gap`, а из
+ * явных `forkIndex`/`returnIndex` первого по порядку шагов сегмента, у которого
+ * соответствующий якорь есть.
+ *
+ * Ветка без единого собственного сегмента (все её шаги — якоря главной линии)
+ * подписи не получает: рисовать в дорожках у неё нечего.
+ */
+function laneOrigin(segments: readonly Segment[]): CjmLaneOrigin | undefined {
+  if (segments.length === 0) return undefined;
+  const ordered = [...segments].sort((left, right) => left.start - right.start);
+  const fork = ordered.find((segment) => segment.forkIndex !== undefined);
+  if (fork) return { kind: "fork", step: fork.forkIndex! + 1 };
+  // Ветка начинается вне главной линии и только вливается в неё: точки ветвления
+  // у неё нет, и «ветвится после шага N» было бы враньём.
+  const merge = ordered.find((segment) => segment.returnIndex !== undefined);
+  if (merge) return { kind: "merge", step: merge.returnIndex! + 1 };
+  return { kind: "detached" };
 }
 
 function gapStart(gap: number, gapWidths: ReadonlyMap<number, number>): number {
@@ -204,7 +250,7 @@ export function computeCjmLanes(doc: PrototypeDoc, graph: NavigationGraph): CjmL
         anchor: false,
       });
     });
-    lanes.push({ key, name: flow.name, description: flow.description, nodes });
+    lanes.push({ key, name: flow.name, description: flow.description, origin: laneOrigin(branchSegments[branchIndex]!), nodes });
   });
 
   const edges: CjmEdge[] = mainNodes.slice(0, -1).map((node, index) => ({

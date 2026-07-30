@@ -247,6 +247,43 @@ describe("computeCjmLanes", () => {
     });
   });
 
+  /**
+   * Подпись дорожки (план 2026-07-31, W3-3). Сегментов у ветки несколько, и `gap`
+   * для anchorless равен −1, поэтому подпись выводится из явных якорей сегмента,
+   * а не из `gap`.
+   */
+  describe("lane origin", () => {
+    it("labels the first fork, a merge-only branch and an anchorless one", () => {
+      const doc = makeDoc(["a", "b", "c"], [
+        // Ветка отходит от «b» и позже ещё раз от «a» — подписывается первая по шагам.
+        { id: "fork", steps: ["b", "x", "c"] },
+        { id: "leading", steps: ["y", "b"] },
+        { id: "detached", steps: ["z1", "z2"] },
+      ]);
+      const result = layout(doc);
+      // Главная дорожка соотносить не с чем — подписи у неё нет.
+      expect(result.lanes[0]!.origin).toBeUndefined();
+      expect(result.lanes[1]!.origin).toEqual({ kind: "fork", step: 2 });
+      expect(result.lanes[2]!.origin).toEqual({ kind: "merge", step: 2 });
+      expect(result.lanes[3]!.origin).toEqual({ kind: "detached" });
+      expectCoreInvariants(doc, result);
+    });
+
+    it("takes the earliest fork when a branch leaves the main line several times", () => {
+      const doc = makeDoc(["a", "b", "c"], [{ id: "twice", steps: ["a", "x", "b", "y", "c"] }]);
+      expect(layout(doc).lanes[1]!.origin).toEqual({ kind: "fork", step: 1 });
+    });
+
+    it("gives no caption to a branch that owns no tiles at all", () => {
+      // Все шаги ветки — якоря главной линии: собственных сегментов нет, и подписывать
+      // в дорожках нечего.
+      const doc = makeDoc(["a", "b", "c"], [{ id: "anchors-only", steps: ["a", "b"] }]);
+      const result = layout(doc);
+      expect(result.lanes[1]!.nodes).toEqual([]);
+      expect(result.lanes[1]!.origin).toBeUndefined();
+    });
+  });
+
   it("grows inserted columns with steps per flow, not with the number of flows", () => {
     const wide = layout(syntheticDoc(6, 5, 4));
     const manyFlows = layout(syntheticDoc(6, 20, 4));

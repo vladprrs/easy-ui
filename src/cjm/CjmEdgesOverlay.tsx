@@ -1,5 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cjm } from "../app/strings/cjm";
+import type { EdgeVerification } from "../prototype/navigationGraph";
 import { LAZY_MOUNT_EVENT } from "./LazyMount";
 import type { CjmEdge, CjmLayout, CjmNode } from "./lanesLayout";
 
@@ -217,8 +218,17 @@ export function computeLogicalEdgeRoutes(layout: CjmLayout): LogicalRouting {
 interface PixelRoute {
   key: string;
   points: string;
-  middle: { x: number; y: number };
 }
+
+/**
+ * Наконечники связей: форма кодирует верификацию (план 2026-07-31, S3) —
+ * подтверждён залитый зелёный, динамический полый зелёный, не найден залитый
+ * приглушённым пурпуром. Цвета живут в CSS (`.cjm-edge-arrow*`), здесь только
+ * геометрия; тот же треугольник рисует и коннектор линейной ленты.
+ */
+const EDGE_ARROW_PATH = "M0 0 L8 4 L0 8 Z";
+const arrowKinds = ["static", "dynamic", "missing"] as const;
+export const edgeArrowClass = (verified: EdgeVerification) => `cjm-edge-arrow cjm-edge-arrow-${verified}`;
 
 const portPoint = (rect: DOMRect, root: DOMRect, port: LogicalEdgeRoute["startPort"]) => {
   if (port === "left") return { x: rect.left - root.left, y: rect.top - root.top + rect.height / 2 };
@@ -232,7 +242,6 @@ export function CjmEdgesOverlay({ layout, routing }: { layout: CjmLayout; routin
   const [pixelRoutes, setPixelRoutes] = useState<PixelRoute[]>(() => routing.routes.map((route) => ({
     key: route.edge.key,
     points: route.points.map((point) => `${point.x},${point.y}`).join(" "),
-    middle: route.points[Math.floor(route.points.length / 2)]!,
   })));
   const nodes = useMemo(() => new Map(layout.lanes.flatMap((lane) => lane.nodes).map((node) => [node.key, node])), [layout]);
   useLayoutEffect(() => {
@@ -288,8 +297,7 @@ export function CjmEdgesOverlay({ layout, routing }: { layout: CjmLayout; routin
           points[1]!.y = points[0]!.y;
           points[2]!.y = points[3]!.y;
         }
-        const middle = points[Math.floor(points.length / 2)]!;
-        return [{ key: route.edge.key, points: points.map((point) => `${point.x},${point.y}`).join(" "), middle }];
+        return [{ key: route.edge.key, points: points.map((point) => `${point.x},${point.y}`).join(" ") }];
       }));
     };
     const observer = new ResizeObserver(measure);
@@ -324,16 +332,19 @@ export function CjmEdgesOverlay({ layout, routing }: { layout: CjmLayout; routin
   return <>
     <svg ref={svgRef} className="cjm-edges-overlay pointer-events-none absolute inset-0 z-10 overflow-visible" aria-hidden="true">
       <defs>
-        <marker id="cjm-edge-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="context-stroke" strokeWidth="1.5" /></marker>
+        {arrowKinds.map((kind) => <marker key={kind} id={`cjm-edge-arrow-${kind}`} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+          <path className={edgeArrowClass(kind)} d={EDGE_ARROW_PATH} />
+        </marker>)}
       </defs>
       {pixelRoutes.map((route) => {
         const edge = edgeByKey.get(route.key)!;
         const from = nodes.get(edge.from)?.screenId ?? edge.from;
         const to = nodes.get(edge.to)?.screenId ?? edge.to;
+        // Штрих и глиф «!» сняты (S3): три состояния кодируются цветом линии и
+        // формой наконечника, и это тот же язык, что у `ConnectivityLegend`.
         return <g key={route.key} data-edge-kind={edge.kind} data-verified={edge.verified} data-from={edge.from} data-to={edge.to}>
           <title>{cjm.edgeTitle(from, to, edge.kind, edge.verified)}</title>
-          <polyline className="cjm-flow-edge" points={route.points} fill="none" markerEnd="url(#cjm-edge-arrow)" />
-          {edge.verified === "missing" ? <text className="cjm-edge-warning" x={route.middle.x} y={route.middle.y} textAnchor="middle" dominantBaseline="central">!</text> : null}
+          <polyline className="cjm-flow-edge" points={route.points} fill="none" markerEnd={`url(#cjm-edge-arrow-${edge.verified})`} />
         </g>;
       })}
     </svg>
