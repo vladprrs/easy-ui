@@ -161,7 +161,9 @@ describe("CJM scenarios sheet", () => {
   it("switches to lanes only through ?view=lanes and keeps the scenario query", async () => {
     const router = renderAt("/p/tree/cjm?flow=section");
     const lanes = await screen.findByRole("link", { name: "Дорожки" });
-    expect(screen.getByRole("link", { name: "Сценарии" }).getAttribute("aria-current")).toBe("page");
+    // «Сценарии» теперь есть и в сегменте хрома (место), и в переключателе режима — скоупим по режиму.
+    const modeSwitch = screen.getByRole("navigation", { name: "Режим просмотра" });
+    expect(within(modeSwitch).getByRole("link", { name: "Сценарии" }).getAttribute("aria-current")).toBe("page");
     fireEvent.click(lanes);
 
     await waitFor(() => expect(router.state.location.search).toBe("?flow=section&view=lanes"));

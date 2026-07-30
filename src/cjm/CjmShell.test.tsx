@@ -132,26 +132,29 @@ describe("CjmShell", () => {
     expect(screen.getByRole("link", { name: "Открыть экран «Cart» прототипа «Checkout journey» в плеере" }).getAttribute("href")).toBe("/p/journey/s/cart");
     expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey");
     expect(screen.getByText("демо-состояние")).toBeTruthy();
-    const metadata = screen.getByLabelText("Метаданные CJM");
-    expect(within(metadata).getByText("2 экрана")).toBeTruthy();
-    expect(within(metadata).getByText("shadcn")).toBeTruthy();
-    await waitFor(() => expect(document.title).toBe("Checkout journey · CJM — easy-ui"));
+    // Чипы-дубли в хроме сняты (W1-4): числа читаются из ряда счётчиков, который
+    // теперь общая шапка обоих режимов и рендерится даже на линейном документе.
+    const counters = screen.getByLabelText("Сводка прототипа");
+    expect(within(counters).getByText("2")).toBeTruthy();
+    expect(within(counters).getByText("экранов")).toBeTruthy();
+    expect(screen.queryByLabelText("Метаданные CJM")).toBeNull();
+    await waitFor(() => expect(document.title).toBe("Checkout journey · Сценарии — easy-ui"));
   });
 
   // Обязательный контракт плана §6.1: документ без `doc.flows` — это сегодня 100 % прода,
   // и дефолтный режим «Сценарии» обязан показывать ту же линейную ленту, что и раньше.
   it("renders the linear CJM strip in the default mode and hides the view switch without flows", async () => {
     renderAt("/p/journey/cjm");
-    expect(await screen.findByRole("list", { name: "Экраны CJM" })).toBeTruthy();
-    expect(screen.queryByRole("navigation", { name: "Режим CJM" })).toBeNull();
+    expect(await screen.findByRole("list", { name: "Экраны прототипа" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Режим просмотра" })).toBeNull();
     expect(document.querySelector(".cjm-sheet")).toBeNull();
     expect(document.querySelector(".cjm-grid")).toBeNull();
   });
 
   it("ignores ?view=lanes on a flowless document and still renders the linear strip", async () => {
     renderAt("/p/journey/cjm?view=lanes");
-    expect(await screen.findByRole("list", { name: "Экраны CJM" })).toBeTruthy();
-    expect(screen.queryByRole("navigation", { name: "Режим CJM" })).toBeNull();
+    expect(await screen.findByRole("list", { name: "Экраны прототипа" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Режим просмотра" })).toBeNull();
   });
 
   it("keeps published tile links version-aware", async () => {
@@ -161,7 +164,7 @@ describe("CjmShell", () => {
     expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey/v/2");
     expect(screen.getByRole("link", { name: /Редактор/ }).getAttribute("href")).toBe("/p/journey/edit");
     expect(screen.getByText("v2")).toBeTruthy();
-    await waitFor(() => expect(document.title).toBe("Checkout journey v2 · CJM — easy-ui"));
+    await waitFor(() => expect(document.title).toBe("Checkout journey v2 · Сценарии — easy-ui"));
   });
 
   it("renders a published Overlay tile with its exact pinned v1 theme after v2 exists", async () => {
@@ -318,7 +321,7 @@ describe("CjmShell", () => {
     const dialogDoc = prototypeDocSchema.parse({ ...doc, state: { open: false }, screens: [{ id: "cart", name: "Cart", stateOverrides: { open: true }, spec: { root: "dialog", elements: { dialog: { type: "Dialog", props: { title: "Modal", openPath: "/open" } } } } }] });
     mocks.getDraft.mockResolvedValue({ ...draft, doc: dialogDoc });
     renderAt("/p/journey/cjm");
-    const list = await screen.findByRole("list", { name: "Экраны CJM" });
+    const list = await screen.findByRole("list", { name: "Экраны прототипа" });
     await waitFor(() => expect(document.body.style.pointerEvents).not.toBe("none"));
     expect(list.getAttribute("aria-hidden")).toBeNull();
     expect(screen.getByRole("link", { name: /Открыть экран/ })).toBeTruthy();

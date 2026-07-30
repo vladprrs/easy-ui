@@ -155,4 +155,4 @@ export const gallery = {
 export { deviceNames } from "./common";
 
 export const versionLink = (version: number) => `Версия v${version}`;
-export const cjmVersionLink = (version: number) => `CJM v${version}`;
+export const cjmVersionLink = (version: number) => `Сценарии v${version}`;

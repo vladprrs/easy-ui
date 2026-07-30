@@ -68,7 +68,9 @@ test("branching checkout renders ordered scenario lanes and a verified edge lege
     /Отказ банка и повторная оплата/,
     /Отмена заказа/,
   ]);
-  await expect(page.getByLabel("Метаданные CJM").getByText("3 сценария", { exact: true })).toBeVisible();
+  // Числа переехали из снятых чипов хрома в ряд счётчиков — общую шапку обоих режимов (W1-4).
+  // Счёт берём из ячейки сценариев адресно: «3» само по себе в ряду неуникально.
+  await expect(page.getByLabel("Сводка прототипа").locator("div", { hasText: "сценариев" })).toContainText("3");
   await expect(page.getByRole("button", { name: /Вне сценариев/ })).toHaveCount(0);
 
   const edges = page.locator(".cjm-edges-overlay g[data-edge-kind]");

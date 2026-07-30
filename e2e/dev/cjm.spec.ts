@@ -1,4 +1,13 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+/**
+ * После переименования сегмента (план 2026-07-31, W1-1) «Сценарии» — это и место в
+ * хроме, и режим в канве, поэтому обе группы ссылок адресуются через свои nav-ы.
+ */
+const chromeSegment = (page: Page, name: string) =>
+  page.getByRole("navigation", { name: "Разделы прототипа" }).getByRole("link", { name, exact: true });
+const modeSwitch = (page: Page, name: string) =>
+  page.getByRole("navigation", { name: "Режим просмотра" }).getByRole("link", { name, exact: true });
 
 const checkoutNotes = [
   "Покупатель замечает новинку в каталоге и открывает карточку товара.",
@@ -16,7 +25,7 @@ test("checkout CJM opens from gallery and preserves player history semantics", a
   await checkoutCard.getByRole("link", { name: "Сценарии", exact: true }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/cjm$/);
 
-  const journey = page.getByRole("list", { name: "Экраны CJM" });
+  const journey = page.getByRole("list", { name: "Экраны прототипа" });
   await expect(journey).toBeVisible();
   await expect(journey).not.toHaveAttribute("aria-hidden", "true");
 
@@ -52,17 +61,17 @@ test("checkout CJM opens from gallery and preserves player history semantics", a
 
   await page.goBack();
   await expect(page).toHaveURL(/\/p\/checkout\/cjm$/);
-  await expect(page.getByRole("list", { name: "Экраны CJM" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Экраны прототипа" })).toBeVisible();
 
-  await page.getByRole("link", { name: "Плеер", exact: true }).click();
+  await chromeSegment(page, "Плеер").click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/catalog$/);
-  await page.getByRole("link", { name: "CJM", exact: true }).click();
+  await chromeSegment(page, "Сценарии").click();
   await expect(page).toHaveURL(/\/p\/checkout\/cjm$/);
 });
 
 test("checkout CJM supports direct load and rejects an unknown version", async ({ page }) => {
   await page.goto("/p/checkout/cjm");
-  await expect(page.getByRole("list", { name: "Экраны CJM" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Экраны прототипа" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Мобильное оформление заказа" })).toBeVisible();
 
   // Unknown published version (W0-4): a dedicated state with working escape links.
@@ -71,7 +80,7 @@ test("checkout CJM supports direct load and rejects an unknown version", async (
   await expect(page.getByRole("link", { name: "К галерее" })).toBeVisible();
   await page.getByRole("link", { name: "Открыть текущую" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/cjm$/);
-  await expect(page.getByRole("list", { name: "Экраны CJM" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Экраны прототипа" })).toBeVisible();
 
   // Same state in the player at /p/:id/v/N; «Открыть текущую» lands on the draft player.
   await page.goto("/p/checkout/v/99");
@@ -87,12 +96,12 @@ test("checkout CJM supports direct load and rejects an unknown version", async (
 test("settings CJM connects measured tile centers and labels authored transitions", async ({ page }) => {
   await page.goto("/p/settings/cjm");
 
-  const metadata = page.getByLabel("Метаданные CJM");
-  await expect(metadata.getByText("3 экрана", { exact: true })).toBeVisible();
-  await expect(metadata.getByText("e2e-starter", { exact: true })).toBeVisible();
+  // Чипы-дубли в хроме сняты (W1-4): числа живут в ряду счётчиков, который теперь
+  // общая шапка обоих режимов и рендерится в том числе на линейном документе.
+  await expect(page.getByLabel("Сводка прототипа").locator("div", { hasText: "экранов" })).toContainText("3");
 
   // Все три обёртки в DOM с первого layout, поэтому коннекторы меряются и без живых тайлов.
-  const journey = page.getByRole("list", { name: "Экраны CJM" });
+  const journey = page.getByRole("list", { name: "Экраны прототипа" });
   await expect(journey.locator("[data-lazy-mounted]")).toHaveCount(3);
   await page.emulateMedia({ media: "print" });
   await expect(journey.locator('[data-lazy-mounted="true"]')).toHaveCount(3);
@@ -161,14 +170,20 @@ test("flows-tree opens in the scenarios sheet, reads a child branch end-to-end a
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("/p/flows-tree/cjm?flow=receipt-leaf");
 
   // Дорожки: только корневые флоу, простыня уходит, режим липнет к сегментам хрома.
-  await page.getByRole("link", { name: "Дорожки", exact: true }).click();
+  // Переключатель режима живёт в канве над счётчиками (W1-2), а не в actions хрома.
+  await expect(page.getByRole("navigation", { name: "Режим просмотра" })).toBeVisible();
+  await modeSwitch(page, "Дорожки").click();
   await expect(page).toHaveURL(/\/p\/flows-tree\/cjm\?view=lanes$/);
   await expect(page.getByTestId("cjm-lane-label")).toHaveCount(2);
   await expect(page.locator(".cjm-sheet")).toHaveCount(0);
   await expect(page.getByLabel("Легенда рёбер сценариев")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Плеер", exact: true })).toHaveAttribute("href", "/p/flows-tree?view=lanes");
+  await expect(chromeSegment(page, "Плеер")).toHaveAttribute("href", "/p/flows-tree?view=lanes");
 
-  await page.getByRole("link", { name: "Сценарии", exact: true }).click();
+  await modeSwitch(page, "Сценарии").click();
   await expect(page).toHaveURL(/\/p\/flows-tree\/cjm$/);
   await expect(page.locator(".cjm-sheet-section")).toHaveCount(5);
+
+  // Крошка хрома — третий уровень «Галерея / {Имя} / {Сценарий}» по `?flow=` (W1-6).
+  await page.goto("/p/flows-tree/cjm?flow=receipt-leaf");
+  await expect(page.getByRole("navigation", { name: "Хлебные крошки" })).toContainText("Квитанция о переводе");
 });

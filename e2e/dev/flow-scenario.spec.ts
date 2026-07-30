@@ -57,7 +57,7 @@ test("external navigation outside the route offers a return to step one", async 
 
 test("Player to CJM to a step tile round-trip opens that exact scenario occurrence", async ({ page }) => {
   await page.goto("/p/branching-checkout/s/declined?flow=bank-declined&step=4");
-  await page.getByRole("link", { name: "CJM", exact: true }).click();
+  await page.getByRole("link", { name: "Сценарии", exact: true }).click();
   await expect(page).toHaveURL(/\/p\/branching-checkout\/cjm\?flow=bank-declined&step=4$/);
 
   // Дефолтный режим CJM — «Сценарии» (T2b): шаг живёт в ленте своей секции.
@@ -72,7 +72,7 @@ test("Player to CJM to a step tile round-trip opens that exact scenario occurren
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/cancel-reason\?flow=cancellation&step=3$/);
   await expect(scenarioBar(page).getByRole("status")).toContainText("Шаг 4 из 6");
 
-  await page.getByRole("link", { name: "CJM", exact: true }).click();
+  await page.getByRole("link", { name: "Сценарии", exact: true }).click();
   await page.getByRole("link", { name: "Плеер", exact: true }).click();
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/cancel-reason\?flow=cancellation&step=3$/);
 });

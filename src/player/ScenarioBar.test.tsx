@@ -224,7 +224,7 @@ describe("scenario query boundaries", () => {
     render(<RouterProvider router={router} />);
 
     expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/demo/s/two?flow=main&step=1");
-    expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/demo/cjm?flow=main&step=1");
+    expect(screen.getByRole("link", { name: "Сценарии" }).getAttribute("href")).toBe("/p/demo/cjm?flow=main&step=1");
   });
 
   // Липкость режима CJM (план §7 T2b): без переноса `view` возврат из плеера молча
@@ -236,7 +236,7 @@ describe("scenario query boundaries", () => {
     }], { initialEntries: ["/p/demo/s/two?flow=main&step=1&view=lanes&debug=1"] });
     render(<RouterProvider router={router} />);
 
-    expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/demo/cjm?flow=main&step=1&view=lanes");
+    expect(screen.getByRole("link", { name: "Сценарии" }).getAttribute("href")).toBe("/p/demo/cjm?flow=main&step=1&view=lanes");
     expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/demo?flow=main&step=1&view=lanes");
   });
 });

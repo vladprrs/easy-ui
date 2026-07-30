@@ -114,7 +114,7 @@ describe("PlayerShell", () => {
     const router = renderAt("/p/hello-world/v/2");
     await waitFor(() => expect(router.state.location.pathname).toBe("/p/hello-world/v/2/s/welcome"));
     expect(mocks.getVersion).toHaveBeenCalledWith("hello-world", 2, expect.any(AbortSignal));
-    expect((await screen.findByRole("link", { name: "CJM" })).getAttribute("href")).toBe("/p/hello-world/v/2/cjm");
+    expect((await screen.findByRole("link", { name: "Сценарии" })).getAttribute("href")).toBe("/p/hello-world/v/2/cjm");
     expect(document.title).toBe("Hello World v2 · Welcome — easy-ui");
   });
 
@@ -181,7 +181,7 @@ describe("PlayerShell", () => {
 
   it("links to the draft CJM from the sidebar", async () => {
     renderAt("/p/hello-world/s/welcome");
-    expect((await screen.findByRole("link", { name: "CJM" })).getAttribute("href")).toBe("/p/hello-world/cjm");
+    expect((await screen.findByRole("link", { name: "Сценарии" })).getAttribute("href")).toBe("/p/hello-world/cjm");
   });
 
   it("restart and prototype changes create a clean store", async () => {

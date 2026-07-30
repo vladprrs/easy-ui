@@ -8,10 +8,10 @@ import { appShell, prototypeChrome } from "./strings/common";
 
 afterEach(cleanup);
 
-function renderChrome(props: Partial<PrototypeChromeProps> = {}) {
+function renderChrome(props: Partial<PrototypeChromeProps> = {}, entry = "/p/demo") {
   const router = createMemoryRouter(
     [{ path: "*", element: <PrototypeChrome prototypeId="demo" prototypeName="Demo proto" view="player" {...props} /> }],
-    { initialEntries: ["/p/demo"] },
+    { initialEntries: [entry] },
   );
   render(<RouterProvider router={router} />);
 }
@@ -32,7 +32,16 @@ describe("PrototypeChrome", () => {
     expect(screen.queryByText(prototypeChrome.versionBadge(1))).toBeNull();
   });
 
-  it("keeps /v/N in player and CJM links while the editor goes to the draft with an explicit badge", () => {
+  it("adds the active scenario as the third breadcrumb level only when the view supplies it", () => {
+    renderChrome({ view: "cjm", scenarioName: "Отказ банка" });
+    const breadcrumb = screen.getByRole("navigation", { name: prototypeChrome.breadcrumbAria });
+    expect(within(breadcrumb).getByText("Отказ банка")).toBeTruthy();
+    cleanup();
+    renderChrome({ view: "player" });
+    expect(screen.queryByText("Отказ банка")).toBeNull();
+  });
+
+  it("keeps /v/N in player and scenarios links while the editor goes to the draft with an explicit badge", () => {
     renderChrome({ view: "player", version: 3 });
     expect(linkHref(prototypeChrome.player)).toBe("/p/demo/v/3");
     expect(linkHref(prototypeChrome.cjm)).toBe("/p/demo/v/3/cjm");
@@ -46,6 +55,15 @@ describe("PrototypeChrome", () => {
     renderChrome({ prototypeId: "прото 1" });
     expect(linkHref(prototypeChrome.player)).toBe(`/p/${encodeURIComponent("прото 1")}`);
     expect(linkHref(prototypeChrome.editor)).toBe(`/p/${encodeURIComponent("прото 1")}/edit`);
+  });
+
+  // Политика W1-3: сегмент — смена места, а не режима, поэтому все три несут
+  // сценарный контекст и сохраняют `view`; посторонний `debug` не переносится.
+  it("carries flow/step and keeps the view mode across all three segments", () => {
+    renderChrome({ view: "cjm" }, "/p/demo/cjm?flow=main&step=1&view=lanes&debug=1");
+    expect(linkHref(prototypeChrome.player)).toBe("/p/demo?flow=main&step=1&view=lanes");
+    expect(linkHref(prototypeChrome.cjm)).toBe("/p/demo/cjm?flow=main&step=1&view=lanes");
+    expect(linkHref(new RegExp(prototypeChrome.editor))).toBe("/p/demo/edit?flow=main&step=1&view=lanes");
   });
 
   it("renders the status and actions slots when provided and hides their containers otherwise", () => {

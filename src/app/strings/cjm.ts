@@ -1,20 +1,16 @@
-// Строки CJM-вида (W0-5). CJM — доменный термин из allowlist, не переводится.
+// Строки вью `/p/:id/cjm`. «CJM» осталось именем кода и маршрута, но из видимых
+// подписей, `document.title` и aria выведено (план 2026-07-31, S1): пользователь
+// видит «Сценарии».
 
 import { pluralRu, screensCount } from "./common";
 
-/** document.title CJM-вида: имя прототипа (+версия) (W0-3). */
+/** document.title вью разбора: имя прототипа (+версия) (W0-3). */
 export const cjmDocumentTitle = (docName: string, version?: number) =>
-  version === undefined ? `${docName} · CJM` : `${docName} v${version} · CJM`;
+  version === undefined ? `${docName} · Сценарии` : `${docName} v${version} · Сценарии`;
 
 export const cjm = {
-  screensAria: "Экраны CJM",
-  metadataAria: "Метаданные CJM",
-  screensLabel: "Количество экранов",
-  flowsLabel: "Количество сценариев",
-  designSystemLabel: "Дизайн-система",
-  screensCount,
-  flowsCount: (count: number) => `${count} ${pluralRu(count, ["сценарий", "сценария", "сценариев"])}`,
-  lanesAria: "Дорожки сценариев CJM",
+  screensAria: "Экраны прототипа",
+  lanesAria: "Дорожки сценариев",
   mainLaneName: "Главный сценарий",
   unassignedLaneName: "Вне сценариев",
   unassignedCount: (count: number) => `Вне сценариев, ${count}`,
@@ -26,11 +22,17 @@ export const cjm = {
   edgesAria: "Рёбра сценариев",
   edgeTitle: (from: string, to: string, kind: "main" | "fork" | "branch" | "return", verified: "static" | "dynamic" | "missing") => `${from} → ${to}; ${kind}; ${verified}`,
   edgeDescription: (from: string, to: string, kind: "main" | "fork" | "branch" | "return", verified: "static" | "dynamic" | "missing") => `${from} → ${to}. Ребро ${kind}, проверка: ${verified}`,
-  // Переключатель режимов CJM (план 2026-07-29 §6.1, T2b). На линейном документе
-  // (без `doc.flows`) переключатель скрыт: показывать нечего, кроме ленты «Экраны CJM».
-  viewSwitchAria: "Режим CJM",
+  // Переключатель режимов разбора (план 2026-07-29 §6.1, T2b). На линейном документе
+  // (без `doc.flows`) переключатель скрыт: показывать нечего, кроме ленты экранов.
+  // Живёт в канве над счётчиками, а не в actions хрома (план 2026-07-31, S1):
+  // `PrototypeChrome` рендерится ещё из плеера и редактора, где `layout` неизвестен.
+  viewSwitchAria: "Режим просмотра",
   viewScenarios: "Сценарии",
   viewLanes: "Дорожки",
+  // Actions хрома на вью разбора. «без сценария» — явная подпись: презентация
+  // срезает `flow`/`step`, и тихая потеря контекста запрещена (план 2026-07-31, M7).
+  share: "Поделиться",
+  present: "Презентация · без сценария",
   // Простыня «Сценарии»: секции по флоу в DFS-порядке дерева `flow.parentId`.
   sheetAria: "Сценарии прототипа",
   treeAria: "Дерево сценариев",
