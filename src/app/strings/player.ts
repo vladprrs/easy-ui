@@ -56,6 +56,7 @@ export const player = {
   openLatestPublished: "Открыть актуальную",
   scenarioAria: "Навигация по сценарию",
   scenarioSelect: "Сценарий",
+  scenarioTreeAria: "Дерево сценариев",
   scenarioNone: "Без сценария",
   scenarioStep: (current: number, total: number) => `Шаг ${current} из ${total}`,
   scenarioPrevious: "Предыдущий шаг",
@@ -137,30 +138,33 @@ export const share = {
   revokeError: "Не удалось отозвать ссылку.",
 } as const;
 
-// Сценарии взаимодействия: рекордер и клиентский прогон (волна 6, план 2026-07-27).
+// Проверки взаимодействия: рекордер и клиентский прогон (волна 6, план 2026-07-27).
+// Терминология (план 2026-07-29 §1): записи рекордера — это **«Проверки»**
+// (`expectScreen`/`expectText`/`expectDisabled` — assertions), а «Сценарии» — это флоу
+// документа. Схема, API и имя таблицы `prototype_scenarios` не менялись.
 export const scenarios = {
-  action: "Сценарии",
-  panelAria: "Сценарии взаимодействия",
-  title: "Сценарии",
-  close: "Закрыть панель сценариев",
-  listAria: "Сохранённые сценарии",
-  empty: "Сценариев пока нет — запишите первый.",
-  loading: "Загрузка сценариев…",
-  loadError: "Не удалось загрузить сценарии.",
-  saveError: "Не удалось сохранить сценарий.",
-  deleteError: "Не удалось удалить сценарий.",
+  action: "Проверки",
+  panelAria: "Проверки взаимодействия",
+  title: "Проверки",
+  close: "Закрыть панель проверок",
+  listAria: "Сохранённые проверки",
+  empty: "Проверок пока нет — запишите первую.",
+  loading: "Загрузка проверок…",
+  loadError: "Не удалось загрузить проверки.",
+  saveError: "Не удалось сохранить проверку.",
+  deleteError: "Не удалось удалить проверку.",
   record: "Записать",
   recording: "Идёт запись",
   stop: "Остановить запись",
   recordHint: "Кликайте по прототипу — клики и переходы попадают в шаги.",
-  stepsAria: "Шаги сценария",
+  stepsAria: "Шаги проверки",
   stepsEmpty: "Шагов пока нет.",
   stepRemove: "Удалить шаг",
-  nameLabel: "Название сценария",
+  nameLabel: "Название проверки",
   namePlaceholder: "Например: оплата бонусами",
   save: "Сохранить",
   saving: "Сохраняем…",
-  saved: "Сценарий сохранён.",
+  saved: "Проверка сохранена.",
   discard: "Сбросить",
   replay: "Прогнать",
   replaying: "Прогон…",
@@ -182,13 +186,13 @@ export const scenarios = {
   statusLabel: { pass: "ок", fail: "провал", stale: "устарел" } as const,
   runSummary: (passed: number, total: number, stale: number) =>
     stale ? `${passed}/${total} ок · устаревших: ${stale}` : `${passed}/${total} ок`,
-  runFailed: "Сценарий разошёлся с прототипом.",
-  runPassed: "Сценарий проходит.",
+  runFailed: "Проверка разошлась с прототипом.",
+  runPassed: "Проверка проходит.",
   pointerLabel: "Указатель состояния (/path)",
   valueLabel: "Значение (JSON)",
   invalidValue: "Значение должно быть корректным JSON.",
   invalidStep: "Шаг заполнен неверно.",
-  ownerOnly: "Сохранять сценарии может только владелец прототипа.",
+  ownerOnly: "Сохранять проверки может только владелец прототипа.",
 } as const;
 
 export const inspector = {

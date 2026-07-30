@@ -249,6 +249,34 @@ button { cursor: pointer; }
     overflow: visible !important;
   }
 
+  /* Режим «Сценарии» (дефолт с T2b): дерево на печати не нужно, а ленты шагов
+     обязаны развернуться — иначе печатается только первый видимый экран секции. */
+  .cjm-sheet {
+    display: block !important;
+    max-width: none !important;
+  }
+
+  .cjm-sheet-tree {
+    display: none !important;
+  }
+
+  .cjm-sheet-section {
+    margin: 0 0 8mm !important;
+  }
+
+  .cjm-sheet-strip {
+    display: block !important;
+    overflow: visible !important;
+  }
+
+  .cjm-sheet-strip > li {
+    display: inline-block;
+    margin: 0 5mm 8mm 0;
+    vertical-align: top;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
   .cjm-grid {
     display: block !important;
     width: auto !important;

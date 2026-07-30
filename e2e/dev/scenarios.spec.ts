@@ -8,7 +8,7 @@ test("records a click flow in the player, replays it and saves it next to the pr
   await expect(stage.getByText("Hello, Ada!")).toBeVisible();
 
   await page.getByTestId("scenario-toggle").click();
-  const panel = page.getByRole("complementary", { name: "Сценарии взаимодействия" });
+  const panel = page.getByRole("complementary", { name: "Проверки взаимодействия" });
   await expect(panel).toBeVisible();
 
   // Запись: клик по прототипу продолжает работать (переход происходит), но попадает в шаги.
@@ -33,9 +33,9 @@ test("records a click flow in the player, replays it and saves it next to the pr
   await expect(page).toHaveURL(/\/p\/hello-world\/s\/details$/);
 
   // Сохранение — сценарий появляется в списке рядом с прототипом.
-  await panel.getByLabel("Название сценария").fill("E2E запись");
+  await panel.getByLabel("Название проверки").fill("E2E запись");
   await page.getByTestId("scenario-save").click();
-  const saved = panel.getByRole("list", { name: "Сохранённые сценарии" });
+  const saved = panel.getByRole("list", { name: "Сохранённые проверки" });
   await expect(saved.getByText("E2E запись")).toBeVisible();
 
   // Устаревший шаг не роняет прогон: ключ, которого нет в этой ревизии, помечается «устарел».

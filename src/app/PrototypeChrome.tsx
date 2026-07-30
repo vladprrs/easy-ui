@@ -46,13 +46,21 @@ function Segment({ active, to, children }: { active: boolean; to: string; childr
   return <Link aria-current={active ? "page" : undefined} className={active ? segmentActive : segmentIdle} to={to}>{children}</Link>;
 }
 
+/**
+ * Между вью прототипа переносится только явный allowlist параметров: сценарный
+ * контекст (`flow`/`step`) и режим CJM (`view`). Последний — липкость режима
+ * (план 2026-07-29 §7 T2b): без него уход из дорожек в плеер и обратно молча
+ * возвращал бы пользователя в дефолтные «Сценарии».
+ */
 function transferScenarioQuery(path: string, search: string): string {
   const source = new URLSearchParams(search);
   const target = new URLSearchParams();
   const flow = source.get("flow");
   const step = source.get("step");
+  const view = source.get("view");
   if (flow !== null) target.set("flow", flow);
   if (step !== null) target.set("step", step);
+  if (view !== null) target.set("view", view);
   const query = target.toString();
   return query === "" ? path : `${path}?${query}`;
 }

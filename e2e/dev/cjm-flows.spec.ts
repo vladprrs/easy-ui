@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-const branchingPath = "/p/branching-checkout/cjm";
+// Дорожки — advanced-режим за `?view=lanes` (T2b): дефолт `/p/:id/cjm` — «Сценарии».
+const branchingPath = "/p/branching-checkout/cjm?view=lanes";
 
 async function expectOrthogonalEdgesAvoidTiles(page: Page) {
   const failures = await page.locator(".cjm-edges-overlay").evaluate((svg) => {
@@ -142,7 +143,7 @@ const scrollToEnd = (target: Locator) => target.evaluate((node) => {
 });
 
 test("limit fixture mounts lane tiles lazily while every node wrapper stays measurable", async ({ page }) => {
-  await page.goto("/p/flows-perf/cjm");
+  await page.goto("/p/flows-perf/cjm?view=lanes");
 
   await expect(page.getByTestId("cjm-lane-label")).toHaveCount(12);
   // Обёртки узлов и геометрия грида не зависят от ленивости: рёбра меряют обёртки,
@@ -171,7 +172,7 @@ test("limit fixture mounts lane tiles lazily while every node wrapper stays meas
 });
 
 test("unassigned screens stay collapsed, then mount lazily without a batch button", async ({ page }) => {
-  await page.goto("/p/flows-perf/cjm");
+  await page.goto("/p/flows-perf/cjm?view=lanes");
   await expect(page.locator("[data-cjm-node]")).toHaveCount(178);
 
   const toggle = page.getByRole("button", { name: "Вне сценариев, 61" });

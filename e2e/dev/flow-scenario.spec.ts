@@ -6,7 +6,7 @@ test("direct flow and step entry activates ScenarioBar at the canonical occurren
   await page.goto("/p/branching-checkout/s/delivery?flow=happy-path&step=2");
 
   const bar = scenarioBar(page);
-  await expect(bar.getByRole("combobox", { name: "Сценарий" })).toHaveValue("happy-path");
+  await expect(bar.getByTestId("scenario-flow-button")).toContainText("Успешная оплата");
   await expect(bar.getByRole("status")).toHaveText("Шаг 3 из 5");
   await expect(bar.getByRole("button", { name: "Предыдущий шаг" })).toBeEnabled();
   await expect(bar.getByRole("button", { name: "Следующий шаг" })).toBeEnabled();
@@ -60,9 +60,11 @@ test("Player to CJM to a step tile round-trip opens that exact scenario occurren
   await page.getByRole("link", { name: "CJM", exact: true }).click();
   await expect(page).toHaveURL(/\/p\/branching-checkout\/cjm\?flow=bank-declined&step=4$/);
 
-  // Тайлы CJM монтируются лениво (T2a): обёртка узла в DOM всегда, тайл — после попадания во вьюпорт.
-  await page.locator('[data-cjm-node][data-screen-id="cancel-reason"]').scrollIntoViewIfNeeded();
-  await page.getByRole("link", { name: /Открыть экран «Причина отмены».*в плеере/ }).click();
+  // Дефолтный режим CJM — «Сценарии» (T2b): шаг живёт в ленте своей секции.
+  // Тайлы монтируются лениво (T2a): обёртка в DOM всегда, тайл — после попадания во вьюпорт.
+  const step = page.locator('.cjm-sheet-section[data-flow-id="cancellation"] li[data-screen-id="cancel-reason"]');
+  await step.scrollIntoViewIfNeeded();
+  await step.getByRole("link", { name: /Открыть экран «Причина отмены».*в плеере/ }).click();
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/cancel-reason\?flow=cancellation&step=3$/);
   await expect(scenarioBar(page).getByRole("status")).toHaveText("Шаг 4 из 6");
 
@@ -80,5 +82,5 @@ test("Present strips scenario query, preserves other query, and Escape returns t
   await expect(page.getByText("Esc — вернуться в плеер")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/delivery\?debug=1&theme=dark$/);
-  await expect(scenarioBar(page).getByRole("combobox", { name: "Сценарий" })).toHaveValue("");
+  await expect(scenarioBar(page).getByTestId("scenario-flow-button")).toContainText("Без сценария");
 });

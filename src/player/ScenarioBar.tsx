@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import type { Flow, PrototypeDoc } from "../prototype/schema";
 import { player } from "../app/strings/player";
+import { FlowTree } from "../cjm/FlowTree";
+import { buildFlowTree, flowBreadcrumb } from "../prototype/flowGraph";
 import { usePlayerNavigation } from "./navigation";
 
 interface ScenarioProgress {
@@ -25,6 +27,80 @@ function withScenarioQuery(search: string, flowId: string | null, step: number |
   else params.set("step", String(step));
   const next = params.toString();
   return next === "" ? "" : `?${next}`;
+}
+
+/**
+ * Выбор сценария в плеере (план 2026-07-29 §7 T2b). `<select>` заменён кнопкой с
+ * именем текущего сценария и breadcrumb'ом предков: дерево иерархии в однострочную
+ * полосу не помещается, поэтому оно живёт поповером. На плоском документе
+ * breadcrumb пуст и поведение остаётся прежним.
+ */
+function ScenarioPicker({ flows, flow, onSelect }: {
+  flows: NonNullable<PrototypeDoc["flows"]>;
+  flow: Flow | null;
+  onSelect: (flowId: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const roots = useMemo(() => buildFlowTree(flows), [flows]);
+  const ancestors = useMemo(
+    () => flow === null ? [] : flowBreadcrumb(flows, flow.id).slice(0, -1),
+    [flow, flows],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target === null) return;
+      if (buttonRef.current?.contains(target) === true || popoverRef.current?.contains(target) === true) return;
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  const choose = (flowId: string | null) => {
+    onSelect(flowId);
+    setOpen(false);
+    buttonRef.current?.focus();
+  };
+
+  return <div className="relative flex items-center gap-2">
+    <span id="scenario-picker-label">{player.scenarioSelect}</span>
+    <button
+      ref={buttonRef}
+      type="button"
+      id="scenario-picker-button"
+      data-testid="scenario-flow-button"
+      // Имя кнопки — «Сценарий» + имя текущего сценария: без ссылки на подпись
+      // скринридер прочитал бы только имя флоу, потеряв назначение контрола.
+      aria-labelledby="scenario-picker-label scenario-picker-button"
+      aria-haspopup="tree"
+      aria-expanded={open}
+      onClick={() => setOpen((current) => !current)}
+      className="flex max-w-72 items-center gap-1 rounded-full border border-eui-ink/15 bg-white px-3 py-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand"
+    >
+      {ancestors.length === 0 ? null : <span className="min-w-0 truncate text-xs text-eui-slate-500">{ancestors.map((item) => item.name).join(" / ")} /</span>}
+      <span className="min-w-0 truncate">{flow?.name ?? player.scenarioNone}</span>
+      <span aria-hidden="true" className="shrink-0 text-eui-slate-400">▾</span>
+    </button>
+    {open ? <div
+      ref={popoverRef}
+      data-testid="scenario-flow-popover"
+      onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setOpen(false); buttonRef.current?.focus(); } }}
+      className="absolute left-0 top-full z-40 mt-1 max-h-80 w-72 overflow-auto rounded-2xl border border-eui-ink/10 bg-white p-2 shadow-xl"
+    >
+      <button
+        type="button"
+        aria-current={flow === null ? "true" : undefined}
+        onClick={() => choose(null)}
+        className={`w-full rounded-lg px-2 py-1 text-left ${flow === null ? "bg-eui-lilac-100 font-semibold text-eui-brand" : "hover:bg-eui-lilac-50"}`}
+      >{player.scenarioNone}</button>
+      <FlowTree roots={roots} activeFlowId={flow?.id ?? null} onActivate={choose} label={player.scenarioTreeAria} />
+    </div> : null}
+  </div>;
 }
 
 export function ScenarioBar({ doc, currentScreen, runtimeKey }: {
@@ -117,8 +193,8 @@ export function ScenarioBar({ doc, currentScreen, runtimeKey }: {
     replaceQuery(withScenarioQuery(location.search, flow.id, target));
   };
 
-  const onFlowChange = (flowId: string) => {
-    replaceQuery(withScenarioQuery(location.search, flowId === "" ? null : flowId, null));
+  const onFlowChange = (flowId: string | null) => {
+    replaceQuery(withScenarioQuery(location.search, flowId, null));
   };
 
   const outside = flow !== null && matches.length === 0;
@@ -129,18 +205,7 @@ export function ScenarioBar({ doc, currentScreen, runtimeKey }: {
     data-testid="scenario-bar"
     className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-eui-brand/20 bg-eui-lilac-50 px-4 py-2 font-eui-ui text-sm text-eui-ink sm:px-6"
   >
-    <label className="flex items-center gap-2">
-      <span>{player.scenarioSelect}</span>
-      <select
-        aria-label={player.scenarioSelect}
-        className="max-w-64 rounded-full border border-eui-ink/15 bg-white px-3 py-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand"
-        value={flow?.id ?? ""}
-        onChange={(event) => onFlowChange(event.target.value)}
-      >
-        <option value="">{player.scenarioNone}</option>
-        {flows.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-      </select>
-    </label>
+    <ScenarioPicker flows={flows} flow={flow} onSelect={onFlowChange} />
 
     {flow === null ? null : <>
       {confirmedStep === null

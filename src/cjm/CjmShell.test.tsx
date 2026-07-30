@@ -138,6 +138,22 @@ describe("CjmShell", () => {
     await waitFor(() => expect(document.title).toBe("Checkout journey · CJM — easy-ui"));
   });
 
+  // Обязательный контракт плана §6.1: документ без `doc.flows` — это сегодня 100 % прода,
+  // и дефолтный режим «Сценарии» обязан показывать ту же линейную ленту, что и раньше.
+  it("renders the linear CJM strip in the default mode and hides the view switch without flows", async () => {
+    renderAt("/p/journey/cjm");
+    expect(await screen.findByRole("list", { name: "Экраны CJM" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Режим CJM" })).toBeNull();
+    expect(document.querySelector(".cjm-sheet")).toBeNull();
+    expect(document.querySelector(".cjm-grid")).toBeNull();
+  });
+
+  it("ignores ?view=lanes on a flowless document and still renders the linear strip", async () => {
+    renderAt("/p/journey/cjm?view=lanes");
+    expect(await screen.findByRole("list", { name: "Экраны CJM" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Режим CJM" })).toBeNull();
+  });
+
   it("keeps published tile links version-aware", async () => {
     renderAt("/p/journey/v/2/cjm");
     expect((await screen.findByRole("link", { name: "Открыть экран «Success» прототипа «Checkout journey» в плеере" })).getAttribute("href")).toBe("/p/journey/v/2/s/success");
@@ -197,7 +213,7 @@ describe("CjmShell", () => {
 
   it("renders scenario lanes, verified edge styles, legend, flow links, and collapsed unassigned screens", async () => {
     mocks.getDraft.mockResolvedValue({ ...draft, doc: flowDoc });
-    renderAt("/p/journey/cjm");
+    renderAt("/p/journey/cjm?view=lanes");
     expect(await screen.findAllByTestId("cjm-lane-label")).toHaveLength(2);
     expect(screen.getByText("Успешная оплата")).toBeTruthy();
     expect(screen.getByText("Основной путь")).toBeTruthy();
@@ -219,22 +235,23 @@ describe("CjmShell", () => {
 
   it("points the chrome player segment at the scenario step screen for a valid flow/step pair", async () => {
     mocks.getDraft.mockResolvedValue({ ...draft, doc: flowDoc });
-    renderAt("/p/journey/cjm?flow=bank-decline&step=1");
+    renderAt("/p/journey/cjm?flow=bank-decline&step=1&view=lanes");
     await screen.findAllByTestId("cjm-lane-label");
-    expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey/s/declined?flow=bank-decline&step=1");
+    // Липкость режима (T2b): `view` переносится в плеер вместе с flow/step.
+    expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey/s/declined?flow=bank-decline&step=1&view=lanes");
   });
 
   it("falls back to the route base in chrome when the flow/step pair is invalid", async () => {
     mocks.getDraft.mockResolvedValue({ ...draft, doc: flowDoc });
-    renderAt("/p/journey/cjm?flow=bank-decline&step=9");
+    renderAt("/p/journey/cjm?flow=bank-decline&step=9&view=lanes");
     await screen.findAllByTestId("cjm-lane-label");
-    expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey?flow=bank-decline&step=9");
+    expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/journey?flow=bank-decline&step=9&view=lanes");
   });
 
   it("mounts lane tiles only after intersection and keeps every node wrapper measurable", async () => {
     stubIntersectionObserver();
     mocks.getDraft.mockResolvedValue({ ...draft, doc: flowDoc });
-    renderAt("/p/journey/cjm");
+    renderAt("/p/journey/cjm?view=lanes");
     await screen.findAllByTestId("cjm-lane-label");
 
     // Обёртки узлов — в DOM с первого layout: на них стоит геометрия рёбер.
@@ -261,7 +278,7 @@ describe("CjmShell", () => {
     }));
     const batched = prototypeDocSchema.parse({ ...flowDoc, screens: [...flowDoc.screens.filter((item) => item.id !== "secret"), ...extras] });
     mocks.getDraft.mockResolvedValue({ ...draft, doc: batched });
-    renderAt("/p/journey/cjm");
+    renderAt("/p/journey/cjm?view=lanes");
     fireEvent.click(await screen.findByRole("button", { name: "Вне сценариев, 21" }));
 
     const section = document.querySelector(".cjm-unassigned")!;
@@ -277,7 +294,7 @@ describe("CjmShell", () => {
   it("forces every lane tile to mount before printing", async () => {
     stubIntersectionObserver();
     mocks.getDraft.mockResolvedValue({ ...draft, doc: flowDoc });
-    renderAt("/p/journey/cjm");
+    renderAt("/p/journey/cjm?view=lanes");
     await screen.findAllByTestId("cjm-lane-label");
     expect(document.querySelectorAll(".cjm-grid .cjm-tile")).toHaveLength(0);
 

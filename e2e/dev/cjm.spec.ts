@@ -118,3 +118,55 @@ test("settings CJM connects measured tile centers and labels authored transition
     expect(endpoint.targetDelta).toBeLessThan(1);
   }
 });
+
+/**
+ * Иерархия сценариев на фикстуре `flows-tree` (план 2026-07-29 §7 T2b): дефолтный режим
+ * «Сценарии» и advanced-режим дорожек за `?view=lanes`.
+ */
+const treeFlowOrder = ["main-line", "payments-hub", "phone-transfer-shortcut", "receipt-leaf", "history-line"];
+
+test("flows-tree opens in the scenarios sheet, reads a child branch end-to-end and switches to lanes", async ({ page }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/p/flows-tree/cjm");
+
+  // Секции — в DFS-порядке дерева `flow.parentId`, с отступом по глубине.
+  const sheetSections = page.locator(".cjm-sheet-section");
+  await expect(sheetSections).toHaveCount(5);
+  expect(await sheetSections.evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).dataset.flowId))).toEqual(treeFlowOrder);
+  expect(await sheetSections.evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).dataset.flowDepth))).toEqual(["1", "2", "3", "3", "1"]);
+
+  const tree = page.getByRole("tree", { name: "Дерево сценариев" });
+  await expect(tree.getByRole("treeitem")).toHaveCount(5);
+  await expect(tree.getByRole("treeitem").first()).toHaveAttribute("aria-current", "true");
+
+  // Ключевая ценность простыни: у дочернего флоу оба шага — якоря главной линии,
+  // и в дорожках собственных тайлов у них нет. Здесь ветка читается целиком.
+  const shortcut = sheetSections.nth(2);
+  await expect(shortcut.locator("li[data-flow-step]")).toHaveCount(2);
+  await expect(shortcut.getByRole("heading", { name: "Быстрый перевод из раздела" })).toBeVisible();
+  await expect(shortcut.locator('[data-verified="missing"]')).toHaveCount(1);
+  await expect(sheetSections.first().locator('[data-verified="static"]')).toHaveCount(4);
+
+  // Ленивость (обёртка T2a): счёт по факту — тайлов в этом режиме больше, чем `layout.tileCount`.
+  const wrappers = await page.locator(".cjm-sheet [data-lazy-mounted]").count();
+  expect(wrappers).toBe(14);
+  expect(await page.locator('.cjm-sheet [data-lazy-mounted="true"]').count()).toBeLessThan(wrappers);
+
+  await expect(sheetSections.nth(3).getByRole("link", { name: "Открыть в плеере" }))
+    .toHaveAttribute("href", "/p/flows-tree/s/transfer-receipt?flow=receipt-leaf&step=0");
+  await sheetSections.nth(3).getByRole("button", { name: "Скопировать ссылку" }).click();
+  await expect(sheetSections.nth(3).getByRole("button", { name: "Ссылка скопирована" })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("/p/flows-tree/cjm?flow=receipt-leaf");
+
+  // Дорожки: только корневые флоу, простыня уходит, режим липнет к сегментам хрома.
+  await page.getByRole("link", { name: "Дорожки", exact: true }).click();
+  await expect(page).toHaveURL(/\/p\/flows-tree\/cjm\?view=lanes$/);
+  await expect(page.getByTestId("cjm-lane-label")).toHaveCount(2);
+  await expect(page.locator(".cjm-sheet")).toHaveCount(0);
+  await expect(page.getByLabel("Легенда рёбер сценариев")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Плеер", exact: true })).toHaveAttribute("href", "/p/flows-tree?view=lanes");
+
+  await page.getByRole("link", { name: "Сценарии", exact: true }).click();
+  await expect(page).toHaveURL(/\/p\/flows-tree\/cjm$/);
+  await expect(page.locator(".cjm-sheet-section")).toHaveCount(5);
+});

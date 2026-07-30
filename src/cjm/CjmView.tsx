@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "react-router";
+import { Link, useLocation } from "react-router";
 import { PrototypeChrome } from "../app/PrototypeChrome";
 import { buildPlayerPath } from "../player/navigation";
 import { cjm, cjmDocumentTitle } from "../app/strings/cjm";
@@ -14,7 +14,37 @@ import { CjmEdgesOverlay, computeLogicalEdgeRoutes } from "./CjmEdgesOverlay";
 import { CjmScreenTile } from "./CjmScreenTile";
 import { createCjmRegistry } from "./cjmRegistry";
 import { LazyMount } from "./LazyMount";
+import { ScenarioSheet } from "./ScenarioSheet";
 import { computeCjmLanes, type CjmLayout } from "./lanesLayout";
+
+/** Режим `/p/:id/cjm`: дефолт — «Сценарии», дорожки живут за `?view=lanes` (план §6.1). */
+export type CjmViewMode = "scenarios" | "lanes";
+
+const readViewMode = (search: string): CjmViewMode => new URLSearchParams(search).get("view") === "lanes" ? "lanes" : "scenarios";
+
+/** Ссылка режима: остальные параметры (`flow`/`step`) сохраняются как есть. */
+function viewSearch(search: string, mode: CjmViewMode): string {
+  const params = new URLSearchParams(search);
+  if (mode === "lanes") params.set("view", "lanes");
+  else params.delete("view");
+  const query = params.toString();
+  return query === "" ? "" : `?${query}`;
+}
+
+const modeBase = "rounded-full px-3 py-1 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand";
+
+function ViewSwitch({ mode, search }: { mode: CjmViewMode; search: string }) {
+  return <nav aria-label={cjm.viewSwitchAria} className="flex items-center gap-1 rounded-full bg-eui-lilac-100 p-1 font-eui-ui text-xs">
+    {([["scenarios", cjm.viewScenarios], ["lanes", cjm.viewLanes]] as const).map(([id, label]) => <Link
+      key={id}
+      to={{ search: viewSearch(search, id) }}
+      replace
+      aria-current={mode === id ? "page" : undefined}
+      data-cjm-view={id}
+      className={mode === id ? `${modeBase} bg-white font-bold text-eui-ink shadow-sm` : `${modeBase} text-eui-slate-500 hover:text-eui-ink`}
+    >{label}</Link>)}
+  </nav>;
+}
 
 interface ConnectorGeometry {
   left: number;
@@ -111,6 +141,9 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
   const routing = useMemo(() => computeLogicalEdgeRoutes(layout), [layout]);
   const screens = useMemo(() => new Map(doc.screens.map((screen) => [screen.id, screen])), [doc.screens]);
   const location = useLocation();
+  // Контракт §6.1: на линейном документе (без `doc.flows` — сегодня это весь прод)
+  // дефолтный режим показывает ту же ленту «Экраны CJM», а переключатель скрыт.
+  const mode = layout.linear ? "scenarios" : readViewMode(location.search);
   // Голый routeBase редиректится на startScreen, и ScenarioBar удалил бы корректный step —
   // при валидной паре flow/step хром получает явный Player-URL экрана шага.
   const playerPath = useMemo(() => {
@@ -139,7 +172,7 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
   // тело вью — только stage (описание + лента экранов).
   return <main className="cjm-root flex h-full min-h-0 flex-col">
     <ThemeStyle content={themeContent} />
-    <PrototypeChrome prototypeId={doc.id} prototypeName={doc.name} view="cjm" version={version} playerPath={playerPath} status={metadata} />
+    <PrototypeChrome prototypeId={doc.id} prototypeName={doc.name} view="cjm" version={version} playerPath={playerPath} status={metadata} actions={layout.linear ? undefined : <ViewSwitch mode={mode} search={location.search} />} />
     <div className="cjm-stage min-h-0 flex-1 overflow-y-auto bg-eui-lav p-6 sm:p-8">
       {doc.description ? <p className="mx-auto max-w-[1600px] font-eui-ui text-eui-slate-500">{doc.description}</p> : null}
       {layout.linear ? <ol className="cjm-list mx-auto mt-8 flex items-start gap-16 overflow-x-auto pb-8" aria-label={cjm.screensAria}>
@@ -147,7 +180,13 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
         <LazyMount placeholderHeight={placeholder.height} placeholderWidth={placeholder.width}>{renderTile(screen.id)}</LazyMount>
         {index < doc.screens.length - 1 ? <CjmConnector sourceScreenId={screen.id} targetScreenId={doc.screens[index + 1]!.id} /> : null}
       </li>)}
-      </ol> : <>
+      </ol> : mode === "scenarios" ? <ScenarioSheet
+        doc={doc}
+        graph={graph}
+        routeBase={routeBase}
+        placeholder={placeholder}
+        renderTile={renderTile}
+      /> : <>
         <div className="cjm-grid-scroll mt-8 overflow-x-auto pb-8">
           <div
             className="cjm-grid relative mx-auto grid w-max items-start"

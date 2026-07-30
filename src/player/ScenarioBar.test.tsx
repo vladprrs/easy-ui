@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider, useLocation, useParams } from "react-router";
 import { describe, expect, it } from "vitest";
 import { PrototypeChrome } from "../app/PrototypeChrome";
@@ -99,17 +99,47 @@ describe("ScenarioBar guided browse", () => {
     await waitFor(() => expect(router.state.location.search).toBe("?flow=repeat&debug=1&step=2"));
   });
 
-  it("switches flows query-only and resolves the current screen in the selected flow", async () => {
+  it("switches flows query-only through the tree popover and resolves the current screen", async () => {
     const doc = scenarioDoc([
       { id: "main", name: "Основной", steps: [{ screenId: "one" }, { screenId: "two" }] },
       { id: "other", name: "Другой", steps: [{ screenId: "one" }, { screenId: "three" }] },
     ]);
     const { router } = renderScenario(doc, "/p/demo/s/one?flow=main&step=0");
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Сценарий" }), { target: { value: "other" } });
+    const picker = screen.getByTestId("scenario-flow-button");
+    expect(picker.textContent).toContain("Основной");
+    expect(picker.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(picker);
+    fireEvent.click(within(screen.getByRole("tree", { name: "Дерево сценариев" })).getByText("Другой"));
 
     await waitFor(() => expect(router.state.location.search).toBe("?flow=other&step=0"));
-    expect(screen.getByRole("combobox", { name: "Сценарий" })).toHaveProperty("value", "other");
+    expect(screen.getByTestId("scenario-flow-button").textContent).toContain("Другой");
+    expect(screen.queryByTestId("scenario-flow-popover")).toBeNull();
+  });
+
+  // Дерево вместо `<select>` (план §7 T2b): breadcrumb показывает предков дочернего сценария.
+  it("shows the ancestor breadcrumb and picks a nested scenario from the tree", async () => {
+    const doc = scenarioDoc([
+      { id: "main", name: "Основной", steps: [{ screenId: "one" }, { screenId: "two" }] },
+      { id: "child", name: "Ветка", parentId: "main", steps: [{ screenId: "one" }, { screenId: "three" }] },
+    ]);
+    const { router } = renderScenario(doc, "/p/demo/s/one?flow=main&step=0");
+
+    fireEvent.click(screen.getByTestId("scenario-flow-button"));
+    const tree = screen.getByRole("tree", { name: "Дерево сценариев" });
+    const items = within(tree).getAllByRole("treeitem");
+    expect(items.map((item) => item.getAttribute("aria-level"))).toEqual(["1", "2"]);
+    fireEvent.click(within(tree).getByText("Ветка"));
+
+    await waitFor(() => expect(router.state.location.search).toBe("?flow=child&step=0"));
+    const picker = screen.getByTestId("scenario-flow-button");
+    expect(picker.textContent).toContain("Основной /");
+    expect(picker.textContent).toContain("Ветка");
+
+    fireEvent.click(picker);
+    fireEvent.click(screen.getByRole("button", { name: "Без сценария" }));
+    await waitFor(() => expect(router.state.location.search).toBe(""));
+    expect(screen.getByTestId("scenario-flow-button").textContent).toContain("Без сценария");
   });
 
   it("preserves PlayerNavigationProvider session state during the post-navigation query replace", async () => {
@@ -195,5 +225,18 @@ describe("scenario query boundaries", () => {
 
     expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/demo/s/two?flow=main&step=1");
     expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/demo/cjm?flow=main&step=1");
+  });
+
+  // Липкость режима CJM (план §7 T2b): без переноса `view` возврат из плеера молча
+  // приземлял бы пользователя в дефолтные «Сценарии».
+  it("carries the CJM view mode between Player and CJM", () => {
+    const router = createMemoryRouter([{
+      path: "*",
+      element: <PrototypeChrome prototypeId="demo" prototypeName="Demo" view="player" />,
+    }], { initialEntries: ["/p/demo/s/two?flow=main&step=1&view=lanes&debug=1"] });
+    render(<RouterProvider router={router} />);
+
+    expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/demo/cjm?flow=main&step=1&view=lanes");
+    expect(screen.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/demo?flow=main&step=1&view=lanes");
   });
 });
