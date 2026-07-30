@@ -1,6 +1,6 @@
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { PROTOTYPE_KINDS, type PrototypeKind } from "../../api/client";
-import { chipActive, pillWhite, segmentActive, segmentIdle, segmentTrack } from "../../app/chrome";
+import { pillWhite, segmentActive, segmentIdle, segmentTrack } from "../../app/chrome";
 import { gallery } from "../../app/strings/gallery";
 import { kindsForTab, type GallerySort, type GalleryTab } from "../galleryModel";
 
@@ -26,110 +26,69 @@ const TABS: readonly [GalleryTab, string][] = [
   ["service", gallery.tabService],
 ];
 
+/** Белая пилюля-селект: выбранное значение читается прямо в пилюле, раскрывать нечего. */
+function FilterSelect(props: { label: string; value: string; onChange: (value: string) => void; children: ReactNode }): ReactElement {
+  return <label className="shrink-0">
+    <span className="sr-only">{props.label}</span>
+    <select className={`${pillWhite} max-w-[220px] appearance-none pr-4`} value={props.value} onChange={(event) => props.onChange(event.target.value)}>
+      {props.children}
+    </select>
+  </label>;
+}
+
 /**
- * Тулбар галереи (макет 01) живёт прямо на лавандовой канве, а не в панели:
- * сегмент разделов на приглушённом треке, поиск и фильтры — белые пилюли.
+ * Тулбар галереи (макет 01) живёт прямо на лавандовой канве и занимает **один ряд**:
+ * сегмент разделов · поиск · фильтры · сортировка.
+ *
+ * Фильтры — селекты, а не ряды чипов: чипы дизайн-систем и видов занимали над гридом
+ * две строки, в которых выбранное значение всё равно приходилось искать глазами.
+ * Фильтр вида показывается, только когда в текущем разделе есть из чего выбирать.
  */
 export function GalleryToolbar(props: GalleryToolbarProps): ReactElement {
-  const {
-    tab,
-    onTabChange,
-    systems,
-    selectedSystem,
-    onSystemChange,
-    kind,
-    onKindChange,
-    query,
-    onQueryChange,
-    sort,
-    onSortChange,
-    showSearch,
-  } = props;
-  // Архив показывает прототипы любого вида, поэтому чипы там перечисляют всю таксономию.
+  const { tab, onTabChange, systems, selectedSystem, onSystemChange, kind, onKindChange, query, onQueryChange, sort, onSortChange, showSearch } = props;
+  // Архив показывает прототипы любого вида, поэтому фильтр там перечисляет всю таксономию.
   const kinds = tab === "archive" ? [...PROTOTYPE_KINDS] : kindsForTab(tab, PROTOTYPE_KINDS);
 
   return (
-    <section className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className={`${segmentTrack} max-w-full flex-nowrap overflow-x-auto`} aria-label={gallery.tabsAria}>
-          {TABS.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              aria-pressed={tab === id}
-              onClick={() => onTabChange(id)}
-              className={tab === id ? segmentActive : segmentIdle}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {showSearch ? (
-          <label className="max-sm:w-full sm:w-80">
-            <span className="sr-only">{gallery.searchLabel}</span>
-            <input
-              type="search"
-              className="w-full rounded-full bg-white px-5 py-2.5 text-sm text-eui-ink placeholder:text-eui-slate-400"
-              value={query}
-              placeholder={gallery.searchPlaceholder}
-              onChange={(event) => onQueryChange(event.target.value)}
-            />
-          </label>
-        ) : null}
-        <label className="ml-auto flex shrink-0 items-center gap-2 text-sm text-eui-slate-500">
-          <span className="sr-only sm:not-sr-only">{gallery.sortLabel}</span>
-          <select
-            className={`${pillWhite} appearance-none pr-4`}
-            value={sort}
-            onChange={(event) => onSortChange(event.target.value as GallerySort)}
-          >
-            <option value="updated">{gallery.sortUpdated}</option>
-            <option value="name">{gallery.sortName}</option>
-          </select>
+    <section className="flex flex-wrap items-center gap-3">
+      <div className={`${segmentTrack} max-w-full flex-nowrap overflow-x-auto`} aria-label={gallery.tabsAria}>
+        {TABS.map(([id, label]) => (
+          <button key={id} type="button" aria-pressed={tab === id} onClick={() => onTabChange(id)} className={tab === id ? segmentActive : segmentIdle}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {showSearch ? (
+        <label className="max-sm:w-full sm:w-80">
+          <span className="sr-only">{gallery.searchLabel}</span>
+          <input
+            type="search"
+            className="w-full rounded-full bg-white px-5 py-2.5 text-sm text-eui-ink placeholder:text-eui-slate-400"
+            value={query}
+            placeholder={gallery.searchPlaceholder}
+            onChange={(event) => onQueryChange(event.target.value)}
+          />
         </label>
-      </div>
-      <div className="flex flex-nowrap gap-2 overflow-x-auto sm:flex-wrap" aria-label={gallery.designSystemsAria}>
-        <button
-          type="button"
-          aria-pressed={selectedSystem === null}
-          onClick={() => onSystemChange(null)}
-          className={selectedSystem === null ? chipActive : `${pillWhite} px-3 py-1 text-xs`}
-        >
-          {gallery.allSystems}
-        </button>
-        {systems.map((system) => (
-          <button
-            key={system.id}
-            type="button"
-            aria-pressed={selectedSystem === system.id}
-            onClick={() => onSystemChange(system.id)}
-            className={selectedSystem === system.id ? chipActive : `${pillWhite} px-3 py-1 text-xs`}
-          >
-            {system.name}
-          </button>
-        ))}
-      </div>
-      <div className="flex flex-nowrap gap-2 overflow-x-auto sm:flex-wrap" aria-label={gallery.kindsAria}>
-        <button
-          type="button"
-          aria-pressed={kind === null}
-          onClick={() => onKindChange(null)}
-          className={kind === null ? chipActive : `${pillWhite} px-3 py-1 text-xs`}
-        >
-          {gallery.allKinds}
-        </button>
-        {kinds.map((id) => (
-          <button
-            key={id}
-            type="button"
-            aria-pressed={kind === id}
-            onClick={() => onKindChange(kind === id ? null : id)}
-            className={kind === id ? chipActive : `${pillWhite} px-3 py-1 text-xs`}
-          >
-            {gallery.kindNames[id] ?? id}
-          </button>
-        ))}
-      </div>
+      ) : null}
+      {systems.length > 1 ? (
+        <FilterSelect label={gallery.systemFilterLabel} value={selectedSystem ?? ""} onChange={(value) => onSystemChange(value || null)}>
+          <option value="">{`${gallery.systemFilterLabel}: ${gallery.filterAll}`}</option>
+          {systems.map((system) => <option key={system.id} value={system.id}>{system.name}</option>)}
+        </FilterSelect>
+      ) : null}
+      {kinds.length > 1 ? (
+        <FilterSelect label={gallery.kindFilterLabel} value={kind ?? ""} onChange={(value) => onKindChange((value || null) as PrototypeKind | null)}>
+          <option value="">{`${gallery.kindFilterLabel}: ${gallery.filterAll}`}</option>
+          {kinds.map((id) => <option key={id} value={id}>{gallery.kindNames[id] ?? id}</option>)}
+        </FilterSelect>
+      ) : null}
+      <label className="ml-auto flex shrink-0 items-center gap-2 text-sm text-eui-slate-500">
+        <span className="sr-only">{gallery.sortLabel}</span>
+        <select className={`${pillWhite} appearance-none pr-4`} value={sort} onChange={(event) => onSortChange(event.target.value as GallerySort)}>
+          <option value="updated">{gallery.sortUpdated}</option>
+          <option value="name">{gallery.sortName}</option>
+        </select>
+      </label>
     </section>
   );
 }

@@ -17,7 +17,7 @@ vi.mock("./GalleryShareDialog", () => ({
 const summary: PrototypeSummary = {
   id: "hello-world", name: "Hello World", description: "A minimal two-screen prototype.", device: "mobile" as const,
   designSystem: "shadcn",
-  screenCount: 2, headRev: 3, latestVersion: 2, updatedAt: "2026-07-10T00:00:00.000Z",
+  screenCount: 2, flowCount: 1, headRev: 3, latestVersion: 2, updatedAt: "2026-07-10T00:00:00.000Z",
   status: "private", owner: { id: "user-me", name: "Я" },
 };
 
@@ -109,14 +109,22 @@ describe("GalleryPage", () => {
     expect(document.title).toBe("Прототипы — easy-ui");
     await act(async () => request.resolve([summary]));
     expect(screen.getByRole("heading", { name: "Hello World" })).toBeTruthy();
-    expect(screen.getByText("Телефон")).toBeTruthy();
-    expect(screen.getByText("2")).toBeTruthy();
-    expect(screen.getByText("10 июл. 2026 г.")).toBeTruthy();
-    const draftLink = screen.getByRole("link", { name: "Hello World" });
-    expect(within(screen.getByRole("heading", { name: "Hello World" }).closest("li")!).getByText("Shadcn")).toBeTruthy();
+    const card = screen.getByRole("heading", { name: "Hello World" }).closest("li")!;
+    // Мета-строка карточки: экраны, сценарии, дата — и ничего больше (макет 01).
+    expect(within(card).getByText("2 экрана")).toBeTruthy();
+    expect(within(card).getByText("1 сценарий")).toBeTruthy();
+    expect(within(card).getByText("обновлён 10 июл. 2026 г.")).toBeTruthy();
+    expect(within(card).getByText("Shadcn")).toBeTruthy();
+    // Заглушки описания и статус-чипа приватного прототипа на карточке нет.
+    expect(within(card).queryByText("Без описания")).toBeNull();
+    expect(within(card).queryByText("Черновик")).toBeNull();
+    const draftLink = within(card).getByRole("link", { name: "Hello World" });
     expect(draftLink.getAttribute("href")).toBe("/p/hello-world");
-    expect(screen.getByRole("link", { name: "CJM" }).getAttribute("href")).toBe("/p/hello-world/cjm");
-    fireEvent.click(screen.getByText("Версии…"));
+    const menu = within(openCardMenu(card));
+    expect(menu.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/hello-world");
+    expect(menu.getByRole("link", { name: "Сценарии" }).getAttribute("href")).toBe("/p/hello-world/cjm");
+    expect(menu.getByRole("link", { name: "Презентация" }).getAttribute("href")).toBe("/p/hello-world/present");
+    fireEvent.click(menu.getByText("Версии"));
     expect((await screen.findByRole("link", { name: "Версия v2" })).getAttribute("href")).toBe("/p/hello-world/v/2");
   });
 
@@ -188,15 +196,11 @@ describe("GalleryPage", () => {
     for (const anchor of Array.from(card.querySelectorAll("a"))) {
       expect(anchor.parentElement?.closest("a")).toBeNull();
     }
-    // Actions sit above the stretched link with their own tab stops.
-    const actions = within(card).getAllByRole("link").filter((link) => link !== cardLink);
-    expect(actions.map((link) => link.textContent)).toEqual(["Презентация", "CJM", "Редактор"]);
-    // Кнопка «Презентация» (W1-2) ведёт на present-маршрут вне Layout/PrototypeChrome.
-    expect(within(card).getByRole("link", { name: "Презентация" }).getAttribute("href")).toBe("/p/hello-world/present");
-    const actionsRow = actions[0]!.parentElement!;
-    expect(actionsRow.className).toContain("relative");
-    expect(actionsRow.className).toContain("z-10");
-    expect(within(card).getByText("Версии…").closest("details")?.className).toContain("relative");
+    // Единственный контрол карточки — «⋯»: он лежит над растянутой ссылкой со своим tab stop.
+    const menu = within(card).getByLabelText("Действия").closest("details")!;
+    expect(menu.className).toContain("relative");
+    expect(menu.parentElement!.className).toContain("z-10");
+    expect(within(card).getAllByRole("link").filter((link) => link !== cardLink && !menu.contains(link))).toHaveLength(0);
   });
 
   it("opens any published version from the card versions menu", async () => {
@@ -206,8 +210,8 @@ describe("GalleryPage", () => {
       { version: 2, rev: 3, publishedAt: "2026-07-10T00:00:00.000Z" },
     ]);
     const router = renderGallery();
-    await screen.findByRole("heading", { name: "Hello World" });
-    fireEvent.click(screen.getByText("Версии…"));
+    const card = (await screen.findByRole("heading", { name: "Hello World" })).closest("li")!;
+    fireEvent.click(within(openCardMenu(card)).getByText("Версии"));
     fireEvent.click(await screen.findByRole("link", { name: "Версия v3" }));
     expect(router.state.location.pathname).toBe("/p/hello-world/v/3");
   });
@@ -221,9 +225,8 @@ describe("GalleryPage", () => {
     const publishedCard = (await screen.findByRole("heading", { name: "Hello World" })).closest("li")!;
     const draftCard = screen.getByRole("heading", { name: "Draft only" }).closest("li")!;
 
-    const qrButton = within(publishedCard).getByRole("button", { name: "QR на телефон" });
-    expect(qrButton.getAttribute("title")).toBe("QR на телефон");
-    expect(within(draftCard).queryByRole("button", { name: "QR на телефон" })).toBeNull();
+    const qrButton = within(openCardMenu(publishedCard)).getByRole("button", { name: "QR на телефон" });
+    expect(within(openCardMenu(draftCard)).queryByRole("button", { name: "QR на телефон" })).toBeNull();
     fireEvent.click(qrButton);
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(screen.getByRole("dialog", { name: "QR hello-world v2" })).toBeTruthy();
@@ -253,16 +256,17 @@ describe("GalleryPage", () => {
     ]);
     renderGallery();
 
-    expect(await screen.findByRole("button", { name: "Wireframe" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Shadcn" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Yandex Pay Design System" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "classic" })).toBeTruthy();
+    const systemFilter = await screen.findByLabelText("Дизайн-система");
+    expect(within(systemFilter).getByRole("option", { name: "Дизайн-система: все" })).toBeTruthy();
+    for (const name of ["Wireframe", "Shadcn", "Yandex Pay Design System", "classic"]) {
+      expect(within(systemFilter).getByRole("option", { name })).toBeTruthy();
+    }
     expect(screen.getByRole("heading", { name: "Hello World" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Wireframe" }));
+    fireEvent.change(systemFilter, { target: { value: "wireframe" } });
     expect(screen.getByRole("heading", { name: "Wire flow" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Hello World" })).toBeNull();
     expect(within(screen.getByRole("heading", { name: "Wire flow" }).closest("li")!).getByText("Wireframe")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "classic" }));
+    fireEvent.change(systemFilter, { target: { value: "classic" } });
     expect(screen.getByRole("heading", { name: "Legacy flow" })).toBeTruthy();
     expect(within(screen.getByRole("heading", { name: "Legacy flow" }).closest("li")!).getByText("classic")).toBeTruthy();
   });
@@ -298,7 +302,7 @@ describe("GalleryPage", () => {
     expect(ids("service", "evidence")).toEqual(["evidence"]);
   });
 
-  it("filters the grid by kind chips and shows the kind and lineage on the card", async () => {
+  it("filters the grid by kind and shows the kind chip on the card", async () => {
     vi.mocked(listPrototypes).mockResolvedValue([
       { ...summary, id: "flow", name: "Флоу" },
       { ...summary, id: "lab", name: "Лаборатория", kind: "experiment", tags: ["draft"], derivedFrom: "flow" },
@@ -306,15 +310,17 @@ describe("GalleryPage", () => {
     renderGallery();
     const lab = (await screen.findByRole("heading", { name: "Лаборатория" })).closest("li")!;
     expect(within(lab).getByText("Эксперимент")).toBeTruthy();
-    expect(within(lab).getByText("Производный от: flow")).toBeTruthy();
-    expect(within(lab).getByText("draft")).toBeTruthy();
-    // Продуктовый флоу не показывает бейдж вида по умолчанию.
+    // Теги и происхождение с карточки убраны: они не помогают выбрать прототип в гриде.
+    expect(within(lab).queryByText("Производный от: flow")).toBeNull();
+    expect(within(lab).queryByText("draft")).toBeNull();
+    // Продуктовый флоу не показывает чип вида по умолчанию.
     expect(within(screen.getByRole("heading", { name: "Флоу" }).closest("li")!).queryByText("Продуктовый флоу")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Эксперимент" }));
+    const kindFilter = screen.getByLabelText("Вид");
+    fireEvent.change(kindFilter, { target: { value: "experiment" } });
     expect(screen.queryByRole("heading", { name: "Флоу" })).toBeNull();
     expect(screen.getByRole("heading", { name: "Лаборатория" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Все виды" }));
+    fireEvent.change(kindFilter, { target: { value: "" } });
     expect(screen.getByRole("heading", { name: "Флоу" })).toBeTruthy();
   });
 
@@ -340,14 +346,14 @@ describe("GalleryPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Общие" }));
     const own = screen.getByRole("heading", { name: "Свой" }).closest("li")!;
     const foreign = screen.getByRole("heading", { name: "Чужой" }).closest("li")!;
-    expect(within(own).getByRole("link", { name: "Редактор" })).toBeTruthy();
-    // Статус-действия владельца доступны только после раскрытия «⋯»-меню.
+    // Действия владельца доступны только после раскрытия «⋯»-меню.
     const ownMenu = within(openCardMenu(own));
+    expect(ownMenu.getByRole("link", { name: "Редактор" })).toBeTruthy();
     expect(ownMenu.getByRole("button", { name: "Снять с публикации" })).toBeTruthy();
     expect(within(foreign).getByText("Владелец: Анна")).toBeTruthy();
-    expect(within(foreign).queryByRole("link", { name: "Редактор" })).toBeNull();
-    // У чужой карточки «⋯» содержит только экспорт — статус-кнопок нет.
+    // У чужой карточки нет ни редактора, ни статус-действий — только открыть и экспорт.
     const foreignMenu = within(openCardMenu(foreign));
+    expect(foreignMenu.queryByRole("link", { name: "Редактор" })).toBeNull();
     expect(foreignMenu.queryByRole("button", { name: "Снять с публикации" })).toBeNull();
     expect(foreignMenu.queryByRole("button", { name: "В архив" })).toBeNull();
     fireEvent.click(ownMenu.getByRole("button", { name: "Снять с публикации" }));

@@ -17,7 +17,7 @@ test.describe("bundle export/import from the gallery", () => {
     await expect(page.locator('main[data-gallery-ready="true"]')).toBeVisible();
 
     const downloadPromise = page.waitForEvent("download");
-    await page.getByRole("link", { name: "Экспортировать всё" }).click();
+    await page.getByRole("link", { name: "Экспортировать все прототипы" }).click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toMatch(/^easy-ui-export-\d{8}\.zip$/);
 

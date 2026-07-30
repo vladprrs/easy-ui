@@ -65,6 +65,8 @@ test("presentation hotkeys browse, restart, show help, and direct Esc exits", as
 test("gallery card opens the presentation at the start screen", async ({ page }) => {
   await page.goto("/");
   const card = page.getByRole("listitem").filter({ hasText: "Мобильное оформление заказа" });
+  // Действия карточки живут в «⋯»-меню (редизайн макета 01).
+  await card.getByLabel("Действия").click();
   await card.getByRole("link", { name: "Презентация" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/present\/s\/catalog$/);
   await expect(page.getByRole("button", { name: "Открыть карточку кроссовок" })).toBeVisible();

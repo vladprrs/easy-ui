@@ -131,6 +131,9 @@ export function GalleryPage() {
         onChanged={prototypes.reload}
       />)}
     </ul> : null}
+    {!loading && !failed && visiblePrototypes.length ? <p className="text-[13px] text-eui-slate-500">
+      <a className="underline decoration-pay-lavender-light underline-offset-4 hover:text-eui-ink" href="/api/bundles/export">{gallery.exportAll}</a>
+    </p> : null}
     {!loading && !failed && !visiblePrototypes.length ? <GalleryEmpty
       variant={prototypes.status === "ready" && prototypes.data.length ? (query.trim() ? "search" : "filtered") : "none"}
       canCreate={usableSystems.length > 0}

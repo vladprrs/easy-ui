@@ -1,6 +1,6 @@
 // Строки галереи прототипов (W0-5).
 
-import { pluralRu } from "./common";
+import { pluralRu, screensCount } from "./common";
 
 export const gallery = {
   kicker: "Галерея",
@@ -59,6 +59,11 @@ export const gallery = {
   tagsLabel: "Теги",
   searchLabel: "Поиск по названию",
   searchPlaceholder: "Введите название прототипа",
+  // Фильтры тулбара — выпадающие списки, а не ряды чипов: выбранное значение видно
+  // в самой подписи, и над гридом остаётся один ряд управления (макет 01).
+  systemFilterLabel: "Дизайн-система",
+  kindFilterLabel: "Вид",
+  filterAll: "все",
   sortLabel: "Сортировка",
   sortUpdated: "Сначала обновлённые",
   sortName: "По названию",
@@ -67,6 +72,16 @@ export const gallery = {
   screensLabel: "Экраны",
   systemLabel: "Система",
   updatedLabel: "Обновлён",
+  // Мета-строка карточки: ровно те два числа, по которым прототип узнают, и дата.
+  cardScreens: screensCount,
+  cardFlows: (n: number) => `${n} ${pluralRu(n, ["сценарий", "сценария", "сценариев"])}`,
+  cardUpdated: (date: string) => `обновлён ${date}`,
+  // «⋯» — единственное меню карточки: открыть · поделиться · управление (макет 08).
+  menuGroupOpen: "Открыть",
+  menuGroupShare: "Поделиться",
+  menuGroupManage: "Управление",
+  playerLink: "Плеер",
+  cjmLink: "Сценарии",
   editorLink: "Редактор",
   ownerBadge: (name: string) => `Владелец: ${name}`,
   publish: "Опубликовать",
@@ -89,7 +104,7 @@ export const gallery = {
   shareVersionsLoading: "Загружаем версии…",
   shareVersionsLoadFailed: "Не удалось загрузить версии для ссылки.",
   shareVersionsEmpty: "Опубликованных версий для ссылки нет.",
-  versionsMenu: "Версии…",
+  versionsMenu: "Версии",
   versionsMenuAria: (name: string) => `Опубликованные версии «${name}»`,
   versionsLoading: "Загружаем версии…",
   versionsLoadFailed: "Не удалось загрузить версии.",
@@ -109,7 +124,7 @@ export const gallery = {
   exportLatest: "Экспорт",
   exporting: "Экспортируем…",
   exportError: "Не удалось экспортировать бандл.",
-  exportAll: "Экспортировать всё",
+  exportAll: "Экспортировать все прототипы",
   importButton: "Импортировать",
   importDialogAria: "Импорт бандла",
   importDialogTitle: "Импорт бандла",

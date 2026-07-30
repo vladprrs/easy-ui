@@ -11,7 +11,9 @@ const checkoutNotes = [
 test("checkout CJM opens from gallery and preserves player history semantics", async ({ page }) => {
   await page.goto("/");
   const checkoutCard = page.getByRole("listitem").filter({ hasText: "Мобильное оформление заказа" });
-  await checkoutCard.getByRole("link", { name: "CJM", exact: true }).click();
+  // Действия карточки живут в «⋯»-меню (редизайн макета 01).
+  await checkoutCard.getByLabel("Действия").click();
+  await checkoutCard.getByRole("link", { name: "Сценарии", exact: true }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/cjm$/);
 
   const journey = page.getByRole("list", { name: "Экраны CJM" });

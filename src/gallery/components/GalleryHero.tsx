@@ -29,11 +29,10 @@ export function GalleryHero(props: GalleryHeroProps): ReactElement {
           </h1>
           <p className="mt-4 text-[19px] font-medium text-eui-slate-700">{gallery.subtitle}</p>
         </div>
+        {/* Ровно два действия (макет 01): импорт и главный CTA. «Экспортировать всё» —
+            редкое сервисное действие, оно живёт тихой строкой под гридом. */}
         {showActions ? (
           <div className="flex flex-wrap items-center gap-3">
-            <a className={pillGhost} href="/api/bundles/export">
-              {gallery.exportAll}
-            </a>
             <button type="button" className={pillGhost} onClick={onImport}>
               {gallery.importButton}
             </button>
