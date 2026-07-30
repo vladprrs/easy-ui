@@ -65,7 +65,7 @@ export function libraryComponentIntegrationSuite(options: { api: string; seed: b
 
       await page.goBack();
       await expect(page).toHaveURL(/\/library$/);
-      await expect(page.getByRole("heading", { name: "Библиотека компонентов" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Библиотека живых компонентов" })).toBeVisible();
     });
 
     test("keeps the document alive across Gallery, Library, and component-page SPA navigation", async ({ page }) => {

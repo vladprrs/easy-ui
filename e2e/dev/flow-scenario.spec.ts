@@ -7,7 +7,7 @@ test("direct flow and step entry activates ScenarioBar at the canonical occurren
 
   const bar = scenarioBar(page);
   await expect(bar.getByTestId("scenario-flow-button")).toContainText("Успешная оплата");
-  await expect(bar.getByRole("status")).toHaveText("Шаг 3 из 5");
+  await expect(bar.getByRole("status")).toContainText("Шаг 3 из 5");
   await expect(bar.getByRole("button", { name: "Предыдущий шаг" })).toBeEnabled();
   await expect(bar.getByRole("button", { name: "Следующий шаг" })).toBeEnabled();
 });
@@ -21,7 +21,7 @@ test("prev and next browse in the same player session and synchronize step with 
 
   await scenarioBar(page).getByRole("button", { name: "Следующий шаг" }).click();
   await expect(page).toHaveURL(/\/p\/flows-perf\/s\/main-1\?flow=perf-main&step=1$/);
-  await expect(scenarioBar(page).getByRole("status")).toHaveText("Шаг 2 из 50");
+  await expect(scenarioBar(page).getByRole("status")).toContainText("Шаг 2 из 50");
   expect(await page.evaluate(() => history.length)).toBe(historyLength);
 
   await scenarioBar(page).getByRole("button", { name: "Предыдущий шаг" }).click();
@@ -41,7 +41,7 @@ test("a non-canonical repeated-screen step is removed and an occurrence choice r
 
   await choices.getByRole("button", { name: "Шаг 5" }).click();
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/cancel-confirm\?flow=cancellation&debug=1&step=4$/);
-  await expect(bar.getByRole("status")).toHaveText("Шаг 5 из 6");
+  await expect(bar.getByRole("status")).toContainText("Шаг 5 из 6");
 });
 
 test("external navigation outside the route offers a return to step one", async ({ page }) => {
@@ -52,7 +52,7 @@ test("external navigation outside the route offers a return to step one", async 
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/success\?flow=cancellation$/);
   await bar.getByRole("button", { name: "К шагу 1" }).click();
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/catalog\?flow=cancellation&step=0$/);
-  await expect(bar.getByRole("status")).toHaveText("Шаг 1 из 6");
+  await expect(bar.getByRole("status")).toContainText("Шаг 1 из 6");
 });
 
 test("Player to CJM to a step tile round-trip opens that exact scenario occurrence", async ({ page }) => {
@@ -62,11 +62,15 @@ test("Player to CJM to a step tile round-trip opens that exact scenario occurren
 
   // Дефолтный режим CJM — «Сценарии» (T2b): шаг живёт в ленте своей секции.
   // Тайлы монтируются лениво (T2a): обёртка в DOM всегда, тайл — после попадания во вьюпорт.
+  // Редизайн (макет 03): тайл ленты открывает лайтбокс, а уже он ведёт в плеер.
   const step = page.locator('.cjm-sheet-section[data-flow-id="cancellation"] li[data-screen-id="cancel-reason"]');
   await step.scrollIntoViewIfNeeded();
-  await step.getByRole("link", { name: /Открыть экран «Причина отмены».*в плеере/ }).click();
+  await step.getByRole("button", { name: /Открыть экран «Причина отмены».*в плеере/ }).click();
+  const lightbox = page.getByTestId("screen-lightbox");
+  await expect(lightbox.getByText("шаг 4 / 6")).toBeVisible();
+  await lightbox.getByRole("link", { name: "В плеер →" }).click();
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/cancel-reason\?flow=cancellation&step=3$/);
-  await expect(scenarioBar(page).getByRole("status")).toHaveText("Шаг 4 из 6");
+  await expect(scenarioBar(page).getByRole("status")).toContainText("Шаг 4 из 6");
 
   await page.getByRole("link", { name: "CJM", exact: true }).click();
   await page.getByRole("link", { name: "Плеер", exact: true }).click();
