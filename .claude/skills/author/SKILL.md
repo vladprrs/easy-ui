@@ -47,7 +47,7 @@ node driver.mjs prototype my-flow.json
 
 Полное описание — `docs/prototype-format.md` в репо; машинная версия — `GET /api/schemas/prototype-document.json`, сводка возможностей — `GET /api/capabilities` (actions, directives, param sources, лимиты). Ниже — рабочая выжимка.
 
-Корень: `{version: 1, id, name, description?, designSystem, device?, startScreen, state?, screens[]}`. `designSystem` обязателен для новых записей и должен быть slug активной зарегистрированной системы; `id` и все ID — slugs.
+Корень: `{version: 1, id, name, description?, designSystem, device?, startScreen, state?, screens[], flows?, architecture?}`. `designSystem` обязателен для новых записей и должен быть slug активной зарегистрированной системы; `id` и все ID — slugs.
 
 Экран: `{id, name, canvas?: {width,height}, note?, stateOverrides?, spec: {root, elements}}`. Элемент: `{type, props, children?, visible?, on?, repeat?, slot?, region?}` — только эти ключи. Элементы образуют одно дерево от `root` (≤500 элементов, глубина ≤50).
 
@@ -81,6 +81,41 @@ Condition: boolean, truthiness `{"$state":"/path"}`, либо `{"$state":"/path"
 **URL и Hotspot**: `openUrl.url` — статический `http(s)`; host `Image.src` дополнительно допускает абсолютный путь с `/` (включая `$asset`-резолв). `Hotspot` требует `canvas` у экрана; его прямоугольник — статические числа внутри canvas.
 
 **Warnings**: save возвращает несблокирующие semantic warnings (interactive-элемент без обработчиков, отсутствие accessible label, большой inline base64, экраны без переходов и т.п.) — драйвер печатает их; чистый прототип не шумит.
+
+### Сценарии: `flows` и дерево `parentId`
+
+Опциональный `flows[]` описывает сценарии поверх графа `navigate`: они видны в `/p/<id>/cjm` и в переключателе сценариев плеера. UI редактирования флоу нет — флоу пишутся руками в JSON и уезжают тем же `node driver.mjs prototype doc.json`. Полные правила — `docs/prototype-format.md` («Flows» и «Scenario tree»).
+
+Флоу: `{id, name, description?, parentId?, steps: [{screenId, note?}]}`.
+
+Два вида флоу, и они не симметричны:
+
+- **корневой** (без `parentId`) — дорожка: связный проход по navigate-графу. `flows[0]` — главная линия, её первый шаг обязан быть `startScreen`, экраны в ней уникальны. Корневые флоу обязаны быть связными (иначе warning) и соблюдать правило соседних якорей;
+- **дочерний** (`parentId`) — упорядоченная **выборка** экранов, а не цепочка. Дорожки не получает; с него сняты правило соседних якорей (error) и warning'и «разрыв связности» и «флоу из одного шага». Лист из одного экрана — нормальная форма.
+
+Жёсткие правила, которые ловит валидация на записи:
+
+1. **`flows[0]` неприкосновенен** — он всегда корневой и всегда нулевой элемент массива. Не давать ему `parentId`, не сдвигать с индекса 0 (сдвиг молча меняет главную линию и геометрию CJM; `driver.mjs diff` показывает это как смену главного сценария);
+2. **родителя объявлять раньше ребёнка** — вставлять детей сразу **после** родителя, массив должен читаться как pre-order. Это единственное правило порядка; из него же следует запрет циклов и самоссылок;
+3. глубина ≤ 4, **корень = уровень 1** (актуальное значение — `limits.flowDepth` в `GET /api/capabilities`);
+4. лимиты: 24 флоу, 50 шагов на флоу, 200 шагов суммарно; пустой `flows: []` невалиден — поле просто опускается.
+
+Минимальное трёхуровневое дерево, которое можно скопировать (экраны переиспользуются между сценариями — копий не делать):
+
+```json
+"flows": [
+  { "id": "main-line", "name": "Главная линия",
+    "steps": [{ "screenId": "home" }, { "screenId": "transfers" }, { "screenId": "by-phone" }, { "screenId": "amount" }, { "screenId": "receipt" }] },
+  { "id": "payments", "name": "Переводы и платежи", "parentId": "main-line",
+    "steps": [{ "screenId": "transfers" }, { "screenId": "by-phone" }, { "screenId": "amount" }] },
+  { "id": "by-phone-detail", "name": "Перевод по номеру телефона", "parentId": "payments",
+    "steps": [{ "screenId": "by-phone" }, { "screenId": "amount" }] },
+  { "id": "receipt-leaf", "name": "Квитанция о переводе", "parentId": "payments",
+    "steps": [{ "screenId": "receipt" }] }
+]
+```
+
+Приём авторинга: держать главную линию короткой (5–7 экранов), а полноту уводить в детей. Не использовать `parentId` только чтобы заглушить диагностику на сценарии, который по смыслу является дорожкой, — `parentId` одновременно убирает флоу из дорожек CJM. Рабочий образец в репо — `test/fixtures/flows-tree.json`.
 
 ### Layout guide
 

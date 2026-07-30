@@ -38,13 +38,54 @@ Each CJM tile gets an isolated json-render state store. This does not isolate cu
 
 The optional `flows` field annotates full end-to-end scenarios over the prototype's `navigate` graph. It is additive to format v1 and does not change runtime behavior: only actions define navigation, while flows provide authored scenario lanes for CJM and guided browsing in the player. During guided browsing, a selected screen opens in the current player session state. Intermediate actions are not executed, and guided browsing does not apply the destination screen's `stateOverrides`.
 
-Each flow has a slug `id`, a non-empty `name` of at most 120 characters, an optional `description` of at most 500 characters, and one or more `steps`. A step contains a screen `screenId` and may contain a trimmed, non-blank `note` of at most 500 characters. The first flow is the canonical main scenario. Its first step must be `startScreen`, and its screen IDs must be unique.
+Each flow has a slug `id`, a non-empty `name` of at most 120 characters, an optional `description` of at most 500 characters, an optional slug `parentId` (see [Scenario tree](#scenario-tree-flowparentid)), and one or more `steps`. A step contains a screen `screenId` and may contain a trimmed, non-blank `note` of at most 500 characters. `flows[0]` is the canonical main scenario and must be a root flow. Its first step must be `startScreen`, and its screen IDs must be unique.
 
-A step whose screen occurs in the main flow is an anchor. Two adjacent anchors in any flow are valid only when they are adjacent in the main flow in the same forward direction; shortcuts and direct backward anchor-to-anchor pairs are errors. Authors must insert an intermediate non-anchor screen or change the main flow. Equal adjacent steps are forbidden. Other repeated screens, including repeated non-anchor screens used for retry loops and backward returns through their own tiles, are allowed. Branch-from-branch and convergence between branches are not represented specially in v1: a screen belonging to another branch remains that flow's own tile.
+A step whose screen occurs in the main flow is an anchor. Two adjacent anchors **in a root flow** are valid only when they are adjacent in the main flow in the same forward direction; shortcuts and direct backward anchor-to-anchor pairs are errors. Authors must insert an intermediate non-anchor screen or change the main flow. Child flows are exempt from this rule (see [Scenario tree](#scenario-tree-flowparentid)). Equal adjacent steps are forbidden in every flow. Other repeated screens, including repeated non-anchor screens used for retry loops and backward returns through their own tiles, are allowed. Branch-from-branch and convergence between branches are not represented specially in v1: a screen belonging to another branch remains that flow's own tile.
 
-Limits are 12 flows, 50 steps per flow, and 200 steps across all flows. An explicitly empty `flows` array is invalid; omit the field when scenarios are not authored. Every flow ID is unique and every step references an existing screen.
+Limits are 24 flows, 50 steps per flow, 200 steps across all flows, and a nesting depth of 4. An explicitly empty `flows` array is invalid; omit the field when scenarios are not authored. Every flow ID is unique and every step references an existing screen.
 
-Flow diagnostics are warnings, not errors, when a flow has only one step, when no static or dynamic `navigate` action can connect a step to its predecessor, or when a note is attached to an anchor step of a branch flow (anchor steps have no separate tile, so their notes are not displayed; main-flow steps own their tiles and display notes normally). Static navigation is recognized even under an action `$if`. A dynamic `screenId` makes the edge unverifiable and suppresses the missing-edge warning for that source; it does not create a graph edge. `back`, `restart`, and dynamic targets are not part of the statically inferred navigate graph.
+Flow diagnostics are warnings, not errors, when a **root** flow has only one step, or when no static or dynamic `navigate` action can connect a step of a **root** flow to its predecessor. Static navigation is recognized even under an action `$if`. A dynamic `screenId` makes the edge unverifiable and suppresses the missing-edge warning for that source; it does not create a graph edge. `back`, `restart`, and dynamic targets are not part of the statically inferred navigate graph.
+
+### Scenario tree (`flow.parentId`)
+
+A flow may declare `parentId` — the `id` of another flow — which makes it a **child flow**. Child flows form the scenario tree: a short main line with detail uncovered by nested scenarios, instead of one flat list.
+
+The two kinds of flow are deliberately asymmetric:
+
+- a **root flow** (no `parentId`) is a lane: a connected walk over the `navigate` graph. Root flows are what CJM lane geometry is built from;
+- a **child flow** is an ordered **selection** of screens, not a connected chain. It gets no lane of its own. Screens are reused between flows; a flow never copies a screen, and a screen assigned to a child flow still counts as covered.
+
+Rules (enforced on authored input only — stored revisions are parsed without them, so rolling the image back keeps reading documents that already use the tree):
+
+- `parentId` must reference an existing flow;
+- **the parent must be declared before the child in the `flows` array.** This is the only normative ordering rule. Acyclicity follows from it by construction (a parent always has a smaller index), and depth can be computed in one pass — so there are no separate cycle or self-reference checks, and a self-reference is simply an ordering violation;
+- nesting depth is at most 4, where **a root flow is level 1**. The value is published as `limits.flowDepth` by `GET /api/capabilities`;
+- `flows[0]` must be a root flow.
+
+**What a child flow is exempt from.** Because it is a selection rather than a lane, three diagnostics do not apply to it:
+
+| rule | severity | why it is lifted |
+|---|---|---|
+| adjacent main-flow anchors must be consecutive | error | the rule exists to keep lane geometry expressible, and a child flow has no lane |
+| flow step is not connected to the previous step by a navigate action | warning | a selection is not required to be a connected chain of edges |
+| flow has a single step | warning | a one-screen leaf is the canonical bottom of the tree |
+
+A fourth rule — *flow step note on a main-flow anchor is not displayed* — was removed entirely (it is no longer emitted for any flow): the «Сценарии» view renders anchor steps with their own tiles, so anchor notes are displayed. In the lanes view (`?view=lanes`) such a note still has no tile to sit on; that is an accepted imprecision.
+
+**Accepted trade-off.** `parentId` therefore doubles as the way to legalize a slice such as `[main-A, main-D]`: it bypasses the anchor-adjacency error *and* removes the flow from lanes in one move. This is a deliberate compromise — a child flow genuinely is a slice — but it means `parentId` must not be used merely to silence a diagnostic on a flow that is meant to be a lane. A scenario that should read as a walk stays a root flow.
+
+**Authoring recipe.** The zeroth array element is untouchable: it is the main scenario, and lane geometry is built around it. Never move it away from index 0 and never give it a `parentId`. Add children by **inserting them right after their parent**, so the array stays a valid pre-order:
+
+```json
+"flows": [
+  { "id": "main-line", "name": "Главная линия",            "steps": [{ "screenId": "home" }, { "screenId": "transfers" }] },
+  { "id": "payments",  "name": "Переводы и платежи",       "parentId": "main-line", "steps": [{ "screenId": "transfers" }, { "screenId": "by-phone" }] },
+  { "id": "by-phone",  "name": "Перевод по телефону",      "parentId": "payments",  "steps": [{ "screenId": "by-phone" }, { "screenId": "amount" }] },
+  { "id": "receipt",   "name": "Квитанция о переводе",     "parentId": "by-phone",  "steps": [{ "screenId": "receipt" }] }
+]
+```
+
+Depths here are 1 → 2 → 3 → 4; a fifth level is an error. A worked three-level document, including a one-step leaf and a child flow with a connectivity gap, is `test/fixtures/flows-tree.json`.
 
 ## Dynamic values and conditions
 
@@ -435,6 +476,7 @@ The document root accepts an optional strict `architecture` object with one fiel
 - Semantic warnings (interactive handlers/labels, item identity, inline base64, screen connectivity, monolithic screens, local URL paths) have been reviewed.
 - Architecture warnings (`arch/*`) have been reviewed; every remaining one is either fixed or covered by a documented `architecture.exemptions` entry.
 - Element keys contain no `$`; every referenced composition is published and its required params are supplied.
+- If `flows` are authored: `flows[0]` is the root main scenario and stays at index 0, every child is declared after its parent, and nesting stays within 4 levels.
 - Directives, conditions, actions, and params use only the closed v1 grammar.
 - State paths are valid, non-reserved JSON Pointers; bound initial values are in `state` where appropriate.
 - Terminal actions are unique and last; navigating links prevent their default browser action.

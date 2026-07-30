@@ -138,7 +138,9 @@ export async function starterPrototypeFromFile(path: string, overrides: Partial<
 
 /** Core cross-surface documents shared by dev and production-preview projects. */
 export async function ensureStarterPrototypeSuite(request: APIRequestContext, api = "/api"): Promise<void> {
-  for (const name of ["checkout", "branching-checkout", "flows-perf", "hello-world", "settings", "scale-demo", "composition-demo"] as const) {
+  // `flows-tree` — трёхуровневое дерево сценариев (`flow.parentId`): лист из одного шага
+  // и дочерний флоу с разрывом связности, обе конструкции без warning'ов.
+  for (const name of ["checkout", "branching-checkout", "flows-tree", "flows-perf", "hello-world", "settings", "scale-demo", "composition-demo"] as const) {
     await ensureStarterPrototype(request, await starterPrototypeFromFile(`test/fixtures/${name}.json`), { api });
   }
   const declarative = JSON.parse(await readFile("test/fixtures/starter/prototype.json", "utf8")) as JsonObject;

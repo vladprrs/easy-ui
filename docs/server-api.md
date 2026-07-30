@@ -733,15 +733,17 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
   "directives": ["$state", "$bindState", "$template", "$cond", "$asset"],
   "paramSources": ["$event", "$elementId", "$itemIndex", "$itemKey"],
   "conditions": ["$and", "$or", "$state", "$item", "$index", "eq", "neq", "gt", "gte", "lt", "lte", "not"],
-  "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5, "geometryRects": 2000, "flows": 12, "flowSteps": 50, "flowTotalSteps": 200 },
+  "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5, "geometryRects": 2000, "flows": 24, "flowSteps": 50, "flowTotalSteps": 200, "flowDepth": 4 },
   "designSystems": ["shadcn", "wireframe", "..."],
   "resolvedSpaceScales": { "shadcn": { "none": "0px", "xs": "4px", "sm": "8px", "md": "12px", "lg": "16px", "xl": "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" } },
   "regions": ["statusBar", "header", "footer"],
-  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true, "screenRegions": true }
+  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true, "screenRegions": true, "bundleExport": true, "bundleImport": true }
 }
 ```
 
-`designSystems` читается из живого реестра БД; `resolvedSpaceScales` резолвится для каждой системы из её последней merged-темы с canonical fallback. Значения `limits` импортируются из модулей, где они реально enforce'ятся (`src/prototype/validate.ts`, `server/assets/validate.ts`, `server/screenshot/service.ts`, `server/http.ts`), — двойного хардкода нет.
+`designSystems` читается из живого реестра БД; `resolvedSpaceScales` резолвится для каждой системы из её последней merged-темы с canonical fallback. Значения `limits` импортируются из модулей, где они реально enforce'ятся (`src/prototype/schema.ts`, `src/prototype/validate.ts`, `server/assets/validate.ts`, `server/screenshot/service.ts`, `server/http.ts`), — двойного хардкода нет.
+
+`limits.flowDepth` — максимальная глубина дерева сценариев (`flow.parentId`), и **корень считается уровнем 1**: при `flowDepth: 4` законна цепочка «корень → ребёнок → внук → правнук», а пятый уровень отвергается входной схемой. Правила иерархии описаны в `docs/prototype-format.md#scenario-tree-flowparentid`; они исполняются только на записи — сохранённые ревизии парсятся без авторских правил и лимитов, чтобы откат образа читал документы без потерь.
 
 **Правило**: каждый новый endpoint обязан регистрироваться в `server/contracts.ts` (`registerContract`) — contract-тест `server/contract.test.ts` требует покрытия каждого контракта, а drift-check заставит перегенерировать `server/openapi.json`.
 

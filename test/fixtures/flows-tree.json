@@ -1,0 +1,312 @@
+{
+  "version": 1,
+  "id": "flows-tree",
+  "name": "Дерево сценариев банка",
+  "description": "Три уровня иерархии сценариев: главная линия, разделы и листья. Показывает освобождения дочерних флоу — лист из одного шага и выборку с разрывом связности.",
+  "designSystem": "shadcn",
+  "device": "mobile",
+  "startScreen": "home",
+  "state": {},
+  "screens": [
+    {
+      "id": "home",
+      "name": "Главный экран",
+      "note": "Точка входа: отсюда расходятся переводы и история операций.",
+      "spec": {
+        "root": "home-layout",
+        "elements": {
+          "home-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["home-title", "home-balance", "home-transfers", "home-history"]
+          },
+          "home-title": {
+            "type": "Text",
+            "props": { "text": "Главный экран", "variant": "lead" }
+          },
+          "home-balance": {
+            "type": "Text",
+            "props": { "text": "Доступно 42 300 ₽ на счёте «Основной»." }
+          },
+          "home-transfers": {
+            "type": "Button",
+            "props": { "label": "Переводы и платежи", "variant": "primary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "transfers" }
+              }
+            }
+          },
+          "home-history": {
+            "type": "Button",
+            "props": { "label": "История операций", "variant": "secondary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "history" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "transfers",
+      "name": "Переводы и платежи",
+      "spec": {
+        "root": "transfers-layout",
+        "elements": {
+          "transfers-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["transfers-title", "transfers-copy", "transfers-phone", "transfers-back"]
+          },
+          "transfers-title": {
+            "type": "Text",
+            "props": { "text": "Переводы и платежи", "variant": "lead" }
+          },
+          "transfers-copy": {
+            "type": "Text",
+            "props": { "text": "Перевод по номеру телефона, по реквизитам или между своими счетами." }
+          },
+          "transfers-phone": {
+            "type": "Button",
+            "props": { "label": "Перевод по номеру телефона", "variant": "primary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "phone-transfer" }
+              }
+            }
+          },
+          "transfers-back": {
+            "type": "Button",
+            "props": { "label": "На главный экран", "variant": "secondary" },
+            "on": {
+              "press": {
+                "action": "back",
+                "params": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "phone-transfer",
+      "name": "Перевод по номеру телефона",
+      "spec": {
+        "root": "phone-transfer-layout",
+        "elements": {
+          "phone-transfer-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["phone-transfer-title", "phone-transfer-copy", "phone-transfer-next"]
+          },
+          "phone-transfer-title": {
+            "type": "Text",
+            "props": { "text": "Перевод по номеру телефона", "variant": "lead" }
+          },
+          "phone-transfer-copy": {
+            "type": "Text",
+            "props": { "text": "Получатель: Мария К., +7 900 000-00-00, банк «Пример»." }
+          },
+          "phone-transfer-next": {
+            "type": "Button",
+            "props": { "label": "Указать сумму", "variant": "primary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "transfer-amount" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "transfer-amount",
+      "name": "Сумма перевода",
+      "spec": {
+        "root": "transfer-amount-layout",
+        "elements": {
+          "transfer-amount-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["transfer-amount-title", "transfer-amount-copy", "transfer-amount-send"]
+          },
+          "transfer-amount-title": {
+            "type": "Text",
+            "props": { "text": "Сумма перевода", "variant": "lead" }
+          },
+          "transfer-amount-copy": {
+            "type": "Text",
+            "props": { "text": "К переводу 3 500 ₽, комиссия не взимается." }
+          },
+          "transfer-amount-send": {
+            "type": "Button",
+            "props": { "label": "Перевести", "variant": "primary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "transfer-receipt" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "transfer-receipt",
+      "name": "Квитанция о переводе",
+      "note": "Лист дерева: отдельный дочерний сценарий из одного экрана.",
+      "spec": {
+        "root": "transfer-receipt-layout",
+        "elements": {
+          "transfer-receipt-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["transfer-receipt-title", "transfer-receipt-copy", "transfer-receipt-restart"]
+          },
+          "transfer-receipt-title": {
+            "type": "Text",
+            "props": { "text": "Квитанция о переводе", "variant": "lead" }
+          },
+          "transfer-receipt-copy": {
+            "type": "Text",
+            "props": { "text": "3 500 ₽ отправлены. Квитанция сохранена в истории операций." }
+          },
+          "transfer-receipt-restart": {
+            "type": "Button",
+            "props": { "label": "Начать заново", "variant": "secondary" },
+            "on": {
+              "press": {
+                "action": "restart",
+                "params": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "history",
+      "name": "История операций",
+      "spec": {
+        "root": "history-layout",
+        "elements": {
+          "history-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["history-title", "history-copy", "history-open"]
+          },
+          "history-title": {
+            "type": "Text",
+            "props": { "text": "История операций", "variant": "lead" }
+          },
+          "history-copy": {
+            "type": "Text",
+            "props": { "text": "Сегодня: перевод 3 500 ₽ и оплата связи 450 ₽." }
+          },
+          "history-open": {
+            "type": "Button",
+            "props": { "label": "Открыть операцию", "variant": "primary" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "history-details" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "history-details",
+      "name": "Детали операции",
+      "spec": {
+        "root": "history-details-layout",
+        "elements": {
+          "history-details-layout": {
+            "type": "Stack",
+            "props": { "direction": "vertical", "gap": "md" },
+            "children": ["history-details-title", "history-details-copy", "history-details-back"]
+          },
+          "history-details-title": {
+            "type": "Text",
+            "props": { "text": "Детали операции", "variant": "lead" }
+          },
+          "history-details-copy": {
+            "type": "Text",
+            "props": { "text": "Перевод по номеру телефона, 3 500 ₽, статус «Исполнен»." }
+          },
+          "history-details-back": {
+            "type": "Button",
+            "props": { "label": "Вернуться к истории", "variant": "secondary" },
+            "on": {
+              "press": {
+                "action": "back",
+                "params": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "id": "main-line",
+      "name": "Перевод по номеру телефона: главная линия",
+      "description": "Уровень 1, корневой сценарий. Первый элемент массива неприкосновенен: он остаётся главной линией дорожек.",
+      "steps": [
+        { "screenId": "home" },
+        { "screenId": "transfers" },
+        { "screenId": "phone-transfer" },
+        { "screenId": "transfer-amount" },
+        { "screenId": "transfer-receipt" }
+      ]
+    },
+    {
+      "id": "payments-hub",
+      "name": "Переводы и платежи",
+      "description": "Уровень 2: раздел целиком, связная выборка. Объявлен сразу после родителя main-line.",
+      "parentId": "main-line",
+      "steps": [
+        { "screenId": "transfers" },
+        { "screenId": "phone-transfer" },
+        { "screenId": "transfer-amount" }
+      ]
+    },
+    {
+      "id": "phone-transfer-shortcut",
+      "name": "Быстрый перевод из раздела",
+      "description": "Уровень 3: выборка с разрывом связности — между «Переводы и платежи» и «Сумма перевода» нет navigate-действия, и оба экрана являются якорями главной линии с неконсекутивными индексами. Для дочернего флоу это законно.",
+      "parentId": "payments-hub",
+      "steps": [
+        { "screenId": "transfers" },
+        { "screenId": "transfer-amount", "note": "Разрыв связности: шаг не соединён с предыдущим navigate-действием." }
+      ]
+    },
+    {
+      "id": "receipt-leaf",
+      "name": "Квитанция о переводе",
+      "description": "Уровень 3: канонический лист дерева из одного экрана.",
+      "parentId": "payments-hub",
+      "steps": [
+        { "screenId": "transfer-receipt", "note": "Лист из одного шага — предупреждение о единственном шаге снято с дочерних флоу." }
+      ]
+    },
+    {
+      "id": "history-line",
+      "name": "История операций",
+      "description": "Второй корневой сценарий (уровень 1): у корней остаются дорожки и все геометрические правила.",
+      "steps": [
+        { "screenId": "home" },
+        { "screenId": "history" },
+        { "screenId": "history-details" }
+      ]
+    }
+  ]
+}
