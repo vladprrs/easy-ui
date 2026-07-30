@@ -8394,6 +8394,9 @@
                       "device": {
                         "type": "string"
                       },
+                      "flowCount": {
+                        "type": "number"
+                      },
                       "headRev": {
                         "type": "number"
                       },
@@ -8467,6 +8470,7 @@
                       "designSystem",
                       "device",
                       "screenCount",
+                      "flowCount",
                       "headRev",
                       "latestVersion",
                       "updatedAt",

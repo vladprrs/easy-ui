@@ -536,7 +536,7 @@ const prototypeLifecycleResponseSchema = z.strictObject({
 
 const prototypeListItemSchema = z.looseObject({
   id: z.string(), name: z.string(), designSystem: z.string(), device: z.string(),
-  screenCount: z.number(), headRev: z.number(), latestVersion: z.number().nullable(), updatedAt: isoDate,
+  screenCount: z.number(), flowCount: z.number(), headRev: z.number(), latestVersion: z.number().nullable(), updatedAt: isoDate,
   status:z.enum(["private","published","archived"]),owner:z.strictObject({id:z.string(),name:z.string()}),
   kind: prototypeKindSchema, tags: z.array(z.string()), derivedFrom: z.string().nullable(),
 });

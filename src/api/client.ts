@@ -95,6 +95,8 @@ export interface PrototypeSummary {
   device: PrototypeDoc["device"];
   designSystem?: string;
   screenCount: number;
+  /** Сценарии головной ревизии. Опционально в типе: фикстуры тестов его опускают, сервер всегда шлёт. */
+  flowCount?: number;
   headRev: number;
   latestVersion: number | null;
   updatedAt: string;

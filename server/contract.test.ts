@@ -399,6 +399,22 @@ describe("route contracts", () => {
     ]));
   });
 
+  // Галерея показывает число сценариев в мете карточки, поэтому список обязан отдавать
+  // `flowCount` головной ревизии — и обнулять его, когда документ сохранён без flows.
+  test("GET /api/prototypes reports the head revision flow count", async () => {
+    const doc = await flowDoc("contract-flow-count", ["home", "done"]);
+    doc.flows = [{ id: "main", name: "Main", steps: [{ screenId: "home" }, { screenId: "done" }] }];
+    expect((await call("POST", "/api/prototypes", { doc })).status).toBe(201);
+    const flowCountOf = async (id: string) => ((await (await call("GET", "/api/prototypes")).json()) as { id: string; flowCount: number }[])
+      .find((item) => item.id === id)!.flowCount;
+    expect(await flowCountOf("contract-flow-count")).toBe(1);
+
+    const withoutFlows: PrototypeDoc = { ...doc };
+    delete withoutFlows.flows;
+    expect((await call("PUT", "/api/prototypes/contract-flow-count", { baseRev: 1, doc: withoutFlows })).status).toBe(200);
+    expect(await flowCountOf("contract-flow-count")).toBe(0);
+  });
+
   test("POST rejects every v1 flows schema rule and all flow limits", async () => {
     const cases: {
       name: string;
