@@ -57,6 +57,7 @@ export const player = {
   scenarioAria: "Навигация по сценарию",
   scenarioSelect: "Сценарий",
   scenarioTreeAria: "Дерево сценариев",
+  scenarioAllLink: "Все сценарии на странице прототипа →",
   scenarioNone: "Без сценария",
   scenarioStep: (current: number, total: number) => `Шаг ${current} из ${total}`,
   scenarioPrevious: "Предыдущий шаг",
@@ -70,6 +71,7 @@ export const player = {
   // Оверлей интерактивных зон (план 2026-07-29 §7 T3). «цель вычисляется» —
   // формулировка только этого оверлея: классификацию перехода `$if` не меняет.
   zonesToggle: "Зоны переходов",
+  zonesMisclickHint: "Клик мимо активной зоны подсвечивает доступные переходы",
   zoneTo: (screenName: string) => `→ ${screenName}`,
   zoneComputed: "цель вычисляется",
   zoneDynamic: "→ цель вычисляется",

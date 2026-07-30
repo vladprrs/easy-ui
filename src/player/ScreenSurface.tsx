@@ -250,12 +250,14 @@ function ZoneLayer({ zones }: { zones: readonly ZoneRect[] }) {
       {zones.map((zone) => <div
         key={`${zone.key}:${zone.instance}`}
         data-eui-zone-key={zone.key}
-        className="pointer-events-none fixed rounded-md border-2 border-eui-brand bg-eui-brand/10"
+        // Рамка рисуется `outline` с offset, а не border: так подсветка «дышит»
+        // на 6px вокруг зоны (макеты 03/04), не меняя измеренную геометрию.
+        className="pointer-events-none fixed rounded-[10px] outline-2 outline-offset-[6px] outline-pay-red"
         style={{ left: zone.left, top: zone.top, width: zone.width, height: zone.height }}
       >
         {zone.labelVisible ? <span
           data-eui-zone-label={zone.key}
-          className="pointer-events-none absolute left-0 top-0 max-w-full truncate rounded-br-md rounded-tl-sm bg-eui-brand px-1 py-px font-eui-ui text-[11px] leading-none text-white"
+          className="pointer-events-none absolute -top-2 left-0 max-w-full -translate-y-full truncate rounded-full bg-pay-deep px-2.5 py-1 text-xs leading-none text-white"
         >{zone.label}</span> : null}
       </div>)}
     </div>,

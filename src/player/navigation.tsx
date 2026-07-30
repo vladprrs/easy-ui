@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
-import { pillGhostOnDark } from "../app/chrome";
+import { pillGhost } from "../app/chrome";
 import { loader, player } from "../app/strings/player";
 
 /**
@@ -151,7 +151,7 @@ export function usePlayerNavigation() {
   return navigation;
 }
 
-const dismissButton = "rounded-full p-1 leading-none text-eui-ondark-2 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/80";
+const dismissButton = "rounded-full p-1 leading-none text-eui-slate-500 transition-colors duration-100 hover:bg-pay-lavender hover:text-eui-ink";
 
 /**
  * Баннер «Состояние флоу сброшено» (W1-5): показывается при bootstrap-входе
@@ -163,12 +163,12 @@ export function FlowResetBanner({ compact = false }: { compact?: boolean }) {
   const navigation = usePlayerNavigation();
   if (!navigation.flowResetVisible) return null;
   const frame = compact
-    ? "absolute left-1/2 top-3 z-20 flex max-w-[92%] -translate-x-1/2 items-center gap-2 rounded-full bg-eui-graphite/95 px-3 py-1.5 text-xs text-white shadow-lg ring-1 ring-white/20"
-    : "flex flex-wrap items-center gap-3 border-b border-white/15 bg-eui-graphite px-4 py-2 font-eui-ui text-sm text-white";
+    ? "absolute left-1/2 top-3 z-20 flex max-w-[92%] -translate-x-1/2 items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs text-eui-ink"
+    : "flex flex-wrap items-center gap-3 bg-pay-lavender px-5 py-2 text-sm text-eui-ink";
   return (
     <div role="status" data-testid="flow-reset-banner" className={frame}>
-      <span className="min-w-0 truncate text-eui-ondark-2">{player.flowResetMessage}</span>
-      <button type="button" onClick={navigation.restart} className={compact ? "shrink-0 rounded-full px-2 py-0.5 font-semibold text-white underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/80" : `${pillGhostOnDark} shrink-0`}>
+      <span className="min-w-0 truncate text-eui-slate-700">{player.flowResetMessage}</span>
+      <button type="button" onClick={navigation.restart} className={compact ? "shrink-0 rounded-full px-2 py-0.5 font-medium text-pay-red underline-offset-2 hover:underline" : `${pillGhost} shrink-0 px-3 py-1.5 text-[13px]`}>
         {player.flowResetRestart}
       </button>
       <button type="button" aria-label={player.flowResetDismiss} title={player.flowResetDismiss} onClick={navigation.dismissFlowReset} className={`${dismissButton} shrink-0`}>

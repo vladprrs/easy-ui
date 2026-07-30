@@ -7,7 +7,7 @@ import { buildPlayerPath, buildPrototypeRouteBase, documentLifetimeNonce, FlowRe
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { ScreenSurface } from "./ScreenSurface";
 import { useStatusBarPreference } from "./statusBarPreference";
-import { chip, chipActive, pillGhost, pillGhostOnDark } from "../app/chrome";
+import { chip, chipActive, pillDeep, pillGhost, pillGhostOnDark } from "../app/chrome";
 import { PrototypeChrome } from "../app/PrototypeChrome";
 import { formatPlayerDate, inspector as inspectorStrings, player, playerDocumentTitle, playerHotkeys, share as shareStrings } from "../app/strings/player";
 import { common, deviceNames } from "../app/strings/common";
@@ -41,15 +41,15 @@ export class ScreenErrorBoundary extends Component<{
   render() {
     if (!this.state.error) return this.props.children;
     return <section role="alert" className="rounded-2xl bg-white/10 p-6 text-eui-orange">
-      <h1 className="font-eui-display text-xl font-bold">{player.screenErrorTitle}</h1>
+      <h1 className="pay-display text-[30px] leading-[0.9]">{player.screenErrorTitle}</h1>
       <p className="mt-2 font-mono text-sm text-eui-ondark-2">{player.screenErrorContext(this.props.prototypeId, this.props.screenId)}</p>
       <p className="mt-2 text-sm">{this.state.error.message}</p>
-      <button type="button" className={`${pillGhostOnDark} mt-4 font-eui-ui`} onClick={this.props.restart}>{player.restart}</button>
+      <button type="button" className={`${pillGhostOnDark} mt-4`} onClick={this.props.restart}>{player.restart}</button>
     </section>;
   }
 }
 
-const zoomChip = "inline-flex items-center rounded-full px-2.5 py-1 text-sm font-medium text-eui-ink transition-colors hover:bg-eui-lilac-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand aria-pressed:bg-eui-brand aria-pressed:font-bold aria-pressed:text-white";
+const zoomChip = "inline-flex items-center rounded-full px-2.5 py-1 text-sm font-medium text-eui-ink transition-colors duration-100 hover:bg-pay-lavender aria-pressed:bg-pay-deep aria-pressed:text-white";
 
 const hotkeyRows = [
   ["←", playerHotkeys.previous],
@@ -63,15 +63,15 @@ export function PlayerHotkeysHelp({ onClose, present = false, canExitPresent = p
   const rows = present
     ? [...hotkeyRows.filter(([key]) => key !== "F"), ...(canExitPresent ? [["Esc", playerHotkeys.exitPresent] as const] : [])]
     : hotkeyRows;
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-eui-graphite/70 p-4" role="presentation">
-    <section role="dialog" aria-modal="true" aria-labelledby="player-hotkeys-title" className="w-full max-w-sm rounded-3xl bg-white p-6 text-eui-ink shadow-2xl">
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-pay-deep/55 p-4" role="presentation">
+    <section role="dialog" aria-modal="true" aria-labelledby="player-hotkeys-title" className="w-full max-w-sm rounded-panel bg-white p-7 text-eui-ink">
       <div className="flex items-center justify-between gap-4">
-        <h2 id="player-hotkeys-title" className="font-eui-display text-xl font-bold">{player.hotkeysTitle}</h2>
-        <button type="button" aria-label={player.hotkeysClose} title={player.hotkeysClose} onClick={onClose} className="rounded-full px-2 py-1 text-xl leading-none hover:bg-eui-lilac-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand">×</button>
+        <h2 id="player-hotkeys-title" className="pay-display text-[32px] leading-[0.9]">{player.hotkeysTitle}</h2>
+        <button type="button" aria-label={player.hotkeysClose} title={player.hotkeysClose} onClick={onClose} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-pay-lavender text-lg leading-none transition-colors duration-100 hover:brightness-95">×</button>
       </div>
       <dl className="mt-5 grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-3">
         {rows.map(([key, label]) => <div key={key} className="contents">
-          <dt><kbd className="inline-flex min-w-10 justify-center rounded-lg border border-eui-ink/20 bg-eui-lilac-50 px-2 py-1 font-mono text-sm font-bold">{key}</kbd></dt>
+          <dt><kbd className="inline-flex min-w-10 justify-center rounded-item bg-pay-lavender px-2 py-1 font-mono text-sm font-medium">{key}</kbd></dt>
           <dd className="text-sm text-eui-slate-700">{label}</dd>
         </div>)}
       </dl>
@@ -227,7 +227,7 @@ export function ScreenView() {
       <select
         id="player-version-select"
         aria-label={player.versionsAria}
-        className="max-w-56 rounded-full border border-eui-ink/15 bg-white px-3 py-1 text-sm text-eui-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-eui-brand"
+        className="max-w-56 rounded-full bg-pay-lavender px-3 py-1.5 text-sm text-eui-ink"
         value={numericVersion === undefined ? "draft" : String(numericVersion)}
         disabled={switchingVersion}
         onChange={(event) => { void switchVersion(event.target.value); }}
@@ -242,7 +242,8 @@ export function ScreenView() {
     actions={<>
       {screen === undefined ? null : <>
         {hasStatusBar && <button type="button" aria-pressed={statusBarHidden} onClick={() => setStatusBarHidden(!statusBarHidden)} className={pillGhost}>{player.statusBarToggle}</button>}
-        <button type="button" aria-pressed={zonesVisible} onClick={() => setZonesVisible((visible) => !visible)} className={pillGhost}>{player.zonesToggle}</button>
+        {/* Тумблер зон — включён тёмной пилюлей, выключен лавандовой (макет 04). */}
+        <button type="button" aria-pressed={zonesVisible} onClick={() => setZonesVisible((visible) => !visible)} className={zonesVisible ? pillDeep : pillGhost}>{player.zonesToggle}</button>
         <div role="group" aria-label={player.deviceAria} className="flex items-center gap-1">
           {(["mobile", "tablet", "desktop"] as const).map((item) => (
             <button key={item} type="button" aria-pressed={device === item} disabled={item === "desktop" && blocksDesktopPreview} title={item === "desktop" && blocksDesktopPreview ? player.desktopOverlayUnavailable : undefined} onClick={() => { setDevice(item); stageZoom.fit(); }} className={`${device === item ? chipActive : chip} disabled:cursor-not-allowed disabled:opacity-50`}>
@@ -250,7 +251,7 @@ export function ScreenView() {
             </button>
           ))}
         </div>
-        {hasFixedViewport && <div role="group" aria-label={player.zoomAria} className="flex items-center gap-0.5 rounded-full border border-eui-ink/15 px-1 py-0.5">
+        {hasFixedViewport && <div role="group" aria-label={player.zoomAria} className="flex items-center gap-0.5 rounded-full bg-pay-lavender/50 px-1 py-0.5">
           <button type="button" aria-pressed={zoomValue.mode === "fit"} onClick={stageZoom.fit} className={zoomChip}>{player.zoomFit}</button>
           <button type="button" aria-pressed={isActualSize} onClick={stageZoom.actualSize} className={zoomChip}>{player.zoomActual}</button>
           <button type="button" aria-label={player.zoomOut} title={player.zoomOut} onClick={stageZoom.zoomOut} className={zoomChip}><span aria-hidden="true">−</span></button>
@@ -268,7 +269,7 @@ export function ScreenView() {
     </>}
   />;
   const shareDialog = shareOpen ? <ShareDialog prototypeId={doc.id} versions={publishedVersions} currentVersion={numericVersion} onClose={() => setShareOpen(false)} /> : null;
-  if (!screen) return <main className="flex h-dvh min-h-0 flex-col">{shareDialog}{chrome}<div className="flex min-h-0 flex-1 items-start justify-center bg-eui-graphite p-8 text-white"><section role="alert" className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h2 className="font-eui-display text-2xl font-bold">{player.screenMissingTitle}</h2><p className="mt-2 text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">{common.backToGallery}</Link></section></div></main>;
+  if (!screen) return <main className="flex h-dvh min-h-0 flex-col">{shareDialog}{chrome}<div className="flex min-h-0 flex-1 items-start justify-center bg-pay-deep p-8 text-pay-lavender"><section role="alert" className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h2 className="pay-display text-[32px] leading-[0.9]">{player.screenMissingTitle}</h2><p className="mt-2 text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p><Link className={`${pillGhostOnDark} mt-4`} to="/">{common.backToGallery}</Link></section></div></main>;
 
   const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} misclickHighlights hostPrimitivesAllowed={device !== "desktop" || screen.canvas !== undefined} interactiveZones={interactiveZones} />;
 
@@ -276,25 +277,30 @@ export function ScreenView() {
     {shareDialog}
     {hotkeysVisible && <PlayerHotkeysHelp onClose={() => setHotkeysVisible(false)} />}
     {chrome}
-    {noteScreenId === screenId && screen.note ? <section id="player-screen-note" aria-label={player.notePanelAria} className="border-b border-eui-brand/20 bg-eui-lilac-50 px-4 py-3 text-eui-ink sm:px-6">
-      <p className="whitespace-pre-wrap font-eui-ui text-sm">{screen.note}</p>
+    {noteScreenId === screenId && screen.note ? <section id="player-screen-note" aria-label={player.notePanelAria} className="bg-white px-5 py-3 text-eui-ink sm:px-6">
+      <p className="whitespace-pre-wrap text-sm">{screen.note}</p>
     </section> : null}
-    {isNonLatest && currentPublished && latestPublished ? <div role="status" data-testid="non-latest-version-banner" className="flex flex-wrap items-center gap-2 border-b border-eui-brand/20 bg-eui-lilac-100 px-4 py-2 font-eui-ui text-sm text-eui-ink sm:px-6">
+    {isNonLatest && currentPublished && latestPublished ? <div role="status" data-testid="non-latest-version-banner" className="flex flex-wrap items-center gap-2 bg-pay-lavender px-5 py-2.5 text-sm text-eui-ink sm:px-6">
       <span>{player.nonLatestVersion(numericVersion, formatPlayerDate(currentPublished.publishedAt))}</span>
       <span aria-hidden="true">·</span>
       {latestDoc
-        ? <Link className="font-semibold text-eui-brand underline-offset-2 hover:underline" to={targetPath(latestDoc, latestPublished.version)} state={browseState}>{player.openLatestPublished}</Link>
+        ? <Link className="font-medium text-pay-red underline-offset-2 hover:underline" to={targetPath(latestDoc, latestPublished.version)} state={browseState}>{player.openLatestPublished}</Link>
         : <span className="font-semibold text-eui-slate-500">{player.openLatestPublished}</span>}
     </div> : null}
     <FlowResetBanner />
     <ScenarioBar doc={doc} currentScreen={screen.id} runtimeKey={runtimeKey} />
-    <div className="flex min-h-0 flex-1 bg-eui-graphite text-white">
+    {/* Стейдж плеера — лавандовая канва бренда (макет 04); тёмными остаются только
+        инструментальные панели инспектора и сценариев. */}
+    <div className="relative flex min-h-0 flex-1 bg-pay-lavender text-eui-ink">
       <ScreensSidebar doc={doc} currentScreen={screen.id} collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((prev) => !prev)} />
       <DeviceFrame device={device} canvas={screen.canvas} zoom={zoomValue} onEffectiveScale={stageZoom.onEffectiveScale} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} statusBarHidden={statusBarHidden} scrollResetKey={screen.id}>
         <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>{rendered}</ScreenErrorBoundary>
       </DeviceFrame>
       {scenarios.open ? <ScenarioPanel doc={doc} screenId={screen.id} controller={scenarios} /> : null}
       {inspector.enabled && inspector.visible ? <InspectorPanel log={inspector.log} spec={screen.spec} definitions={customDefinitions} pins={pins} /> : null}
+      {/* Подсказка про misclick-подсветку (макет 04): белая пилюля в левом нижнем
+          углу стейджа, не перехватывает указатель. */}
+      <p className="pointer-events-none absolute bottom-5 left-5 z-10 rounded-full bg-white px-4 py-2 text-[13px] text-eui-slate-500 max-sm:hidden">{player.zonesMisclickHint}</p>
     </div>
   </main>;
 }
