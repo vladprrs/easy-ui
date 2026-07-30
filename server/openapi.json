@@ -1054,6 +1054,9 @@
                         "elements": {
                           "type": "number"
                         },
+                        "flowDepth": {
+                          "type": "number"
+                        },
                         "flowSteps": {
                           "type": "number"
                         },
@@ -1091,7 +1094,8 @@
                         "geometryRects",
                         "flows",
                         "flowSteps",
-                        "flowTotalSteps"
+                        "flowTotalSteps",
+                        "flowDepth"
                       ],
                       "type": "object"
                     },
@@ -8523,7 +8527,7 @@
                     "items": {
                       "$ref": "#/$defs/__schema11"
                     },
-                    "maxItems": 12,
+                    "maxItems": 24,
                     "minItems": 1,
                     "type": "array"
                   },
@@ -9565,7 +9569,7 @@
                     "items": {
                       "$ref": "#/$defs/__schema11"
                     },
-                    "maxItems": 12,
+                    "maxItems": 24,
                     "minItems": 1,
                     "type": "array"
                   },

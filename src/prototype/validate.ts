@@ -525,14 +525,16 @@ export function validatePrototype(
     if (!hasCrossScreenNavigate) issue(warnings, ["screens"], "prototype has multiple screens but no navigate action moves between different screens");
   }
   if (doc.flows) {
-    const mainScreenIds = new Set(doc.flows[0]!.steps.map((step) => step.screenId));
+    // План §3 (`docs/plans/2026-07-29-scrn-gallery-ux.md`): дочерний флоу (`parentId`) —
+    // упорядоченная **выборка** экранов, а не связная цепочка рёбер, поэтому с него сняты
+    // предупреждения о единственном шаге и о разрыве связности (иначе каждый лист дерева и
+    // каждый разрыв выборки красили бы гейт `schema` в `warn`, см. server/readiness.ts).
+    // Предупреждение «note на якоре не отображается» снято целиком: режим «Сценарии»
+    // рендерит якорные шаги со своими тайлами, и премиса правила перестала быть верной.
     doc.flows.forEach((flow, flowIndex) => {
+      if (flow.parentId !== undefined) return;
       if (flow.steps.length === 1) issue(warnings, ["flows", flowIndex, "steps"], "flow has a single step");
       flow.steps.forEach((step, stepIndex) => {
-        // Anchors are branch-flow steps referencing a main-flow screen; main-flow steps own their tiles and display notes.
-        if (flowIndex > 0 && step.note !== undefined && mainScreenIds.has(step.screenId)) {
-          issue(warnings, ["flows", flowIndex, "steps", stepIndex, "note"], "flow step note on a main-flow anchor is not displayed");
-        }
         if (stepIndex > 0 && verifyEdge(navigation, flow.steps[stepIndex - 1]!.screenId, step.screenId) === "missing") {
           issue(warnings, ["flows", flowIndex, "steps", stepIndex, "screenId"], "flow step is not connected to the previous step by a navigate action");
         }

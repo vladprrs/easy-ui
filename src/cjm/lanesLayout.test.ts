@@ -182,6 +182,71 @@ describe("computeCjmLanes", () => {
     expectCoreInvariants(doc, result);
   });
 
+  // План §3: фильтр «дорожки только по корневым флоу» действует **исключительно** на
+  // геометрию; покрытие (`assigned`/`unassigned`) считается по `doc.flows` целиком.
+  describe("child flows (parentId)", () => {
+    const withChild = (childSteps: string[]) => prototypeDocSchema.parse({
+      version: 1, id: "tree", name: "Tree", device: "desktop", startScreen: "a", state: {},
+      screens: ["a", "b", "x", "deep", "outside"].map(screen),
+      flows: [
+        { id: "main", name: "Main", steps: ["a", "b"].map((screenId) => ({ screenId })) },
+        { id: "branch", name: "Branch", steps: ["a", "x", "b"].map((screenId) => ({ screenId })) },
+        { id: "leaf", name: "Leaf", parentId: "branch", steps: childSteps.map((screenId) => ({ screenId })) },
+      ],
+    });
+
+    it("gives a child flow no lane of its own and leaves the geometry untouched", () => {
+      const baseline = layout(makeDoc(["a", "b"], [{ id: "branch", steps: ["a", "x", "b"] }], ["deep", "outside"]));
+      const result = layout(withChild(["deep"]));
+      expect(result.lanes.map((lane) => lane.key)).toEqual(["flow:main", "flow:branch"]);
+      expect(result.columns).toBe(baseline.columns);
+      expect(result.tileCount).toBe(baseline.tileCount);
+      expect(result.edges).toEqual(baseline.edges);
+      expect(result.linear).toBe(false);
+    });
+
+    it("counts screens of child flows as assigned: unassigned must not include them", () => {
+      const result = layout(withChild(["deep"]));
+      // `deep` живёт только в дочернем флоу — дорожки его не рисуют, но покрытие видит.
+      expect(result.unassigned).toEqual(["outside"]);
+      expect(result.lanes.flatMap((lane) => lane.nodes).some((node) => node.screenId === "deep")).toBe(false);
+    });
+
+    it("keeps a child flow out of the branch-segment indexing (columns stay aligned)", () => {
+      // Дочерний флоу объявлен раньше второй корневой ветки: если бы фильтр применялся
+      // не везде, индексы branchSegments разъехались бы на единицу.
+      const doc = prototypeDocSchema.parse({
+        version: 1, id: "order", name: "Order", device: "desktop", startScreen: "a", state: {},
+        screens: ["a", "b", "c", "x", "y", "deep"].map(screen),
+        flows: [
+          { id: "main", name: "Main", steps: ["a", "b", "c"].map((screenId) => ({ screenId })) },
+          { id: "leaf", name: "Leaf", parentId: "main", steps: ["deep"].map((screenId) => ({ screenId })) },
+          { id: "first", name: "First", steps: ["a", "x", "b"].map((screenId) => ({ screenId })) },
+          { id: "second", name: "Second", steps: ["b", "y", "c"].map((screenId) => ({ screenId })) },
+        ],
+      });
+      const result = layout(doc);
+      expect(result.lanes.map((lane) => lane.key)).toEqual(["flow:main", "flow:first", "flow:second"]);
+      expect(result.lanes[1]!.nodes.map((node) => node.column)).toEqual([1]);
+      expect(result.lanes[2]!.nodes.map((node) => node.column)).toEqual([3]);
+      expect(result.lanes[0]!.nodes.map((node) => node.column)).toEqual([0, 2, 4]);
+      expect(result.columns).toBe(5);
+      expect(result.unassigned).toEqual([]);
+    });
+
+    it("falls back to the linear layout when no root flow is left", () => {
+      const doc = prototypeDocSchema.parse({
+        version: 1, id: "degenerate", name: "Degenerate", device: "desktop", startScreen: "a", state: {},
+        screens: ["a", "b"].map(screen),
+        // Stored-ветка авторских правил не исполняет: такой документ может прийти с отката.
+        flows: [{ id: "orphan", name: "Orphan", parentId: "gone", steps: [{ screenId: "a" }] }],
+      });
+      const result = layout(doc);
+      expect(result.linear).toBe(true);
+      expect(result.columns).toBe(2);
+    });
+  });
+
   it("grows inserted columns with steps per flow, not with the number of flows", () => {
     const wide = layout(syntheticDoc(6, 5, 4));
     const manyFlows = layout(syntheticDoc(6, 20, 4));

@@ -84,35 +84,46 @@ function gapStart(gap: number, gapWidths: ReadonlyMap<number, number>): number {
   return gap + 1 + precedingWidth;
 }
 
+/** Линейная лента по экранам документа: используется, когда дорожек строить не из чего. */
+function linearLayout(doc: PrototypeDoc, graph: NavigationGraph): CjmLayout {
+  const lane = "synthetic:main";
+  const nodes = doc.screens.map<CjmNode>((screen, index) => ({
+    key: nodeKey(lane, index),
+    screenId: screen.id,
+    note: screen.note,
+    column: index,
+    lane: 0,
+    anchor: true,
+  }));
+  return {
+    lanes: [{ key: lane, name: null, nodes }],
+    edges: nodes.slice(0, -1).map((node, index) => ({
+      key: mainEdgeKey(index),
+      from: node.key,
+      to: nodes[index + 1]!.key,
+      kind: "main",
+      verified: verifyEdge(graph, node.screenId, nodes[index + 1]!.screenId),
+    })),
+    columns: nodes.length,
+    linear: true,
+    unassigned: [],
+    tileCount: nodes.length,
+  };
+}
+
 /** Computes scenario-lane geometry. The input must already be a parsed PrototypeDoc. */
 export function computeCjmLanes(doc: PrototypeDoc, graph: NavigationGraph): CjmLayout {
-  if (!doc.flows) {
-    const lane = "synthetic:main";
-    const nodes = doc.screens.map<CjmNode>((screen, index) => ({
-      key: nodeKey(lane, index),
-      screenId: screen.id,
-      note: screen.note,
-      column: index,
-      lane: 0,
-      anchor: true,
-    }));
-    return {
-      lanes: [{ key: lane, name: null, nodes }],
-      edges: nodes.slice(0, -1).map((node, index) => ({
-        key: mainEdgeKey(index),
-        from: node.key,
-        to: nodes[index + 1]!.key,
-        kind: "main",
-        verified: verifyEdge(graph, node.screenId, nodes[index + 1]!.screenId),
-      })),
-      columns: nodes.length,
-      linear: true,
-      unassigned: [],
-      tileCount: nodes.length,
-    };
-  }
+  // План §3: дорожки строит **только** иерархия корневых флоу — дочерний флоу
+  // (`parentId`) это выборка экранов, а не заякоренная ветка, и собственной дорожки
+  // не получает. Фильтр действует исключительно на геометрию (main/branches/
+  // branchSegments/gapWidths/columns/lanes); `assigned`/`unassigned` ниже считаются
+  // по `doc.flows` **целиком**, иначе экран из дочернего флоу уехал бы в «Вне
+  // сценариев» и метрика покрытия инвертировалась бы.
+  const rootFlows = doc.flows?.filter((flow) => flow.parentId === undefined) ?? [];
+  // Документ без флоу — и вырожденный stored-документ, где корневых флоу нет вовсе.
+  if (!doc.flows || rootFlows.length === 0) return linearLayout(doc, graph);
 
-  const [main, ...branches] = doc.flows;
+  const [main, ...branches] = rootFlows;
   const mainIndexes = new Map(main!.steps.map((step, index) => [step.screenId, index]));
   const branchSegments = branches.map((flow) => collectSegments(flow, mainIndexes));
   const gapWidths = new Map<number, number>();
@@ -221,6 +232,8 @@ export function computeCjmLanes(doc: PrototypeDoc, graph: NavigationGraph): CjmL
     }
   });
 
+  // Намеренно `doc.flows`, а не `rootFlows` (план §3): покрытие считается по всем
+  // сценариям, включая дочерние, которые дорожек не получают.
   const assigned = new Set(doc.flows.flatMap((flow) => flow.steps.map((step) => step.screenId)));
   const unassigned = doc.screens.filter((screen) => !assigned.has(screen.id)).map((screen) => screen.id);
   const insertedColumns = [...gapWidths.values()].reduce((sum, width) => sum + width, 0);

@@ -79,6 +79,31 @@ describe("diffDocs (W2-4)", () => {
     ]);
   });
 
+  // План §7/T1: правило «родитель раньше ребёнка» заставляет двигать элементы массива,
+  // поэтому смена `parentId` и смена нулевого элемента обязаны быть видимы.
+  it("reports a changed parentId", () => {
+    const base = makeDoc();
+    base.flows = [
+      { id: "main", name: "Покупка", steps: [{ screenId: "cart" }, { screenId: "done" }] },
+      { id: "leaf", name: "Квитанция", steps: [{ screenId: "done" }] },
+    ];
+    const next = clone(base);
+    next.flows![1]!.parentId = "main";
+    expect(paths(diffDocs(base, next))).toEqual(["added:Сценарий «Квитанция» › родительский сценарий"]);
+    expect(paths(diffDocs(next, base))).toEqual(["removed:Сценарий «Квитанция» › родительский сценарий"]);
+  });
+
+  it("reports a changed main flow when the array order moves flows[0]", () => {
+    const base = makeDoc();
+    base.flows = [
+      { id: "main", name: "Покупка", steps: [{ screenId: "cart" }, { screenId: "done" }] },
+      { id: "leaf", name: "Квитанция", steps: [{ screenId: "done" }] },
+    ];
+    const next = clone(base);
+    next.flows = [base.flows[1]!, base.flows[0]!];
+    expect(paths(diffDocs(base, next))).toEqual(["changed:Главный сценарий"]);
+  });
+
   it("reports added and removed screens by id", () => {
     const base = makeDoc();
     const next = clone(base);

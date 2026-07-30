@@ -10,6 +10,7 @@ import {
   FLOWS_LIMIT,
   FLOW_STEPS_LIMIT,
   FLOW_TOTAL_STEPS_LIMIT,
+  FLOW_DEPTH_LIMIT,
   type PrototypeDoc,
 } from "../src/prototype/schema";
 import { ELEMENTS_PER_SCREEN_LIMIT, REPEAT_ELEMENT_LIMIT, REPEAT_RENDER_COST_BUDGET, TREE_DEPTH_LIMIT } from "../src/prototype/validate";
@@ -299,6 +300,7 @@ describe("route contracts", () => {
       flows: FLOWS_LIMIT,
       flowSteps: FLOW_STEPS_LIMIT,
       flowTotalSteps: FLOW_TOTAL_STEPS_LIMIT,
+      flowDepth: FLOW_DEPTH_LIMIT,
     });
     expect(value.designSystems).toEqual(expect.arrayContaining(["contract-ds", "yandex-pay"]));
     expect(value.layoutContractVersion).toBe(1);

@@ -12,6 +12,7 @@ import {
   FLOWS_LIMIT,
   FLOW_STEPS_LIMIT,
   FLOW_TOTAL_STEPS_LIMIT,
+  FLOW_DEPTH_LIMIT,
 } from "../../src/prototype/schema";
 import { ELEMENTS_PER_SCREEN_LIMIT, REPEAT_ELEMENT_LIMIT, REPEAT_RENDER_COST_BUDGET, TREE_DEPTH_LIMIT } from "../../src/prototype/validate";
 import { MAX_ASSET_BYTES } from "../assets/validate";
@@ -58,6 +59,8 @@ export function capabilities(db: Database): JsonObject {
       flows: FLOWS_LIMIT,
       flowSteps: FLOW_STEPS_LIMIT,
       flowTotalSteps: FLOW_TOTAL_STEPS_LIMIT,
+      // Глубина дерева сценариев (`flow.parentId`); корень считается уровнем 1.
+      flowDepth: FLOW_DEPTH_LIMIT,
     },
     designSystems: systems.map((system) => system.id),
     resolvedSpaceScales: Object.fromEntries(systems.map((system) => {

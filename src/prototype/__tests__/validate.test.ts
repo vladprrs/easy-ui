@@ -443,18 +443,56 @@ describe("semantic warnings", () => {
     expect(validatePrototype(doc, { definitions: { Widget: widget } }).warnings.some((entry) => entry.message.includes("flow step is not connected"))).toBe(false);
   });
 
-  it("warns for a single-step flow and a note on a branch-flow anchor, but not on main-flow steps", () => {
+  it("warns for a single-step root flow", () => {
     const doc = build({ a: { type: "Text", props: { text: "A" } } }, "a");
     doc.flows = [
       { id: "main", name: "Main", steps: [{ screenId: "s", note: "Shown on the main tile" }] },
-      { id: "branch", name: "Branch", steps: [{ screenId: "s", note: "Hidden" }] },
+      { id: "branch", name: "Branch", steps: [{ screenId: "s", note: "Rendered by the scenarios view" }] },
     ];
     const warnings = validatePrototype(doc).warnings;
     expect(warnings).toEqual(expect.arrayContaining([
       { path: "/flows/0/steps", message: "flow has a single step" },
-      { path: "/flows/1/steps/0/note", message: "flow step note on a main-flow anchor is not displayed" },
+      { path: "/flows/1/steps", message: "flow has a single step" },
     ]));
-    expect(warnings).not.toContainEqual(expect.objectContaining({ path: "/flows/0/steps/0/note" }));
+  });
+
+  // План docs/plans/2026-07-29-scrn-gallery-ux.md §3, освобождение 4: премиса «у якоря
+  // нет своего тайла» перестала быть верной — режим «Сценарии» рендерит якорные шаги.
+  it("no longer warns about a note on a main-flow anchor in any flow, flat ones included", () => {
+    const doc = build({ a: { type: "Text", props: { text: "A" } } }, "a");
+    doc.flows = [
+      { id: "main", name: "Main", steps: [{ screenId: "s", note: "Main" }] },
+      { id: "flat", name: "Flat", steps: [{ screenId: "s", note: "Anchor note" }] },
+      { id: "child", name: "Child", parentId: "main", steps: [{ screenId: "s", note: "Anchor note" }] },
+    ];
+    expect(validatePrototype(doc).warnings.some((entry) => entry.message.includes("main-flow anchor"))).toBe(false);
+  });
+
+  // Освобождение 3: канонический лист дерева — один экран.
+  it("exempts a child flow from the single-step warning", () => {
+    const doc = build({ a: { type: "Text", props: { text: "A" } } }, "a");
+    doc.flows = [
+      { id: "main", name: "Main", steps: [{ screenId: "s" }, { screenId: "s" }] },
+      { id: "leaf", name: "Leaf", parentId: "main", steps: [{ screenId: "s" }] },
+    ];
+    expect(validatePrototype(doc).warnings).not.toContainEqual(expect.objectContaining({ path: "/flows/1/steps" }));
+  });
+
+  // Освобождение 2: дочерний флоу — выборка экранов, а не связная цепочка рёбер.
+  it("exempts a child flow from the connectivity warning but keeps it for root flows", () => {
+    const make = (parentId?: string) => {
+      const doc = build({}, "a", { screens: [
+        screen({ a: { type: "Text", props: { text: "A" } } }, "a", { id: "s", name: "A" }),
+        screen({ b: { type: "Text", props: { text: "B" } } }, "b", { id: "s2", name: "B" }),
+      ] });
+      doc.flows = [
+        { id: "main", name: "Main", steps: [{ screenId: "s" }, { screenId: "s2" }] },
+        { id: "slice", name: "Slice", ...(parentId === undefined ? {} : { parentId }), steps: [{ screenId: "s" }, { screenId: "s2" }] },
+      ];
+      return validatePrototype(doc).warnings.filter((entry) => entry.message.includes("flow step is not connected"));
+    };
+    expect(make().map((entry) => entry.path)).toEqual(["/flows/0/steps/1/screenId", "/flows/1/steps/1/screenId"]);
+    expect(make("main").map((entry) => entry.path)).toEqual(["/flows/0/steps/1/screenId"]);
   });
 
   it("keeps reachability based on statically inferred navigate edges", () => {

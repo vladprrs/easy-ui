@@ -13,9 +13,14 @@ export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
 
 export const slugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "must be a slug");
 
-export const FLOWS_LIMIT = 12;
+export const FLOWS_LIMIT = 24;
 export const FLOW_STEPS_LIMIT = 50;
 export const FLOW_TOTAL_STEPS_LIMIT = 200;
+/**
+ * Максимальная глубина дерева сценариев (`flow.parentId`), **корень = уровень 1**.
+ * Значение уезжает в публичный `/api/capabilities` как `limits.flowDepth`.
+ */
+export const FLOW_DEPTH_LIMIT = 4;
 
 export const REGION_KINDS = ["statusBar", "header", "footer"] as const;
 export type RegionKind = (typeof REGION_KINDS)[number];
@@ -92,7 +97,8 @@ const flowStepSchema = z.strictObject({
 /**
  * Общая форма флоу. `parentId` — аддитивное поле иерархии сценариев (план
  * `docs/plans/2026-07-29-scrn-gallery-ux.md` §4/T0): присутствует в обеих ветках,
- * без валидационных правил (они приходят в T1).
+ * а правила иерархии (существование родителя, порядок, глубина) — только во входной
+ * (`refinePrototypeDocAuthoring`), чтобы откат образа читал документы без потерь.
  * Обе ветки — `strictObject`: `looseObject` добавил бы индексную сигнатуру и
  * убил бы excess-property-проверки на литералах флоу по всему репозиторию.
  */
@@ -160,7 +166,7 @@ const prototypeDocShape = <S extends z.ZodType, F extends z.ZodType>(screens: S,
 type RefinableDoc = {
   screens: { id: string }[];
   startScreen: string;
-  flows?: { id: string; steps: { screenId: string }[] }[];
+  flows?: { id: string; parentId?: string; steps: { screenId: string }[] }[];
 };
 
 /**
@@ -188,12 +194,56 @@ const refinePrototypeDocStructure = <T extends RefinableDoc>(doc: T, context: z.
 };
 
 /**
+ * Иерархия сценариев (`flow.parentId`), план §7/T1. Единственное нормативное правило
+ * порядка — **родитель объявлен раньше ребёнка**: оно же даёт ацикличность (отношение
+ * `parent: i → j < i` — лес по построению) и позволяет посчитать глубину одним проходом,
+ * поэтому отдельных проверок на цикл и самоссылку нет (самоссылка = нарушение порядка).
+ *
+ * Defensive: висячий `parentId` трактуется как корень (второй issue про глубину не
+ * добавляется), карта `id → index` фиксирует **первое** вхождение (дубликаты `id`
+ * репортит структурная ветка), а при нарушении порядка глубина поддерева не считается
+ * вовсе (`null`) — чтобы не сыпать производными issue'ами.
+ */
+const refineFlowHierarchy = (flows: NonNullable<RefinableDoc["flows"]>, context: z.RefinementCtx) => {
+  const indexById = new Map<string, number>();
+  flows.forEach((flow, index) => { if (!indexById.has(flow.id)) indexById.set(flow.id, index); });
+
+  if (flows[0]?.parentId !== undefined) {
+    context.addIssue({ code: "custom", path: ["flows", 0, "parentId"], message: "the first flow must be a root flow" });
+  }
+
+  const depths: (number | null)[] = [];
+  flows.forEach((flow, index) => {
+    if (flow.parentId === undefined) { depths.push(1); return; }
+    const parentIndex = indexById.get(flow.parentId);
+    if (parentIndex === undefined) {
+      context.addIssue({ code: "custom", path: ["flows", index, "parentId"], message: "flow parentId must reference an existing flow" });
+      depths.push(1);
+      return;
+    }
+    if (parentIndex >= index) {
+      context.addIssue({ code: "custom", path: ["flows", index, "parentId"], message: "flow parent must be declared before the flow" });
+      depths.push(null);
+      return;
+    }
+    const parentDepth = depths[parentIndex]!;
+    if (parentDepth === null) { depths.push(null); return; }
+    const depth = parentDepth + 1;
+    depths.push(depth);
+    if (depth > FLOW_DEPTH_LIMIT) {
+      context.addIssue({ code: "custom", path: ["flows", index, "parentId"], message: `flow nesting exceeds the depth limit of ${FLOW_DEPTH_LIMIT}` });
+    }
+  });
+};
+
+/**
  * Авторские правила — **только входная ветка** (план §4). Stored-парс их не исполняет,
  * чтобы откат образа на предыдущую версию читал, сохранял и восстанавливал документы
  * без потерь: правила геометрии дорожек и лимиты — вопрос авторинга, не чтения.
  */
 const refinePrototypeDocAuthoring = <T extends RefinableDoc>(doc: T, context: z.RefinementCtx) => {
   if (!doc.flows) return;
+  refineFlowHierarchy(doc.flows, context);
   let totalSteps = 0;
   doc.flows.forEach((flow, flowIndex) => {
     totalSteps += flow.steps.length;
@@ -219,6 +269,9 @@ const refinePrototypeDocAuthoring = <T extends RefinableDoc>(doc: T, context: z.
     }
   });
   doc.flows.forEach((flow, flowIndex) => {
+    // План §3: дочерний флоу (`parentId`) — выборка экранов, а не заякоренная в
+    // главную линию ветка, поэтому геометрическое правило дорожек на него не действует.
+    if (flow.parentId !== undefined) return;
     for (let stepIndex = 1; stepIndex < flow.steps.length; stepIndex += 1) {
       const previousMainIndex = mainIndexes.get(flow.steps[stepIndex - 1]!.screenId);
       const currentMainIndex = mainIndexes.get(flow.steps[stepIndex]!.screenId);

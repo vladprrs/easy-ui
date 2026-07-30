@@ -1364,7 +1364,7 @@ export const capabilitiesResponseSchema = z.object({
   limits: z.object({
     elements: z.number(), depth: z.number(), bodyMiB: z.number(), sourceKiB: z.number(),
     assetMiB: z.number(), repeatBudget: z.number(), repeatPerScreen: z.number(), screenshotQueue: z.number(), geometryRects: z.number(),
-    flows: z.number(), flowSteps: z.number(), flowTotalSteps: z.number(),
+    flows: z.number(), flowSteps: z.number(), flowTotalSteps: z.number(), flowDepth: z.number(),
   }),
   designSystems: z.array(z.string()),
   resolvedSpaceScales: z.record(z.string(), spaceScaleSchema),

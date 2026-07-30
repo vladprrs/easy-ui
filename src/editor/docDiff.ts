@@ -86,8 +86,31 @@ function diffScreen(changes: DocChange[], before: Screen, after: Screen): void {
   }
 }
 
+// Локальные ярлыки иерархии сценариев (план §7/T1). Живут здесь, а не в
+// `strings/editor.ts`: тот файл принадлежит другой задаче волны.
+const FLOW_PARENT_LABEL = "родительский сценарий";
+const MAIN_FLOW_LABEL = "Главный сценарий";
+
+/**
+ * Diff сценариев: матчинг по `id` (переименование отличается от добавления+удаления),
+ * плюс два сигнала иерархии — смена `parentId` и **смена главного сценария**. Второй
+ * важен потому, что правило «родитель раньше ребёнка» заставляет двигать элементы
+ * массива, и нулевой элемент (`flows[0]`, каноническая главная линия) легко сдвинуть
+ * случайно — без этой строки правка выглядела бы как безобидная перестановка.
+ */
 function diffFlows(changes: DocChange[], before: PrototypeDoc["flows"], after: PrototypeDoc["flows"]): void {
   const nextById = new Map((after ?? []).map((flow) => [flow.id, flow]));
+  const beforeMain = before?.[0];
+  const afterMain = after?.[0];
+  // Только когда сценарии есть по обе стороны: появление или исчезновение всего блока
+  // уже описано строками added/removed ниже, и «главный изменился» было бы дублем.
+  if (beforeMain && afterMain && beforeMain.id !== afterMain.id) {
+    changes.push({
+      kind: "changed",
+      segments: [MAIN_FLOW_LABEL],
+      detail: editor.diffScalarDetail(beforeMain.name, afterMain.name),
+    });
+  }
   for (const flow of before ?? []) {
     const counterpart = nextById.get(flow.id);
     if (!counterpart) {
@@ -98,6 +121,7 @@ function diffFlows(changes: DocChange[], before: PrototypeDoc["flows"], after: P
       changes.push({ kind: "renamed", segments: [editor.diffFlowLabel(flow.name)], detail: editor.diffScalarDetail(flow.name, counterpart.name) });
     }
     diffValue(changes, [editor.diffFlowLabel(counterpart.name), editor.descriptionLabel], flow.description, counterpart.description);
+    diffValue(changes, [editor.diffFlowLabel(counterpart.name), FLOW_PARENT_LABEL], flow.parentId, counterpart.parentId);
     diffValue(changes, [editor.diffFlowLabel(counterpart.name), editor.diffFlowStepsLabel], flow.steps, counterpart.steps);
   }
   const baseIds = new Set((before ?? []).map((flow) => flow.id));

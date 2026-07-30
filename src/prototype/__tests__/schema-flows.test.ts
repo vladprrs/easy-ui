@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FLOWS_LIMIT,
+  FLOW_DEPTH_LIMIT,
   FLOW_STEPS_LIMIT,
   FLOW_TOTAL_STEPS_LIMIT,
   inputPrototypeDocSchema,
@@ -27,6 +28,7 @@ function doc(screenIds: string[], flows?: unknown) {
 }
 
 const flow = (id: string, steps: string[]) => ({ id, name: id, steps: steps.map((screenId) => ({ screenId })) });
+const child = (id: string, parentId: string, steps: string[]) => ({ ...flow(id, steps), parentId });
 const issues = (value: unknown) => {
   const result = inputPrototypeDocSchema.safeParse(value);
   return result.success ? [] : result.error.issues;
@@ -73,6 +75,17 @@ describe("prototype flows schema", () => {
     }
   });
 
+  // Освобождение 1 из таблицы §3: anchor-adjacency — правило выразимости геометрии
+  // дорожек, а дочерний флоу дорожки не получает.
+  it("exempts child flows from the anchor-adjacency rule but keeps it for root flows", () => {
+    const anchorIssue = expect.objectContaining({ message: "adjacent main-flow anchors must be consecutive in the forward direction" });
+    // Негативный контроль: тот же срез [a, c] в **корневом** флоу по-прежнему error.
+    expect(issues(doc(["a", "b", "c"], [flow("main", ["a", "b", "c"]), flow("slice", ["a", "c"])])))
+      .toContainEqual(anchorIssue);
+    expect(issues(doc(["a", "b", "c"], [flow("main", ["a", "b", "c"]), child("slice", "main", ["a", "c"])])))
+      .not.toContainEqual(anchorIssue);
+  });
+
   it("enforces per-document and per-flow limits", () => {
     const tooManyFlows = Array.from({ length: FLOWS_LIMIT + 1 }, (_, index) => flow(`flow-${index}`, ["a"]));
     expect(issues(doc(["a"], tooManyFlows)).some((entry) => entry.path.join("/") === "flows")).toBe(true);
@@ -107,6 +120,104 @@ describe("prototype flows schema", () => {
   });
 });
 
+// План docs/plans/2026-07-29-scrn-gallery-ux.md §7 / T1: иерархия сценариев.
+// Все правила — авторские, то есть живут только во входной ветке.
+describe("flow hierarchy (parentId)", () => {
+  const chain = (length: number) => [
+    flow("f-0", ["a"]),
+    ...Array.from({ length: length - 1 }, (_, index) => child(`f-${index + 1}`, `f-${index}`, ["a"])),
+  ];
+
+  it("accepts a tree up to the depth limit, counting the root as level 1", () => {
+    expect(inputPrototypeDocSchema.safeParse(doc(["a"], chain(FLOW_DEPTH_LIMIT))).success).toBe(true);
+  });
+
+  it("rejects nesting deeper than the limit and points at the offending child", () => {
+    expect(issues(doc(["a"], chain(FLOW_DEPTH_LIMIT + 1)))).toContainEqual(expect.objectContaining({
+      path: ["flows", FLOW_DEPTH_LIMIT, "parentId"],
+      message: `flow nesting exceeds the depth limit of ${FLOW_DEPTH_LIMIT}`,
+    }));
+  });
+
+  it("requires parentId to reference an existing flow", () => {
+    expect(issues(doc(["a"], [flow("main", ["a"]), child("orphan", "nope", ["a"])])))
+      .toContainEqual(expect.objectContaining({ path: ["flows", 1, "parentId"], message: "flow parentId must reference an existing flow" }));
+  });
+
+  it("requires the parent to be declared before the child, which also rules out cycles and self references", () => {
+    const orderIssue = (index: number) => expect.objectContaining({
+      path: ["flows", index, "parentId"],
+      message: "flow parent must be declared before the flow",
+    });
+    // Ссылка вперёд.
+    expect(issues(doc(["a"], [flow("main", ["a"]), child("early", "late", ["a"]), flow("late", ["a"])]))).toContainEqual(orderIssue(1));
+    // Самоссылка — частный случай того же правила, отдельного сообщения нет.
+    expect(issues(doc(["a"], [flow("main", ["a"]), child("self", "self", ["a"])]))).toContainEqual(orderIssue(1));
+    // Двухзвенный цикл: обе ссылки не могут быть «назад» одновременно.
+    const cycle = issues(doc(["a"], [flow("main", ["a"]), child("x", "y", ["a"]), child("y", "x", ["a"])]));
+    expect(cycle).toContainEqual(orderIssue(1));
+    expect(cycle.every((entry) => entry.message !== "flow parentId must reference an existing flow")).toBe(true);
+  });
+
+  it("requires the first flow to be a root flow", () => {
+    expect(issues(doc(["a"], [child("main", "other", ["a"]), flow("other", ["a"])])))
+      .toContainEqual(expect.objectContaining({ path: ["flows", 0, "parentId"], message: "the first flow must be a root flow" }));
+  });
+
+  it("treats a dangling parentId as a root without emitting a second depth issue", () => {
+    // Родитель `orphan` висячий: если бы глубина считалась «как есть», лист ушёл бы за лимит.
+    const flows = [
+      flow("f-0", ["a"]),
+      child("orphan", "nope", ["a"]),
+      child("g-1", "orphan", ["a"]),
+      child("g-2", "g-1", ["a"]),
+      child("g-3", "g-2", ["a"]),
+    ];
+    const reported = issues(doc(["a"], flows));
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ path: ["flows", 1, "parentId"], message: "flow parentId must reference an existing flow" });
+  });
+
+  it("suppresses depth checking under a flow that violated the ordering rule", () => {
+    const flows = [
+      flow("f-0", ["a"]),
+      child("bad", "late", ["a"]),
+      flow("late", ["a"]),
+      child("g-1", "bad", ["a"]),
+      child("g-2", "g-1", ["a"]),
+      child("g-3", "g-2", ["a"]),
+      child("g-4", "g-3", ["a"]),
+    ];
+    const reported = issues(doc(["a"], flows));
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toMatchObject({ path: ["flows", 1, "parentId"], message: "flow parent must be declared before the flow" });
+  });
+
+  it("binds a duplicated parent id to its first occurrence", () => {
+    // Дубликат `id` репортит структурное правило; иерархия смотрит на первое вхождение,
+    // поэтому глубина листа равна 3, а не 2 — второго issue про глубину быть не должно.
+    const reported = issues(doc(["a"], [flow("dup", ["a"]), flow("dup", ["a"]), child("leaf", "dup", ["a"])]));
+    expect(reported).toEqual([expect.objectContaining({ path: ["flows", 1, "id"], message: "flow id must be unique" })]);
+  });
+
+  it("keeps the stored branch free of every hierarchy rule", () => {
+    const broken = doc(["a"], [
+      child("main", "self", ["a"]),
+      ...Array.from({ length: FLOW_DEPTH_LIMIT + 2 }, (_, index) => child(`f-${index}`, index === 0 ? "main" : `f-${index - 1}`, ["a"])),
+    ]);
+    expect(storedPrototypeDocSchema.safeParse(broken).success).toBe(true);
+    expect(inputPrototypeDocSchema.safeParse(broken).success).toBe(false);
+  });
+
+  it("raised FLOWS_LIMIT to 24", () => {
+    expect(FLOWS_LIMIT).toBe(24);
+    expect(inputPrototypeDocSchema.safeParse(doc(["a", "b"], [
+      flow("main", ["a", "b"]),
+      ...Array.from({ length: FLOWS_LIMIT - 1 }, (_, index) => child(`leaf-${index}`, "main", ["b"])),
+    ])).success).toBe(true);
+  });
+});
+
 // План docs/plans/2026-07-29-scrn-gallery-ux.md §4 / T0: авторские правила и лимиты —
 // input-only, чтобы откат образа читал и round-trip'ил документы без потерь.
 describe("stored branch is rollback-safe", () => {
@@ -114,14 +225,18 @@ describe("stored branch is rollback-safe", () => {
     const result = storedPrototypeDocSchema.safeParse(value);
     return result.success ? [] : result.error.issues;
   };
-  const child = (id: string, parentId: string, steps: string[]) => ({ ...flow(id, steps), parentId });
 
   it("reads a document with parentId and a violated authoring rule that the input branch rejects", () => {
-    // Соседние неконсекутивные main-якоря: [a, c] при главной линии [a, b, c].
-    const value = doc(["a", "b", "c"], [flow("main", ["a", "b", "c"]), child("slice", "main", ["a", "c"])]);
+    // Соседние неконсекутивные main-якоря [a, c] при главной линии [a, b, c] — в
+    // **корневом** флоу (у дочернего это правило снято, план §3), плюс дочерний флоу рядом.
+    const value = doc(["a", "b", "c"], [
+      flow("main", ["a", "b", "c"]),
+      flow("slice", ["a", "c"]),
+      child("leaf", "main", ["c"]),
+    ]);
     const stored = storedPrototypeDocSchema.safeParse(value);
     expect(stored.success).toBe(true);
-    expect(stored.data?.flows?.[1]).toMatchObject({ id: "slice", parentId: "main" });
+    expect(stored.data?.flows?.[2]).toMatchObject({ id: "leaf", parentId: "main" });
     expect(issues(value))
       .toContainEqual(expect.objectContaining({ message: "adjacent main-flow anchors must be consecutive in the forward direction" }));
   });
