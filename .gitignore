@@ -41,3 +41,7 @@ data/
 .w0-data/
 .w6-data/
 work/
+
+# Артефакты прогонов Playwright (трассы, скриншоты, error-context).
+test-results/
+playwright-report/
