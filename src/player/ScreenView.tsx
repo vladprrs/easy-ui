@@ -90,6 +90,7 @@ export function ScreenView() {
   const [hotkeysVisible, setHotkeysVisible] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [statusBarHidden, setStatusBarHidden] = useStatusBarPreference();
+  const [zonesVisible, setZonesVisible] = useState(false);
   // Заметка привязана к экрану, для которого её открыли: смена экрана закрывает
   // её без эффекта (react-hooks/set-state-in-effect).
   const [noteScreenId, setNoteScreenId] = useState<string | null>(null);
@@ -119,6 +120,22 @@ export function ScreenView() {
   // Zoom-контролы осмысленны только для фиксированного viewport (canvas-экран или
   // mobile/tablet); desktop auto-height рендерится fluid-веткой без масштаба.
   const hasFixedViewport = screenCanvas !== undefined || canonicalViewport[device] !== null;
+  // Оверлей интерактивных зон (T3): подписи целей строятся по документу, а зоны —
+  // по сырым `on`-биндингам рантайм-метаданных внутри ScreenSurface.
+  const currentFlowId = new URLSearchParams(location.search).get("flow");
+  const interactiveZones = useMemo(() => {
+    if (!zonesVisible) return undefined;
+    const screenNames = new Map(doc.screens.map((item) => [item.id, item.name]));
+    const flows = doc.flows;
+    if (flows === undefined) return { screenNames };
+    const currentFlow = flows.find((item) => item.id === currentFlowId);
+    const flowNote = (screenId: string) => {
+      if (currentFlow?.steps.some((step) => step.screenId === screenId) === true) return player.zoneInCurrentFlow;
+      const owner = flows.find((item) => item.steps.some((step) => step.screenId === screenId));
+      return owner === undefined ? undefined : player.zoneFlow(owner.name);
+    };
+    return { screenNames, flowNote };
+  }, [currentFlowId, doc.flows, doc.screens, zonesVisible]);
 
   const publishedVersions = versions?.published ?? [];
   const latestPublished = publishedVersions.reduce<typeof publishedVersions[number] | undefined>(
@@ -225,6 +242,7 @@ export function ScreenView() {
     actions={<>
       {screen === undefined ? null : <>
         {hasStatusBar && <button type="button" aria-pressed={statusBarHidden} onClick={() => setStatusBarHidden(!statusBarHidden)} className={pillGhost}>{player.statusBarToggle}</button>}
+        <button type="button" aria-pressed={zonesVisible} onClick={() => setZonesVisible((visible) => !visible)} className={pillGhost}>{player.zonesToggle}</button>
         <div role="group" aria-label={player.deviceAria} className="flex items-center gap-1">
           {(["mobile", "tablet", "desktop"] as const).map((item) => (
             <button key={item} type="button" aria-pressed={device === item} disabled={item === "desktop" && blocksDesktopPreview} title={item === "desktop" && blocksDesktopPreview ? player.desktopOverlayUnavailable : undefined} onClick={() => { setDevice(item); stageZoom.fit(); }} className={`${device === item ? chipActive : chip} disabled:cursor-not-allowed disabled:opacity-50`}>
@@ -252,7 +270,7 @@ export function ScreenView() {
   const shareDialog = shareOpen ? <ShareDialog prototypeId={doc.id} versions={publishedVersions} currentVersion={numericVersion} onClose={() => setShareOpen(false)} /> : null;
   if (!screen) return <main className="flex h-dvh min-h-0 flex-col">{shareDialog}{chrome}<div className="flex min-h-0 flex-1 items-start justify-center bg-eui-graphite p-8 text-white"><section role="alert" className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h2 className="font-eui-display text-2xl font-bold">{player.screenMissingTitle}</h2><p className="mt-2 text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p><Link className={`${pillGhostOnDark} mt-4 font-eui-ui`} to="/">{common.backToGallery}</Link></section></div></main>;
 
-  const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} misclickHighlights hostPrimitivesAllowed={device !== "desktop" || screen.canvas !== undefined} />;
+  const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} misclickHighlights hostPrimitivesAllowed={device !== "desktop" || screen.canvas !== undefined} interactiveZones={interactiveZones} />;
 
   return <main className="flex h-dvh min-h-0 flex-col">
     {shareDialog}

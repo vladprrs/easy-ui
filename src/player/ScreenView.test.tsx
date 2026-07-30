@@ -155,6 +155,51 @@ describe("ScreenView stage controls (W1-1)", () => {
     expect(screen.getByRole("group", { name: "Масштаб" })).toBeTruthy();
   });
 
+  it("toggles the interactive zones overlay from the chrome actions slot", () => {
+    const box = {
+      x: 0, y: 0, left: 0, top: 0, width: 300, height: 60, right: 300, bottom: 60, toJSON: () => ({}),
+    } as DOMRect;
+    const rects = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(box);
+    try {
+      const doc = prototypeDocSchema.parse({
+        version: 1,
+        id: "zones-prototype",
+        name: "Zones prototype",
+        device: "mobile",
+        startScreen: "home",
+        state: {},
+        flows: [{ id: "main", name: "Основной", steps: [{ screenId: "home" }, { screenId: "details" }] }],
+        screens: [
+          {
+            id: "home",
+            name: "Home",
+            spec: {
+              root: "stack",
+              elements: {
+                stack: { type: "Stack", props: {}, children: ["cta"] },
+                cta: { type: "Button", props: { label: "Дальше" }, on: { press: { action: "navigate", params: { screenId: "details" } } } },
+              },
+            },
+          },
+          { id: "details", name: "Details", spec: { root: "copy", elements: { copy: { type: "Text", props: { text: "Details" } } } } },
+        ],
+      });
+      renderPlayer(doc, "/p/zones-prototype/s/home?flow=main");
+      const toggle = screen.getByRole("button", { name: "Зоны переходов" });
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+      expect(document.querySelector("[data-eui-zone-key]")).toBeNull();
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+      expect(document.querySelector('[data-eui-zone-label="cta"]')?.textContent).toBe("→ Details · в текущем сценарии");
+
+      fireEvent.click(toggle);
+      expect(document.querySelector("[data-eui-zone-key]")).toBeNull();
+    } finally {
+      rects.mockRestore();
+    }
+  });
+
   it("collapses and expands the screens sidebar", () => {
     renderPlayer(mobileDoc(), "/p/stage-prototype/s/home");
     expect(screen.getByRole("button", { name: "Home" })).toBeTruthy();

@@ -67,6 +67,16 @@ export const player = {
   scenarioOccurrences: "Выберите вхождение экрана",
   scenarioOccurrence: (step: number) => `Шаг ${step}`,
   scenarioGuidedBrowse: "Экран открывается в текущем состоянии сессии; промежуточные действия не выполняются.",
+  // Оверлей интерактивных зон (план 2026-07-29 §7 T3). «цель вычисляется» —
+  // формулировка только этого оверлея: классификацию перехода `$if` не меняет.
+  zonesToggle: "Зоны переходов",
+  zoneTo: (screenName: string) => `→ ${screenName}`,
+  zoneComputed: "цель вычисляется",
+  zoneDynamic: "→ цель вычисляется",
+  zoneNoTarget: "без перехода",
+  zoneInCurrentFlow: "в текущем сценарии",
+  zoneFlow: (flowName: string) => `сценарий: ${flowName}`,
+  zoneMore: (count: number) => `+${count}`,
 } as const;
 
 /** Человекочитаемая дата публикации в продуктовом русском интерфейсе. */

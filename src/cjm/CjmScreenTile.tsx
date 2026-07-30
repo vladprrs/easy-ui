@@ -6,6 +6,7 @@ import { HostStageSurface } from "../catalog/hostPrimitives";
 import type { ThemeContent } from "../api/client";
 import type { PrototypeDoc } from "../prototype/schema";
 import { mergeScreenState } from "../prototype/stateOverrides";
+import { parseNavigateBinding } from "../prototype/navigateBinding";
 import { buildScreenRenderPlan, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { buildPlayerPath } from "../player/navigation";
@@ -19,7 +20,11 @@ export type CjmTransition =
   | { kind: "static"; screenId: string; screenName: string }
   | { kind: "dynamic" };
 
-/** Reads authored press bindings only. These labels never add or reorder CJM tiles. */
+/**
+ * Reads authored press bindings only. These labels never add or reorder CJM tiles.
+ * Разбор одного биндинга делегирован общему `parseNavigateBinding`; `conditional`
+ * здесь намеренно игнорируется — переход под `$if` остаётся статическим (T3).
+ */
 export function getCjmTransitions(screen: PrototypeDoc["screens"][number], screens: PrototypeDoc["screens"]): CjmTransition[] {
   const screenNames = new Map(screens.map((item) => [item.id, item.name]));
   const transitions: CjmTransition[] = [];
@@ -27,19 +32,13 @@ export function getCjmTransitions(screen: PrototypeDoc["screens"][number], scree
   for (const element of Object.values(screen.spec.elements)) {
     const binding = element.on?.press;
     if (binding === undefined) continue;
-    const actions = Array.isArray(binding) ? binding : [binding];
-    for (const action of actions) {
-      if (action.action !== "navigate") continue;
-      const target = action.params?.screenId;
-      if (typeof target === "string") {
-        const key = `static:${target}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        transitions.push({ kind: "static", screenId: target, screenName: screenNames.get(target) ?? target });
-      } else if (target !== undefined && !seen.has("dynamic")) {
-        seen.add("dynamic");
-        transitions.push({ kind: "dynamic" });
-      }
+    for (const target of parseNavigateBinding(binding, screenNames)) {
+      const key = target.kind === "static" ? `static:${target.screenId}` : "dynamic";
+      if (seen.has(key)) continue;
+      seen.add(key);
+      transitions.push(target.kind === "static"
+        ? { kind: "static", screenId: target.screenId, screenName: target.screenName }
+        : { kind: "dynamic" });
     }
   }
   return transitions;

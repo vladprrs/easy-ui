@@ -1,16 +1,16 @@
 import { JSONUIProvider } from "@json-render/react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
+import { createPlayerRuntime, EUI_KEY_ATTRIBUTE, type CustomPlayerRuntime } from "../catalog/runtime";
 import { HostStageSurface } from "../catalog/hostPrimitives";
 import type { PrototypeDoc } from "../prototype/schema";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { EasyUiActionRuntime } from "./actionRuntime";
 import type { EasyUIComponentProps } from "./easyUiRuntime";
 import { ScreenRegionsProvider } from "./ScreenRegions";
-import { ScreenSurface } from "./ScreenSurface";
+import { ScreenSurface, type InteractiveZonesOptions } from "./ScreenSurface";
 
 const noopDeps = { navigate() {}, back() {}, openUrl() {}, restart() {} };
 const rect = (left: number, top: number, width: number, height: number): DOMRect => ({
@@ -349,5 +349,245 @@ describe("ScreenSurface Overlay stage integration", () => {
     view.rerender(renderSurfaceWithTarget(target));
     expect(target.contains(screen.getByRole("img", { name: "Deferred footer" }))).toBe(true);
     target.remove();
+  });
+});
+
+// ── Оверлей интерактивных зон (план 2026-07-29 §7 T3) ────────────────────────────
+
+/** Мутабельный масштаб: rect'ы зон пост-трансформные, как при fit-zoom. */
+const zoomState = { scale: 1 };
+
+/**
+ * Геометрия для jsdom: прямоугольники клипперов (`data-eui-content-scroller` /
+ * `data-eui-stage-viewport`) и зон (`data-eui-key`, несколько записей = `repeat`).
+ * Зоны масштабируются `zoomState.scale`, клипперы — нет.
+ */
+function mockGeometry(config: {
+  clip?: Record<string, [number, number, number, number]>;
+  zones: Record<string, [number, number, number, number][]>;
+}) {
+  zoomState.scale = 1;
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const clipName = this.getAttribute("data-eui-content-scroller") ?? this.getAttribute("data-eui-stage-viewport");
+    // Неописанный клиппер ничего не обрезает: иначе нулевой rect jsdom схлопнул бы пересечение.
+    if (clipName !== null) { const clip = config.clip?.[clipName]; return clip ? rect(...clip) : rect(0, 0, 10_000, 10_000); }
+    const key = this.getAttribute(EUI_KEY_ATTRIBUTE);
+    const list = key === null ? undefined : config.zones[key];
+    if (list === undefined) return rect(0, 0, 0, 0);
+    const nodes = Array.from(document.querySelectorAll(`[${EUI_KEY_ATTRIBUTE}="${key}"]`));
+    const box = list[Math.max(nodes.indexOf(this), 0)] ?? list[0]!;
+    const s = zoomState.scale;
+    return rect(box[0] * s, box[1] * s, box[2] * s, box[3] * s);
+  });
+}
+
+const screenNames = new Map([["checkout", "Оплата"], ["done", "Готово"]]);
+
+function renderZones(spec: PrototypeDoc["screens"][number]["spec"], options: {
+  zones?: InteractiveZonesOptions;
+  state?: Record<string, unknown>;
+  withStage?: boolean;
+} = {}) {
+  const runtime = createPlayerRuntime(noopDeps);
+  const actionRuntime = new EasyUiActionRuntime({ initialState: options.state ?? {}, screenIds: new Set(["screen"]), deps: noopDeps });
+  const tree = toRuntimeSpec(spec);
+  const scroller = document.createElement("div");
+  scroller.setAttribute("data-eui-content-scroller", "player");
+  let mount: HTMLElement = scroller;
+  if (options.withStage !== false) {
+    const stage = document.createElement("div");
+    stage.setAttribute("data-eui-stage-viewport", "player");
+    const inner = document.createElement("div");
+    inner.setAttribute("data-eui-stage-viewport", "player-stage");
+    stage.append(inner);
+    scroller.append(stage);
+    mount = inner;
+  }
+  document.body.append(scroller);
+  const view = render(
+    <JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
+      <ScreenSurface
+        registry={runtime.registry}
+        runtime={actionRuntime}
+        customDefinitions={{}}
+        onError={() => {}}
+        tree={tree}
+        misclickHighlights={false}
+        interactiveZones={options.zones ?? { screenNames }}
+      />
+    </JSONUIProvider>,
+    { container: mount },
+  );
+  return { ...view, scroller, stage: scroller.querySelector<HTMLElement>('[data-eui-stage-viewport="player"]') };
+}
+
+const zoneLabelsInDom = () => Array.from(document.querySelectorAll("[data-eui-zone-label]")).map((node) => node.textContent);
+const zoneBox = (key: string) => document.querySelectorAll<HTMLElement>(`[data-eui-zone-key="${key}"]`);
+
+describe("ScreenSurface interactive zones", () => {
+  afterEach(() => {
+    for (const node of document.querySelectorAll("[data-eui-content-scroller]")) node.remove();
+  });
+
+  it("labels every kind of navigate target, including $if, dynamic and several actions", () => {
+    mockGeometry({
+      clip: { player: [0, 0, 400, 800] },
+      zones: {
+        plain: [[0, 0, 300, 40]],
+        guarded: [[0, 100, 300, 40]],
+        dynamic: [[0, 200, 300, 40]],
+        multi: [[0, 300, 300, 40]],
+        inert: [[0, 400, 300, 40]],
+      },
+    });
+    const zones: InteractiveZonesOptions = {
+      screenNames,
+      flowNote: (screenId) => screenId === "checkout" ? "в текущем сценарии" : screenId === "done" ? "сценарий: Возврат" : undefined,
+    };
+    renderZones({
+      root: "stack",
+      elements: {
+        stack: { type: "Stack", props: {}, children: ["plain", "guarded", "dynamic", "multi", "inert"] },
+        plain: { type: "Button", props: { label: "Plain" }, on: { press: { action: "navigate", params: { screenId: "checkout" } } } },
+        guarded: { type: "Button", props: { label: "Guarded" }, on: { press: { action: "navigate", params: { screenId: "done" }, $if: { $state: "/ready" } } } },
+        dynamic: { type: "Button", props: { label: "Dynamic" }, on: { press: { action: "navigate", params: { screenId: { $state: "/target" } } } } },
+        multi: { type: "Button", props: { label: "Multi" }, on: { press: [{ action: "restart" }, { action: "navigate", params: { screenId: "done" } }, { action: "navigate", params: { screenId: "checkout" } }] } },
+        inert: { type: "Hotspot", props: { x: 0, y: 400, width: 300, height: 40, ariaLabel: "Inert hotspot" } },
+      },
+    }, { zones });
+
+    expect(zoneLabelsInDom()).toEqual([
+      "→ Оплата · в текущем сценарии",
+      "→ Готово · сценарий: Возврат · цель вычисляется",
+      "→ цель вычисляется",
+      "→ Готово · сценарий: Возврат +1",
+      "без перехода",
+    ]);
+  });
+
+  it("marks expanded composition keys and every repeat instance of a hotspot", () => {
+    mockGeometry({
+      clip: { player: [0, 0, 400, 800] },
+      zones: { "card$cta": [[0, 0, 300, 40]], "row-hotspot": [[0, 100, 300, 40], [0, 160, 300, 40]] },
+    });
+    renderZones({
+      root: "stack",
+      elements: {
+        stack: { type: "Stack", props: {}, children: ["card$cta", "row"] },
+        // Ключ раскрытой композиции (`<hostKey>$<innerKey>`) приходит в плеер уже
+        // раскрытым — оверлей работает по DOM-маркерам, а не по авторскому документу.
+        "card$cta": { type: "Button", props: { label: "Inner CTA" }, on: { press: { action: "navigate", params: { screenId: "checkout" } } } },
+        row: { type: "Stack", props: {}, repeat: { statePath: "/items", key: "id" }, children: ["row-hotspot"] },
+        "row-hotspot": {
+          type: "Hotspot",
+          props: { x: 0, y: 0, width: 300, height: 40, ariaLabel: "Row" },
+          on: { press: { action: "navigate", params: { screenId: "done" } } },
+        },
+      },
+    }, { state: { items: [{ id: "a" }, { id: "b" }] } });
+
+    expect(zoneBox("card$cta")).toHaveLength(1);
+    expect(zoneBox("row-hotspot")).toHaveLength(2);
+    expect(zoneLabelsInDom()).toEqual(["→ Оплата", "→ Готово", "→ Готово"]);
+  });
+
+  it("clips zones to the scroller and stage intersection and drops fully hidden ones", () => {
+    mockGeometry({
+      clip: { player: [0, 0, 400, 300], "player-stage": [0, 50, 400, 300] },
+      zones: { inside: [[10, 60, 100, 40]], partial: [[10, 260, 100, 100]], outside: [[10, 500, 100, 40]] },
+    });
+    renderZones({
+      root: "stack",
+      elements: {
+        stack: { type: "Stack", props: {}, children: ["inside", "partial", "outside"] },
+        inside: { type: "Button", props: { label: "Inside" }, on: { press: { action: "navigate", params: { screenId: "checkout" } } } },
+        partial: { type: "Button", props: { label: "Partial" }, on: { press: { action: "navigate", params: { screenId: "checkout" } } } },
+        outside: { type: "Button", props: { label: "Outside" }, on: { press: { action: "navigate", params: { screenId: "checkout" } } } },
+      },
+    });
+
+    expect(zoneBox("inside")[0]!.style.top).toBe("60px");
+    expect(zoneBox("inside")[0]!.style.height).toBe("40px");
+    // Пересечение скроллера (0..300) и внутреннего stage (50..350) обрезает низ.
+    expect(zoneBox("partial")[0]!.style.height).toBe("40px");
+    expect(zoneBox("outside")).toHaveLength(0);
+  });
+
+  it("keeps the whole overlay inert and portalled into document.body", () => {
+    mockGeometry({ clip: { player: [0, 0, 400, 800] }, zones: { action: [[0, 0, 300, 40]] } });
+    const { container } = renderZones({
+      root: "stack",
+      elements: {
+        stack: { type: "Stack", props: {}, children: ["action"] },
+        action: { type: "Button", props: { label: "Action" }, on: { press: { action: "navigate", params: { screenId: "checkout" } } } },
+      },
+    });
+
+    const layer = screen.getByTestId("interactive-zones");
+    expect(layer.parentElement).toBe(document.body);
+    expect(container.contains(layer)).toBe(false);
+    expect(layer.className).toContain("pointer-events-none");
+    expect(zoneBox("action")[0]!.className).toContain("pointer-events-none");
+  });
+
+  it("re-measures when the stage zoom changes without a player re-render", async () => {
+    mockGeometry({ clip: { player: [0, 0, 400, 800] }, zones: { action: [[20, 40, 300, 60]] } });
+    const { stage } = renderZones({
+      root: "stack",
+      elements: {
+        stack: { type: "Stack", props: {}, children: ["action"] },
+        action: { type: "Button", props: { label: "Action" }, on: { press: { action: "navigate", params: { screenId: "checkout" } } } },
+      },
+    });
+    expect(zoneBox("action")[0]!.style.left).toBe("20px");
+
+    // Смена zoom меняет только `transform: scale()` на stage-вьюпорте: ре-рендера
+    // ScreenSurface нет, ResizeObserver молчит — перезамер даёт MutationObserver.
+    await act(async () => {
+      zoomState.scale = 0.5;
+      stage!.style.transform = "scale(0.5)";
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(zoneBox("action")[0]!.style.left).toBe("10px"));
+    expect(zoneBox("action")[0]!.style.width).toBe("150px");
+  });
+
+  it("suppresses labels that would be unreadable at fit zoom or collide with a neighbour", () => {
+    mockGeometry({
+      clip: { player: [0, 0, 400, 800] },
+      zones: { big: [[0, 0, 300, 40]], overlapping: [[40, 4, 300, 40]], tiny: [[0, 200, 40, 40]], short: [[0, 300, 300, 10]] },
+    });
+    renderZones({
+      root: "stack",
+      elements: {
+        stack: { type: "Stack", props: {}, children: ["big", "overlapping", "tiny", "short"] },
+        big: { type: "Button", props: { label: "Big" }, on: { press: { action: "navigate", params: { screenId: "checkout" } } } },
+        overlapping: { type: "Button", props: { label: "Overlapping" }, on: { press: { action: "navigate", params: { screenId: "done" } } } },
+        tiny: { type: "Button", props: { label: "Tiny" }, on: { press: { action: "navigate", params: { screenId: "done" } } } },
+        short: { type: "Button", props: { label: "Short" }, on: { press: { action: "navigate", params: { screenId: "done" } } } },
+      },
+    });
+
+    expect(zoneBox("big")).toHaveLength(1);
+    expect(zoneBox("overlapping")).toHaveLength(1);
+    expect(zoneBox("tiny")).toHaveLength(1);
+    expect(zoneBox("short")).toHaveLength(1);
+    expect(zoneLabelsInDom()).toEqual(["→ Оплата"]);
+  });
+
+  it("renders nothing extra without the opt-in prop (capture and present parity)", () => {
+    mockGeometry({ clip: { player: [0, 0, 400, 800] }, zones: { action: [[0, 0, 300, 40]] } });
+    renderSurface({
+      root: "stack",
+      elements: {
+        stack: { type: "Stack", props: {}, children: ["action"] },
+        action: { type: "Button", props: { label: "Action" }, on: { press: { action: "navigate", params: { screenId: "checkout" } } } },
+      },
+    }, { misclickHighlights: false });
+
+    expect(screen.queryByTestId("interactive-zones")).toBeNull();
+    expect(document.querySelectorAll("[data-eui-zone-key]")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Action" })).toBeTruthy();
   });
 });
