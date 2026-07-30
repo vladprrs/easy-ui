@@ -4,6 +4,10 @@ import { pluralRu } from "./common";
 
 export const library = {
   title: "Библиотека компонентов",
+  // Заголовок-хиро: акцент — ровно один фрагмент (курсив + красный).
+  heroPrefix: "Библиотека",
+  heroAccent: "живых",
+  heroRest: "компонентов",
   loadingSystems: "Загружаем дизайн-системы…",
   systemsUnavailable: "Дизайн-системы недоступны.",
   designSystemsAria: "Дизайн-системы",
