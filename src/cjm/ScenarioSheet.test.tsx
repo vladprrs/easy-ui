@@ -64,9 +64,48 @@ describe("CJM scenarios sheet", () => {
     expect(sections().map((node) => node.dataset.flowId)).toEqual(["main", "section", "shortcut", "history-line"]);
     // Ступень отступа — 28px на уровень (редизайн 2026-07-30, макет 02).
     expect(sections().map((node) => node.style.marginInlineStart)).toEqual(["0px", "28px", "56px", "0px"]);
-    // Дорожек в дефолтном режиме нет — их язык (рёбра, легенда) простыня не дублирует.
+    // Дорожек в дефолтном режиме нет — рёбра простыня не рисует.
     expect(screen.queryByLabelText("Легенда рёбер сценариев")).toBeNull();
     expect(document.querySelector(".cjm-grid")).toBeNull();
+    // Зато легенда связности общая для обоих режимов (план 2026-07-31, S3):
+    // метка шага перестала объясняться одним лишь `title`.
+    const legend = screen.getByLabelText("Легенда связности шагов");
+    expect(within(legend).getByText("Подтверждённый переход")).toBeTruthy();
+    expect(within(legend).getByText("Динамический переход")).toBeTruthy();
+    expect(within(legend).getByText("Переход не найден")).toBeTruthy();
+  });
+
+  // Третий счётчик трёхчастный (W2-1): `dynamic` больше не считается дефектом, а
+  // готовность ключуется только на «не найдено». Единица счёта — смежная пара шагов.
+  it("counts step connectivity in three honest buckets", async () => {
+    renderAt("/p/tree/cjm");
+    const counters = await screen.findByLabelText("Сводка прототипа");
+    // main: home→hub, hub→phone, phone→amount + section: hub→phone = 4 подтверждённых;
+    // shortcut: hub→amount и history-line: home→history переходов не имеют.
+    expect(within(counters).getByText("4 подтверждено")).toBeTruthy();
+    expect(within(counters).getByText("0 динамических")).toBeTruthy();
+    expect(within(counters).getByText("2 не найдено")).toBeTruthy();
+    expect(within(counters).getByText("2 перехода не найдено")).toBeTruthy();
+    expect(within(counters).queryByText("Готов к публикации")).toBeNull();
+    expect(counters.textContent).not.toContain("проверок");
+  });
+
+  // Линейный документ: ячейка готовности хвалила пустоту («Готов к публикации»,
+  // 0 непроверенных) — вместо неё подпись о том, что считать не по чему.
+  it("replaces the readiness cell with an explanation on a document without flows", async () => {
+    const linearDoc = prototypeDocSchema.parse({
+      version: 1, id: "flat", name: "Плоский", designSystem: "shadcn", device: "mobile", startScreen: "home", state: {},
+      screens: [
+        { id: "home", name: "Главный", spec: screenSpec("home", "Дальше", "next") },
+        { id: "next", name: "Дальше", spec: screenSpec("next", "Готово") },
+      ],
+    });
+    mocks.getDraft.mockResolvedValue({ ...draft, doc: linearDoc });
+    renderAt("/p/flat/cjm");
+    const counters = await screen.findByLabelText("Сводка прототипа");
+    expect(within(counters).getByText("Сценарии не размечены")).toBeTruthy();
+    expect(within(counters).queryByText("Готов к публикации")).toBeNull();
+    expect(within(counters).queryByText("связность шагов")).toBeNull();
   });
 
   it("counts steps and cross-scenario reuse in the section heading", async () => {
@@ -104,10 +143,13 @@ describe("CJM scenarios sheet", () => {
     await waitFor(() => expect(sections()).toHaveLength(4));
 
     const section = within(sections()[1]!);
-    expect(section.getByRole("link", { name: "Открыть в плеере" }).getAttribute("href")).toBe("/p/tree/s/hub?flow=section&step=0");
-    fireEvent.click(section.getByRole("button", { name: "Скопировать ссылку" }));
+    expect(section.getByRole("link", { name: "В плеер →" }).getAttribute("href")).toBe("/p/tree/s/hub?flow=section&step=0");
+    fireEvent.click(section.getByRole("button", { name: "Ссылка" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/p/tree/cjm?flow=section`));
     expect(await section.findByRole("button", { name: "Ссылка скопирована" })).toBeTruthy();
+    // Отчёт о клике живёт 2 с и уступает место обычной подписи: залипшая надпись
+    // через минуту читается как свойство сценария, а не как результат действия.
+    await waitFor(() => expect(section.getByRole("button", { name: "Ссылка" })).toBeTruthy(), { timeout: 4000 });
   });
 
   it("exposes the flow tree with ARIA levels, expansion, current item and arrow navigation", async () => {
@@ -135,6 +177,36 @@ describe("CJM scenarios sheet", () => {
     // Активация переносит `aria-current` на выбранный сценарий.
     fireEvent.click(within(tree).getByText("История операций"));
     await waitFor(() => expect(treeItems().find((node) => node.getAttribute("aria-current") === "true")?.dataset.flowId).toBe("history-line"));
+  });
+
+  // Каретка (W2-9): 24×24 hit-area вместо голого глифа и смена `▸`/`▾` вместо вращения.
+  it("collapses a branch by clicking the caret and swaps the glyph", async () => {
+    renderAt("/p/tree/cjm");
+    await screen.findByRole("tree", { name: "Дерево сценариев" });
+    const caret = treeItems()[0]!.querySelector<HTMLElement>("span[aria-hidden='true']")!;
+    expect(caret.textContent).toBe("▾");
+    expect(caret.className).toContain("h-6 w-6");
+    fireEvent.click(caret);
+    expect(treeItems()[0]!.getAttribute("aria-expanded")).toBe("false");
+    expect(treeItems().map((node) => node.dataset.flowId)).toEqual(["main", "history-line"]);
+    expect(treeItems()[0]!.querySelector("span[aria-hidden='true']")!.textContent).toBe("▸");
+  });
+
+  // Ниже 1024px левая колонка уезжает в поповер (W2-4), а не исчезает вместе с
+  // ориентацией «где я»: в jsdom медиазапросов нет, поэтому проверяем сам поповер.
+  it("keeps the flow tree reachable through the narrow-screen popover", async () => {
+    renderAt("/p/tree/cjm");
+    await waitFor(() => expect(sections()).toHaveLength(4));
+    const trigger = screen.getByRole("button", { name: "Сценарии" });
+    fireEvent.click(trigger);
+    const trees = screen.getAllByRole("tree", { name: "Дерево сценариев" });
+    expect(trees).toHaveLength(2);
+
+    // Поповер стоит перед сеткой, поэтому в DOM он первый; кликаем именно в нём.
+    fireEvent.click(within(screen.getByRole("menu")).getByText("История операций"));
+    // Выбор уводит скролл к секции — поповер поверх неё закрывается.
+    await waitFor(() => expect(screen.getAllByRole("tree", { name: "Дерево сценариев" })).toHaveLength(1));
+    expect(treeItems().find((node) => node.getAttribute("aria-current") === "true")?.dataset.flowId).toBe("history-line");
   });
 
   // Лайтбокс экрана (редизайн 2026-07-30, макет 03): открывается кликом по тайлу

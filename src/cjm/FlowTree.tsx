@@ -123,11 +123,18 @@ export function FlowTree({ roots, activeFlowId, onActivate, label, className }: 
           style={{ paddingInlineStart: 12 + (node.depth - 1) * 18 }}
           className={`flex cursor-pointer items-center gap-1.5 rounded-field py-[9px] pr-3 text-sm transition-colors duration-100 ${active ? "bg-pay-lavender font-medium text-eui-ink" : "text-eui-ink hover:bg-pay-lavender-tint"}`}
         >
-          {node.children.length === 0 ? null : <span
-            aria-hidden="true"
-            className="shrink-0 text-eui-slate-400"
-            onClick={(event) => { event.stopPropagation(); setCollapsedFor(node.flow.id, !isCollapsed); }}
-          >{isCollapsed ? "▸" : "▾"}</span>}
+          {/* Каретка: hit-area 24×24 вместо голого глифа 10px — попасть в неё пальцем
+              было нельзя. Признак раскрытия — смена глифа `▸`→`▾` (S5), вращения нет:
+              бренд не даёт моушена. Состояние дублируется в `aria-expanded` на `li`,
+              поэтому сама каретка для скринридера скрыта. Листья получают распорку
+              того же размера, иначе их подписи разъезжаются с подписями веток. */}
+          {node.children.length === 0
+            ? <span aria-hidden="true" className="h-6 w-6 shrink-0" />
+            : <span
+              aria-hidden="true"
+              className="grid h-6 w-6 shrink-0 place-items-center text-eui-slate-400"
+              onClick={(event) => { event.stopPropagation(); setCollapsedFor(node.flow.id, !isCollapsed); }}
+            >{isCollapsed ? "▸" : "▾"}</span>}
           <span className="min-w-0 flex-1 truncate" title={node.flow.name}>{node.flow.name}</span>
           <span aria-hidden="true" className={`shrink-0 text-xs tabular-nums ${active ? "text-pay-red" : "text-eui-slate-400"}`}>{node.flow.steps.length}</span>
         </span>

@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import { inset, panel, pillGhost } from "../app/chrome";
+import { Menu } from "../app/Menu";
+import { inset, panel, pillGhost, pillWhite } from "../app/chrome";
+import { EmptyState } from "../app/states";
 import { cjm } from "../app/strings/cjm";
 import { buildPlayerPath } from "../player/navigation";
 import { buildFlowTree, flattenFlowTree, screenFlowIndex, type FlowTreeNode } from "../prototype/flowGraph";
 import { verifyEdge, type NavigationGraph } from "../prototype/navigationGraph";
 import type { PrototypeDoc } from "../prototype/schema";
+import { ConnectivityLegend, ConnectivityMarker } from "./ConnectivityLegend";
 import { FlowTree } from "./FlowTree";
 import { LazyMount } from "./LazyMount";
 import { ScreenLightbox } from "./ScreenLightbox";
@@ -20,23 +23,19 @@ import { sheetStripTile } from "../designSystems/deviceMetrics";
  * (`lanesLayout.collectSegments` его пропускает), поэтому ветку нельзя прочитать
  * end-to-end. Лента здесь рендерит **все** шаги флоу подряд.
  *
- * Рёбра и легенду верификации простыня не рисует (это язык дорожек); вместо них у
- * каждого шага, кроме первого, стоит собственная метка проходимости перехода из
- * предыдущего шага — для дочерних флоу это единственный индикатор связности (§3).
- * В редизайне метка — круг 14px: зелёная «✓» у проверенного перехода, приглушённое
- * «–» у остальных.
+ * Рёбер простыня не рисует (это язык дорожек); вместо них у каждого шага, кроме
+ * первого, стоит собственная метка проходимости перехода из предыдущего шага — для
+ * дочерних флоу это единственный индикатор связности (§3). Метка говорит на общем
+ * языке `ConnectivityLegend` (план 2026-07-31, S3): цвет + форма, три состояния.
+ * Легенда рендерится тут же — раньше метку объяснял только `title`, недоступный
+ * с клавиатуры и на тач-устройствах.
  */
 
 const sectionDomId = (flowId: string) => `cjm-flow-section-${flowId}`;
 
 function StepVerified({ verified }: { verified: "static" | "dynamic" | "missing" }) {
-  const ok = verified === "static";
-  return <span
-    className={`cjm-step-verified grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full text-[9px] leading-none ${ok ? "bg-pay-valid text-white" : "bg-pay-deep/[0.22] text-white"}`}
-    data-verified={verified}
-    title={cjm.stepVerified(verified)}
-  >
-    <span aria-hidden="true">{ok ? "✓" : "–"}</span>
+  return <span className="cjm-step-verified inline-flex shrink-0 items-center" data-verified={verified}>
+    <ConnectivityMarker kind={verified} />
     <span className="sr-only">{cjm.stepVerified(verified)}</span>
   </span>;
 }
@@ -60,15 +59,26 @@ function FlowSection({ node, doc, graph, routeBase, renderTile, sharedFlows, reg
     ? undefined
     : `${buildPlayerPath(routeBase, firstStep.screenId)}?${new URLSearchParams({ flow: flow.id, step: "0" })}`;
 
+  // Итог копирования — временная подпись той же кнопки, а не новое состояние секции:
+  // раньше «Ссылка скопирована» залипало навсегда и через минуту читалось как
+  // свойство сценария, а не как отчёт о клике (план 2026-07-31, W2-2).
+  const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(resetTimer.current), []);
+  const report = (result: "done" | "failed") => {
+    setCopied(result);
+    clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setCopied("idle"), 2000);
+  };
+
   const copyLink = async () => {
     // Внутренний URL вида: режим «Сценарии» дефолтный, поэтому `?flow=` достаточно.
     const origin = typeof window === "undefined" ? "" : window.location.origin;
     const href = `${origin}${routeBase}/cjm?${new URLSearchParams({ flow: flow.id })}`;
     try {
       await navigator.clipboard.writeText(href);
-      setCopied("done");
+      report("done");
     } catch {
-      setCopied("failed");
+      report("failed");
     }
   };
 
@@ -84,8 +94,9 @@ function FlowSection({ node, doc, graph, routeBase, renderTile, sharedFlows, reg
   >
     <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       <h2 id={headingId} className="text-xl font-medium text-eui-ink">{flow.name}</h2>
+      {/* «в 1 сценарии» — тавтология: на плоских документах это шум в каждой секции. */}
       <p className="text-[13px] text-eui-slate-500">
-        {cjm.sheetScreensCount(flow.steps.length)} · {cjm.sheetInFlows(sharedFlows)}
+        {cjm.sheetScreensCount(flow.steps.length)}{sharedFlows > 1 ? ` · ${cjm.sheetInFlows(sharedFlows)}` : ""}
       </p>
       <div className="ml-auto flex items-center gap-2">
         <button type="button" className={`${pillGhost} px-3 py-1.5 text-[13px]`} onClick={() => { void copyLink(); }}>
@@ -96,7 +107,7 @@ function FlowSection({ node, doc, graph, routeBase, renderTile, sharedFlows, reg
     </header>
     {flow.description ? <p className="mt-1 text-[13px] text-eui-slate-500">{flow.description}</p> : null}
     {flow.steps.length === 0 ? <p className="mt-4 text-[13px] text-eui-slate-500">{cjm.sheetEmptySteps}</p> : <div className={`${inset} mt-4 p-4`}>
-      <ol className="cjm-sheet-strip flex items-start gap-3 overflow-x-auto" aria-label={cjm.sheetStepsAria(flow.name)}>
+      <ol className="cjm-sheet-strip flex items-start gap-5 overflow-x-auto" aria-label={cjm.sheetStepsAria(flow.name)}>
         {flow.steps.map((step, stepIndex) => {
           const previous = flow.steps[stepIndex - 1];
           const verified = previous === undefined ? null : verifyEdge(graph, previous.screenId, step.screenId);
@@ -115,6 +126,9 @@ function FlowSection({ node, doc, graph, routeBase, renderTile, sharedFlows, reg
           </li>;
         })}
       </ol>
+      {/* Клик по кадру открывает лайтбокс — жест ничем не обозначен, поэтому подпись
+          одна на ленту (по подписи под каждым кадром 11px было бы шумом). */}
+      <p className="mt-3 text-[11px] text-eui-slate-500">{cjm.sheetTileHint}</p>
     </div>}
   </section>;
 }
@@ -180,7 +194,41 @@ export function ScenarioSheet({ doc, graph, routeBase, renderTile, renderStage }
 
   const openFlow = openStep === null ? undefined : doc.flows?.find((flow) => flow.id === openStep.flowId);
 
+  // Поповер дерева закрывается пересозданием `Menu`: примитив не отдаёт наружу
+  // императивного `close()`, а оставлять раскрытый поповер поверх секции, к которой
+  // только что уехал скролл, нельзя. Побочный эффект — сброс свёрнутых веток; для
+  // одноразового поповера это ожидаемо.
+  const [popoverKey, setPopoverKey] = useState(0);
+  const activateFromPopover = useCallback((flowId: string) => {
+    activate(flowId);
+    setPopoverKey((key) => key + 1);
+  }, [activate]);
+
+  if (nodes.length === 0) {
+    // Правки `flows` в UI не существует, поэтому CTA нет — только объяснение, где
+    // сценарии размечаются (план 2026-07-31, m3(ux)).
+    return <EmptyState title={cjm.sheetEmptyTitle} description={cjm.sheetEmptyBody} circles={false} />;
+  }
+
   return <>
+    {/* Ниже 1024px левая колонка уезжает в поповер, а не исчезает: без неё
+        пропадала единственная ориентация «где я» и подсказка о переиспользовании.
+        `lg:hidden` без базовой утилиты display — единственная безопасная форма:
+        compat-CSS shadcn перебивает базовые утилиты, но lg/max-lg-вариантов в нём
+        нет (см. memory shadcn-compat-css-cascade). */}
+    <div className="mx-auto w-full max-w-[1600px] lg:hidden">
+      <Menu
+        key={popoverKey}
+        label={cjm.treeMenuLabel}
+        trigger={<span className="flex items-center gap-1.5">{cjm.treeMenuLabel}<span aria-hidden="true">▾</span></span>}
+        triggerClassName={pillWhite}
+        panelLabel={cjm.treeAria}
+        panelClassName="left-0 max-h-[70vh] w-[280px] overflow-y-auto"
+      >
+        <FlowTree roots={roots} activeFlowId={activeFlowId} onActivate={activateFromPopover} label={cjm.treeAria} />
+        <p className={`${inset} mt-2 px-4 py-3 text-[13px] text-eui-ink`}>{cjm.sheetHint}</p>
+      </Menu>
+    </div>
     <section className="cjm-sheet mx-auto grid max-w-[1600px] items-start gap-5 lg:grid-cols-[300px_minmax(0,1fr)]" aria-label={cjm.sheetAria}>
       {/* `max-lg:hidden`, а не `hidden lg:block`: compat-CSS shadcn глушит responsive-оверрайды
           базовых утилит, и `lg:block` не пересилил бы `hidden` (см. memory shadcn-compat-css-cascade). */}
@@ -189,6 +237,9 @@ export function ScenarioSheet({ doc, graph, routeBase, renderTile, renderStage }
         <p className={`${inset} mt-4 px-4 py-3 text-[13px] text-eui-ink`}>{cjm.sheetHint}</p>
       </nav>
       <div className="flex min-w-0 flex-col gap-5">
+        {/* Легенда — тот же код, что и в дорожках (S3): метка шага перестаёт
+            объясняться только всплывающим `title`. */}
+        <ConnectivityLegend className="px-1" />
         {nodes.map((node) => <FlowSection
           key={node.flow.id}
           node={node}

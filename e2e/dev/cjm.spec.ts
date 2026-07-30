@@ -53,7 +53,10 @@ test("checkout CJM opens from gallery and preserves player history semantics", a
   await expect(cartOverlay).toBeVisible();
   await cartOverlay.click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/cart$/);
-  await expect(page.getByRole("button", { name: "Назад" })).toBeDisabled();
+  // «Назад» хрома плеера живёт в «···» (план 2026-07-31, W4-3).
+  await page.getByTestId("chrome-actions").getByRole("button", { name: "Ещё действия" }).click();
+  await expect(page.getByRole("menuitem", { name: "Назад" })).toBeDisabled();
+  await page.keyboard.press("Escape");
   // The tile link opens a NEW player session with fresh document state (CJM stateOverrides are
   // tile-only). Since checkout@2 the cart totals are $cond-driven, so with /cart/count = 0 the
   // checkout button is correctly disabled here.
@@ -98,7 +101,12 @@ test("settings CJM connects measured tile centers and labels authored transition
 
   // Чипы-дубли в хроме сняты (W1-4): числа живут в ряду счётчиков, который теперь
   // общая шапка обоих режимов и рендерится в том числе на линейном документе.
-  await expect(page.getByLabel("Сводка прототипа").locator("div", { hasText: "экранов" })).toContainText("3");
+  const summary = page.getByLabel("Сводка прототипа");
+  await expect(summary.locator("div", { hasText: "экранов" })).toContainText("3");
+  // На линейном документе связность считать не по чему: вместо «Готов к публикации»
+  // при нуле проверенных переходов — объяснение (W2-1).
+  await expect(summary).toContainText("Сценарии не размечены");
+  await expect(summary).not.toContainText("Готов к публикации");
 
   // Все три обёртки в DOM с первого layout, поэтому коннекторы меряются и без живых тайлов.
   const journey = page.getByRole("list", { name: "Экраны прототипа" });
@@ -146,6 +154,14 @@ test("flows-tree opens in the scenarios sheet, reads a child branch end-to-end a
   expect(await sheetSections.evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).dataset.flowId))).toEqual(treeFlowOrder);
   expect(await sheetSections.evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).dataset.flowDepth))).toEqual(["1", "2", "3", "3", "1"]);
 
+  // Счётчик связности трёхчастный, слово «проверок» из него выведено (W2-1),
+  // а метка шага объясняется общей легендой, а не только `title` (W2-5).
+  const summary = page.getByLabel("Сводка прототипа");
+  await expect(summary).toContainText("связность шагов");
+  await expect(summary).toContainText("подтверждено");
+  await expect(summary).not.toContainText("проверок");
+  await expect(page.getByLabel("Легенда связности шагов")).toBeVisible();
+
   const tree = page.getByRole("tree", { name: "Дерево сценариев" });
   await expect(tree.getByRole("treeitem")).toHaveCount(5);
   await expect(tree.getByRole("treeitem").first()).toHaveAttribute("aria-current", "true");
@@ -163,11 +179,16 @@ test("flows-tree opens in the scenarios sheet, reads a child branch end-to-end a
   expect(wrappers).toBe(14);
   expect(await page.locator('.cjm-sheet [data-lazy-mounted="true"]').count()).toBeLessThan(wrappers);
 
-  await expect(sheetSections.nth(3).getByRole("link", { name: "Открыть в плеере" }))
+  await expect(sheetSections.nth(3).getByRole("link", { name: "В плеер →" }))
     .toHaveAttribute("href", "/p/flows-tree/s/transfer-receipt?flow=receipt-leaf&step=0");
-  await sheetSections.nth(3).getByRole("button", { name: "Скопировать ссылку" }).click();
-  await expect(sheetSections.nth(3).getByRole("button", { name: "Ссылка скопирована" })).toBeVisible();
+  // Подпись «Ссылка скопирована» — отчёт о клике с окном 2 с (W2-2). Проверяем
+  // состояние сразу после клика (первый же poll укладывается в окно), а не «через
+  // сколько-то»; затем — что подпись действительно вернулась к обычной.
+  const copyLink = sheetSections.nth(3).getByRole("button", { name: "Ссылка", exact: true });
+  await copyLink.click();
+  await expect(sheetSections.nth(3).getByRole("button", { name: "Ссылка скопирована" })).toBeVisible({ timeout: 1500 });
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("/p/flows-tree/cjm?flow=receipt-leaf");
+  await expect(copyLink).toBeVisible({ timeout: 5000 });
 
   // Дорожки: только корневые флоу, простыня уходит, режим липнет к сегментам хрома.
   // Переключатель режима живёт в канве над счётчиками (W1-2), а не в actions хрома.
