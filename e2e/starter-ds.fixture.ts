@@ -140,7 +140,9 @@ export async function starterPrototypeFromFile(path: string, overrides: Partial<
 export async function ensureStarterPrototypeSuite(request: APIRequestContext, api = "/api"): Promise<void> {
   // `flows-tree` — трёхуровневое дерево сценариев (`flow.parentId`): лист из одного шага
   // и дочерний флоу с разрывом связности, обе конструкции без warning'ов.
-  for (const name of ["checkout", "branching-checkout", "flows-tree", "flows-perf", "hello-world", "settings", "scale-demo", "composition-demo"] as const) {
+  // `flows-perf-320` — граничная фикстура нового `FLOW_TOTAL_STEPS_LIMIT` (T4): 24 сценария,
+  // 320 шагов, ветка в каждом из первых 23 промежутков главной линии (грид на 274 колонки).
+  for (const name of ["checkout", "branching-checkout", "flows-tree", "flows-perf", "flows-perf-320", "hello-world", "settings", "scale-demo", "composition-demo"] as const) {
     await ensureStarterPrototype(request, await starterPrototypeFromFile(`test/fixtures/${name}.json`), { api });
   }
   const declarative = JSON.parse(await readFile("test/fixtures/starter/prototype.json", "utf8")) as JsonObject;

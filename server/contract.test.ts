@@ -461,7 +461,9 @@ describe("route contracts", () => {
         name: "flow-total-steps",
         flows: [
           { id: "main", name: "Main", steps: [{ screenId: "home" }] },
-          ...Array.from({ length: 4 }, (_, flowIndex) => ({
+          // Столько максимальных по длине флоу, чтобы суммарно перевалить за FLOW_TOTAL_STEPS_LIMIT
+          // (после T4 лимит 320, и захардкоженные 4×50 его больше не превышали).
+          ...Array.from({ length: Math.ceil((FLOW_TOTAL_STEPS_LIMIT + 1) / FLOW_STEPS_LIMIT) }, (_, flowIndex) => ({
             id: `long-${flowIndex}`,
             name: `Long ${flowIndex}`,
             steps: Array.from({ length: FLOW_STEPS_LIMIT }, (_, index) => ({ screenId: index % 2 ? "a" : "b" })),

@@ -198,6 +198,48 @@ test("unassigned screens stay collapsed, then mount lazily without a batch butto
   await expect.poll(async () => (await lazyCounters(page, ".cjm-unassigned")).mounted).toBeGreaterThan(revealed.mounted);
 });
 
+/**
+ * Граница нового `FLOW_TOTAL_STEPS_LIMIT = 320` (T4): 24 сценария, 320 шагов, 274 экрана,
+ * ветка в каждом из первых 23 промежутков главной линии. Числа детерминированы
+ * геометрией (`computeCjmLanes`): колонки = 50 главных + 22×10 + 4 вставленных = 274.
+ */
+test("the 320-step limit fixture keeps lane geometry deterministic while tiles stay lazy", async ({ page }) => {
+  await page.goto("/p/flows-perf-320/cjm?view=lanes");
+
+  await expect(page.getByTestId("cjm-lane-label")).toHaveCount(24);
+  await expect(page.locator("[data-cjm-node]")).toHaveCount(274);
+  await expect(page.locator(".cjm-edges-overlay g[data-edge-kind]")).toHaveCount(296);
+  // layout.columns + 1: первая колонка грида — подписи дорожек.
+  const columns = await page.locator(".cjm-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length);
+  expect(columns).toBe(275);
+  await expect(page.getByRole("button", { name: /Вне сценариев/ })).toHaveCount(0);
+
+  const resting = await lazyCounters(page, ".cjm-grid");
+  expect(resting.wrappers).toBe(274);
+  expect(resting.mounted).toBeGreaterThan(0);
+  // Предельный документ не делает вид дороже: живых тайлов в покое столько же, сколько на 200 шагах.
+  expect(resting.mounted).toBeLessThanOrEqual(18);
+  expect(resting.tiles).toBe(resting.mounted);
+  expect(resting.placeholders).toBe(274 - resting.mounted);
+});
+
+test("the 320-step limit fixture renders every authored step in the default scenario sheet", async ({ page }) => {
+  await page.goto("/p/flows-perf-320/cjm");
+
+  // `[data-flow-id]` носят и секции простыни, и узлы дерева слева — считаем только секции.
+  await expect(page.locator("section[data-flow-id]")).toHaveCount(24);
+  await expect(page.locator('[role="treeitem"]')).toHaveCount(24);
+  // В ленте живут **все** авторские шаги, включая якорные: 50 + 22×12 + 6 = 320.
+  await expect(page.locator("[data-flow-step]")).toHaveCount(320);
+
+  const resting = await lazyCounters(page, "main");
+  expect(resting.wrappers).toBe(320);
+  expect(resting.mounted).toBeGreaterThan(0);
+  expect(resting.mounted).toBeLessThanOrEqual(24);
+  expect(resting.tiles).toBe(resting.mounted);
+  expect(resting.placeholders).toBe(320 - resting.mounted);
+});
+
 test("print media forces every lane tile to mount so printing and find-in-page are not empty", async ({ page }) => {
   await page.goto(branchingPath);
   await expect(page.locator("[data-cjm-node]")).toHaveCount(10);

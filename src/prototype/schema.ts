@@ -15,7 +15,7 @@ export const slugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "must b
 
 export const FLOWS_LIMIT = 24;
 export const FLOW_STEPS_LIMIT = 50;
-export const FLOW_TOTAL_STEPS_LIMIT = 200;
+export const FLOW_TOTAL_STEPS_LIMIT = 320;
 /**
  * Максимальная глубина дерева сценариев (`flow.parentId`), **корень = уровень 1**.
  * Значение уезжает в публичный `/api/capabilities` как `limits.flowDepth`.
