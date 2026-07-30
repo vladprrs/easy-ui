@@ -246,20 +246,28 @@ export function measureZones(root: ParentNode & Element, keys: ReadonlySet<strin
 function ZoneLayer({ zones }: { zones: readonly ZoneRect[] }) {
   if (zones.length === 0) return null;
   return createPortal(
-    <div className="pointer-events-none fixed inset-0" style={{ zIndex: 55 }} aria-hidden="true" data-testid="interactive-zones">
-      {zones.map((zone) => <div
-        key={`${zone.key}:${zone.instance}`}
-        data-eui-zone-key={zone.key}
-        // Рамка рисуется `outline` с offset, а не border: так подсветка «дышит»
-        // на 6px вокруг зоны (макеты 03/04), не меняя измеренную геометрию.
-        className="pointer-events-none fixed rounded-[10px] outline-2 outline-offset-[6px] outline-pay-red"
-        style={{ left: zone.left, top: zone.top, width: zone.width, height: zone.height }}
-      >
-        {zone.labelVisible ? <span
-          data-eui-zone-label={zone.key}
-          className="pointer-events-none absolute -top-2 left-0 max-w-full -translate-y-full truncate rounded-full bg-pay-deep px-2.5 py-1 text-xs leading-none text-white"
-        >{zone.label}</span> : null}
-      </div>)}
+    // Слой целиком `aria-hidden` был тупиком для скринридера: тумблер включён, а
+    // прочитать нечего. Геометрия остаётся скрытой (это чистая графика), но
+    // подписи целей отдаются списком (W4-5).
+    <div className="pointer-events-none fixed inset-0" style={{ zIndex: 55 }} data-testid="interactive-zones">
+      <ul className="sr-only" aria-label={player.zonesOverlayAria}>
+        {zones.map((zone) => <li key={`${zone.key}:${zone.instance}`}>{zone.label}</li>)}
+      </ul>
+      <div aria-hidden="true">
+        {zones.map((zone) => <div
+          key={`${zone.key}:${zone.instance}`}
+          data-eui-zone-key={zone.key}
+          // Рамка рисуется `outline` с offset, а не border: так подсветка «дышит»
+          // на 6px вокруг зоны (макеты 03/04), не меняя измеренную геометрию.
+          className="pointer-events-none fixed rounded-item outline-2 outline-offset-[6px] outline-pay-red"
+          style={{ left: zone.left, top: zone.top, width: zone.width, height: zone.height }}
+        >
+          {zone.labelVisible ? <span
+            data-eui-zone-label={zone.key}
+            className="pointer-events-none absolute -top-2 left-0 max-w-full -translate-y-full truncate rounded-full bg-pay-deep px-2.5 py-1 text-xs leading-none text-white"
+          >{zone.label}</span> : null}
+        </div>)}
+      </div>
     </div>,
     document.body,
   );
@@ -379,7 +387,9 @@ function MisclickHighlightSurface({ metadata, children }: { metadata: Record<str
       rects={rects}
       visible={visible}
       testId="misclick-highlights"
-      className="rounded-md border-2 border-eui-orange bg-eui-orange/15 shadow-[0_0_0_1px_rgba(255,255,255,0.65)]"
+      // Та же геометрия, что у оверлея зон: подсветка «где вообще можно кликнуть»
+      // и «вот зоны» — один и тот же факт, показанный по разному поводу (W4-12).
+      className="rounded-item bg-pay-red/10 outline-2 outline-offset-[6px] outline-pay-red"
     />
   </div>;
 }

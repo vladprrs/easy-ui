@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import type { Flow, PrototypeDoc } from "../prototype/schema";
-import { pillDeep, pillGhost, popover, popoverItem } from "../app/chrome";
+import { menuItemClass, Menu } from "../app/Menu";
+import { SelectPill } from "../app/SelectPill";
+import { pillDeep } from "../app/chrome";
 import { player } from "../app/strings/player";
 import { FlowTree } from "../cjm/FlowTree";
 import { buildFlowTree, flowBreadcrumb } from "../prototype/flowGraph";
+import { isPlayerHotkeyEvent, setPlayerPopoverOpen } from "./DeviceFrame";
 import { buildPrototypeRouteBase, usePlayerNavigation } from "./navigation";
 
 /** Стрелка шага сценария — лавандовый круг 36px (макет 04). */
@@ -34,80 +37,85 @@ function withScenarioQuery(search: string, flowId: string | null, step: number |
 }
 
 /**
- * Выбор сценария в плеере (план 2026-07-29 §7 T2b). `<select>` заменён кнопкой с
- * именем текущего сценария и breadcrumb'ом предков: дерево иерархии в однострочную
- * полосу не помещается, поэтому оно живёт поповером. На плоском документе
- * breadcrumb пуст и поведение остаётся прежним.
+ * Выбор сценария в плеере (план 2026-07-29 §7 T2b, редизайн W4-1/W4-2).
+ *
+ * Пилюля одна и тёмная: назначение контрола («Сценарий:») живёт внутри неё, а
+ * breadcrumb предков вынесен наружу приглушённым текстом — внутри тёмной пилюли
+ * он конкурировал с именем сценария и обрезался вместе с ним.
+ *
+ * Поповер — общий примитив {@link Menu} (W0): фокус уходит внутрь по ↓, Esc
+ * возвращает его на триггер. Само дерево остаётся `role="tree"` со своей
+ * клавиатурой; меню владеет оболочкой, а не навигацией по узлам.
  */
-function ScenarioPicker({ flows, flow, routeBase, onSelect }: {
+function ScenarioPicker({ flows, flow, routeBase, onSelect, onOpenChange }: {
   flows: NonNullable<PrototypeDoc["flows"]>;
   flow: Flow | null;
   routeBase: string;
   onSelect: (flowId: string | null) => void;
+  onOpenChange: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const roots = useMemo(() => buildFlowTree(flows), [flows]);
   const ancestors = useMemo(
     () => flow === null ? [] : flowBreadcrumb(flows, flow.id).slice(0, -1),
     [flow, flows],
   );
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (target === null) return;
-      if (buttonRef.current?.contains(target) === true || popoverRef.current?.contains(target) === true) return;
-      setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [open]);
+  // `Menu` владеет собственным состоянием раскрытия и не умеет закрываться
+  // снаружи — выбор сценария закрывает его пересозданием по ключу. Фокус после
+  // этого возвращается на триггер вручную: узел, на котором он стоял, исчезает.
+  const [pickerKey, setPickerKey] = useState(0);
+  const returnFocus = useRef(false);
+  useLayoutEffect(() => {
+    if (!returnFocus.current) return;
+    returnFocus.current = false;
+    rootRef.current?.querySelector("button")?.focus();
+  }, [pickerKey]);
 
   const choose = (flowId: string | null) => {
     onSelect(flowId);
-    setOpen(false);
-    buttonRef.current?.focus();
+    onOpenChange(false);
+    returnFocus.current = true;
+    setPickerKey((current) => current + 1);
   };
 
-  return <div className="relative flex items-center gap-2">
-    <span id="scenario-picker-label" className="text-eui-slate-500">{player.scenarioSelect}</span>
-    <button
-      ref={buttonRef}
-      type="button"
-      id="scenario-picker-button"
-      data-testid="scenario-flow-button"
-      // Имя кнопки — «Сценарий» + имя текущего сценария: без ссылки на подпись
-      // скринридер прочитал бы только имя флоу, потеряв назначение контрола.
-      aria-labelledby="scenario-picker-label scenario-picker-button"
-      aria-haspopup="tree"
-      aria-expanded={open}
-      onClick={() => setOpen((current) => !current)}
-      className={`${pillDeep} max-w-72 gap-1.5 px-4 py-1.5 text-left`}
-    >
-      {ancestors.length === 0 ? null : <span className="min-w-0 truncate text-xs text-white/60">{ancestors.map((item) => item.name).join(" / ")} /</span>}
-      <span className="min-w-0 truncate">{flow?.name ?? player.scenarioNone}</span>
-      <span aria-hidden="true" className="shrink-0 text-white/60">▾</span>
-    </button>
-    {open ? <div
-      ref={popoverRef}
-      data-testid="scenario-flow-popover"
-      onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setOpen(false); buttonRef.current?.focus(); } }}
-      className={`${popover} absolute left-0 top-full z-40 mt-2 max-h-80 w-72 overflow-auto`}
+  const title = player.scenarioPill(flow?.name ?? player.scenarioNone);
+  return <div ref={rootRef} data-testid="scenario-flow-button" className="flex min-w-0 items-center gap-2">
+    <Menu
+      key={pickerKey}
+      label={title}
+      onOpenChange={onOpenChange}
+      panelLabel={player.scenarioTreeAria}
+      // Пилюля прижата к левому краю полосы: панель обязана раскрываться вправо,
+      // иначе на узком экране она уезжает за границу вьюпорта. `left-0` вместе с
+      // фиксированной шириной переопределяет `right-0` примитива без `!`:
+      // over-constrained абсолютное позиционирование в LTR игнорирует `right`.
+      panelClassName="left-0 max-h-80 w-72 overflow-auto"
+      triggerClassName={`${pillDeep} max-w-72 gap-1.5 px-4 py-1.5 text-left`}
+      trigger={<>
+        <span className="min-w-0 truncate">{title}</span>
+        <span aria-hidden="true" className="shrink-0 text-white/60">▾</span>
+      </>}
     >
       <button
         type="button"
+        role="menuitem"
         aria-current={flow === null ? "true" : undefined}
         onClick={() => choose(null)}
-        className={`${popoverItem} ${flow === null ? "bg-pay-lavender font-medium" : ""}`}
+        // Радиус и паддинг — как у пунктов дерева (14 / 9-12): рядом стоящие
+        // пункты одного списка не должны отличаться геометрией.
+        className={`${menuItemClass} rounded-field py-[9px] ${flow === null ? "bg-pay-lavender font-medium" : ""}`}
       >{player.scenarioNone}</button>
       <FlowTree roots={roots} activeFlowId={flow?.id ?? null} onActivate={choose} label={player.scenarioTreeAria} />
       {/* Дерево в поповере — вырезка того же дерева, что на странице прототипа;
-          ссылка ведёт к полному виду со всеми сценариями (макет 08). */}
-      <Link to={`${routeBase}/cjm`} className="mt-1 block rounded-item px-3 py-2 text-[13px] font-medium text-pay-red">{player.scenarioAllLink}</Link>
-    </div> : null}
+          ссылка ведёт к полному виду со всеми сценариями (макет 08). Красным
+          она быть не должна: единственный акцент полосы — активный шаг. */}
+      <Link role="menuitem" to={`${routeBase}/cjm`} className={`${menuItemClass} rounded-field text-[13px] font-medium`}>
+        {player.scenarioAllLink} <span aria-hidden="true">→</span>
+      </Link>
+    </Menu>
+    {ancestors.length === 0 ? null : <span className="min-w-0 truncate text-[13px] text-pay-deep/60">
+      {ancestors.map((item) => item.name).join(" / ")} /
+    </span>}
   </div>;
 }
 
@@ -129,6 +137,15 @@ export function ScenarioBar({ doc, currentScreen, runtimeKey }: {
   const [progressByKey, setProgressByKey] = useState<Record<string, ScenarioProgress>>({});
   const pendingOrigins = useRef<Record<string, string>>({});
   const progress = stateKey === null ? emptyProgress : (progressByKey[stateKey] ?? emptyProgress);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  // Пока поповер открыт, глобальные хоткеи плеера (в т.ч. ← →) выключены.
+  // Флаг снимается и при размонтировании полосы, иначе он завис бы включённым.
+  useEffect(() => {
+    if (!pickerOpen) return;
+    setPlayerPopoverOpen(true);
+    return () => setPlayerPopoverOpen(false);
+  }, [pickerOpen]);
 
   const replaceQuery = useCallback((search: string) => {
     routerNavigate({ search }, { replace: true, state: location.state });
@@ -181,17 +198,33 @@ export function ScenarioBar({ doc, currentScreen, runtimeKey }: {
     validUrlStep,
   ]);
 
-  if (flows === undefined) return null;
-
-  const setPending = (target: number) => {
+  const setPending = useCallback((target: number) => {
     if (flow === null || stateKey === null) return;
     setProgressByKey((current) => ({
       ...current,
-      [stateKey]: { lastConfirmed: progress.lastConfirmed, pendingTarget: target },
+      [stateKey]: { lastConfirmed: current[stateKey]?.lastConfirmed ?? null, pendingTarget: target },
     }));
     pendingOrigins.current[stateKey] = currentScreen;
     navigation.goToScreen(flow.steps[target]!.screenId);
-  };
+  }, [currentScreen, flow, navigation, stateKey]);
+
+  // Шаги сценария на Shift+←/→ (W4-6): без Shift те же клавиши остаются за
+  // экранами документа, потому что сценарий есть далеко не у каждого прототипа.
+  useEffect(() => {
+    if (flow === null || confirmedStep === null) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.shiftKey || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
+      if (!isPlayerHotkeyEvent(event)) return;
+      const target = confirmedStep + (event.key === "ArrowLeft" ? -1 : 1);
+      if (target < 0 || target >= flow.steps.length) return;
+      event.preventDefault();
+      setPending(target);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [confirmedStep, flow, setPending]);
+
+  if (flows === undefined) return null;
 
   const chooseOccurrence = (target: number) => {
     if (flow === null || stateKey === null) return;
@@ -209,23 +242,37 @@ export function ScenarioBar({ doc, currentScreen, runtimeKey }: {
 
   const outside = flow !== null && matches.length === 0;
   const ambiguous = flow !== null && matches.length > 1 && confirmedStep === null;
+  const screenNames = new Map(doc.screens.map((item) => [item.id, item.name]));
+  const currentStepScreen = confirmedStep === null || flow === null
+    ? undefined
+    : screenNames.get(flow.steps[confirmedStep]!.screenId);
 
-  const currentStepScreen = confirmedStep === null ? undefined : doc.screens.find((item) => item.id === flow?.steps[confirmedStep]?.screenId);
+  // Один контрол вместо россыпи кнопок «К шагу 1» / «Шаг 2» / «Шаг 5» (W4-7):
+  // и «экран вне сценария», и «шаг не определён» — это один и тот же вопрос
+  // «на каком шаге мы находимся», поэтому и ответ у них один — выбор шага.
+  const resolveOptions = flow === null || confirmedStep !== null ? [] : (outside
+    ? flow.steps.map((step, index) => ({
+      value: String(index),
+      label: player.scenarioStepOption(index + 1, screenNames.get(step.screenId) ?? step.screenId),
+    }))
+    : matches.map((index) => ({ value: String(index), label: player.scenarioOccurrence(index + 1) })));
 
   return <section
     aria-label={player.scenarioAria}
     data-testid="scenario-bar"
     className="flex flex-wrap items-center gap-x-4 gap-y-2 bg-white px-5 py-2.5 text-sm text-eui-ink sm:px-6"
   >
-    <ScenarioPicker flows={flows} flow={flow} routeBase={routeBase} onSelect={onFlowChange} />
+    <ScenarioPicker flows={flows} flow={flow} routeBase={routeBase} onSelect={onFlowChange} onOpenChange={setPickerOpen} />
 
     {flow === null ? null : <>
-      {confirmedStep === null
-        ? <span role="status" className="text-eui-slate-500">{outside ? player.scenarioOutside : player.scenarioAmbiguous}</span>
-        : <span role="status" className="text-eui-slate-500">
-          {player.scenarioStep(confirmedStep + 1, flow.steps.length)}
-          {currentStepScreen ? <span className="text-eui-ink"> · {currentStepScreen.name}</span> : null}
-        </span>}
+      {/* Полоса всегда сообщает «Шаг N из M»: без счётчика неопределённое
+          состояние читалось как поломка, а не как вопрос к пользователю. */}
+      <span role="status" className="text-eui-slate-500">
+        {confirmedStep === null ? player.scenarioStepUnknown(flow.steps.length) : player.scenarioStep(confirmedStep + 1, flow.steps.length)}
+        {confirmedStep === null
+          ? <> · {outside ? player.scenarioOutside : player.scenarioAmbiguous}</>
+          : currentStepScreen === undefined ? null : <span className="text-eui-ink"> · {currentStepScreen}</span>}
+      </span>
       {/* Прогресс шага: точка 8px, активный шаг — красная «капсула» 22×8. */}
       <ol className="flex items-center gap-1.5" aria-hidden="true">
         {flow.steps.map((step, index) => <li
@@ -233,35 +280,51 @@ export function ScenarioBar({ doc, currentScreen, runtimeKey }: {
           className={`h-2 rounded-full ${index === confirmedStep ? "w-[22px] bg-pay-red" : "w-2 bg-pay-lavender-light"}`}
         />)}
       </ol>
-      <button
-        type="button"
-        aria-label={player.scenarioPrevious}
-        title={player.scenarioPrevious}
-        disabled={confirmedStep === null || confirmedStep === 0}
-        onClick={() => setPending(confirmedStep! - 1)}
-        className={stepCircle}
+      <div
+        role="group"
+        aria-label={player.scenarioStepsAria}
+        aria-describedby="scenario-guided-browse"
+        title={player.scenarioGuidedBrowse}
+        className="flex items-center gap-2"
       >
-        <span aria-hidden="true">←</span>
-      </button>
-      <button
-        type="button"
-        aria-label={player.scenarioNext}
-        title={player.scenarioNext}
-        disabled={confirmedStep === null || confirmedStep === flow.steps.length - 1}
-        onClick={() => setPending(confirmedStep! + 1)}
-        className={stepCircle}
-      >
-        <span aria-hidden="true">→</span>
-      </button>
-      {outside
-        ? <button type="button" onClick={() => setPending(0)} className={`${pillGhost} px-3 py-1.5 text-[13px]`}>{player.scenarioToFirst}</button>
-        : null}
-      {ambiguous ? <div className="flex flex-wrap items-center gap-2" role="group" aria-label={player.scenarioOccurrences}>
-        {matches.map((index) => <button key={index} type="button" onClick={() => chooseOccurrence(index)} className={`${pillGhost} px-3 py-1.5 text-[13px]`}>
-          {player.scenarioOccurrence(index + 1)}
-        </button>)}
-      </div> : null}
-      <span className="text-xs text-eui-slate-500">{player.scenarioGuidedBrowse}</span>
+        <button
+          type="button"
+          aria-label={player.scenarioPreviousHotkey}
+          title={player.scenarioPreviousHotkey}
+          disabled={confirmedStep === null || confirmedStep === 0}
+          onClick={() => setPending(confirmedStep! - 1)}
+          className={stepCircle}
+        >
+          <span aria-hidden="true">←</span>
+        </button>
+        <button
+          type="button"
+          aria-label={player.scenarioNextHotkey}
+          title={player.scenarioNextHotkey}
+          disabled={confirmedStep === null || confirmedStep === flow.steps.length - 1}
+          onClick={() => setPending(confirmedStep! + 1)}
+          className={stepCircle}
+        >
+          <span aria-hidden="true">→</span>
+        </button>
+      </div>
+      {/* Пояснение про guided browse больше не абзац документации в тулбаре
+          (W4-10): оно висит подсказкой ровно на тех кнопках, к которым относится. */}
+      <p id="scenario-guided-browse" className="sr-only">{player.scenarioGuidedBrowse}</p>
+      {resolveOptions.length === 0 ? null : <SelectPill
+        label={player.scenarioResolveAria}
+        value=""
+        options={[
+          { value: "", label: ambiguous ? player.scenarioResolveAmbiguous : player.scenarioResolveOutside },
+          ...resolveOptions,
+        ]}
+        onChange={(value) => {
+          if (value === "") return;
+          const index = Number(value);
+          if (outside) setPending(index);
+          else chooseOccurrence(index);
+        }}
+      />}
     </>}
   </section>;
 }

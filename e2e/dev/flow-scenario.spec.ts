@@ -8,8 +8,10 @@ test("direct flow and step entry activates ScenarioBar at the canonical occurren
   const bar = scenarioBar(page);
   await expect(bar.getByTestId("scenario-flow-button")).toContainText("Успешная оплата");
   await expect(bar.getByRole("status")).toContainText("Шаг 3 из 5");
-  await expect(bar.getByRole("button", { name: "Предыдущий шаг" })).toBeEnabled();
-  await expect(bar.getByRole("button", { name: "Следующий шаг" })).toBeEnabled();
+  // Подписи стрелок несут хоткей (W4-6): шаги ходят по Shift+←/→, а голые ← →
+  // остаются за экранами документа.
+  await expect(bar.getByRole("button", { name: "Предыдущий шаг · Shift+←" })).toBeEnabled();
+  await expect(bar.getByRole("button", { name: "Следующий шаг · Shift+→" })).toBeEnabled();
 });
 
 test("prev and next browse in the same player session and synchronize step with replace navigation", async ({ page }) => {
@@ -19,12 +21,19 @@ test("prev and next browse in the same player session and synchronize step with 
   await expect(page.getByText("Сессия сохранена", { exact: true })).toBeVisible();
   const historyLength = await page.evaluate(() => history.length);
 
-  await scenarioBar(page).getByRole("button", { name: "Следующий шаг" }).click();
+  await scenarioBar(page).getByRole("button", { name: "Следующий шаг · Shift+→" }).click();
   await expect(page).toHaveURL(/\/p\/flows-perf\/s\/main-1\?flow=perf-main&step=1$/);
   await expect(scenarioBar(page).getByRole("status")).toContainText("Шаг 2 из 50");
   expect(await page.evaluate(() => history.length)).toBe(historyLength);
 
-  await scenarioBar(page).getByRole("button", { name: "Предыдущий шаг" }).click();
+  // Тот же шаг с клавиатуры: Shift+← идёт по сценарию, не по экранам документа.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Shift+ArrowRight");
+  await expect(page).toHaveURL(/\/p\/flows-perf\/s\/main-2\?flow=perf-main&step=2$/);
+  await page.keyboard.press("Shift+ArrowLeft");
+  await expect(page).toHaveURL(/\/p\/flows-perf\/s\/main-1\?flow=perf-main&step=1$/);
+
+  await scenarioBar(page).getByRole("button", { name: "Предыдущий шаг · Shift+←" }).click();
   await expect(page).toHaveURL(/\/p\/flows-perf\/s\/main-0\?flow=perf-main&step=0$/);
   await expect(page.getByText("Сессия сохранена", { exact: true })).toBeVisible();
   expect(await page.evaluate(() => history.length)).toBe(historyLength);
@@ -35,11 +44,12 @@ test("a non-canonical repeated-screen step is removed and an occurrence choice r
 
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/cancel-confirm\?flow=cancellation&debug=1$/);
   const bar = scenarioBar(page);
-  await expect(bar.getByRole("status")).toHaveText("Шаг не определён");
-  const choices = bar.getByRole("group", { name: "Выберите вхождение экрана" });
-  await expect(choices.getByRole("button")).toHaveText(["Шаг 3", "Шаг 5"]);
+  // Полоса всегда показывает счётчик, а выбор вхождения — один контрол (W4-7).
+  await expect(bar.getByRole("status")).toHaveText("Шаг ? из 6 · Шаг не определён");
+  const choice = bar.getByRole("combobox", { name: "Шаг сценария" });
+  await expect(choice.locator("option")).toHaveText(["Выберите вхождение экрана", "Шаг 3", "Шаг 5"]);
 
-  await choices.getByRole("button", { name: "Шаг 5" }).click();
+  await choice.selectOption({ label: "Шаг 5" });
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/cancel-confirm\?flow=cancellation&debug=1&step=4$/);
   await expect(bar.getByRole("status")).toContainText("Шаг 5 из 6");
 });
@@ -48,9 +58,10 @@ test("external navigation outside the route offers a return to step one", async 
   await page.goto("/p/branching-checkout/s/success?flow=cancellation&step=5");
 
   const bar = scenarioBar(page);
-  await expect(bar.getByRole("status")).toHaveText("Текущий экран вне сценария");
+  await expect(bar.getByRole("status")).toHaveText("Шаг ? из 6 · Текущий экран вне сценария");
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/success\?flow=cancellation$/);
-  await bar.getByRole("button", { name: "К шагу 1" }).click();
+  // «К шагу 1» заменена общим выбором шага: вне сценария он предлагает все шаги.
+  await bar.getByRole("combobox", { name: "Шаг сценария" }).selectOption("0");
   await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/catalog\?flow=cancellation&step=0$/);
   await expect(bar.getByRole("status")).toContainText("Шаг 1 из 6");
 });
@@ -79,7 +90,8 @@ test("Player to CJM to a step tile round-trip opens that exact scenario occurren
 
 test("Present strips scenario query, preserves other query, and Escape returns to Player", async ({ page }) => {
   await page.goto("/p/branching-checkout/s/delivery?flow=happy-path&step=2&debug=1&theme=dark");
-  await page.getByRole("link", { name: "Презентация" }).click();
+  // Срез `flow`/`step` больше не молчаливый — он назван в подписи кнопки (W4-11).
+  await page.getByRole("link", { name: "Презентация · без сценария" }).click();
 
   await expect(page).toHaveURL(/\/p\/branching-checkout\/present\/s\/delivery\?debug=1&theme=dark$/);
   await expect(scenarioBar(page)).toHaveCount(0);

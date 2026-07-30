@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { scenarios as strings } from "../app/strings/player";
-import { pillGhost } from "../app/chrome";
+import { inputBase, pillDeep, pillGhost } from "../app/chrome";
+import { SelectPill } from "../app/SelectPill";
 import type { PrototypeDoc } from "../prototype/schema";
 import {
   SCENARIO_STEPS_LIMIT, scenarioStepSchema,
@@ -48,13 +49,22 @@ export interface ScenarioPanelController {
   setDraft: Dispatch<SetStateAction<ScenarioDraft>>;
 }
 
-const box = "rounded border border-white/20 bg-transparent px-2 py-1 text-xs text-white placeholder:text-white/40";
-const button = "rounded border border-white/20 px-2 py-0.5 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50";
+/**
+ * Панель в бренде Пэй (W4-13): белая поверхность, YS Text, пилюли. Бордеров и
+ * теней в бренде нет — единственная разрешённая линия — 1px лаванда, ею и
+ * разделяются секции панели. `font-mono` осталась только там, где показывается
+ * машинный текст (JSON-значения шага), — в остальном панель читается как UI.
+ */
+const box = `${inputBase} w-full`;
+const button = `${pillGhost} px-3 py-1.5 text-[13px] disabled:cursor-not-allowed disabled:opacity-50`;
+const sectionDivider = "border-t border-pay-lavender";
 
+// Три состояния шага кодируются словом (`statusLabel`) и цветом; зелёного в
+// бренде нет, поэтому «ок» — обычный чернильный, а красный остаётся за провалом.
 const statusClass: Record<ScenarioStepResult["status"], string> = {
-  pass: "text-eui-mint",
-  fail: "text-eui-orange",
-  stale: "text-white/50",
+  pass: "font-medium text-eui-ink",
+  fail: "font-medium text-pay-red",
+  stale: "text-eui-slate-500",
 };
 
 export function describeStep(step: ScenarioStep): string {
@@ -96,7 +106,7 @@ function StepList({ steps, results, current, onRemove }: {
   current: number | null;
   onRemove?: (index: number) => void;
 }) {
-  if (!steps.length) return <p className="px-3 py-2 text-white/50">{strings.stepsEmpty}</p>;
+  if (!steps.length) return <p className="px-4 py-3 text-eui-slate-500">{strings.stepsEmpty}</p>;
   return <ol aria-label={strings.stepsAria} className="min-h-0 flex-1 overflow-y-auto px-3 py-2" data-testid="scenario-steps">
     {steps.map((step, index) => {
       const result = results[index];
@@ -104,12 +114,12 @@ function StepList({ steps, results, current, onRemove }: {
         key={index}
         data-testid={`scenario-step-${index}`}
         aria-current={current === index ? "step" : undefined}
-        className={`flex items-start gap-2 border-b border-white/10 py-1 last:border-b-0 ${current === index ? "bg-white/10" : ""}`}
+        className={`flex items-start gap-2 rounded-item px-1.5 py-1.5 ${current === index ? "bg-pay-lavender" : ""}`}
       >
-        <span className="w-4 shrink-0 text-white/40">{index + 1}</span>
+        <span className="w-4 shrink-0 tabular-nums text-eui-slate-500">{index + 1}</span>
         <span className="min-w-0 flex-1 break-all">{describeStep(step)}</span>
         {result ? <span className={`shrink-0 ${statusClass[result.status]}`} data-testid={`scenario-step-status-${index}`}>{strings.statusLabel[result.status]}</span> : null}
-        {onRemove ? <button type="button" aria-label={strings.stepRemove} title={strings.stepRemove} onClick={() => onRemove(index)} className="shrink-0 px-1 text-white/50 hover:text-white">×</button> : null}
+        {onRemove ? <button type="button" aria-label={strings.stepRemove} title={strings.stepRemove} onClick={() => onRemove(index)} className="shrink-0 px-1 text-eui-slate-500 transition-colors duration-100 hover:text-pay-red"><span aria-hidden="true">✕</span></button> : null}
       </li>;
     })}
   </ol>;
@@ -129,6 +139,14 @@ export function ScenarioPanel({ doc, screenId, controller }: {
   const [running, setRunning] = useState(false);
   const [adding, setAdding] = useState<ScenarioStepType | null>(null);
   const [fields, setFields] = useState({ text: "", pointer: "", value: "" });
+  // Подтверждение удаления вторым кликом: окно 2 с — меньше нельзя (S6 требует
+  // ≥1.5 с), больше — и «Удалить?» останется висеть на кнопке, о которой забыли.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  useEffect(() => {
+    if (pendingDelete === null) return;
+    const timer = setTimeout(() => setPendingDelete(null), 2_000);
+    return () => clearTimeout(timer);
+  }, [pendingDelete]);
 
   // Клики рекордера: capture-фаза, без preventDefault — обычное взаимодействие не меняется.
   useEffect(() => {
@@ -214,23 +232,23 @@ export function ScenarioPanel({ doc, screenId, controller }: {
     return { text: strings.runSummary(passed, results.length, stale), failed: results.some((item) => item.status === "fail") };
   }, [results]);
 
-  return <aside aria-label={strings.panelAria} className="flex h-full w-80 shrink-0 flex-col overflow-hidden border-l border-white/20 bg-eui-graphite font-mono text-xs text-white">
-    <header className="flex items-center gap-2 border-b border-white/15 px-3 py-2">
-      <span className="font-semibold">{strings.title}</span>
+  return <aside aria-label={strings.panelAria} className="flex h-full w-80 shrink-0 flex-col overflow-hidden bg-white text-[13px] text-eui-ink">
+    <header className="flex items-center gap-2 px-4 py-3">
+      <span className="text-base font-medium">{strings.title}</span>
       <button
         type="button"
-        className={`${button} ml-auto ${draft.recording ? "border-eui-orange text-eui-orange" : ""}`}
+        className={`ml-auto ${draft.recording ? `${pillDeep} px-3 py-1.5 text-[13px]` : button}`}
         aria-pressed={draft.recording}
         data-testid="scenario-record"
         onClick={() => setDraft((value) => value.recording
           ? { ...value, recording: false }
           : { recording: true, steps: startRecording(screenId), name: value.name, scenarioId: value.scenarioId })}
       >{draft.recording ? strings.stop : strings.record}</button>
-      <button type="button" className={button} aria-label={strings.close} title={strings.close} onClick={controller.toggle}>×</button>
+      <button type="button" className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-pay-lavender transition-colors duration-100 hover:brightness-95" aria-label={strings.close} title={strings.close} onClick={controller.toggle}><span aria-hidden="true">✕</span></button>
     </header>
 
-    {draft.recording ? <p className="border-b border-white/15 px-3 py-1 text-eui-orange" role="status">{strings.recordHint}</p> : null}
-    {error ? <p className="border-b border-white/15 px-3 py-1 text-eui-orange" role="alert">{error}</p> : null}
+    {draft.recording ? <p className="px-4 pb-2 text-eui-slate-500" role="status">{strings.recordHint}</p> : null}
+    {error ? <p className="px-4 pb-2 font-medium text-pay-red" role="alert">{error}</p> : null}
 
     <div className="flex min-h-0 flex-1 flex-col">
       <StepList
@@ -239,34 +257,37 @@ export function ScenarioPanel({ doc, screenId, controller }: {
         current={current}
         onRemove={(index) => setDraft((value) => ({ ...value, steps: removeStep(value.steps, index) }))}
       />
-      {summary ? <p className={`px-3 py-1 ${summary.failed ? "text-eui-orange" : "text-eui-mint"}`} role="status" data-testid="scenario-run-summary">
+      {summary ? <p className={`px-4 py-1.5 ${summary.failed ? "font-medium text-pay-red" : "text-eui-slate-500"}`} role="status" data-testid="scenario-run-summary">
         {summary.text} · {summary.failed ? strings.runFailed : strings.runPassed}
       </p> : null}
 
-      <div className="border-t border-white/15 px-3 py-2">
+      <div className={`${sectionDivider} px-4 py-3`}>
         {adding === null
-          ? <div className="flex flex-wrap items-center gap-1">
-            <select aria-label={strings.expectationType} className={box} value="" onChange={(event) => { setAdding(event.target.value as ScenarioStepType); setFields({ text: "", pointer: "", value: "" }); }}>
-              <option value="" className="bg-eui-graphite">{strings.addExpectation}</option>
-              {EXPECTATION_TYPES.map((type) => <option key={type} value={type} className="bg-eui-graphite">{strings.stepTypeLabel[type]}</option>)}
-            </select>
-          </div>
-          : <div className="flex flex-col gap-1">
-            <span className="text-white/60">{strings.stepTypeLabel[adding]}</span>
+          ? <SelectPill
+            label={strings.expectationType}
+            value=""
+            options={[
+              { value: "", label: strings.addExpectation },
+              ...EXPECTATION_TYPES.map((type) => ({ value: type, label: strings.stepTypeLabel[type] })),
+            ]}
+            onChange={(value) => { if (value === "") return; setAdding(value as ScenarioStepType); setFields({ text: "", pointer: "", value: "" }); }}
+          />
+          : <div className="flex flex-col gap-2">
+            <span className="text-eui-slate-500">{strings.stepTypeLabel[adding]}</span>
             {adding === "setState" || adding === "expectState"
               ? <>
                 <input aria-label={strings.pointerLabel} placeholder="/path" className={box} value={fields.pointer} onChange={(event) => setFields((value) => ({ ...value, pointer: event.target.value }))} />
                 <input aria-label={strings.valueLabel} placeholder='"value"' className={box} value={fields.value} onChange={(event) => setFields((value) => ({ ...value, value: event.target.value }))} />
               </>
               : <input aria-label={strings.expectationValue} className={box} value={fields.text} onChange={(event) => setFields((value) => ({ ...value, text: event.target.value }))} />}
-            <div className="flex gap-1">
+            <div className="flex gap-2">
               <button type="button" className={button} onClick={addExpectation}>{strings.add}</button>
               <button type="button" className={button} onClick={() => { setAdding(null); setError(null); }}>{strings.cancel}</button>
             </div>
           </div>}
       </div>
 
-      <div className="flex flex-col gap-1 border-t border-white/15 px-3 py-2">
+      <div className={`flex flex-col gap-2 ${sectionDivider} px-4 py-3`}>
         <input
           aria-label={strings.nameLabel}
           placeholder={strings.namePlaceholder}
@@ -274,7 +295,7 @@ export function ScenarioPanel({ doc, screenId, controller }: {
           value={draft.name}
           onChange={(event) => setDraft((value) => ({ ...value, name: event.target.value }))}
         />
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-2">
           <button type="button" className={button} data-testid="scenario-replay" disabled={!draft.steps.length || running} onClick={() => { void replay(draft.steps); }}>
             {running ? strings.replaying : strings.replay}
           </button>
@@ -286,21 +307,31 @@ export function ScenarioPanel({ doc, screenId, controller }: {
       </div>
 
       {/* pb-16: нижний правый угол панели перекрывает пузырь json-render devtools в dev-режиме. */}
-      <section className="max-h-48 shrink-0 overflow-y-auto border-t border-white/15 px-3 pt-2 pb-16">
-        {list.status === "loading" ? <p className="text-white/50">{strings.loading}</p> : null}
-        {list.status === "error" ? <p className="text-eui-orange">{strings.loadError}</p> : null}
-        {list.status === "ready" && list.data.length === 0 ? <p className="text-white/50">{strings.empty}</p> : null}
-        {list.status === "ready" && list.data.length > 0 ? <ul aria-label={strings.listAria}>
-          {list.data.map((scenario) => <li key={scenario.id} className="flex items-center gap-2 border-b border-white/10 py-1 last:border-b-0">
+      <section className={`max-h-48 shrink-0 overflow-y-auto ${sectionDivider} px-4 pt-3 pb-16`}>
+        {list.status === "loading" ? <p className="text-eui-slate-500">{strings.loading}</p> : null}
+        {list.status === "error" ? <p className="font-medium text-pay-red">{strings.loadError}</p> : null}
+        {list.status === "ready" && list.data.length === 0 ? <p className="text-eui-slate-500">{strings.empty}</p> : null}
+        {list.status === "ready" && list.data.length > 0 ? <ul aria-label={strings.listAria} className="flex flex-col gap-1.5">
+          {list.data.map((scenario) => <li key={scenario.id} className="flex items-center gap-2">
             <span className="min-w-0 flex-1 break-all">{scenario.name}</span>
             <button type="button" className={button} onClick={() => open(scenario)}>{strings.edit}</button>
             <button type="button" className={button} disabled={running} onClick={() => { open(scenario); void replay(scenario.steps); }}>{strings.replay}</button>
-            <button type="button" className={button} onClick={() => { void remove(scenario); }}>{strings.delete}</button>
+            {/* Удаление проверки локально обратимо (её можно записать заново),
+                поэтому подтверждение — второй клик с окном 2 с и сменой подписи,
+                а не модалка (S6). */}
+            <button
+              type="button"
+              className={pendingDelete === scenario.id ? `${pillDeep} px-3 py-1.5 text-[13px]` : button}
+              onClick={() => {
+                if (pendingDelete === scenario.id) { setPendingDelete(null); void remove(scenario); return; }
+                setPendingDelete(scenario.id);
+              }}
+            >{pendingDelete === scenario.id ? strings.deleteConfirm : strings.delete}</button>
           </li>)}
         </ul> : null}
       </section>
     </div>
-    <HighlightLayer rects={rects} testId="scenario-highlights" className="rounded-md border-2 border-eui-brand bg-eui-brand/20" />
+    <HighlightLayer rects={rects} testId="scenario-highlights" className="rounded-item bg-pay-red/10 outline-2 outline-offset-[6px] outline-pay-red" />
   </aside>;
 }
 

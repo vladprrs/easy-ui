@@ -70,12 +70,12 @@ describe("ScenarioBar guided browse", () => {
     ]);
     const { router } = renderScenario(doc, "/p/demo/s/one?flow=repeat&step=0");
 
-    fireEvent.click(screen.getByRole("button", { name: "Следующий шаг" }));
+    fireEvent.click(screen.getByRole("button", { name: "Следующий шаг · Shift+→" }));
     await waitFor(() => {
       expect(router.state.location.search).toBe("?flow=repeat&step=1");
       expect(screen.getByText("Шаг 2 из 3")).toBeTruthy();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Следующий шаг" }));
+    fireEvent.click(screen.getByRole("button", { name: "Следующий шаг · Shift+→" }));
 
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/p/demo/s/one");
@@ -92,10 +92,13 @@ describe("ScenarioBar guided browse", () => {
     const { router } = renderScenario(doc, "/p/demo/s/one?flow=repeat&step=1&debug=1");
 
     await waitFor(() => expect(router.state.location.search).toBe("?flow=repeat&debug=1"));
-    expect(screen.getByText("Шаг не определён")).toBeTruthy();
-    expect(screen.getByRole("group", { name: "Выберите вхождение экрана" })).toBeTruthy();
+    // Полоса всегда сообщает счётчик шага (W4-7); неопределённость — причина рядом.
+    expect(within(screen.getByTestId("scenario-bar")).getByRole("status").textContent).toBe("Шаг ? из 3 · Шаг не определён");
+    // Россыпь кнопок «Шаг 3»/«Шаг 5» заменена одним контролом выбора шага.
+    const resolve = screen.getByRole("combobox", { name: "Шаг сценария" }) as HTMLSelectElement;
+    expect([...resolve.options].map((option) => option.textContent)).toEqual(["Выберите вхождение экрана", "Шаг 1", "Шаг 3"]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Шаг 3" }));
+    fireEvent.change(resolve, { target: { value: "2" } });
     await waitFor(() => expect(router.state.location.search).toBe("?flow=repeat&debug=1&step=2"));
   });
 
@@ -106,15 +109,16 @@ describe("ScenarioBar guided browse", () => {
     ]);
     const { router } = renderScenario(doc, "/p/demo/s/one?flow=main&step=0");
 
-    const picker = screen.getByTestId("scenario-flow-button");
-    expect(picker.textContent).toContain("Основной");
+    // Пилюля одна и несёт назначение контрола внутри себя (W4-1).
+    const picker = screen.getByRole("button", { name: "Сценарий: Основной" });
     expect(picker.getAttribute("aria-expanded")).toBe("false");
+    expect(picker.getAttribute("aria-haspopup")).toBe("menu");
     fireEvent.click(picker);
     fireEvent.click(within(screen.getByRole("tree", { name: "Дерево сценариев" })).getByText("Другой"));
 
     await waitFor(() => expect(router.state.location.search).toBe("?flow=other&step=0"));
     expect(screen.getByTestId("scenario-flow-button").textContent).toContain("Другой");
-    expect(screen.queryByTestId("scenario-flow-popover")).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   // Дерево вместо `<select>` (план §7 T2b): breadcrumb показывает предков дочернего сценария.
@@ -125,19 +129,21 @@ describe("ScenarioBar guided browse", () => {
     ]);
     const { router } = renderScenario(doc, "/p/demo/s/one?flow=main&step=0");
 
-    fireEvent.click(screen.getByTestId("scenario-flow-button"));
+    fireEvent.click(screen.getByRole("button", { name: "Сценарий: Основной" }));
     const tree = screen.getByRole("tree", { name: "Дерево сценариев" });
     const items = within(tree).getAllByRole("treeitem");
     expect(items.map((item) => item.getAttribute("aria-level"))).toEqual(["1", "2"]);
     fireEvent.click(within(tree).getByText("Ветка"));
 
     await waitFor(() => expect(router.state.location.search).toBe("?flow=child&step=0"));
+    // Breadcrumb предков вынесен наружу пилюли, поэтому оба фрагмента живут в
+    // обёртке контрола, а не внутри тёмной пилюли (W4-1).
     const picker = screen.getByTestId("scenario-flow-button");
     expect(picker.textContent).toContain("Основной /");
-    expect(picker.textContent).toContain("Ветка");
+    expect(screen.getByRole("button", { name: "Сценарий: Ветка" })).toBeTruthy();
 
-    fireEvent.click(picker);
-    fireEvent.click(screen.getByRole("button", { name: "Без сценария" }));
+    fireEvent.click(screen.getByRole("button", { name: "Сценарий: Ветка" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Без сценария" }));
     await waitFor(() => expect(router.state.location.search).toBe(""));
     expect(screen.getByTestId("scenario-flow-button").textContent).toContain("Без сценария");
   });
@@ -145,7 +151,7 @@ describe("ScenarioBar guided browse", () => {
   it("preserves PlayerNavigationProvider session state during the post-navigation query replace", async () => {
     const { router } = renderScenario(scenarioDoc(), "/p/demo/s/one?flow=main&step=0");
 
-    fireEvent.click(screen.getByRole("button", { name: "Следующий шаг" }));
+    fireEvent.click(screen.getByRole("button", { name: "Следующий шаг · Shift+→" }));
 
     await waitFor(() => expect(router.state.location.search).toBe("?flow=main&step=1"));
     expect(router.state.location.pathname).toBe("/p/demo/s/two");
@@ -181,7 +187,7 @@ describe("ScenarioBar guided browse", () => {
     await act(async () => {
       await runtime.dispatch({ action: "setState", params: { statePath: "/choice", value: "chosen" } }, { event: "press", payload: null, elementId: "set" });
     });
-    fireEvent.click(screen.getByRole("button", { name: "Следующий шаг" }));
+    fireEvent.click(screen.getByRole("button", { name: "Следующий шаг · Shift+→" }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/p/demo/s/two"));
     expect(screen.getByTestId("choice").textContent).toBe("chosen");
@@ -191,8 +197,12 @@ describe("ScenarioBar guided browse", () => {
   it("shows the outside state without losing the last confirmed step and offers step 1", async () => {
     const { router } = renderScenario(scenarioDoc(), "/p/demo/s/three?flow=main&step=0");
     await waitFor(() => expect(router.state.location.search).toBe("?flow=main"));
-    expect(screen.getByText("Текущий экран вне сценария")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "К шагу 1" }));
+    expect(within(screen.getByTestId("scenario-bar")).getByRole("status").textContent).toBe("Шаг ? из 2 · Текущий экран вне сценария");
+    // Кнопка «К шагу 1» заменена общим контролом выбора шага (W4-7): вне сценария
+    // он предлагает все шаги, а не только первый.
+    const resolve = screen.getByRole("combobox", { name: "Шаг сценария" }) as HTMLSelectElement;
+    expect([...resolve.options].map((option) => option.textContent)).toEqual(["Выберите шаг сценария", "Шаг 1 · One", "Шаг 2 · Two"]);
+    fireEvent.change(resolve, { target: { value: "0" } });
     await waitFor(() => expect(router.state.location.search).toBe("?flow=main&step=0"));
     expect(router.state.location.pathname).toBe("/p/demo/s/one");
   });

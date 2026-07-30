@@ -143,7 +143,9 @@ describe("DeviceFrame desktop fluid branch", () => {
     const { container } = renderFrame({ device: "desktop", child: <RegionsProbe /> });
     expect(container.querySelector("[data-eui-stage-viewport='player']")).toBeNull();
     expect(container.querySelector("[data-eui-content-scroller='player-stage']")).toBeNull();
-    expect(container.querySelector(".rounded-3xl")).not.toBeNull();
+    // Радиус фрейма — из шкалы бренда (24), а не произвольный `rounded-3xl` (W4-12).
+    expect(container.querySelector(".rounded-panel")).not.toBeNull();
+    expect(container.querySelector("[class*='shadow-']")).toBeNull();
   });
 
   it("keeps the status-bar toggle meaningful via a minimal inline region provider", () => {

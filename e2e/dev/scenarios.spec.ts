@@ -47,7 +47,9 @@ test("records a click flow in the player, replays it and saves it next to the pr
   await expect(page.getByTestId("scenario-run-summary")).toContainText("устаревших: 1");
 
   // Уборка: прогон e2e не оставляет сценариев на общем прототипе.
+  // Удаление подтверждается вторым кликом (S6): первый меняет подпись кнопки.
   await saved.getByRole("button", { name: "Удалить" }).first().click();
+  await saved.getByRole("button", { name: "Удалить?" }).first().click();
   await expect(saved.getByText("E2E запись")).toHaveCount(0);
 
   // Вне режима записи слушатель снят: клик по прототипу не добавляет шагов.

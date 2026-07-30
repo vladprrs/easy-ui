@@ -16,7 +16,9 @@ test("checkout keeps session state, then restart invalidates stale history", asy
   await expect(page.getByText("Итого: 7 990 ₽ · товаров: 1")).toBeVisible();
 
   await page.getByRole("button", { name: "Оформить" }).click();
-  await page.getByRole("button", { name: "Назад" }).click();
+  // «Назад» хрома уехала в «···» (план 2026-07-31, W4-3) — имя контрола прежнее.
+  await page.getByTestId("chrome-actions").getByRole("button", { name: "Ещё действия" }).click();
+  await page.getByRole("menuitem", { name: "Назад" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/cart$/);
   await page.getByRole("button", { name: "Оформить" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/checkout-form$/);

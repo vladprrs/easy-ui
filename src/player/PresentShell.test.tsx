@@ -121,7 +121,9 @@ describe("PresentShell (W2-1)", () => {
     mocks.getDraft.mockResolvedValue({ ...draft(), doc: presentRegionsDoc });
     const router = renderAt("/p/present-regions/s/main");
     expect(await screen.findByRole("img", { name: "Authored status bar" })).toBeTruthy();
-    const playerToggle = screen.getByRole("button", { name: "Скрыть статус-бар" });
+    // В плеере тумблер живёт в «···» (W4-3); в презентации — в её собственном футере.
+    fireEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
+    const playerToggle = screen.getByRole("menuitem", { name: "Скрыть статус-бар" });
     expect(playerToggle.getAttribute("aria-pressed")).toBe("false");
 
     fireEvent.click(playerToggle);

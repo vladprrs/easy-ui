@@ -247,7 +247,9 @@ describe("PlayerShell", () => {
     const state = router.state.location.state as { flowDepth: number; entryReason: string };
     expect(state.flowDepth).toBe(0);
     expect(state.entryReason).toBe("browse");
-    const back = within(screen.getByTestId("chrome-actions")).getByRole("button", { name: "Назад" }) as HTMLButtonElement;
+    // «Назад» уехала в «···» (W4-3) — доступное имя то же.
+    fireEvent.click(within(screen.getByTestId("chrome-actions")).getByRole("button", { name: "Ещё действия" }));
+    const back = within(screen.getByTestId("chrome-actions")).getByRole("menuitem", { name: "Назад" }) as HTMLButtonElement;
     expect(back.disabled).toBe(true);
     expect(screen.queryByTestId("flow-reset-banner")).toBeNull();
   });

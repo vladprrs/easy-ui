@@ -23,6 +23,9 @@ export const player = {
   back: "Назад",
   restart: "Начать сначала",
   present: "Презентация",
+  // Презентация не умеет сценарный контекст: `stripScenarioSearch` срезает
+  // `flow`/`step`. Раньше это происходило молча — теперь сказано в подписи (W4-11).
+  presentWithoutScenario: "Презентация · без сценария",
   note: "Заметка",
   statusBarToggle: "Скрыть статус-бар",
   notePanelAria: "Заметка к экрану",
@@ -55,29 +58,46 @@ export const player = {
   nonLatestVersion: (version: number, date: string) => `Версия ${version} от ${date}`,
   openLatestPublished: "Открыть актуальную",
   scenarioAria: "Навигация по сценарию",
-  scenarioSelect: "Сценарий",
   scenarioTreeAria: "Дерево сценариев",
-  scenarioAllLink: "Все сценарии на странице прототипа →",
+  scenarioAllLink: "Все сценарии на странице прототипа",
   scenarioNone: "Без сценария",
+  // Пилюля выбора сценария (W4-1): назначение контрола живёт внутри самой пилюли,
+  // поэтому отдельной серой подписи «Сценарий» рядом больше нет.
+  scenarioPill: (name: string) => `Сценарий: ${name}`,
   scenarioStep: (current: number, total: number) => `Шаг ${current} из ${total}`,
+  // Полоса всегда показывает «Шаг N из M» (W4-7). Когда шаг не определён,
+  // числитель — «?», а причина дописывается следующим фрагментом статуса.
+  scenarioStepUnknown: (total: number) => `Шаг ? из ${total}`,
   scenarioPrevious: "Предыдущий шаг",
   scenarioNext: "Следующий шаг",
+  // Подписи кнопок полосы включают хоткей (W4-6): ← → закреплены за экранами
+  // документа, шаги сценария ходят по Shift+←/→.
+  scenarioPreviousHotkey: "Предыдущий шаг · Shift+←",
+  scenarioNextHotkey: "Следующий шаг · Shift+→",
+  scenarioStepsAria: "Шаги сценария",
   scenarioOutside: "Текущий экран вне сценария",
   scenarioAmbiguous: "Шаг не определён",
-  scenarioToFirst: "К шагу 1",
-  scenarioOccurrences: "Выберите вхождение экрана",
+  // Один контрол вместо россыпи кнопок «К шагу 1» / «Шаг 2» / «Шаг 5» (W4-7).
+  scenarioResolveAria: "Шаг сценария",
+  scenarioResolveOutside: "Выберите шаг сценария",
+  scenarioResolveAmbiguous: "Выберите вхождение экрана",
   scenarioOccurrence: (step: number) => `Шаг ${step}`,
+  scenarioStepOption: (step: number, screenName: string) => `Шаг ${step} · ${screenName}`,
   scenarioGuidedBrowse: "Экран открывается в текущем состоянии сессии; промежуточные действия не выполняются.",
+  /** Доступное имя «···»-меню плеера (W4-3). */
+  moreActions: "Ещё действия",
+  versionShort: (version: number) => `v${version}`,
   // Оверлей интерактивных зон (план 2026-07-29 §7 T3). «цель вычисляется» —
   // формулировка только этого оверлея: классификацию перехода `$if` не меняет.
-  zonesToggle: "Зоны переходов",
+  zonesToggle: (visible: boolean) => `Зоны переходов · ${visible ? "вкл" : "выкл"}`,
   zonesMisclickHint: "Клик мимо активной зоны подсвечивает доступные переходы",
+  zonesOverlayAria: "Зоны переходов текущего экрана",
   zoneTo: (screenName: string) => `→ ${screenName}`,
+  /** Номер шага цели в текущем сценарии (W4-5). */
+  zoneStep: (step: number) => `шаг ${step}`,
   zoneComputed: "цель вычисляется",
   zoneDynamic: "→ цель вычисляется",
   zoneNoTarget: "без перехода",
-  zoneInCurrentFlow: "в текущем сценарии",
-  zoneFlow: (flowName: string) => `сценарий: ${flowName}`,
   zoneMore: (count: number) => `+${count}`,
 } as const;
 
@@ -91,6 +111,10 @@ export const formatPlayerDate = (value: string) => new Intl.DateTimeFormat("ru-R
 export const playerHotkeys = {
   previous: "Предыдущий экран",
   next: "Следующий экран",
+  // Шаги сценария — отдельная ось навигации (W4-6, триаж M4-D): ← → остаются за
+  // экранами документа, потому что сценарий есть далеко не у каждого прототипа.
+  stepPrevious: "Предыдущий шаг сценария",
+  stepNext: "Следующий шаг сценария",
   restart: "Начать сначала",
   zoom: "Вписать / 100%",
   exitPresent: "Вернуться в плеер",
@@ -120,6 +144,8 @@ export const presentHud = {
   panelAria: "Управление презентацией",
   close: "Закрыть управление презентацией",
   returnToPlayer: "Вернуться в плеер",
+  /** Автоскрытие без подписи выглядело поломкой: панель пропадала молча (W4-14). */
+  autoHideHint: "Панель скроется через 4 секунды — «···» вернёт её",
 } as const;
 
 export const share = {
@@ -182,6 +208,8 @@ export const scenarios = {
   replaying: "Прогон…",
   edit: "Открыть",
   delete: "Удалить",
+  /** Второй клик подтверждает удаление проверки (S6): окно ~2 с, подпись меняется. */
+  deleteConfirm: "Удалить?",
   addExpectation: "Добавить ожидание",
   expectationType: "Тип ожидания",
   expectationValue: "Значение",

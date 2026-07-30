@@ -91,7 +91,9 @@ describe("player integration (?debug=1)", () => {
     renderAt("/p/hello-world/s/welcome?debug=1");
     const input = await screen.findByLabelText("Name") as HTMLInputElement;
     const actions = screen.getByTestId("chrome-actions");
-    const toggle = within(actions).getByRole("button", { name: "Инспектор" });
+    // Тумблер инспектора уехал в «···» (W4-3), сохранив доступное имя.
+    fireEvent.click(within(actions).getByRole("button", { name: "Ещё действия" }));
+    const toggle = within(actions).getByRole("menuitem", { name: "Инспектор" });
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
 
     fireEvent.change(input, { target: { value: "Lin" } });
@@ -143,6 +145,7 @@ describe("player integration (?debug=1)", () => {
     renderAt("/p/hello-world/s/welcome");
     await screen.findByLabelText("Name");
     expect(screen.queryByRole("complementary", { name: "Инспектор взаимодействий" })).toBeNull();
-    expect(within(screen.getByTestId("chrome-actions")).queryByRole("button", { name: "Инспектор" })).toBeNull();
+    fireEvent.click(within(screen.getByTestId("chrome-actions")).getByRole("button", { name: "Ещё действия" }));
+    expect(within(screen.getByTestId("chrome-actions")).queryByRole("menuitem", { name: "Инспектор" })).toBeNull();
   });
 });

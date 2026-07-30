@@ -49,7 +49,13 @@ test("?debug=1 survives all transitions; sidebar browse is replace outside flowD
   await page.goto("/p/checkout?debug=1");
   await expect(page).toHaveURL(/\/p\/checkout\/s\/catalog\?debug=1$/);
   const chromeActions = page.getByTestId("chrome-actions");
-  const chromeBack = chromeActions.getByRole("button", { name: "Назад" });
+  // Редкие контролы плеера уехали в «···» (W4-3): «Назад», «Скрыть статус-бар»,
+  // «Инспектор». Доступные имена те же, но меню нужно раскрыть.
+  const moreActions = chromeActions.getByRole("button", { name: "Ещё действия" });
+  const openMore = async () => {
+    if (await moreActions.getAttribute("aria-expanded") === "false") await moreActions.click();
+  };
+  const chromeBack = chromeActions.getByRole("menuitem", { name: "Назад" });
   const sidebar = page.getByRole("complementary", { name: "Экраны" });
 
   // Reload сохраняет query-флаг и открывает панель; её toggle живёт в actions-слоте.
@@ -58,40 +64,47 @@ test("?debug=1 survives all transitions; sidebar browse is replace outside flowD
   await page.reload();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/catalog\?debug=1$/);
   await expect(inspectorPanel).toBeVisible();
-  const inspectorToggle = chromeActions.getByRole("button", { name: "Инспектор" });
+  await openMore();
+  const inspectorToggle = chromeActions.getByRole("menuitem", { name: "Инспектор" });
   await expect(inspectorToggle).toHaveAttribute("aria-pressed", "true");
   await inspectorToggle.click();
   await expect(inspectorPanel).toHaveCount(0);
+  await page.keyboard.press("Escape");
 
   // browse с глубины 0: flowDepth не растёт — Back прототипа не реагирует.
   await sidebar.getByRole("button", { name: "Товар" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/product\?debug=1$/);
+  await openMore();
   await expect(chromeBack).toBeDisabled();
   await expect(banner(page)).toHaveCount(0);
+  await page.keyboard.press("Escape");
 
   // flow-переход наращивает глубину и сохраняет query.
   await page.getByRole("button", { name: "В корзину" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/cart\?debug=1$/);
+  await openMore();
   await expect(chromeBack).toBeEnabled();
+  await page.keyboard.press("Escape");
 
   // browse с глубины 1: replace — Back возвращает на запись до browse-перехода.
   await sidebar.getByRole("button", { name: "Оформление" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/checkout-form\?debug=1$/);
+  await openMore();
   await expect(chromeBack).toBeEnabled();
   await chromeBack.click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/product\?debug=1$/);
 
-  // restart сохраняет query; инспектор (?debug=1) остаётся доступен в хроме.
+  // restart сохраняет query; инспектор (?debug=1) остаётся доступен в меню.
   await chromeActions.getByRole("button", { name: "Начать сначала" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/s\/catalog\?debug=1$/);
-  await expect(chromeActions.getByRole("button", { name: "Инспектор" })).toBeVisible();
+  await openMore();
+  await expect(chromeActions.getByRole("menuitem", { name: "Инспектор" })).toBeVisible();
 });
 
 test("player hotkeys browse outside flowDepth, toggle zoom, show help, and restart with query", async ({ page }) => {
   await page.goto("/p/hello-world?source=hotkeys");
   await expect(page).toHaveURL(/\/p\/hello-world\/s\/welcome\?source=hotkeys$/);
   const chromeActions = page.getByTestId("chrome-actions");
-  const back = chromeActions.getByRole("button", { name: "Назад" });
   const fit = chromeActions.getByRole("button", { name: "Вписать" });
   const actual = chromeActions.getByRole("button", { name: "100%" });
   await expect(fit).toHaveAttribute("aria-pressed", "true");
@@ -107,7 +120,11 @@ test("player hotkeys browse outside flowDepth, toggle zoom, show help, and resta
 
   await page.keyboard.press("ArrowRight");
   await expect(page).toHaveURL(/\/p\/hello-world\/s\/details\?source=hotkeys$/);
-  await expect(back).toBeDisabled();
+  await chromeActions.getByRole("button", { name: "Ещё действия" }).click();
+  await expect(chromeActions.getByRole("menuitem", { name: "Назад" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  // Esc возвращает фокус на триггер меню, а на кнопке глобальные хоткеи молчат.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press("R");
   await expect(page).toHaveURL(/\/p\/hello-world\/s\/welcome\?source=hotkeys$/);
   await expect(page.getByLabel("Превью прототипа на устройстве").getByRole("button", { name: "Details" })).toBeVisible();

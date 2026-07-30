@@ -148,7 +148,7 @@ export function PropsForm({ schema, values, validate, onCandidate, epoch = 0, st
   const fieldErrors = errors.ok ? {} : errors.fields;
   const formError = introspection.error ?? (errors.ok ? undefined : errors.form);
   return <div className="space-y-3">
-    {formError ? <p role="alert" className="text-xs text-eui-magenta">{formError}</p> : null}
+    {formError ? <p role="alert" className="text-xs text-pay-red">{formError}</p> : null}
     {fields.map((field) => {
       const present = Object.hasOwn(current.candidate, field.name);
       const value = present ? current.candidate[field.name] : undefined;
@@ -178,7 +178,7 @@ export function PropsForm({ schema, values, validate, onCandidate, epoch = 0, st
             {hint ? <span className="mt-1 block text-xs font-normal text-eui-slate-500">{hint}</span> : null}
           </FieldLabel>}
         <div className="mt-1 flex gap-1">{!asset ? actions : null}</div>
-        {fieldErrors[field.name] ? <p role="alert" className="mt-1 text-xs text-eui-magenta">{fieldErrors[field.name]}</p> : null}
+        {fieldErrors[field.name] ? <p role="alert" className="mt-1 text-xs text-pay-red">{fieldErrors[field.name]}</p> : null}
         {!fieldErrors[field.name] && warnings[field.name] ? <p role="status" className="mt-1 text-xs text-eui-orange">{warnings[field.name]}</p> : null}
       </div>;
     })}
@@ -197,7 +197,7 @@ function JsonWholeProps({ values, validate, onCandidate, strings, initialError }
     setError(validation.ok ? "" : validation.form ?? Object.values(validation.fields).join("; "));
     onCandidate(candidate, validation);
   };
-  return <label className="block font-eui-ui text-xs text-eui-slate-500">{strings.propsJsonLabel}<textarea aria-label={strings.propsJsonLabel} className={`${controlClass} min-h-36 font-mono`} value={text} onChange={(event) => setText(event.target.value)} onBlur={commit} />{error ? <span role="alert" className="mt-1 block text-xs text-eui-magenta">{error}</span> : null}</label>;
+  return <label className="block font-eui-ui text-xs text-eui-slate-500">{strings.propsJsonLabel}<textarea aria-label={strings.propsJsonLabel} className={`${controlClass} min-h-36 font-mono`} value={text} onChange={(event) => setText(event.target.value)} onBlur={commit} />{error ? <span role="alert" className="mt-1 block text-xs text-pay-red">{error}</span> : null}</label>;
 }
 
 export { describePropsSchema, type PropControl, type PropField, type SelectValue } from "./introspect";

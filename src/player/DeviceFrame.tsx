@@ -68,8 +68,25 @@ export function useStageZoom(): StageZoomController {
 
 const hotkeyInteractiveSelector = "input, textarea, select, button, a, [contenteditable]:not([contenteditable=\"false\"])";
 
+/**
+ * Счётчик открытых поповеров плеера (W4-2). Пока открыт хотя бы один, глобальные
+ * хоткеи молчат: внутри поповера ← → принадлежат его собственной клавиатуре
+ * (дерево сценариев, роверинг меню), и увести из-под пользователя экран плеера
+ * они не должны. Фильтра по «редактируемой цели» для этого мало: фокус может
+ * стоять на триггере поповера, а не внутри панели.
+ *
+ * Счётчик, а не булев флаг: поповеров на экране бывает несколько, и закрытие
+ * одного не должно снимать блокировку, пока открыт другой.
+ */
+let openPlayerPopovers = 0;
+
+export function setPlayerPopoverOpen(open: boolean) {
+  openPlayerPopovers = Math.max(0, openPlayerPopovers + (open ? 1 : -1));
+}
+
 /** Общий гейт хоткеев для плеера и презентации, включая shadow/composed tree. */
 export function isPlayerHotkeyEvent(event: KeyboardEvent) {
+  if (openPlayerPopovers > 0) return false;
   if (event.defaultPrevented || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return false;
   const isInteractive = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest(hotkeyInteractiveSelector));
   if (event.composedPath().some(isInteractive)) return false;
@@ -80,7 +97,9 @@ export function isPlayerHelpHotkey(event: KeyboardEvent) {
   return event.key === "?" || (event.code === "Slash" && event.shiftKey);
 }
 
-const frameCard = "overflow-hidden bg-background text-foreground shadow-[0_20px_60px_rgba(2,2,5,0.35)]";
+// Теней в бренде нет: фрейм отделяется от лавандовой канвы собственным фоном и
+// радиусом, а не подложенной тенью (W4-12).
+const frameCard = "overflow-hidden bg-background text-foreground";
 
 /**
  * Stage плеера (W1-1). Стабильный stage-вьюпорт занимает всю высоту под хромом;
@@ -157,16 +176,16 @@ export function DeviceFrame({ device, canvas, zoom, onEffectiveScale, designSyst
   useEffect(() => { onEffectiveScale?.(scale); }, [scale, onEffectiveScale]);
 
   return (
+    // Градиентов в бренде нет — подсветка стейджа снята, канву задаёт вызывающий.
     <section
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       aria-label={player.devicePreviewAria}
-      style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(132,78,220,0.18), transparent 70%)" }}
     >
       <div ref={hostRef} className="min-h-0 min-w-0 flex-1 overflow-hidden">
         <div className="h-full w-full overflow-auto" data-eui-content-scroller="player">
           {hasFixedViewport ? (
             <div className="flex w-max min-w-full min-h-full items-center justify-center" style={{ padding: stagePadding }}>
-              <div className={`${frameCard} rounded-[28px]`} style={{ width: frameWidth * scale, height: frameHeight * scale }}>
+              <div className={`${frameCard} rounded-panel`} style={{ width: frameWidth * scale, height: frameHeight * scale }}>
                 <SurfaceSpacingScope systemId={designSystem} themeTokens={themeTokens}>
                   <div data-eui-stage-viewport="player" style={{ width: frameWidth, height: frameHeight, transform: `scale(${scale})`, transformOrigin: "top left" }}>
                     {canvas ? (
@@ -186,7 +205,7 @@ export function DeviceFrame({ device, canvas, zoom, onEffectiveScale, designSyst
             </div>
           ) : (
             <div className="flex min-h-full" style={{ padding: stagePadding }}>
-              <div className={`${frameCard} w-full rounded-3xl`} style={{ minHeight: playerDesktopMinStageHeight }}>
+              <div className={`${frameCard} w-full rounded-panel`} style={{ minHeight: playerDesktopMinStageHeight }}>
                 <ScreenRegionsProvider disposition={{ statusBar: statusBarHidden ? "drop" : "inline", header: "inline", footer: "inline" }} targets={{}}>
                   {children}
                 </ScreenRegionsProvider>

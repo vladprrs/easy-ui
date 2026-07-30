@@ -114,7 +114,9 @@ function overlayDoc(device: "mobile" | "tablet", withCanvasScreen = false) {
 describe("ScreenView stage controls (W1-1)", () => {
   it("toggles only statusBar and hides the control on a screen without that region", async () => {
     const { router } = renderPlayer(regionsDoc(), "/p/regions-prototype/s/home");
-    const toggle = screen.getByRole("button", { name: "Скрыть статус-бар" });
+    // Тумблер статусбара уехал в «···» (W4-3), сохранив то же доступное имя.
+    fireEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
+    const toggle = screen.getByRole("menuitem", { name: "Скрыть статус-бар" });
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
     expect(screen.getByRole("img", { name: "Player status bar" })).toBeTruthy();
 
@@ -126,7 +128,8 @@ describe("ScreenView stage controls (W1-1)", () => {
 
     await router.navigate("/p/regions-prototype/s/plain");
     await screen.findByRole("img", { name: "Plain player screen" });
-    expect(screen.queryByRole("button", { name: "Скрыть статус-бар" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
+    expect(screen.queryByRole("menuitem", { name: "Скрыть статус-бар" })).toBeNull();
   });
 
   it("renders zoom controls in the chrome actions slot and switches fit/actual/manual", () => {
@@ -185,13 +188,17 @@ describe("ScreenView stage controls (W1-1)", () => {
         ],
       });
       renderPlayer(doc, "/p/zones-prototype/s/home?flow=main");
-      const toggle = screen.getByRole("button", { name: "Зоны переходов" });
+      // Подпись тумблера несёт состояние (W4-9), подпись зоны — номер шага (W4-5).
+      const toggle = screen.getByRole("button", { name: "Зоны переходов · выкл" });
       expect(toggle.getAttribute("aria-pressed")).toBe("false");
       expect(document.querySelector("[data-eui-zone-key]")).toBeNull();
 
       fireEvent.click(toggle);
       expect(toggle.getAttribute("aria-pressed")).toBe("true");
-      expect(document.querySelector('[data-eui-zone-label="cta"]')?.textContent).toBe("→ Details · в текущем сценарии");
+      expect(toggle.textContent).toBe("Зоны переходов · вкл");
+      expect(document.querySelector('[data-eui-zone-label="cta"]')?.textContent).toBe("→ Details · шаг 2");
+      // Слой зон больше не сплошной `aria-hidden`: подписи целей читаются списком.
+      expect(screen.getByRole("list", { name: "Зоны переходов текущего экрана" }).textContent).toBe("→ Details · шаг 2");
 
       fireEvent.click(toggle);
       expect(document.querySelector("[data-eui-zone-key]")).toBeNull();

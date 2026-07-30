@@ -7,7 +7,10 @@ import { buildPlayerPath, buildPrototypeRouteBase, documentLifetimeNonce, FlowRe
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { ScreenSurface } from "./ScreenSurface";
 import { useStatusBarPreference } from "./statusBarPreference";
-import { chip, chipActive, pillDeep, pillGhost, pillGhostOnDark } from "../app/chrome";
+import { chip, chipActive, pillDeep, pillGhost } from "../app/chrome";
+import { Menu, MenuItem, menuItemClass } from "../app/Menu";
+import { SelectPill } from "../app/SelectPill";
+import { EmptyState, ErrorState } from "../app/states";
 import { PrototypeChrome } from "../app/PrototypeChrome";
 import { formatPlayerDate, inspector as inspectorStrings, player, playerDocumentTitle, playerHotkeys, share as shareStrings } from "../app/strings/player";
 import { common, deviceNames } from "../app/strings/common";
@@ -40,12 +43,17 @@ export class ScreenErrorBoundary extends Component<{
   }
   render() {
     if (!this.state.error) return this.props.children;
-    return <section role="alert" className="rounded-2xl bg-white/10 p-6 text-eui-orange">
-      <h1 className="pay-display text-[30px] leading-[0.9]">{player.screenErrorTitle}</h1>
-      <p className="mt-2 font-mono text-sm text-eui-ondark-2">{player.screenErrorContext(this.props.prototypeId, this.props.screenId)}</p>
-      <p className="mt-2 text-sm">{this.state.error.message}</p>
-      <button type="button" className={`${pillGhostOnDark} mt-4`} onClick={this.props.restart}>{player.restart}</button>
-    </section>;
+    // Ошибка рендера — белая панель на лавандовой канве (W4-12): тёмная плашка с
+    // оранжевым текстом была единственным местом плеера со старой палитрой.
+    return <ErrorState
+      title={player.screenErrorTitle}
+      description={<>
+        {player.screenErrorContext(this.props.prototypeId, this.props.screenId)}
+        <span className="mt-2 block text-eui-ink">{this.state.error.message}</span>
+      </>}
+      retryLabel={player.restart}
+      onRetry={this.props.restart}
+    />;
   }
 }
 
@@ -54,20 +62,25 @@ const zoomChip = "inline-flex items-center rounded-full px-2.5 py-1 text-sm font
 const hotkeyRows = [
   ["←", playerHotkeys.previous],
   ["→", playerHotkeys.next],
+  ["Shift+←", playerHotkeys.stepPrevious],
+  ["Shift+→", playerHotkeys.stepNext],
   ["R", playerHotkeys.restart],
   ["F", playerHotkeys.zoom],
   ["?", playerHotkeys.help],
 ] as const;
 
+/** Клавиши, которых нет в презентации: зум и шаги сценария (полосы там нет). */
+const presentHiddenHotkeys = new Set(["F", "Shift+←", "Shift+→"]);
+
 export function PlayerHotkeysHelp({ onClose, present = false, canExitPresent = present }: { onClose: () => void; present?: boolean; canExitPresent?: boolean }) {
   const rows = present
-    ? [...hotkeyRows.filter(([key]) => key !== "F"), ...(canExitPresent ? [["Esc", playerHotkeys.exitPresent] as const] : [])]
+    ? [...hotkeyRows.filter(([key]) => !presentHiddenHotkeys.has(key)), ...(canExitPresent ? [["Esc", playerHotkeys.exitPresent] as const] : [])]
     : hotkeyRows;
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-pay-deep/55 p-4" role="presentation">
     <section role="dialog" aria-modal="true" aria-labelledby="player-hotkeys-title" className="w-full max-w-sm rounded-panel bg-white p-7 text-eui-ink">
       <div className="flex items-center justify-between gap-4">
         <h2 id="player-hotkeys-title" className="pay-display text-[32px] leading-[0.9]">{player.hotkeysTitle}</h2>
-        <button type="button" aria-label={player.hotkeysClose} title={player.hotkeysClose} onClick={onClose} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-pay-lavender text-lg leading-none transition-colors duration-100 hover:brightness-95">×</button>
+        <button type="button" aria-label={player.hotkeysClose} title={player.hotkeysClose} onClick={onClose} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-pay-lavender text-lg leading-none transition-colors duration-100 hover:brightness-95"><span aria-hidden="true">✕</span></button>
       </div>
       <dl className="mt-5 grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-3">
         {rows.map(([key, label]) => <div key={key} className="contents">
@@ -117,6 +130,9 @@ export function ScreenView() {
   // Present не поддерживает guided browse: flow/step срезаются, прочий query сохраняется.
   const location = useLocation();
   const presentPath = `${buildPrototypeRouteBase(doc.id, numericVersion)}/present${screen ? `/s/${encodeURIComponent(screen.id)}` : ""}${stripScenarioSearch(location.search)}`;
+  // Подпись кнопки говорит о срезе сценарного контекста ровно тогда, когда он
+  // есть (W4-11): на документе без флоу «· без сценария» было бы шумом.
+  const hasScenarioContext = stripScenarioSearch(location.search) !== location.search;
   // Zoom-контролы осмысленны только для фиксированного viewport (canvas-экран или
   // mobile/tablet); desktop auto-height рендерится fluid-веткой без масштаба.
   const hasFixedViewport = screenCanvas !== undefined || canonicalViewport[device] !== null;
@@ -129,10 +145,13 @@ export function ScreenView() {
     const flows = doc.flows;
     if (flows === undefined) return { screenNames };
     const currentFlow = flows.find((item) => item.id === currentFlowId);
+    // Подпись зоны — «→ {Экран} · шаг N» (W4-5). Номер ставится только когда он
+    // однозначен: экран может входить в сценарий несколько раз, и тогда любая
+    // конкретная цифра была бы враньём — остаётся «→ {Экран}».
     const flowNote = (screenId: string) => {
-      if (currentFlow?.steps.some((step) => step.screenId === screenId) === true) return player.zoneInCurrentFlow;
-      const owner = flows.find((item) => item.steps.some((step) => step.screenId === screenId));
-      return owner === undefined ? undefined : player.zoneFlow(owner.name);
+      if (currentFlow === undefined) return undefined;
+      const occurrences = currentFlow.steps.flatMap((step, index) => step.screenId === screenId ? [index] : []);
+      return occurrences.length === 1 ? player.zoneStep(occurrences[0]! + 1) : undefined;
     };
     return { screenNames, flowNote };
   }, [currentFlowId, doc.flows, doc.screens, zonesVisible]);
@@ -145,6 +164,12 @@ export function ScreenView() {
   const currentPublished = numericVersion === undefined ? undefined : publishedVersions.find((item) => item.version === numericVersion);
   const isNonLatest = numericVersion !== undefined && latestPublished !== undefined && numericVersion < latestPublished.version;
   const hasUnpublishedChanges = latestPublished !== undefined && versions !== null && versions.draft.rev > latestPublished.rev;
+  const versionOptions = [
+    { value: "draft", label: player.draftVersion },
+    ...[...publishedVersions]
+      .sort((a, b) => b.version - a.version)
+      .map((item) => ({ value: String(item.version), label: player.publishedVersion(item.version, formatPlayerDate(item.publishedAt)) })),
+  ];
   const [loadedLatest, setLoadedLatest] = useState<{ version: number; doc: PrototypeDraft["doc"] } | null>(null);
   const latestDoc = loadedLatest !== null && latestPublished !== undefined && loadedLatest.version === latestPublished.version
     ? loadedLatest.doc
@@ -197,6 +222,8 @@ export function ScreenView() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isPlayerHotkeyEvent(event)) return;
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        // Shift+←/→ принадлежат шагам сценария (ScenarioBar, W4-6).
+        if (event.shiftKey) return;
         const offset = event.key === "ArrowLeft" ? -1 : 1;
         const target = doc.screens[currentIndex + offset];
         if (!target) return;
@@ -223,27 +250,47 @@ export function ScreenView() {
     view="player"
     version={numericVersion}
     status={publishedVersions.length === 0 ? undefined : <>
-      <label className="sr-only" htmlFor="player-version-select">{player.versionsAria}</label>
-      <select
-        id="player-version-select"
-        aria-label={player.versionsAria}
-        className="max-w-56 rounded-full bg-pay-lavender px-3 py-1.5 text-sm text-eui-ink"
-        value={numericVersion === undefined ? "draft" : String(numericVersion)}
-        disabled={switchingVersion}
-        onChange={(event) => { void switchVersion(event.target.value); }}
-      >
-        <option value="draft">{player.draftVersion}</option>
-        {[...publishedVersions].sort((a, b) => b.version - a.version).map((item) => (
-          <option key={item.version} value={item.version}>{player.publishedVersion(item.version, formatPlayerDate(item.publishedAt))}</option>
-        ))}
-      </select>
-      {hasUnpublishedChanges ? <span className="text-xs text-eui-magenta">{player.unpublishedChanges}</span> : null}
+      {/* Версии (W4-4): от `sm:` — брендовая пилюля с поповером, ниже — нативный
+          `<select>` в оболочке `SelectPill`. Системный список на телефоне
+          выбирается одним пальцем, и менять его на поповер значило бы чинить
+          внешний вид ценой мобильной доступности (ревью m6). */}
+      <span className="sm:hidden">
+        <SelectPill
+          id="player-version-select"
+          label={player.versionsAria}
+          value={numericVersion === undefined ? "draft" : String(numericVersion)}
+          disabled={switchingVersion}
+          options={versionOptions}
+          onChange={(value) => { void switchVersion(value); }}
+        />
+      </span>
+      <span className="max-sm:hidden">
+        <Menu
+          // Смена версии закрывает поповер пересозданием: примитив не отдаёт
+          // наружу императивного `close()`, а висеть над новой версией меню не должно.
+          key={numericVersion ?? "draft"}
+          label={player.versionsAria}
+          triggerClassName={`${pillGhost} gap-1.5`}
+          panelClassName="w-72"
+          trigger={<>
+            <span>{numericVersion === undefined ? player.draftVersion : player.versionShort(numericVersion)}</span>
+            <span aria-hidden="true" className="text-pay-red">▾</span>
+          </>}
+        >
+          {versionOptions.map((option) => <MenuItem
+            key={option.value}
+            disabled={switchingVersion}
+            onSelect={() => { void switchVersion(option.value); }}
+          >{option.label}</MenuItem>)}
+        </Menu>
+      </span>
+      {hasUnpublishedChanges ? <span className="text-xs text-eui-slate-500">{player.unpublishedChanges}</span> : null}
     </>}
     actions={<>
       {screen === undefined ? null : <>
-        {hasStatusBar && <button type="button" aria-pressed={statusBarHidden} onClick={() => setStatusBarHidden(!statusBarHidden)} className={pillGhost}>{player.statusBarToggle}</button>}
-        {/* Тумблер зон — включён тёмной пилюлей, выключен лавандовой (макет 04). */}
-        <button type="button" aria-pressed={zonesVisible} onClick={() => setZonesVisible((visible) => !visible)} className={zonesVisible ? pillDeep : pillGhost}>{player.zonesToggle}</button>
+        {/* Тумблер зон — включён тёмной пилюлей, выключен лавандовой (макет 04);
+            подпись несёт состояние, потому что цвет его не сообщает (W4-9). */}
+        <button type="button" aria-pressed={zonesVisible} onClick={() => setZonesVisible((visible) => !visible)} className={zonesVisible ? pillDeep : pillGhost}>{player.zonesToggle(zonesVisible)}</button>
         <div role="group" aria-label={player.deviceAria} className="flex items-center gap-1">
           {(["mobile", "tablet", "desktop"] as const).map((item) => (
             <button key={item} type="button" aria-pressed={device === item} disabled={item === "desktop" && blocksDesktopPreview} title={item === "desktop" && blocksDesktopPreview ? player.desktopOverlayUnavailable : undefined} onClick={() => { setDevice(item); stageZoom.fit(); }} className={`${device === item ? chipActive : chip} disabled:cursor-not-allowed disabled:opacity-50`}>
@@ -260,16 +307,54 @@ export function ScreenView() {
         </div>}
       </>}
       <button type="button" onClick={() => setShareOpen(true)} disabled={publishedVersions.length === 0} title={publishedVersions.length === 0 ? shareStrings.noPublishedVersions : undefined} className={`${pillGhost} disabled:cursor-not-allowed disabled:opacity-50`}>{shareStrings.action}</button>
-      <Link className={pillGhost} to={presentPath}>{player.present}</Link>
-      <button type="button" onClick={navigation.back} disabled={navigation.flowDepth === 0} className={`${pillGhost} disabled:opacity-50`}>{player.back}</button>
+      <Link className={pillGhost} to={presentPath}>{hasScenarioContext ? player.presentWithoutScenario : player.present}</Link>
       <button type="button" onClick={navigation.restart} className={pillGhost}>{player.restart}</button>
       {screen?.note ? <button type="button" aria-expanded={noteScreenId === screenId} aria-controls="player-screen-note" onClick={() => setNoteScreenId((open) => open === screenId ? null : screenId ?? null)} className={pillGhost}>{player.note}</button> : null}
       <ScenarioToggle controller={scenarios} />
-      {inspector.enabled && <button type="button" aria-pressed={inspector.visible} onClick={inspector.toggle} className={pillGhost}>{inspectorStrings.title}</button>}
+      {/* В «···» уезжают только редкие контролы (W4-3, триаж M4-C): «Проверки» —
+          единственный вход в рекордер прогонов, «Начать сначала» — самое частое
+          действие показа, поэтому оба остаются в ряду. Условный рендер сохранён:
+          серых пунктов «недоступно, потому что…» здесь не будет. */}
+      <Menu label={player.moreActions}>
+        <button
+          type="button"
+          role="menuitem"
+          disabled={navigation.flowDepth === 0}
+          onClick={navigation.back}
+          className={`${menuItemClass} disabled:opacity-50`}
+        >{player.back}</button>
+        {hasStatusBar && <button
+          type="button"
+          role="menuitem"
+          aria-pressed={statusBarHidden}
+          onClick={() => setStatusBarHidden(!statusBarHidden)}
+          className={menuItemClass}
+        >{player.statusBarToggle}</button>}
+        {inspector.enabled && <button
+          type="button"
+          role="menuitem"
+          aria-pressed={inspector.visible}
+          onClick={inspector.toggle}
+          className={menuItemClass}
+        >{inspectorStrings.title}</button>}
+      </Menu>
     </>}
   />;
   const shareDialog = shareOpen ? <ShareDialog prototypeId={doc.id} versions={publishedVersions} currentVersion={numericVersion} onClose={() => setShareOpen(false)} /> : null;
-  if (!screen) return <main className="flex h-dvh min-h-0 flex-col">{shareDialog}{chrome}<div className="flex min-h-0 flex-1 items-start justify-center bg-pay-deep p-8 text-pay-lavender"><section role="alert" className="w-full max-w-xl rounded-2xl bg-white/10 p-6 text-eui-orange"><h2 className="pay-display text-[32px] leading-[0.9]">{player.screenMissingTitle}</h2><p className="mt-2 text-eui-ondark-2">{player.screenMissingBody(doc.name)}</p><Link className={`${pillGhostOnDark} mt-4`} to="/">{common.backToGallery}</Link></section></div></main>;
+  // Экран не найден — белая панель на лавандовой канве (W4-12).
+  if (!screen) return <main className="flex h-dvh min-h-0 flex-col">
+    {shareDialog}
+    {chrome}
+    <div className="flex min-h-0 flex-1 items-start justify-center overflow-auto bg-pay-lavender p-8">
+      <div className="w-full max-w-xl">
+        <EmptyState
+          title={player.screenMissingTitle}
+          description={player.screenMissingBody(doc.name)}
+          primary={<Link className={pillGhost} to="/">{common.backToGallery}</Link>}
+        />
+      </div>
+    </div>
+  </main>;
 
   const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} misclickHighlights hostPrimitivesAllowed={device !== "desktop" || screen.canvas !== undefined} interactiveZones={interactiveZones} />;
 
@@ -299,8 +384,10 @@ export function ScreenView() {
       {scenarios.open ? <ScenarioPanel doc={doc} screenId={screen.id} controller={scenarios} /> : null}
       {inspector.enabled && inspector.visible ? <InspectorPanel log={inspector.log} spec={screen.spec} definitions={customDefinitions} pins={pins} /> : null}
       {/* Подсказка про misclick-подсветку (макет 04): белая пилюля в левом нижнем
-          углу стейджа, не перехватывает указатель. */}
-      <p className="pointer-events-none absolute bottom-5 left-5 z-10 rounded-full bg-white px-4 py-2 text-[13px] text-eui-slate-500 max-sm:hidden">{player.zonesMisclickHint}</p>
+          углу стейджа, не перехватывает указатель. Она объясняет, как найти
+          кликабельное **без** оверлея зон, поэтому при включённом тумблере не
+          нужна (W4-8); на узком экране она нужна тем более и не прячется. */}
+      {zonesVisible ? null : <p className="pointer-events-none absolute bottom-5 left-5 z-10 rounded-full bg-white px-4 py-2 text-[13px] text-eui-slate-500">{player.zonesMisclickHint}</p>}
     </div>
   </main>;
 }
