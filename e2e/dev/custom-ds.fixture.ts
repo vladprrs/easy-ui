@@ -126,6 +126,16 @@ type ComponentSeed = {
   designSystem?: string;
 };
 
+const componentKey = (designSystem: string, id: string) => `component:${designSystem}:${id}`;
+const fixtureCollisionAllowlist = (seed: ComponentSeed): string[] => {
+  const designSystem = seed.designSystem ?? STARTER_DS_ID;
+  if (seed.id === COMPONENT_PAGE_IDS.namedSlots) return [componentKey(designSystem, COMPONENT_PAGE_IDS.legacySlots)];
+  if (seed.id === COMPONENT_PAGE_IDS.legacySlots) return [componentKey(designSystem, COMPONENT_PAGE_IDS.namedSlots)];
+  if (seed.id === COMPONENT_PAGE_IDS.propsBadge) return [componentKey(designSystem, COMPONENT_PAGE_IDS.rejected)];
+  if (seed.id === COMPONENT_PAGE_IDS.rejected) return [componentKey(designSystem, COMPONENT_PAGE_IDS.propsBadge)];
+  return [];
+};
+
 async function componentExists(request: APIRequestContext, api: string, id: string): Promise<boolean> {
   const response = await request.get(`${api}/components/${id}`);
   if (response.status() === 404) return false;
@@ -142,6 +152,9 @@ async function publishFixture(request: APIRequestContext, api: string, seed: Com
     source,
     designSystem: seed.designSystem ?? STARTER_DS_ID,
     intent: `Тестовый компонент ${seed.name} для проверки продуктового интерфейса`,
+  }, {
+    reason: "Отдельная E2E-фикстура нужна для проверки совместимости разных контрактов",
+    allowedCandidateKeys: fixtureCollisionAllowlist(seed),
   });
   await expectStatus(`create component ${seed.id}`, created.status(), [201]);
   const published = await request.post(`${api}/components/${seed.id}/publish`, { data: { baseRev: 1 } });
@@ -160,6 +173,9 @@ export async function ensureComponentPageFixtures(request: APIRequestContext, ap
       source: firstSource,
       designSystem: STARTER_DS_ID,
       intent: "Статусная метка с настраиваемыми свойствами для карточки",
+    }, {
+      reason: "Отдельная E2E-фикстура нужна для проверки совместимости разных контрактов",
+      allowedCandidateKeys: [componentKey(STARTER_DS_ID, COMPONENT_PAGE_IDS.rejected)],
     })).status(), [201]);
     await expectStatus("publish props badge v1", (await request.post(`${api}/components/${COMPONENT_PAGE_IDS.propsBadge}/publish`, {
       data: { baseRev: 1 },

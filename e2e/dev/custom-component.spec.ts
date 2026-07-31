@@ -9,7 +9,10 @@ test("custom component hooks, events, state templates, and published navigation 
   const source = await readFile("server/fixtures/rating-stars.tsx", "utf8");
   expect((await createFixtureComponent(request, api, {
     id: "ui-rating-stars", name: "UiRatingStars", source, designSystem: STARTER_DS_ID, intent: "Collects customer ratings in the interactive product flow",
-  }, "Отдельная UI-фикстура проверяет события, состояние и навигацию пользовательского флоу")).status()).toBe(201);
+  }, {
+    reason: "Отдельная UI-фикстура проверяет события, состояние и навигацию пользовательского флоу",
+    allowedCandidateKeys: [`component:${STARTER_DS_ID}:api-rating-stars`],
+  })).status()).toBe(201);
   expect((await request.post(`${api}/components/ui-rating-stars/publish`, { data: { baseRev: 1 } })).status()).toBe(201);
 
   const doc = {

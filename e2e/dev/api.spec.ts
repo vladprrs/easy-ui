@@ -44,7 +44,10 @@ test("API revisions, publishing, component bundles, and shim ABI work end to end
   const source = await readFile("server/fixtures/rating-stars.tsx", "utf8");
   const created = await createFixtureComponent(request, api, {
     id: "api-rating-stars", name: "ApiRatingStars", source, designSystem: STARTER_DS_ID, intent: "Collects product ratings for the API lifecycle scenario",
-  }, "Отдельная API lifecycle фикстура проверяет публикацию, бандл и shim-контракт");
+  }, {
+    reason: "Отдельная API lifecycle фикстура проверяет публикацию, бандл и shim-контракт",
+    allowedCandidateKeys: [`component:${STARTER_DS_ID}:ui-rating-stars`],
+  });
   expect(created.status()).toBe(201);
   const componentPublish = await request.post(`${api}/components/api-rating-stars/publish`, { data: { baseRev: 1 } });
   expect(componentPublish.status()).toBe(201);

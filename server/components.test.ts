@@ -101,11 +101,17 @@ describe("component API",()=>{
   });
 
   test("accepts one prototype document pinned to ABI2 and ABI3 components",async()=>{const {db,handler}=await setup();
-    const sources=[
-      {id:"document-v2",name:"DocumentV2",runtime:'import {token} from "easy-ui/runtime";',render:'token("missing")'},
-      {id:"document-v3",name:"DocumentV3",runtime:'import {space} from "easy-ui/runtime/v3";',render:'space("md")'},
-    ];
-    for(const item of sources){const source=`import {z} from "zod";${item.runtime}export const definition={props:z.strictObject({}),description:"mixed document",atomicLevel:"atom" as const,example:{}};export default function ${item.name}(){return <span>${item.render}</span>}`;const data={designSystem:"yandex-pay",id:item.id,name:item.name,source};let created=await handler(req("/components","POST",data));if(created.status===409){const rejection=await created.json() as {error:{code:string;candidates:{id:string;blocking:boolean;reasons:string[]}[];overrideTemplate:{catalogRevision:string;candidateKeys:string[]}}};expect(rejection.error.code).toBe("component_reuse_required");expect(rejection.error.candidates).toContainEqual(expect.objectContaining({id:"document-v2",blocking:true,reasons:expect.arrayContaining(["100% normalized source structure"])}));expect(rejection.error.overrideTemplate.candidateKeys).toEqual(["component:yandex-pay:document-v2"]);created=await handler(req("/components","POST",{...data,reuseOverride:{...rejection.error.overrideTemplate,reason:"Separate ABI2 and ABI3 fixtures verify mixed-runtime prototype compatibility"}}));}expect(created.status).toBe(201);expect((await handler(req(`/components/${item.id}/publish`,"POST",{baseRev:1}))).status).toBe(201);}
+    const sourceFor=(name:string,runtime:string,render:string)=>`import {z} from "zod";${runtime}export const definition={props:z.strictObject({}),description:"mixed document",atomicLevel:"atom" as const,example:{}};export default function ${name}(){return <span>${render}</span>}`;
+    const v2={designSystem:"yandex-pay",id:"document-v2",name:"DocumentV2",source:sourceFor("DocumentV2",'import {token} from "easy-ui/runtime";','token("missing")')};
+    expect((await handler(req("/components","POST",v2))).status).toBe(201);
+    expect((await handler(req("/components/document-v2/publish","POST",{baseRev:1}))).status).toBe(201);
+
+    const v3={designSystem:"yandex-pay",id:"document-v3",name:"DocumentV3",source:sourceFor("DocumentV3",'import {space} from "easy-ui/runtime/v3";','space("md")')};
+    const blocked=await handler(req("/components","POST",v3));expect(blocked.status).toBe(409);
+    const rejection=await blocked.json() as {error:{code:string;candidates:{id:string;blocking:boolean;reasons:string[]}[];overrideTemplate:{catalogRevision:string;candidateKeys:string[]}}};
+    expect(rejection.error.code).toBe("component_reuse_required");expect(rejection.error.candidates).toContainEqual(expect.objectContaining({id:"document-v2",blocking:true,reasons:expect.arrayContaining(["100% normalized source structure"])}));expect(rejection.error.overrideTemplate.candidateKeys).toEqual(["component:yandex-pay:document-v2"]);
+    const overridden=await handler(req("/components","POST",{...v3,reuseOverride:{...rejection.error.overrideTemplate,reason:"Separate ABI2 and ABI3 fixtures verify mixed-runtime prototype compatibility"}}));expect(overridden.status).toBe(201);
+    expect((await handler(req("/components/document-v3/publish","POST",{baseRev:1}))).status).toBe(201);
     const doc=prototypeDocSchema.parse({version:1,id:"mixed-abi-document",name:"Mixed ABI",device:"mobile",designSystem:"yandex-pay",startScreen:"s",state:{},screens:[{id:"s",name:"S",spec:{root:"root",elements:{root:{type:"DocumentV2",props:{},children:["v3"]},v3:{type:"DocumentV3",props:{}}}}}]});
     const created=await handler(req("/prototypes","POST",{doc}));expect(created.status).toBe(201);const draft=await (await handler(req("/prototypes/mixed-abi-document/draft"))).json() as {components:{name:string}[]};expect(draft.components.map((pin)=>pin.name).sort()).toEqual(["DocumentV2","DocumentV3"]);expect(db.query("SELECT host_abi_version version FROM component_publishes ORDER BY component_id").all()).toEqual([{version:2},{version:3}]);db.close();
   },15000);

@@ -47,6 +47,7 @@ test("deep link opens the requested screen and offers an easy-ui entry", async (
 test("presentation hotkeys browse, restart, show help, and direct Esc exits", async ({ page }) => {
   await page.goto("/p/hello-world/present");
   await expect(page).toHaveURL(/\/p\/hello-world\/present\/s\/welcome$/);
+  await expect(page.getByRole("button", { name: "Details" })).toBeVisible();
   await page.keyboard.press("ArrowRight");
   await expect(page).toHaveURL(/\/p\/hello-world\/present\/s\/details$/);
   await page.keyboard.press("R");

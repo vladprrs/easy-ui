@@ -197,6 +197,14 @@ const previewIntent = (id: string, name: string) => ({
   [PREVIEW_IDS.scopedAccent]: "Displays a scoped design-system accent in a library preview",
 }[id] ?? `Displays ${name} in a product library preview`);
 
+const previewCandidateKey = (id: string) => `component:${DOMINANT_DS_ID}:${id}`;
+const previewCollisionAllowlist = (id: string): string[] => {
+  const structurallySimilar = [PREVIEW_IDS.organism, PREVIEW_IDS.fixed, PREVIEW_IDS.broken, PREVIEW_IDS.accent];
+  return structurallySimilar.includes(id as typeof structurallySimilar[number])
+    ? structurallySimilar.filter((candidateId) => candidateId !== id).map(previewCandidateKey)
+    : [];
+};
+
 async function publish(request: APIRequestContext, api: string, seed: { id: string; name: string; source: string; designSystem: string }): Promise<void> {
   const existing = await request.get(`${api}/components/${seed.id}`);
   if (existing.status() === 200) {
@@ -210,7 +218,10 @@ async function publish(request: APIRequestContext, api: string, seed: { id: stri
   await expectStatus(`read component ${seed.id}`, existing, [404]);
   const created = await createFixtureComponent(request, api, {
     id: seed.id, name: seed.name, source: seed.source, designSystem: seed.designSystem, intent: previewIntent(seed.id, seed.name),
-  }, "Отдельные preview-фикстуры проверяют разные режимы рендера и изоляции ошибок");
+  }, {
+    reason: "Отдельные preview-фикстуры проверяют разные режимы рендера и изоляции ошибок",
+    allowedCandidateKeys: previewCollisionAllowlist(seed.id),
+  });
   await expectStatus(`create component ${seed.id}`, created, [201]);
   const published = await request.post(`${api}/components/${seed.id}/publish`, { data: { baseRev: 1 } });
   await expectStatus(`publish component ${seed.id}`, published, [201]);
