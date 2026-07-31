@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import compositionRaw from "../../test/fixtures/architecture/ctyp-payment-success.composition.json";
 import screenRaw from "../../test/fixtures/architecture/composition-screen.json";
 import { COMPOSITION_TYPE, SLOT_TYPE } from "../catalog/hostPrimitives/composition.definition";
-import { compositionDocSchema, expandedKey } from "../prototype/composition";
+import { compositionDocSchema, expandedKey, type CompositionDocV2 } from "../prototype/composition";
 import { prototypeDocSchema, type PrototypeDoc } from "../prototype/schema";
 import {
-  buildCompositionFromSubtree, defaultParams, expandForEditor, insertComposition, replaceSubtreeWithComposition,
+  buildCompositionFromSubtree, compositionMapFromPins, defaultParams, expandForEditor, insertComposition, replaceSubtreeWithComposition,
 } from "./compositions";
 
 const composition = compositionDocSchema.parse(compositionRaw);
@@ -49,6 +49,41 @@ describe("expandForEditor", () => {
     const expansion = expandForEditor(cardScreen, compositions);
     expect(expansion.doc).toBe(cardScreen);
     expect(expansion.hostRootKeys).toEqual({});
+  });
+
+  it("keeps exact pin metadata for v2 expansion and origin chains", () => {
+    const pinnedComposition = compositionDocSchema.parse({
+      version: 2,
+      name: "Pinned v2",
+      atomicLevel: "molecule",
+      params: {},
+      slots: [],
+      spec: { root: "root", elements: { root: { type: "Box", props: {} } } },
+    }) as CompositionDocV2;
+    const pin = {
+      id: "pinned-v2",
+      name: pinnedComposition.name,
+      version: 17,
+      sourceHash: "hash",
+      doc: pinnedComposition,
+      designSystem: "shadcn",
+      status: "deprecated",
+    };
+    const mapped = compositionMapFromPins([pin]);
+    expect(mapped[pin.id]).toMatchObject({ doc: pinnedComposition, version: 17, designSystem: "shadcn", status: "deprecated" });
+
+    const expansion = expandForEditor(plainDoc({
+      root: "screen",
+      elements: { screen: { type: COMPOSITION_TYPE, props: { composition: pin.id } } },
+    }), mapped);
+
+    expect(expansion.issues).toEqual([]);
+    expect(expansion.compositionRefs["screen$root"]).toEqual({
+      compositionId: pin.id,
+      hostKey: "screen",
+      innerKey: "root",
+      chain: [{ compositionId: pin.id, version: 17, hostKey: "screen", innerKey: "root" }],
+    });
   });
 });
 

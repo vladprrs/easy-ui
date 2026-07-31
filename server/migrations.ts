@@ -11,6 +11,10 @@ export const RETIRED_DESIGN_SYSTEM_TRIGGER_NAMES = [
   "component_revisions_reject_retired_design_system_update",
   "prototype_revisions_reject_retired_design_system_insert",
   "prototype_revisions_reject_retired_design_system_update",
+  "compositions_reject_retired_design_system_insert",
+  "compositions_reject_retired_design_system_update",
+  "composition_revisions_reject_retired_design_system_insert",
+  "composition_revisions_reject_retired_design_system_update",
 ] as const;
 
 const migrations = [
@@ -506,10 +510,97 @@ const migrations = [
       updated_at TEXT NOT NULL,
       PRIMARY KEY (component_id, rev, source_sha256))`);
   },
+  (db: Database) => {
+    // v21: Composition v2 closure metadata and the production migration ledger.
+    // Existing v1 publications remain byte-for-byte compatible: their document and
+    // source_hash are untouched; the new manifest columns are filled for new v2
+    // publications and default to an empty closure for historical rows.
+    db.run("ALTER TABLE composition_publishes ADD COLUMN dependency_manifest_json TEXT NOT NULL DEFAULT '[]'");
+    db.run("ALTER TABLE composition_publishes ADD COLUMN dependency_manifest_hash TEXT NOT NULL DEFAULT ''");
+
+    db.run(`CREATE TRIGGER compositions_reject_retired_design_system_insert
+      BEFORE INSERT ON compositions
+      WHEN EXISTS (SELECT 1 FROM design_systems WHERE id=NEW.design_system AND retired=1)
+      BEGIN SELECT RAISE(ABORT,'retired design system reference'); END`);
+    db.run(`CREATE TRIGGER compositions_reject_retired_design_system_update
+      BEFORE UPDATE OF design_system ON compositions
+      WHEN EXISTS (SELECT 1 FROM design_systems WHERE id=NEW.design_system AND retired=1)
+      BEGIN SELECT RAISE(ABORT,'retired design system reference'); END`);
+    db.run(`CREATE TRIGGER composition_revisions_reject_retired_design_system_insert
+      BEFORE INSERT ON composition_revisions
+      WHEN EXISTS (SELECT 1 FROM design_systems WHERE id=NEW.design_system AND retired=1)
+      BEGIN SELECT RAISE(ABORT,'retired design system reference'); END`);
+    db.run(`CREATE TRIGGER composition_revisions_reject_retired_design_system_update
+      BEFORE UPDATE OF design_system ON composition_revisions
+      WHEN EXISTS (SELECT 1 FROM design_systems WHERE id=NEW.design_system AND retired=1)
+      BEGIN SELECT RAISE(ABORT,'retired design system reference'); END`);
+
+    // Cross-artifact replacement identity deliberately has no FK to the source
+    // artifact: the source is soft-deleted after cutover and the mapping must stay
+    // queryable. The destination design system is kept as a reference for readable
+    // audit data, while ids remain historical coordinates rather than live FKs.
+    db.run(`CREATE TABLE catalog_replacements (
+      from_kind TEXT NOT NULL CHECK(from_kind IN ('component','composition')),
+      from_id TEXT NOT NULL,
+      from_design_system TEXT NOT NULL REFERENCES design_systems(id),
+      to_kind TEXT NOT NULL CHECK(to_kind IN ('component','composition')),
+      to_id TEXT NOT NULL,
+      to_design_system TEXT NOT NULL REFERENCES design_systems(id),
+      migration_run_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (from_kind, from_id, from_design_system))`);
+    db.run("CREATE INDEX catalog_replacements_target ON catalog_replacements (to_kind, to_id, to_design_system)");
+    db.run("CREATE INDEX catalog_replacements_run ON catalog_replacements (migration_run_id)");
+
+    db.run(`CREATE TABLE catalog_migration_runs (
+      id TEXT PRIMARY KEY,
+      plan_hash TEXT NOT NULL UNIQUE,
+      catalog_revision TEXT NOT NULL,
+      data_fingerprint TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('prepared','applying','applied','aborted','rolled_back')),
+      generated_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      backup_id TEXT,
+      reason TEXT)
+    `);
+    db.run(`CREATE TABLE catalog_migration_staging (
+      run_id TEXT NOT NULL REFERENCES catalog_migration_runs(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('component','composition','prototype')),
+      artifact_id TEXT NOT NULL,
+      design_system TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('staged','activated','aborted')),
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (run_id, kind, artifact_id, design_system))`);
+    db.run("CREATE INDEX catalog_migration_staging_status ON catalog_migration_staging (run_id, status)");
+
+    // A single-row policy activation timestamp distinguishes legacy TSX artifacts
+    // from newly authored ones. It is persisted in the database so a restore or a
+    // second process cannot silently choose a different rollout boundary.
+    db.run(`CREATE TABLE atomic_policy (
+      id INTEGER PRIMARY KEY CHECK(id=1),
+      activated_at TEXT NOT NULL,
+      policy_version INTEGER NOT NULL DEFAULT 1,
+      activated_by TEXT NOT NULL)
+    `);
+    db.query("INSERT INTO atomic_policy (id,activated_at,policy_version,activated_by) VALUES (1,?,?,?)")
+      .run(new Date().toISOString(), 1, "system");
+
+    // Application-level write lock used by the protected cutover. Reads remain
+    // available; the HTTP layer rejects unrelated unsafe operations while active.
+    db.run(`CREATE TABLE maintenance_locks (
+      id INTEGER PRIMARY KEY CHECK(id=1),
+      run_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      acquired_at TEXT NOT NULL)
+    `);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {
-  for(const table of ["components","component_revisions","prototypes"] as const) {
+  for(const table of ["components","component_revisions","prototypes","compositions","composition_revisions"] as const) {
     const row=db.query(`SELECT design_system FROM ${table} WHERE design_system NOT IN (SELECT id FROM design_systems) LIMIT 1`).get() as {design_system:string}|null;
     if(row) throw new Error(`Dangling design system reference in ${table}: ${row.design_system}`);
   }
@@ -517,6 +608,10 @@ function assertRegistryIntegrity(db:Database):void {
     LEFT JOIN component_revisions r ON r.component_id=c.id AND r.rev=c.head_rev
     WHERE r.component_id IS NULL OR c.design_system<>r.design_system LIMIT 1`).get() as {id:string;head_system:string;revision_system:string|null}|null;
   if(component) throw new Error(`Component head design system mismatch: ${component.id}`);
+  const composition=db.query(`SELECT c.id,c.design_system head_system,r.design_system revision_system FROM compositions c
+    LEFT JOIN composition_revisions r ON r.composition_id=c.id AND r.rev=c.head_rev
+    WHERE r.composition_id IS NULL OR c.design_system<>r.design_system LIMIT 1`).get() as {id:string;head_system:string;revision_system:string|null}|null;
+  if(composition) throw new Error(`Composition head design system mismatch: ${composition.id}`);
   const heads=db.query(`SELECT p.id,p.design_system,r.doc FROM prototypes p
     LEFT JOIN prototype_revisions r ON r.prototype_id=p.id AND r.rev=p.head_rev`).all() as {id:string;design_system:string;doc:string|null}[];
   for(const head of heads) {

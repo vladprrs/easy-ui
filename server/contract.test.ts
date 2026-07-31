@@ -122,7 +122,7 @@ type Expectation =
 interface Case { run: () => Promise<Response>; expected: Expectation }
 
 // Shared mutable fixture state threaded through the ordered execution below.
-const state: { assetId?: string; referenceId?: string; screenId?: string; screenIds?:string[]; shareId?: string; prototypeInstanceId?:string; loginCookie?:string; operatorId?:string } = {};
+const state: { assetId?: string; referenceId?: string; screenId?: string; screenIds?:string[]; shareId?: string; prototypeInstanceId?:string; loginCookie?:string; operatorId?:string; migrationPlan?: unknown; migrationRunId?: string } = {};
 
 function orderedCases(): [string, Case][] {
   const ok = (status?: number, contentType?: string): Expectation => ({ kind: "success", status, contentType });
@@ -264,6 +264,21 @@ function orderedCases(): [string, Case][] {
     // Админский аудит гейта (проект 2 §4 T10): чтение отчёта и отказ невалидного лимита.
     ["GET /api/catalog/reuse-decisions", { run: () => call("GET", "/api/catalog/reuse-decisions?minAttempts=2&limit=50"), expected: ok() }],
     ["GET /api/catalog/reuse-decisions", { run: () => call("GET", "/api/catalog/reuse-decisions?limit=0"), expected: err(422, "validation_failed") }],
+    // Protected catalog audit/cutover control plane. The empty fixture plan still exercises
+    // fingerprint validation, staging, the maintenance lock and the atomic ledger transition.
+    ["GET /api/catalog/migrations/audit", { run: async () => {
+      const response = await call("GET", "/api/catalog/migrations/audit");
+      if (response.ok) state.migrationPlan = (await response.clone().json() as { plan: unknown }).plan;
+      return response;
+    }, expected: ok() }],
+    ["GET /api/catalog/migrations", { run: () => call("GET", "/api/catalog/migrations"), expected: ok() }],
+    ["POST /api/catalog/migrations/prepare", { run: async () => {
+      const response = await call("POST", "/api/catalog/migrations/prepare", state.migrationPlan);
+      if (response.ok) state.migrationRunId = (await response.clone().json() as { runId: string }).runId;
+      return response;
+    }, expected: ok(201) }],
+    ["POST /api/catalog/migrations/{runId}/apply", { run: () => call("POST", `/api/catalog/migrations/${state.migrationRunId}/apply`, state.migrationPlan), expected: ok() }],
+    ["POST /api/catalog/migrations/{runId}/rollback", { run: () => call("POST", `/api/catalog/migrations/${state.migrationRunId}/rollback`, {}), expected: ok() }],
     ["GET /api/shims/{abi}/{file}",{ run: () => call("GET", "/api/shims/v1/react.js"), expected: ok(200, "text/javascript") }],
     // Bundle export (ZIP): owner draft, unpublished component draft, bulk (all owned)
     ["GET /api/prototypes/{id}/export", { run: () => call("GET", "/api/prototypes/contract-proto/export"), expected: ok(200, "application/zip") }],
@@ -578,8 +593,11 @@ describe("route contracts", () => {
       flowSteps: FLOW_STEPS_LIMIT,
       flowTotalSteps: FLOW_TOTAL_STEPS_LIMIT,
       flowDepth: FLOW_DEPTH_LIMIT,
+      compositionDepth: 5,
     });
-    expect(value.designSystems).toEqual(expect.arrayContaining(["contract-ds", "yandex-pay"]));
+    // The ordered contract case may have created the fixture system already; Bun can execute
+    // this independent case before or after it, so assert the stable built-in system only.
+    expect(value.designSystems).toEqual(expect.arrayContaining(["yandex-pay"]));
     expect(value.layoutContractVersion).toBe(1);
     expect(value.regions).toEqual(["statusBar", "header", "footer"]);
     expect(value.features).toEqual({
@@ -597,6 +615,8 @@ describe("route contracts", () => {
       bundleExport: true,
       bundleImport: true,
       componentReuseGate: true,
+      compositionV2: true,
+      catalogMigration: true,
     });
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
   });

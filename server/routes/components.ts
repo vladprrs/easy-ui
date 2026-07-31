@@ -25,6 +25,7 @@ import {
   ReuseGateRejection, reuseOverrideSchema, stageAndExtract, synthesizeIntent, DEFAULT_REUSE_GATE_MODE,
   type ReuseGateMode,
 } from "../catalog/gate";
+import { assertAtomicPolicy } from "../atomicPolicy";
 
 const slug=/^[a-z0-9]+(?:-[a-z0-9]+)*$/, componentName=/^[A-Z][A-Za-z0-9]*$/;
 function bad(message:string,path="source"):never{throw new ApiError(422,"validation_failed","Component is invalid",{issues:[{path:[path],message}]});}
@@ -94,6 +95,7 @@ export async function publishComponent(db:Database,repo:ComponentRepo,id:string,
   // Validate /api/assets/asset_<sha256> literals in source before staging so a dangling ref fails fast.
   const assetIds=collectAndValidateComponentAssetRefs(db,revision.source);
   const extracted=preExtracted!==undefined&&preExtracted.sourceHash===sha256(revision.source)?preExtracted.extracted:await checkSource(revision.source,path,true);
+  assertAtomicPolicy(db,"component",id,extracted.meta!);
   // Роль проверяется **до** `repo.stage`: после 409 не должно оставаться ни staging-публикации,
   // ни материализованного клиентского модуля.
   assertPublishRoleAvailable(db,{designSystem:revision.designSystem,id,canonicalFor:extracted.meta!.canonicalFor??[],actor:reuse.actor,mode:reuse.mode,sourceHash:sha256(revision.source),intent:extracted.meta!.description,...(reuse.override===undefined?{}:{override:reuse.override})});

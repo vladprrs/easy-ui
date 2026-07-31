@@ -1,6 +1,6 @@
 import type { PrototypeDoc, RegionKind } from "../prototype/schema";
-import type { CompositionDoc } from "../prototype/composition";
-import { expandCompositions } from "../prototype/composition";
+import type { CompositionDoc, ExpandedOrigin } from "../prototype/composition";
+import { collectCompositionRefs, expandCompositions } from "../prototype/composition";
 import type { ComponentLayout, SpaceToken } from "../designSystems/types";
 import type { ComponentScope } from "../designSystems/scope";
 import type { PrototypeScenario, ScenarioInput } from "../prototype/scenario";
@@ -150,7 +150,7 @@ export interface PrototypeDraft {
   /** Авторский документ до раскрытия композиций — заполняет `src/prototype/loader.ts`. */
   authoredDoc?: PrototypeDoc;
   /** Раскрытый ключ → происхождение из композиции (для дерева компонентов). */
-  compositionRefs?: Record<string, { compositionId: string; hostKey: string; innerKey: string }>;
+  compositionRefs?: Record<string, ExpandedOrigin>;
   designSystemMetaVersion?: number | null;
   // Asset pins and figma provenance of the revision (WF-5). Optional in the type because test
   // fixtures elide them, but the server always includes both (figma is null for legacy revisions).
@@ -184,7 +184,7 @@ export interface CompositionUsageReport {
   safeToRemove: boolean;
 }
 /** Пин композиции в ревизии прототипа: документ приезжает вместе с пином для раскрытия на клиенте. */
-export interface PrototypeCompositionPin { id: string; name: string; version: number; sourceHash: string; doc: CompositionDoc }
+export interface PrototypeCompositionPin { id: string; name: string; version: number; sourceHash: string; doc: CompositionDoc; designSystem?: string; status?: string }
 
 const compositionPath = (id: string) => `/api/compositions/${encodeURIComponent(id)}`;
 export const listCompositions = (signal?: AbortSignal) => request<CompositionSummary[]>("/api/compositions", { signal });
@@ -476,9 +476,34 @@ export const getPrototypeMeta = (id: string, signal?: AbortSignal) => request<Pr
  * Ревизия без композиций возвращается как есть.
  */
 function expandRevisionResponse<T extends { doc: PrototypeDoc; compositions?: PrototypeCompositionPin[] }>(response: T): T {
-  if (!response.compositions?.length) return response;
-  const compositions = Object.fromEntries(response.compositions.map((pin) => [pin.id, pin.doc]));
-  const expanded = expandCompositions(response.doc, { compositions });
+  // Keep the transport helper tolerant of legacy/test DTOs that are validated by a
+  // higher-level loader. Composition expansion only applies to a prototype-shaped document.
+  if (!response.doc || !Array.isArray((response.doc as { screens?: unknown }).screens)) return response;
+  const refs = collectCompositionRefs(response.doc);
+  if (!refs.length) return response;
+  if (!response.compositions?.length) {
+    throw new ApiError(422, {
+      code: "composition_expansion_failed",
+      message: "Prototype response is missing the pinned composition closure",
+      issues: refs.map((ref) => ({ path: `/screens/${ref.screenIndex}/spec/elements/${ref.elementKey}/props/composition`, message: `missing composition pin: ${ref.compositionId}` })),
+    });
+  }
+  const compositions = Object.fromEntries(response.compositions.map((pin) => [pin.id, {
+    doc: pin.doc,
+    version: pin.version,
+    designSystem: pin.designSystem ?? response.doc.designSystem,
+    status: pin.status ?? "active",
+  }]));
+  // A revision response carries exact immutable composition pins. Their publication may later
+  // be deprecated by a catalog migration, but playback/editor expansion must remain stable.
+  const expanded = expandCompositions(response.doc, { compositions, designSystem: response.doc.designSystem, allowInactivePins: true });
+  if (expanded.issues.length) {
+    throw new ApiError(422, {
+      code: "composition_expansion_failed",
+      message: "Pinned composition closure cannot be expanded",
+      issues: expanded.issues.map((issue) => ({ path: issue.path, message: issue.message })),
+    });
+  }
   return { ...response, doc: expanded.doc, authoredDoc: response.doc, compositionRefs: expanded.expandedFrom };
 }
 

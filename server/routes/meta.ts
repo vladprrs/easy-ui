@@ -76,6 +76,7 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       flowTotalSteps: FLOW_TOTAL_STEPS_LIMIT,
       // Глубина дерева сценариев (`flow.parentId`); корень считается уровнем 1.
       flowDepth: FLOW_DEPTH_LIMIT,
+      compositionDepth: 5,
     },
     designSystems: systems.map((system) => system.id),
     resolvedSpaceScales: Object.fromEntries(systems.map((system) => {
@@ -98,6 +99,8 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       bundleExport: true,
       bundleImport: true,
       componentReuseGate: true,
+      compositionV2: true,
+      catalogMigration: true,
     },
     reuseGate: {
       mode: reuseGateMode,

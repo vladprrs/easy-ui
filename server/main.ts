@@ -33,6 +33,8 @@ import { routeUsers } from "./routes/users";
 import { assertOwnersPresent, ensureBootstrapAdmin } from "./users";
 import { sweepStagingModules } from "./components/pipeline";
 import { DEFAULT_REUSE_GATE_MODE, resolveReuseGateMode, type ReuseGateMode } from "./catalog/gate";
+import { assertMutationAllowed } from "./maintenance";
+import { routeCatalogMigrations } from "./routes/catalogMigrations";
 
 export type HandlerOptions = {
   ready?: () => boolean;
@@ -158,6 +160,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         }
         const clientAddress=server?.requestIP?.(request)?.address??"direct";
         const auth=await routeAuth(request,db,segments.slice(1),{principal,publicOrigin,clientAddress,limiter}); if(auth) return finish(auth);
+        assertMutationAllowed(db,request.method,decodedPath);
         const users=await routeUsers(request,db,segments.slice(1),principal); if(users) return finish(users);
         const shot=await routeScreenshots(request,db,options.screenshots,segments.slice(1),principal); if(shot) return finish(shot);
         const vis=await routeVisual(request,db,options.dataDir??process.env.DATA_DIR??"data",segments.slice(1),principal,options.visual); if(vis) return finish(vis);
@@ -177,6 +180,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         if(segments[1]==="catalog"&&segments[2]==="candidates"&&segments.length===3) return finish(await routeCatalogCandidates(request,db,principal,options.dataDir??process.env.DATA_DIR??"data"));
         // Админское чтение аудита гейта (проект 2 §4 T10); admin-проверка — внутри роута.
         if(segments[1]==="catalog"&&segments[2]==="reuse-decisions"&&segments.length===3) return finish(routeReuseDecisions(request,db,principal));
+        if(segments[1]==="catalog"&&segments[2]==="migrations") return finish(await routeCatalogMigrations(request,db,segments.slice(2),principal,options.dataDir??process.env.DATA_DIR??"data"));
         if(segments[1]==="shims"&&segments[2]!==undefined&&/^v[1-9]\d*$/.test(segments[2])) return finish(routeShims(request,segments.slice(1)));
         // Режим гейта — часть discovery: `/api/capabilities` обязан рапортовать фактическую
         // фазу процесса, иначе агент узнаёт её только сломав собственный create.

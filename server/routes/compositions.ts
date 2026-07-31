@@ -1,9 +1,9 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
-import { compositionDocSchema, type CompositionDoc } from "../../src/prototype/composition";
+import type { CompositionDoc } from "../../src/prototype/composition";
 import { hostPrimitiveNames } from "../../src/catalog/hostPrimitives/definitions";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
-import { CompositionRepo } from "../repos/compositions";
+import { CompositionRepo, safeParseCompositionDocument } from "../repos/compositions";
 import { requireActiveDesignSystem } from "../designSystems";
 import { requireResourceOwner, requireUser } from "../authorization";
 import { writeAuditEvent } from "../audit";
@@ -36,9 +36,11 @@ const text = (value: unknown, name: string, required = true) => {
 };
 
 function parseDoc(value: unknown): CompositionDoc {
-  const parsed = compositionDocSchema.safeParse(value);
+  const parsed = safeParseCompositionDocument(value);
   if (!parsed.success) throw new ApiError(422, "validation_failed", "Composition document is invalid", { issues: parsed.error.issues });
-  return parsed.data;
+  // CompositionRepo keeps the historical v1 type surface for the rest of the server. v2 is
+  // structurally identical at the persistence boundary and is discriminated at publish time.
+  return parsed.data as CompositionDoc;
 }
 
 /**

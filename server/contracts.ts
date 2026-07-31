@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { inputPrototypeDocSchema, REGION_KINDS } from "../src/prototype/schema";
+import { compositionDocSchema } from "../src/prototype/composition";
 import { COMPONENT_SCOPES } from "../src/designSystems/scope";
 import { PROTOTYPE_KINDS, READINESS_GATE_IDS } from "../src/api/client";
 import { atomicLevels, layoutSpacingProps, spaceTokens } from "../src/designSystems/types";
@@ -614,12 +615,17 @@ export const deletePrototypeContract = registerContract({
 
 // Пин компонента ревизии; `status` добавлен волной 3 и опционален для старых ответов.
 const componentPinSchema = z.looseObject({ id: z.string(), name: z.string(), version: z.number(), bundleUrl: z.string(), bundleHash: z.string(), status: z.string().optional() });
+const compositionPinSchema = z.looseObject({
+  id: z.string(), name: z.string(), version: z.number(), sourceHash: z.string(), doc: compositionDocSchema,
+  designSystem: z.string().optional(), status: z.string().optional(),
+});
 
 const prototypeRevisionCoreSchema = z.looseObject({
   doc: z.looseObject({ id: z.string(), version: z.literal(1), screens: z.array(z.unknown()) }),
   rev: z.number(), builtinCatalogHash: z.string(), componentManifestHash: z.string(),
   prototypeInstanceId:z.string(),
   components: z.array(z.looseObject({ id: z.string(), version: z.number() })),
+  compositions: z.array(compositionPinSchema).optional(),
   assets: z.array(assetPublicSchema.omit({ width: true, height: true })),
   designSystemMetaVersion: z.number().nullable(),
   figma: figmaResponseSchema.optional(),
@@ -1105,7 +1111,7 @@ export const publishComponentContract = registerContract({
   status: 201,
   requestSchema: z.strictObject({ ...casBody, reuseOverride: componentReuseOverrideSchema.optional() }),
   responseSchema: z.looseObject({ version: z.number(), hostAbiVersion: z.number(), warnings: z.array(z.string()) }),
-  errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, { status: 403, code: "admin_required", description: "reuseOverride is admin-only" }, { status: 409, code: "catalog_changed" }, { status: 409, code: "canonical_role_conflict" }, errorCatalog.validationFailed, { status: 422, code: "event_schema_not_serializable" }],
+  errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, { status: 403, code: "admin_required", description: "reuseOverride is admin-only" }, { status: 409, code: "catalog_changed" }, { status: 409, code: "canonical_role_conflict" }, errorCatalog.validationFailed, { status: 422, code: "atomic_policy_violation" }, { status: 422, code: "event_schema_not_serializable" }],
   errorResponseSchemas: { 409: componentPublishConflictEnvelopeSchema },
 });
 
@@ -1242,11 +1248,20 @@ const compositionParamSchema = z.looseObject({
   type: z.enum(["string", "number", "boolean", "json", "asset"]),
   required: z.boolean().optional(), default: z.json().optional(), description: z.string().optional(),
 });
-const compositionDocumentSchema = z.looseObject({
-  version: z.literal(1), name: z.string(), description: z.string().optional(),
+const compositionDocumentCommonSchema = {
+  name: z.string(), description: z.string().optional(),
+  scope: z.enum(["section", "shell", "screen"]).optional(),
+  canonicalFor: z.array(z.string()).optional(),
+  ownership: z.object({ reason: z.string(), provenance: z.string().optional() }).optional(),
+  replacement: z.string().optional(),
   params: z.record(z.string(), compositionParamSchema), slots: z.array(z.string()),
   spec: z.looseObject({ root: z.string(), elements: z.record(z.string(), z.unknown()) }),
-});
+  provenance: z.looseObject({ source: z.string().optional(), figmaNodeId: z.string().optional() }).optional(),
+} as const;
+const compositionDocumentSchema = z.discriminatedUnion("version", [
+  z.looseObject({ version: z.literal(1), ...compositionDocumentCommonSchema }),
+  z.looseObject({ version: z.literal(2), atomicLevel: z.enum(["molecule", "organism", "template", "page"]), ...compositionDocumentCommonSchema }),
+]);
 const compositionVersionSchema = z.looseObject({
   version: positiveInt, rev: positiveInt, status: z.string(), statusReason: z.string().nullable(),
   supersededBy: z.number().nullable(), statusRev: z.number(), sourceHash: z.string(), publishedAt: isoDate,
@@ -1375,6 +1390,57 @@ export const catalogManifestContract = registerContract({
     headUsageCount: z.number(), deprecated: z.boolean(),
   })) }),
   errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed, errorCatalog.validationFailed],
+});
+
+// --- Catalog audit and protected migration control ---
+
+const migrationArtifactKeySchema = z.looseObject({ kind: z.enum(["component", "composition"]), id: z.string(), designSystem: z.string(), version: z.number().int().positive().optional() });
+const migrationAdapterSchema = z.looseObject({ typeMap: z.record(z.string(), z.string()), props: z.record(z.string(), z.unknown()), events: z.record(z.string(), z.unknown()).optional(), slots: z.unknown().optional(), composition: z.unknown().optional() });
+const migrationPlanSchema = z.looseObject({
+  version: z.literal(1), generatedAt: z.string(), catalogRevision: z.string(), dataFingerprint: z.string(),
+  groups: z.array(z.looseObject({ canonical: migrationArtifactKeySchema, retired: z.array(migrationArtifactKeySchema), confidence: z.number(), reasons: z.array(z.string()), adapter: migrationAdapterSchema, affectedPrototypeHeads: z.array(z.string()), affectedCompositionHeads: z.array(z.string()), immutableUsages: z.array(z.looseObject({ resourceId: z.string(), version: z.number() })) })),
+  compositionConversions: z.array(z.unknown()), metadataRevisions: z.array(z.unknown()), documentedExceptions: z.array(z.unknown()),
+});
+
+export const catalogMigrationAuditContract = registerContract({
+  method: "GET", path: "/api/catalog/migrations/audit",
+  summary: "Read-only consistent catalog audit and deterministic migration plan. Administrator only.",
+  responseSchema: z.looseObject({ generatedAt: z.string(), catalogRevision: z.string(), dataFingerprint: z.string(), artifacts: z.array(z.unknown()), duplicateGroups: z.array(z.unknown()), plan: migrationPlanSchema }),
+  errors: [{ status: 401, code: "unauthorized" }, { status: 403, code: "admin_required" }, errorCatalog.methodNotAllowed],
+});
+
+export const listCatalogMigrationsContract = registerContract({
+  method: "GET", path: "/api/catalog/migrations",
+  summary: "List catalog migration runs and their cutover status. Administrator only.",
+  responseSchema: z.looseObject({ runs: z.array(z.unknown()) }),
+  errors: [{ status: 401, code: "unauthorized" }, { status: 403, code: "admin_required" }, errorCatalog.methodNotAllowed],
+});
+
+export const prepareCatalogMigrationContract = registerContract({
+  method: "POST", path: "/api/catalog/migrations/prepare",
+  summary: "Stage a read-only audit plan after verifying its catalog and data fingerprints.",
+  status: 201,
+  requestSchema: migrationPlanSchema,
+  responseSchema: z.looseObject({ runId: z.string(), planHash: z.string(), status: z.enum(["prepared", "applied"]) }),
+  errors: [{ status: 401, code: "unauthorized" }, { status: 403, code: "admin_required" }, { status: 409, code: "migration_plan_stale" }, errorCatalog.validationFailed],
+});
+
+export const applyCatalogMigrationContract = registerContract({
+  method: "POST", path: "/api/catalog/migrations/{runId}/apply",
+  summary: "Perform the protected atomic migration cutover for a prepared plan.",
+  requestSchema: migrationPlanSchema,
+  // `backupId` идентифицирует удержанный образ cutover: он нужен для rollback из другого
+  // процесса (рестарт, редеплой), где in-process кэш бэкапов пуст.
+  responseSchema: z.looseObject({ runId: z.string(), status: z.literal("applied"), backupId: z.string() }),
+  errors: [{ status: 401, code: "unauthorized" }, { status: 403, code: "admin_required" }, { status: 409, code: "migration_plan_stale" }, { status: 503, code: "maintenance_in_progress" }, errorCatalog.validationFailed],
+});
+
+export const rollbackCatalogMigrationContract = registerContract({
+  method: "POST", path: "/api/catalog/migrations/{runId}/rollback",
+  summary: "Restore the cutover backup and mark a committed catalog migration rolled back. Administrator only.",
+  requestSchema: z.looseObject({ backupId: z.string().min(1).optional(), reason: z.string().trim().min(1).max(500).optional() }),
+  responseSchema: z.looseObject({ runId: z.string(), backupId: z.string(), backupSha256: z.string(), bytes: z.number(), status: z.literal("rolled_back") }),
+  errors: [{ status: 401, code: "unauthorized" }, { status: 403, code: "admin_required" }, { status: 404, code: "migration_backup_not_found" }, { status: 409, code: "migration_backup_mismatch" }, { status: 503, code: "maintenance_in_progress" }, errorCatalog.validationFailed],
 });
 
 // --- Library read model (проект 1 «Library Performance», §3.1–3.2) ---
@@ -1704,6 +1770,7 @@ export const capabilitiesResponseSchema = z.object({
     elements: z.number(), depth: z.number(), bodyMiB: z.number(), sourceKiB: z.number(),
     assetMiB: z.number(), repeatBudget: z.number(), repeatPerScreen: z.number(), screenshotQueue: z.number(), geometryRects: z.number(),
     flows: z.number(), flowSteps: z.number(), flowTotalSteps: z.number(), flowDepth: z.number(),
+    compositionDepth: z.number(),
   }),
   designSystems: z.array(z.string()),
   resolvedSpaceScales: z.record(z.string(), spaceScaleSchema),
@@ -1713,7 +1780,7 @@ export const capabilitiesResponseSchema = z.object({
     typedEvents: z.boolean(), repeat: z.boolean(), namedSlots: z.boolean(), themeVersions: z.boolean(), layoutContract: z.boolean(),
     flows: z.boolean(), screenRegions: z.boolean(), bundleExport: z.boolean(), bundleImport: z.boolean(),
     /** Гейт переиспользования компонентов присутствует в этой сборке (план 2026-07-31 §3.5). */
-    componentReuseGate: z.boolean(),
+    componentReuseGate: z.boolean(), compositionV2: z.boolean(), catalogMigration: z.boolean(),
   }),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`

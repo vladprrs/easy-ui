@@ -55,7 +55,7 @@ describe("component architecture metadata",()=>{
 
   test("scans screen geometry only when sourceBounded is declared",async()=>{
     const geometry=`return <div className="min-h-screen fixed inset-0" style={{height:"100dvh"}} />`;
-    const bounded=await publish("arch-bounded","ArchBounded",`atomicLevel:"organism" as const,scope:"section" as const,sourceBounded:true`,geometry);
+    const bounded=await publish("arch-bounded","ArchBounded",`atomicLevel:"organism" as const,scope:"section" as const,sourceBounded:true,ownership:{reason:"Owns the viewport geometry needed by this bounded section"}`,geometry);
     expect(bounded.result.warnings.join(" ")).toContain("min-h-screen, 100dvh, fixed inset-0");
     bounded.db.close();
     // Канонический каркас (yp-screen и родня) законно несёт геометрию экрана и молчит.

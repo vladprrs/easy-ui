@@ -59,6 +59,20 @@ export function classifyRevision(db:Database,prototypeId:string,rev:number):Revi
   };
   const issues:RevisionRenderError["issues"]=[];
 
+  // A prototype revision stores the full transitive composition closure, not only the
+  // top-level hosts present in its authored document. Check every exact pin so a child that
+  // was later archived cannot be silently omitted from renderability classification.
+  const compositionTables = db.query("SELECT COUNT(*) count FROM sqlite_master WHERE type='table' AND name IN ('prototype_revision_compositions','composition_publishes')").get() as {count:number};
+  if (compositionTables.count === 2) {
+    const allCompositionPins = db.query(`SELECT prc.composition_id id,cp.status
+      FROM prototype_revision_compositions prc
+      JOIN composition_publishes cp ON cp.composition_id=prc.composition_id AND cp.version=prc.composition_version
+      WHERE prc.prototype_id=? AND prc.rev=? ORDER BY prc.composition_id`).all(prototypeId,rev) as {id:string;status:string}[];
+    for (const pin of allCompositionPins) {
+      if (!RENDERABLE_PIN_STATUSES.has(pin.status)) issues.push({path:`/compositions/${pin.id}`,message:`Pinned composition ${pin.id} is not renderable (status ${pin.status})`});
+    }
+  }
+
   for(const [screenIndex,screen] of doc.screens.entries()) {
     const state=mergeScreenState(doc.state,screen.stateOverrides);
     for(const [elementId,element] of Object.entries(screen.spec.elements)) {
@@ -68,7 +82,6 @@ export function classifyRevision(db:Database,prototypeId:string,rev:number):Revi
         const pin=typeof compositionId==="string"?compositionPin(compositionId):undefined;
         if(typeof compositionId!=="string") issues.push({path:`${path}/props/composition`,message:"Composition reference is missing a composition id"});
         else if(!pin) issues.push({path:`${path}/props/composition`,message:`Composition ${compositionId} is not pinned by this revision`});
-        else if(!RENDERABLE_PIN_STATUSES.has(pin.status)) issues.push({path:`${path}/props/composition`,message:`Pinned composition ${compositionId} is not renderable (status ${pin.status})`});
         continue;
       }
       if(hostPrimitiveNames.has(element.type)) {

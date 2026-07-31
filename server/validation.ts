@@ -6,8 +6,8 @@ import { importPublished } from "./components/pipeline";
 import { requireActiveDesignSystem } from "./designSystems";
 import { ApiError } from "./http";
 import { hostPrimitiveDefinitions, hostPrimitiveNames } from "../src/catalog/hostPrimitives/definitions";
-import { collectCompositionRefs, expandCompositions, type CompositionDoc } from "../src/prototype/composition";
-import { resolveCompositionPins } from "./repos/compositions";
+import { collectCompositionRefs, expandCompositions, type CompositionCatalogEntry } from "../src/prototype/composition";
+import { resolveCompositionPins, type ComponentDependencyPin, type CompositionDependencyPin } from "./repos/compositions";
 
 // Walks every element prop looking for {"$asset":"<id>"} directives, returning the referenced ids.
 export function collectAssetIds(doc:PrototypeDoc):string[] {
@@ -47,7 +47,32 @@ export function collectAndValidateComponentAssetRefs(db:Database,source:string):
   return ids;
 }
 
-export type CompositionPin={id:string;name:string;version:number;sourceHash:string};
+export type CompositionPin=CompositionDependencyPin;
+
+// The composition expander in src/ is deliberately v1-shaped. Keeping the recursive orchestration
+// here lets the server accept v2 documents without changing the v1 client/runtime contract.
+const COMPOSITION_EXPANSION_PASSES = 5;
+const compositionComponentPins = new WeakMap<object, Map<string, ComponentDependencyPin>>();
+
+function expandNestedCompositions(doc: PrototypeDoc, compositions: Record<string, CompositionCatalogEntry>): PrototypeDoc {
+  let current = doc;
+  for (let pass = 0; pass <= COMPOSITION_EXPANSION_PASSES; pass += 1) {
+    const expanded = expandCompositions(current, { compositions, designSystem: current.designSystem });
+    if (expanded.issues.length) {
+      throw new ApiError(422, "validation_failed", "Prototype document is invalid", {
+        issues: expanded.issues.map((issue) => ({ path: issue.path.split("/").filter(Boolean), message: issue.message })),
+      });
+    }
+    current = expanded.doc;
+    if (!collectCompositionRefs(current).length) return current;
+    if (pass === COMPOSITION_EXPANSION_PASSES) {
+      throw new ApiError(422, "validation_failed", "Composition nesting exceeds the supported expansion depth", {
+        issues: [{ path: ["screens"], message: "composition nesting exceeds the depth limit of 5" }],
+      });
+    }
+  }
+  return current;
+}
 
 /**
  * Раскрытие композиций в **save-пути** (волна 5, B3 адверсариального ревью).
@@ -60,28 +85,34 @@ export type CompositionPin={id:string;name:string;version:number;sourceHash:stri
  *
  * В БД сохраняется **авторский** документ (с `@eui/Composition`), пины — от раскрытого.
  */
-export function expandPrototypeForSave(db:Database,doc:PrototypeDoc):{doc:PrototypeDoc;pins:CompositionPin[];compositions:Record<string,CompositionDoc>} {
+export function expandPrototypeForSave(db:Database,doc:PrototypeDoc):{doc:PrototypeDoc;pins:CompositionPin[];compositions:Record<string,CompositionCatalogEntry>} {
   const refs=collectCompositionRefs(doc);
   if(!refs.length) return {doc,pins:[],compositions:{}};
-  const {docs,pins,missing}=resolveCompositionPins(db,refs.map(ref=>ref.compositionId),doc.designSystem);
+  const {docs,sources,pins,componentPins,missing}=resolveCompositionPins(db,refs.map(ref=>ref.compositionId),doc.designSystem);
   if(missing.length) throw new ApiError(422,"validation_failed","Prototype references compositions that are unavailable",
     {issues:missing.map(entry=>({path:["screens"],message:entry.reason}))});
-  const expanded=expandCompositions(doc,{compositions:docs});
-  if(expanded.issues.length) throw new ApiError(422,"validation_failed","Prototype document is invalid",
-    {issues:expanded.issues.map(issue=>({path:issue.path.split("/").filter(Boolean),message:issue.message}))});
-  return {doc:expanded.doc,pins,compositions:docs};
+  const expanded=expandNestedCompositions(doc,sources);
+  if(componentPins.length) compositionComponentPins.set(expanded, new Map(componentPins.map((pin) => [pin.name, pin])));
+  return {doc:expanded,pins,compositions:docs};
 }
 
 export type ComponentPin={id:string;name:string;version:number;bundleHash:string;sourcePath:string};
 export async function snapshotDefinitions(db:Database,doc:PrototypeDoc,dataDir:string):Promise<{definitions:Record<string,ComponentDefinition>;pins:ComponentPin[]}> {
   const builtin=requireActiveDesignSystem(db,doc.designSystem,["designSystem"]).definitions;
   const types=new Set(doc.screens.flatMap(s=>Object.values(s.spec.elements).map(e=>e.type)).filter(t=>!Object.hasOwn(builtin,t)&&!hostPrimitiveNames.has(t)));
+  const compositionPins=compositionComponentPins.get(doc);
   const pins:ComponentPin[]=[]; const custom:Record<string,ComponentDefinition>={};
   for(const name of [...types].sort()) {
-    const row=db.query(`SELECT c.id,c.name,cp.version,cp.rev,cp.bundle_hash bundleHash,cr.source
-      FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.status='active'
-      JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
-      WHERE c.name=? AND cr.design_system=? AND c.deleted_at IS NULL ORDER BY cp.version DESC LIMIT 1`).get(name,doc.designSystem) as {id:string;name:string;version:number;rev:number;bundleHash:string;source:string}|null;
+    const pinned=compositionPins?.get(name);
+    const row=pinned
+      ? db.query(`SELECT c.id,c.name,cp.version,cp.rev,cp.bundle_hash bundleHash,cr.source
+          FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.version=?
+          JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
+          WHERE c.id=? AND cr.design_system=?`).get(pinned.version,pinned.id,doc.designSystem) as {id:string;name:string;version:number;rev:number;bundleHash:string;source:string}|null
+      : db.query(`SELECT c.id,c.name,cp.version,cp.rev,cp.bundle_hash bundleHash,cr.source
+          FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.status='active'
+          JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
+          WHERE c.name=? AND cr.design_system=? AND c.deleted_at IS NULL ORDER BY cp.version DESC LIMIT 1`).get(name,doc.designSystem) as {id:string;name:string;version:number;rev:number;bundleHash:string;source:string}|null;
     if(!row) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["screens"],message:`Unknown or unpublished component type in design system '${doc.designSystem}': ${name}`}]});
     const {materializeSource}=await import("./components/pipeline"); const path=await materializeSource(dataDir,row.id,row.rev,row.source);
     const mod=await importPublished(row.id,row.rev,path);

@@ -4,7 +4,8 @@ import { COMPOSITION_TYPE, SLOT_TYPE } from "../catalog/hostPrimitives/compositi
 import { FLOW_ROOT_TYPE } from "../catalog/hostPrimitives/flowRoot.definition";
 import {
   compositionDocSchema, expandCompositions, expandedKey,
-  type CompositionDoc, type CompositionParamType,
+  type CompositionCatalogEntry, type CompositionDoc, type CompositionParamType, type CompositionSource,
+  type ExpandedOrigin,
 } from "../prototype/composition";
 import { slugSchema, type JsonValue, type PrototypeDoc } from "../prototype/schema";
 import type { ValidationIssue } from "../prototype/types";
@@ -26,7 +27,7 @@ export interface EditorExpansion {
   /** Раскрытый документ для рендера; при отсутствии композиций — исходный (по ссылке). */
   doc: PrototypeDoc;
   /** Раскрытый ключ → происхождение (в `toRuntimeSpec({compositionRefs})`). */
-  compositionRefs: Record<string, { compositionId: string; hostKey: string; innerKey: string }>;
+  compositionRefs: Record<string, ExpandedOrigin>;
   /** Проблемы раскрытия (неизвестная композиция, плохой параметр, слот). */
   issues: ValidationIssue[];
   /** Авторский host-ключ → ключ корня раскрытой композиции (подсветка выделения на холсте). */
@@ -35,16 +36,40 @@ export interface EditorExpansion {
 
 /** Карта `id → документ` из пинов ревизии. */
 export function compositionMapFromPins(pins: readonly PrototypeCompositionPin[] | undefined): Record<string, CompositionDoc> {
-  return Object.fromEntries((pins ?? []).map((pin) => [pin.id, pin.doc]));
+  return Object.fromEntries((pins ?? []).map((pin) => {
+    const source: CompositionSource = {
+      doc: pin.doc,
+      version: pin.version,
+      ...(pin.designSystem !== undefined ? { designSystem: pin.designSystem } : {}),
+      ...(pin.status !== undefined ? { status: pin.status } : {}),
+    };
+    // Keep the old document-shaped read surface for InspectorPanel/session callers,
+    // while allowing expandCompositions to consume the exact pin source.
+    const documentView = new Proxy(source, {
+      get(target, property, receiver) {
+        if (Reflect.has(target, property)) return Reflect.get(target, property, receiver);
+        return Reflect.get(target.doc, property, target.doc);
+      },
+      has(target, property) {
+        return Reflect.has(target, property) || Reflect.has(target.doc, property);
+      },
+    });
+    return [pin.id, documentView];
+  })) as unknown as Record<string, CompositionDoc>;
 }
 
 /** Раскрытие авторского документа для рендера + карты, нужные UI редактора. */
-export function expandForEditor(doc: PrototypeDoc, compositions: Record<string, CompositionDoc>): EditorExpansion {
-  const { doc: expanded, issues, refs, expandedFrom } = expandCompositions(doc, { compositions });
+export function expandForEditor(doc: PrototypeDoc, compositions: Record<string, CompositionCatalogEntry>): EditorExpansion {
+  const { doc: expanded, issues, refs, expandedFrom } = expandCompositions(doc, {
+    compositions,
+    designSystem: doc.designSystem,
+    allowInactivePins: true,
+  });
   const hostRootKeys: Record<string, string> = {};
   for (const ref of refs) {
-    const composition = compositions[ref.compositionId];
-    if (!composition) continue;
+    const entry = compositions[ref.compositionId];
+    if (!entry) continue;
+    const composition = "doc" in entry ? entry.doc : entry;
     const key = expandedKey(ref.elementKey, composition.spec.root);
     if (Object.hasOwn(expandedFrom, key)) hostRootKeys[ref.elementKey] = key;
   }

@@ -7,6 +7,7 @@ export const definition = {
   slots: [],
   atomicLevel: "organism" as const,
   scope: "section" as const,
+  ownership: { reason: "Owns the shell layout behavior that cannot be expressed by screen composition slots" },
   description: "Vertical shell of the CTYP payment-success screen; renders its children in order",
   example: { tone: "success" as const },
 };

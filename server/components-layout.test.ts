@@ -16,7 +16,7 @@ const fullLayout=`{version:1 as const,spacing:["gap","padding"] as ("gap"|"paddi
 function source(fields:string,render=`return <div data-gap={props.gap}>{slots.default}</div>`){return `import {z} from "zod";
 export const definition={${fields}};
 export default function LayoutComponent({props,slots,children}:any){if(children!==slots.default)throw new Error("children contract mismatch");${render}}`;}
-const validFields=`props:${props},description:"Layout component",slots:["default"],atomicLevel:"molecule" as const,layoutNeutral:true as const,layout:${fullLayout}`;
+const validFields=`props:${props},description:"Layout component",slots:["default"],atomicLevel:"molecule" as const,ownership:{reason:"Owns the irreducible spacing and child-flow behavior"},layoutNeutral:true as const,layout:${fullLayout}`;
 async function rejected(fields:string,needle:string){const {db,handler}=await setup();const response=await handler(request("/components","POST",{designSystem:"yandex-pay",id:`case-${crypto.randomUUID().slice(0,8)}`,name:"LayoutCase",source:source(fields),intent:"Validates rejected layout metadata in product panels"}));expect(response.status).toBe(422);expect(JSON.stringify(await response.json())).toContain(needle);db.close();}
 
 describe("custom component layout metadata",()=>{

@@ -6,6 +6,7 @@ export const definition = {
   events: [],
   slots: [],
   atomicLevel: "molecule" as const,
+  ownership: { reason: "Owns the irreducible amount formatting behavior of the success badge" },
   description: "Cashback accrual badge; used only from inside the CTYP success composition",
   example: { amount: "12 ₽" },
 };

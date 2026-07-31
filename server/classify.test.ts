@@ -22,6 +22,9 @@ function v14():Database {
   // v20 завела аудит переиспользования и кэш отпечатков — снимаем и их (append-only триггеры
   // умирают вместе со своей таблицей).
   for(const table of ["catalog_reuse_decisions","component_fingerprints"] as const) db.run(`DROP TABLE IF EXISTS ${table}`);
+  // v21 added composition closure metadata and migration control-plane tables. This fixture
+  // deliberately rewinds the schema to v14, so remove those additive objects as well.
+  for(const table of ["maintenance_locks","atomic_policy","catalog_migration_staging","catalog_migration_runs","catalog_replacements"] as const) db.run(`DROP TABLE IF EXISTS ${table}`);
   db.run("PRAGMA user_version=14");
   return db;
 }

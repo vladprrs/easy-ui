@@ -32,6 +32,7 @@ import { activeCatalogRows } from "../routes/components";
 import { headUsageCounts } from "../usageGraph";
 import { sourceShingles } from "./fingerprint";
 import type { CorpusCandidate } from "./matcher";
+import { activeCompositionRevisionSources } from "./compositionRevisionSources";
 
 export interface CorpusSnapshot {
   /** Кандидаты **запрошенной** дизайн-системы: матчинг за её пределы не выходит (спека §3). */
@@ -157,5 +158,6 @@ export function collectCorpus(db: Database, designSystem: string): CorpusSnapsho
     });
   }
 
+  revisionSources.push(...activeCompositionRevisionSources(db));
   return { candidates, catalogRevision: catalogRevision(revisionSources) };
 }
