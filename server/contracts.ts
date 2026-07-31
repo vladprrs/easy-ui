@@ -8,6 +8,7 @@ import { scenarioInputSchema, scenarioStepsSchema } from "../src/prototype/scena
 import { ApiError } from "./http";
 import { figmaSchema } from "./figma";
 import { tokenize } from "../src/library/text";
+import { reuseOverrideSchema as componentReuseOverrideSchema } from "./catalog/gate";
 
 // Figma provenance (plan §J): optional on write, nullable on read-back.
 const figmaResponseSchema = figmaSchema.nullable();
@@ -932,12 +933,6 @@ export const listComponentsContract = registerContract({
   errors: [errorCatalog.methodNotAllowed],
 });
 
-const componentReuseOverrideSchema = z.strictObject({
-  catalogRevision: z.string().min(1).max(128),
-  candidateKeys: z.array(z.string().min(1).max(256)).min(1),
-  reason: z.string().trim().min(20).max(500),
-});
-
 const componentReuseCandidateSchema = z.looseObject({
   kind: z.literal("component"), key: z.string(), id: z.string(), name: z.string(), designSystem: z.string(),
   version: z.number().int().nonnegative(), draft: z.boolean(), description: z.string(),
@@ -947,20 +942,36 @@ const componentReuseCandidateSchema = z.looseObject({
   propsDelta: z.strictObject({ added: z.array(z.string()), removed: z.array(z.string()), typeChanged: z.array(z.string()) }).optional(),
 });
 
-const componentReuseErrorSchema = z.looseObject({
-  code: z.enum(["component_reuse_required", "catalog_changed", "canonical_role_conflict"]),
+const componentReuseErrorFields = {
   message: z.string(), catalogRevision: z.string(), policyVersion: z.number().int().nonnegative(),
   candidates: z.array(componentReuseCandidateSchema), retryable: z.literal(false), resolution: z.enum(["reuse", "escalate"]),
   nextSteps: z.array(z.string()),
   overrideTemplate: z.strictObject({ catalogRevision: z.string(), candidateKeys: z.array(z.string()) }),
   decisionId: z.string().nullable(), repeatedAttempts: z.number().int().nonnegative().nullable(),
   conflictingRoles: z.array(z.string()).optional(),
+};
+
+const componentReuseErrorSchema = z.looseObject({
+  code: z.enum(["component_reuse_required", "catalog_changed", "canonical_role_conflict"]),
+  ...componentReuseErrorFields,
+});
+
+const componentPublishReuseErrorSchema = z.looseObject({
+  code: z.enum(["catalog_changed", "canonical_role_conflict"]),
+  ...componentReuseErrorFields,
 });
 
 const componentCreateConflictEnvelopeSchema = z.strictObject({
   error: z.union([
     z.looseObject({ code: z.literal("already_exists"), message: z.string() }),
     componentReuseErrorSchema,
+  ]),
+});
+
+const componentPublishConflictEnvelopeSchema = z.strictObject({
+  error: z.union([
+    z.looseObject({ code: z.enum(["revision_conflict", "already_published"]), message: z.string() }),
+    componentPublishReuseErrorSchema,
   ]),
 });
 
@@ -1090,11 +1101,12 @@ export const restoreComponentContract = registerContract({
 
 export const publishComponentContract = registerContract({
   method: "POST", path: "/api/components/{id}/publish",
-  summary: "Publish the head revision: typecheck, compile, import-verify and activate the next version.",
+  summary: "Publish the head revision: typecheck, compile, import-verify and activate the next version. Canonical-role conflicts return a terminal 409 with a human-confirmed admin override template.",
   status: 201,
-  requestSchema: z.object(casBody),
+  requestSchema: z.strictObject({ ...casBody, reuseOverride: componentReuseOverrideSchema.optional() }),
   responseSchema: z.looseObject({ version: z.number(), hostAbiVersion: z.number(), warnings: z.array(z.string()) }),
-  errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, errorCatalog.validationFailed, { status: 422, code: "event_schema_not_serializable" }],
+  errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, { status: 403, code: "admin_required", description: "reuseOverride is admin-only" }, { status: 409, code: "catalog_changed" }, { status: 409, code: "canonical_role_conflict" }, errorCatalog.validationFailed, { status: 422, code: "event_schema_not_serializable" }],
+  errorResponseSchemas: { 409: componentPublishConflictEnvelopeSchema },
 });
 
 export const listComponentVersionsContract = registerContract({

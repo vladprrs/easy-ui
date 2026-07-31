@@ -3707,6 +3707,14 @@
           "content": {
             "application/json": {
               "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
                 "properties": {
                   "baseRev": {
                     "exclusiveMinimum": 0,
@@ -3715,6 +3723,34 @@
                   },
                   "message": {
                     "type": "string"
+                  },
+                  "reuseOverride": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "candidateKeys": {
+                        "items": {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "catalogRevision": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "reason": {
+                        "maxLength": 500,
+                        "minLength": 20,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "catalogRevision",
+                      "candidateKeys",
+                      "reason"
+                    ],
+                    "type": "object"
                   }
                 },
                 "required": [
@@ -3767,6 +3803,16 @@
             },
             "description": "base_rev_required"
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "admin_required (reuseOverride is admin-only)"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -3781,11 +3827,262 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "revision_conflict",
+                                "already_published"
+                              ],
+                              "type": "string"
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "message"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "candidates": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "atomicLevel": {
+                                    "type": "string"
+                                  },
+                                  "blocking": {
+                                    "type": "boolean"
+                                  },
+                                  "canonicalFor": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "deprecated": {
+                                    "type": "boolean"
+                                  },
+                                  "description": {
+                                    "type": "string"
+                                  },
+                                  "designSystem": {
+                                    "type": "string"
+                                  },
+                                  "draft": {
+                                    "type": "boolean"
+                                  },
+                                  "headUsageCount": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "key": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "const": "component",
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "propsDelta": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "added": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "type": "array"
+                                      },
+                                      "removed": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "type": "array"
+                                      },
+                                      "typeChanged": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "added",
+                                      "removed",
+                                      "typeChanged"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "reasons": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "recommendable": {
+                                    "type": "boolean"
+                                  },
+                                  "replacement": {
+                                    "type": "string"
+                                  },
+                                  "scope": {
+                                    "type": "string"
+                                  },
+                                  "score": {
+                                    "type": "number"
+                                  },
+                                  "version": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "key",
+                                  "id",
+                                  "name",
+                                  "designSystem",
+                                  "version",
+                                  "draft",
+                                  "description",
+                                  "canonicalFor",
+                                  "deprecated",
+                                  "recommendable",
+                                  "headUsageCount",
+                                  "score",
+                                  "blocking",
+                                  "reasons"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "catalogRevision": {
+                              "type": "string"
+                            },
+                            "code": {
+                              "enum": [
+                                "catalog_changed",
+                                "canonical_role_conflict"
+                              ],
+                              "type": "string"
+                            },
+                            "conflictingRoles": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "decisionId": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "message": {
+                              "type": "string"
+                            },
+                            "nextSteps": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "overrideTemplate": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "candidateKeys": {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "catalogRevision": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "catalogRevision",
+                                "candidateKeys"
+                              ],
+                              "type": "object"
+                            },
+                            "policyVersion": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "repeatedAttempts": {
+                              "anyOf": [
+                                {
+                                  "maximum": 9007199254740991,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "resolution": {
+                              "enum": [
+                                "reuse",
+                                "escalate"
+                              ],
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "message",
+                            "catalogRevision",
+                            "policyVersion",
+                            "candidates",
+                            "retryable",
+                            "resolution",
+                            "nextSteps",
+                            "overrideTemplate",
+                            "decisionId",
+                            "repeatedAttempts"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
                 }
               }
             },
-            "description": "revision_conflict | already_published"
+            "description": "revision_conflict | already_published | catalog_changed | canonical_role_conflict"
           },
           "422": {
             "content": {
@@ -3798,7 +4095,7 @@
             "description": "validation_failed | event_schema_not_serializable"
           }
         },
-        "summary": "Publish the head revision: typecheck, compile, import-verify and activate the next version.",
+        "summary": "Publish the head revision: typecheck, compile, import-verify and activate the next version. Canonical-role conflicts return a terminal 409 with a human-confirmed admin override template.",
         "x-easyui-validated": false
       }
     },

@@ -21,6 +21,7 @@ import {
   catalogCandidatesGetContract,
   createComponentContract,
   listContracts,
+  publishComponentContract,
   type RouteContract,
 } from "./contracts";
 import { openDatabase } from "./db";
@@ -431,6 +432,88 @@ describe("route contracts", () => {
       "overrideTemplate", "decisionId", "repeatedAttempts",
     ]));
     expect(reuseError.required).not.toContain("conflictingRoles");
+  });
+
+  test("POST /api/components/{id}/publish exposes the runtime reuse contract", () => {
+    const reuseOverride = {
+      catalogRevision: "catalog-revision-1",
+      candidateKeys: ["component:contract-ds:existing-rating"],
+      reason: "The approved product exception needs an independently owned control.",
+    };
+    const parsedRequest = publishComponentContract.requestSchema!.parse({
+      baseRev: 2,
+      message: "Publish the reviewed canonical role",
+      reuseOverride,
+    }) as Record<string, unknown>;
+    expect(parsedRequest).toEqual({
+      baseRev: 2,
+      message: "Publish the reviewed canonical role",
+      reuseOverride,
+    });
+    expect(publishComponentContract.requestSchema!.safeParse({ baseRev: 2, reuseOverride, unexpected: true }).success).toBe(false);
+    expect(publishComponentContract.requestSchema!.safeParse({
+      baseRev: 2,
+      reuseOverride: { ...reuseOverride, unexpected: true },
+    }).success).toBe(false);
+
+    const declaredErrors = publishComponentContract.errors.map(({ status, code }) => ({ status, code }));
+    expect(declaredErrors).toEqual(expect.arrayContaining([
+      { status: 403, code: "admin_required" },
+      { status: 409, code: "catalog_changed" },
+      { status: 409, code: "canonical_role_conflict" },
+    ]));
+    expect(declaredErrors).not.toContainEqual({ status: 409, code: "component_reuse_required" });
+
+    const errorResponseSchemas = (publishComponentContract as RouteContract & {
+      errorResponseSchemas?: Readonly<Record<number, { safeParse(value: unknown): { success: boolean } }>>;
+    }).errorResponseSchemas;
+    const reuseError = {
+      message: "Canonical role payment-success is already owned",
+      catalogRevision: "catalog-revision-1",
+      policyVersion: 1,
+      candidates: [{
+        kind: "component", key: "component:contract-ds:existing-rating", id: "existing-rating", name: "ExistingRating",
+        designSystem: "contract-ds", version: 1, draft: false, description: "Existing rating", canonicalFor: ["payment-success"],
+        deprecated: false, recommendable: true, headUsageCount: 0, score: 1, blocking: true, reasons: ["same canonical role"],
+      }],
+      retryable: false,
+      resolution: "escalate",
+      nextSteps: ["Ask an administrator for a reuse override"],
+      overrideTemplate: { catalogRevision: "catalog-revision-1", candidateKeys: ["component:contract-ds:existing-rating"] },
+      decisionId: "decision-1",
+      repeatedAttempts: 1,
+    } as const;
+    expect(errorResponseSchemas?.[409]?.safeParse({ error: { code: "catalog_changed", ...reuseError } }).success).toBe(true);
+    expect(errorResponseSchemas?.[409]?.safeParse({
+      error: { code: "canonical_role_conflict", ...reuseError, conflictingRoles: ["payment-success"] },
+    }).success).toBe(true);
+    expect(errorResponseSchemas?.[409]?.safeParse({ error: { code: "component_reuse_required", ...reuseError } }).success).toBe(false);
+
+    const document = JSON.parse(renderOpenApiJson()) as {
+      paths: Record<string, { post: {
+        requestBody: { content: { "application/json": { schema: Record<string, unknown> } } };
+        responses: Record<string, { content: { "application/json": { schema: Record<string, unknown> } } }>;
+      } }>;
+    };
+    const operation = document.paths["/api/components/{id}/publish"]!.post;
+    expect(operation.requestBody.content["application/json"].schema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["baseRev"],
+      properties: {
+        reuseOverride: {
+          type: "object",
+          additionalProperties: false,
+          required: ["catalogRevision", "candidateKeys", "reason"],
+        },
+      },
+    });
+    expect(operation.responses).toHaveProperty("403");
+    const conflictSchema = operation.responses["409"]!.content["application/json"].schema as {
+      properties: { error: { anyOf: Array<{ properties: { code?: { enum?: string[] }; catalogRevision?: unknown } }> } };
+    };
+    const publishReuseError = conflictSchema.properties.error.anyOf.find((variant) => Object.hasOwn(variant.properties, "catalogRevision"))!;
+    expect(publishReuseError.properties.code).toMatchObject({ enum: ["catalog_changed", "canonical_role_conflict"] });
   });
 
   test("GET /api/capabilities exposes actions, directives, param sources, limits and design systems", async () => {
