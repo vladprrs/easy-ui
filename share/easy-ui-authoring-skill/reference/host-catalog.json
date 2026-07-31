@@ -1,0 +1,5 @@
+{
+  "note": "Fetch exact custom definitions from the target server. These host names are reserved and globally available.",
+  "contentTypes": ["Image", "Hotspot"],
+  "extractionTypes": ["Overlay"]
+}
