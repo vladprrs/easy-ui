@@ -66,7 +66,7 @@ describe("prototype principal/status matrix",()=>{
     db.query("INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at) VALUES ('owned-component',1,1,'active','js','{}','source','bundle',1,?)").run(at);
     db.query("INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version) VALUES ('owned-proto',1,'owned-component',1)").run();
 
-    expect((await call("alice","POST","/components",{id:"blocked",name:"Blocked",source:"export default null",designSystem:"bob-ds"})).status).toBe(403);
+    expect((await call("alice","POST","/components",{id:"blocked",name:"Blocked",source:"export default null",designSystem:"bob-ds",intent:"Provides a restricted test fixture for ownership validation"})).status).toBe(403);
     expect((await call("alice","POST","/components/owned-component/publish",{baseRev:1})).status).toBe(403);
     expect((await call("bob","POST","/components/owned-component/publish",{baseRev:1})).status).toBe(403);
     expect((await call("alice","PATCH","/design-systems/bob-ds",{baseVersion:0,tokens:{}})).status).toBe(403);

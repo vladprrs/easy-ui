@@ -14,9 +14,19 @@ import { compileComponent } from "./components/compile";
 const dirs:string[]=[];
 afterEach(async()=>{for(const d of dirs.splice(0))await rm(d,{recursive:true,force:true});});
 async function setup(){const dir=await mkdtemp(resolve(process.cwd(),".components-test-"));dirs.push(dir);const db=openDatabase(":memory:");db.run("INSERT INTO design_systems (id,name,description,builtin_provider,retired,created_at,updated_at) VALUES ('test-alt','Test alt','Test system',NULL,0,'now','now')");const handler=createTestHandler(db,{dataDir:dir});return {dir,db,handler};}
-const req=(url:string,method="GET",value?:unknown)=>{const body=url==="/components"&&method==="POST"&&value&&typeof value==="object"&&!Object.hasOwn(value,"intent")?{...value,intent:intentFor(String((value as {name?:unknown}).name??"fixture"))}:value;return new Request(`http://test/api${url}`,{method,headers:body?{"content-type":"application/json"}:undefined,body:body?JSON.stringify(body):undefined});};
+const fixtureIntent=(id:string)=>({
+  "rating-stars":"Collects star ratings in the product fixture workflow",
+  "named-examples":"Displays named product-field examples in a preview",
+  "slot-smoke":"Arranges named product content into host slots",
+  "runtime-smoke":"Renders tokenized product content through the runtime API",
+  "document-v2":"Renders product content with ABI2 runtime tokens",
+  "document-v3":"Renders product content with ABI3 runtime spacing",
+  "shot-examples":"Displays an example value for product screenshot capture",
+  "shot-plain":"Displays product ratings for screenshot capture",
+}[id] ?? (id.startsWith("invalid-example-") ? "Validates rejected named example data in a product form" : id.startsWith("unsafe-example-") ? "Validates rejected unsafe product example data" : undefined));
+const req=(url:string,method="GET",value?:unknown)=>{const id=value&&typeof value==="object"?String((value as {id?:unknown}).id??""):"";const intent=url==="/components"&&method==="POST"&&value&&typeof value==="object"&&!Object.hasOwn(value,"intent")?fixtureIntent(id):undefined;if(url==="/components"&&method==="POST"&&value&&typeof value==="object"&&!Object.hasOwn(value,"intent")&&!intent)throw new Error(`Missing explicit fixture intent for ${id}`);const body=intent?{...value as object,intent}:value;return new Request(`http://test/api${url}`,{method,headers:body?{"content-type":"application/json"}:undefined,body:body?JSON.stringify(body):undefined});};
 const fixture=(name:string)=>Bun.file(resolve("server/fixtures",name)).text();
-const intentFor=(name:string)=>`Renders ${name} in a product interface fixture`;
+const intentFor=(name:string)=>`Validates the ${name} source fixture before product use`;
 const neverResolves:RunJob=()=>new Promise<WorkerResult>(()=>{});
 const examplesSource=(examples:string,props="z.strictObject({ value: z.number().min(0).max(5) })")=>`import { z } from "zod";
 export const definition={props:${props},description:"Named examples",atomicLevel:"atom" as const,examples:${examples}};
