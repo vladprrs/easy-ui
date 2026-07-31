@@ -247,6 +247,37 @@ export interface CatalogComponent extends SerializedComponentDefinition {
 }
 export interface CatalogManifest { components: CatalogComponent[] }
 
+// --- Library read-model (план 2026-07-31 §3.1–3.2) ---
+//
+// Идентичность записи — пара `(designSystem, id)`: один компонент может быть активен в двух
+// системах, и статусы у него в них разные (`server/routes/libraryCatalog.ts:23`).
+export interface LibraryCatalogStatus { published: boolean; verified: boolean; visualPending: boolean; blocked: boolean; rejected: boolean }
+export interface LibraryCatalogEntry {
+  kind: "component";
+  id: string; name: string; designSystem: string; version: number;
+  bundleUrl: string; bundleHash: string; hostAbiVersion: number; description: string;
+  atomicLevel?: AtomicLevel; layoutNeutral: boolean; scope?: ComponentScope; canonicalFor: string[]; replacement?: string;
+  deprecated: boolean; headUsageCount: number; status: LibraryCatalogStatus;
+  figma: null | { fileKey: string; nodeCount: number };
+  preview: ComponentPreviewSelector | null;
+}
+export interface LibraryCatalogResponse {
+  /** sha256 канонического JSON **нефильтрованного** каталога — одинаков при любом `?designSystem=`. */
+  catalogRevision: string;
+  components: LibraryCatalogEntry[];
+  systems: { id: string; name: string; count: number }[];
+}
+/** Какой пример рендерить в превью; сервер решает это правилом карточки и отдаёт в `entry.preview`. */
+export type ComponentPreviewSelector = { selector: "legacy" } | { selector: "named"; name: string };
+export interface ComponentPreviewData {
+  componentId: string; name: string; version: number; designSystem: string;
+  bundleUrl: string; bundleHash: string; hostAbiVersion: number;
+  props: Record<string, unknown>;
+  /** `slots`/`capabilities` нужны построителю дерева превью для слот-плейсхолдеров. */
+  slots: string[];
+  capabilities?: { typedEvents?: true; namedSlots?: true };
+}
+
 // --- Граф использования компонентов (волна 3 §3.1) ---
 export interface ComponentScreenUsage { screenId: string; screenName: string; elementKeys: string[] }
 export interface ComponentHeadUsage { prototypeId: string; name: string; kind: string; rev: number; componentVersion: number; screens: ComponentScreenUsage[] }
@@ -395,6 +426,18 @@ export const listPrototypes = (signal?: AbortSignal, kinds?: readonly PrototypeK
 export const listDesignSystems = (signal?: AbortSignal) => request<{designSystems: DesignSystemSummary[]}>("/api/design-systems", { signal });
 export const getCapabilities = (signal?: AbortSignal) => request<Capabilities>("/api/capabilities", { signal });
 export const getCatalogManifest = (signal?: AbortSignal) => request<CatalogManifest>("/api/catalog/manifest", { signal });
+export const getLibraryCatalog = (params: { designSystem?: string } = {}, signal?: AbortSignal) =>
+  request<LibraryCatalogResponse>(params.designSystem ? `/api/catalog/library?designSystem=${encodeURIComponent(params.designSystem)}` : "/api/catalog/library", { signal });
+/**
+ * Грамматика запроса строгая (`server/components/previewSelector.ts:22`): ровно один `selector`,
+ * `name` — только при `selector=named` и обязателен там. Любое отклонение — 400, поэтому строку
+ * собираем из размеченного объединения, а не из свободных полей.
+ */
+export const getComponentPreview = (id: string, version: number, selector: ComponentPreviewSelector, signal?: AbortSignal) => {
+  const query = new URLSearchParams({ selector: selector.selector });
+  if (selector.selector === "named") query.set("name", selector.name);
+  return request<ComponentPreviewData>(`${componentPath(id)}/versions/${version}/preview?${query}`, { signal });
+};
 export const getCatalogUsages = (signal?: AbortSignal, designSystem?: string) =>
   request<CatalogUsageIndex>(designSystem ? `/api/catalog/usages?designSystem=${encodeURIComponent(designSystem)}` : "/api/catalog/usages", { signal });
 export const getComponentUsages = (id: string, signal?: AbortSignal) => request<ComponentUsageReport>(`${componentPath(id)}/usages`, { signal });
