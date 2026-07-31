@@ -185,13 +185,22 @@ export function InlineComponentPreview({ entry, priority, className }: InlineCom
   </div>;
 }
 
+/**
+ * Карточка витрины показывает компонент таким, каким он выйдет в прототипе, поэтому
+ * плейсхолдеры слотов не подставляются: `slots: []` вместо `preview.data`. Так же вёл себя
+ * прежний iframe — `/capture/component/...` рендерит только example-props (см. CaptureComponent),
+ * а плейсхолдеры — приём страницы компонента, где слоты изучают. Внутри карточки они
+ * накладывались бы на собственное содержимое компонента.
+ */
+const NO_SLOT_PLACEHOLDERS = { slots: [] as readonly string[] };
+
 /** Отдельный компонент: `usePreviewRuntime` — хук, а рантайм существует только после загрузки. */
 function PreviewTree({ preview, onError }: { preview: LoadedPreview; onError: () => void }): ReactElement {
   const runtime = usePreviewRuntime(preview.loaded, onError);
   return <RuntimePreview
     componentName={preview.data.name}
     designSystem={preview.data.designSystem}
-    source={preview.data}
+    source={NO_SLOT_PLACEHOLDERS}
     props={preview.data.props}
     runtime={runtime}
     onError={onError}
