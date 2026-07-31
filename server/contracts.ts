@@ -8,7 +8,7 @@ import { scenarioInputSchema, scenarioStepsSchema } from "../src/prototype/scena
 import { ApiError } from "./http";
 import { figmaSchema } from "./figma";
 import { tokenize } from "../src/library/text";
-import { reuseOverrideSchema as componentReuseOverrideSchema } from "./catalog/gate";
+import { reuseOverrideSchema as componentReuseOverrideSchema } from "./catalog/reuseOverride";
 
 // Figma provenance (plan §J): optional on write, nullable on read-back.
 const figmaResponseSchema = figmaSchema.nullable();

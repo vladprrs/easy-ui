@@ -25,7 +25,6 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { z } from "zod";
 import { withStagedSource } from "../components/pipeline";
 import type { DefinitionMeta } from "../components/types";
 import { ComponentFingerprintRepo, sourceSha256 } from "../repos/componentFingerprints";
@@ -40,8 +39,10 @@ import { collectCorpus } from "./corpus";
 import { sourceShingles } from "./fingerprint";
 import { matchCandidates, type CorpusCandidate, type MatchCandidate, type ProposedArtifact } from "./matcher";
 import { CALIBRATED_POLICY, type MatchPolicy } from "./policy";
+import { reuseOverrideSchema, type ReuseOverride } from "./reuseOverride";
 
 export type { ReuseGateMode } from "../repos/reuseDecisions";
+export { reuseOverrideSchema, type ReuseOverride };
 
 // ───────────────────────────── режим гейта ─────────────────────────────
 
@@ -68,19 +69,6 @@ export function resolveReuseGateMode(value: string | undefined): ReuseGateMode {
  */
 export const candidateKey = (candidate: { designSystem: string; id: string }): string =>
   `component:${candidate.designSystem}:${candidate.id}`;
-
-/**
- * Спека §4. `reason` — 20..500 **после** trim; `catalogRevision` обязан совпасть с текущей
- * ревизией; `candidateKeys` обязаны покрыть **все** сегодняшние blocking-ключи, пересчитанные
- * сервером. Присланные вызывающим score/кандидаты сервер игнорирует по построению — их просто
- * негде передать.
- */
-export const reuseOverrideSchema = z.strictObject({
-  catalogRevision: z.string().min(1).max(128),
-  candidateKeys: z.array(z.string().min(1).max(256)).min(1),
-  reason: z.string().trim().min(20).max(500),
-});
-export type ReuseOverride = z.infer<typeof reuseOverrideSchema>;
 
 // ───────────────────────────── отказы гейта ─────────────────────────────
 

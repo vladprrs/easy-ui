@@ -283,6 +283,34 @@ function orderedCases(): [string, Case][] {
 }
 
 describe("route contracts", () => {
+  test("catalog gate is directly importable in a fresh Bun process", async () => {
+    const child = Bun.spawn({
+      cmd: [process.execPath, "-e", `
+        import { reuseOverrideSchema } from "./server/catalog/gate.ts";
+        const parsed = reuseOverrideSchema.parse({
+          catalogRevision: "catalog-revision-1",
+          candidateKeys: ["component:contract-ds:existing-rating"],
+          reason: "  The approved exception keeps this component independently owned.  ",
+        });
+        console.log(JSON.stringify(parsed));
+      `],
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(stdout)).toEqual({
+      catalogRevision: "catalog-revision-1",
+      candidateKeys: ["component:contract-ds:existing-rating"],
+      reason: "The approved exception keeps this component independently owned.",
+    });
+  });
+
   test("every registered contract has a coverage case, and responses match their schemas", async () => {
     state.screenIds=(await helloDoc("x")).screens.map(screen=>screen.id); state.screenId=state.screenIds[0]!;
     const contracts = new Map(listContracts().map((contract) => [contractKey(contract), contract]));
