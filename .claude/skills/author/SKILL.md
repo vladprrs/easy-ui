@@ -207,11 +207,32 @@ curl -u "$EASYUI_LEGACY_BASIC_AUTH" -b /tmp/easyui.cookies -X POST \
 
 ### Reuse gate: обязательная остановка перед новым компонентом
 
-Перед созданием нового custom-компонента сформулируйте содержательный `intent` — что именно делает компонент для продукта. В фазе `enforce` raw `POST /api/components` требует его: после trim это 8..500 символов и хотя бы один токен вне стоп-набора `component`, `компонент`, `element`, `элемент`, `ui`. В `shadow` отсутствие поля временно допустимо, но сервер синтезирует intent и записывает аудит `intent_missing`; это не повод посылать пустое или шаблонное описание.
+Перед созданием нового custom-компонента сформулируйте содержательный `intent` — продуктовую задачу, которую он решает. Для нового id `driver.mjs component` требует `--intent <text>`; после trim это 8..500 символов и хотя бы один токен вне стоп-набора `component`, `компонент`, `element`, `элемент`, `ui`. Обновление существующего компонента intent не требует.
 
-Сначала запросите `GET`/`POST /api/catalog/candidates` для той же дизайн-системы и используйте существующий компонент, если он покрывает задачу. Если raw create возвращает `409` reuse gate, агент **не** делает авто-ретрай и **не** выполняет `force-new`: останавливается, показывает человеку кандидатов и `decisionId`, затем ждёт решения. Админский `reuseOverride` — только двухфазный raw API-контракт: человек подтверждает актуальные `catalogRevision` и полный `candidateKeys`, после чего админ передаёт их вместе с причиной 20..500 символов. При `catalog_changed` снова запросите кандидатов; не переносите старое подтверждение.
+Начинайте с компактного каталога и раскрывайте только подходящие артефакты; `--json` удобен для машинного выбора:
 
-Текущий `driver.mjs component` пока не передаёт `intent` или `reuseOverride`; не выдавайте несуществующие CLI-флаги за доступные. Для enforce-создания и подтверждённого override используйте raw HTTP API с обычными cookie/`Origin` из Setup либо дождитесь поддержки драйвера.
+```bash
+node driver.mjs catalog list yandex-pay
+node driver.mjs catalog search yandex-pay --intent "Let a customer rate a product from one to five stars" --limit 5 --json
+node driver.mjs catalog get yandex-pay <candidate-id-or-name> --json
+```
+
+`catalog list` показывает компактный инвентарь, `catalog search` — кандидатов для intent, а `catalog get` — exact definition только выбранных компонентов. Если кандидат покрывает задачу, переиспользуйте его или расширьте существующий компонент вместо создания дубля.
+
+При создании `driver.mjs component` сам выполняет ранний authoritative discovery с intent, source и метаданными предлагаемого компонента. Это помогает принять решение до мутации, но не обходит гонки: `POST /api/components` заново вычисляет reuse gate на сервере в транзакции.
+
+Любой `409 component_reuse_required`, `canonical_role_conflict` или `catalog_changed` — терминальный **STOP**: драйвер выводит кандидатов и `decisionId` (с `--json` — структурированный отчёт), завершает процесс с exit code `2` и никогда не делает автоматический retry или `force-new`. Нормальный ответ человека — переиспользовать/расширить показанного кандидата. После `catalog_changed` заново выполните discovery и покажите новое решение человеку; старое подтверждение не переносится.
+
+Только явное подтверждение человека для администраторского исключения разрешает повторить create с `--force-new --reason <text>`, где причина содержит 20..500 символов:
+
+```bash
+node driver.mjs component rating-stars RatingStars examples/rating-stars.tsx \
+  --design-system yandex-pay \
+  --intent "Let a customer rate a product from one to five stars" \
+  --force-new --reason "Product owner approved a distinct rating interaction for this flow"
+```
+
+Для override драйвер использует server-authored `overrideTemplate` из свежего authoritative discovery verbatim: передаёт `catalogRevision` и полный `candidateKeys` без изменений и добавляет подтверждённую человеком причину. Raw HTTP API остаётся допустим для собственных клиентов, но это дополнительный путь; он обязан соблюдать тот же двухфазный STOP/override-контракт. Предпочтительный поддерживаемый путь для агента — `driver.mjs`.
 
 Контракт TSX-модуля — named export `definition` + default plain function component (`memo`/`forwardRef` нельзя). Образцы: `examples/rating-stars.tsx` (простейший, ABI v1) и `examples/plan-picker.tsx` (typed events + named slots, ABI v2):
 
@@ -223,7 +244,9 @@ curl -u "$EASYUI_LEGACY_BASIC_AUTH" -b /tmp/easyui.cookies -X POST \
 - Лимит source — 256 KiB; JSON-тело запроса — 1 MiB.
 
 ```bash
-node driver.mjs component rating-stars RatingStars examples/rating-stars.tsx --design-system yandex-pay
+node driver.mjs component rating-stars RatingStars examples/rating-stars.tsx \
+  --design-system yandex-pay \
+  --intent "Let a customer rate a product from one to five stars"
 # saved rating-stars rev 1 in yandex-pay
 # published rating-stars version 1 in yandex-pay
 ```
