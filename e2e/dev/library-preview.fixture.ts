@@ -68,6 +68,9 @@ export const definition = {
   events: [],
   slots: [],
   atomicLevel: "organism" as const,
+  // Atomic policy: TSX organisms must justify themselves. These probes own render-time behavior
+  // (runtime shim calls, viewport-bounded layout, deliberate throws) that no composition expresses.
+  ownership: { reason: "E2E render probe: owns runtime behavior that declarative composition cannot reproduce" },
   description: "E2E inline-preview organism: a fixed-size block that renders its label",
   example: { label: "Organism preview" },
 };
@@ -105,6 +108,9 @@ export const definition = {
   events: [],
   slots: [],
   atomicLevel: "organism" as const,
+  // Atomic policy: TSX organisms must justify themselves. These probes own render-time behavior
+  // (runtime shim calls, viewport-bounded layout, deliberate throws) that no composition expresses.
+  ownership: { reason: "E2E render probe: owns runtime behavior that declarative composition cannot reproduce" },
   description: "E2E inline-preview icon host: resolves an icon through the runtime shim",
   example: { name: "e2e-spark" },
 };
@@ -123,6 +129,9 @@ export const definition = {
   events: [],
   slots: [],
   atomicLevel: "organism" as const,
+  // Atomic policy: TSX organisms must justify themselves. These probes own render-time behavior
+  // (runtime shim calls, viewport-bounded layout, deliberate throws) that no composition expresses.
+  ownership: { reason: "E2E render probe: owns runtime behavior that declarative composition cannot reproduce" },
   description: "E2E inline-preview viewport-bounded component: a 100vh fixed overlay over its own box",
   example: { label: "Fixed overlay" },
 };
@@ -144,6 +153,9 @@ export const definition = {
   events: [],
   slots: [],
   atomicLevel: "organism" as const,
+  // Atomic policy: TSX organisms must justify themselves. These probes own render-time behavior
+  // (runtime shim calls, viewport-bounded layout, deliberate throws) that no composition expresses.
+  ownership: { reason: "E2E render probe: owns runtime behavior that declarative composition cannot reproduce" },
   description: "E2E inline-preview component that always throws while rendering",
   example: { label: "Broken preview" },
 };
@@ -170,6 +182,9 @@ export const definition = {
   events: [],
   slots: [],
   atomicLevel: "organism" as const,
+  // Atomic policy: TSX organisms must justify themselves. These probes own render-time behavior
+  // (runtime shim calls, viewport-bounded layout, deliberate throws) that no composition expresses.
+  ownership: { reason: "E2E render probe: owns runtime behavior that declarative composition cannot reproduce" },
   description: "E2E inline-preview accent block: paints itself with the color() token of its own design system",
   example: { label: "Accent" },
 };

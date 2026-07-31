@@ -3,7 +3,10 @@ import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "node_modules", ".claude", ".claude-config", ".codex-home", "server/fixtures", "data", ".e2e-data", ".w0-data", ".w6-data", ".backups", "work"] },
+  // `share` — самодостаточный дистрибутив авторингового скилла (свой driver.mjs и tsx-примеры вне
+  // tsconfig проекта). `.*-test-*` — временные каталоги `mkdtemp` серверных тестов: при прерванном
+  // прогоне они переживают afterEach и иначе роняют lint материализованными модулями.
+  { ignores: ["dist", "node_modules", ".claude", ".claude-config", ".codex-home", "server/fixtures", "data", ".e2e-data", ".w0-data", ".w6-data", ".backups", "work", "share", ".*-test-*"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   reactHooks.configs.flat.recommended,
