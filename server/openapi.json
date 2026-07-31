@@ -1202,6 +1202,541 @@
         "x-easyui-validated": true
       }
     },
+    "/api/catalog/candidates": {
+      "get": {
+        "operationId": "get_catalog_candidates",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "designSystem",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "intent",
+            "required": true,
+            "schema": {
+              "maxLength": 500,
+              "minLength": 8,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "pattern": "^([1-9]|1[0-9]|20)$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidates": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "atomicLevel": {
+                            "enum": [
+                              "atom",
+                              "molecule",
+                              "organism",
+                              "template",
+                              "page"
+                            ],
+                            "type": "string"
+                          },
+                          "blocking": {
+                            "type": "boolean"
+                          },
+                          "canonicalFor": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "deprecated": {
+                            "type": "boolean"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "designSystem": {
+                            "type": "string"
+                          },
+                          "draft": {
+                            "type": "boolean"
+                          },
+                          "headUsageCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "const": "component",
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "reasons": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "recommendable": {
+                            "type": "boolean"
+                          },
+                          "replacement": {
+                            "type": "string"
+                          },
+                          "scope": {
+                            "enum": [
+                              "primitive",
+                              "section",
+                              "shell",
+                              "screen"
+                            ],
+                            "type": "string"
+                          },
+                          "score": {
+                            "type": "number"
+                          },
+                          "version": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "id",
+                          "name",
+                          "designSystem",
+                          "version",
+                          "draft",
+                          "description",
+                          "canonicalFor",
+                          "deprecated",
+                          "recommendable",
+                          "headUsageCount",
+                          "score",
+                          "blocking",
+                          "reasons"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "catalogRevision": {
+                      "type": "string"
+                    },
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "policyVersion": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "designSystem",
+                    "catalogRevision",
+                    "policyVersion",
+                    "candidates"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (share/capture principals may not read the catalog index)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed | unsupported_kind (composition candidates are not supported yet)"
+          }
+        },
+        "summary": "Compact reuse-candidate search over the requested design system: active publications and head drafts scored by the deterministic matcher. Never returns source or props schemas. `catalogRevision` pins the catalog snapshot the scores were computed on. GET covers the frequent intent-only case without an Origin header.",
+        "x-easyui-validated": true
+      },
+      "post": {
+        "operationId": "post_catalog_candidates",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "type": "string"
+                  },
+                  "__schema1": {
+                    "type": "string"
+                  },
+                  "__schema2": {
+                    "type": "string"
+                  },
+                  "__schema3": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "properties": {
+                  "designSystem": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "intent": {
+                    "maxLength": 500,
+                    "minLength": 8,
+                    "type": "string"
+                  },
+                  "limit": {
+                    "maximum": 20,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "proposed": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "atomicLevel": {
+                        "enum": [
+                          "atom",
+                          "molecule",
+                          "organism",
+                          "template",
+                          "page"
+                        ],
+                        "type": "string"
+                      },
+                      "canonicalFor": {
+                        "items": {
+                          "$ref": "#/$defs/__schema1"
+                        },
+                        "maxItems": 16,
+                        "type": "array"
+                      },
+                      "compositionDoc": {},
+                      "description": {
+                        "maxLength": 2000,
+                        "type": "string"
+                      },
+                      "events": {
+                        "items": {
+                          "$ref": "#/$defs/__schema2"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "id": {
+                        "$ref": "#/$defs/__schema0",
+                        "maxLength": 64
+                      },
+                      "kind": {
+                        "enum": [
+                          "component",
+                          "composition"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "maxLength": 64,
+                        "type": "string"
+                      },
+                      "propsJsonSchema": {},
+                      "scope": {
+                        "enum": [
+                          "primitive",
+                          "section",
+                          "shell",
+                          "screen"
+                        ],
+                        "type": "string"
+                      },
+                      "slots": {
+                        "items": {
+                          "$ref": "#/$defs/__schema3"
+                        },
+                        "maxItems": 64,
+                        "type": "array"
+                      },
+                      "source": {
+                        "maxLength": 262144,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "designSystem",
+                  "intent"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidates": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "atomicLevel": {
+                            "enum": [
+                              "atom",
+                              "molecule",
+                              "organism",
+                              "template",
+                              "page"
+                            ],
+                            "type": "string"
+                          },
+                          "blocking": {
+                            "type": "boolean"
+                          },
+                          "canonicalFor": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "deprecated": {
+                            "type": "boolean"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "designSystem": {
+                            "type": "string"
+                          },
+                          "draft": {
+                            "type": "boolean"
+                          },
+                          "headUsageCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "const": "component",
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "reasons": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "recommendable": {
+                            "type": "boolean"
+                          },
+                          "replacement": {
+                            "type": "string"
+                          },
+                          "scope": {
+                            "enum": [
+                              "primitive",
+                              "section",
+                              "shell",
+                              "screen"
+                            ],
+                            "type": "string"
+                          },
+                          "score": {
+                            "type": "number"
+                          },
+                          "version": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "id",
+                          "name",
+                          "designSystem",
+                          "version",
+                          "draft",
+                          "description",
+                          "canonicalFor",
+                          "deprecated",
+                          "recommendable",
+                          "headUsageCount",
+                          "score",
+                          "blocking",
+                          "reasons"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "catalogRevision": {
+                      "type": "string"
+                    },
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "policyVersion": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "designSystem",
+                    "catalogRevision",
+                    "policyVersion",
+                    "candidates"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (share/capture principals may not read the catalog index)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "payload_too_large"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "unsupported_media_type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed | unsupported_kind (composition candidates are not supported yet)"
+          }
+        },
+        "summary": "Compact reuse-candidate search over the requested design system: active publications and head drafts scored by the deterministic matcher. Never returns source or props schemas. `catalogRevision` pins the catalog snapshot the scores were computed on. POST is the full form and accepts `proposed` (including source).",
+        "x-easyui-validated": true
+      }
+    },
     "/api/catalog/library": {
       "get": {
         "operationId": "get_catalog_library",

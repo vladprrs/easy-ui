@@ -7,6 +7,7 @@ import { importReportSchema } from "../src/bundle/schema";
 import { scenarioInputSchema, scenarioStepsSchema } from "../src/prototype/scenario";
 import { ApiError } from "./http";
 import { figmaSchema } from "./figma";
+import { tokenize } from "../src/library/text";
 
 // Figma provenance (plan §J): optional on write, nullable on read-back.
 const figmaResponseSchema = figmaSchema.nullable();
@@ -1358,6 +1359,115 @@ export const catalogLibraryContract = registerContract({
     systems: z.array(z.strictObject({ id: z.string(), name: z.string(), count: z.number().int().positive() })),
   }),
   errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed, errorCatalog.validationFailed],
+});
+
+// --- Discovery кандидатов на переиспользование (проект 2, спека §2, план 2026-07-31 §4 T4) ---
+
+/**
+ * Стоп-набор `intent` (спека §2, версионируется вместе с контрактом): одного слова «компонент»
+ * недостаточно, чтобы описать задачу, а именно такой intent и присылает автоматика «лишь бы
+ * поле было заполнено». Требование «хотя бы один токен вне набора» — единственная защита от
+ * вырождения сигнала описания в шум.
+ */
+export const REUSE_INTENT_STOP_SET: readonly string[] = ["component", "компонент", "element", "элемент", "ui"];
+
+/** 8..500 символов **после** trim; `.trim()` в zod 4 выполняется до проверок длины. */
+export const reuseIntentSchema = z.string().trim().min(8).max(500)
+  .refine((value) => tokenize(value).some((token) => !REUSE_INTENT_STOP_SET.includes(token)),
+    `intent must contain at least one token outside the generic stop set: ${REUSE_INTENT_STOP_SET.join(", ")}`);
+
+/** 1..20, default 8 (спека §2). Дефолт подставляет хендлер — один на оба метода. */
+const reuseLimitSchema = z.number().int().min(1).max(20);
+
+export const catalogCandidateProposedSchema = z.strictObject({
+  kind: z.enum(["component", "composition"]),
+  id: slugString.max(64).optional(),
+  name: z.string().max(64).optional(),
+  description: z.string().max(2000).optional(),
+  atomicLevel: z.enum(atomicLevels).optional(),
+  scope: z.enum(COMPONENT_SCOPES).optional(),
+  canonicalFor: z.array(z.string()).max(16).optional(),
+  propsJsonSchema: z.unknown().optional(),
+  events: z.array(z.string()).max(64).optional(),
+  slots: z.array(z.string()).max(64).optional(),
+  // Тот же потолок, что у `checkSource` (256 KB): исходник здесь только считается в шинглы.
+  source: z.string().max(262_144).optional(),
+  // Спека §2 объявляет поле; сегодня оно приходит только с `kind:"composition"`, а тот
+  // отвергается кодом `unsupported_kind` (отступление D6).
+  compositionDoc: z.unknown().optional(),
+});
+
+export const catalogCandidatesRequestSchema = z.strictObject({
+  designSystem: slugString,
+  intent: reuseIntentSchema,
+  proposed: catalogCandidateProposedSchema.optional(),
+  limit: reuseLimitSchema.optional(),
+});
+export type CatalogCandidatesRequest = z.infer<typeof catalogCandidatesRequestSchema>;
+
+/**
+ * GET-форма: частый случай без `proposed`. Существует ради обхода `enforceOrigin`
+ * (`server/main.ts:78` — он срабатывает только на unsafe-методах). Лимит длины `intent`
+ * назван явно и совпадает с телом: 500 символов.
+ */
+export const catalogCandidatesQuerySchema = z.strictObject({
+  designSystem: slugString,
+  intent: reuseIntentSchema,
+  limit: z.string().regex(/^([1-9]|1[0-9]|20)$/, "limit must be an integer between 1 and 20").transform(Number).optional(),
+});
+
+export const catalogCandidateSchema = z.strictObject({
+  kind: z.literal("component"),
+  id: z.string(), name: z.string(), designSystem: z.string(),
+  /** Версия активной публикации; `0` у head-драфта. */
+  version: z.number().int().nonnegative(),
+  draft: z.boolean(),
+  description: z.string(),
+  atomicLevel: z.enum(atomicLevels).optional(),
+  scope: z.enum(COMPONENT_SCOPES).optional(),
+  canonicalFor: z.array(z.string()),
+  replacement: z.string().optional(),
+  deprecated: z.boolean(),
+  /** Deprecated-кандидат возвращается ради объяснения, но не как цель переиспользования. */
+  recommendable: z.boolean(),
+  headUsageCount: z.number().int().nonnegative(),
+  score: z.number(), blocking: z.boolean(), reasons: z.array(z.string()),
+});
+
+const catalogCandidatesResponseSchema = z.strictObject({
+  designSystem: z.string(),
+  catalogRevision: z.string(),
+  /** Версия политики матчинга: без неё score невоспроизводим задним числом (§3.3). */
+  policyVersion: z.number().int().nonnegative(),
+  candidates: z.array(catalogCandidateSchema),
+});
+
+const catalogCandidatesErrors: RouteError[] = [
+  { status: 403, code: "forbidden", description: "share/capture principals may not read the catalog index" },
+  errorCatalog.notFound,
+  errorCatalog.methodNotAllowed,
+  errorCatalog.validationFailed,
+  { status: 422, code: "unsupported_kind", description: "composition candidates are not supported yet" },
+];
+
+const catalogCandidatesSummary = "Compact reuse-candidate search over the requested design system: active publications and head drafts scored by the deterministic matcher. Never returns source or props schemas. `catalogRevision` pins the catalog snapshot the scores were computed on.";
+
+export const catalogCandidatesContract = registerContract({
+  method: "POST", path: "/api/catalog/candidates",
+  summary: `${catalogCandidatesSummary} POST is the full form and accepts \`proposed\` (including source).`,
+  requestSchema: catalogCandidatesRequestSchema,
+  responseSchema: catalogCandidatesResponseSchema,
+  validated: true,
+  errors: [...catalogCandidatesErrors, errorCatalog.invalidRequest, errorCatalog.payloadTooLarge, errorCatalog.unsupportedMediaType],
+});
+
+export const catalogCandidatesGetContract = registerContract({
+  method: "GET", path: "/api/catalog/candidates",
+  summary: `${catalogCandidatesSummary} GET covers the frequent intent-only case without an Origin header.`,
+  query: catalogCandidatesQuerySchema,
+  responseSchema: catalogCandidatesResponseSchema,
+  validated: true,
+  errors: catalogCandidatesErrors,
 });
 
 export const componentPreviewContract = registerContract({

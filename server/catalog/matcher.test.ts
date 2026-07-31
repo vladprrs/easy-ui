@@ -257,9 +257,33 @@ describe("matchCandidates — пороги, выдача и дельта про�
     expect(scored.candidates.map((candidate) => candidate.score)).toEqual([0.8, 0.6]);
     expect(scored.blocking).toEqual([]);
 
-    expect(matchCandidates([four], nameProposal, withThresholds(0.8, 0.65), options).blocking).toHaveLength(1);
-    expect(matchCandidates([four], nameProposal, withThresholds(0.8001, 0.65), options).blocking).toHaveLength(0);
+    // Порог включающий, но применяется только при структурных уликах (см. тест ниже): у
+    // кандидата по одному имени их нет, поэтому 0.8 ≥ 0.8 всё равно не блокирует.
+    expect(matchCandidates([four], nameProposal, withThresholds(0.8, 0.65), options).blocking).toHaveLength(0);
     expect(matchCandidates([three], nameProposal, withThresholds(0.82, 0.6), options).candidates[0]?.score).toBe(0.6);
+
+    // Тот же кандидат с применимым структурным сигналом: граница включающая (0.8 ≥ 0.8),
+    // а на 0.8001 — уже нет.
+    const shared = "const Widget = () => <div className=\"alpha\">beta</div>;";
+    const structural = nameOnly("cand-src", "AlphaBetaGammaDelta");
+    const withSource: CorpusCandidate = { ...structural, shingles: sourceShingles(shared) };
+    const sourceProposal: ProposedArtifact = { ...nameProposal, source: shared };
+    const exact = matchCandidates([withSource], sourceProposal, withThresholds(0.8, 0.65), options);
+    expect([exact.blocking.length, exact.candidates[0]!.score >= 0.8]).toEqual([1, true]);
+    expect(matchCandidates([withSource], sourceProposal, withThresholds(1.0001, 0.65), options).blocking).toHaveLength(0);
+  });
+
+  test("порог не срабатывает без структурных улик: описание в одиночку не блокирует", () => {
+    // При поиске по одному `intent` перенормировка схлопывает знаменатель до единственного
+    // сигнала, и дословное совпадение описания даёт score выше порога при весе описания 0.05
+    // из 1.00. Blocking обязан опираться на props/io/source (либо на роль/отпечаток), иначе
+    // discovery-поиск объявлял бы «создавать нельзя» без единой структурной улики.
+    const text = "разделитель между блоками списка";
+    const candidate = activeCandidate({ id: "yp-separator", name: "YpSeparator", description: text });
+    const intentOnly: ProposedArtifact = { kind: "component", designSystem: "yandex-pay", intent: text };
+    const result = matchCandidates([candidate], intentOnly, policy, options);
+    expect(result.candidates[0]!.score).toBeGreaterThanOrEqual(policy.blockingThreshold);
+    expect([result.candidates[0]!.blocking, result.blocking.length]).toEqual([false, 0]);
   });
 
   test("blocking-кандидат с низким score попадает в выдачу раньше более похожего непроходного", () => {

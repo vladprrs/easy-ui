@@ -229,7 +229,14 @@ function orderedCases(): [string, Case][] {
     ["GET /api/catalog/library", { run: () => call("GET", "/api/catalog/library?designSystem=contract-ds"), expected: ok() }],
     ["GET /api/catalog/library", { run: () => call("GET", "/api/catalog/library?designSystem=missing-system"), expected: err(404, "not_found") }],
     ["GET /api/catalog/library", { run: () => call("GET", "/api/catalog/library?designSystem=Bad_slug"), expected: err(422, "validation_failed") }],
-    ["GET /api/shims/{abi}/{file}", { run: () => call("GET", "/api/shims/v1/react.js"), expected: ok(200, "text/javascript") }],
+    // Reuse-кандидаты (проект 2 §4 T4): полная POST-форма, GET без Origin и отказ на композиции.
+    ["POST /api/catalog/candidates", { run: () => call("POST", "/api/catalog/candidates", { designSystem: "contract-ds", intent: "rating stars for a product card", limit: 5 }), expected: ok() }],
+    ["POST /api/catalog/candidates", { run: () => call("POST", "/api/catalog/candidates", { designSystem: "contract-ds", intent: "payment success screen", proposed: { kind: "composition" } }), expected: err(422, "unsupported_kind") }],
+    ["POST /api/catalog/candidates", { run: () => call("POST", "/api/catalog/candidates", { designSystem: "missing-system", intent: "rating stars for a product card" }), expected: err(404, "not_found") }],
+    ["POST /api/catalog/candidates", { run: () => call("POST", "/api/catalog/candidates", { designSystem: "contract-ds", intent: "компонент ui" }), expected: err(422, "validation_failed") }],
+    ["GET /api/catalog/candidates", { run: () => call("GET", "/api/catalog/candidates?designSystem=contract-ds&intent=rating%20stars%20for%20a%20product%20card&limit=3"), expected: ok() }],
+    ["GET /api/catalog/candidates", { run: () => call("GET", "/api/catalog/candidates?designSystem=contract-ds&intent=rating%20stars&limit=21"), expected: err(422, "validation_failed") }],
+    ["GET /api/shims/{abi}/{file}",{ run: () => call("GET", "/api/shims/v1/react.js"), expected: ok(200, "text/javascript") }],
     // Bundle export (ZIP): owner draft, unpublished component draft, bulk (all owned)
     ["GET /api/prototypes/{id}/export", { run: () => call("GET", "/api/prototypes/contract-proto/export"), expected: ok(200, "application/zip") }],
     ["GET /api/components/{id}/export", { run: () => call("GET", "/api/components/contract-stars/export"), expected: ok(200, "application/zip") }],

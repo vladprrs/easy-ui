@@ -332,9 +332,16 @@ export function matchCandidates(corpus: readonly CorpusCandidate[], proposed: Pr
     const breakdown = scoreWith(candidate, view, policy, idf);
     const rounded = round4(breakdown.score);
     const replacementActive = candidate.replacement !== undefined && active.has(candidate.replacement);
+    // Порог применим только там, где есть структурное основание. При поиске по одному `intent`
+    // (без исходника и меты) перенормировка схлопывает знаменатель до единственного сигнала, и
+    // дословное попадание в описание даёт score 0.8 — выше порога 0.70 при весе описания 0.05
+    // из 1.00. Без этой проверки discovery-поиск объявлял бы «blocking» вообще без структурных
+    // улик. У гейта исходник и мета есть всегда, поэтому на его вердикт правило не влияет — и
+    // калибровку оно не сдвигает: там во всех парах применён `source`.
+    const structuralEvidence = breakdown.signals.props !== undefined || breakdown.signals.io !== undefined || breakdown.signals.source !== undefined;
     // Deprecated/replaced возвращается ради объяснения, но не как цель: blocking снимается
     // только когда активная замена реально есть в корпусе — иначе агенту некуда идти.
-    const blocking = (breakdown.canonicalOverlap.length > 0 || breakdown.structuralMatch || rounded >= policy.blockingThreshold) && !(candidate.deprecated && replacementActive);
+    const blocking = (breakdown.canonicalOverlap.length > 0 || breakdown.structuralMatch || (rounded >= policy.blockingThreshold && structuralEvidence)) && !(candidate.deprecated && replacementActive);
     return {
       kind: candidate.kind,
       id: candidate.id,
