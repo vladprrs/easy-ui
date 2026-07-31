@@ -277,7 +277,10 @@ describe("visual check full cycle", () => {
     const handler=createTestHandler(db,{dataDir:dir});const put=await handler(req("/visual-references","PUT",{fingerprint:{scope:"component",componentId:"visual-component",refVersion:1,viewport:{width:320,height:480},deviceScaleFactor:1,theme:"light"},assetId:baseline.id}));const {id}=await put.json() as {id:string};
     const screenshots=makeScreenshots(db,dir,candidateRunJob(makePng(4,4,white)));const service=new VisualService({db,dataDir:dir,screenshots,runDiff:inProcessDiff});
     const report=await waitReport(service,service.check(id,{version:2}).runId);
-    expect(report.candidateMeta).toMatchObject({kind:"component",outcome:"captured",requestedTarget:{version:2},resolvedTarget:{version:2},version:2,bundleHash:"bundle-2",rendererBuild:expect.anything(),browserVersion:"test/1"});
+    expect(report.candidateMeta).toMatchObject({kind:"component",outcome:"captured",requestedTarget:{version:2},resolvedTarget:{version:2},version:2,bundleHash:"bundle-2",browserVersion:"test/1"});
+    expect(Object.hasOwn(report.candidateMeta!,"rendererBuild")).toBe(true);
+    expect(Object.hasOwn(report.candidateMeta!.browser!,"rendererBuild")).toBe(true);
+    expect(report.candidateMeta!.rendererBuild).toBe(report.candidateMeta!.browser!.rendererBuild);
     expect(()=>service.check(id,{rev:1})).toThrow();
   });
 
