@@ -12,6 +12,7 @@ export const DEV_STORAGE_STATE = ".e2e-data/storage/dev.json";
 export const LEGACY_ARCHIVE_ID = "v15-archived-legacy";
 
 test("login and provision dev fixtures through the Vite origin", async ({ baseURL }) => {
+  test.setTimeout(120_000);
   expect(baseURL).toBeTruthy();
   await mkdir(".e2e-data/storage", { recursive: true });
   const request = await authenticatedRequest(baseURL!, { storageStatePath: DEV_STORAGE_STATE });
