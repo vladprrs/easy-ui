@@ -46,17 +46,39 @@ describe("mountedRegistry", () => {
     expect(mountedPreviewKeys()).not.toContain("far");
   });
 
-  it("replaces a re-acquired key without unmounting the live card", () => {
+  // Регрессия: витрина «Рекомендуем» когда-то дублировала карточки нижних ярусов, и оба живых
+  // превью писались в реестр под одним `libraryEntryKey` — счётчик показывал 1 вместо 2, бюджет
+  // ≤12 и его perf-гейт считали неправду, а вытеснение снимало только одну карточку из пары.
+  it("never collapses two live previews of the same key into one registry entry", () => {
     const first = vi.fn();
-    acquireMountedPreview("k", handle(0, first));
-    const release = acquireMountedPreview("k", handle(0));
+    const second = vi.fn();
+    const releaseFirst = acquireMountedPreview("k", handle(0, first));
+    acquireMountedPreview("k", handle(0, second));
+
+    // Ни одна регистрация не снимает другую: обе карточки живые.
     expect(first).not.toHaveBeenCalled();
+    expect(second).not.toHaveBeenCalled();
+    expect(mountedPreviewCount()).toBe(2);
+    expect(mountedPreviewKeys()).toEqual(["k", "k"]);
+
+    releaseFirst();
     expect(mountedPreviewCount()).toBe(1);
-    release();
-    expect(mountedPreviewCount()).toBe(0);
   });
 
-  it("release is idempotent and never drops a newer registration of the same key", () => {
+  it("spends a budget slot per live preview, not per key", () => {
+    const unmounts = Array.from({ length: MOUNTED_PREVIEW_BUDGET }, () => vi.fn());
+    // Все под одним ключом и все на экране, кроме последней — она дальше всех.
+    unmounts.forEach((unmount, index) => acquireMountedPreview("k", handle(index === unmounts.length - 1 ? 9_000 : 0, unmount)));
+    expect(mountedPreviewCount()).toBe(MOUNTED_PREVIEW_BUDGET);
+
+    const newcomer = vi.fn();
+    acquireMountedPreview("k", handle(0, newcomer));
+    expect(mountedPreviewCount()).toBe(MOUNTED_PREVIEW_BUDGET);
+    expect(unmounts.at(-1)).toHaveBeenCalledTimes(1);
+    expect(newcomer).not.toHaveBeenCalled();
+  });
+
+  it("release is idempotent and never drops another registration of the same key", () => {
     const release = acquireMountedPreview("k", handle(0));
     release();
     acquireMountedPreview("k", handle(0));

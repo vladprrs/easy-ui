@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LibraryCatalogEntry } from "../api/client";
-import { libraryEntryKey, partitionTiers, previewPriorityFor, rankRecommended, tierOf, type LibraryTier } from "./libraryTiers";
+import { RECOMMENDED_LIMIT, libraryEntryKey, partitionTiers, previewPriorityFor, rankRecommended, tierOf, type LibraryTier } from "./libraryTiers";
 
 type EntryPatch = Partial<LibraryCatalogEntry> & { id: string };
 
@@ -91,8 +91,18 @@ describe("partitionTiers", () => {
     entry({ id: "replaced-atom", atomicLevel: "atom", replacement: "atom" }),
   ];
 
+  /**
+   * Витрина «Рекомендуем» — повышение: попав на неё, запись уходит из своего яруса. Чтобы нижние
+   * ярусы вообще было на чём проверять, шельф целиком занимают заведомые фавориты — записи с
+   * использованием, какого у образцов выше нет.
+   */
+  const shelf = Array.from({ length: RECOMMENDED_LIMIT }, (_, index) => entry({
+    id: `top${index}`, name: `Top${String(index).padStart(2, "0")}`, atomicLevel: "organism", headUsageCount: 100,
+  }));
+  const catalog = [...entries, ...shelf];
+
   it("assigns every entry to exactly one lower tier", () => {
-    const tiers = partitionTiers(entries);
+    const tiers = partitionTiers(catalog);
     expect(tiers.high.map((item) => item.id)).toEqual(["organism", "page", "template"]);
     expect(tiers.molecules.map((item) => item.id)).toEqual(["molecule", "unclassified"]);
     // layoutNeutral идёт в атомы независимо от уровня сборки: показывать в превью нечего.
@@ -106,18 +116,33 @@ describe("partitionTiers", () => {
     expect([...new Set(lower.map(libraryEntryKey))].sort()).toEqual([...new Set(entries.map(libraryEntryKey))].sort());
   });
 
-  it("promotes recommended entries as duplicates of the lower tiers", () => {
-    const tiers = partitionTiers(entries);
-    const lower = new Set([...tiers.high, ...tiers.molecules, ...tiers.atoms, ...tiers.retired].map(libraryEntryKey));
-    expect(tiers.recommended.length).toBeGreaterThan(0);
-    for (const promoted of tiers.recommended) expect(lower.has(libraryEntryKey(promoted))).toBe(true);
-    // Списанное на витрину не попадает.
+  it("promotes a recommended entry out of its lower tier: every entry renders exactly once", () => {
+    const tiers = partitionTiers(catalog);
+    const lower = [...tiers.high, ...tiers.molecules, ...tiers.atoms, ...tiers.retired];
+    const lowerKeys = new Set(lower.map(libraryEntryKey));
+
+    expect(tiers.recommended).toHaveLength(RECOMMENDED_LIMIT);
+    for (const promoted of tiers.recommended) expect(lowerKeys.has(libraryEntryKey(promoted))).toBe(false);
+
+    // Сумма всех пяти ярусов — весь каталог, и каждая запись в ней ровно одна.
+    const rendered = [...tiers.recommended, ...lower].map(libraryEntryKey);
+    expect(rendered).toHaveLength(catalog.length);
+    expect(new Set(rendered).size).toBe(catalog.length);
+
+    // Списанное на витрину не попадает, поэтому и остаётся в своём ярусе.
     expect(ids(tiers.recommended)).not.toContain("deprecated-organism");
-    expect(ids(tiers.recommended)).not.toContain("replaced-atom");
+    expect(ids(tiers.retired)).toContain("deprecated-organism");
   });
 
-  it("tierOf agrees with the partition for every entry", () => {
-    const tiers = partitionTiers(entries);
+  it("takes a promoted atom out of the compact index", () => {
+    const promotedAtom = entry({ id: "star-atom", atomicLevel: "atom", headUsageCount: 100 });
+    const tiers = partitionTiers([promotedAtom, ...entries]);
+    expect(ids(tiers.recommended)).toContain("star-atom");
+    expect(ids(tiers.atoms)).not.toContain("star-atom");
+  });
+
+  it("tierOf agrees with the partition for every entry that stayed in its tier", () => {
+    const tiers = partitionTiers(catalog);
     for (const item of entries) expect(tiers[tierOf(item)].map(libraryEntryKey)).toContain(libraryEntryKey(item));
   });
 });
@@ -125,32 +150,44 @@ describe("partitionTiers", () => {
 describe("previewPriorityFor", () => {
   const molecule = entry({ id: "molecule", atomicLevel: "molecule" });
   const atom = entry({ id: "atom", atomicLevel: "atom" });
+  const wrapper = entry({ id: "wrapper", atomicLevel: "organism", layoutNeutral: true });
 
   it("maps intent to the scheduler priority", () => {
-    const cases: [LibraryCatalogEntry, Parameters<typeof previewPriorityFor>[1], number][] = [
+    const cases: [LibraryCatalogEntry, Parameters<typeof previewPriorityFor>[1], number | null][] = [
       [molecule, "explicit", 0],
       [atom, "explicit", 0],
-      [atom, "atoms", 0],
+      [atom, "atoms", null],
       [molecule, "recommended", 1],
       [molecule, "high", 1],
       [molecule, "molecules", 2],
       [molecule, "prefetch", 3],
-      [atom, "prefetch", 3],
+      [atom, "prefetch", null],
       [molecule, "retired", 3],
     ];
     for (const [item, intent, priority] of cases) expect([item.id, intent, previewPriorityFor(item, intent)]).toEqual([item.id, intent, priority]);
   });
 
-  it("keeps an atom promoted to the shelf at the explicit-pick priority", () => {
-    expect(previewPriorityFor(atom, "recommended")).toBe(0);
-  });
-
-  it("never loads a retired atom ahead of live cards", () => {
-    expect(previewPriorityFor(entry({ id: "old", atomicLevel: "atom", deprecated: true }), "retired")).toBe(3);
-  });
-
-  it("covers every tier", () => {
+  /**
+   * Приоритет 0 значит «выбрано пользователем», а не «атом»: атом и лэйаут-обёртка не грузятся
+   * сами ни в одном ярусе, включая витрину, — иначе повышенный атом уехал бы вперёд организмов.
+   */
+  it("never auto-enqueues an atom or a layout-neutral wrapper, in any tier", () => {
     const tiers: LibraryTier[] = ["recommended", "high", "molecules", "atoms", "retired"];
-    for (const tier of tiers) expect([0, 1, 2, 3]).toContain(previewPriorityFor(molecule, tier));
+    for (const tier of tiers) {
+      expect([tier, previewPriorityFor(atom, tier)]).toEqual([tier, null]);
+      expect([tier, previewPriorityFor(wrapper, tier)]).toEqual([tier, null]);
+    }
+    // Раскрыть его по кнопке по-прежнему можно, и тогда очередь короткая — приоритет 0.
+    expect(previewPriorityFor(atom, "explicit")).toBe(0);
+    expect(previewPriorityFor(wrapper, "explicit")).toBe(0);
+  });
+
+  it("never loads a retired molecule ahead of live cards", () => {
+    expect(previewPriorityFor(entry({ id: "old", atomicLevel: "molecule", deprecated: true }), "retired")).toBe(3);
+  });
+
+  it("answers for every tier", () => {
+    const tiers: LibraryTier[] = ["recommended", "high", "molecules", "atoms", "retired"];
+    for (const tier of tiers) expect([0, 1, 2, 3, null]).toContain(previewPriorityFor(molecule, tier));
   });
 });

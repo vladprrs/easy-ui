@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getComponentPreview, getDesignSystemById, getLibraryCatalog, type LibraryCatalogEntry, type LibraryCatalogResponse } from "../api/client";
@@ -31,10 +31,20 @@ const entry = (patch: Partial<LibraryCatalogEntry> & { id: string }): LibraryCat
   ...patch,
 });
 
+/**
+ * Витрина «Рекомендуем» — повышение: попавшая на неё запись уходит из своего яруса (ровно один
+ * рендер на компонент). Чтобы нижние ярусы вообще существовали, шельф из 12 мест занимают
+ * заведомые фавориты — организмы с использованием, какого у образцов ниже нет.
+ */
+const shelf = Array.from({ length: 12 }, (_, index) => entry({
+  id: `top${index}`, name: `Top${String(index).padStart(2, "0")}`, atomicLevel: "organism", headUsageCount: 100,
+}));
+
 const catalog = (patch: Partial<LibraryCatalogResponse> = {}): LibraryCatalogResponse => ({
   catalogRevision: "rev",
-  systems: [{ id: "yandex-pay", name: "Yandex Pay", count: 4 }, { id: "e2e", name: "E2E", count: 1 }],
+  systems: [{ id: "yandex-pay", name: "Yandex Pay", count: 16 }, { id: "e2e", name: "E2E", count: 1 }],
   components: [
+    ...shelf,
     entry({ id: "rating", name: "Rating", version: 3, atomicLevel: "molecule", description: "Choose a rating", canonicalFor: ["ctyp-rating"], headUsageCount: 1 }),
     entry({ id: "rating-legacy", name: "RatingLegacy", atomicLevel: "molecule", description: "Old rating widget", deprecated: true, replacement: "Rating" }),
     entry({ id: "chip", name: "Chip", version: 2, atomicLevel: "atom", preview: null }),
@@ -79,16 +89,42 @@ describe("LibraryPage витрина компонентов", () => {
   it("раскладывает каталог по ярусам и различает одноимённые компоненты разных систем", async () => {
     renderLibrary();
     const molecules = await screen.findByLabelText("Молекулы");
-    expect(within(molecules).getAllByRole("link", { name: "Rating" })).toHaveLength(2);
-    expect(within(molecules).getByText("используется в 1 прототипе")).toBeTruthy();
+    const recommended = screen.getByLabelText("Рекомендуем");
+    // Одноимённые записи двух систем — две разные карточки, но каждая ровно одна на экране:
+    // канонический Rating забрала витрина, его тёзка из другой системы остался в молекулах.
+    expect(screen.getAllByRole("link", { name: "Rating" })).toHaveLength(2);
+    expect(within(recommended).getAllByRole("link", { name: "Rating" })).toHaveLength(1);
+    expect(within(recommended).getByText("используется в 1 прототипе")).toBeTruthy();
+    expect(within(molecules).getAllByRole("link", { name: "Rating" })).toHaveLength(1);
+    // Витрина ограничена 12 местами, и всё, что на неё попало, ушло из своего яруса.
+    expect(within(recommended).getAllByRole("listitem")).toHaveLength(12);
+    expect(screen.getAllByRole("link", { name: "Top00" })).toHaveLength(1);
     // Ярусы: организмы отдельно, атомы и списанное — компактными индексами.
     expect(screen.getByLabelText("Страницы, шаблоны и организмы")).toBeTruthy();
     expect(within(screen.getByLabelText("Атомы и лэйаут")).getByRole("link", { name: "Chip" })).toBeTruthy();
     const retired = screen.getByLabelText("Устаревшее");
     expect(within(retired).getByRole("link", { name: "RatingLegacy" })).toBeTruthy();
     expect(within(retired).getByText("Замена: Rating")).toBeTruthy();
-    // Витрина «Рекомендуем» поднимает живые записи наверх, не трогая нижние ярусы.
-    expect(within(screen.getByLabelText("Рекомендуем")).getAllByRole("listitem").length).toBeGreaterThan(0);
+  });
+
+  it("повышенный на витрину атом не грузится сам, а ждёт кнопки", async () => {
+    vi.mocked(getLibraryCatalog).mockResolvedValue(catalog({
+      components: [entry({ id: "chip", name: "Chip", atomicLevel: "atom", headUsageCount: 500 })],
+    }));
+    renderLibrary();
+    const recommended = await screen.findByLabelText("Рекомендуем");
+    const card = within(recommended).getByRole("listitem");
+
+    // Одна ссылка на весь экран — карточка не продублирована в компактном индексе.
+    expect(screen.getAllByRole("link", { name: "Chip" })).toHaveLength(1);
+    expect(screen.queryByLabelText("Атомы и лэйаут")).toBeNull();
+    // Атом не встаёт в очередь ни в каком ярусе: превью в DOM нет, запроса тоже.
+    expect(card.querySelectorAll("[data-component-preview]").length).toBe(0);
+    expect(vi.mocked(getComponentPreview)).not.toHaveBeenCalled();
+
+    fireEvent.click(within(card).getByRole("button", { name: "Показать превью" }));
+    expect(card.querySelectorAll("[data-component-preview]").length).toBe(1);
+    await waitFor(() => expect(vi.mocked(getComponentPreview)).toHaveBeenCalledTimes(1));
   });
 
   it("в компактном индексе превью раскрывается только по действию пользователя", async () => {
@@ -108,7 +144,9 @@ describe("LibraryPage витрина компонентов", () => {
     renderLibrary();
     const systems = await screen.findByLabelText("Дизайн-системы");
     fireEvent.click(within(systems).getByRole("button", { name: "E2E · 1" }));
-    expect(within(screen.getByLabelText("Молекулы")).getAllByRole("listitem")).toHaveLength(1);
+    // Единственная запись системы — она же и вся витрина; в нижние ярусы ей уже не попасть.
+    expect(within(screen.getByLabelText("Рекомендуем")).getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.queryByLabelText("Молекулы")).toBeNull();
     expect(screen.queryByLabelText("Атомы и лэйаут")).toBeNull();
 
     fireEvent.click(within(systems).getByRole("button", { name: "Все системы" }));

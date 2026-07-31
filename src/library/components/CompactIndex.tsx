@@ -1,11 +1,11 @@
 import { useId, useState, type ReactElement } from "react";
 import { Link } from "react-router";
 import type { LibraryCatalogEntry } from "../../api/client";
-import { pillGhost } from "../../app/chrome";
 import { levelSection, library } from "../../app/strings/library";
 import { atomicLevelLabel } from "../libraryModel";
 import { libraryEntryKey } from "../libraryTiers";
 import { InlineComponentPreview } from "../preview/InlineComponentPreview";
+import { PreviewDisclosureButton } from "./PreviewDisclosureButton";
 
 export interface CompactIndexProps {
   entries: LibraryCatalogEntry[];
@@ -46,13 +46,12 @@ export function CompactIndex({ entries, label, systemNames, showSystem, previews
             {entry.deprecated ? <Badge title={library.deprecatedBadgeTitle}>{library.deprecatedBadge}</Badge> : null}
             {entry.replacement ? <span title={library.deprecatedBadgeTitle}>{library.replacementLink(entry.replacement)}</span> : null}
           </span>
-          {previewsEnabled ? <button
-            type="button"
-            className={`${pillGhost} ml-auto shrink-0`}
-            aria-expanded={open}
-            aria-controls={open ? previewId : undefined}
-            onClick={() => setExpanded(open ? null : key)}
-          >{library.compactShowPreview}</button> : null}
+          {previewsEnabled ? <PreviewDisclosureButton
+            expanded={open}
+            controls={previewId}
+            onToggle={() => setExpanded(open ? null : key)}
+            className="ml-auto shrink-0"
+          /> : null}
         </div>
         {open ? <div
           id={previewId}

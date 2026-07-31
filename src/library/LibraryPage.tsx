@@ -81,6 +81,8 @@ export function LibraryPage() {
   const showSystem = selectedSystem === null && systems.length > 1;
   // Выбранный результат поиска и раскрытый атом — интент `explicit`: приоритет 0 доезжает до
   // задачи планировщика через `reprioritize` внутри самого превью, даже если оно уже в очереди.
+  // `previewPriorityFor` может вернуть `null` — атом или лэйаут-обёртка (в том числе повышенная
+  // в «Рекомендуем») не грузится сама: карточка покажет кнопку «Показать превью».
   const cardsFor = (list: LibraryCatalogEntry[], intent: PreviewIntent) => list.map((entry) => <ComponentCard
     key={libraryEntryKey(entry)}
     entry={entry}

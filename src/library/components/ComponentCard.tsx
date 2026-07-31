@@ -1,18 +1,23 @@
-import type { ReactElement } from "react";
+import { useId, useState, type ReactElement } from "react";
 import { Link } from "react-router";
 import type { LibraryCatalogEntry } from "../../api/client";
 import { figmaBadgeTitle, levelSection, library } from "../../app/strings/library";
 import { atomicLevelLabel } from "../libraryModel";
 import { InlineComponentPreview } from "../preview/InlineComponentPreview";
 import type { PreviewPriority } from "../preview/previewScheduler";
+import { PreviewDisclosureButton } from "./PreviewDisclosureButton";
 
 export interface ComponentCardProps {
   entry: LibraryCatalogEntry;
   /** Имя дизайн-системы; показывается, когда в гриде смешаны системы. */
   systemName: string;
   showSystem: boolean;
-  /** Приоритет задачи превью; определяется ярусом карточки (`previewPriorityFor`). */
-  priority: PreviewPriority;
+  /**
+   * Приоритет задачи превью по ярусу карточки (`previewPriorityFor`); `null` — «само не грузится»
+   * (атом или лэйаут-нейтральная обёртка, в том числе повышенная в «Рекомендуем»): вместо превью
+   * рисуется кнопка «Показать превью», и уже её нажатие грузит с приоритетом 0.
+   */
+  priority: PreviewPriority | null;
   /** `?libraryPreviews=off` — превью не монтируется вовсе, метаданные рисуются как есть. */
   previewsEnabled: boolean;
 }
@@ -32,9 +37,16 @@ function Fact({ children, title }: { children: string; title?: string }): ReactE
  */
 export function ComponentCard({ entry, systemName, showSystem, priority, previewsEnabled }: ComponentCardProps): ReactElement {
   const { status, figma } = entry;
+  const previewId = useId();
+  // Раскрытие одностороннее: кнопка уступает место превью и больше не нужна — карточка сворачивается
+  // сама, уехав из вьюпорта (`InlineComponentPreview` размонтирует содержимое, зона остаётся её).
+  const [revealed, setRevealed] = useState(false);
+  const manual = priority === null && !revealed;
   return <li className="group relative flex min-w-0 flex-col rounded-panel bg-white focus-within:z-20">
-    <div className="relative flex h-[170px] items-center justify-center overflow-hidden rounded-t-panel bg-pay-lavender-tint">
-      {previewsEnabled ? <InlineComponentPreview entry={entry} priority={priority} /> : null}
+    <div id={previewId} className="relative flex h-[170px] items-center justify-center overflow-hidden rounded-t-panel bg-pay-lavender-tint">
+      {!previewsEnabled ? null
+        : manual ? <PreviewDisclosureButton expanded={false} controls={previewId} onToggle={() => setRevealed(true)} className="relative z-10" />
+        : <InlineComponentPreview entry={entry} priority={priority ?? 0} />}
       <div className="absolute left-4 top-4 z-10 flex flex-wrap gap-2">
         {entry.canonicalFor.length
           ? <span className="rounded-full bg-pay-red px-2.5 py-1 text-xs font-medium text-white" title={library.canonicalBadgeTitle(entry.canonicalFor)}>{library.canonicalBadge}</span>

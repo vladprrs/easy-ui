@@ -14,7 +14,20 @@ export interface MountedPreview {
   unmount: () => void;
 }
 
-const mounted = new Map<string, MountedPreview>();
+/**
+ * Реестр ведётся по идентичности регистрации, а не по ключу записи каталога: ключ — это то, что
+ * показывают (`libraryEntryKey`), и он обязан быть уникальным на странице (`partitionTiers`
+ * повышает, а не копирует), но реестр не имеет права **зависеть** от этого. Схлопни он две живые
+ * регистрации в одну, `mountedPreviewCount()` вернул бы 1 на два живых превью — бюджет ≤12 и его
+ * perf-гейт считали бы неправду, а вытеснение снимало бы только одно из двух.
+ */
+interface Registration {
+  key: string;
+  preview: MountedPreview;
+}
+
+const mounted = new Map<number, Registration>();
+let nextRegistrationId = 1;
 
 /** Кратчайшее расстояние от узла до вьюпорта по вертикали; 0 — пересекается. */
 export function viewportDistance(node: Element | null | undefined): number {
@@ -28,36 +41,41 @@ export function viewportDistance(node: Element | null | undefined): number {
 
 function enforceBudget() {
   while (mounted.size > MOUNTED_PREVIEW_BUDGET) {
-    let farthestKey: string | null = null;
+    let farthestId: number | null = null;
     let farthest = Number.NEGATIVE_INFINITY;
-    for (const [key, preview] of mounted) {
-      const distance = preview.distance();
-      if (distance > farthest) { farthest = distance; farthestKey = key; }
+    for (const [id, registration] of mounted) {
+      const distance = registration.preview.distance();
+      if (distance > farthest) { farthest = distance; farthestId = id; }
     }
-    if (farthestKey === null) return;
-    const victim = mounted.get(farthestKey)!;
-    mounted.delete(farthestKey);
+    if (farthestId === null) return;
+    const victim = mounted.get(farthestId)!;
+    mounted.delete(farthestId);
     // Вытесненной может оказаться и только что вставшая карточка — если она дальше всех, это верно.
-    victim.unmount();
+    victim.preview.unmount();
   }
 }
 
-/** Регистрирует смонтированное превью; возвращает идемпотентный release. */
+/**
+ * Регистрирует смонтированное превью; возвращает идемпотентный release.
+ *
+ * Каждый acquire — своя ячейка бюджета, даже при совпадении ключа: release снимает ровно свою
+ * регистрацию и никогда не трогает чужую. Размонтировать соседа по ключу тоже нельзя — это сняло бы
+ * живое превью; лишнее уедет обычным вытеснением по расстоянию.
+ */
 export function acquireMountedPreview(key: string, preview: MountedPreview): () => void {
-  // Повторный acquire того же ключа (StrictMode, смена приоритета) — замена записи, а НЕ вытеснение:
-  // unmount() старой ручки снял бы ту же самую живую карточку.
-  mounted.set(key, preview);
+  const id = nextRegistrationId++;
+  mounted.set(id, { key, preview });
   enforceBudget();
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    if (mounted.get(key) === preview) mounted.delete(key);
+    mounted.delete(id);
   };
 }
 
 export function mountedPreviewCount(): number { return mounted.size; }
 
-export function mountedPreviewKeys(): string[] { return [...mounted.keys()]; }
+export function mountedPreviewKeys(): string[] { return [...mounted.values()].map((registration) => registration.key); }
 
 export function resetMountedPreviewsForTests(): void { mounted.clear(); }

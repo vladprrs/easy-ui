@@ -43,11 +43,12 @@ async function ensureFixtures(request: APIRequestContext, options: { api: string
 }
 
 // Витрина библиотеки: чип системы (с числом компонентов) → карточка-ссылка компонента.
-// `.first()` — ярус «Рекомендуем» сознательно дублирует карточки нижних ярусов
-// (`src/library/libraryTiers.ts`), поэтому у компонента на странице легитимно две одинаковые ссылки.
+// Ссылка ровно одна: «Рекомендуем» — повышение, а не копия нижних ярусов (`libraryTiers.ts`),
+// поэтому компонент рендерится на странице единственный раз, в каком бы ярусе он ни оказался.
 async function openFixtureCard(page: Page) {
   await page.locator('[aria-label="Дизайн-системы"]').getByRole("button", { name: /^E2E Starter/ }).click();
-  const link = page.getByRole("link", { name: COMPONENT_NAME, exact: true }).first();
+  const link = page.getByRole("link", { name: COMPONENT_NAME, exact: true });
+  await expect(link).toHaveCount(1);
   await expect(link).toHaveAttribute("href", `/library/c/${COMPONENT_PAGE_IDS.propsBadge}?v=${COMPONENT_VERSION}`);
   await link.click();
 }

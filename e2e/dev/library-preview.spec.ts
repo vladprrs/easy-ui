@@ -23,9 +23,6 @@ import {
  */
 
 const SECTION = {
-  recommended: "Рекомендуем",
-  high: "Страницы, шаблоны и организмы",
-  molecules: "Молекулы",
   atoms: "Атомы и лэйаут",
 } as const;
 
@@ -38,18 +35,24 @@ const CHROME_VARS = [
 ];
 
 const section = (page: Page, name: string): Locator => page.getByRole("list", { name });
-const previewIn = (scope: Locator, designSystem: string, id: string): Locator =>
-  scope.locator(`[data-component-preview="${previewKey(designSystem, id)}"]`);
+/**
+ * Превью ищется по всей странице, а не внутри яруса: ярус записи зависит от всей базы —
+ * витрина «Рекомендуем» забирает фаворитов из нижних секций (`libraryTiers.partitionTiers`),
+ * поэтому организм фикстуры законно рендерится либо в `high`, либо в витрине. Рендерится он при
+ * этом ровно один раз — за этим следит `toHaveCount(1)` здесь же.
+ */
+const preview = (page: Page, designSystem: string, id: string): Locator =>
+  page.locator(`[data-component-preview="${previewKey(designSystem, id)}"]`);
+
 const searchBox = (page: Page): Locator => page.getByRole("searchbox");
 
-/** «Витрина готова» = карточка организма из яруса `high` доехала до `ready`. */
-async function openLibraryWithPreviews(page: Page): Promise<Locator> {
+/** «Витрина готова» = карточка организма доехала до `ready`. */
+async function openLibraryWithPreviews(page: Page): Promise<void> {
   await page.goto("/library");
-  const high = section(page, SECTION.high);
-  const organism = previewIn(high, DOMINANT_DS_ID, PREVIEW_IDS.organism);
+  const organism = preview(page, DOMINANT_DS_ID, PREVIEW_IDS.organism);
+  await expect(organism).toHaveCount(1);
   await organism.scrollIntoViewIfNeeded();
   await expect(organism).toHaveAttribute("data-component-preview-state", "ready");
-  return high;
 }
 
 test.describe("Library inline previews", () => {
@@ -77,13 +80,14 @@ test.describe("Library inline previews", () => {
   });
 
   test("loads an organism preview while the atoms index mounts none", async ({ page }) => {
-    const high = await openLibraryWithPreviews(page);
-    await expect(previewIn(high, DOMINANT_DS_ID, PREVIEW_IDS.organism).locator("[data-e2e-preview-organism]")).toHaveText("Organism preview");
+    await openLibraryWithPreviews(page);
+    await expect(preview(page, DOMINANT_DS_ID, PREVIEW_IDS.organism).locator("[data-e2e-preview-organism]")).toHaveText("Organism preview");
 
-    // Компактный индекс атомов не монтирует превью вовсе: они раскрываются только по действию.
-    const atoms = section(page, SECTION.atoms);
-    await expect(atoms.getByRole("link", { name: PREVIEW_NAMES.atom, exact: true })).toHaveCount(1);
-    await expect(atoms.locator("[data-component-preview]")).toHaveCount(0);
+    // Атом не встаёт в очередь ни в каком ярусе (спека §5): превью нет в DOM ни в компактном
+    // индексе, ни на карточке витрины, куда атом мог попасть повышением, — там кнопка.
+    await expect(page.getByRole("link", { name: PREVIEW_NAMES.atom, exact: true })).toHaveCount(1);
+    await expect(preview(page, DOMINANT_DS_ID, PREVIEW_IDS.atom)).toHaveCount(0);
+    await expect(section(page, SECTION.atoms).locator("[data-component-preview]")).toHaveCount(0);
   });
 
   test("promotes an offscreen search result to a loaded preview", async ({ page }) => {
@@ -148,8 +152,8 @@ test.describe("Library inline previews", () => {
       if (path.startsWith(`/api/components/${PREVIEW_IDS.organism}/versions/`) && path.endsWith("/bundle.js")) bundles.push(path);
     });
 
-    const high = await openLibraryWithPreviews(page);
-    const organism = previewIn(high, DOMINANT_DS_ID, PREVIEW_IDS.organism);
+    await openLibraryWithPreviews(page);
+    const organism = preview(page, DOMINANT_DS_ID, PREVIEW_IDS.organism);
     expect(bundles).toHaveLength(1);
 
     await page.evaluate(() => window.scrollTo(0, 0));
@@ -190,8 +194,8 @@ test.describe("Library inline previews", () => {
     await expect(page.locator("[data-component-preview]")).toHaveCount(0);
     const baseline = await chromeSnapshot();
 
-    const high = await openLibraryWithPreviews(page);
-    const scoped = previewIn(high, PREVIEW_DS_ID, PREVIEW_IDS.scopedAccent);
+    await openLibraryWithPreviews(page);
+    const scoped = preview(page, PREVIEW_DS_ID, PREVIEW_IDS.scopedAccent);
     await scoped.scrollIntoViewIfNeeded();
     await expect(scoped).toHaveAttribute("data-component-preview-state", "ready");
     // Обе системы живы одновременно — иначе проверка «не пересекаются» ничего не значит.
@@ -208,8 +212,8 @@ test.describe("Library inline previews", () => {
   });
 
   test("keeps a viewport-bounded component inside its card", async ({ page }) => {
-    const high = await openLibraryWithPreviews(page);
-    const fixed = previewIn(high, DOMINANT_DS_ID, PREVIEW_IDS.fixed);
+    await openLibraryWithPreviews(page);
+    const fixed = preview(page, DOMINANT_DS_ID, PREVIEW_IDS.fixed);
     await fixed.scrollIntoViewIfNeeded();
     await expect(fixed).toHaveAttribute("data-component-preview-state", "ready");
 
@@ -246,8 +250,8 @@ test.describe("Library inline previews", () => {
   });
 
   test("isolates a broken component from its neighbours", async ({ page }) => {
-    const high = await openLibraryWithPreviews(page);
-    const broken = previewIn(high, DOMINANT_DS_ID, PREVIEW_IDS.broken);
+    await openLibraryWithPreviews(page);
+    const broken = preview(page, DOMINANT_DS_ID, PREVIEW_IDS.broken);
     await broken.scrollIntoViewIfNeeded();
 
     await expect(broken).toHaveAttribute("data-component-preview-state", "error");
@@ -256,16 +260,16 @@ test.describe("Library inline previews", () => {
     await expect(broken.getByRole("button", { name: "Повторить" })).toBeVisible();
 
     for (const id of [PREVIEW_IDS.organism, PREVIEW_IDS.icon, PREVIEW_IDS.accent]) {
-      const neighbour = previewIn(high, DOMINANT_DS_ID, id);
+      const neighbour = preview(page, DOMINANT_DS_ID, id);
       await neighbour.scrollIntoViewIfNeeded();
       await expect(neighbour).toHaveAttribute("data-component-preview-state", "ready");
     }
   });
 
   test("resolves Icon from the dominant theme and color() from each card's own scope", async ({ page }) => {
-    const high = await openLibraryWithPreviews(page);
+    await openLibraryWithPreviews(page);
 
-    const icon = previewIn(high, DOMINANT_DS_ID, PREVIEW_IDS.icon);
+    const icon = preview(page, DOMINANT_DS_ID, PREVIEW_IDS.icon);
     await icon.scrollIntoViewIfNeeded();
     await expect(icon).toHaveAttribute("data-component-preview-state", "ready");
     const image = icon.locator(`img[data-eui-icon="${PREVIEW_ICON_NAME}"]`);
@@ -274,19 +278,19 @@ test.describe("Library inline previews", () => {
 
     // `color()` — чистый var(--eui-color-*): доминирующая система читает его из :root владельца
     // темы, недоминирующая — из инлайн-переменных своей обёртки.
-    const dominant = previewIn(high, DOMINANT_DS_ID, PREVIEW_IDS.accent);
+    const dominant = preview(page, DOMINANT_DS_ID, PREVIEW_IDS.accent);
     await dominant.scrollIntoViewIfNeeded();
     await expect(dominant.locator("[data-e2e-preview-accent]")).toHaveCSS("background-color", ACCENT_DOMINANT);
 
-    const scoped = previewIn(high, PREVIEW_DS_ID, PREVIEW_IDS.scopedAccent);
+    const scoped = preview(page, PREVIEW_DS_ID, PREVIEW_IDS.scopedAccent);
     await scoped.scrollIntoViewIfNeeded();
     await expect(scoped).toHaveAttribute("data-component-preview-state", "ready");
     await expect(scoped.locator("[data-e2e-preview-scoped-accent]")).toHaveCSS("background-color", ACCENT_SCOPED);
   });
 
   test("overrides :root with per-card scoped custom properties", async ({ page }) => {
-    const high = await openLibraryWithPreviews(page);
-    const scoped = previewIn(high, PREVIEW_DS_ID, PREVIEW_IDS.scopedAccent);
+    await openLibraryWithPreviews(page);
+    const scoped = preview(page, PREVIEW_DS_ID, PREVIEW_IDS.scopedAccent);
     await scoped.scrollIntoViewIfNeeded();
     await expect(scoped).toHaveAttribute("data-component-preview-state", "ready");
 
