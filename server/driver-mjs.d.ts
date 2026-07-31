@@ -18,6 +18,9 @@ declare module "*/author/driver.mjs" {
       full?: boolean;
       forceNew?: boolean;
       reason?: string;
+      actor?: string;
+      since?: string;
+      minAttempts?: number;
       [key: string]: unknown;
     };
   }
@@ -94,4 +97,33 @@ declare module "*/author/driver.mjs" {
   ): DriverAuditRow[];
   export function auditFindings(rows: readonly DriverAuditRow[]): { deprecatedInUse: string[]; unused: string[] };
   export function auditExitCode(findings: { deprecatedInUse: readonly string[] }): 0 | 2;
+  export interface DriverReuseDecision {
+    id: string;
+    actorId: string;
+    artifactKind: string;
+    artifactId: string;
+    designSystem: string;
+    decision: string;
+    gateMode: string;
+    intent: string | null;
+    reason: string | null;
+    candidates: { id: string; score: number; blocking: boolean; reasons: string[] }[];
+    createdAt: string;
+  }
+  export interface DriverReuseAuditReport {
+    generatedAt: string;
+    gateActiveSince: string | null;
+    filter?: { since?: string; designSystem?: string; actorId?: string; limit?: number; minAttempts?: number };
+    totals?: { decisions: number; actors: number; byDecision: Record<string, number>; byGateMode: Record<string, number> };
+    forceNew?: DriverReuseDecision[];
+    repeatedBlocked?: {
+      actorId: string; artifactKind: string; artifactId: string; designSystem: string;
+      attempts: number; blocked: number; wouldBlock: number; firstAt: string; lastAt: string;
+      lastDecisionId: string | null; lastReason: string | null; candidateIds: string[];
+    }[];
+    canonicalRoleConflicts?: (DriverReuseDecision & { roles: string[] })[];
+    wouldBlock?: { total: number; actors: number; byActor: { actorId: string; count: number }[]; decisions: DriverReuseDecision[] };
+    unreviewed?: { total: number; artifacts: { kind: string; id: string; name: string; designSystem: string; createdAt: string; createdBeforeGate: boolean }[] };
+  }
+  export function reuseAuditLines(report: DriverReuseAuditReport): string[];
 }

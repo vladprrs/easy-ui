@@ -1525,6 +1525,107 @@ export const catalogCandidatesGetContract = registerContract({
   errors: catalogCandidatesErrors,
 });
 
+// --- Админское чтение аудита переиспользования (спека §5, план §4 T10) ---
+
+/** Значения `decision` таблицы `catalog_reuse_decisions` (миграция v20). */
+export const reuseDecisionKindSchema = z.enum(["accepted_no_match", "blocked", "would_block", "force_new", "intent_missing"]);
+
+export const reuseAuditQuerySchema = z.strictObject({
+  /** ISO-момент; отдаются решения строго новее. Окно наблюдения shadow-фазы (§5.4). */
+  since: z.string().min(1).max(64).optional(),
+  designSystem: slugString.optional(),
+  actorId: z.string().min(1).max(64).optional(),
+  /** Потолок каждой секции по отдельности, не всего ответа. */
+  limit: z.string().regex(/^([1-9]\d{0,2}|1000)$/, "limit must be an integer between 1 and 1000").transform(Number).optional(),
+  /** Сколько попыток по одному actor/artifact считается «повторяющимися» (§5 b). */
+  minAttempts: z.string().regex(/^([2-9]|[1-4]\d|50)$/, "minAttempts must be an integer between 2 and 50").transform(Number).optional(),
+});
+
+const reuseDecisionCandidateSchema = z.looseObject({
+  id: z.string(), score: z.number(), blocking: z.boolean(), reasons: z.array(z.string()),
+  propsDelta: z.looseObject({ added: z.array(z.string()).optional(), removed: z.array(z.string()).optional(), typeChanged: z.array(z.string()).optional() }).optional(),
+});
+
+const reuseDecisionSchema = z.strictObject({
+  id: z.string(), actorId: z.string(),
+  artifactKind: z.enum(["component", "composition", "prototype"]),
+  artifactId: z.string(), designSystem: z.string(),
+  sourceOrDocHash: z.string(), catalogRevision: z.string(),
+  policyVersion: z.number().int().nonnegative(),
+  gateMode: z.enum(["shadow", "enforce"]),
+  intent: z.string().nullable(),
+  candidates: z.array(reuseDecisionCandidateSchema),
+  decision: reuseDecisionKindSchema,
+  reason: z.string().nullable(),
+  createdAt: isoDate,
+});
+
+export const reuseAuditResponseSchema = z.strictObject({
+  generatedAt: isoDate,
+  /** Первый записанный гейтом момент: раньше него reuse-review не существовало. */
+  gateActiveSince: isoDate.nullable(),
+  filter: z.strictObject({
+    since: z.string().optional(), designSystem: z.string().optional(), actorId: z.string().optional(),
+    limit: z.number().int().positive(), minAttempts: z.number().int().min(2),
+  }),
+  totals: z.strictObject({
+    decisions: z.number().int().nonnegative(),
+    actors: z.number().int().nonnegative(),
+    byDecision: z.record(z.string(), z.number().int().nonnegative()),
+    byGateMode: z.record(z.string(), z.number().int().nonnegative()),
+  }),
+  /** (a) Админские обходы гейта: каждый обязан быть атрибутируемым. */
+  forceNew: z.array(reuseDecisionSchema),
+  /** (b) Повторяющиеся блокировки, агрегированные по актору и артефакту. */
+  repeatedBlocked: z.array(z.strictObject({
+    actorId: z.string(), artifactKind: z.enum(["component", "composition", "prototype"]),
+    artifactId: z.string(), designSystem: z.string(),
+    attempts: z.number().int().positive(), blocked: z.number().int().nonnegative(), wouldBlock: z.number().int().nonnegative(),
+    firstAt: isoDate, lastAt: isoDate,
+    lastDecisionId: z.string().nullable(), lastReason: z.string().nullable(),
+    candidateIds: z.array(z.string()),
+  })),
+  /** (c) Конфликты канонической роли: `blocked` с префиксом `canonical_role_conflict:`. */
+  canonicalRoleConflicts: z.array(reuseDecisionSchema.extend({ roles: z.array(z.string()) })),
+  /** Наблюдаемость shadow-фазы и вход критерия §5.4 выхода из неё. */
+  wouldBlock: z.strictObject({
+    total: z.number().int().nonnegative(),
+    actors: z.number().int().nonnegative(),
+    byActor: z.array(z.strictObject({ actorId: z.string(), count: z.number().int().positive() })),
+    decisions: z.array(reuseDecisionSchema),
+  }),
+  /** (d) Артефакты каталога, ни разу не проходившие reuse-review. */
+  unreviewed: z.strictObject({
+    total: z.number().int().nonnegative(),
+    artifacts: z.array(z.strictObject({
+      kind: z.enum(["component", "composition", "prototype"]),
+      id: z.string(), name: z.string(), designSystem: z.string(), createdAt: isoDate,
+      createdBeforeGate: z.boolean(),
+    })),
+  }),
+});
+
+/**
+ * Заявка контрактной дельты для T4′ (план §4: контрактный слой, `contract.test.ts` и
+ * `server/openapi.json` принадлежат T4/T4′). Объявление готово к регистрации: T4′ оборачивает
+ * его в `registerContract(...)`, добавляет кейс покрытия в `contract.test.ts` и регенерирует
+ * OpenAPI. Регистрировать здесь нельзя — биекция «контракты ↔ кейсы» и drift-тест OpenAPI
+ * упали бы в зелёной сюите до прихода T4′. Хендлер валидирует вход этими же схемами.
+ */
+export const reuseAuditContract: RouteContract = {
+  method: "GET", path: "/api/catalog/reuse-decisions",
+  summary: "Admin-only read model over the append-only reuse-decision audit: force-new overrides, repeated blocked attempts aggregated by actor/artifact, canonical-role conflicts, shadow-phase would-block counters, and catalog artifacts that never went through a reuse review. Read-only: the table is append-only in the database.",
+  query: reuseAuditQuerySchema,
+  responseSchema: reuseAuditResponseSchema,
+  validated: true,
+  errors: [
+    { status: 401, code: "unauthorized", description: "authentication is required" },
+    { status: 403, code: "forbidden", description: "administrator access required; share/capture principals are rejected" },
+    errorCatalog.methodNotAllowed,
+    errorCatalog.validationFailed,
+  ],
+};
+
 export const componentPreviewContract = registerContract({
   method: "GET", path: "/api/components/{id}/versions/{version}/preview",
   summary: "Preview data for one published component version: the resolved example props plus bundle coordinates, slots and capabilities. `selector=legacy` uses definition.example, `selector=named&name=` a named example. Never returns source or props schemas.",

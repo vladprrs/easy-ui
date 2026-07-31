@@ -7,11 +7,13 @@ import { openDatabase } from "./db";
 import { ensureBootstrapAdmin } from "./users";
 import { prototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
 import { ScreenshotService, type RunJob } from "./screenshot/service";
+import { ReuseDecisionRepo } from "./repos/reuseDecisions";
 import {
   assertViewportPixelBudget,
   auditExitCode,
   auditFindings,
   auditRows,
+  reuseAuditLines,
   failingGates,
   readinessExitCode,
   snapExitCode,
@@ -738,6 +740,88 @@ describe("author driver usages and audit verbs", () => {
     expect(missing.stderr).toContain("get design-systems");
   });
 
+  /**
+   * `audit reuse` — чтение админского аудита гейта (план §4 T7/T10, спека §5). Решения
+   * сидятся репозиторием: настоящий гейт платит extract+typecheck в подпроцессе на каждое
+   * создание, а формат отчёта от этого не зависит.
+   */
+  test("audit reuse reads the gate audit and honours --json", async () => {
+    const { api, db } = await setup();
+    seedComponent(db, "legacy-card", "LegacyCard");
+    const repo = new ReuseDecisionRepo(db);
+    const base = {
+      artifactKind: "component" as const,
+      artifactId: "proposed-badge",
+      designSystem: "yandex-pay",
+      sourceOrDocHash: "sha",
+      catalogRevision: "rev-1",
+      policyVersion: 1,
+      gateMode: "enforce" as const,
+      intent: "Status badge for the order card",
+      candidates: [{ id: "legacy-card", score: 0.9, blocking: true, reasons: ["same props/events/slots signature"] }],
+    };
+    repo.record({ ...base, actorId: "user_alice", decision: "blocked" });
+    repo.record({ ...base, actorId: "user_alice", decision: "blocked" });
+    repo.record({ ...base, actorId: "user_alice", gateMode: "shadow", decision: "would_block" });
+    repo.record({ ...base, actorId: "user_admin", decision: "force_new", reason: "Approved: independent lifecycle" });
+    repo.record({ ...base, actorId: "user_alice", artifactId: "role-clash", decision: "blocked", reason: "canonical_role_conflict:payment-success" });
+
+    const json = await run(api, ["audit", "reuse", "--json"]);
+    expect(json.exitCode).toBe(0);
+    const payload = JSON.parse(json.stdout) as {
+      command: string;
+      totals: { decisions: number; byDecision: Record<string, number> };
+      forceNew: { actorId: string }[];
+      repeatedBlocked: { actorId: string; artifactId: string; attempts: number }[];
+      canonicalRoleConflicts: { roles: string[] }[];
+      wouldBlock: { total: number; actors: number };
+      unreviewed: { total: number; artifacts: { id: string }[] };
+    };
+    expect(payload.command).toBe("audit reuse");
+    expect(payload.totals.byDecision).toMatchObject({ blocked: 3, would_block: 1, force_new: 1 });
+    expect(payload.forceNew).toEqual([expect.objectContaining({ actorId: "user_admin" })]);
+    expect(payload.repeatedBlocked).toEqual([expect.objectContaining({ actorId: "user_alice", artifactId: "proposed-badge", attempts: 3 })]);
+    expect(payload.canonicalRoleConflicts).toEqual([expect.objectContaining({ roles: ["payment-success"] })]);
+    expect(payload.wouldBlock).toMatchObject({ total: 1, actors: 1 });
+    expect(payload.unreviewed.artifacts).toEqual([expect.objectContaining({ id: "legacy-card" })]);
+
+    const human = await run(api, ["audit", "reuse", "--design-system", "yandex-pay", "--min-attempts", "2", "--limit", "5"]);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).toContain("force-new overrides: 1");
+    expect(human.stdout).toContain("repeated blocked attempts: 1");
+    expect(human.stdout).toContain("canonical role conflicts: 1");
+    expect(human.stdout).toContain("would_block: 1 across 1 actors");
+    expect(human.stdout).toContain("artifacts never reuse-reviewed: 1");
+
+    // Фильтр окна доезжает до сервера: за окном отчёт пуст, но команда успешна.
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const empty = await run(api, ["audit", "reuse", "--since", future, "--json"]);
+    expect(empty.exitCode).toBe(0);
+    expect((JSON.parse(empty.stdout) as { totals: { decisions: number } }).totals.decisions).toBe(0);
+  });
+
+  test("audit reuse formats a report without a server", () => {
+    const lines = reuseAuditLines({
+      generatedAt: "2026-07-31T00:00:00.000Z",
+      gateActiveSince: "2026-07-30T00:00:00.000Z",
+      filter: { designSystem: "yandex-pay", limit: 100, minAttempts: 2 },
+      totals: { decisions: 2, actors: 1, byDecision: { blocked: 2 }, byGateMode: { enforce: 2 } },
+      forceNew: [],
+      repeatedBlocked: [{
+        actorId: "user_alice", artifactKind: "component", artifactId: "proposed-badge", designSystem: "yandex-pay",
+        attempts: 2, blocked: 2, wouldBlock: 0, firstAt: "2026-07-30T00:00:00.000Z", lastAt: "2026-07-30T01:00:00.000Z",
+        lastDecisionId: "reuse_1", lastReason: null, candidateIds: ["legacy-card"],
+      }],
+      canonicalRoleConflicts: [],
+      wouldBlock: { total: 0, actors: 0, byActor: [], decisions: [] },
+      unreviewed: { total: 0, artifacts: [] },
+    });
+    expect(lines[0]).toContain("2 decisions from 1 actors");
+    expect(lines[0]).toContain("gate active since 2026-07-30T00:00:00.000Z");
+    expect(lines.join("\n")).toContain("user_alice\tcomponent/proposed-badge\t2\t2\t0");
+    expect(lines.join("\n")).toContain("(designSystem=yandex-pay)");
+  });
+
   test("parser guards the new verbs", async () => {
     const { api } = await setup();
     const noSystem = await run(api, ["audit"]);
@@ -752,6 +836,23 @@ describe("author driver usages and audit verbs", () => {
     const badVerb = await run(api, ["publish"]);
     expect(badVerb.exitCode).toBe(1);
     expect(badVerb.stderr).toContain("invalid arguments for publish");
+    // Флаги привязаны к подкоманде: аудит-фильтры не должны молча приниматься каталожным sweep.
+    const crossFlag = await run(api, ["audit", "--design-system", "yandex-pay", "--min-attempts", "3"]);
+    expect(crossFlag.exitCode).toBe(1);
+    expect(crossFlag.stderr).toContain("unknown flag for audit: --min-attempts");
+    const unknownAuditFlag = await run(api, ["audit", "reuse", "--full"]);
+    expect(unknownAuditFlag.exitCode).toBe(1);
+    expect(unknownAuditFlag.stderr).toContain("unknown flag for audit reuse: --full");
+    // `audit reuse` не требует --design-system: аудит гейта сквозной.
+    const badAuditArgs = await run(api, ["audit", "reuse", "extra"]);
+    expect(badAuditArgs.exitCode).toBe(1);
+    expect(badAuditArgs.stderr).toContain("invalid arguments for audit reuse");
+    const strayPositional = await run(api, ["audit", "sweep", "--design-system", "yandex-pay"]);
+    expect(strayPositional.exitCode).toBe(1);
+    expect(strayPositional.stderr).toContain("invalid arguments for audit");
+    const badAttempts = await run(api, ["audit", "reuse", "--min-attempts", "1"]);
+    expect(badAttempts.exitCode).toBe(1);
+    expect(badAttempts.stderr).toContain("--min-attempts must be an integer from 2 to 50");
   });
 });
 

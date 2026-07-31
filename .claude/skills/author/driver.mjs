@@ -17,7 +17,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id>\nevery verb accepts --json; snap exits 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id> | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap exits 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -60,6 +60,17 @@ const catalogLimitFlag = {
   parse(value) {
     const number = Number(value);
     if (!Number.isInteger(number) || number < 1 || number > 20) invalid("--limit must be an integer from 1 to 20");
+    return number;
+  },
+};
+
+/** Секции аудита длиннее каталожных выборок: потолок сервера — 1000 на секцию. */
+const auditLimitFlag = {
+  value: true,
+  key: "limit",
+  parse(value) {
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < 1 || number > 1000) invalid("--limit must be an integer from 1 to 1000");
     return number;
   },
 };
@@ -110,6 +121,22 @@ export const flagSpecs = Object.freeze({
   publish: { ...jsonFlag, "--verify": { value: false, key: "verify" }, "--force": { value: false, key: "force" } },
   usages: { ...jsonFlag, "--tree": { value: false, key: "tree" } },
   audit: { ...jsonFlag, "--design-system": { value: true, key: "designSystem" } },
+  "audit reuse": {
+    ...jsonFlag,
+    "--design-system": { value: true, key: "designSystem" },
+    "--actor": { value: true, key: "actor" },
+    "--since": { value: true, key: "since" },
+    "--limit": auditLimitFlag,
+    "--min-attempts": {
+      value: true,
+      key: "minAttempts",
+      parse(value) {
+        const number = Number(value);
+        if (!Number.isInteger(number) || number < 2 || number > 50) invalid("--min-attempts must be an integer from 2 to 50");
+        return number;
+      },
+    },
+  },
 });
 
 const ranges = Object.freeze({
@@ -131,7 +158,8 @@ const ranges = Object.freeze({
   readiness: [1, 1],
   publish: [1, 1],
   usages: [1, 1],
-  audit: [0, 0],
+  // 0 — каталожный sweep `audit --design-system`, 1 — подкоманда `audit reuse`.
+  audit: [0, 1],
 });
 
 export function parseArgs(argv) {
@@ -148,9 +176,16 @@ export function parseArgs(argv) {
   };
   const catalogFirst = command === "catalog" ? firstPositional(new Set(["--intent", "--limit"])) : null;
   const compositionFirst = command === "composition" ? firstPositional(new Set(["--design-system"])) : null;
+  // `audit reuse` — чтение аудита гейта; у него собственный набор флагов, поэтому подкоманда
+  // распознаётся до разбора флагов, как у `catalog list|search|get`.
+  const auditFirst = command === "audit" ? firstPositional(new Set(["--design-system", "--actor", "--since", "--limit", "--min-attempts"])) : null;
   const catalogSubcommand = ["list", "search", "get"].includes(catalogFirst) ? catalogFirst : null;
   const compositionSubcommand = compositionFirst === "publish" ? "publish" : null;
-  const commandForm = catalogSubcommand ? `catalog ${catalogSubcommand}` : compositionSubcommand ? "composition publish" : command;
+  const auditSubcommand = auditFirst === "reuse" ? "reuse" : null;
+  const commandForm = catalogSubcommand ? `catalog ${catalogSubcommand}`
+    : compositionSubcommand ? "composition publish"
+    : auditSubcommand ? "audit reuse"
+    : command;
   const specs = flagSpecs[commandForm] ?? {};
   const positionals = [];
   const flags = {};
@@ -185,7 +220,11 @@ export function parseArgs(argv) {
   if (command === "component-move" && flags.designSystem === undefined) invalid("component-move requires --design-system <id>");
   if (command === "component" && flags.forceNew && flags.reason === undefined) invalid("component --force-new requires --reason <text>");
   if (commandForm === "composition" && flags.designSystem === undefined) invalid("composition requires --design-system <id>");
-  if (command === "audit" && flags.designSystem === undefined) invalid("audit requires --design-system <id>");
+  if (commandForm === "audit reuse" && positionals.length !== 1) invalid("invalid arguments for audit reuse");
+  // `--design-system` обязателен только у каталожного sweep: аудит гейта по построению
+  // сквозной, дизайн-система в нём — необязательный фильтр.
+  if (commandForm === "audit" && flags.designSystem === undefined) invalid("audit requires --design-system <id>");
+  if (commandForm === "audit" && positionals.length !== 0) invalid("invalid arguments for audit");
   if (command === "status" && positionals.length < 2 && !flags.allScreens) invalid("status requires <screenId> or --all-screens");
   return { cmd: command, args: positionals, flags };
 }
@@ -967,6 +1006,63 @@ async function runAudit(flags) {
   if (exitCode !== EXIT.ok) throw new CliError(`deprecated components are still used by head revisions: ${findings.deprecatedInUse.join(", ")}`, { exitCode });
 }
 
+/**
+ * Человекочитаемый отчёт аудита гейта переиспользования (спека §5). Чистая функция: тест
+ * проверяет форматирование без сервера, а `--json` отдаёт ответ API как есть.
+ */
+export function reuseAuditLines(report) {
+  const decisionCounts = Object.entries(report.totals?.byDecision ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const scope = [
+    report.filter?.designSystem ? `designSystem=${report.filter.designSystem}` : null,
+    report.filter?.actorId ? `actor=${report.filter.actorId}` : null,
+    report.filter?.since ? `since=${report.filter.since}` : null,
+  ].filter(Boolean).join(" ");
+  const lines = [
+    `reuse audit${scope ? ` (${scope})` : ""}: ${report.totals?.decisions ?? 0} decisions from ${report.totals?.actors ?? 0} actors; gate active since ${report.gateActiveSince ?? "never"}`,
+    `decisions: ${decisionCounts.map(([decision, count]) => `${decision}=${count}`).join(" ") || "-"}`,
+    `gate modes: ${Object.entries(report.totals?.byGateMode ?? {}).map(([mode, count]) => `${mode}=${count}`).join(" ") || "-"}`,
+    `would_block: ${report.wouldBlock?.total ?? 0} across ${report.wouldBlock?.actors ?? 0} actors${(report.wouldBlock?.byActor ?? []).length ? ` (${report.wouldBlock.byActor.map((row) => `${row.actorId}=${row.count}`).join(", ")})` : ""}`,
+  ];
+  const section = (title, rows, header, format) => {
+    lines.push(`${title}: ${rows.length}`);
+    if (!rows.length) return;
+    lines.push(header);
+    for (const row of rows) lines.push(format(row));
+  };
+  section("force-new overrides", report.forceNew ?? [], "decisionId\tactor\tartifact\tdesignSystem\tcreatedAt\treason",
+    (row) => `${row.id}\t${row.actorId}\t${row.artifactKind}/${row.artifactId}\t${row.designSystem}\t${row.createdAt}\t${row.reason ?? "-"}`);
+  section("repeated blocked attempts", report.repeatedBlocked ?? [], "actor\tartifact\tattempts\tblocked\twouldBlock\tlastAt\tcandidates",
+    (row) => `${row.actorId}\t${row.artifactKind}/${row.artifactId}\t${row.attempts}\t${row.blocked}\t${row.wouldBlock}\t${row.lastAt}\t${row.candidateIds.join(",") || "-"}`);
+  section("canonical role conflicts", report.canonicalRoleConflicts ?? [], "decisionId\tactor\tartifact\troles\tcreatedAt",
+    (row) => `${row.id}\t${row.actorId}\t${row.artifactKind}/${row.artifactId}\t${row.roles.join(",") || "-"}\t${row.createdAt}`);
+  section("would_block decisions", report.wouldBlock?.decisions ?? [], "decisionId\tactor\tartifact\tcandidates\tcreatedAt",
+    (row) => `${row.id}\t${row.actorId}\t${row.artifactKind}/${row.artifactId}\t${row.candidates.map((candidate) => candidate.id).join(",") || "-"}\t${row.createdAt}`);
+  const unreviewed = report.unreviewed ?? { total: 0, artifacts: [] };
+  lines.push(`artifacts never reuse-reviewed: ${unreviewed.total} (showing ${unreviewed.artifacts.length})`);
+  if (unreviewed.artifacts.length) {
+    lines.push("kind\tid\tdesignSystem\tcreatedAt\tbeforeGate");
+    for (const row of unreviewed.artifacts) lines.push(`${row.kind}\t${row.id}\t${row.designSystem}\t${row.createdAt}\t${row.createdBeforeGate ? "yes" : "no"}`);
+  }
+  return lines;
+}
+
+/** Чтение админского аудита гейта. Успешное чтение — всегда exit 0, находки — не ошибка CLI. */
+async function runReuseAudit(flags) {
+  const query = new URLSearchParams();
+  if (flags.designSystem !== undefined) query.set("designSystem", flags.designSystem);
+  if (flags.actor !== undefined) query.set("actorId", flags.actor);
+  if (flags.since !== undefined) query.set("since", flags.since);
+  if (flags.limit !== undefined) query.set("limit", String(flags.limit));
+  if (flags.minAttempts !== undefined) query.set("minAttempts", String(flags.minAttempts));
+  const path = `/catalog/reuse-decisions${query.size ? `?${query}` : ""}`;
+  const response = await call("GET", path);
+  if (response.status === 401 || response.status === 403) {
+    throw new CliError(`reuse audit requires an administrator session (${response.status}): ${JSON.stringify(response.json, null, 2)}`);
+  }
+  const audit = await requireOk("reuse audit", response);
+  report(reuseAuditLines(audit), { command: "audit reuse", ...audit });
+}
+
 async function runComposition(args, flags) {
   if (args[0] === "publish") {
     const id = args[1];
@@ -1124,7 +1220,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "readiness") await runReadiness(args);
   else if (cmd === "publish") await runPublish(args, flags);
   else if (cmd === "usages") await runUsages(args, flags);
-  else if (cmd === "audit") await runAudit(flags);
+  else if (cmd === "audit") await (args[0] === "reuse" ? runReuseAudit(flags) : runAudit(flags));
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : null;
