@@ -9558,6 +9558,66 @@
       }
     },
     "/api/design-systems/{id}": {
+      "delete": {
+        "operationId": "delete_design_systems_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No content"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "design_system_in_use | design_system_retired"
+          }
+        },
+        "summary": "Retire (soft-archive) a custom design system: sets retired=1 without deleting anything. Owner or admin only; builtin systems answer 405; a system that still owns live components/prototypes/compositions answers 409 design_system_in_use with per-kind counts; an already retired one answers 409 design_system_retired. Responds 204 without a body.",
+        "x-easyui-validated": false
+      },
       "get": {
         "operationId": "get_design_systems_id",
         "parameters": [

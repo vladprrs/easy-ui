@@ -1228,6 +1228,13 @@ export const createDesignSystemContract = registerContract({
   errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed],
 });
 
+export const retireDesignSystemContract = registerContract({
+  method: "DELETE", path: "/api/design-systems/{id}",
+  summary: "Retire (soft-archive) a custom design system: sets retired=1 without deleting anything. Owner or admin only; builtin systems answer 405; a system that still owns live components/prototypes/compositions answers 409 design_system_in_use with per-kind counts; an already retired one answers 409 design_system_retired. Responds 204 without a body.",
+  status: 204,
+  errors: [{ status: 403, code: "forbidden" }, errorCatalog.notFound, errorCatalog.methodNotAllowed, { status: 409, code: "design_system_in_use" }, { status: 409, code: "design_system_retired" }],
+});
+
 
 // --- Compositions (волна 5 §5.4): версионированные фрагменты экрана ---
 

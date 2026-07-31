@@ -280,6 +280,11 @@ function orderedCases(): [string, Case][] {
     ["DELETE /api/prototypes/{id}/share/{shareId}", { run: () => call("DELETE", `/api/prototypes/contract-proto/share/${state.shareId}`), expected: err(404, "share_not_found") }],
     ["DELETE /api/visual-references/{id}", { run: () => call("DELETE", `/api/visual-references/${state.referenceId}`), expected: ok(204) }],
     ["DELETE /api/visual-references/{id}", { run: () => call("DELETE", `/api/visual-references/${state.referenceId}`), expected: err(404, "reference_not_found") }],
+    // Ретайр дизайн-системы: успех на свежей пустой системе, 409 на повторе и на непустой.
+    ["POST /api/design-systems", { run: () => call("POST", "/api/design-systems", { id: "contract-ds-retire", name: "Contract DS Retire", description: "Retired by the contract test" }), expected: ok(201) }],
+    ["DELETE /api/design-systems/{id}", { run: () => call("DELETE", "/api/design-systems/contract-ds-retire"), expected: ok(204) }],
+    ["DELETE /api/design-systems/{id}", { run: () => call("DELETE", "/api/design-systems/contract-ds-retire"), expected: err(409, "design_system_retired") }],
+    ["DELETE /api/design-systems/{id}", { run: () => call("DELETE", "/api/design-systems/contract-ds"), expected: err(409, "design_system_in_use") }],
     ["DELETE /api/components/{id}", { run: () => call("DELETE", "/api/components/contract-stars", { baseRev: 3 }), expected: ok(204) }],
     ["DELETE /api/prototypes/{id}", { run: () => call("DELETE", "/api/prototypes/contract-proto", { baseRev: 3 }), expected: ok(204) }],
     ["POST /api/auth/logout", { run: () => handler(new Request("http://test/api/auth/logout", { method: "POST", headers: { origin: "http://test", cookie: state.loginCookie! } })), expected: ok(204) }],

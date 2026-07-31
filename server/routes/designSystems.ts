@@ -6,6 +6,7 @@ import {ApiError,json,noStore,readJson} from "../http";
 import {resolveSpacingScale} from "../../src/designSystems/spacingScale";
 import type {Principal} from "../auth";
 import {requireResourceOwner,requireUser} from "../authorization";
+import {writeAuditEvent} from "../audit";
 
 function summary(db:Database,system:RegisteredDesignSystem) {
   const theme=getLatestDesignSystemContent(db,system.id);
@@ -58,6 +59,41 @@ async function patchTheme(request:Request,db:Database,system:RegisteredDesignSys
   return json(summary(db,getIncludingRetired(db,system.id)!),200,noStore);
 }
 
+// Артефакты, удерживающие систему живой. Ретайр — не удаление, поэтому пустоту считаем по
+// «живым» строкам: компоненты и композиции имеют надгробия (deleted_at), прототипы удаляются
+// физически. Триггеры v15 запрещают запись новых артефактов в ретайрнутую систему, но не
+// умеют рассказать, почему ретайр невозможен, — счётчики отдаёт 409.
+const RETIRE_BLOCKERS=[
+  {key:"components",sql:"SELECT COUNT(*) n FROM components WHERE design_system=? AND deleted_at IS NULL"},
+  {key:"prototypes",sql:"SELECT COUNT(*) n FROM prototypes WHERE design_system=?"},
+  {key:"compositions",sql:"SELECT COUNT(*) n FROM compositions WHERE design_system=? AND deleted_at IS NULL"},
+] as const;
+
+function retireBlockers(db:Database,id:string):{counts:Record<string,number>;total:number} {
+  const counts:Record<string,number>={};let total=0;
+  for(const blocker of RETIRE_BLOCKERS) {
+    const n=(db.query(blocker.sql).get(id) as {n:number}).n;
+    counts[blocker.key]=n;total+=n;
+  }
+  return {counts,total};
+}
+
+/** Мягкий ретайр кастомной системы: retired=1, без физического удаления и без миграций. */
+function retire(db:Database,id:string,principal:Principal):Response {
+  requireUser(principal);
+  const system=getIncludingRetired(db,id);
+  if(!system) throw new ApiError(404,"not_found","Design system not found");
+  if(system.builtinProvider!==null) throw new ApiError(405,"method_not_allowed","Builtin design systems cannot be retired");
+  const actor=requireResourceOwner(db,"design_systems",id,principal);
+  if(system.retired) throw new ApiError(409,"design_system_retired","Design system is already retired");
+  const blockers=retireBlockers(db,id);
+  if(blockers.total>0) throw new ApiError(409,"design_system_in_use","Design system still owns components, prototypes or compositions",{blockers:{...blockers.counts,total:blockers.total}});
+  const at=new Date().toISOString();
+  db.query("UPDATE design_systems SET retired=1,updated_at=? WHERE id=?").run(at,id);
+  writeAuditEvent(db,{actorId:actor.userId,action:"design_system.retired",subjectType:"design_system",subjectId:id,detail:{at}});
+  return new Response(null,{status:204,headers:noStore});
+}
+
 export async function routeDesignSystems(request:Request,db:Database,segments:string[],principal:Principal):Promise<Response> {
   // segments: ["design-systems", id?, "versions"?, v?]
   if(segments.length>=3) {
@@ -83,6 +119,7 @@ export async function routeDesignSystems(request:Request,db:Database,segments:st
     catch(error) { if(String(error).includes("UNIQUE constraint failed")) throw new ApiError(409,"already_exists","Design system already exists"); throw error; }
     return json(summary(db,getIncludingRetired(db,input.id)!),201,{...noStore,location:`/api/design-systems/${input.id}`});
   }
+  if(request.method==="DELETE"&&id) return retire(db,id,principal);
   if(request.method==="PATCH"&&id) { requireResourceOwner(db,"design_systems",id,principal); const system=getIncludingRetired(db,id); if(!system) throw new ApiError(404,"not_found","Design system not found"); if(system.retired) throw new ApiError(409,"design_system_retired","Retired design-system themes cannot be changed"); return patchTheme(request,db,system); }
   throw new ApiError(405,"method_not_allowed","Method not allowed");
 }

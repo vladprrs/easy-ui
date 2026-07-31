@@ -363,7 +363,10 @@ node driver.mjs get design-systems        # реестр активных custom
 node driver.mjs get assets                # ассеты и счётчики hard-pin usage
 node driver.mjs get assets asset_<sha256> # все удерживающие hard pins и visual-run роли
 node driver.mjs delete prototypes my-flow # hard delete (prototypes) / soft (components)
+node driver.mjs delete design-system old-ds # ретайр системы: только пустая, иначе 409
 ```
+
+`delete <kind> <id>` принимает и единственное число (`component`, `design-system`). Ретайр дизайн-системы — мягкий (`retired=1`): она пропадает из `get design-systems` и из записи, но остаётся читаемой по прямому GET; повторный вызов → `409 design_system_retired`.
 
 Ревью изменений между immutable-ревизиями:
 

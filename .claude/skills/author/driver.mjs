@@ -17,7 +17,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id> | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap exits 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id> | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap exits 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -277,6 +277,32 @@ async function requireOk(step, response, statuses = [200]) {
   if (!statuses.includes(response.status)) requestFailed(step, response);
   return response.json;
 }
+
+/**
+ * REST-коллекции всегда во множественном числе, а руки набирают единственное. Раньше `kind`
+ * уходил в путь как есть, и `delete component <id>` бился о `/api/component/<id>` → 404 с
+ * диагностикой «component/<id> not found», врущей про существование ресурса. Алиасы
+ * нормализуют форму; неизвестный kind диагностируется отдельно, а не через ложный 404.
+ */
+const COLLECTION_ALIASES = Object.freeze({
+  prototype: "prototypes",
+  component: "components",
+  composition: "compositions",
+  "design-system": "design-systems",
+  asset: "assets",
+});
+const resolveCollection = (kind) => COLLECTION_ALIASES[kind] ?? kind;
+
+/**
+ * Что и как удаляется. `revisioned` — ресурсы с CAS по headRev; дизайн-система версий тела
+ * не имеет: DELETE её ретайрит (retired=1) без тела запроса.
+ */
+const DELETABLE = Object.freeze({
+  prototypes: { revisioned: true, verb: "deleted" },
+  components: { revisioned: true, verb: "deleted" },
+  compositions: { revisioned: true, verb: "deleted" },
+  "design-systems": { revisioned: false, verb: "retired" },
+});
 
 async function getMeta(kind, id) {
   const response = await call("GET", `/${kind}/${encodeURIComponent(id)}`);
@@ -1180,15 +1206,26 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "check") await runCheck(args, flags);
   else if (cmd === "geometry") await runGeometry(args);
   else if (cmd === "get") {
-    const [kind, id] = args;
+    // `get` принимает и составные пути (`prototypes/<id>/draft`), поэтому алиас применяется
+    // только к точному совпадению с известной коллекцией.
+    const kind = resolveCollection(args[0]);
+    const id = args[1];
     const path = kind === "assets" && id ? `/assets/${encodeURIComponent(id)}/usage` : id ? `/${kind}/${encodeURIComponent(id)}` : `/${kind}`;
     process.stdout.write(`${JSON.stringify(await requireOk("get", await call("GET", path)), null, 2)}\n`);
   } else if (cmd === "delete") {
-    const [kind, id] = args;
+    const [rawKind, id] = args;
+    const kind = resolveCollection(rawKind);
+    const spec = DELETABLE[kind];
+    if (!spec) throw new CliError(`cannot delete ${rawKind}; supported kinds: ${Object.keys(DELETABLE).join(", ")}`);
     const meta = await getMeta(kind, id);
     if (!meta) throw new CliError(`${kind}/${id} not found`);
-    await requireOk("delete", await call("DELETE", `/${kind}/${encodeURIComponent(id)}`, { baseRev: meta.headRev }), [204]);
-    report(`deleted ${kind}/${id}`, { command: "delete", kind, id, deleted: true });
+    let body;
+    if (spec.revisioned) {
+      if (typeof meta.headRev !== "number") throw new CliError(`${kind}/${id} has no headRev to CAS on: ${JSON.stringify(meta)}`);
+      body = { baseRev: meta.headRev };
+    }
+    await requireOk("delete", await call("DELETE", `/${kind}/${encodeURIComponent(id)}`, body), [204]);
+    report(`${spec.verb} ${kind}/${id}`, { command: "delete", kind, id, deleted: true });
   } else if (cmd === "shoot") {
     const [id, outputDir = `author-shots/${id}`] = args;
     const draft = await requireOk("draft", await call("GET", `/prototypes/${encodeURIComponent(id)}/draft`));

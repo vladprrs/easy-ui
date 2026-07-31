@@ -435,6 +435,31 @@ export default function MoveRoleOwner() { return <div>move role owner</div>; }
     expect(JSON.parse(usage.stdout)).toMatchObject({ asset: { id: asset.id }, prototypes: [], components: [] });
   });
 
+  test("delete resolves singular kinds and retires a design system without a baseRev", async () => {
+    const { api, db } = await setup();
+    seedComponent(db, "retire-me", "RetireMe");
+
+    const badKind = await run(api, ["delete", "widget", "retire-me"]);
+    expect(badKind.exitCode).toBe(1);
+    expect(badKind.stderr).toContain("cannot delete widget");
+
+    // Регресс: единственное число уходило в путь как есть → GET /api/component/<id> → 404,
+    // и CLI врал «component/<id> not found» про существующий компонент.
+    const component = await run(api, ["delete", "component", "retire-me", "--json"]);
+    expect(component.exitCode).toBe(0);
+    expect(JSON.parse(component.stdout)).toEqual({ command: "delete", kind: "components", id: "retire-me", deleted: true });
+    expect(db.query("SELECT deleted_at IS NOT NULL gone FROM components WHERE id='retire-me'").get()).toEqual({ gone: 1 });
+
+    const system = await run(api, ["delete", "design-system", "yandex-pay"]);
+    expect(system.exitCode).toBe(0);
+    expect(system.stdout).toContain("retired design-systems/yandex-pay");
+    expect(db.query("SELECT retired FROM design_systems WHERE id='yandex-pay'").get()).toEqual({ retired: 1 });
+
+    const repeat = await run(api, ["delete", "design-system", "yandex-pay"]);
+    expect(repeat.exitCode).toBe(1);
+    expect(repeat.stderr).toContain("design_system_retired");
+  });
+
   test("parser rejects unknown and duplicate flags without consuming positional values after booleans", async () => {
     const { api } = await setup();
     await createThreeRevisions(api, "parser-diff");

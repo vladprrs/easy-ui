@@ -3,6 +3,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { openDatabase } from "./db";
+import { createHandler } from "./main";
+import { UserRepo } from "./users";
 import { PrototypeRepo } from "./repos/prototypes";
 import { insertDesignSystemVersion } from "./designSystems";
 import { prototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
@@ -256,6 +258,118 @@ describe("PATCH CAS + immutability + builtin guard", () => {
     const { db, handler } = await setup();
     await createCustomSystem(handler, "cas-c");
     expect((await handler(req("/design-systems/cas-c/versions/7"))).status).toBe(404);
+    db.close();
+  });
+});
+
+describe("DELETE /api/design-systems/:id — мягкий ретайр", () => {
+  const errorOf = async (response: Response) => (await response.json() as { error: { code: string; blockers?: Record<string, number> } }).error;
+
+  test("retires an empty custom system: 204, gone from the list, still readable directly, repeat → 409", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "retire-empty");
+    await createCustomSystem(handler, "retire-keep");
+
+    const retired = await handler(req("/design-systems/retire-empty", "DELETE"));
+    expect(retired.status).toBe(204);
+    expect(await retired.text()).toBe("");
+    expect(db.query("SELECT retired FROM design_systems WHERE id='retire-empty'").get()).toEqual({ retired: 1 });
+    expect(db.query("SELECT action FROM audit_events WHERE subject_id='retire-empty' ORDER BY at DESC LIMIT 1").get()).toEqual({ action: "design_system.retired" });
+
+    const listed = await (await handler(req("/design-systems"))).json() as { designSystems: { id: string }[] };
+    expect(listed.designSystems.map((system) => system.id)).toContain("retire-keep");
+    expect(listed.designSystems.map((system) => system.id)).not.toContain("retire-empty");
+
+    const direct = await handler(req("/design-systems/retire-empty"));
+    expect(direct.status).toBe(200);
+    expect(await direct.json() as { retired: boolean }).toMatchObject({ id: "retire-empty", retired: true });
+
+    // Повтор — не 204: ретайрнутая система остаётся читаемой, поэтому 404 солгал бы,
+    // а 409 повторяет отказ PATCH на той же ретайрнутой системе.
+    const repeat = await handler(req("/design-systems/retire-empty", "DELETE"));
+    expect(repeat.status).toBe(409);
+    expect((await errorOf(repeat)).code).toBe("design_system_retired");
+    db.close();
+  });
+
+  test("refuses a system that still owns a component or a prototype (409 with counts)", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "retire-busy");
+    const at = new Date().toISOString();
+    db.query("INSERT INTO components (id,name,head_rev,design_system,deleted_at,created_at,updated_at,owner_id) VALUES ('busy-widget','BusyWidget',1,'retire-busy',NULL,?,?,'user_admin')").run(at, at);
+
+    const blocked = await handler(req("/design-systems/retire-busy", "DELETE"));
+    expect(blocked.status).toBe(409);
+    const error = await errorOf(blocked);
+    expect(error.code).toBe("design_system_in_use");
+    expect(error.blockers).toEqual({ components: 1, prototypes: 0, compositions: 0, total: 1 });
+
+    // Надгробие компонента освобождает систему; живой прототип — снова блокирует.
+    db.query("UPDATE components SET deleted_at=? WHERE id='busy-widget'").run(at);
+    new PrototypeRepo(db).create(customDoc("busy-proto", "retire-busy"));
+    const stillBlocked = await handler(req("/design-systems/retire-busy", "DELETE"));
+    expect(stillBlocked.status).toBe(409);
+    expect((await errorOf(stillBlocked)).blockers).toEqual({ components: 0, prototypes: 1, compositions: 0, total: 1 });
+
+    db.query("DELETE FROM prototype_revisions WHERE prototype_id='busy-proto'").run();
+    db.query("DELETE FROM prototypes WHERE id='busy-proto'").run();
+    expect((await handler(req("/design-systems/retire-busy", "DELETE"))).status).toBe(204);
+    db.close();
+  });
+
+  test("only the owner or an admin may retire; builtin systems answer 405", async () => {
+    const { dir, db, handler } = await setup();
+    await createCustomSystem(handler, "retire-owned");
+    const at = new Date().toISOString();
+    db.query("INSERT INTO users (id,name,password_hash,is_admin,created_at) VALUES (?,?,?,?,?),(?,?,?,?,?)")
+      .run("user_alice", "Alice", "unused", 0, at, "user_root", "Root", "unused", 1, at);
+    const users = new UserRepo(db);
+    const alice = users.createSession("user_alice").token;
+    const root = users.createSession("user_root").token;
+    const raw = createHandler(db, { dataDir: dir, publicOrigin: "http://test" });
+    const as = (token: string, id: string) => raw(new Request(`http://test/api/design-systems/${id}`, { method: "DELETE", headers: { cookie: `easyui_session=${token}`, origin: "http://test" } }));
+
+    const stranger = await as(alice, "retire-owned");
+    expect(stranger.status).toBe(403);
+    expect((await errorOf(stranger)).code).toBe("forbidden");
+    expect(db.query("SELECT retired FROM design_systems WHERE id='retire-owned'").get()).toEqual({ retired: 0 });
+
+    // Аноним отсекается ещё аутентификацией (401), до владельческой проверки.
+    const anonymous = await raw(new Request("http://test/api/design-systems/retire-owned", { method: "DELETE", headers: { origin: "http://test" } }));
+    expect(anonymous.status).toBe(401);
+
+    // Встроенная система неретайрима так же, как неизменяема её тема.
+    const builtin = await as(root, "shadcn");
+    expect(builtin.status).toBe(405);
+    expect((await errorOf(builtin)).code).toBe("method_not_allowed");
+
+    // Админ, не будучи владельцем, ретайрит.
+    expect((await as(root, "retire-owned")).status).toBe(204);
+    expect((await as(root, "retire-missing")).status).toBe(404);
+    db.close();
+  });
+
+  test("a retired system accepts no new component or prototype", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "retire-closed");
+    expect((await handler(req("/design-systems/retire-closed", "DELETE"))).status).toBe(204);
+
+    const component = await handler(req("/components", "POST", {
+      id: "closed-widget", name: "ClosedWidget", designSystem: "retire-closed",
+      source: "export default function ClosedWidget() { return null; }",
+      intent: "closed system rejection fixture for retirement coverage",
+    }));
+    expect(component.status).toBe(422);
+    expect((await errorOf(component)).code).toBe("validation_failed");
+
+    const prototype = await handler(req("/prototypes", "POST", { doc: customDoc("closed-proto", "retire-closed") }));
+    expect(prototype.status).toBe(422);
+    expect((await errorOf(prototype)).code).toBe("validation_failed");
+
+    // Нижний рубеж — триггеры v15: даже прямая вставка в БД отвергается.
+    const at = new Date().toISOString();
+    expect(() => db.query("INSERT INTO components (id,name,head_rev,design_system,deleted_at,created_at,updated_at,owner_id) VALUES ('raw-widget','RawWidget',1,'retire-closed',NULL,?,?,'user_admin')").run(at, at))
+      .toThrow(/retired design system reference/);
     db.close();
   });
 });

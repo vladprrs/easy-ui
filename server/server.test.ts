@@ -55,7 +55,9 @@ describe("prototype API", () => {
       if(path) expect((await body(response)) as {error:{issues:{path:string[]}[]}}).toMatchObject({error:{code:"validation_failed",issues:expect.arrayContaining([expect.objectContaining({path:[path]})])}});
     }
     for(const method of ["PUT","PATCH","DELETE"]) expect((await fetch(`${base}/api/design-systems`,{method})).status).toBe(405);
-    for(const method of ["PUT","DELETE"]) expect((await fetch(`${base}/api/design-systems/product-ui`,{method})).status).toBe(405);
+    // DELETE на `:id` больше не 405 — это ретайр системы; его семантика покрыта в
+    // `design-systems-theme.test.ts`, здесь система намеренно не трогается (ниже её PATCH-тема).
+    expect((await fetch(`${base}/api/design-systems/product-ui`,{method:"PUT"})).status).toBe(405);
     // PATCH on :id is the theme endpoint: custom systems accept it, retired systems reject.
     expect((await fetch(`${base}/api/design-systems/product-ui`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({tokens:{"color.a":"#111"},baseVersion:0})})).status).toBe(200);
     expect((await fetch(`${base}/api/design-systems/shadcn`,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({baseVersion:0})})).status).toBe(409);
