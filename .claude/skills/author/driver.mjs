@@ -245,35 +245,12 @@ async function getMeta(kind, id) {
   return requireOk(`GET /${kind}/${id}`, response);
 }
 
-async function discoverComponent({ id, name, source, designSystem, intent }, limit) {
+async function discoverComponent({ id, name, source, designSystem, intent }) {
   return requireOk("catalog search", await call("POST", "/catalog/candidates", {
     designSystem,
     intent,
     proposed: { kind: "component", id, name, source },
-    ...(limit === undefined ? {} : { limit }),
   }));
-}
-
-async function componentCorpusSize(designSystem) {
-  const encoded = encodeURIComponent(designSystem);
-  const [manifestResponse, componentsResponse] = await Promise.all([
-    call("GET", `/catalog/manifest?designSystem=${encoded}`),
-    call("GET", "/components"),
-  ]);
-  const manifest = await requireOk("catalog manifest", manifestResponse);
-  const components = await requireOk("component list", componentsResponse);
-  const drafts = components.filter((component) => component.designSystem === designSystem && component.latestVersion === null);
-  return (manifest.components ?? []).length + drafts.length;
-}
-
-function blockingCandidateKeys(discovery) {
-  return [...new Set((discovery.candidates ?? []).filter((candidate) => candidate.blocking).map((candidate) => {
-    if (typeof candidate.key === "string" && candidate.key) return candidate.key;
-    if (candidate.kind === "component" && typeof candidate.designSystem === "string" && typeof candidate.id === "string") {
-      return `component:${candidate.designSystem}:${candidate.id}`;
-    }
-    throw new CliError(`catalog search returned a blocking candidate without a reusable key: ${JSON.stringify(candidate)}`);
-  }))].sort();
 }
 
 export async function pollJob(path, { deadlineMs }) {
@@ -1035,34 +1012,16 @@ export async function main(argv = process.argv.slice(2)) {
     if (meta === null) {
       if (flags.intent === undefined) invalid("component create requires --intent <text>");
       if (selectedSystem === undefined) invalid("component create requires --design-system <id> or EASYUI_DESIGN_SYSTEM");
-      let candidateCount;
-      if (flags.forceNew) {
-        [discovery, candidateCount] = await Promise.all([
-          discoverComponent({ id, name, source, designSystem: selectedSystem, intent: flags.intent }, 20),
-          componentCorpusSize(selectedSystem),
-        ]);
-      } else {
-        discovery = await discoverComponent({ id, name, source, designSystem: selectedSystem, intent: flags.intent });
-      }
+      discovery = await discoverComponent({ id, name, source, designSystem: selectedSystem, intent: flags.intent });
       if (!jsonMode) for (const line of catalogSearchLines(discovery)) out(line);
       if (flags.forceNew) {
-        if (candidateCount > discovery.candidates.length) {
-          report(
-            [
-              `STOP: the catalog candidates endpoint returned ${discovery.candidates.length} of ${candidateCount} artifacts`,
-              "A complete blocking candidate key set cannot be prepared; do not force creation.",
-            ],
-            {
-              command: "component", id, stop: true, exitCode: EXIT.productErrors,
-              code: "candidate_set_truncated", candidateCount, returnedCandidates: discovery.candidates.length,
-              catalogRevision: discovery.catalogRevision,
-            },
-          );
-          throw new CliError("STOP: candidate discovery is truncated; cannot prepare a complete reuseOverride", { exitCode: EXIT.productErrors });
+        const template = discovery.overrideTemplate;
+        if (template === undefined || !Array.isArray(template.candidateKeys) || typeof template.catalogRevision !== "string") {
+          throw new CliError("catalog search did not return an authoritative overrideTemplate");
         }
-        acknowledgedCandidateKeys = blockingCandidateKeys(discovery);
+        acknowledgedCandidateKeys = template.candidateKeys;
         if (acknowledgedCandidateKeys.length) {
-          reuseOverride = { catalogRevision: discovery.catalogRevision, candidateKeys: acknowledgedCandidateKeys, reason: flags.reason };
+          reuseOverride = { ...template, reason: flags.reason };
         }
       }
     }

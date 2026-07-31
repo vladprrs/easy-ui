@@ -1538,7 +1538,6 @@
                         "type": "array"
                       },
                       "source": {
-                        "maxLength": 262144,
                         "type": "string"
                       }
                     },
@@ -1671,6 +1670,25 @@
                     "designSystem": {
                       "type": "string"
                     },
+                    "overrideTemplate": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "candidateKeys": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "catalogRevision": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "catalogRevision",
+                        "candidateKeys"
+                      ],
+                      "type": "object"
+                    },
                     "policyVersion": {
                       "maximum": 9007199254740991,
                       "minimum": 0,
@@ -1757,7 +1775,7 @@
                 }
               }
             },
-            "description": "validation_failed | unsupported_kind (composition candidates are not supported yet)"
+            "description": "validation_failed | unsupported_kind (composition candidates are not supported yet) | event_schema_not_serializable (a typed event payload schema in proposed source cannot be serialized)"
           }
         },
         "summary": "Compact reuse-candidate search over the requested design system: active publications and head drafts scored by the deterministic matcher. Never returns source or props schemas. `catalogRevision` pins the catalog snapshot the scores were computed on. POST is the full form and accepts `proposed` (including source).",
@@ -2695,7 +2713,6 @@
                         "items": {
                           "$ref": "#/$defs/__schema3"
                         },
-                        "maxItems": 64,
                         "minItems": 1,
                         "type": "array"
                       },

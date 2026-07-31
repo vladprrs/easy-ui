@@ -77,7 +77,7 @@ export const candidateKey = (candidate: { designSystem: string; id: string }): s
  */
 export const reuseOverrideSchema = z.strictObject({
   catalogRevision: z.string().min(1).max(128),
-  candidateKeys: z.array(z.string().min(1).max(256)).min(1).max(64),
+  candidateKeys: z.array(z.string().min(1).max(256)).min(1),
   reason: z.string().trim().min(20).max(500),
 });
 export type ReuseOverride = z.infer<typeof reuseOverrideSchema>;
@@ -262,13 +262,22 @@ function nextStepsFor(resolution: "reuse" | "escalate", blocking: readonly Match
 }
 
 /** Предложение для матчера. Собирается **только** из извлечённой меты, не из тела запроса. */
-type ProposalInput = { designSystem: string; artifactId: string; name: string; intent: string; source: string; meta: DefinitionMeta };
-function proposedFrom(input: ProposalInput): ProposedArtifact {
+export type ReuseProposalInput = {
+  designSystem: string;
+  artifactId?: string;
+  name: string;
+  intent: string;
+  source: string;
+  meta: DefinitionMeta;
+  policy?: MatchPolicy;
+  limit?: number;
+};
+function proposedFrom(input: ReuseProposalInput): ProposedArtifact {
   const meta = input.meta;
   return {
     kind: "component",
     designSystem: input.designSystem,
-    id: input.artifactId,
+    ...(input.artifactId === undefined ? {} : { id: input.artifactId }),
     name: input.name,
     intent: input.intent,
     description: meta.description,
@@ -289,14 +298,14 @@ export function canonicalRoleConflicts(
   corpus: readonly CorpusCandidate[],
   designSystem: string,
   roles: readonly string[],
-  exclude: { designSystem: string; id: string },
+  exclude?: { designSystem: string; id: string },
 ): { candidate: CorpusCandidate; roles: string[] }[] {
   if (roles.length === 0) return [];
   const wanted = new Set(roles);
   const conflicts: { candidate: CorpusCandidate; roles: string[] }[] = [];
   for (const candidate of corpus) {
     if (candidate.designSystem !== designSystem) continue;
-    if (candidate.designSystem === exclude.designSystem && candidate.id === exclude.id) continue;
+    if (exclude !== undefined && candidate.designSystem === exclude.designSystem && candidate.id === exclude.id) continue;
     const overlap = [...new Set(candidate.canonicalFor ?? [])].filter((role) => wanted.has(role)).sort();
     if (overlap.length) conflicts.push({ candidate, roles: overlap });
   }
@@ -321,6 +330,44 @@ export function cacheSourceShingles(db: Database, componentId: string, rev: numb
 export const synthesizeIntent = (name: string): string =>
   name.replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, "$1 $2").replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1 $2").replace(/[-_]+/g, " ").trim().toLowerCase();
 
+export interface ReuseProposalMatch {
+  catalogRevision: string;
+  policyVersion: number;
+  candidates: MatchCandidate[];
+  blocking: MatchCandidate[];
+  roleConflicts: { candidate: CorpusCandidate; roles: string[] }[];
+  /** Полный authoritative набор, не усечённый display limit. */
+  candidateKeys: string[];
+}
+
+/**
+ * Общий read-only seam discovery/create: один proposal из извлечённой meta, один matcher и
+ * одно правило полного override key set. Вызывающий сам держит транзакцию, если ему нужна
+ * snapshot-consistency с дальнейшей записью.
+ */
+export function matchReuseProposal(db: Database, input: ReuseProposalInput): ReuseProposalMatch {
+  const policy = input.policy ?? CALIBRATED_POLICY;
+  const exclude = input.artifactId === undefined ? undefined : { designSystem: input.designSystem, id: input.artifactId };
+  const corpus = collectCorpus(db, input.designSystem);
+  const matched = matchCandidates(corpus.candidates, proposedFrom(input), policy, {
+    limit: input.limit ?? 8,
+    ...(exclude === undefined ? {} : { exclude }),
+  });
+  const roleConflicts = canonicalRoleConflicts(corpus.candidates, input.designSystem, input.meta.canonicalFor ?? [], exclude);
+  const candidateKeys = [...new Set([
+    ...matched.blocking.map(candidateKey),
+    ...roleConflicts.map((conflict) => candidateKey(conflict.candidate)),
+  ])].sort();
+  return {
+    catalogRevision: corpus.catalogRevision,
+    policyVersion: matched.policyVersion,
+    candidates: matched.candidates,
+    blocking: matched.blocking,
+    roleConflicts,
+    candidateKeys,
+  };
+}
+
 /**
  * **Строго синхронная** функция. Ни одного `await` — см. шапку модуля.
  *
@@ -330,27 +377,27 @@ export const synthesizeIntent = (name: string): string =>
  * «fail open» (спека §9).
  */
 export function matchAndDecide<T>(db: Database, input: GateInput, create: () => T): GateOutcome<T> {
-  const policy = input.policy ?? CALIBRATED_POLICY;
   const decisions = new ReuseDecisionRepo(db);
   const sourceHash = sourceSha256(input.source);
-  const exclude = { designSystem: input.designSystem, id: input.artifactId };
 
   return db.transaction((): GateOutcome<T> => {
-    const corpus = collectCorpus(db, input.designSystem);
-    const matched = matchCandidates(corpus.candidates, proposedFrom(input), policy, {
-      limit: input.limit ?? 8,
-      // D4: сам оцениваемый артефакт из корпуса исключается — иначе повторное создание под тем
-      // же id (после отката) блокировалось бы собственной осиротевшей ревизией.
-      exclude,
+    const evaluated = matchReuseProposal(db, {
+      designSystem: input.designSystem,
+      artifactId: input.artifactId,
+      name: input.name,
+      source: input.source,
+      meta: input.meta,
+      intent: input.intent,
+      ...(input.policy === undefined ? {} : { policy: input.policy }),
+      ...(input.limit === undefined ? {} : { limit: input.limit }),
     });
+    const corpus = { catalogRevision: evaluated.catalogRevision };
+    const matched = { policyVersion: evaluated.policyVersion, candidates: evaluated.candidates, blocking: evaluated.blocking };
     const blocking = matched.blocking;
-    const roleConflicts = canonicalRoleConflicts(corpus.candidates, input.designSystem, input.meta.canonicalFor ?? [], exclude);
+    const roleConflicts = evaluated.roleConflicts;
 
     const overrideKeys = new Set(input.override?.candidateKeys ?? []);
-    const requiredKeys = [...new Set([
-      ...blocking.map(candidateKey),
-      ...roleConflicts.map((conflict) => candidateKey(conflict.candidate)),
-    ])].sort();
+    const requiredKeys = evaluated.candidateKeys;
 
     const attempt = (reason: string): BlockedAttempt => ({
       actorId: input.actor.userId,

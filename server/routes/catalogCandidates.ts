@@ -2,8 +2,10 @@ import type { Database } from "bun:sqlite";
 import type { Principal } from "../auth";
 import { requireUser } from "../authorization";
 import { collectCorpus } from "../catalog/corpus";
+import { matchReuseProposal, stageAndExtract } from "../catalog/gate";
 import { matchCandidates, type MatchCandidate, type ProposedArtifact } from "../catalog/matcher";
 import { CALIBRATED_POLICY } from "../catalog/policy";
+import { checkSource } from "./components";
 import { catalogCandidatesQuerySchema, catalogCandidatesRequestSchema, parseQuery, parseWith, type CatalogCandidatesRequest } from "../contracts";
 import { getIncludingRetired } from "../designSystems";
 import { ApiError, json, noStore, readJson } from "../http";
@@ -51,7 +53,7 @@ function readInput(request: Request, url: URL): Promise<CatalogCandidatesRequest
   return readJson(request).then((body) => parseWith(catalogCandidatesRequestSchema, body));
 }
 
-export async function routeCatalogCandidates(request: Request, db: Database, principal: Principal): Promise<Response> {
+export async function routeCatalogCandidates(request: Request, db: Database, principal: Principal, dataDir = "data"): Promise<Response> {
   if (request.method !== "GET" && request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
   requireUser(principal);
   const input = await readInput(request, new URL(request.url));
@@ -64,6 +66,14 @@ export async function routeCatalogCandidates(request: Request, db: Database, pri
   if (input.proposed?.kind === "composition") {
     throw new ApiError(422, "unsupported_kind", "Composition candidates are not supported yet");
   }
+
+  const source = input.proposed?.source;
+  const extracted = source === undefined ? undefined : await stageAndExtract(
+    dataDir,
+    input.proposed?.id ?? "catalog-candidate",
+    source,
+    (path) => checkSource(source, path),
+  );
 
   const proposed: ProposedArtifact = {
     kind: "component",
@@ -86,6 +96,23 @@ export async function routeCatalogCandidates(request: Request, db: Database, pri
   // Корпус и матчинг — одной транзакцией: иначе `catalogRevision` мог бы описывать не тот
   // снапшот, по которому посчитаны кандидаты (та же причина, что у `routeLibraryCatalog`).
   const result = db.transaction(() => {
+    if (source !== undefined && extracted?.meta !== undefined) {
+      const matched = matchReuseProposal(db, {
+        designSystem: input.designSystem,
+        ...(input.proposed?.id === undefined ? {} : { artifactId: input.proposed.id }),
+        name: input.proposed?.name ?? input.proposed?.id ?? "",
+        intent: input.intent,
+        source,
+        meta: extracted.meta,
+        limit: input.limit ?? DEFAULT_LIMIT,
+      });
+      return {
+        catalogRevision: matched.catalogRevision,
+        policyVersion: matched.policyVersion,
+        candidates: matched.candidates.map(compact),
+        overrideTemplate: { catalogRevision: matched.catalogRevision, candidateKeys: matched.candidateKeys },
+      };
+    }
     const corpus = collectCorpus(db, input.designSystem);
     const matched = matchCandidates(corpus.candidates, proposed, CALIBRATED_POLICY, {
       limit: input.limit ?? DEFAULT_LIMIT,

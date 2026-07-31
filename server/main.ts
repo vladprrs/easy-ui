@@ -173,7 +173,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         if(segments[1]==="catalog"&&segments[2]==="usages"&&segments.length===3) return finish(routeCatalogUsages(request,db));
         // Discovery кандидатов на переиспользование (проект 2 §4 T4). `requireUser` — внутри
         // роута: share/capture проходят проверку анонимности выше и обязаны получить 403.
-        if(segments[1]==="catalog"&&segments[2]==="candidates"&&segments.length===3) return finish(await routeCatalogCandidates(request,db,principal));
+        if(segments[1]==="catalog"&&segments[2]==="candidates"&&segments.length===3) return finish(await routeCatalogCandidates(request,db,principal,options.dataDir??process.env.DATA_DIR??"data"));
         if(segments[1]==="shims"&&segments[2]!==undefined&&/^v[1-9]\d*$/.test(segments[2])) return finish(routeShims(request,segments.slice(1)));
         const meta=routeMeta(request,db,segments.slice(1)); if(meta) return finish(meta);
         throw new ApiError(404,"not_found","API route not found");

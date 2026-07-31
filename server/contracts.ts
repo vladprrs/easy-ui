@@ -934,7 +934,7 @@ export const listComponentsContract = registerContract({
 
 const componentReuseOverrideSchema = z.strictObject({
   catalogRevision: z.string().min(1).max(128),
-  candidateKeys: z.array(z.string().min(1).max(256)).min(1).max(64),
+  candidateKeys: z.array(z.string().min(1).max(256)).min(1),
   reason: z.string().trim().min(20).max(500),
 });
 
@@ -1419,8 +1419,8 @@ export const catalogCandidateProposedSchema = z.strictObject({
   propsJsonSchema: z.unknown().optional(),
   events: z.array(z.string()).max(64).optional(),
   slots: z.array(z.string()).max(64).optional(),
-  // Тот же потолок, что у `checkSource` (256 KB): исходник здесь только считается в шинглы.
-  source: z.string().max(262_144).optional(),
+  // Byte ceiling and typed 413 are authoritative in `checkSource`; JSON-body limits apply first.
+  source: z.string().optional(),
   // Спека §2 объявляет поле; сегодня оно приходит только с `kind:"composition"`, а тот
   // отвергается кодом `unsupported_kind` (отступление D6).
   compositionDoc: z.unknown().optional(),
@@ -1471,6 +1471,14 @@ const catalogCandidatesResponseSchema = z.strictObject({
   candidates: z.array(catalogCandidateSchema),
 });
 
+const catalogCandidatesPostResponseSchema = catalogCandidatesResponseSchema.extend({
+  /** Present only when POST included source and the server extracted authoritative metadata. */
+  overrideTemplate: z.strictObject({
+    catalogRevision: z.string(),
+    candidateKeys: z.array(z.string()),
+  }).optional(),
+});
+
 const catalogCandidatesErrors: RouteError[] = [
   { status: 403, code: "forbidden", description: "share/capture principals may not read the catalog index" },
   errorCatalog.notFound,
@@ -1485,9 +1493,15 @@ export const catalogCandidatesContract = registerContract({
   method: "POST", path: "/api/catalog/candidates",
   summary: `${catalogCandidatesSummary} POST is the full form and accepts \`proposed\` (including source).`,
   requestSchema: catalogCandidatesRequestSchema,
-  responseSchema: catalogCandidatesResponseSchema,
+  responseSchema: catalogCandidatesPostResponseSchema,
   validated: true,
-  errors: [...catalogCandidatesErrors, errorCatalog.invalidRequest, errorCatalog.payloadTooLarge, errorCatalog.unsupportedMediaType],
+  errors: [
+    ...catalogCandidatesErrors,
+    errorCatalog.invalidRequest,
+    errorCatalog.payloadTooLarge,
+    errorCatalog.unsupportedMediaType,
+    { status: 422, code: "event_schema_not_serializable", description: "a typed event payload schema in proposed source cannot be serialized" },
+  ],
 });
 
 export const catalogCandidatesGetContract = registerContract({

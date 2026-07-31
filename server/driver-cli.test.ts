@@ -319,27 +319,52 @@ export default function MoveRoleOwner() { return <div>move role owner</div>; }
     expect(audit).toMatchObject({ decision: "force_new", reason, catalog_revision: payload.discovery.catalogRevision });
   });
 
-  test("component --force-new stops when the candidate endpoint cannot return the full corpus", async () => {
+  test("component --force-new omits reuseOverride when the authoritative template is empty", async () => {
     const { api, db, directory } = await setup();
-    const sourcePath = await writeComponentSource(directory, "DriverCrowdedDuplicate", "Crowded checkout duplicate", "crowded");
-    const source = await Bun.file(sourcePath).text();
-    for (let index = 0; index < 21; index += 1) {
-      seedComponent(db, `crowded-${index}`, `Crowded${index}`, { description: "Crowded checkout duplicate", source, atomicLevel: "atom" });
-    }
+    const sourcePath = await writeComponentSource(directory, "DriverUniqueControl", "Unique account recovery control", "unique-recovery");
 
-    const result = await run(api, ["component", "driver-crowded-duplicate", "DriverCrowdedDuplicate", sourcePath, "--design-system", "yandex-pay", "--intent", "Show crowded checkout duplicate", "--force-new", "--reason", "Approved separate treatment for the crowded checkout case", "--json"]);
-    expect(result.exitCode).toBe(2);
+    const result = await run(api, ["component", "driver-unique-control", "DriverUniqueControl", sourcePath, "--design-system", "yandex-pay", "--intent", "Show a unique account recovery control", "--force-new", "--reason", "Approved only if a reuse exception is required", "--json"]);
+    expect(result.exitCode).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       command: "component",
-      id: "driver-crowded-duplicate",
-      stop: true,
-      exitCode: 2,
-      code: "candidate_set_truncated",
-      candidateCount: 21,
-      returnedCandidates: 20,
+      id: "driver-unique-control",
+      forceNew: true,
+      acknowledgedCandidateKeys: [],
+      version: 1,
     });
-    expect(result.stderr).toContain("STOP");
-    expect((db.query("SELECT COUNT(*) count FROM components WHERE id='driver-crowded-duplicate'").get() as { count: number }).count).toBe(0);
+    const audit = db.query("SELECT decision,reason FROM catalog_reuse_decisions WHERE artifact_id='driver-unique-control' ORDER BY created_at DESC LIMIT 1").get() as { decision: string; reason: string | null };
+    expect(audit).toEqual({ decision: "accepted_no_match", reason: null });
+  });
+
+  test("component --force-new consumes the complete authoritative template beyond the display limit", async () => {
+    const { api, db, directory } = await setup();
+    const sourcePath = await writeComponentSource(directory, "DriverCrowdedDuplicate", "Crowded checkout duplicate", "crowded");
+    const source = (await Bun.file(sourcePath).text()).replace(
+      'events: ["press"], slots: []',
+      'events: ["press"], slots: [], canonicalFor: ["crowded-checkout"]',
+    );
+    await Bun.write(sourcePath, source);
+    for (let index = 0; index < 64; index += 1) {
+      seedComponent(db, `crowded-${index}`, `Crowded${index}`, { description: "Crowded checkout duplicate", source, atomicLevel: "atom", canonicalFor: [] });
+    }
+    seedComponent(db, "crowded-role-owner", "CrowdedRoleOwner", {
+      description: "Unrelated role owner",
+      source: "export const definition = { description: 'unrelated role owner' }; export default function CrowdedRoleOwner() { return <aside />; }",
+      canonicalFor: ["crowded-checkout"],
+    });
+
+    const result = await run(api, ["component", "driver-crowded-duplicate", "DriverCrowdedDuplicate", sourcePath, "--design-system", "yandex-pay", "--intent", "Show crowded checkout duplicate", "--force-new", "--reason", "Approved separate treatment for the crowded checkout case", "--json"]);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as { acknowledgedCandidateKeys: string[]; discovery: { candidates: unknown[] } };
+    expect(payload.acknowledgedCandidateKeys).toEqual(
+      [
+        ...Array.from({ length: 64 }, (_, index) => `component:yandex-pay:crowded-${index}`),
+        "component:yandex-pay:crowded-role-owner",
+      ].sort(),
+    );
+    expect(payload.discovery.candidates.length).toBeLessThan(payload.acknowledgedCandidateKeys.length);
+    expect(payload).toMatchObject({ command: "component", id: "driver-crowded-duplicate", forceNew: true, version: 1 });
+    expect((db.query("SELECT decision FROM catalog_reuse_decisions WHERE artifact_id='driver-crowded-duplicate' ORDER BY created_at DESC LIMIT 1").get() as { decision: string }).decision).toBe("force_new");
   });
 
   test("composition creates, updates with CAS, and publishes the current head", async () => {

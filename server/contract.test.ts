@@ -15,7 +15,14 @@ import {
 } from "../src/prototype/schema";
 import { ELEMENTS_PER_SCREEN_LIMIT, REPEAT_ELEMENT_LIMIT, REPEAT_RENDER_COST_BUDGET, TREE_DEPTH_LIMIT } from "../src/prototype/validate";
 import { MAX_ASSET_BYTES } from "./assets/validate";
-import { capabilitiesResponseSchema, createComponentContract, listContracts, type RouteContract } from "./contracts";
+import {
+  capabilitiesResponseSchema,
+  catalogCandidatesContract,
+  catalogCandidatesGetContract,
+  createComponentContract,
+  listContracts,
+  type RouteContract,
+} from "./contracts";
 import { openDatabase } from "./db";
 import { MAX_JSON_BODY_BYTES } from "./http";
 import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "./screenshot/service";
@@ -316,6 +323,30 @@ describe("route contracts", () => {
 
   test("server/openapi.json has no drift against the contract registry", () => {
     expect(readFileSync(OPENAPI_PATH, "utf8")).toBe(renderOpenApiJson());
+  });
+
+  test("only POST candidate discovery declares the authoritative override template", () => {
+    const response = {
+      designSystem: "contract-ds",
+      catalogRevision: "catalog-revision-1",
+      policyVersion: 1,
+      candidates: [],
+      overrideTemplate: {
+        catalogRevision: "catalog-revision-1",
+        candidateKeys: ["component:contract-ds:existing-rating"],
+      },
+    };
+    expect(catalogCandidatesContract.responseSchema!.safeParse(response).success).toBe(true);
+    expect(catalogCandidatesGetContract.responseSchema!.safeParse(response).success).toBe(false);
+
+    const document = JSON.parse(renderOpenApiJson()) as {
+      paths: Record<string, Record<string, { responses: Record<string, { content: { "application/json": { schema: { properties: Record<string, unknown> } } } }> }>>;
+    };
+    const candidates = document.paths["/api/catalog/candidates"]!;
+    expect(candidates.post!.responses["200"]!.content["application/json"].schema.properties).toHaveProperty("overrideTemplate");
+    expect(candidates.get!.responses["200"]!.content["application/json"].schema.properties).not.toHaveProperty("overrideTemplate");
+    expect(catalogCandidatesContract.errors.some((error) => error.status === 422 && error.code === "event_schema_not_serializable")).toBe(true);
+    expect(catalogCandidatesGetContract.errors.some((error) => error.code === "event_schema_not_serializable")).toBe(false);
   });
 
   test("POST /api/components contract retains reuse-gate input and declared rejections", () => {

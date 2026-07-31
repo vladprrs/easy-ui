@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { resolve } from "node:path";
 import { openDatabase } from "./db";
 import { createHandler } from "./main";
 import { createTestHandler } from "./test-auth";
@@ -64,7 +66,11 @@ const sourceFor = (name: string, extra = ""): string =>
   `import { z } from "zod";\nexport const definition = { props: z.object({ ${name.toLowerCase()}: z.string() }), description: "${name}" };\nexport default function ${name}(props) { return <div className="${name}">{props.${name.toLowerCase()}}${extra}</div>; }\n`;
 
 const dbs: Database[] = [];
-afterEach(() => { for (const db of dbs.splice(0)) db.close(); });
+const directories: string[] = [];
+afterEach(async () => {
+  for (const db of dbs.splice(0)) db.close();
+  for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
+});
 
 function setup(): { db: Database; handler: (request: Request) => Promise<Response> } {
   const db = openDatabase(":memory:");
@@ -95,7 +101,13 @@ interface CandidateRow {
   description: string; canonicalFor: string[]; deprecated: boolean; recommendable: boolean;
   headUsageCount: number; score: number; blocking: boolean; reasons: string[];
 }
-interface CandidatesResponse { designSystem: string; catalogRevision: string; policyVersion: number; candidates: CandidateRow[] }
+interface CandidatesResponse {
+  designSystem: string;
+  catalogRevision: string;
+  policyVersion: number;
+  candidates: CandidateRow[];
+  overrideTemplate?: { catalogRevision: string; candidateKeys: string[] };
+}
 
 const post = (handler: (r: Request) => Promise<Response>, body: unknown) =>
   handler(new Request("http://test/api/catalog/candidates", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
@@ -182,6 +194,122 @@ describe("corpus (server/catalog/corpus.ts)", () => {
 });
 
 describe("POST|GET /api/catalog/candidates", () => {
+  test("POST extracts authoritative source metadata and returns every override key beyond display limit", async () => {
+    const { db, handler } = setup();
+    const proposedSource = `import { z } from "zod";
+export const definition = { props: z.strictObject({ label: z.string() }), description: "Checkout role proposal", canonicalFor: ["payment-success"] };
+export default function ProposedCheckout({ label }) { return <button>{label}</button>; }
+`;
+    seedComponent(db, "structural-copy", "StructuralCopy", {
+      designSystem: "cand-ds",
+      source: proposedSource,
+      description: "Structural checkout copy",
+      meta: { canonicalFor: [] },
+    });
+    seedComponent(db, "role-owner", "RoleOwner", {
+      designSystem: "cand-ds",
+      source: sourceFor("RoleOwner", "different-role-owner-source"),
+      description: "Existing payment success owner",
+      meta: { canonicalFor: ["payment-success"] },
+    });
+
+    const response = await post(handler, {
+      designSystem: "cand-ds",
+      intent: "Create checkout payment success action",
+      limit: 1,
+      proposed: {
+        kind: "component",
+        id: "proposed-checkout",
+        name: "ProposedCheckout",
+        source: proposedSource,
+        // Deliberately false client metadata: source extraction must win.
+        canonicalFor: [],
+        propsJsonSchema: { type: "object", properties: {} },
+      },
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json() as CandidatesResponse;
+    expect(body.candidates).toHaveLength(1);
+    expect(body.overrideTemplate).toEqual({
+      catalogRevision: body.catalogRevision,
+      candidateKeys: ["component:cand-ds:role-owner", "component:cand-ds:structural-copy"],
+    });
+
+    const intentOnly = await get(handler, "designSystem=cand-ds&intent=" + encodeURIComponent("Create checkout payment success action") + "&limit=1");
+    expect(Object.hasOwn(await intentOnly.json(), "overrideTemplate")).toBe(false);
+  });
+
+  test("source-backed POST without an id does not exclude a real catalog-candidate id", async () => {
+    const { db, handler } = setup();
+    const source = sourceFor("AnonymousProposal", "anonymous-proposal-copy");
+    seedComponent(db, "catalog-candidate", "ExistingCatalogCandidate", {
+      designSystem: "cand-ds",
+      source,
+      description: "Existing anonymous proposal copy",
+      meta: { canonicalFor: [] },
+    });
+
+    const response = await post(handler, {
+      designSystem: "cand-ds",
+      intent: "Discover an anonymous copied catalog component",
+      proposed: { kind: "component", name: "AnonymousProposal", source },
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json() as CandidatesResponse;
+    expect(body.overrideTemplate?.candidateKeys).toContain("component:cand-ds:catalog-candidate");
+  });
+
+  test("POST source validation returns typed 422 and always removes staging files", async () => {
+    const dataDir = await mkdtemp(resolve(process.cwd(), ".catalog-candidates-source-test-"));
+    directories.push(dataDir);
+    const db = openDatabase(":memory:");
+    dbs.push(db);
+    const handler = createTestHandler(db, { dataDir }) as (request: Request) => Promise<Response>;
+    seedSystem(db, "cand-ds");
+
+    const response = await post(handler, {
+      designSystem: "cand-ds",
+      intent: "Validate a broken checkout component source",
+      proposed: {
+        kind: "component",
+        id: "broken-checkout",
+        name: "BrokenCheckout",
+        source: "export default function BrokenCheckout( {",
+      },
+    });
+    expect(response.status).toBe(422);
+    expect((await response.json() as { error: { code: string } }).error.code).toBe("validation_failed");
+    expect(await readdir(resolve(dataDir, ".staging")).catch(() => [])).toEqual([]);
+
+    const eventResponse = await post(handler, {
+      designSystem: "cand-ds",
+      intent: "Validate a component with unsupported event schema",
+      proposed: {
+        kind: "component",
+        id: "broken-event-schema",
+        name: "BrokenEventSchema",
+        source: await Bun.file("server/fixtures/nonserializable-event.tsx").text(),
+      },
+    });
+    expect(eventResponse.status).toBe(422);
+    expect((await eventResponse.json() as { error: { code: string } }).error.code).toBe("event_schema_not_serializable");
+    expect(await readdir(resolve(dataDir, ".staging")).catch(() => [])).toEqual([]);
+
+    const oversizedResponse = await post(handler, {
+      designSystem: "cand-ds",
+      intent: "Validate an oversized checkout component source",
+      proposed: {
+        kind: "component",
+        id: "oversized-source",
+        name: "OversizedSource",
+        source: "x".repeat(262_145),
+      },
+    });
+    expect(oversizedResponse.status).toBe(413);
+    expect((await oversizedResponse.json() as { error: { code: string } }).error.code).toBe("payload_too_large");
+    expect(await readdir(resolve(dataDir, ".staging")).catch(() => [])).toEqual([]);
+  });
+
   test("ищет кандидатов по intent и отдаёт компактные строки без исходника и схем", async () => {
     const { db, handler } = setup();
     seedRankingCatalog(db);
