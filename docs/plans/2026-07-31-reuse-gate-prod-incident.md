@@ -1,6 +1,6 @@
 # План: разбор прод-инцидента reuse-gate (enforce без shadow-фазы)
 
-Дата: 2026-07-31 · Статус: **зафиксировано, исполнение не начато**
+Дата: 2026-07-31 · Статус: **I1–I4 complete; I5 decision recorded / enforce not eligible**
 Родительский план: `docs/plans/2026-07-31-component-reuse-enforcement.md` (проект 2, волны 0–2 выполнены)
 Спека: `docs/superpowers/specs/2026-07-30-component-reuse-enforcement-design.md`
 
@@ -139,31 +139,33 @@ POST /api/components → 400
 
 ## 7. Задачи
 
-**I1 — Вернуть прод в shadow** (владеет: оркестратор; вне кода)
+**I1 — Вернуть прод в shadow — COMPLETE** (владеет: оркестратор; вне кода)
 Задать `REUSE_GATE=shadow` в Dokploy env сервиса easy-ui, редеплой
 (`node .claude/skills/deploy/driver.mjs deploy "reuse gate → shadow"`).
 Критерий: зонд `POST /api/components` без `intent` возвращает не 400 `intent is required`;
 `driver.mjs` создаёт компонент; в аудите появляется строка `intent_missing`.
 
-**I2 — Явная переменная в compose** (владеет: `docker-compose.yml`, `docs/server-api.md#deployment`)
+**I2 — Явная переменная в compose — COMPLETE** (владеет: `docker-compose.yml`, `docs/server-api.md#deployment`)
 Объявить `REUSE_GATE` в compose со значением `shadow` — фаза гейта не должна зависеть от того,
 помнит ли кто-то про необъявленную переменную окружения. Критерий: переменная видна в файле,
 описана в §deployment, смена фазы — правка одной строки + редеплой.
 
-**I3 — Волна 3 родительского плана** (T6a → T6b ∥ T7)
+**I3 — Волна 3 родительского плана — COMPLETE** (T6a → T6b ∥ T7)
 Механическая простановка `intent` в фикстурах, триаж коллизий гейта, CLI (`--intent`,
 `--force-new`, `catalog list|search|get`). Критерий: `npm run verify` и `npm run e2e` зелёные.
 Включает правку `.claude/skills/author/driver.mjs:807`.
 
-**I4 — Контрактный слой** (владеет: `server/openapi.json`, `docs/server-api.md`, `author/SKILL.md`)
+**I4 — Контрактный слой — COMPLETE** (владеет: `server/openapi.json`, `docs/server-api.md`, `author/SKILL.md`)
 `npm run generate:openapi`; описать `intent`, `reuseOverride` и 409-конверт с `reuseCode` в
 `docs/server-api.md`; добавить в скилл авторинга обязательность `intent` и стоп-набор.
 Критерий: `npm run verify:openapi` зелёный; `GET /api/openapi.json` на проде описывает
 фактическое поведение.
 
-**I5 — Критерий включения enforce** (владеет: оркестратор)
+**I5 — Критерий включения enforce — DECISION RECORDED / NOT ELIGIBLE** (владеет: оркестратор)
 Не включать `enforce` до выполнения конъюнкции §5.4 родительского плана. Критерий фиксируется
-отдельной записью приёмки, эскалация человеку — если окно не набрано.
+отдельной [записью приёмки](../audit/2026-07-31-reuse-gate-enforce-readiness.md), эскалация
+человеку — если окно не набрано. Текущая запись требует **KEEP SHADOW** и не разрешает
+автоматическое переключение.
 
 Порядок: **I1 → I2 ∥ I4 → I3 → I5**. I1 срочный, остальное — обычной волной.
 
