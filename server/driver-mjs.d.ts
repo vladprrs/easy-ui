@@ -1,6 +1,28 @@
 // Ambient types for the untyped authoring-skill driver, so server tests can
 // import its pure planner helpers (the CLI itself runs as a standalone .mjs).
 declare module "*/author/driver.mjs" {
+  export interface DriverFlagSpec {
+    value: boolean;
+    key?: string;
+    enum?: readonly string[];
+    parse?: (value: string) => unknown;
+  }
+  export interface DriverParsedArgs {
+    cmd: string;
+    args: string[];
+    flags: {
+      json?: boolean;
+      designSystem?: string;
+      intent?: string;
+      limit?: number;
+      full?: boolean;
+      forceNew?: boolean;
+      reason?: string;
+      [key: string]: unknown;
+    };
+  }
+  export const flagSpecs: Readonly<Record<string, Readonly<Record<string, DriverFlagSpec>>>>;
+  export function parseArgs(argv: readonly string[]): DriverParsedArgs;
   export interface DriverViewport { width: number; height: number }
   export interface DriverSurface {
     screenId: string;

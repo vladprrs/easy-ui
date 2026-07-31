@@ -17,7 +17,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] | component-move <id> --design-system <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id>\nevery verb accepts --json; snap exits 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id>\nevery verb accepts --json; snap exits 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -54,13 +54,33 @@ const viewportFlag = {
 
 const jsonFlag = { "--json": { value: false, key: "json" } };
 const allScreensFlag = { "--all-screens": { value: false, key: "allScreens" } };
+const catalogLimitFlag = {
+  value: true,
+  key: "limit",
+  parse(value) {
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < 1 || number > 20) invalid("--limit must be an integer from 1 to 20");
+    return number;
+  },
+};
 
 export const flagSpecs = Object.freeze({
-  component: { ...jsonFlag, "--design-system": { value: true, key: "designSystem" } },
+  component: {
+    ...jsonFlag,
+    "--design-system": { value: true, key: "designSystem" },
+    "--intent": { value: true, key: "intent" },
+    "--force-new": { value: false, key: "forceNew" },
+    "--reason": { value: true, key: "reason" },
+  },
   "component-move": { ...jsonFlag, "--design-system": { value: true, key: "designSystem" } },
+  composition: { ...jsonFlag, "--design-system": { value: true, key: "designSystem" } },
+  "composition publish": { ...jsonFlag },
   "design-system": { ...jsonFlag },
   prototype: { ...jsonFlag },
-  catalog: { ...jsonFlag },
+  catalog: { ...jsonFlag, "--full": { value: false, key: "full" } },
+  "catalog list": { ...jsonFlag },
+  "catalog search": { ...jsonFlag, "--intent": { value: true, key: "intent" }, "--limit": catalogLimitFlag },
+  "catalog get": { ...jsonFlag },
   diff: { ...jsonFlag },
   baseline: {
     ...jsonFlag,
@@ -95,9 +115,10 @@ export const flagSpecs = Object.freeze({
 const ranges = Object.freeze({
   component: [3, 3],
   "component-move": [1, 1],
+  composition: [2, 2],
   "design-system": [3, 3],
   prototype: [1, 1],
-  catalog: [1, 2],
+  catalog: [1, Infinity],
   diff: [1, 3],
   baseline: [1, 2],
   check: [1, 1],
@@ -117,7 +138,20 @@ export function parseArgs(argv) {
   const [command, ...tokens] = argv;
   const range = ranges[command];
   if (!range) invalid(command ? `unknown command: ${command}` : "command is required");
-  const specs = flagSpecs[command] ?? {};
+  const firstPositional = (valueFlags) => {
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      if (!token.startsWith("--")) return token;
+      if (valueFlags.has(token)) index += 1;
+    }
+    return null;
+  };
+  const catalogFirst = command === "catalog" ? firstPositional(new Set(["--intent", "--limit"])) : null;
+  const compositionFirst = command === "composition" ? firstPositional(new Set(["--design-system"])) : null;
+  const catalogSubcommand = ["list", "search", "get"].includes(catalogFirst) ? catalogFirst : null;
+  const compositionSubcommand = compositionFirst === "publish" ? "publish" : null;
+  const commandForm = catalogSubcommand ? `catalog ${catalogSubcommand}` : compositionSubcommand ? "composition publish" : command;
+  const specs = flagSpecs[commandForm] ?? {};
   const positionals = [];
   const flags = {};
   const seen = new Set();
@@ -128,7 +162,7 @@ export function parseArgs(argv) {
       continue;
     }
     const spec = specs[token];
-    if (!spec) invalid(`unknown flag for ${command}: ${token}`);
+    if (!spec) invalid(`unknown flag for ${commandForm}: ${token}`);
     if (seen.has(token)) invalid(`duplicate flag: ${token}`);
     seen.add(token);
     if (!spec.value) {
@@ -140,8 +174,17 @@ export function parseArgs(argv) {
     if (spec.enum && !spec.enum.includes(value)) invalid(`${token} must be one of: ${spec.enum.join(", ")}`);
     flags[spec.key] = spec.parse ? spec.parse(value) : value;
   }
-  if (positionals.length < range[0] || positionals.length > range[1]) invalid(`invalid arguments for ${command}`);
+  if (positionals.length < range[0] || positionals.length > range[1]) invalid(`invalid arguments for ${commandForm}`);
+  if (commandForm === "catalog list" && positionals.length !== 2) invalid("invalid arguments for catalog list");
+  if (commandForm === "catalog search") {
+    if (positionals.length !== 2) invalid("invalid arguments for catalog search");
+    if (flags.intent === undefined) invalid("catalog search requires --intent <text>");
+  }
+  if (commandForm === "catalog get" && positionals.length < 3) invalid("catalog get requires at least one artifact");
+  if (commandForm === "catalog" && positionals.length > 2) invalid("invalid arguments for catalog");
   if (command === "component-move" && flags.designSystem === undefined) invalid("component-move requires --design-system <id>");
+  if (command === "component" && flags.forceNew && flags.reason === undefined) invalid("component --force-new requires --reason <text>");
+  if (commandForm === "composition" && flags.designSystem === undefined) invalid("composition requires --design-system <id>");
   if (command === "audit" && flags.designSystem === undefined) invalid("audit requires --design-system <id>");
   if (command === "status" && positionals.length < 2 && !flags.allScreens) invalid("status requires <screenId> or --all-screens");
   return { cmd: command, args: positionals, flags };
@@ -200,6 +243,37 @@ async function getMeta(kind, id) {
   const response = await call("GET", `/${kind}/${encodeURIComponent(id)}`);
   if (response.status === 404) return null;
   return requireOk(`GET /${kind}/${id}`, response);
+}
+
+async function discoverComponent({ id, name, source, designSystem, intent }, limit) {
+  return requireOk("catalog search", await call("POST", "/catalog/candidates", {
+    designSystem,
+    intent,
+    proposed: { kind: "component", id, name, source },
+    ...(limit === undefined ? {} : { limit }),
+  }));
+}
+
+async function componentCorpusSize(designSystem) {
+  const encoded = encodeURIComponent(designSystem);
+  const [manifestResponse, componentsResponse] = await Promise.all([
+    call("GET", `/catalog/manifest?designSystem=${encoded}`),
+    call("GET", "/components"),
+  ]);
+  const manifest = await requireOk("catalog manifest", manifestResponse);
+  const components = await requireOk("component list", componentsResponse);
+  const drafts = components.filter((component) => component.designSystem === designSystem && component.latestVersion === null);
+  return (manifest.components ?? []).length + drafts.length;
+}
+
+function blockingCandidateKeys(discovery) {
+  return [...new Set((discovery.candidates ?? []).filter((candidate) => candidate.blocking).map((candidate) => {
+    if (typeof candidate.key === "string" && candidate.key) return candidate.key;
+    if (candidate.kind === "component" && typeof candidate.designSystem === "string" && typeof candidate.id === "string") {
+      return `component:${candidate.designSystem}:${candidate.id}`;
+    }
+    throw new CliError(`catalog search returned a blocking candidate without a reusable key: ${JSON.stringify(candidate)}`);
+  }))].sort();
 }
 
 export async function pollJob(path, { deadlineMs }) {
@@ -276,7 +350,7 @@ export function parseDiffArguments(revisionArgs, headRev) {
 
 export const planDiffRevisions = parseDiffArguments;
 
-function compactCatalog(system, manifest) {
+function fullCatalog(system, manifest) {
   const customKeys = ["id", "name", "version", "atomicLevel", "layoutNeutral", "layout", "description", "events", "eventPayloads", "slots", "example", "examples", "propsJsonSchema"];
   const builtinKeys = ["name", "atomicLevel", "layoutNeutral", "layout", "description", "events", "slots", "propsJsonSchema"];
   const hostKeys = ["name", "atomicLevel", "layoutNeutral", "layout", "description", "events", "slots", "propsJsonSchema"];
@@ -287,6 +361,60 @@ function compactCatalog(system, manifest) {
     builtins: system.components.map((component) => pick(component, builtinKeys)),
     hostPrimitives: system.hostPrimitives.map((component) => pick(component, hostKeys)),
   };
+}
+
+function compactCatalog(system, manifest) {
+  const custom = (manifest.components ?? []).map((component) => ({
+    id: component.id,
+    name: component.name,
+    version: component.version,
+    ...(component.atomicLevel === undefined ? {} : { atomicLevel: component.atomicLevel }),
+    description: component.description ?? "",
+    events: component.events ?? [],
+    slots: component.slots ?? [],
+    deprecated: component.deprecated === true,
+  }));
+  const compactDefinition = (component) => ({
+    name: component.name,
+    ...(component.atomicLevel === undefined ? {} : { atomicLevel: component.atomicLevel }),
+    description: component.description ?? "",
+    events: component.events ?? [],
+    slots: component.slots ?? [],
+  });
+  return {
+    designSystem: { id: system.id, name: system.name, description: system.description, resolvedSpaceScale: system.resolvedSpaceScale },
+    custom,
+    builtins: (system.components ?? []).map(compactDefinition),
+    hostPrimitives: (system.hostPrimitives ?? []).map(compactDefinition),
+  };
+}
+
+function catalogListLines(result) {
+  const rows = [
+    ...result.custom.map((item) => ({ kind: "custom", ...item })),
+    ...result.builtins.map((item) => ({ kind: "builtin", ...item })),
+    ...result.hostPrimitives.map((item) => ({ kind: "host", ...item })),
+  ];
+  return [
+    `catalog ${result.designSystem.id}: ${rows.length} artifacts; use 'catalog get ${result.designSystem.id} <artifact...>' for full definitions`,
+    "kind\tid\tname\tversion\tatomicLevel\tdeprecated\tevents\tslots\tdescription",
+    ...rows.map((row) => `${row.kind}\t${row.id ?? row.name}\t${row.name}\t${row.version ?? "-"}\t${row.atomicLevel ?? "-"}\t${row.deprecated === undefined ? "-" : row.deprecated ? "yes" : "no"}\t${row.events.join(",") || "-"}\t${row.slots.join(",") || "-"}\t${row.description}`),
+  ];
+}
+
+function catalogSearchLines(result) {
+  return [
+    `catalog search ${result.designSystem}: ${result.candidates.length} candidates at ${result.catalogRevision}`,
+    "id\tname\tversion\tscore\tblocking\tdeprecated\treasons",
+    ...result.candidates.map((candidate) => `${candidate.id}\t${candidate.name}\t${candidate.version || "draft"}\t${candidate.score}\t${candidate.blocking ? "yes" : "no"}\t${candidate.deprecated ? "yes" : "no"}\t${candidate.reasons.join("; ")}`),
+  ];
+}
+
+function catalogGetLines(designSystem, artifacts) {
+  return [
+    `catalog get ${designSystem}: ${artifacts.length} artifacts`,
+    ...artifacts.flatMap((artifact) => [`${artifact.kind} ${artifact.id ?? artifact.name} (${artifact.name})`, JSON.stringify(artifact.details, null, 2)]),
+  ];
 }
 
 function diffSummary(diff) {
@@ -495,12 +623,38 @@ async function downloadImage(imageUrl, outputPath) {
   await writeFile(outputPath, Buffer.from(await response.arrayBuffer()));
 }
 
-async function publishComponent(id, rev) {
-  const published = await call("POST", `/components/${encodeURIComponent(id)}/publish`, { baseRev: rev });
-  if (published.status !== 201) await failRevisionConflict("publish", published, "components", id);
+async function publishComponent(id, rev, reuseOverride, command = "component") {
+  const published = await call("POST", `/components/${encodeURIComponent(id)}/publish`, { baseRev: rev, ...(reuseOverride === undefined ? {} : { reuseOverride }) });
+  if (published.status !== 201) {
+    failReuseConflict(command, "publish", published, id);
+    await failRevisionConflict("publish", published, "components", id);
+  }
   const meta = await getMeta("components", id);
   if (!jsonMode) console.log(`published ${id} version ${published.json.version} in ${meta.designSystem}`, published.json.warnings?.length ? published.json.warnings : "");
   return { version: published.json.version, designSystem: meta.designSystem, warnings: published.json.warnings ?? [] };
+}
+
+const REUSE_STOP_CODES = new Set(["component_reuse_required", "catalog_changed", "canonical_role_conflict"]);
+
+function failReuseConflict(command, step, response, id) {
+  const failure = response.json?.error;
+  if (response.status !== 409 || !REUSE_STOP_CODES.has(failure?.code)) return;
+  const candidates = failure.candidates ?? [];
+  report(
+    [
+      `STOP: ${failure.code} while attempting to ${step} ${id}`,
+      `decisionId: ${failure.decisionId ?? "-"}`,
+      ...candidates.map((candidate) => `candidate ${candidate.key ?? `${candidate.designSystem}/${candidate.id}`}: ${candidate.name} v${candidate.version} score=${candidate.score} blocking=${candidate.blocking ? "yes" : "no"}`),
+      ...(failure.nextSteps ?? []),
+      "Do not retry or force creation automatically; present this decision to a human.",
+    ],
+    {
+      command, id, published: false, stop: true, exitCode: EXIT.productErrors,
+      ...(step === "save" ? { created: false } : { draftSaved: true }),
+      ...failure,
+    },
+  );
+  throw new CliError(`STOP: ${failure.code}; decisionId=${failure.decisionId ?? "-"}; no automatic retry or force-new`, { exitCode: EXIT.productErrors });
 }
 
 async function failRevisionConflict(step, response, kind, id) {
@@ -509,8 +663,7 @@ async function failRevisionConflict(step, response, kind, id) {
   throw new CliError(`${step} failed (409 revision_conflict); current metadata:\n${JSON.stringify(current, null, 2)}\nnot retrying automatically; inspect the current revision and run the command again`);
 }
 
-async function runCatalog(args) {
-  const [id, output] = args;
+async function loadCatalog(id) {
   const encoded = encodeURIComponent(id);
   const [manifest, system] = await Promise.all([
     call("GET", `/catalog/manifest?designSystem=${encoded}`),
@@ -519,13 +672,56 @@ async function runCatalog(args) {
   if (manifest.status === 404 || system.status === 404) {
     throw new CliError(`design system ${id} not found; hint: run 'driver.mjs get design-systems'`);
   }
-  const result = compactCatalog(
-    await requireOk(`GET /design-systems/${id}`, system),
-    await requireOk(`GET /catalog/manifest?designSystem=${id}`, manifest),
-  );
+  return {
+    manifest: await requireOk(`GET /catalog/manifest?designSystem=${id}`, manifest),
+    system: await requireOk(`GET /design-systems/${id}`, system),
+  };
+}
+
+async function runCatalog(args, flags) {
+  const subcommand = ["list", "search", "get"].includes(args[0]) ? args[0] : null;
+  if (subcommand === "list") {
+    const id = args[1];
+    const { manifest, system } = await loadCatalog(id);
+    const result = compactCatalog(system, manifest);
+    report(catalogListLines(result), { command: "catalog list", ...result });
+    return;
+  }
+  if (subcommand === "search") {
+    const id = args[1];
+    const query = new URLSearchParams({ designSystem: id, intent: flags.intent });
+    if (flags.limit !== undefined) query.set("limit", String(flags.limit));
+    const result = await requireOk("catalog search", await call("GET", `/catalog/candidates?${query}`));
+    report(catalogSearchLines(result), { command: "catalog search", ...result });
+    return;
+  }
+  if (subcommand === "get") {
+    const id = args[1];
+    const requested = args.slice(2);
+    const { manifest, system } = await loadCatalog(id);
+    const artifacts = [];
+    for (const artifact of requested) {
+      const custom = (manifest.components ?? []).find((component) => component.id === artifact || component.name === artifact);
+      if (custom) {
+        const details = await requireOk(`catalog get ${artifact}`, await call("GET", `/components/${encodeURIComponent(custom.id)}/versions/${custom.version}`));
+        artifacts.push({ kind: "custom", id: custom.id, name: custom.name, details });
+        continue;
+      }
+      const builtin = (system.components ?? []).find((component) => component.name === artifact);
+      if (builtin) { artifacts.push({ kind: "builtin", name: builtin.name, details: builtin }); continue; }
+      const host = (system.hostPrimitives ?? []).find((component) => component.name === artifact);
+      if (host) { artifacts.push({ kind: "host", name: host.name, details: host }); continue; }
+      throw new CliError(`catalog get ${id}: artifact ${artifact} not found; run 'catalog list ${id}' first`);
+    }
+    report(catalogGetLines(id, artifacts), { command: "catalog get", designSystem: id, artifacts });
+    return;
+  }
+  const [id, output] = args;
+  const { manifest, system } = await loadCatalog(id);
+  const result = flags.full ? fullCatalog(system, manifest) : compactCatalog(system, manifest);
   const text = `${JSON.stringify(result, null, 2)}\n`;
   if (output) await writeFile(output, text);
-  else process.stdout.write(text);
+  else report(text.trimEnd(), result);
 }
 
 async function runDiff(args, flags) {
@@ -794,6 +990,36 @@ async function runAudit(flags) {
   if (exitCode !== EXIT.ok) throw new CliError(`deprecated components are still used by head revisions: ${findings.deprecatedInUse.join(", ")}`, { exitCode });
 }
 
+async function runComposition(args, flags) {
+  if (args[0] === "publish") {
+    const id = args[1];
+    const meta = await getMeta("compositions", id);
+    if (!meta) throw new CliError(`compositions/${id} not found`);
+    const response = await call("POST", `/compositions/${encodeURIComponent(id)}/publish`, { baseRev: meta.headRev, message: "driver publish" });
+    if (response.status !== 201) await failRevisionConflict("composition publish", response, "compositions", id);
+    report(
+      `published composition ${id} version ${response.json.version} (rev ${response.json.rev})`,
+      { command: "composition publish", id, version: response.json.version, rev: response.json.rev },
+    );
+    return;
+  }
+  const [id, documentPath] = args;
+  const doc = JSON.parse(await readFile(documentPath, "utf8"));
+  const meta = await getMeta("compositions", id);
+  if (meta && meta.designSystem !== flags.designSystem) {
+    throw new CliError(`composition ${id} belongs to ${meta.designSystem}; compositions cannot move to ${flags.designSystem}`);
+  }
+  const response = meta === null
+    ? await call("POST", "/compositions", { id, doc, designSystem: flags.designSystem, message: "driver save" })
+    : await call("PUT", `/compositions/${encodeURIComponent(id)}`, { doc, baseRev: meta.headRev, message: "driver save" });
+  if (![200, 201].includes(response.status)) await failRevisionConflict("composition save", response, "compositions", id);
+  const created = meta === null;
+  report(
+    `saved composition ${id} rev ${response.json.rev} in ${flags.designSystem}${created ? " (created)" : ""}`,
+    { command: "composition", id, created, rev: response.json.rev, designSystem: flags.designSystem },
+  );
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const { cmd, args, flags } = parseArgs(argv);
   jsonMode = flags.json === true;
@@ -803,14 +1029,58 @@ export async function main(argv = process.argv.slice(2)) {
     const source = await readFile(sourcePath, "utf8");
     const meta = await getMeta("components", id);
     const systemBody = selectedSystem !== undefined && selectedSystem !== meta?.designSystem ? { designSystem: selectedSystem } : {};
+    let discovery;
+    let reuseOverride;
+    let acknowledgedCandidateKeys = [];
+    if (meta === null) {
+      if (flags.intent === undefined) invalid("component create requires --intent <text>");
+      if (selectedSystem === undefined) invalid("component create requires --design-system <id> or EASYUI_DESIGN_SYSTEM");
+      let candidateCount;
+      if (flags.forceNew) {
+        [discovery, candidateCount] = await Promise.all([
+          discoverComponent({ id, name, source, designSystem: selectedSystem, intent: flags.intent }, 20),
+          componentCorpusSize(selectedSystem),
+        ]);
+      } else {
+        discovery = await discoverComponent({ id, name, source, designSystem: selectedSystem, intent: flags.intent });
+      }
+      if (!jsonMode) for (const line of catalogSearchLines(discovery)) out(line);
+      if (flags.forceNew) {
+        if (candidateCount > discovery.candidates.length) {
+          report(
+            [
+              `STOP: the catalog candidates endpoint returned ${discovery.candidates.length} of ${candidateCount} artifacts`,
+              "A complete blocking candidate key set cannot be prepared; do not force creation.",
+            ],
+            {
+              command: "component", id, stop: true, exitCode: EXIT.productErrors,
+              code: "candidate_set_truncated", candidateCount, returnedCandidates: discovery.candidates.length,
+              catalogRevision: discovery.catalogRevision,
+            },
+          );
+          throw new CliError("STOP: candidate discovery is truncated; cannot prepare a complete reuseOverride", { exitCode: EXIT.productErrors });
+        }
+        acknowledgedCandidateKeys = blockingCandidateKeys(discovery);
+        if (acknowledgedCandidateKeys.length) {
+          reuseOverride = { catalogRevision: discovery.catalogRevision, candidateKeys: acknowledgedCandidateKeys, reason: flags.reason };
+        }
+      }
+    }
     const saved = meta === null
-      ? await call("POST", "/components", { id, name, source, ...systemBody, message: "driver save" })
+      ? await call("POST", "/components", { id, name, source, ...systemBody, intent: flags.intent, ...(reuseOverride === undefined ? {} : { reuseOverride }), message: "driver save" })
       : await call("PUT", `/components/${encodeURIComponent(id)}`, { source, ...systemBody, message: "driver save", baseRev: meta.headRev });
-    if (![200, 201].includes(saved.status)) await failRevisionConflict("save", saved, "components", id);
+    if (![200, 201].includes(saved.status)) {
+      failReuseConflict("component", "save", saved, id);
+      await failRevisionConflict("save", saved, "components", id);
+    }
     const savedMeta = await getMeta("components", id);
     out(`saved ${id} rev ${saved.json.rev} in ${savedMeta.designSystem}`);
-    const published = await publishComponent(id, saved.json.rev);
-    if (jsonMode) report(null, { command: "component", id, rev: saved.json.rev, ...published });
+    const published = await publishComponent(id, saved.json.rev, reuseOverride);
+    if (jsonMode) report(null, {
+      command: "component", id, rev: saved.json.rev, ...published,
+      ...(discovery === undefined ? {} : { discovery }),
+      ...(flags.forceNew ? { forceNew: true, acknowledgedCandidateKeys } : {}),
+    });
   } else if (cmd === "component-move") {
     const [id] = args;
     const meta = await getMeta("components", id);
@@ -819,8 +1089,10 @@ export async function main(argv = process.argv.slice(2)) {
     if (saved.status !== 200) await failRevisionConflict("move", saved, "components", id);
     const savedMeta = await getMeta("components", id);
     out(`saved ${id} rev ${saved.json.rev} in ${savedMeta.designSystem}`);
-    const published = await publishComponent(id, saved.json.rev);
+    const published = await publishComponent(id, saved.json.rev, undefined, "component-move");
     if (jsonMode) report(null, { command: "component-move", id, rev: saved.json.rev, ...published });
+  } else if (cmd === "composition") {
+    await runComposition(args, flags);
   } else if (cmd === "design-system") {
     const [id, name, description] = args;
     const created = await call("POST", "/design-systems", { id, name, description });
@@ -847,7 +1119,7 @@ export async function main(argv = process.argv.slice(2)) {
         screens: (result.screens ?? []).map((screen) => ({ ...screen, url: `${base}${screen.url}` })),
       });
     }
-  } else if (cmd === "catalog") await runCatalog(args);
+  } else if (cmd === "catalog") await runCatalog(args, flags);
   else if (cmd === "diff") await runDiff(args, flags);
   else if (cmd === "baseline") await runBaseline(args, flags);
   else if (cmd === "check") await runCheck(args, flags);

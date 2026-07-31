@@ -96,6 +96,15 @@ async function run(api: string, args: string[], legacyBasicAuth = "") {
   return { exitCode, stdout, stderr };
 }
 
+async function writeComponentSource(directory: string, name: string, description: string, marker: string): Promise<string> {
+  const path = resolve(directory, `${name}-${marker}.tsx`);
+  await Bun.write(path, `import { z } from "zod";
+export const definition = { props: z.strictObject({ label: z.string().optional() }), description: ${JSON.stringify(description)}, atomicLevel: "atom" as const, events: ["press"], slots: [] };
+export default function ${name}({ props }: any) { return <button data-marker=${JSON.stringify(marker)}>{props.label ?? ${JSON.stringify(marker)}}</button>; }
+`);
+  return path;
+}
+
 async function fixture(id: string): Promise<PrototypeDoc> {
   const value = prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json());
   return { ...value, id, name: "First" };
@@ -142,25 +151,234 @@ describe("author driver CLI", () => {
     expect(JSON.parse(result.stdout)).toEqual([]);
   });
 
-  test("catalog emits compact server catalog and hints on an unknown system", async () => {
-    const { api } = await setup();
+  test("catalog list is compact while legacy --full preserves definition details", async () => {
+    const { api, db } = await setup();
+    seedComponent(db, "catalog-card", "CatalogCard", {
+      deprecated: true,
+      description: "Compact catalog card",
+      events: ["select"],
+      slots: ["body"],
+      atomicLevel: "molecule",
+    });
     const valid = await run(api, ["catalog", "yandex-pay"]);
     expect(valid.exitCode).toBe(0);
-    expect(JSON.parse(valid.stdout)).toMatchObject({
+    const compact = JSON.parse(valid.stdout);
+    expect(compact).toMatchObject({
       designSystem: { id: "yandex-pay", resolvedSpaceScale: { none: "0px", md: "12px", "4xl": "64px" } },
-      custom: [],
+      custom: [expect.objectContaining({ id: "catalog-card", name: "CatalogCard", version: 1, atomicLevel: "molecule", description: "Compact catalog card", events: ["select"], slots: ["body"], deprecated: true })],
       builtins: [],
       hostPrimitives: expect.arrayContaining([expect.objectContaining({
         name: "Overlay",
         atomicLevel: "atom",
-        layoutNeutral: true,
         slots: ["default"],
-        propsJsonSchema: expect.objectContaining({ type: "object" }),
       }), expect.objectContaining({ name: "Image" }), expect.objectContaining({ name: "Hotspot" })]),
     });
+    expect(JSON.stringify(compact)).not.toContain("propsJsonSchema");
+
+    const list = await run(api, ["catalog", "list", "yandex-pay", "--json"]);
+    expect(list.exitCode).toBe(0);
+    expect(JSON.parse(list.stdout)).toMatchObject({ command: "catalog list", designSystem: { id: "yandex-pay" }, hostPrimitives: expect.arrayContaining([expect.objectContaining({ name: "Overlay", events: [], slots: ["default"] })]) });
+    expect(JSON.parse(list.stdout).custom).toEqual([expect.objectContaining({ id: "catalog-card", events: ["select"], slots: ["body"], deprecated: true })]);
+    expect(JSON.stringify(JSON.parse(list.stdout))).not.toContain("propsJsonSchema");
+
+    const full = await run(api, ["catalog", "yandex-pay", "--full"]);
+    expect(full.exitCode).toBe(0);
+    expect(JSON.parse(full.stdout).hostPrimitives.find((item: { name: string }) => item.name === "Overlay").propsJsonSchema).toMatchObject({ type: "object" });
+
     const missing = await run(api, ["catalog", "missing-system"]);
     expect(missing.exitCode).toBe(1);
     expect(missing.stderr).toContain("get design-systems");
+  });
+
+  test("catalog search reports compact candidates and exits zero for a successful search", async () => {
+    const { api, db } = await setup();
+    seedComponent(db, "checkout-button", "CheckoutButton", {
+      description: "Button that starts checkout payment for an order",
+      events: ["press"],
+      slots: ["icon"],
+      atomicLevel: "atom",
+    });
+
+    const json = await run(api, ["catalog", "search", "yandex-pay", "--intent", "start checkout payment for order", "--limit", "1", "--json"]);
+    expect(json.exitCode).toBe(0);
+    const payload = JSON.parse(json.stdout) as { command: string; catalogRevision: string; candidates: { id: string; events?: string[] }[] };
+    expect(payload).toMatchObject({ command: "catalog search", designSystem: "yandex-pay", candidates: [{ id: "checkout-button" }] });
+    expect(payload.catalogRevision).toHaveLength(64);
+    expect(JSON.stringify(payload)).not.toContain("propsJsonSchema");
+    expect(JSON.stringify(payload)).not.toContain("not-for-list-or-search");
+
+    const human = await run(api, ["catalog", "search", "yandex-pay", "--intent", "start checkout payment for order", "--limit", "1"]);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).toContain("checkout-button");
+    expect(human.stdout).toContain("score");
+  });
+
+  test("catalog get returns exact version details for only the selected artifacts", async () => {
+    const { api, db } = await setup();
+    seedComponent(db, "chosen-card", "ChosenCard", {
+      description: "Chosen card details",
+      source: "export const chosenSourceMarker = true;",
+      events: ["select"],
+      slots: ["body"],
+    });
+    seedComponent(db, "other-card", "OtherCard", {
+      description: "Unselected private catalog marker",
+      source: "export const unselectedSourceMarker = true;",
+    });
+
+    const result = await run(api, ["catalog", "get", "yandex-pay", "chosen-card", "Overlay", "--json"]);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as { command: string; artifacts: { kind: string; id?: string; name: string; details: Record<string, unknown> }[] };
+    expect(payload.command).toBe("catalog get");
+    expect(payload.artifacts.map((artifact) => [artifact.kind, artifact.id ?? artifact.name])).toEqual([["custom", "chosen-card"], ["host", "Overlay"]]);
+    expect(payload.artifacts[0]).toMatchObject({ name: "ChosenCard", details: { version: 1, source: "export const chosenSourceMarker = true;", description: "Chosen card details", events: ["select"], slots: ["body"] } });
+    expect(payload.artifacts[1]!.details.propsJsonSchema).toBeDefined();
+    expect(result.stdout).not.toContain("Unselected private catalog marker");
+    expect(result.stdout).not.toContain("unselectedSourceMarker");
+  });
+
+  test("component requires intent only on create and performs early discovery only there", async () => {
+    const { api, directory } = await setup();
+    const createSource = await writeComponentSource(directory, "DriverIntentCard", "Card showing checkout intent details", "create");
+    const missing = await run(api, ["component", "driver-intent-card", "DriverIntentCard", createSource, "--design-system", "yandex-pay"]);
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain("component create requires --intent");
+
+    const created = await run(api, ["component", "driver-intent-card", "DriverIntentCard", createSource, "--design-system", "yandex-pay", "--intent", "Show checkout intent details in a reusable card", "--json"]);
+    expect(created.exitCode).toBe(0);
+    const createPayload = JSON.parse(created.stdout) as { command: string; version: number; discovery?: { catalogRevision: string; candidates: unknown[] } };
+    expect(createPayload).toMatchObject({ command: "component", version: 1, discovery: { candidates: expect.any(Array) } });
+    expect(createPayload.discovery?.catalogRevision).toHaveLength(64);
+
+    const updateSource = await writeComponentSource(directory, "DriverIntentCard", "Updated checkout intent details", "update");
+    const updated = await run(api, ["component", "driver-intent-card", "DriverIntentCard", updateSource, "--design-system", "yandex-pay", "--json"]);
+    expect(updated.exitCode).toBe(0);
+    expect(JSON.parse(updated.stdout)).toMatchObject({ command: "component", version: 2 });
+    expect(JSON.parse(updated.stdout).discovery).toBeUndefined();
+  });
+
+  test("component reuse rejection is a terminal STOP report with exit 2", async () => {
+    const { api, db, directory } = await setup();
+    const sourcePath = await writeComponentSource(directory, "DriverDuplicate", "Checkout payment duplicate card", "duplicate");
+    seedComponent(db, "existing-duplicate", "ExistingDuplicate", {
+      description: "Checkout payment duplicate card",
+      source: await Bun.file(sourcePath).text(),
+      atomicLevel: "atom",
+      events: ["press"],
+    });
+
+    const result = await run(api, ["component", "driver-duplicate", "DriverDuplicate", sourcePath, "--design-system", "yandex-pay", "--intent", "Show checkout payment duplicate card", "--json"]);
+    expect(result.exitCode).toBe(2);
+    const payload = JSON.parse(result.stdout) as { command: string; created: boolean; stop: boolean; exitCode: number; code: string; decisionId: string | null; candidates: { id: string }[] };
+    expect(payload).toMatchObject({ command: "component", created: false, stop: true, exitCode: 2, code: "component_reuse_required" });
+    expect(payload.decisionId).toMatch(/^reuse_/);
+    expect(payload.candidates).toEqual(expect.arrayContaining([expect.objectContaining({ id: "existing-duplicate" })]));
+    expect(result.stderr).toContain("STOP");
+    expect((db.query("SELECT COUNT(*) count FROM components WHERE id='driver-duplicate'").get() as { count: number }).count).toBe(0);
+  });
+
+  test("component-move keeps its command identity in a canonical-role publish STOP", async () => {
+    const { api, db, directory } = await setup();
+    db.query("INSERT INTO design_systems (id,name,description,builtin_provider,created_at,updated_at,owner_id) VALUES ('move-source','Move source','Move source fixtures',NULL,'now','now','user_admin')").run();
+    const sourcePath = resolve(directory, "MoveRoleOwner.tsx");
+    const source = `import { z } from "zod";
+export const definition = { props: z.strictObject({}), description: "Owns the payment success role", atomicLevel: "atom" as const, canonicalFor: ["payment-success"] };
+export default function MoveRoleOwner() { return <div>move role owner</div>; }
+`;
+    await Bun.write(sourcePath, source);
+    seedComponent(db, "existing-role-owner", "ExistingRoleOwner", { canonicalFor: ["payment-success"] });
+    seedComponent(db, "moving-role-owner", "MoveRoleOwner", { designSystem: "move-source", source, canonicalFor: ["payment-success"] });
+
+    const result = await run(api, ["component-move", "moving-role-owner", "--design-system", "yandex-pay", "--json"]);
+    expect(result.exitCode).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({ command: "component-move", id: "moving-role-owner", stop: true, exitCode: 2, code: "canonical_role_conflict", draftSaved: true });
+    const moved = await (await fetch(`${api}/components/moving-role-owner`)).json() as { headRev: number; designSystem: string };
+    expect(moved).toMatchObject({ headRev: 2, designSystem: "yandex-pay" });
+  });
+
+  test("component --force-new sends fresh blocking material and records the human reason", async () => {
+    const { api, db, directory } = await setup();
+    const sourcePath = await writeComponentSource(directory, "DriverForcedDuplicate", "Forced checkout payment duplicate", "forced-duplicate");
+    seedComponent(db, "existing-forced-duplicate", "ExistingForcedDuplicate", {
+      description: "Forced checkout payment duplicate",
+      source: await Bun.file(sourcePath).text(),
+      atomicLevel: "atom",
+      events: ["press"],
+    });
+    const missingReason = await run(api, ["component", "driver-forced-duplicate", "DriverForcedDuplicate", sourcePath, "--design-system", "yandex-pay", "--intent", "Show forced checkout payment duplicate", "--force-new"]);
+    expect(missingReason.exitCode).toBe(1);
+    expect(missingReason.stderr).toContain("--force-new requires --reason");
+
+    const reason = "Product owner approved a distinct checkout treatment";
+    const result = await run(api, ["component", "driver-forced-duplicate", "DriverForcedDuplicate", sourcePath, "--design-system", "yandex-pay", "--intent", "Show forced checkout payment duplicate", "--force-new", "--reason", reason, "--json"]);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as { forceNew: boolean; acknowledgedCandidateKeys: string[]; discovery: { catalogRevision: string } };
+    expect(payload).toMatchObject({ forceNew: true, acknowledgedCandidateKeys: ["component:yandex-pay:existing-forced-duplicate"], version: 1 });
+    expect(payload.discovery.catalogRevision).toHaveLength(64);
+    const audit = db.query("SELECT decision,reason,catalog_revision FROM catalog_reuse_decisions WHERE artifact_id=? ORDER BY created_at DESC LIMIT 1").get("driver-forced-duplicate") as { decision: string; reason: string; catalog_revision: string };
+    expect(audit).toMatchObject({ decision: "force_new", reason, catalog_revision: payload.discovery.catalogRevision });
+  });
+
+  test("component --force-new stops when the candidate endpoint cannot return the full corpus", async () => {
+    const { api, db, directory } = await setup();
+    const sourcePath = await writeComponentSource(directory, "DriverCrowdedDuplicate", "Crowded checkout duplicate", "crowded");
+    const source = await Bun.file(sourcePath).text();
+    for (let index = 0; index < 21; index += 1) {
+      seedComponent(db, `crowded-${index}`, `Crowded${index}`, { description: "Crowded checkout duplicate", source, atomicLevel: "atom" });
+    }
+
+    const result = await run(api, ["component", "driver-crowded-duplicate", "DriverCrowdedDuplicate", sourcePath, "--design-system", "yandex-pay", "--intent", "Show crowded checkout duplicate", "--force-new", "--reason", "Approved separate treatment for the crowded checkout case", "--json"]);
+    expect(result.exitCode).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      command: "component",
+      id: "driver-crowded-duplicate",
+      stop: true,
+      exitCode: 2,
+      code: "candidate_set_truncated",
+      candidateCount: 21,
+      returnedCandidates: 20,
+    });
+    expect(result.stderr).toContain("STOP");
+    expect((db.query("SELECT COUNT(*) count FROM components WHERE id='driver-crowded-duplicate'").get() as { count: number }).count).toBe(0);
+  });
+
+  test("composition creates, updates with CAS, and publishes the current head", async () => {
+    const { api, directory } = await setup();
+    const firstPath = resolve(directory, "composition-first.json");
+    const secondPath = resolve(directory, "composition-second.json");
+    const compositionDoc = (name: string) => ({
+      version: 1,
+      name,
+      params: {},
+      slots: [],
+      spec: { root: "image", elements: { image: { type: "Image", props: { src: "/fixture.png", alt: name } } } },
+    });
+    await Bun.write(firstPath, JSON.stringify(compositionDoc("Reusable image")));
+    await Bun.write(secondPath, JSON.stringify(compositionDoc("Updated reusable image")));
+
+    const missingSystem = await run(api, ["composition", "reusable-image", firstPath]);
+    expect(missingSystem.exitCode).toBe(1);
+    expect(missingSystem.stderr).toContain("composition requires --design-system");
+    const foreignFlag = await run(api, ["composition", "publish", "reusable-image", "--design-system", "yandex-pay"]);
+    expect(foreignFlag.exitCode).toBe(1);
+    expect(foreignFlag.stderr).toContain("unknown flag for composition publish: --design-system");
+    const missingPublishId = await run(api, ["composition", "publish"]);
+    expect(missingPublishId.exitCode).toBe(1);
+    expect(missingPublishId.stderr).toContain("invalid arguments for composition publish");
+
+    const created = await run(api, ["composition", "reusable-image", firstPath, "--design-system", "yandex-pay", "--json"]);
+    expect(created.exitCode).toBe(0);
+    expect(JSON.parse(created.stdout)).toEqual({ command: "composition", id: "reusable-image", created: true, rev: 1, designSystem: "yandex-pay" });
+
+    const updated = await run(api, ["composition", "reusable-image", secondPath, "--design-system", "yandex-pay", "--json"]);
+    expect(updated.exitCode).toBe(0);
+    expect(JSON.parse(updated.stdout)).toEqual({ command: "composition", id: "reusable-image", created: false, rev: 2, designSystem: "yandex-pay" });
+
+    const published = await run(api, ["composition", "publish", "reusable-image", "--json"]);
+    expect(published.exitCode).toBe(0);
+    expect(JSON.parse(published.stdout)).toEqual({ command: "composition publish", id: "reusable-image", version: 1, rev: 2 });
+    const meta = await (await fetch(`${api}/compositions/reusable-image`)).json() as { headRev: number; publishedVersion: number; doc: { name: string } };
+    expect(meta).toMatchObject({ headRev: 2, publishedVersion: 1, doc: { name: "Updated reusable image" } });
   });
 
   test("diff supports defaults, explicit revisions, and JSON", async () => {
@@ -202,6 +420,38 @@ describe("author driver CLI", () => {
     const positionalAfterBoolean = await run(api, ["diff", "parser-diff", "--json", "1", "2", "3"]);
     expect(positionalAfterBoolean.exitCode).toBe(1);
     expect(positionalAfterBoolean.stderr).toContain("invalid arguments for diff");
+  });
+
+  test("catalog reserves subcommands and rejects flags from other catalog forms", async () => {
+    const { api } = await setup();
+    const missingListSystem = await run(api, ["catalog", "list"]);
+    expect(missingListSystem.exitCode).toBe(1);
+    expect(missingListSystem.stderr).toContain("invalid arguments for catalog list");
+
+    const missingSearchIntent = await run(api, ["catalog", "search", "yandex-pay"]);
+    expect(missingSearchIntent.exitCode).toBe(1);
+    expect(missingSearchIntent.stderr).toContain("catalog search requires --intent");
+
+    const missingArtifact = await run(api, ["catalog", "get", "yandex-pay"]);
+    expect(missingArtifact.exitCode).toBe(1);
+    expect(missingArtifact.stderr).toContain("catalog get requires at least one artifact");
+
+    for (const [args, diagnostic] of [
+      [["catalog", "list", "yandex-pay", "--limit", "2"], "unknown flag for catalog list: --limit"],
+      [["catalog", "--full", "list", "yandex-pay"], "unknown flag for catalog list: --full"],
+      [["catalog", "search", "yandex-pay", "--intent", "find a button", "--full"], "unknown flag for catalog search: --full"],
+      [["catalog", "get", "yandex-pay", "Overlay", "--intent", "find overlay"], "unknown flag for catalog get: --intent"],
+      [["catalog", "yandex-pay", "--intent", "find anything"], "unknown flag for catalog: --intent"],
+      [["composition", "--design-system", "yandex-pay", "publish", "missing"], "unknown flag for composition publish: --design-system"],
+    ] as const) {
+      const result = await run(api, [...args]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(diagnostic);
+    }
+
+    const globalBeforeSubcommand = await run(api, ["catalog", "--json", "list", "yandex-pay"]);
+    expect(globalBeforeSubcommand.exitCode).toBe(0);
+    expect(JSON.parse(globalBeforeSubcommand.stdout)).toMatchObject({ command: "catalog list" });
   });
 });
 
@@ -294,17 +544,37 @@ function dropAssets(db: Database) {
   db.run("DELETE FROM assets");
 }
 
-const DEFINITION_META = JSON.stringify({ description: "seeded", events: [], slots: [], scope: "screen", canonicalFor: ["payment-success"] });
-
 /** Seeds a published component (optionally with a later deprecated version) directly in the DB. */
-function seedComponent(db: Database, id: string, name: string, { deprecated = false } = {}) {
-  db.query("INSERT INTO components (id,name,head_rev,design_system,deleted_at,owner_id,created_at,updated_at) VALUES (?,?,?,'yandex-pay',NULL,'user_admin','now','now')")
-    .run(id, name, deprecated ? 2 : 1);
+function seedComponent(db: Database, id: string, name: string, options: {
+  deprecated?: boolean;
+  description?: string;
+  events?: string[];
+  slots?: string[];
+  source?: string;
+  atomicLevel?: string;
+  designSystem?: string;
+  canonicalFor?: string[];
+} = {}) {
+  const { deprecated = false } = options;
+  const designSystem = options.designSystem ?? "yandex-pay";
+  const source = options.source ?? "export const definition={}";
+  const definitionMeta = JSON.stringify({
+    description: options.description ?? "seeded",
+    events: options.events ?? [],
+    slots: options.slots ?? [],
+    ...(options.atomicLevel === undefined ? {} : { atomicLevel: options.atomicLevel }),
+    scope: "screen",
+    canonicalFor: options.canonicalFor ?? ["payment-success"],
+    propsJsonSchema: { type: "object", properties: { secretDetail: { type: "string" } } },
+    examples: { full: { secretDetail: "not-for-list-or-search" } },
+  });
+  db.query("INSERT INTO components (id,name,head_rev,design_system,deleted_at,owner_id,created_at,updated_at) VALUES (?,?,?,?,NULL,'user_admin','now','now')")
+    .run(id, name, deprecated ? 2 : 1, designSystem);
   const versions: [number, string][] = deprecated ? [[1, "active"], [2, "deprecated"]] : [[1, "active"]];
   for (const [version, status] of versions) {
-    db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES (?,?,'export const definition={}','yandex-pay','now')").run(id, version);
+    db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES (?,?,?,?,'now')").run(id, version, source, designSystem);
     db.query(`INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at)
-      VALUES (?,?,?,?,'',?,'sh','bh',2,'now')`).run(id, version, version, status, DEFINITION_META);
+      VALUES (?,?,?,?,'',?,'sh','bh',2,'now')`).run(id, version, version, status, definitionMeta);
   }
 }
 
