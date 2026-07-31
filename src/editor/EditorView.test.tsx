@@ -44,10 +44,10 @@ describe("EditorView (W2-2: защита правок + undo/redo)", () => {
     expect(await screen.findByText("Не сохранено")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("link", { name: "Галерея" }));
-    const dialog = await screen.findByRole("dialog", { name: "Несохранённые правки" });
+    const dialog = await screen.findByRole("dialog", { name: "Уйти без сохранения?" });
     expect(dialog.textContent).toContain("Уйти без сохранения?");
     fireEvent.click(screen.getByRole("button", { name: "Остаться" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Несохранённые правки" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Уйти без сохранения?" })).toBeNull());
     expect(router.state.location.pathname).toBe("/p/editor-demo/edit");
     expect(screen.getByText("Не сохранено")).toBeTruthy(); // правки не потеряны
 
@@ -175,7 +175,7 @@ describe("EditorView (W2-2: защита правок + undo/redo)", () => {
     expect(history.textContent).toContain("v1");
     fireEvent.click(within(screen.getByText("Before redesign").closest("li")!).getByRole("button", { name: "Восстановить" }));
 
-    const confirm = await screen.findByRole("dialog", { name: "Подтверждение восстановления" });
+    const confirm = await screen.findByRole("dialog", { name: /^Восстановить/ });
     expect(confirm.textContent).toContain("Текущие несохранённые правки будут отброшены");
     expect(requests.some((request) => request.url.endsWith("/restore"))).toBe(false);
     fireEvent.click(within(confirm).getByRole("button", { name: "Восстановить" }));
@@ -212,7 +212,7 @@ describe("EditorView (W2-2: защита правок + undo/redo)", () => {
     editText("Local");
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
 
-    const dialog = await screen.findByRole("dialog", { name: "Конфликт версий черновика" });
+    const dialog = await screen.findByRole("dialog", { name: /Черновик изменён снаружи/ });
     expect(dialog.textContent).toContain("Черновик изменён снаружи (rev 9)");
     // Что поменяли снаружи и что поменял ты — человекочитаемые адреса.
     expect(dialog.textContent).toContain("Название — изменено («Editor demo» → «Remote name»)");
@@ -221,16 +221,16 @@ describe("EditorView (W2-2: защита правок + undo/redo)", () => {
 
     // «Отменить» оставляет локальные правки в редакторе.
     fireEvent.click(screen.getByRole("button", { name: "Отменить" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Конфликт версий черновика" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Черновик изменён снаружи/ })).toBeNull());
     expect((screen.getByRole("textbox", { name: "text" }) as HTMLInputElement).value).toBe("Local");
     expect(screen.getByText("Не сохранено")).toBeTruthy();
 
     // Повторный save → снова диалог → «Перезаписать» кладёт локальную версию с baseRev свежего rev.
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
-    await screen.findByRole("dialog", { name: "Конфликт версий черновика" });
+    await screen.findByRole("dialog", { name: /Черновик изменён снаружи/ });
     fireEvent.click(screen.getByRole("button", { name: "Перезаписать" }));
     expect(await screen.findByText("Сохранено")).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: "Конфликт версий черновика" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /Черновик изменён снаружи/ })).toBeNull();
     const last = puts[puts.length - 1]!;
     expect(last.baseRev).toBe(9);
     expect(last.doc.screens[0]!.spec.elements["text"]!.props["text"]).toBe("Local");
@@ -285,7 +285,7 @@ describe("EditorView (W2-2: защита правок + undo/redo)", () => {
     await screen.findByRole("heading", { name: "Editor demo" });
 
     fireEvent.click(screen.getByRole("button", { name: "Опубликовать" }));
-    const dialog = screen.getByRole("dialog", { name: "Публикация прототипа" });
+    const dialog = screen.getByRole("dialog", { name: "Опубликовать текущую версию" });
     fireEvent.change(within(dialog).getByRole("textbox", { name: "Сообщение к версии (необязательно)" }), { target: { value: "Готово для показа" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Опубликовать" }));
 
@@ -344,7 +344,7 @@ describe("EditorView (W2-2: защита правок + undo/redo)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Опубликовать" }));
     fireEvent.click(screen.getByRole("button", { name: "Сохранить и опубликовать" }));
-    const conflictDialog = await screen.findByRole("dialog", { name: "Конфликт версий черновика" });
+    const conflictDialog = await screen.findByRole("dialog", { name: /Черновик изменён снаружи/ });
     fireEvent.click(within(conflictDialog).getByRole("button", { name: "Перезаписать" }));
 
     expect(await screen.findByText("v 2 опубликована")).toBeTruthy();
@@ -363,7 +363,7 @@ describe("EditorView (W2-2: защита правок + undo/redo)", () => {
     renderView();
     await screen.findByRole("heading", { name: "Editor demo" });
     fireEvent.click(screen.getByRole("button", { name: "Опубликовать" }));
-    fireEvent.click(within(screen.getByRole("dialog", { name: "Публикация прототипа" })).getByRole("button", { name: "Опубликовать" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Опубликовать текущую версию" })).getByRole("button", { name: "Опубликовать" }));
 
     expect(await screen.findByText("v 4 опубликована")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("Текущая ревизия уже опубликована как версия v 4.");

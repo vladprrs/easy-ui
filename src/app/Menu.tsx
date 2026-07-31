@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement, type ReactNode } from "react";
 import { pillGhost, popover, popoverItem, transition } from "./chrome";
 
 /**
@@ -16,6 +16,32 @@ import { pillGhost, popover, popoverItem, transition } from "./chrome";
  *
  * Подписи приходят пропсами: примитив общий для зон с разными словарями.
  */
+
+/**
+ * Императивное закрытие меню изнутри содержимого.
+ *
+ * Без него потребители закрывали поповер пересозданием `Menu` через `key` — это
+ * сбрасывало не только открытость, но и всё внутреннее состояние содержимого
+ * (свёрнутые ветки дерева сценариев, раскрытые подменю). Контекст отдаёт ту же
+ * функцию, что и Esc: закрыть **и вернуть фокус на триггер**, — иначе после
+ * выбора пункта фокус оставался бы на исчезнувшем узле и падал на <body>.
+ */
+const MenuCloseContext = createContext<(() => void) | null>(null);
+
+const noop = () => {};
+
+/**
+ * Закрыть меню-предок. Вне `Menu` — no-op, чтобы тот же пункт можно было
+ * рендерить и вне поповера.
+ *
+ * Почему хук, а не проп-функция в children: пункт бывает вложен в подменю или в
+ * собственный компонент вызывающей стороны, и протаскивать `close` вручную через
+ * каждый такой слой значит заводить проп, который существует только ради одного
+ * листа дерева.
+ */
+export function useMenuClose(): () => void {
+  return useContext(MenuCloseContext) ?? noop;
+}
 
 const menuItemsIn = (panel: HTMLElement): HTMLElement[] =>
   [...panel.querySelectorAll<HTMLElement>('[role="menuitem"]')]
@@ -142,7 +168,9 @@ export function Menu({ label, trigger, triggerClassName, panelClassName, panelLa
       aria-label={panelLabel ?? label}
       onKeyDown={onPanelKeyDown}
       className={`${popover} absolute right-0 z-20 mt-2 w-64 ${panelClassName ?? ""}`}
-    >{children}</div> : null}
+    >
+      <MenuCloseContext.Provider value={closeAndReturn}>{children}</MenuCloseContext.Provider>
+    </div> : null}
   </div>;
 }
 
@@ -156,16 +184,22 @@ export interface MenuItemProps {
   onSelect?: () => void;
   disabled?: boolean;
   destructive?: boolean;
+  /**
+   * Закрыть меню после выбора. По умолчанию выключено: часть пунктов —
+   * тумблеры и переключатели, которым закрытие поповера противопоказано.
+   */
+  closeOnSelect?: boolean;
   className?: string;
 }
 
-export function MenuItem({ children, onSelect, disabled = false, destructive = false, className }: MenuItemProps): ReactElement {
+export function MenuItem({ children, onSelect, disabled = false, destructive = false, closeOnSelect = false, className }: MenuItemProps): ReactElement {
+  const close = useMenuClose();
   return <button
     type="button"
     role="menuitem"
     disabled={disabled}
     className={`${destructive ? menuItemDestructiveClass : menuItemClass} disabled:opacity-50 ${className ?? ""}`}
-    onClick={onSelect}
+    onClick={() => { onSelect?.(); if (closeOnSelect) close(); }}
   >{children}</button>;
 }
 

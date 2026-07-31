@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Navigate } from "react-router";
 import { ApiError, createUser, listUsers, type UserSummary } from "../api/client";
 import { headingPage, inputBase, kicker, pillPrimary, plate } from "../app/chrome";
+import { Toggle } from "../app/Toggle";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { useAuth } from "./AuthContext";
 
@@ -12,6 +13,7 @@ export function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     if (!user?.isAdmin) return;
@@ -39,10 +41,11 @@ export function UsersPage() {
       const created = await createUser({
         name: String(form.get("name") ?? ""),
         password: String(form.get("password") ?? ""),
-        isAdmin: form.get("isAdmin") === "on",
+        isAdmin,
       });
       setUsers((current) => [...current, created]);
       formElement.reset();
+      setIsAdmin(false);
     } catch (caught) {
       setError(caught instanceof ApiError && caught.code === "already_exists"
         ? "Пользователь с таким именем уже существует."
@@ -71,7 +74,9 @@ export function UsersPage() {
         <form className="mt-5 space-y-4" onSubmit={submit}>
           <label className="block text-sm font-medium">Имя<input className={`${inputBase} mt-1.5 w-full`} name="name" required maxLength={64} /></label>
           <label className="block text-sm font-medium">Пароль<input className={`${inputBase} mt-1.5 w-full`} name="password" type="password" required minLength={8} maxLength={256} autoComplete="new-password" /></label>
-          <label className="flex items-center gap-2 text-sm"><input name="isAdmin" type="checkbox" /> Администратор</label>
+          {/* Тумблер — не элемент формы, поэтому значение читается из состояния,
+              а не из FormData, и сбрасывается вместе с полями вручную. */}
+          <Toggle checked={isAdmin} onChange={setIsAdmin} label="Администратор" />
           {error ? <p className="text-sm text-pay-red" role="alert">{error}</p> : null}
           <button className={pillPrimary} type="submit" disabled={creating}>{creating ? "Создаём…" : "Создать"}</button>
         </form>

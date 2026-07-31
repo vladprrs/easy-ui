@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError, getComponentMeta, getPrototypeMeta, getPrototypeRevision, getPrototypeVersion, listComponents,
@@ -121,9 +121,10 @@ describe("VisualPage reference capture", () => {
     vi.mocked(listVisualReferences).mockResolvedValue({ references: [reference] });
     vi.mocked(getVisualReference).mockResolvedValue({ ...reference, runs: [] });
     vi.mocked(deleteVisualReference).mockRejectedValue(new ApiError(409, { code: "baseline_managed", message: "raw delete error" }));
-    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
     render(<VisualPage />);
+    // Удаление эталона подтверждается окном бренда (S6), а не window.confirm.
     fireEvent.click(await screen.findByRole("button", { name: "Удалить эталон" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Удалить эталон?" })).getByRole("button", { name: "Удалить эталон" }));
 
     expect(await screen.findByText("Этот reference управляется baseline-набором и не может быть изменён отдельно.")).toBeTruthy();
     expect(screen.queryByText("raw delete error")).toBeNull();

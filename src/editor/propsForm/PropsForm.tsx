@@ -1,5 +1,6 @@
 import { createContext, useContext, useRef, useState, useSyncExternalStore, type ChangeEvent } from "react";
 import { chip, chipActive, inputBase } from "../../app/chrome";
+import { SelectPill } from "../../app/SelectPill";
 import { editor } from "../../app/strings/editor";
 import { propsForm as sharedStrings } from "../../app/strings/propsForm";
 import { getEditorAssetsSnapshot, subscribeEditorAssets, uploadAsset, type EditorAsset } from "../../api/client";
@@ -65,10 +66,16 @@ function AssetField({ field, value, assets, commit }: { field: { name: string };
       <button type="button" className={mode === "asset" ? chipActive : chip} onClick={() => setMode("asset")}>{editor.assetMode}</button>
     </div>
     {mode === "url" ? <input aria-label={field.name} className={controlClass} value={urlDraft.text} onChange={(event) => setUrlDraft({ baseline: valueUrl, text: event.target.value })} onBlur={() => commit(urlDraft.text)} /> : <>
-      <select aria-label={editor.assetSelect} className={`${controlClass} font-eui-ui`} value={directive?.$asset ?? ""} onChange={(event) => { if (event.target.value) commit({ $asset: event.target.value }); }}>
-        <option value="" disabled>{choices.length ? editor.assetSelect : editor.assetEmpty}</option>
-        {choices.map((asset) => <option key={asset.id} value={asset.id}>{asset.name ?? asset.id}{asset.mime ? ` — ${editor.assetMeta(asset.mime, formatBytes(asset.size))}` : ""}</option>)}
-      </select>
+      <SelectPill
+        label={editor.assetSelect}
+        className="max-w-full"
+        value={directive?.$asset ?? ""}
+        onChange={(next) => { if (next) commit({ $asset: next }); }}
+        options={[
+          { value: "", label: choices.length ? editor.assetSelect : editor.assetEmpty, disabled: true },
+          ...choices.map((asset) => ({ value: asset.id, label: `${asset.name ?? asset.id}${asset.mime ? ` — ${editor.assetMeta(asset.mime, formatBytes(asset.size))}` : ""}` })),
+        ]}
+      />
       {directive ? <p className="break-all font-mono text-xs font-normal text-eui-slate-500">{selected?.name ?? directive.$asset}{selected ? <span className="mt-0.5 block font-eui-ui">{editor.assetMeta(selected.mime, formatBytes(selected.size))}</span> : null}</p> : null}
       <button type="button" className={chip} disabled={uploading} onClick={() => fileRef.current?.click()}>{uploading ? editor.assetUploading : editor.assetUpload}</button>
       <input ref={fileRef} type="file" aria-label={editor.assetUploadInput} className="sr-only" disabled={uploading} onChange={(event) => void onFile(event)} />

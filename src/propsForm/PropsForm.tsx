@@ -1,6 +1,8 @@
 import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { z } from "zod";
-import { inputBase, chip, chipActive } from "../app/chrome";
+import { inputBase, chip } from "../app/chrome";
+import { SelectPill } from "../app/SelectPill";
+import { Toggle } from "../app/Toggle";
 import { propsForm as defaultStrings, type PropsFormStrings } from "../app/strings/propsForm";
 import { describePropsSchema, type PropField, type SelectValue } from "./introspect";
 
@@ -165,13 +167,30 @@ export function PropsForm({ schema, values, validate, onCandidate, epoch = 0, st
       return <div key={field.name}>
         {asset && renderAssetField ? <div className="font-eui-ui text-xs text-eui-slate-500"><span>{field.name}{field.required ? <span aria-hidden="true"> *</span> : null}</span>{renderAssetField({ field, value, commit: (next) => commit(field.name, next) })}</div>
           : <FieldLabel field={field}>
-            {kind === "switch" ? <span className="mt-1 flex items-center justify-between gap-3"><span>{!present ? strings.unsetOption : value === null ? strings.nullOption : String(value)}</span><input aria-label={field.name} type="checkbox" role="switch" checked={value === true} onChange={(event) => commit(field.name, event.target.checked)} /></span> : null}
-            {kind === "select" ? <select aria-label={field.name} className={`${present ? chipActive : chip} mt-1 font-eui-ui`} value={!present ? "" : optionKey(value as SelectValue)} onChange={(event) => {
-              if (event.target.value === "") { remove(field.name); return; }
-              if (event.target.value === "null") { commit(field.name, null); return; }
-              const option = field.control.kind === "select" ? field.control.options.find((item) => optionKey(item) === event.target.value) : undefined;
-              commit(field.name, option);
-            }}>{canUnset ? <option value="">{strings.unsetOption}</option> : !present ? <option value="" disabled hidden /> : null}{field.control.kind === "select" ? field.control.options.map((option) => <option key={optionKey(option)} value={optionKey(option)}>{String(option)}</option>) : null}{field.nullable && field.control.kind === "select" && !field.control.options.includes(null) ? <option value="null">{strings.nullOption}</option> : null}</select> : null}
+            {/* Значение — подпись самого тумблера, а не сосед: иначе оно попадает
+                в доступное имя контрола, которое даёт оборачивающий `FieldLabel`. */}
+            {kind === "switch" ? <Toggle
+              className="mt-1"
+              checked={value === true}
+              onChange={(next) => commit(field.name, next)}
+              label={!present ? strings.unsetOption : value === null ? strings.nullOption : String(value)}
+            /> : null}
+            {kind === "select" ? <SelectPill
+              label={field.name}
+              className="mt-1 max-w-full"
+              value={!present ? "" : optionKey(value as SelectValue)}
+              onChange={(next) => {
+                if (next === "") { remove(field.name); return; }
+                if (next === "null") { commit(field.name, null); return; }
+                const option = field.control.kind === "select" ? field.control.options.find((item) => optionKey(item) === next) : undefined;
+                commit(field.name, option);
+              }}
+              options={[
+                ...(canUnset ? [{ value: "", label: strings.unsetOption }] : !present ? [{ value: "", label: "" }] : []),
+                ...(field.control.kind === "select" ? field.control.options.map((option) => ({ value: optionKey(option), label: String(option) })) : []),
+                ...(field.nullable && field.control.kind === "select" && !field.control.options.includes(null) ? [{ value: "null", label: strings.nullOption }] : []),
+              ]}
+            /> : null}
             {kind === "text" ? <input aria-label={field.name} className={controlClass} placeholder={hint} value={text} onChange={(event) => setText(event.target.value)} onBlur={() => commitText(field, text)} onKeyDown={(event) => enter(event, () => commitText(field, text))} /> : null}
             {kind === "number" ? <input aria-label={field.name} type="number" className={controlClass} placeholder={hint} value={text} onChange={(event) => setText(event.target.value)} onBlur={() => commitNumber(field, text)} onKeyDown={(event) => enter(event, () => commitNumber(field, text))} /> : null}
             {kind === "json" ? <><span className="mt-1 block text-xs font-normal text-eui-slate-500">{dynamic ? strings.dynamicValueLabel : strings.jsonLabel}</span><textarea aria-label={field.name} className={`${controlClass} min-h-24 font-mono`} value={text} onChange={(event) => setText(event.target.value)} onBlur={() => commitJson(field.name, text)} /></> : null}

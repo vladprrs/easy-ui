@@ -1,5 +1,6 @@
-import { useEffect, type ReactElement } from "react";
-import { headingDialog, panel, pillGhost, pillPrimary } from "../../app/chrome";
+import type { ReactElement } from "react";
+import { Modal } from "../../app/Modal";
+import { panel, pillGhost, pillPrimary } from "../../app/chrome";
 import { EmptyState, ErrorState, Skeleton } from "../../app/states";
 import { library } from "../../app/strings/library";
 
@@ -38,29 +39,18 @@ export function LibraryNoMatches({ searching, onReset }: { searching: boolean; o
  * в никуда экран честно показывает два запроса API и ссылку на описание.
  */
 export function PublishDialog({ onClose }: { onClose: () => void }): ReactElement {
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-pay-deep/55 p-6" onClick={onClose}>
-    <section
-      role="dialog"
-      aria-modal="true"
-      aria-label={library.publishDialogAria}
-      className="w-full max-w-[460px] rounded-panel bg-white p-7"
-      onClick={(event) => event.stopPropagation()}
-    >
-      <h2 className={headingDialog}>{library.publishDialogTitle}</h2>
-      <p className="mt-3 text-sm text-eui-slate-500">{library.publishDialogBody}</p>
-      <ol className="mt-5 space-y-3 text-sm">
-        <li><span className="font-medium">1.</span> {library.emptyCreateStep} <code className="rounded-item bg-pay-lavender-tint px-1.5 py-0.5">POST /api/components</code></li>
-        <li><span className="font-medium">2.</span> {library.emptyPublishStep} <code className="rounded-item bg-pay-lavender-tint px-1.5 py-0.5">POST /api/components/&#123;id&#125;/publish</code></li>
-      </ol>
-      <div className="mt-7 flex flex-wrap items-center gap-3">
-        <a className={pillPrimary} href="/api/openapi.json">{library.emptyApiLink}</a>
-        <button type="button" className={pillGhost} onClick={onClose}>{library.close}</button>
-      </div>
-    </section>
-  </div>;
+  return <Modal
+    title={library.publishDialogTitle}
+    onClose={onClose}
+    footer={<>
+      <button type="button" className={pillGhost} onClick={onClose}>{library.close}</button>
+      <a className={pillPrimary} href="/api/openapi.json">{library.emptyApiLink}</a>
+    </>}
+  >
+    <p className="mt-3 text-sm text-eui-slate-500">{library.publishDialogBody}</p>
+    <ol className="mt-5 space-y-3 text-sm">
+      <li><span className="font-medium">1.</span> {library.emptyCreateStep} <code className="rounded-item bg-pay-lavender-tint px-1.5 py-0.5">POST /api/components</code></li>
+      <li><span className="font-medium">2.</span> {library.emptyPublishStep} <code className="rounded-item bg-pay-lavender-tint px-1.5 py-0.5">POST /api/components/&#123;id&#125;/publish</code></li>
+    </ol>
+  </Modal>;
 }

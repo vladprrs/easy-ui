@@ -62,10 +62,10 @@ describe("AssetsPage", () => {
     expect(within(screen.getByLabelText("Сетка ассетов")).queryByText("logo.png")).toBeNull();
 
     fireEvent.click(within(facets).getByRole("button", { name: "Все типы" }));
-    fireEvent.click(screen.getByLabelText("Только неиспользуемые"));
+    fireEvent.click(screen.getByRole("switch", { name: "Только неиспользуемые" }));
     expect(within(screen.getByLabelText("Сетка ассетов")).getAllByRole("button")).toHaveLength(1);
 
-    fireEvent.click(screen.getByLabelText("Только неиспользуемые"));
+    fireEvent.click(screen.getByRole("switch", { name: "Только неиспользуемые" }));
     fireEvent.change(screen.getByLabelText("Поиск по id или имени файла"), { target: { value: "aaaa" } });
     expect(within(screen.getByLabelText("Сетка ассетов")).getAllByRole("button")).toHaveLength(1);
   });

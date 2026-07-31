@@ -136,7 +136,7 @@ describe("EditorShell", () => {
     await screen.findByRole("heading", { name: "Editor demo" });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
     // 409 → редактор сам тянет актуальный remote-драфт для diff (2-я загрузка).
-    const dialog = await screen.findByRole("dialog", { name: "Конфликт версий черновика" });
+    const dialog = await screen.findByRole("dialog", { name: /Черновик изменён снаружи/ });
     expect(draftLoads).toBe(2);
     expect(dialog.textContent).toContain("Черновик изменён снаружи (rev 7)");
     fireEvent.click(screen.getByRole("button", { name: /Перезагрузить черновик/ }));

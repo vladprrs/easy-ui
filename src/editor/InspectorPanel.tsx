@@ -1,5 +1,6 @@
 import { useState, type Dispatch, type KeyboardEvent } from "react";
 import { z } from "zod";
+import { ConfirmModal } from "../app/Modal";
 import { inputBase, kicker, pillGhost } from "../app/chrome";
 import { deviceNames } from "../app/strings/common";
 import { editor } from "../app/strings/editor";
@@ -117,6 +118,9 @@ export function InspectorPanel({ state, definitions, dispatch, pins, issues, com
   onCompositionRegistered?: (id: string, doc: CompositionDoc) => void;
 }) {
   const [dialog, setDialog] = useState<"insert" | "extract" | null>(null);
+  // Переход на холст снимает регионы: подтверждение висит на отложенном значении,
+  // потому что коммит приходит из blur поля, а не из клика по кнопке.
+  const [canvasConfirm, setCanvasConfirm] = useState<{ width: number; height: number } | null>(null);
   const screenIndex = state.doc.screens.findIndex((item) => item.id === state.selection.screenId);
   const screen = state.doc.screens[screenIndex];
   if (!screen) return <aside className="w-90 shrink-0 border-l border-eui-ink/10 bg-white p-4"><p className="font-eui-ui text-sm text-eui-slate-500">{editor.screenMissing}</p></aside>;
@@ -135,9 +139,10 @@ export function InspectorPanel({ state, definitions, dispatch, pins, issues, com
     .filter((region): region is RegionKind => region !== undefined));
   const suggestion = elementKey ? suggestRegion(screen, elementKey) : null;
   const commitCanvas = (canvas: { width: number; height: number } | undefined) => {
-    if (canvas !== undefined
-      && Object.values(screen.spec.elements).some((candidate) => candidate.region !== undefined)
-      && !window.confirm(editor.canvasRegionsConfirm)) return;
+    if (canvas !== undefined && Object.values(screen.spec.elements).some((candidate) => candidate.region !== undefined)) {
+      setCanvasConfirm(canvas);
+      return;
+    }
     dispatch({ type: "set-screen-meta", screenId: screen.id, patch: { canvas } });
   };
 
@@ -217,6 +222,14 @@ export function InspectorPanel({ state, definitions, dispatch, pins, issues, com
       <label className="block font-eui-ui text-xs text-eui-slate-500">{editor.startScreenLabel}<select className={`${inputClass} text-eui-ink`} value={state.doc.startScreen} onChange={(event) => dispatch({ type: "set-doc-meta", patch: { startScreen: event.target.value } })}>{state.doc.screens.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <label className="block font-eui-ui text-xs text-eui-slate-500">{editor.deviceLabel}<select className={`${inputClass} text-eui-ink`} value={state.doc.device} onChange={(event) => dispatch({ type: "set-doc-meta", patch: { device: event.target.value as EditorState["doc"]["device"] } })}><option value="mobile">{deviceNames.mobile}</option><option value="tablet">{deviceNames.tablet}</option><option value="desktop">{deviceNames.desktop}</option></select></label>
     </div></Section>
+    {canvasConfirm ? <ConfirmModal
+      title={editor.canvasRegionsDialogTitle}
+      body={editor.canvasRegionsDialogBody}
+      confirmLabel={editor.canvasRegionsConfirmAction}
+      cancelLabel={editor.canvasRegionsCancel}
+      onConfirm={() => { dispatch({ type: "set-screen-meta", screenId: screen.id, patch: { canvas: canvasConfirm } }); setCanvasConfirm(null); }}
+      onClose={() => setCanvasConfirm(null)}
+    /> : null}
     {dialog === "insert" ? <InsertCompositionDialog
       designSystem={state.doc.designSystem}
       parentKey={insertParentKey}

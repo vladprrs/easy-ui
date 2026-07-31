@@ -2,7 +2,9 @@ import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { createPrototype, getCatalogManifest, listDesignSystems, listPrototypes, type PrototypeKind } from "../api/client";
 import { useApi } from "../api/hooks";
-import { headingDialog, inputBase, inputLabel, pillGhost, pillPrimary } from "../app/chrome";
+import { Modal } from "../app/Modal";
+import { SelectPill } from "../app/SelectPill";
+import { inputBase, inputLabel, pillGhost, pillPrimary } from "../app/chrome";
 import { gallery } from "../app/strings/gallery";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { useAuth } from "../auth";
@@ -146,27 +148,29 @@ export function GalleryPage() {
       onImport={() => setImportOpen(true)}
       onReset={resetFilters}
     /> : null}
-    {createDialog ? <div className="fixed inset-0 z-50 flex items-center justify-center bg-pay-deep/55 p-6">
-      <section role="dialog" aria-modal="true" aria-label={gallery.createDialogAria} className="w-full max-w-[460px] rounded-panel bg-white p-7">
-        <h2 className={headingDialog}>{gallery.createDialogTitle}</h2>
-        <form className="mt-6 space-y-4" onSubmit={(event) => { event.preventDefault(); void submitCreate(); }}>
-          <label className={inputLabel}>{gallery.nameLabel}
-            <input className={`${inputBase} mt-1.5 w-full`} name="prototype-name" autoFocus required placeholder={gallery.namePlaceholder} value={createDialog.name} disabled={createDialog.status === "creating"} onChange={(event) => setCreateDialog((current) => current ? { ...current, name: event.target.value, error: false } : null)} />
-          </label>
-          <label className={inputLabel}>{gallery.systemLabelCreate}
-            <select className={`${inputBase} mt-1.5 w-full`} name="design-system" value={createDialog.designSystemId} disabled={createDialog.status === "creating"} onChange={(event) => setCreateDialog((current) => current ? { ...current, designSystemId: event.target.value, error: false } : null)}>
-              {usableSystems.map((system) => <option key={system.id} value={system.id}>{system.name}</option>)}
-            </select>
-          </label>
-          <p className="text-[13px] text-eui-slate-500">{gallery.hostStarterReady}</p>
-          {createDialog.error ? <p className="text-[13px] text-pay-red" role="alert">{gallery.createFailed}</p> : null}
-          <div className="flex flex-wrap justify-end gap-2 pt-2">
-            <button type="button" className={pillGhost} disabled={createDialog.status === "creating"} onClick={() => setCreateDialog(null)}>{gallery.cancel}</button>
-            <button type="submit" className={pillPrimary} disabled={!canCreate}>{createDialog.status === "creating" ? gallery.creating : gallery.create}</button>
-          </div>
-        </form>
-      </section>
-    </div> : null}
+    {createDialog ? <Modal title={gallery.createDialogTitle} onClose={() => setCreateDialog(null)}>
+      <form className="mt-6 space-y-4" onSubmit={(event) => { event.preventDefault(); void submitCreate(); }}>
+        <label className={inputLabel}>{gallery.nameLabel}
+          <input className={`${inputBase} mt-1.5 w-full`} name="prototype-name" required placeholder={gallery.namePlaceholder} value={createDialog.name} disabled={createDialog.status === "creating"} onChange={(event) => setCreateDialog((current) => current ? { ...current, name: event.target.value, error: false } : null)} />
+        </label>
+        <div className="grid gap-1.5">
+          <span className={inputLabel}>{gallery.systemLabelCreate}</span>
+          <SelectPill
+            label={gallery.systemLabelCreate}
+            value={createDialog.designSystemId}
+            disabled={createDialog.status === "creating"}
+            onChange={(next) => setCreateDialog((current) => current ? { ...current, designSystemId: next, error: false } : null)}
+            options={usableSystems.map((system) => ({ value: system.id, label: system.name }))}
+          />
+        </div>
+        <p className="text-[13px] text-eui-slate-500">{gallery.hostStarterReady}</p>
+        {createDialog.error ? <p className="text-[13px] text-pay-red" role="alert">{gallery.createFailed}</p> : null}
+        <div className="flex flex-wrap justify-end gap-2 pt-2">
+          <button type="button" className={pillGhost} disabled={createDialog.status === "creating"} onClick={() => setCreateDialog(null)}>{gallery.cancel}</button>
+          <button type="submit" className={pillPrimary} disabled={!canCreate}>{createDialog.status === "creating" ? gallery.creating : gallery.create}</button>
+        </div>
+      </form>
+    </Modal> : null}
     {sharePrototypeId !== null && shareLatestVersion !== null ? <GalleryShareDialog
       prototypeId={sharePrototypeId}
       latestVersion={shareLatestVersion}

@@ -76,7 +76,7 @@ describe("Диалоги композиций", () => {
   it("extracts a subtree: creates and publishes the composition, then replaces it with a reference", async () => {
     const { dispatch, onCompositionRegistered } = renderPanel("card");
     fireEvent.click(screen.getByRole("button", { name: "Извлечь композицию из экрана" }));
-    await screen.findByRole("dialog", { name: "Извлечение композиции" });
+    await screen.findByRole("dialog", { name: /Извлечь композицию из/ });
 
     fireEvent.click(screen.getByRole("button", { name: "Извлечь и опубликовать" }));
 
@@ -112,7 +112,7 @@ describe("Диалоги композиций", () => {
     render(<InspectorPanel state={state} definitions={{}} dispatch={dispatch} compositions={{}} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Извлечь композицию из экрана" }));
-    await screen.findByRole("dialog", { name: "Извлечение композиции" });
+    await screen.findByRole("dialog", { name: /Извлечь композицию из/ });
     fireEvent.click(screen.getByRole("button", { name: "Извлечь и опубликовать" }));
 
     const alert = await screen.findByRole("alert");

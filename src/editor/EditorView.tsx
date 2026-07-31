@@ -8,7 +8,8 @@ import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import { prototypeDocSchema } from "../prototype/schema";
 import { hostKeyOf, type CompositionDoc } from "../prototype/composition";
 import { validatePrototype } from "../prototype/validate";
-import { pillGhost, pillPrimary } from "../app/chrome";
+import { inputBase, inputLabel, pillGhost, pillPrimary } from "../app/chrome";
+import { ConfirmModal, Modal } from "../app/Modal";
 import { PrototypeChrome } from "../app/PrototypeChrome";
 import { formatApiError } from "../app/strings/common";
 import { editor, editorDocumentTitle } from "../app/strings/editor";
@@ -288,53 +289,60 @@ export function EditorView({ loaded, custom, runtimeKey, onReload }: { loaded: P
     {readinessOpen ? <ReadinessPanel prototypeId={state.doc.id} refreshKey={historyRefreshKey} onSelectLocation={selectLocation} /> : null}
     <EditorScreenStrip doc={expansion.doc} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedScreenId={screen.id} onSelect={(screenId) => dispatch({ type: "select-screen", screenId })} customTypes={customTypes} customDefinitions={customDefinitions} compositionRefs={expansion.compositionRefs} themeContent={themeContent} />
     <div className="flex min-h-0 flex-1"><section className="min-w-0 flex-1 overflow-auto bg-eui-lav p-6" aria-label={editor.canvasAria}><EditorCanvas doc={expansion.doc} screen={renderedScreen} registry={runtime.registry} handlers={runtime.handlers} runtimeKey={runtimeKey} stateEpoch={state.stateEpoch} selectedKey={canvasSelectedKey} onSelect={(elementKey) => dispatch({ type: "select-element", elementKey: elementKey === null ? null : hostKeyOf(elementKey) })} customTypes={customTypes} customDefinitions={customDefinitions} compositionRefs={expansion.compositionRefs} themeContent={themeContent} /></section><DocEpochContext.Provider value={state.docEpoch}><InspectorPanel state={state} definitions={definitions} dispatch={dispatch} pins={loaded.components} compositions={compositions} compositionPins={loaded.compositions} onCompositionRegistered={registerComposition} /></DocEpochContext.Provider></div>
-    {publishDialogOpen ? <div role="dialog" aria-modal="true" aria-label={editor.publishDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
-      <div className="w-full max-w-md rounded-popover bg-white p-5">
-        <h2 className="pay-display text-lg">{editor.publishDialogTitle}</h2>
-        <p className="mt-1 text-sm text-eui-slate-500">{editor.publishDialogBody}</p>
-        <div className="-mx-5 mt-3 border-y border-eui-ink/10"><ReadinessPanel prototypeId={state.doc.id} refreshKey={historyRefreshKey} /></div>
-        <label className="mt-4 block text-sm font-medium">{editor.publishMessageLabel}<textarea value={publishMessage} onChange={(event) => setPublishMessage(event.target.value)} placeholder={editor.publishMessagePlaceholder} className="mt-2 min-h-24 w-full rounded-inset border border-eui-ink/15 bg-white p-3 font-eui-ui text-sm" /></label>
-        <div className="mt-4 flex justify-end gap-2">
-          <button type="button" className={pillGhost} onClick={() => { setPublishDialogOpen(false); setPublishMessage(""); }}>{editor.publishCancel}</button>
-          <button type="button" className={pillPrimary} onClick={confirmPublish}>{state.dirty ? editor.saveAndPublish : editor.publishConfirm}</button>
-        </div>
+    {publishDialogOpen ? <Modal
+      title={editor.publishDialogTitle}
+      onClose={() => { setPublishDialogOpen(false); setPublishMessage(""); }}
+      footer={<>
+        <button type="button" className={pillGhost} onClick={() => { setPublishDialogOpen(false); setPublishMessage(""); }}>{editor.publishCancel}</button>
+        <button type="button" className={pillPrimary} onClick={confirmPublish}>{state.dirty ? editor.saveAndPublish : editor.publishConfirm}</button>
+      </>}
+    >
+      <p className="mt-1 text-sm text-eui-slate-500">{editor.publishDialogBody}</p>
+      <div className="-mx-7 mt-5 border-y border-pay-lavender"><ReadinessPanel prototypeId={state.doc.id} refreshKey={historyRefreshKey} /></div>
+      <label className={`${inputLabel} mt-5`}>{editor.publishMessageLabel}
+        <textarea value={publishMessage} onChange={(event) => setPublishMessage(event.target.value)} placeholder={editor.publishMessagePlaceholder} className={`${inputBase} mt-1.5 min-h-24 w-full`} />
+      </label>
+    </Modal> : null}
+    {restoreTarget ? <ConfirmModal
+      title={editor.restoreDialogTitle(restoreTarget.label)}
+      body={<><span className="block font-medium text-pay-red">{editor.restoreDiscardWarning}</span><span className="mt-1 block">{editor.restoreBody}</span></>}
+      confirmLabel={editor.restoreConfirm}
+      cancelLabel={editor.restoreCancel}
+      onConfirm={() => void runRestore(restoreTarget)}
+      onClose={() => setRestoreTarget(null)}
+    /> : null}
+    {conflict ? <Modal
+      title={editor.conflictDialogTitle(conflict.remoteRev)}
+      onClose={() => { setConflict(null); publishIntentRef.current = null; }}
+      footer={<>
+        <button type="button" className={pillGhost} onClick={copy}>{editor.copyLocalJson}</button>
+        <button type="button" className={pillGhost} onClick={onReload}>{editor.reloadDraft}</button>
+        <button type="button" className={pillGhost} onClick={() => { setConflict(null); publishIntentRef.current = null; }}>{editor.conflictCancel}</button>
+        <button type="button" disabled={saving} className={`${pillPrimary} disabled:opacity-50`} onClick={() => runSave(conflict.remoteRev)}>{editor.conflictOverwrite}</button>
+      </>}
+    >
+      <p className="mt-1 text-sm text-eui-slate-500">{editor.conflictBody}</p>
+      <div className="mt-4 flex flex-col gap-4">
+        <ChangeList title={editor.conflictTheirsTitle} changes={conflict.remoteChanges} />
+        <ChangeList title={editor.conflictYoursTitle} changes={conflict.localChanges} />
       </div>
-    </div> : null}
-    {restoreTarget ? <div role="dialog" aria-modal="true" aria-label={editor.restoreDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
-      <div className="w-full max-w-md rounded-popover bg-white p-5">
-        <h2 className="pay-display text-lg">{editor.restoreDialogTitle(restoreTarget.label)}</h2>
-        <p className="mt-2 text-sm font-medium text-pay-red">{editor.restoreDiscardWarning}</p>
-        <p className="mt-1 text-sm text-eui-slate-500">{editor.restoreBody}</p>
-        <div className="mt-4 flex justify-end gap-2"><button type="button" className={pillGhost} onClick={() => setRestoreTarget(null)}>{editor.restoreCancel}</button><button type="button" className={pillPrimary} onClick={() => void runRestore(restoreTarget)}>{editor.restoreConfirm}</button></div>
-      </div>
-    </div> : null}
-    {conflict ? <div role="dialog" aria-modal="true" aria-label={editor.conflictDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
-      <div className="w-full max-w-xl rounded-popover bg-white p-5">
-        <h2 className="pay-display text-lg">{editor.conflictDialogTitle(conflict.remoteRev)}</h2>
-        <p className="mt-1 text-sm text-eui-slate-500">{editor.conflictBody}</p>
-        <div className="mt-4 flex flex-col gap-4">
-          <ChangeList title={editor.conflictTheirsTitle} changes={conflict.remoteChanges} />
-          <ChangeList title={editor.conflictYoursTitle} changes={conflict.localChanges} />
-        </div>
-        <p className="mt-4 text-sm text-pay-red">{editor.conflictOverwriteHint}</p>
-        <div className="mt-4 flex flex-wrap justify-end gap-2">
-          <button type="button" className={pillGhost} onClick={copy}>{editor.copyLocalJson}</button>
-          <button type="button" className={pillGhost} onClick={onReload}>{editor.reloadDraft}</button>
-          <button type="button" className={pillGhost} onClick={() => { setConflict(null); publishIntentRef.current = null; }}>{editor.conflictCancel}</button>
-          <button type="button" disabled={saving} className={`${pillPrimary} disabled:opacity-50`} onClick={() => runSave(conflict.remoteRev)}>{editor.conflictOverwrite}</button>
-        </div>
-      </div>
-    </div> : null}
-    {blocker.state === "blocked" ? <div role="dialog" aria-modal="true" aria-label={editor.leaveDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui">
-      <div className="w-full max-w-md rounded-popover bg-white p-5">
-        <h2 className="pay-display text-lg">{editor.leaveTitle}</h2>
-        <p className="mt-1 text-sm text-eui-slate-500">{editor.leaveBody}</p>
-        <div className="mt-4 flex justify-end gap-2">
-          <button type="button" className={pillGhost} onClick={() => blocker.reset()}>{editor.leaveStay}</button>
-          <button type="button" className={pillPrimary} onClick={() => blocker.proceed()}>{editor.leaveConfirm}</button>
-        </div>
-      </div>
-    </div> : null}
-    {copyFallback ? <div role="dialog" aria-modal="true" aria-label={editor.copyDialogAria} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"><div className="w-full max-w-3xl rounded-popover bg-eui-lilac-100 p-5"><h2 className="pay-display text-lg">{editor.copyDialogTitle}</h2><p role="status" className="mt-1 font-eui-ui text-sm text-pay-red">{editor.copyUnavailable}</p><textarea ref={fallbackRef} readOnly className="mt-4 h-96 w-full rounded-inset border border-eui-ink/15 bg-white p-3 font-mono text-xs" value={JSON.stringify(state.doc, null, 2)} /><button type="button" className={`${pillGhost} mt-3 font-eui-ui`} onClick={() => setCopyFallback(false)}>{editor.close}</button></div></div> : null}
+      <p className="mt-4 text-sm text-pay-red">{editor.conflictOverwriteHint}</p>
+    </Modal> : null}
+    {blocker.state === "blocked" ? <ConfirmModal
+      title={editor.leaveTitle}
+      body={editor.leaveBody}
+      confirmLabel={editor.leaveConfirm}
+      cancelLabel={editor.leaveStay}
+      onConfirm={() => blocker.proceed()}
+      onClose={() => blocker.reset()}
+    /> : null}
+    {copyFallback ? <Modal
+      title={editor.copyDialogTitle}
+      onClose={() => setCopyFallback(false)}
+      footer={<button type="button" className={pillGhost} onClick={() => setCopyFallback(false)}>{editor.close}</button>}
+    >
+      <p role="status" className="mt-1 text-sm text-pay-red">{editor.copyUnavailable}</p>
+      <textarea ref={fallbackRef} readOnly className={`${inputBase} mt-4 h-96 w-full font-mono text-xs`} value={JSON.stringify(state.doc, null, 2)} />
+    </Modal> : null}
   </main>;
 }

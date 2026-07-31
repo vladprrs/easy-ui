@@ -67,7 +67,7 @@ test("gallery card opens the presentation at the start screen", async ({ page })
   const card = page.getByRole("listitem").filter({ hasText: "Мобильное оформление заказа" });
   // Действия карточки живут в «⋯»-меню (редизайн макета 01).
   await card.getByLabel("Действия").click();
-  await card.getByRole("link", { name: "Презентация" }).click();
+  await card.getByRole("menuitem", { name: "Презентация" }).click();
   await expect(page).toHaveURL(/\/p\/checkout\/present\/s\/catalog$/);
   await expect(page.getByRole("button", { name: "Открыть карточку кроссовок" })).toBeVisible();
 });

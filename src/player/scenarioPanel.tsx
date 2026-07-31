@@ -114,10 +114,10 @@ function StepList({ steps, results, current, onRemove }: {
         key={index}
         data-testid={`scenario-step-${index}`}
         aria-current={current === index ? "step" : undefined}
-        className={`flex items-start gap-2 rounded-item px-1.5 py-1.5 ${current === index ? "bg-pay-lavender" : ""}`}
+        className={`flex flex-wrap items-start gap-x-2 gap-y-1 rounded-item px-1.5 py-1.5 ${current === index ? "bg-pay-lavender" : ""}`}
       >
         <span className="w-4 shrink-0 tabular-nums text-eui-slate-500">{index + 1}</span>
-        <span className="min-w-0 flex-1 break-all">{describeStep(step)}</span>
+        <span className="min-w-0 flex-1 break-words">{describeStep(step)}</span>
         {result ? <span className={`shrink-0 ${statusClass[result.status]}`} data-testid={`scenario-step-status-${index}`}>{strings.statusLabel[result.status]}</span> : null}
         {onRemove ? <button type="button" aria-label={strings.stepRemove} title={strings.stepRemove} onClick={() => onRemove(index)} className="shrink-0 px-1 text-eui-slate-500 transition-colors duration-100 hover:text-pay-red"><span aria-hidden="true">✕</span></button> : null}
       </li>;
@@ -250,7 +250,10 @@ export function ScenarioPanel({ doc, screenId, controller }: {
     {draft.recording ? <p className="px-4 pb-2 text-eui-slate-500" role="status">{strings.recordHint}</p> : null}
     {error ? <p className="px-4 pb-2 font-medium text-pay-red" role="alert">{error}</p> : null}
 
-    <div className="flex min-h-0 flex-1 flex-col">
+    {/* overflow-y-auto здесь обязателен: без него автоматический min-height флекс-элемента
+        равен высоте нескрываемых блоков (форма ожидания + имя + кнопки), и список
+        сохранённых проверок ниже выдавливается за overflow-hidden панели. */}
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <StepList
         steps={draft.steps}
         results={results}
@@ -305,15 +308,20 @@ export function ScenarioPanel({ doc, screenId, controller }: {
           <button type="button" className={button} onClick={() => { setDraft(emptyScenarioDraft); setResults([]); setCurrent(null); }}>{strings.discard}</button>
         </div>
       </div>
+    </div>
 
-      {/* pb-16: нижний правый угол панели перекрывает пузырь json-render devtools в dev-режиме. */}
-      <section className={`max-h-48 shrink-0 overflow-y-auto ${sectionDivider} px-4 pt-3 pb-16`}>
+    {/* Список сохранённых проверок — сосед скроллящегося черновика, а не его часть:
+        вложенным он клипался в ноль, как только черновик набирал шагов.
+        pb-16: нижний правый угол панели перекрывает пузырь json-render devtools в dev-режиме. */}
+    <section className={`max-h-48 shrink-0 overflow-y-auto ${sectionDivider} px-4 pt-3 pb-16`}>
         {list.status === "loading" ? <p className="text-eui-slate-500">{strings.loading}</p> : null}
         {list.status === "error" ? <p className="font-medium text-pay-red">{strings.loadError}</p> : null}
         {list.status === "ready" && list.data.length === 0 ? <p className="text-eui-slate-500">{strings.empty}</p> : null}
         {list.status === "ready" && list.data.length > 0 ? <ul aria-label={strings.listAria} className="flex flex-col gap-1.5">
-          {list.data.map((scenario) => <li key={scenario.id} className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 break-all">{scenario.name}</span>
+          {/* Имя занимает всю строку, кнопки — следующую: в панели шириной 320
+              три пилюли не оставляли имени ни пикселя, и оно схлопывалось в ноль. */}
+          {list.data.map((scenario) => <li key={scenario.id} className="flex flex-wrap items-center gap-2">
+            <span className="w-full break-words font-medium">{scenario.name}</span>
             <button type="button" className={button} onClick={() => open(scenario)}>{strings.edit}</button>
             <button type="button" className={button} disabled={running} onClick={() => { open(scenario); void replay(scenario.steps); }}>{strings.replay}</button>
             {/* Удаление проверки локально обратимо (её можно записать заново),
@@ -328,9 +336,8 @@ export function ScenarioPanel({ doc, screenId, controller }: {
               }}
             >{pendingDelete === scenario.id ? strings.deleteConfirm : strings.delete}</button>
           </li>)}
-        </ul> : null}
-      </section>
-    </div>
+      </ul> : null}
+    </section>
     <HighlightLayer rects={rects} testId="scenario-highlights" className="rounded-item bg-pay-red/10 outline-2 outline-offset-[6px] outline-pay-red" />
   </aside>;
 }

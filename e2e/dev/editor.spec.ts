@@ -104,7 +104,7 @@ test.describe("prototype editor", () => {
     await expect(canvas.getByText(updatedText, { exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Опубликовать", exact: true }).click();
-    const publishDialog = page.getByRole("dialog", { name: "Публикация прототипа" });
+    const publishDialog = page.getByRole("dialog", { name: "Опубликовать текущую версию" });
     await publishDialog.getByRole("textbox", { name: "Сообщение к версии (необязательно)" }).fill("E2E publish");
     await publishDialog.getByRole("button", { name: "Сохранить и опубликовать", exact: true }).click();
     await expect(page.getByText("v 1 опубликована", { exact: true })).toBeVisible();
@@ -127,7 +127,7 @@ test.describe("prototype editor", () => {
     const history = page.getByRole("region", { name: "История прототипа" });
     await expect(history.getByText("Initial E2E revision", { exact: true })).toBeVisible();
     await history.getByText("Initial E2E revision", { exact: true }).locator("..").locator("..").getByRole("button", { name: "Восстановить" }).click();
-    const restoreDialog = page.getByRole("dialog", { name: "Подтверждение восстановления" });
+    const restoreDialog = page.getByRole("dialog", { name: /^Восстановить/ });
     await expect(restoreDialog).toContainText("Текущие несохранённые правки будут отброшены");
     await restoreDialog.getByRole("button", { name: "Восстановить", exact: true }).click();
     await expect(canvas.getByText(initialText, { exact: true })).toBeVisible();

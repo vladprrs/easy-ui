@@ -51,15 +51,12 @@ function renderGallery() {
   return router;
 }
 
-// Статус-действия владельца живут внутри свёрнутого «⋯»-меню (нативный <details>).
-// Раскрываем его так же, как пользователь: клик по <summary aria-label="Действия">.
-// В этом jsdom клик по summary тоглит details.open — именно так меню и открывается.
+// Статус-действия владельца живут внутри свёрнутого «⋯»-меню (общий примитив
+// `Menu`): раскрываем его кликом по триггеру и работаем внутри role="menu".
 function openCardMenu(card: HTMLElement) {
-  const summary = within(card).getByLabelText("Действия");
-  const details = summary.closest("details") as HTMLDetailsElement;
-  if (!details.open) fireEvent.click(summary);
-  expect(details.open).toBe(true);
-  return details;
+  const trigger = within(card).getByRole("button", { name: "Действия" });
+  if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.click(trigger);
+  return within(card).getByRole("menu");
 }
 
 describe("GalleryPage", () => {
@@ -121,11 +118,11 @@ describe("GalleryPage", () => {
     const draftLink = within(card).getByRole("link", { name: "Hello World" });
     expect(draftLink.getAttribute("href")).toBe("/p/hello-world");
     const menu = within(openCardMenu(card));
-    expect(menu.getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/hello-world");
-    expect(menu.getByRole("link", { name: "Сценарии" }).getAttribute("href")).toBe("/p/hello-world/cjm");
-    expect(menu.getByRole("link", { name: "Презентация" }).getAttribute("href")).toBe("/p/hello-world/present");
-    fireEvent.click(menu.getByText("Версии"));
-    expect((await screen.findByRole("link", { name: "Версия v2" })).getAttribute("href")).toBe("/p/hello-world/v/2");
+    expect(menu.getByRole("menuitem", { name: "Плеер" }).getAttribute("href")).toBe("/p/hello-world");
+    expect(menu.getByRole("menuitem", { name: "Сценарии" }).getAttribute("href")).toBe("/p/hello-world/cjm");
+    expect(menu.getByRole("menuitem", { name: "Презентация" }).getAttribute("href")).toBe("/p/hello-world/present");
+    fireEvent.click(menu.getByRole("menuitem", { name: /Версии/ }));
+    expect((await screen.findByRole("menuitem", { name: "Версия v2" })).getAttribute("href")).toBe("/p/hello-world/v/2");
   });
 
   it("loads a preview only after intersection and unmounts it offscreen", async () => {
@@ -197,10 +194,10 @@ describe("GalleryPage", () => {
       expect(anchor.parentElement?.closest("a")).toBeNull();
     }
     // Единственный контрол карточки — «⋯»: он лежит над растянутой ссылкой со своим tab stop.
-    const menu = within(card).getByLabelText("Действия").closest("details")!;
-    expect(menu.className).toContain("relative");
-    expect(menu.parentElement!.className).toContain("z-10");
-    expect(within(card).getAllByRole("link").filter((link) => link !== cardLink && !menu.contains(link))).toHaveLength(0);
+    const menuRoot = within(card).getByRole("button", { name: "Действия" }).parentElement!;
+    expect(menuRoot.className).toContain("relative");
+    expect(menuRoot.parentElement!.className).toContain("z-10");
+    expect(within(card).getAllByRole("link").filter((link) => link !== cardLink && !menuRoot.contains(link))).toHaveLength(0);
   });
 
   it("opens any published version from the card versions menu", async () => {
@@ -211,8 +208,8 @@ describe("GalleryPage", () => {
     ]);
     const router = renderGallery();
     const card = (await screen.findByRole("heading", { name: "Hello World" })).closest("li")!;
-    fireEvent.click(within(openCardMenu(card)).getByText("Версии"));
-    fireEvent.click(await screen.findByRole("link", { name: "Версия v3" }));
+    fireEvent.click(within(openCardMenu(card)).getByRole("menuitem", { name: /Версии/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Версия v3" }));
     expect(router.state.location.pathname).toBe("/p/hello-world/v/3");
   });
 
@@ -225,8 +222,8 @@ describe("GalleryPage", () => {
     const publishedCard = (await screen.findByRole("heading", { name: "Hello World" })).closest("li")!;
     const draftCard = screen.getByRole("heading", { name: "Draft only" }).closest("li")!;
 
-    const qrButton = within(openCardMenu(publishedCard)).getByRole("button", { name: "QR на телефон" });
-    expect(within(openCardMenu(draftCard)).queryByRole("button", { name: "QR на телефон" })).toBeNull();
+    const qrButton = within(openCardMenu(publishedCard)).getByRole("menuitem", { name: "QR на телефон" });
+    expect(within(openCardMenu(draftCard)).queryByRole("menuitem", { name: "QR на телефон" })).toBeNull();
     fireEvent.click(qrButton);
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(screen.getByRole("dialog", { name: "QR hello-world v2" })).toBeTruthy();
@@ -329,7 +326,7 @@ describe("GalleryPage", () => {
     vi.mocked(setPrototypeLifecycle).mockResolvedValue({ kind: "evidence", tags: ["proof"], derivedFrom: null });
     renderGallery();
     const card = (await screen.findByRole("heading", { name: "Свой" })).closest("li")!;
-    fireEvent.click(within(openCardMenu(card)).getByRole("button", { name: "Вид и теги…" }));
+    fireEvent.click(within(openCardMenu(card)).getByRole("menuitem", { name: "Вид и теги…" }));
     const dialog = screen.getByRole("dialog", { name: "Вид и теги прототипа" });
     fireEvent.change(within(dialog).getByLabelText("Вид"), { target: { value: "evidence" } });
     fireEvent.change(within(dialog).getByLabelText("Теги (через запятую)"), { target: { value: "proof, Proof , " } });
@@ -348,15 +345,19 @@ describe("GalleryPage", () => {
     const foreign = screen.getByRole("heading", { name: "Чужой" }).closest("li")!;
     // Действия владельца доступны только после раскрытия «⋯»-меню.
     const ownMenu = within(openCardMenu(own));
-    expect(ownMenu.getByRole("link", { name: "Редактор" })).toBeTruthy();
-    expect(ownMenu.getByRole("button", { name: "Снять с публикации" })).toBeTruthy();
+    expect(ownMenu.getByRole("menuitem", { name: "Редактор" })).toBeTruthy();
+    expect(ownMenu.getByRole("menuitem", { name: "Снять с публикации" })).toBeTruthy();
     expect(within(foreign).getByText("Владелец: Анна")).toBeTruthy();
     // У чужой карточки нет ни редактора, ни статус-действий — только открыть и экспорт.
     const foreignMenu = within(openCardMenu(foreign));
-    expect(foreignMenu.queryByRole("link", { name: "Редактор" })).toBeNull();
-    expect(foreignMenu.queryByRole("button", { name: "Снять с публикации" })).toBeNull();
-    expect(foreignMenu.queryByRole("button", { name: "В архив" })).toBeNull();
-    fireEvent.click(ownMenu.getByRole("button", { name: "Снять с публикации" }));
+    expect(foreignMenu.queryByRole("menuitem", { name: "Редактор" })).toBeNull();
+    expect(foreignMenu.queryByRole("menuitem", { name: "Снять с публикации" })).toBeNull();
+    expect(foreignMenu.queryByRole("menuitem", { name: "В архив" })).toBeNull();
+    // Деструктив идёт через окно подтверждения (S6), а не с первого клика.
+    fireEvent.click(ownMenu.getByRole("menuitem", { name: "Снять с публикации" }));
+    expect(setPrototypeStatus).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("dialog", { name: "Снять с публикации?" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Снять с публикации" }));
     await waitFor(() => expect(setPrototypeStatus).toHaveBeenCalledWith("own", "private"));
   });
 
@@ -367,8 +368,8 @@ describe("GalleryPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Архив" }));
     const card = screen.getByRole("heading", { name: "Hello World" }).closest("li")!;
     const menu = within(openCardMenu(card));
-    fireEvent.click(menu.getByRole("button", { name: "Вернуть из архива" }));
-    // role=alert рендерится сиблингом details (вне сворачиваемой области), поэтому виден и после закрытия меню.
+    fireEvent.click(menu.getByRole("menuitem", { name: "Вернуть из архива" }));
+    // role=alert рендерится сиблингом поповера, поэтому виден и после закрытия меню.
     expect((await screen.findByRole("alert")).textContent).toContain("текущая ревизия не отображается");
   });
 
@@ -377,7 +378,7 @@ describe("GalleryPage", () => {
     const router = renderGallery();
     await screen.findByRole("heading", { name: "Создайте первый прототип" });
     fireEvent.click(screen.getAllByRole("button", { name: "Новый прототип" }).at(-1)!);
-    const dialog = screen.getByRole("dialog", { name: "Создание прототипа" });
+    const dialog = screen.getByRole("dialog", { name: "Новый прототип" });
     fireEvent.change(within(dialog).getByLabelText("Название прототипа"), { target: { value: "Новый сценарий" } });
     fireEvent.change(within(dialog).getByLabelText("Дизайн-система"), { target: { value: "wireframe" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Создать прототип" }));

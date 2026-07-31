@@ -1,20 +1,24 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listPrototypeVersions, type PrototypeVersionSummary } from "../api/client";
-import { pillGhost } from "../app/chrome";
-import { common } from "../app/strings/common";
-import { gallery } from "../app/strings/gallery";
-import { ShareDialog } from "../player/ShareDialog";
+import { ShareDialog, type ShareVersionsState } from "../player/ShareDialog";
 
-type VersionsState =
-  | { status: "loading" | "error"; versions: PrototypeVersionSummary[] }
-  | { status: "ready"; versions: PrototypeVersionSummary[] };
-
+/**
+ * Загрузчик списка версий для окна шаринга.
+ *
+ * Раньше он сам рисовал маленькую панель на время загрузки и подменял её широким
+ * `ShareDialog`, когда версии приезжали, — диалог визуально прыгал. Теперь корпус
+ * всегда один: сюда осталась только загрузка, а все её состояния рендерятся
+ * внутри финальной панели (план W6 §2).
+ */
 export function GalleryShareDialog({ prototypeId, latestVersion, onClose }: {
   prototypeId: string;
   latestVersion: number;
   onClose: () => void;
 }) {
-  const [state, setState] = useState<VersionsState>({ status: "loading", versions: [] });
+  const [state, setState] = useState<{ status: "loading" | "error" } | { status: "ready"; versions: PrototypeVersionSummary[] }>({ status: "loading" });
+  // Счётчик попыток — единственный вход в загрузку: и монтирование, и «Повторить»
+  // выражаются им, поэтому эффект не вызывает setState синхронно в теле.
+  const [attempt, setAttempt] = useState(0);
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -22,43 +26,24 @@ export function GalleryShareDialog({ prototypeId, latestVersion, onClose }: {
     controllerRef.current = controller;
     void listPrototypeVersions(prototypeId, controller.signal).then(
       (versions) => { if (!controller.signal.aborted) setState({ status: "ready", versions }); },
-      () => { if (!controller.signal.aborted) setState({ status: "error", versions: [] }); },
+      () => { if (!controller.signal.aborted) setState({ status: "error" }); },
     );
     return () => controller.abort();
-  }, [prototypeId]);
+  }, [prototypeId, attempt]);
 
-  const retry = () => {
-    controllerRef.current?.abort();
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    setState({ status: "loading", versions: [] });
-    void listPrototypeVersions(prototypeId, controller.signal).then(
-      (versions) => { if (!controller.signal.aborted) setState({ status: "ready", versions }); },
-      () => { if (!controller.signal.aborted) setState({ status: "error", versions: [] }); },
-    );
-  };
+  const load = useCallback(() => {
+    setState({ status: "loading" });
+    setAttempt((current) => current + 1);
+  }, []);
 
   const close = () => {
     controllerRef.current?.abort();
     onClose();
   };
 
-  if (state.status === "ready" && state.versions.length > 0) {
-    return <ShareDialog prototypeId={prototypeId} versions={state.versions} currentVersion={latestVersion} onClose={close} />;
-  }
+  const versions: ShareVersionsState = state.status === "ready"
+    ? { status: "ready", versions: state.versions }
+    : state.status === "error" ? { status: "error", onRetry: load } : { status: "loading" };
 
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
-    <section role="dialog" aria-modal="true" aria-labelledby="gallery-share-dialog-title" className="w-full max-w-lg rounded-panel bg-white p-6">
-      <div className="flex items-center justify-between gap-4">
-        <h2 id="gallery-share-dialog-title" className="pay-display text-2xl">{gallery.shareDialogTitle}</h2>
-        <button type="button" aria-label={common.close} title={common.close} onClick={close} className="rounded-full px-2 py-1 text-xl hover:bg-eui-lilac-100">×</button>
-      </div>
-      {state.status === "loading" ? <p className="mt-5 text-sm text-eui-slate-500" aria-live="polite">{gallery.shareVersionsLoading}</p> : null}
-      {state.status === "error" ? <div className="mt-5">
-        <p role="alert" className="text-sm text-pay-red">{gallery.shareVersionsLoadFailed}</p>
-        <button type="button" className={`${pillGhost} mt-3`} onClick={retry}>{common.retry}</button>
-      </div> : null}
-      {state.status === "ready" && state.versions.length === 0 ? <p className="mt-5 text-sm text-eui-slate-500">{gallery.shareVersionsEmpty}</p> : null}
-    </section>
-  </div>;
+  return <ShareDialog prototypeId={prototypeId} versions={versions} currentVersion={latestVersion} onClose={close} />;
 }

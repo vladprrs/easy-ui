@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { ApiError, createComposition, getComposition, listCompositions, publishComposition, type CompositionSummary } from "../api/client";
-import { inputBase, pillGhost, pillPrimary } from "../app/chrome";
+import { Modal } from "../app/Modal";
+import { Toggle } from "../app/Toggle";
+import { inputBase, inputLabel, pillGhost, pillPrimary } from "../app/chrome";
 import { formatApiError } from "../app/strings/common";
 import { editor } from "../app/strings/editor";
 import type { CompositionDoc } from "../prototype/composition";
@@ -12,8 +14,7 @@ import { buildCompositionFromSubtree, type Screen } from "./compositions";
  * вставка ссылки на опубликованную композицию и извлечение композиции из поддерева экрана.
  */
 
-const inputClass = `${inputBase} mt-1 w-full bg-white text-eui-ink`;
-const dialogShell = "fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6 font-eui-ui";
+const inputClass = `${inputBase} mt-1.5 w-full text-eui-ink`;
 
 function apiMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiError) return formatApiError(error.code, { message: error.message, status: error.status });
@@ -47,29 +48,29 @@ export function InsertCompositionDialog({ designSystem, parentKey, onCancel, onP
     finally { setBusyId(null); }
   };
 
-  return <div role="dialog" aria-modal="true" aria-label={editor.compositionInsertDialogAria} className={dialogShell}>
-    <div className="w-full max-w-md rounded-popover bg-white p-5">
-      <h2 className="pay-display text-lg">{editor.compositionInsertTitle}</h2>
-      <p className="mt-1 text-sm text-eui-slate-500">{editor.compositionInsertHint(designSystem, parentKey)}</p>
-      {error ? <p role="alert" className="mt-2 text-sm text-pay-red">{error}</p> : null}
-      {items === null
-        ? <p className="mt-3 text-sm text-eui-slate-500">{editor.compositionListLoading}</p>
-        : items.length
-          ? <ul className="mt-3 max-h-72 space-y-1 overflow-y-auto">{items.map((item) => <li key={item.id}>
-            <button
-              type="button"
-              disabled={busyId !== null}
-              onClick={() => void pick(item.id)}
-              className="w-full rounded-inset px-3 py-2 text-left hover:bg-eui-lilac-100 disabled:opacity-50"
-            >
-              <span className="block text-sm font-medium text-eui-ink">{item.name}</span>
-              <span className="block text-xs text-eui-slate-500">{item.id} · {editor.compositionSummaryMeta(item.params.length, item.slots.length)}</span>
-            </button>
-          </li>)}</ul>
-          : <p className="mt-3 text-sm text-eui-slate-500">{editor.compositionListEmpty}</p>}
-      <div className="mt-4 flex justify-end"><button type="button" className={pillGhost} onClick={onCancel}>{editor.compositionExtractCancel}</button></div>
-    </div>
-  </div>;
+  return <Modal
+    title={editor.compositionInsertTitle}
+    onClose={onCancel}
+    footer={<button type="button" className={pillGhost} onClick={onCancel}>{editor.compositionExtractCancel}</button>}
+  >
+    <p className="mt-1 text-sm text-eui-slate-500">{editor.compositionInsertHint(designSystem, parentKey)}</p>
+    {error ? <p role="alert" className="mt-2 text-sm text-pay-red">{error}</p> : null}
+    {items === null
+      ? <p className="mt-3 text-sm text-eui-slate-500">{editor.compositionListLoading}</p>
+      : items.length
+        ? <ul className="mt-3 max-h-72 space-y-1 overflow-y-auto">{items.map((item) => <li key={item.id}>
+          <button
+            type="button"
+            disabled={busyId !== null}
+            onClick={() => void pick(item.id)}
+            className="w-full rounded-item px-3 py-2 text-left transition-colors duration-100 hover:bg-pay-lavender disabled:opacity-50"
+          >
+            <span className="block text-sm font-medium text-eui-ink">{item.name}</span>
+            <span className="block text-xs text-eui-slate-500">{item.id} · {editor.compositionSummaryMeta(item.params.length, item.slots.length)}</span>
+          </button>
+        </li>)}</ul>
+        : <p className="mt-3 text-sm text-eui-slate-500">{editor.compositionListEmpty}</p>}
+  </Modal>;
 }
 
 export function ExtractCompositionDialog({ screen, rootKey, designSystem, onCancel, onExtracted }: {
@@ -104,36 +105,39 @@ export function ExtractCompositionDialog({ screen, rootKey, designSystem, onCanc
     finally { setRunning(false); }
   };
 
-  return <div role="dialog" aria-modal="true" aria-label={editor.compositionExtractDialogAria} className={dialogShell}>
-    <div className="w-full max-w-md rounded-popover bg-white p-5">
-      <h2 className="pay-display text-lg">{editor.compositionExtractTitle(rootKey)}</h2>
-      <p className="mt-1 text-sm text-eui-slate-500">{editor.compositionExtractBody}</p>
-      <label className="mt-3 block text-xs text-eui-slate-500">{editor.compositionExtractIdLabel}
-        <input className={inputClass} value={id} onChange={(event) => setId(event.target.value)} />
-      </label>
-      <label className="mt-2 block text-xs text-eui-slate-500">{editor.compositionExtractNameLabel}
-        <input className={inputClass} value={name} onChange={(event) => setName(event.target.value)} />
-      </label>
-      <label className="mt-2 block text-xs text-eui-slate-500">{editor.compositionExtractDescriptionLabel}
-        <textarea className={`${inputClass} min-h-16`} value={description} onChange={(event) => setDescription(event.target.value)} />
-      </label>
-      <label className="mt-3 flex items-center gap-2 text-xs text-eui-slate-500">
-        <input type="checkbox" checked={keepChildren} onChange={(event) => setKeepChildren(event.target.checked)} />
-        {editor.compositionExtractKeepChildren}
-      </label>
-      {keepChildren ? <label className="mt-2 block text-xs text-eui-slate-500">{editor.compositionExtractSlotLabel}
-        <input className={inputClass} value={slotName} onChange={(event) => setSlotName(event.target.value)} />
-      </label> : null}
-      {errors.length ? <div role="alert" className="mt-3 rounded-popover bg-eui-lilac-100 p-3 text-sm text-pay-red">
-        <p className="font-medium">{editor.compositionExtractErrorsTitle}</p>
-        <ul className="mt-1 list-disc pl-5">{errors.map((message, index) => <li key={index}>{message}</li>)}</ul>
-      </div> : null}
-      <div className="mt-4 flex justify-end gap-2">
-        <button type="button" className={pillGhost} onClick={onCancel}>{editor.compositionExtractCancel}</button>
-        <button type="button" disabled={running} className={`${pillPrimary} disabled:opacity-50`} onClick={() => void submit()}>
-          {running ? editor.compositionExtractRunning : editor.compositionExtractSubmit}
-        </button>
-      </div>
-    </div>
-  </div>;
+  return <Modal
+    title={editor.compositionExtractTitle(rootKey)}
+    onClose={onCancel}
+    className="text-left"
+    footer={<>
+      <button type="button" className={pillGhost} onClick={onCancel}>{editor.compositionExtractCancel}</button>
+      <button type="button" disabled={running} className={`${pillPrimary} disabled:opacity-50`} onClick={() => void submit()}>
+        {running ? editor.compositionExtractRunning : editor.compositionExtractSubmit}
+      </button>
+    </>}
+  >
+    <p className="mt-1 text-sm text-eui-slate-500">{editor.compositionExtractBody}</p>
+    <label className={`${inputLabel} mt-5`}>{editor.compositionExtractIdLabel}
+      <input className={inputClass} value={id} onChange={(event) => setId(event.target.value)} />
+    </label>
+    <label className={`${inputLabel} mt-4`}>{editor.compositionExtractNameLabel}
+      <input className={inputClass} value={name} onChange={(event) => setName(event.target.value)} />
+    </label>
+    <label className={`${inputLabel} mt-4`}>{editor.compositionExtractDescriptionLabel}
+      <textarea className={`${inputClass} min-h-16`} value={description} onChange={(event) => setDescription(event.target.value)} />
+    </label>
+    <Toggle
+      className="mt-5"
+      checked={keepChildren}
+      onChange={setKeepChildren}
+      label={editor.compositionExtractKeepChildren}
+    />
+    {keepChildren ? <label className={`${inputLabel} mt-4`}>{editor.compositionExtractSlotLabel}
+      <input className={inputClass} value={slotName} onChange={(event) => setSlotName(event.target.value)} />
+    </label> : null}
+    {errors.length ? <div role="alert" className="mt-4 rounded-inset bg-pay-lavender p-3 text-sm text-pay-red">
+      <p className="font-medium">{editor.compositionExtractErrorsTitle}</p>
+      <ul className="mt-1 list-disc pl-5">{errors.map((message, index) => <li key={index}>{message}</li>)}</ul>
+    </div> : null}
+  </Modal>;
 }

@@ -41,23 +41,24 @@ test("gallery tabs publish, archive, and restore from the owner card", async ({ 
   const openMenu = () => card().getByLabel("Действия").click();
   await expect(page.getByRole("button", { name: "Мои" })).toHaveAttribute("aria-pressed", "true");
   await openMenu();
-  await card().getByRole("button", { name: "В архив" }).click();
+  await card().getByRole("menuitem", { name: "В архив" }).click();
+  await page.getByRole("dialog", { name: "Отправить в архив?" }).getByRole("button", { name: "В архив", exact: true }).click();
   await page.getByRole("button", { name: "Архив", exact: true }).click();
   await expect(card()).toBeVisible();
   await openMenu();
-  await card().getByRole("button", { name: "Вернуть из архива" }).click();
+  await card().getByRole("menuitem", { name: "Вернуть из архива" }).click();
   await page.getByRole("button", { name: "Мои", exact: true }).click();
   await openMenu();
   // Публикация из галереи проходит через диалог с readiness-отчётом (волна 4):
   // пункт меню открывает диалог, подтверждение — кнопка внутри него.
-  await card().getByRole("button", { name: "Опубликовать" }).click();
-  const publishDialog = page.getByRole("dialog", { name: "Публикация прототипа" });
+  await card().getByRole("menuitem", { name: "Опубликовать" }).click();
+  const publishDialog = page.getByRole("dialog", { name: "Опубликовать прототип" });
   await expect(publishDialog.getByRole("region", { name: "Готовность к публикации" })).toBeVisible();
   await publishDialog.getByRole("button", { name: "Опубликовать", exact: true }).click();
   await page.getByRole("button", { name: "Общие", exact: true }).click();
   await expect(card()).toBeVisible();
   await openMenu();
-  await expect(card().getByRole("button", { name: "Снять с публикации" })).toBeVisible();
+  await expect(card().getByRole("menuitem", { name: "Снять с публикации" })).toBeVisible();
 });
 
 test("non-owner principal sees published meta, not private meta, and no revision history", async ({ request, baseURL }) => {

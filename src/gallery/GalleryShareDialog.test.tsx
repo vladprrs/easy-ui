@@ -1,13 +1,17 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listPrototypeVersions } from "../api/client";
-import { ShareDialog } from "../player/ShareDialog";
+import { share as shareStrings } from "../app/strings/player";
 import { GalleryShareDialog } from "./GalleryShareDialog";
 
 vi.mock("../api/client", () => ({ listPrototypeVersions: vi.fn() }));
-vi.mock("../player/ShareDialog", () => ({
-  ShareDialog: vi.fn(({ versions }: { versions: { version: number }[] }) => <div data-testid="share-dialog">{versions.map(({ version }) => `v${version}`).join(", ")}</div>),
+const shareApi = vi.hoisted(() => ({
+  createPrototypeShare: vi.fn(),
+  listPrototypeShares: vi.fn(),
+  revokePrototypeShare: vi.fn(),
 }));
+vi.mock("../api/shareApi", () => shareApi);
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -16,60 +20,69 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+const renderDialog = (onClose = () => {}) => render(<MemoryRouter>
+  <GalleryShareDialog prototypeId="prototype-one" latestVersion={3} onClose={onClose} />
+</MemoryRouter>);
+
+// Окно одно на все состояния списка версий (план W6 §2): раньше загрузка жила в
+// отдельной узкой панели, которая подменялась широким диалогом — окно прыгало.
 describe("GalleryShareDialog", () => {
   beforeEach(() => {
     vi.mocked(listPrototypeVersions).mockReset();
-    vi.mocked(ShareDialog).mockClear();
+    shareApi.listPrototypeShares.mockReset();
+    shareApi.listPrototypeShares.mockResolvedValue({ shares: [] });
   });
 
-  it("can be closed while versions are loading", () => {
+  it("keeps one dialog body while versions are loading and can be closed", () => {
     vi.mocked(listPrototypeVersions).mockReturnValue(new Promise(() => {}));
     const onClose = vi.fn();
-    render(<GalleryShareDialog prototypeId="prototype-one" latestVersion={3} onClose={onClose} />);
+    renderDialog(onClose);
 
-    expect(screen.getByText("Загружаем версии…")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Закрыть" }));
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: shareStrings.dialogTitle })).toBeTruthy();
+    expect(screen.getByText(shareStrings.versionsLoading)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: shareStrings.close }));
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("retries after a loading error", async () => {
-    vi.mocked(listPrototypeVersions).mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce([{ version: 3, rev: 7, publishedAt: "2026-07-16T00:00:00.000Z" }]);
-    render(<GalleryShareDialog prototypeId="prototype-one" latestVersion={3} onClose={() => {}} />);
+  it("retries after a loading error inside the same dialog", async () => {
+    vi.mocked(listPrototypeVersions)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce([{ version: 3, rev: 7, publishedAt: "2026-07-16T00:00:00.000Z" }]);
+    renderDialog();
 
-    expect((await screen.findByRole("alert")).textContent).toBe("Не удалось загрузить версии для ссылки.");
+    expect((await screen.findByRole("alert")).textContent).toBe(shareStrings.versionsLoadFailed);
     fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
-    expect(await screen.findByTestId("share-dialog")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: shareStrings.create })).toBeTruthy();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(listPrototypeVersions).toHaveBeenCalledTimes(2);
   });
 
-  it("shows an empty state without mounting ShareDialog", async () => {
+  it("offers publishing a version instead of dead-ending on the empty state", async () => {
     vi.mocked(listPrototypeVersions).mockResolvedValue([]);
-    render(<GalleryShareDialog prototypeId="prototype-one" latestVersion={3} onClose={() => {}} />);
+    renderDialog();
 
-    expect(await screen.findByText("Опубликованных версий для ссылки нет.")).toBeTruthy();
-    expect(screen.queryByTestId("share-dialog")).toBeNull();
-    expect(ShareDialog).not.toHaveBeenCalled();
+    expect(await screen.findByText(shareStrings.versionsEmpty)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: shareStrings.create })).toBeNull();
+    expect(screen.getByRole("link", { name: shareStrings.versionsPublishCta }).getAttribute("href")).toBe("/p/prototype-one/edit");
   });
 
-  it("mounts ShareDialog with loaded versions and the latest version selected", async () => {
-    const versions = [
+  it("selects the latest published version once the list arrives", async () => {
+    vi.mocked(listPrototypeVersions).mockResolvedValue([
       { version: 3, rev: 7, publishedAt: "2026-07-16T00:00:00.000Z" },
       { version: 2, rev: 5, publishedAt: "2026-07-15T00:00:00.000Z" },
-    ];
-    vi.mocked(listPrototypeVersions).mockResolvedValue(versions);
-    const onClose = vi.fn();
-    render(<GalleryShareDialog prototypeId="prototype-one" latestVersion={3} onClose={onClose} />);
+    ]);
+    renderDialog();
 
-    expect((await screen.findByTestId("share-dialog")).textContent).toBe("v3, v2");
-    expect(ShareDialog).toHaveBeenCalledWith(expect.objectContaining({
-      prototypeId: "prototype-one", versions, currentVersion: 3,
-    }), undefined);
+    const select = await screen.findByLabelText(shareStrings.version) as HTMLSelectElement;
+    expect([...select.options].map((option) => option.textContent)).toEqual(["v3", "v2"]);
+    expect(select.value).toBe("3");
   });
 
   it("aborts the versions request when unmounted", () => {
     const request = deferred<never[]>();
     vi.mocked(listPrototypeVersions).mockReturnValue(request.promise);
-    const view = render(<GalleryShareDialog prototypeId="prototype-one" latestVersion={3} onClose={() => {}} />);
+    const view = renderDialog();
     const signal = vi.mocked(listPrototypeVersions).mock.calls[0]![1]!;
 
     act(() => view.unmount());

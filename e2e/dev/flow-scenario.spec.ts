@@ -49,8 +49,13 @@ test("a non-canonical repeated-screen step is removed and an occurrence choice r
   const choice = bar.getByRole("combobox", { name: "Шаг сценария" });
   await expect(choice.locator("option")).toHaveText(["Выберите вхождение экрана", "Шаг 3", "Шаг 5"]);
 
-  await choice.selectOption({ label: "Шаг 5" });
-  await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/cancel-confirm\?flow=cancellation&debug=1&step=4$/);
+  // Контрол размонтируется ровно в момент успеха (вхождение выбрано — вопроса больше
+  // нет), поэтому под нагрузкой change может уйти в уже отсоединённый узел и потеряться.
+  // Для человека это один клик; для автоматизации — повтор до подтверждённого шага.
+  await expect(async () => {
+    await choice.selectOption({ label: "Шаг 5" });
+    await expect(page).toHaveURL(/\/p\/branching-checkout\/s\/cancel-confirm\?flow=cancellation&debug=1&step=4$/, { timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
   await expect(bar.getByRole("status")).toContainText("Шаг 5 из 6");
 });
 

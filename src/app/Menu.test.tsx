@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { Menu, MenuItem, MenuSeparator, MenuSubmenu } from "./Menu";
+import { Menu, MenuItem, MenuSeparator, MenuSubmenu, useMenuClose } from "./Menu";
 
 const openMenu = () => {
   fireEvent.click(screen.getByRole("button", { name: "Действия" }));
@@ -103,6 +103,53 @@ describe("Menu", () => {
     fireEvent.keyDown(menu, { key: "Escape" });
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("menu")).toBeTruthy();
+  });
+
+  // Императивное закрытие: до него потребители закрывали поповер пересозданием
+  // `Menu` через `key` — при этом `onOpenChange(false)` не приходил вовсе, а фокус
+  // приходилось возвращать на триггер вручную, из layout-эффекта на смену ключа.
+  it("reports the close and returns focus when an item closes the menu itself", () => {
+    const onOpenChange = vi.fn();
+    function CloseItem() {
+      const close = useMenuClose();
+      return <MenuItem onSelect={close}>Выбрать сценарий</MenuItem>;
+    }
+    render(<Menu label="Действия" onOpenChange={onOpenChange}><CloseItem /></Menu>);
+    openMenu();
+    onOpenChange.mockClear();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Выбрать сценарий" }));
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Действия" }));
+  });
+
+  it("closes from a nested item through the context and only when asked", () => {
+    function ContextItem({ label }: { label: string }) {
+      const close = useMenuClose();
+      return <button type="button" role="menuitem" onClick={close}>{label}</button>;
+    }
+    render(<Menu label="Действия">
+      <MenuItem>Тумблер</MenuItem>
+      <ContextItem label="Уйти" />
+    </Menu>);
+    openMenu();
+
+    // Обычный пункт поповер не закрывает — среди пунктов бывают тумблеры.
+    fireEvent.click(screen.getByRole("menuitem", { name: "Тумблер" }));
+    expect(screen.queryByRole("menu")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Уйти" }));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("closes after selecting an item that asked for it", () => {
+    render(<Menu label="Действия"><MenuItem closeOnSelect>Опубликовать</MenuItem></Menu>);
+    openMenu();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Опубликовать" }));
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("swaps the submenu glyph instead of rotating it and folds its items into the roving order", () => {

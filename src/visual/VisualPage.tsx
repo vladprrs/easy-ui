@@ -5,6 +5,8 @@ import {
   type PrototypeDraft,
 } from "../api/client";
 import { chip, chipActive, headingBar, headingPage, inputBase, kicker, pillGhost, pillPrimary } from "../app/chrome";
+import { ConfirmModal } from "../app/Modal";
+import { SelectPill } from "../app/SelectPill";
 import { ErrorState, Skeleton } from "../app/states";
 import {
   checkVisualReference, deleteVisualReference, enqueueComponentScreenshot, enqueuePrototypeScreenshot, getScreenshotJob,
@@ -78,6 +80,7 @@ function ReferenceDetail({ id, onChanged, onDeleted }: { id: string; onChanged: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveRun, setLiveRun] = useState<RunReport | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const runCheck = useCallback(async () => {
     const parsedThreshold = parseThresholdPercent(threshold);
@@ -94,7 +97,7 @@ function ReferenceDetail({ id, onChanged, onDeleted }: { id: string; onChanged: 
   }, [detail, id, onChanged, threshold]);
 
   const remove = async () => {
-    if (!window.confirm(visual.deleteConfirm)) return;
+    setConfirmingDelete(false);
     setBusy(true); setError(null);
     try { await deleteVisualReference(id); onDeleted(); }
     catch (caught) { setError(referenceMutationErrorText(caught)); }
@@ -114,10 +117,19 @@ function ReferenceDetail({ id, onChanged, onDeleted }: { id: string; onChanged: 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <label className="text-sm text-eui-slate-500">{visual.thresholdLabel}<input className={`${inputBase} ml-2 w-20`} value={threshold} inputMode="decimal" aria-invalid={parseThresholdPercent(threshold) === null} onChange={(e) => setThreshold(e.target.value)} /></label>
         <button type="button" className={pillPrimary} disabled={busy} onClick={runCheck}>{busy ? visual.checking : visual.check}</button>
-        <button type="button" className={pillGhost} disabled={busy} onClick={remove}>{visual.deleteReference}</button>
+        <button type="button" className={pillGhost} disabled={busy} onClick={() => setConfirmingDelete(true)}>{visual.deleteReference}</button>
       </div>
       {error ? <p className="mt-3 text-sm text-pay-red" role="alert">{error}</p> : null}
     </header>
+    {confirmingDelete ? <ConfirmModal
+      title={visual.deleteDialogTitle}
+      body={visual.deleteDialogBody}
+      confirmLabel={visual.deleteConfirmAction}
+      cancelLabel={visual.deleteCancel}
+      busy={busy}
+      onConfirm={() => void remove()}
+      onClose={() => setConfirmingDelete(false)}
+    /> : null}
 
     {lastRun ? <RunDetail report={lastRun} /> : <p className="rounded-panel bg-eui-lav p-5 text-sm text-eui-slate-500">{visual.runNowHint}</p>}
 
@@ -165,6 +177,14 @@ function Frame({ title, url, sha, dims, unavailable }: { title: string; url?: st
     {dims && dims.width !== null ? <p className="mt-2 text-xs text-eui-slate-500">{dims.width}×{dims.height}</p> : null}
     {sha ? <p className="mt-1 truncate text-[10px] text-eui-slate-500" title={sha}>sha256 {sha.slice(0, 16)}…</p> : null}
   </figure>;
+}
+
+/**
+ * Подпись над контролом. Не `<label>`: внутри лежит `SelectPill` со своим
+ * `aria-label`, и вторая связь только запутала бы дерево доступности.
+ */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="block min-w-0"><span className={`${kicker} block`}>{label}</span>{children}</div>;
 }
 
 function Evidence({ label, value }: { label: string; value: string }) {
@@ -319,21 +339,22 @@ function CaptureReference({ onCreated }: { onCreated: (id: string) => void }) {
   return <div className="rounded-popover bg-eui-lav p-4">
     <div className="flex items-center justify-between"><h2 className={kicker}>{visual.newReference}</h2><button type="button" className="text-sm text-eui-slate-500 underline" onClick={close}>{visual.close}</button></div>
     <div className="mt-3 space-y-3 text-sm">
-      <label className="block"><span className={kicker}>{visual.modeLabel}</span><select aria-label={visual.modeLabel} className={`${inputBase} mt-1`} value={scope} disabled={busy} onChange={(event) => { setScope(event.target.value as ReferenceScope); setError(null); }}><option value="prototype-screen">{visual.optionPrototypeScreen}</option><option value="component">{visual.optionComponent}</option></select></label>
+      {/* Селекты — общий `SelectPill`: системная стрелка и рамка в бренде не живут. */}
+      <Field label={visual.modeLabel}><SelectPill label={visual.modeLabel} className="mt-1 max-w-full" value={scope} disabled={busy} onChange={(next) => { setScope(next as ReferenceScope); setError(null); }} options={[{ value: "prototype-screen", label: visual.optionPrototypeScreen }, { value: "component", label: visual.optionComponent }]} /></Field>
       {scope === "prototype-screen" ? <>
-        <label className="block"><span className={kicker}>{visual.prototypeLabel}</span><select aria-label={visual.prototypeLabel} className={`${inputBase} mt-1`} value={resolvedPrototypeId} disabled={busy || prototypes.status !== "ready"} onChange={(event) => { setPrototypeId(event.target.value); setPrototypeTarget(""); setScreenId(""); }}><option value="">{visual.selectPrototype}</option>{prototypes.status === "ready" ? prototypes.data.map((prototype) => <option key={prototype.id} value={prototype.id}>{prototype.name}</option>) : null}</select></label>
-        <label className="block"><span className={kicker}>{visual.snapshotLabel}</span><select aria-label={visual.snapshotLabel} className={`${inputBase} mt-1`} value={resolvedTarget} disabled={busy || !activePrototypeMeta || revisions.status !== "ready"} onChange={(event) => { setPrototypeTarget(event.target.value); setScreenId(""); }}>
-          {revisions.status === "ready" ? revisions.data.map((revision) => <option key={`rev:${revision.rev}`} value={`rev:${revision.rev}`}>{visual.revisionOption(revision.rev)}</option>) : null}
-          {activePrototypeMeta ? activePrototypeMeta.versions.map((version) => <option key={`version:${version.version}`} value={`version:${version.version}`}>{visual.versionOption(version.version, version.rev)}</option>) : null}
-        </select></label>
-        <label className="block"><span className={kicker}>{visual.screenLabel}</span><select aria-label={visual.screenLabel} className={`${inputBase} mt-1`} value={resolvedScreenId} disabled={busy || !snapshot} onChange={(event) => setScreenId(event.target.value)}>{snapshot?.doc.screens.map((screen) => <option key={screen.id} value={screen.id}>{screen.name}</option>)}</select></label>
+        <Field label={visual.prototypeLabel}><SelectPill label={visual.prototypeLabel} className="mt-1 max-w-full" value={resolvedPrototypeId} disabled={busy || prototypes.status !== "ready"} onChange={(next) => { setPrototypeId(next); setPrototypeTarget(""); setScreenId(""); }} options={[{ value: "", label: visual.selectPrototype }, ...(prototypes.status === "ready" ? prototypes.data.map((prototype) => ({ value: prototype.id, label: prototype.name })) : [])]} /></Field>
+        <Field label={visual.snapshotLabel}><SelectPill label={visual.snapshotLabel} className="mt-1 max-w-full" value={resolvedTarget} disabled={busy || !activePrototypeMeta || revisions.status !== "ready"} onChange={(next) => { setPrototypeTarget(next); setScreenId(""); }} options={[
+          ...(revisions.status === "ready" ? revisions.data.map((revision) => ({ value: `rev:${revision.rev}`, label: visual.revisionOption(revision.rev) })) : []),
+          ...(activePrototypeMeta ? activePrototypeMeta.versions.map((version) => ({ value: `version:${version.version}`, label: visual.versionOption(version.version, version.rev) })) : []),
+        ]} /></Field>
+        <Field label={visual.screenLabel}><SelectPill label={visual.screenLabel} className="mt-1 max-w-full" value={resolvedScreenId} disabled={busy || !snapshot} onChange={setScreenId} options={snapshot?.doc.screens.map((screen) => ({ value: screen.id, label: screen.name })) ?? []} /></Field>
       </> : <>
-        <label className="block"><span className={kicker}>{visual.componentLabel}</span><select aria-label={visual.componentLabel} className={`${inputBase} mt-1`} value={resolvedComponentId} disabled={busy || components.status !== "ready"} onChange={(event) => { setComponentId(event.target.value); setComponentVersion(""); }}><option value="">{visual.selectComponent}</option>{components.status === "ready" ? components.data.map((component) => <option key={component.id} value={component.id}>{component.name}</option>) : null}</select></label>
-        <label className="block"><span className={kicker}>{visual.versionLabel}</span><select aria-label={visual.versionLabel} className={`${inputBase} mt-1`} value={resolvedComponentVersion || ""} disabled={busy || !activeComponentMeta} onChange={(event) => setComponentVersion(event.target.value)}>{activeComponentMeta ? activeComponentMeta.versions.map((version) => <option key={version.version} value={version.version}>{visual.componentVersionOption(version.version)}</option>) : null}</select></label>
+        <Field label={visual.componentLabel}><SelectPill label={visual.componentLabel} className="mt-1 max-w-full" value={resolvedComponentId} disabled={busy || components.status !== "ready"} onChange={(next) => { setComponentId(next); setComponentVersion(""); }} options={[{ value: "", label: visual.selectComponent }, ...(components.status === "ready" ? components.data.map((component) => ({ value: component.id, label: component.name })) : [])]} /></Field>
+        <Field label={visual.versionLabel}><SelectPill label={visual.versionLabel} className="mt-1 max-w-full" value={String(resolvedComponentVersion || "")} disabled={busy || !activeComponentMeta} onChange={setComponentVersion} options={activeComponentMeta ? activeComponentMeta.versions.map((version) => ({ value: String(version.version), label: visual.componentVersionOption(version.version) })) : []} /></Field>
       </>}
-      <div className="flex gap-2">
-        <label className="min-w-0 flex-1"><span className={kicker}>{visual.scaleLabel}</span><select aria-label={visual.scaleLabel} className={`${inputBase} mt-1`} value={dsf} disabled={busy} onChange={(event) => setDsf(event.target.value)}><option value="1">1×</option><option value="2">2×</option><option value="3">3×</option></select></label>
-        <label className="min-w-0 flex-1"><span className={kicker}>{visual.themeLabel}</span><select aria-label={visual.themeLabel} className={`${inputBase} mt-1`} value={theme} disabled={busy} onChange={(event) => setTheme(event.target.value as typeof theme)}><option value="light">{visual.themeLight}</option><option value="dark">{visual.themeDark}</option></select></label>
+      <div className="flex flex-wrap gap-3">
+        <Field label={visual.scaleLabel}><SelectPill label={visual.scaleLabel} className="mt-1" value={dsf} disabled={busy} onChange={setDsf} options={[{ value: "1", label: "1×" }, { value: "2", label: "2×" }, { value: "3", label: "3×" }]} /></Field>
+        <Field label={visual.themeLabel}><SelectPill label={visual.themeLabel} className="mt-1" value={theme} disabled={busy} onChange={(next) => setTheme(next as typeof theme)} options={[{ value: "light", label: visual.themeLight }, { value: "dark", label: visual.themeDark }]} /></Field>
       </div>
       <p className="rounded-inset bg-white px-3 py-2 text-eui-slate-500">{viewport ? visual.viewportValue(viewport.width, viewport.height) : visual.viewportUnavailable}</p>
       <label className="block"><span className={kicker}>{visual.noteLabel}</span><input className={`${inputBase} mt-1`} placeholder={visual.notePlaceholder} value={note} disabled={busy} onChange={(event) => setNote(event.target.value)} /></label>

@@ -42,8 +42,9 @@ describe("shared PropsForm core", () => {
     const schema = z.object({ enabled: z.boolean().optional(), label: z.string().optional() });
     const { view, onCandidate } = form(schema, {});
     render(view);
-    fireEvent.click(screen.getByLabelText("enabled"));
-    fireEvent.click(screen.getByLabelText("enabled"));
+    // Чекбокс заменён брендовым тумблером: имя поля уехало в sr-only, роль — switch.
+    fireEvent.click(screen.getByRole("switch", { name: "enabled" }));
+    fireEvent.click(screen.getByRole("switch", { name: "enabled" }));
     fireEvent.change(screen.getByLabelText("label"), { target: { value: "" } });
     fireEvent.blur(screen.getByLabelText("label"));
     expect(onCandidate).toHaveBeenLastCalledWith({ enabled: false, label: "" }, { ok: true });

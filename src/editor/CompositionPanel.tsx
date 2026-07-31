@@ -1,5 +1,7 @@
 import { useContext, useState, type Dispatch } from "react";
 import { inputBase, kicker } from "../app/chrome";
+import { SelectPill } from "../app/SelectPill";
+import { Toggle } from "../app/Toggle";
 import { editor } from "../app/strings/editor";
 import type { CompositionDoc, CompositionParam } from "../prototype/composition";
 import { jsonValueSchema, type JsonValue } from "../prototype/schema";
@@ -35,10 +37,12 @@ function ParamField({ name, declared, value, onCommit }: {
   </span>;
 
   if (declared.type === "boolean") {
-    return <label className="flex items-center gap-2 py-1">
-      <input type="checkbox" aria-label={name} checked={value === true} onChange={(event) => onCommit(event.target.checked)} />
+    // Имя параметра уже нарисовано в `label`, поэтому доступное имя тумблера
+    // задаётся sr-only-текстом, а не дублируется рядом с треком.
+    return <div className="flex items-center gap-2 py-1">
+      <Toggle checked={value === true} onChange={onCommit} label={<span className="sr-only">{name}</span>} />
       {label}
-    </label>;
+    </div>;
   }
   if (declared.type === "asset") {
     return <div className="py-1">{label}<AssetValueField name={name} value={value} onCommit={(next) => onCommit(next as JsonValue)} /></div>;
@@ -168,19 +172,18 @@ export function CompositionPanel({ screen, elementKey, element, compositionId, c
           className="min-w-0 flex-1 truncate rounded-item px-2 py-1 text-left font-eui-ui text-xs text-eui-slate-500 hover:bg-eui-lilac-100"
           onClick={() => onSelectElement(key)}
         >{screen.spec.elements[key]!.type} · {key}</button>
-        <select
-          aria-label={editor.compositionSlotSelectAria(key)}
-          className={`${inputBase} w-32 shrink-0 bg-white font-eui-ui text-xs text-eui-ink`}
+        <SelectPill
+          label={editor.compositionSlotSelectAria(key)}
+          className="shrink-0"
           value={slotOf(key)}
-          onChange={(event) => dispatch({
+          onChange={(next) => dispatch({
             type: "set-element-slot",
             screenId: screen.id,
             elementKey: key,
-            slot: event.target.value === DEFAULT_SLOT ? undefined : event.target.value,
+            slot: next === DEFAULT_SLOT ? undefined : next,
           })}
-        >
-          {(slots.includes(slotOf(key)) ? slots : [slotOf(key), ...slots]).map((slot) => <option key={slot} value={slot}>{slot}</option>)}
-        </select>
+          options={(slots.includes(slotOf(key)) ? slots : [slotOf(key), ...slots]).map((slot) => ({ value: slot, label: slot }))}
+        />
       </li>)}</ul>
       : <p className="font-eui-ui text-xs text-eui-slate-500">{editor.compositionNoChildren}</p>}
   </section>;

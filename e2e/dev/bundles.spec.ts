@@ -61,6 +61,8 @@ test.describe("bundle export/import from the gallery", () => {
 
     // Apply: the same button label lives inside the dialog; the header button is out of scope.
     await dialog.getByRole("button", { name: "Импортировать" }).click();
+    // Запись в общую базу подтверждается отдельным окном (W6 §5).
+    await page.getByRole("dialog", { name: "Импортировать в общую базу?" }).getByRole("button", { name: "Импортировать", exact: true }).click();
 
     await expect(dialog.getByRole("heading", { name: "Отчёт об импорте" })).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Готово" })).toBeVisible();

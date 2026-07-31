@@ -147,21 +147,22 @@ describe("InspectorPanel", () => {
     });
     let current = createEditorState({ doc, rev: 1 });
     const dispatch = (action: EditorAction) => { current = editorReducer(current, action); };
-    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
     render(<InspectorPanel state={current} definitions={{}} dispatch={dispatch} />);
 
     fireEvent.change(screen.getByRole("spinbutton", { name: "Ширина холста" }), { target: { value: "390" } });
     const height = screen.getByRole("spinbutton", { name: "Высота холста" });
     fireEvent.change(height, { target: { value: "844" } });
+    // Подтверждение — окно бренда (S6), а не window.confirm: отказ ничего не меняет.
     fireEvent.blur(height);
+    fireEvent.click(screen.getByRole("button", { name: "Отменить" }));
     expect(current.doc.screens[0]!.canvas).toBeUndefined();
     expect(current.doc.screens[0]!.spec.elements.header!.region).toBe("header");
 
     fireEvent.blur(height);
-    expect(confirm).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("button", { name: "Перейти на холст" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(current.doc.screens[0]!.canvas).toEqual({ width: 390, height: 844 });
     expect(current.doc.screens[0]!.spec.elements.header).not.toHaveProperty("region");
     expect(current.past).toHaveLength(1);
-    confirm.mockRestore();
   });
 });

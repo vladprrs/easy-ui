@@ -18,7 +18,7 @@ test.describe("new prototype onboarding", () => {
   test("Новый прототип → редактор", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Новый прототип" }).first().click();
-    const dialog = page.getByRole("dialog", { name: "Создание прототипа" });
+    const dialog = page.getByRole("dialog", { name: "Новый прототип" });
     await dialog.getByLabel("Название прототипа").fill(`Onboarding E2E ${Date.now()}`);
     await dialog.getByLabel("Дизайн-система").selectOption("e2e-starter");
     const responsePromise = page.waitForResponse((response) => response.url().endsWith("/api/prototypes") && response.request().method() === "POST");

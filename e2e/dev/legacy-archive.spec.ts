@@ -18,7 +18,7 @@ test("v15-unrenderable prototype stays in Archive and every player entry shows t
 test("retired systems are absent from create and reject new references and theme patches", async ({ page, request }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Новый прототип" }).first().click();
-  const select = page.getByRole("dialog", { name: "Создание прототипа" }).getByLabel("Дизайн-система");
+  const select = page.getByRole("dialog", { name: "Новый прототип" }).getByLabel("Дизайн-система");
   await expect(select.locator('option[value="shadcn"]')).toHaveCount(0);
   await expect(select.locator('option[value="wireframe"]')).toHaveCount(0);
   await expect(select.locator('option[value="e2e-starter"]')).toHaveCount(1);

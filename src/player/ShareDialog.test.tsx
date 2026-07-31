@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { share as shareStrings } from "../app/strings/player";
 import { ShareDialog } from "./ShareDialog";
@@ -30,7 +31,12 @@ const createdGrant = {
 function renderDialog(onClose = vi.fn()) {
   return {
     onClose,
-    ...render(<ShareDialog prototypeId="prototype-1" versions={[{ version: 1 }, { version: 2 }]} currentVersion={1} onClose={onClose} />),
+    ...render(<MemoryRouter><ShareDialog
+      prototypeId="prototype-1"
+      versions={{ status: "ready", versions: [{ version: 1 }, { version: 2 }] }}
+      currentVersion={1}
+      onClose={onClose}
+    /></MemoryRouter>),
   };
 }
 

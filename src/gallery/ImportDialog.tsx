@@ -1,7 +1,7 @@
-import { useRef, useState, type ChangeEvent } from "react";
+import { useId, useRef, useState, type ChangeEvent } from "react";
 import { importBundle } from "../api/bundles";
+import { ConfirmModal, Modal } from "../app/Modal";
 import { pillGhost, pillPrimary } from "../app/chrome";
-import { common } from "../app/strings/common";
 import { gallery } from "../app/strings/gallery";
 import type { ImportReport, ImportReportItem } from "../bundle/schema";
 
@@ -47,8 +47,12 @@ function ReportTable({ items }: { items: ImportReportItem[] }) {
 
 export function ImportDialog({ onClose, onImported }: { onClose: () => void; onImported: () => void }) {
   const [state, setState] = useState<DialogState>({ status: "idle" });
+  const [confirming, setConfirming] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const selectedFileRef = useRef<File | null>(null);
+  // Причина, по которой «Импортировать» недоступна, лежит абзацем выше кнопки и
+  // раньше с ней никак не была связана: скринридер читал только «недоступно».
+  const failedNoteId = useId();
 
   const onFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -66,6 +70,7 @@ export function ImportDialog({ onClose, onImported }: { onClose: () => void; onI
 
   const apply = async () => {
     const file = selectedFileRef.current;
+    setConfirming(false);
     if (!file) return;
     setState((current) => current.status === "preview" ? { status: "applying", report: current.report } : current);
     try {
@@ -81,46 +86,59 @@ export function ImportDialog({ onClose, onImported }: { onClose: () => void; onI
   const busy = state.status === "checking" || state.status === "applying";
   const previewReport = state.status === "preview" ? state.report : null;
 
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
-    <section role="dialog" aria-modal="true" aria-label={gallery.importDialogAria} className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-panel bg-white p-6">
-      <div className="flex items-center justify-between gap-4">
-        <h2 className="pay-display text-2xl">{gallery.importDialogTitle}</h2>
-        <button type="button" aria-label={common.close} title={common.close} disabled={busy} onClick={onClose} className="rounded-full px-2 py-1 text-xl hover:bg-eui-lilac-100 disabled:opacity-50">×</button>
-      </div>
-
-      <div className="mt-5 min-h-0 flex-1 overflow-y-auto">
+  return <>
+    <Modal
+      title={gallery.importDialogTitle}
+      onClose={onClose}
+      className="max-h-[90vh] overflow-y-auto"
+      footer={<>
+        <input ref={fileRef} type="file" accept=".zip,application/zip" aria-label={gallery.importFileInputLabel} className="sr-only" onChange={(event) => void onFile(event)} />
+        {state.status === "idle" ? <button type="button" className={pillPrimary} onClick={() => fileRef.current?.click()}>{gallery.importChooseFile}</button> : null}
+        {state.status === "error" ? <button type="button" className={pillPrimary} onClick={() => fileRef.current?.click()}>{gallery.importChangeFile}</button> : null}
+        {state.status === "preview" ? <>
+          <button type="button" className={pillGhost} onClick={() => fileRef.current?.click()}>{gallery.importChangeFile}</button>
+          <button
+            type="button"
+            className={pillPrimary}
+            disabled={!previewReport?.ok}
+            aria-describedby={previewReport?.ok === false ? failedNoteId : undefined}
+            onClick={() => setConfirming(true)}
+          >{gallery.importApply}</button>
+        </> : null}
+        {state.status === "done" ? <button type="button" className={pillPrimary} onClick={finish}>{gallery.importDone}</button> : null}
+        {state.status !== "done" ? <button type="button" className={pillGhost} disabled={busy} onClick={onClose}>{gallery.cancel}</button> : null}
+      </>}
+    >
+      <div className="mt-5">
         {state.status === "idle" ? <p className="text-sm text-eui-slate-500">{gallery.importIntro}</p> : null}
         {state.status === "checking" ? <p className="text-sm text-eui-slate-500" aria-live="polite">{gallery.importChecking}</p> : null}
         {state.status === "applying" ? <p className="text-sm text-eui-slate-500" aria-live="polite">{gallery.importApplying}</p> : null}
         {state.status === "error" ? <p role="alert" className="text-sm text-pay-red">{state.message}</p> : null}
 
         {previewReport ? <div>
-          <h3 className="pay-display text-lg">{gallery.importPreviewTitle}</h3>
+          <h3 className="text-base font-medium">{gallery.importPreviewTitle}</h3>
           <p className="mt-1 text-xs text-eui-slate-500">{gallery.importPreviewNote}</p>
-          {!previewReport.ok ? <p role="alert" className="mt-2 text-sm text-pay-red">{gallery.importPreviewFailedNote}</p> : null}
+          {!previewReport.ok ? <p id={failedNoteId} role="alert" className="mt-2 text-sm text-pay-red">{gallery.importPreviewFailedNote}</p> : null}
           <p className="mt-2 text-sm text-eui-ink">{gallery.importSummary(previewReport.summary.created, previewReport.summary.reused, previewReport.summary.skipped, previewReport.summary.errors)}</p>
           <ReportTable items={previewReport.items} />
         </div> : null}
 
         {state.status === "done" ? <div>
-          <h3 className="pay-display text-lg">{gallery.importResultTitle}</h3>
+          <h3 className="text-base font-medium">{gallery.importResultTitle}</h3>
           {!state.report.ok ? <p role="alert" className="mt-2 text-sm text-pay-red">{gallery.importFailedNote}</p> : null}
           <p className="mt-2 text-sm text-eui-ink">{gallery.importSummary(state.report.summary.created, state.report.summary.reused, state.report.summary.skipped, state.report.summary.errors)}</p>
           <ReportTable items={state.report.items} />
         </div> : null}
       </div>
-
-      <div className="mt-5 flex flex-wrap justify-end gap-2 pt-1">
-        <input ref={fileRef} type="file" accept=".zip,application/zip" aria-label={gallery.importFileInputLabel} className="sr-only" onChange={(event) => void onFile(event)} />
-        {state.status === "idle" ? <button type="button" className={pillPrimary} onClick={() => fileRef.current?.click()}>{gallery.importChooseFile}</button> : null}
-        {state.status === "error" ? <button type="button" className={pillPrimary} onClick={() => fileRef.current?.click()}>{gallery.importChangeFile}</button> : null}
-        {state.status === "preview" ? <>
-          <button type="button" className={pillGhost} onClick={() => fileRef.current?.click()}>{gallery.importChangeFile}</button>
-          <button type="button" className={pillPrimary} disabled={!previewReport?.ok} onClick={() => void apply()}>{gallery.importApply}</button>
-        </> : null}
-        {state.status === "done" ? <button type="button" className={pillPrimary} onClick={finish}>{gallery.importDone}</button> : null}
-        {state.status !== "done" ? <button type="button" className={pillGhost} disabled={busy} onClick={onClose}>{gallery.cancel}</button> : null}
-      </div>
-    </section>
-  </div>;
+    </Modal>
+    {/* Импорт пишет в общую базу продукта — последний шаг подтверждается отдельно. */}
+    {confirming ? <ConfirmModal
+      title={gallery.importConfirmTitle}
+      body={gallery.importConfirmBody}
+      confirmLabel={gallery.importConfirmAction}
+      cancelLabel={gallery.cancel}
+      onConfirm={() => void apply()}
+      onClose={() => setConfirming(false)}
+    /> : null}
+  </>;
 }

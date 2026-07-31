@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { getAssetUsage, listAllAssets, type AssetListItem, type AssetUsageGraph } from "../api/assetsApi";
 import { useApi } from "../api/hooks";
 import { chip, chipActive, headingBar, inputBase, kicker } from "../app/chrome";
+import { Toggle } from "../app/Toggle";
 import { EmptyState, ErrorState, Skeleton } from "../app/states";
 import { assetsStrings } from "../app/strings/assets";
 import { useDocumentTitle } from "../app/useDocumentTitle";
@@ -61,10 +62,11 @@ export function AssetsPage() {
             onClick={() => setFilters((previous) => ({ ...previous, mime: previous.mime === facet.mime ? null : facet.mime }))}
           >{facet.mime} · {facet.count}</button>)}
         </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={filters.unusedOnly} onChange={(event) => setFilters((previous) => ({ ...previous, unusedOnly: event.target.checked }))} />
-          {assetsStrings.unusedOnly}
-        </label>
+        <Toggle
+          checked={filters.unusedOnly}
+          onChange={(next) => setFilters((previous) => ({ ...previous, unusedOnly: next }))}
+          label={assetsStrings.unusedOnly}
+        />
       </div>
 
       {list.status === "ready" ? <>

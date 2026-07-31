@@ -81,7 +81,7 @@ describe("LibraryPage витрина компонентов", () => {
     const dialog = screen.getByRole("dialog", { name: "Как опубликовать компонент" });
     expect(within(dialog).getByText("POST /api/components")).toBeTruthy();
     expect(within(dialog).getByRole("link", { name: "Открыть описание API" }).getAttribute("href")).toBe("/api/openapi.json");
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 

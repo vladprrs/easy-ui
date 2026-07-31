@@ -340,7 +340,9 @@ export function ScreenView() {
       </Menu>
     </>}
   />;
-  const shareDialog = shareOpen ? <ShareDialog prototypeId={doc.id} versions={publishedVersions} currentVersion={numericVersion} onClose={() => setShareOpen(false)} /> : null;
+  // Плееру список версий уже известен: он приходит вместе с документом, поэтому
+  // состояние загрузки диалогу передавать неоткуда — сразу «готово» (W6 §2).
+  const shareDialog = shareOpen ? <ShareDialog prototypeId={doc.id} versions={{ status: "ready", versions: publishedVersions }} currentVersion={numericVersion} onClose={() => setShareOpen(false)} /> : null;
   // Экран не найден — белая панель на лавандовой канве (W4-12).
   if (!screen) return <main className="flex h-dvh min-h-0 flex-col">
     {shareDialog}
