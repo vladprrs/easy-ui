@@ -24,6 +24,7 @@ import {
   publishComponentContract,
   type RouteContract,
 } from "./contracts";
+import { CALIBRATED_POLICY } from "./catalog/policy";
 import { openDatabase } from "./db";
 import { MAX_JSON_BODY_BYTES } from "./http";
 import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "./screenshot/service";
@@ -260,6 +261,9 @@ function orderedCases(): [string, Case][] {
     ["POST /api/catalog/candidates", { run: () => call("POST", "/api/catalog/candidates", { designSystem: "contract-ds", intent: "компонент ui" }), expected: err(422, "validation_failed") }],
     ["GET /api/catalog/candidates", { run: () => call("GET", "/api/catalog/candidates?designSystem=contract-ds&intent=rating%20stars%20for%20a%20product%20card&limit=3"), expected: ok() }],
     ["GET /api/catalog/candidates", { run: () => call("GET", "/api/catalog/candidates?designSystem=contract-ds&intent=rating%20stars&limit=21"), expected: err(422, "validation_failed") }],
+    // Админский аудит гейта (проект 2 §4 T10): чтение отчёта и отказ невалидного лимита.
+    ["GET /api/catalog/reuse-decisions", { run: () => call("GET", "/api/catalog/reuse-decisions?minAttempts=2&limit=50"), expected: ok() }],
+    ["GET /api/catalog/reuse-decisions", { run: () => call("GET", "/api/catalog/reuse-decisions?limit=0"), expected: err(422, "validation_failed") }],
     ["GET /api/shims/{abi}/{file}",{ run: () => call("GET", "/api/shims/v1/react.js"), expected: ok(200, "text/javascript") }],
     // Bundle export (ZIP): owner draft, unpublished component draft, bulk (all owned)
     ["GET /api/prototypes/{id}/export", { run: () => call("GET", "/api/prototypes/contract-proto/export"), expected: ok(200, "application/zip") }],
@@ -587,8 +591,23 @@ describe("route contracts", () => {
       screenRegions: true,
       bundleExport: true,
       bundleImport: true,
+      componentReuseGate: true,
     });
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
+  });
+
+  // Фаза гейта — единственное поле discovery, которое зависит от конфигурации процесса.
+  // До T4′ `main.ts` не прокидывал режим в `routeMeta`, и прод в shadow рапортовал `enforce`:
+  // агент узнавал фактическую фазу только сломав собственный `POST /api/components`.
+  test("GET /api/capabilities reports the resolved reuse-gate mode, not the code default", async () => {
+    const readGate = async (call: (request: Request) => Promise<Response>) => {
+      const response = await call(new Request("http://test/api/capabilities"));
+      expect(response.status).toBe(200);
+      return capabilitiesResponseSchema.parse(await response.json()).reuseGate;
+    };
+    expect(await readGate(handler)).toEqual({ mode: "enforce", intentRequired: true, policyVersion: CALIBRATED_POLICY.policyVersion });
+    const shadow = createTestHandler(db, { dataDir: dir, reuseGateMode: "shadow" }) as (request: Request) => Promise<Response>;
+    expect(await readGate(shadow)).toEqual({ mode: "shadow", intentRequired: false, policyVersion: CALIBRATED_POLICY.policyVersion });
   });
 
   test("GET /api/schemas/prototype-document.json is a JSON Schema with directive annotations", async () => {

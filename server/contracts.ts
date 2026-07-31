@@ -1181,11 +1181,13 @@ export const importBundleQuerySchema = z.strictObject({ mode: z.enum(["dry-run",
 
 export const importBundleContract = registerContract({
   method: "POST", path: "/api/bundles/import",
-  summary: "Import a ZIP bundle (multipart file or raw application/zip); dry-run predicts, apply writes. Returns a per-item report.",
+  summary: "Import a ZIP bundle (multipart file or raw application/zip); dry-run predicts, apply writes. Returns a per-item report. A multipart `reuseOverride` field carries the admin-confirmed second phase of a reuse-gate override; items blocked by the gate report `reuseCode` with the candidate keys.",
   query: importBundleQuerySchema,
   responseSchema: importReportSchema,
   errors: [
     { status: 400, code: "invalid_bundle" },
+    { status: 400, code: "invalid_request", description: "the multipart reuseOverride field is not a valid override object" },
+    { status: 403, code: "admin_required", description: "only an admin may pass reuseOverride" },
     { status: 413, code: "payload_too_large" },
     { status: 415, code: "unsupported_media_type" },
     { status: 422, code: "validation_failed" },
@@ -1606,13 +1608,10 @@ export const reuseAuditResponseSchema = z.strictObject({
 });
 
 /**
- * Заявка контрактной дельты для T4′ (план §4: контрактный слой, `contract.test.ts` и
- * `server/openapi.json` принадлежат T4/T4′). Объявление готово к регистрации: T4′ оборачивает
- * его в `registerContract(...)`, добавляет кейс покрытия в `contract.test.ts` и регенерирует
- * OpenAPI. Регистрировать здесь нельзя — биекция «контракты ↔ кейсы» и drift-тест OpenAPI
- * упали бы в зелёной сюите до прихода T4′. Хендлер валидирует вход этими же схемами.
+ * Контрактная дельта T10, внесённая терминальной T4′ (план §4). Хендлер
+ * (`server/routes/reuseDecisions.ts`) валидирует вход этими же схемами.
  */
-export const reuseAuditContract: RouteContract = {
+export const reuseAuditContract = registerContract({
   method: "GET", path: "/api/catalog/reuse-decisions",
   summary: "Admin-only read model over the append-only reuse-decision audit: force-new overrides, repeated blocked attempts aggregated by actor/artifact, canonical-role conflicts, shadow-phase would-block counters, and catalog artifacts that never went through a reuse review. Read-only: the table is append-only in the database.",
   query: reuseAuditQuerySchema,
@@ -1624,7 +1623,7 @@ export const reuseAuditContract: RouteContract = {
     errorCatalog.methodNotAllowed,
     errorCatalog.validationFailed,
   ],
-};
+});
 
 export const componentPreviewContract = registerContract({
   method: "GET", path: "/api/components/{id}/versions/{version}/preview",
@@ -1706,6 +1705,18 @@ export const capabilitiesResponseSchema = z.object({
     renderStatus: z.boolean(), screenshots: z.boolean(), visualRegression: z.boolean(), assets: z.boolean(),
     typedEvents: z.boolean(), repeat: z.boolean(), namedSlots: z.boolean(), themeVersions: z.boolean(), layoutContract: z.boolean(),
     flows: z.boolean(), screenRegions: z.boolean(), bundleExport: z.boolean(), bundleImport: z.boolean(),
+    /** Гейт переиспользования компонентов присутствует в этой сборке (план 2026-07-31 §3.5). */
+    componentReuseGate: z.boolean(),
+  }),
+  /**
+   * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`
+   * запрос без `intent` проходит с предупреждением, в `enforce` — падает `400 invalid_request`.
+   * `policyVersion` совпадает с `/api/catalog/candidates` и с записями аудита.
+   */
+  reuseGate: z.object({
+    mode: z.enum(["shadow", "enforce"]),
+    intentRequired: z.boolean(),
+    policyVersion: z.number().int().nonnegative(),
   }),
 });
 

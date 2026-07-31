@@ -178,7 +178,9 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         // Админское чтение аудита гейта (проект 2 §4 T10); admin-проверка — внутри роута.
         if(segments[1]==="catalog"&&segments[2]==="reuse-decisions"&&segments.length===3) return finish(routeReuseDecisions(request,db,principal));
         if(segments[1]==="shims"&&segments[2]!==undefined&&/^v[1-9]\d*$/.test(segments[2])) return finish(routeShims(request,segments.slice(1)));
-        const meta=routeMeta(request,db,segments.slice(1)); if(meta) return finish(meta);
+        // Режим гейта — часть discovery: `/api/capabilities` обязан рапортовать фактическую
+        // фазу процесса, иначе агент узнаёт её только сломав собственный create.
+        const meta=routeMeta(request,db,segments.slice(1),options.reuseGateMode??DEFAULT_REUSE_GATE_MODE); if(meta) return finish(meta);
         throw new ApiError(404,"not_found","API route not found");
       }
       if(staticResolution) return finish(await serveResolvedStatic(request,staticResolution));

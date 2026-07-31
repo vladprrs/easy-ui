@@ -923,7 +923,17 @@
                 }
               }
             },
-            "description": "invalid_bundle"
+            "description": "invalid_bundle | invalid_request (the multipart reuseOverride field is not a valid override object)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "admin_required (only an admin may pass reuseOverride)"
           },
           "413": {
             "content": {
@@ -956,7 +966,7 @@
             "description": "validation_failed"
           }
         },
-        "summary": "Import a ZIP bundle (multipart file or raw application/zip); dry-run predicts, apply writes. Returns a per-item report.",
+        "summary": "Import a ZIP bundle (multipart file or raw application/zip); dry-run predicts, apply writes. Returns a per-item report. A multipart `reuseOverride` field carries the admin-confirmed second phase of a reuse-gate override; items blocked by the gate report `reuseCode` with the candidate keys.",
         "x-easyui-validated": false
       }
     },
@@ -1014,6 +1024,9 @@
                         "bundleImport": {
                           "type": "boolean"
                         },
+                        "componentReuseGate": {
+                          "type": "boolean"
+                        },
                         "flows": {
                           "type": "boolean"
                         },
@@ -1058,7 +1071,8 @@
                         "flows",
                         "screenRegions",
                         "bundleExport",
-                        "bundleImport"
+                        "bundleImport",
+                        "componentReuseGate"
                       ],
                       "type": "object"
                     },
@@ -1192,6 +1206,32 @@
                         "type": "string"
                       },
                       "type": "object"
+                    },
+                    "reuseGate": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "intentRequired": {
+                          "type": "boolean"
+                        },
+                        "mode": {
+                          "enum": [
+                            "shadow",
+                            "enforce"
+                          ],
+                          "type": "string"
+                        },
+                        "policyVersion": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "intentRequired",
+                        "policyVersion"
+                      ],
+                      "type": "object"
                     }
                   },
                   "required": [
@@ -1206,7 +1246,8 @@
                     "designSystems",
                     "resolvedSpaceScales",
                     "regions",
-                    "features"
+                    "features",
+                    "reuseGate"
                   ],
                   "type": "object"
                 }
@@ -2421,6 +2462,676 @@
           }
         },
         "summary": "Manifest of the latest active custom-component versions across design systems, with head-usage counts and a deprecated flag for discovery.",
+        "x-easyui-validated": true
+      }
+    },
+    "/api/catalog/reuse-decisions": {
+      "get": {
+        "operationId": "get_catalog_reuse_decisions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "designSystem",
+            "required": false,
+            "schema": {
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actorId",
+            "required": false,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "pattern": "^([1-9]\\d{0,2}|1000)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "minAttempts",
+            "required": false,
+            "schema": {
+              "pattern": "^([2-9]|[1-4]\\d|50)$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "actorId": {
+                          "$ref": "#/$defs/__schema3"
+                        },
+                        "artifactId": {
+                          "$ref": "#/$defs/__schema5"
+                        },
+                        "artifactKind": {
+                          "$ref": "#/$defs/__schema4"
+                        },
+                        "candidates": {
+                          "$ref": "#/$defs/__schema12"
+                        },
+                        "catalogRevision": {
+                          "$ref": "#/$defs/__schema8"
+                        },
+                        "createdAt": {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        "decision": {
+                          "$ref": "#/$defs/__schema13"
+                        },
+                        "designSystem": {
+                          "$ref": "#/$defs/__schema6"
+                        },
+                        "gateMode": {
+                          "$ref": "#/$defs/__schema10"
+                        },
+                        "id": {
+                          "$ref": "#/$defs/__schema2"
+                        },
+                        "intent": {
+                          "$ref": "#/$defs/__schema11"
+                        },
+                        "policyVersion": {
+                          "$ref": "#/$defs/__schema9"
+                        },
+                        "reason": {
+                          "$ref": "#/$defs/__schema14"
+                        },
+                        "sourceOrDocHash": {
+                          "$ref": "#/$defs/__schema7"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "actorId",
+                        "artifactKind",
+                        "artifactId",
+                        "designSystem",
+                        "sourceOrDocHash",
+                        "catalogRevision",
+                        "policyVersion",
+                        "gateMode",
+                        "intent",
+                        "candidates",
+                        "decision",
+                        "reason",
+                        "createdAt"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema10": {
+                      "enum": [
+                        "shadow",
+                        "enforce"
+                      ],
+                      "type": "string"
+                    },
+                    "__schema11": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "__schema12": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "blocking": {
+                            "type": "boolean"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "propsDelta": {
+                            "additionalProperties": {},
+                            "properties": {
+                              "added": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "removed": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "typeChanged": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "reasons": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "score": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "score",
+                          "blocking",
+                          "reasons"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "__schema13": {
+                      "enum": [
+                        "accepted_no_match",
+                        "blocked",
+                        "would_block",
+                        "force_new",
+                        "intent_missing"
+                      ],
+                      "type": "string"
+                    },
+                    "__schema14": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "__schema2": {
+                      "type": "string"
+                    },
+                    "__schema3": {
+                      "type": "string"
+                    },
+                    "__schema4": {
+                      "enum": [
+                        "component",
+                        "composition",
+                        "prototype"
+                      ],
+                      "type": "string"
+                    },
+                    "__schema5": {
+                      "type": "string"
+                    },
+                    "__schema6": {
+                      "type": "string"
+                    },
+                    "__schema7": {
+                      "type": "string"
+                    },
+                    "__schema8": {
+                      "type": "string"
+                    },
+                    "__schema9": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "properties": {
+                    "canonicalRoleConflicts": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actorId": {
+                            "$ref": "#/$defs/__schema3"
+                          },
+                          "artifactId": {
+                            "$ref": "#/$defs/__schema5"
+                          },
+                          "artifactKind": {
+                            "$ref": "#/$defs/__schema4"
+                          },
+                          "candidates": {
+                            "$ref": "#/$defs/__schema12"
+                          },
+                          "catalogRevision": {
+                            "$ref": "#/$defs/__schema8"
+                          },
+                          "createdAt": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "decision": {
+                            "$ref": "#/$defs/__schema13"
+                          },
+                          "designSystem": {
+                            "$ref": "#/$defs/__schema6"
+                          },
+                          "gateMode": {
+                            "$ref": "#/$defs/__schema10"
+                          },
+                          "id": {
+                            "$ref": "#/$defs/__schema2"
+                          },
+                          "intent": {
+                            "$ref": "#/$defs/__schema11"
+                          },
+                          "policyVersion": {
+                            "$ref": "#/$defs/__schema9"
+                          },
+                          "reason": {
+                            "$ref": "#/$defs/__schema14"
+                          },
+                          "roles": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "sourceOrDocHash": {
+                            "$ref": "#/$defs/__schema7"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "actorId",
+                          "artifactKind",
+                          "artifactId",
+                          "designSystem",
+                          "sourceOrDocHash",
+                          "catalogRevision",
+                          "policyVersion",
+                          "gateMode",
+                          "intent",
+                          "candidates",
+                          "decision",
+                          "reason",
+                          "createdAt",
+                          "roles"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "filter": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "actorId": {
+                          "type": "string"
+                        },
+                        "designSystem": {
+                          "type": "string"
+                        },
+                        "limit": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "minAttempts": {
+                          "maximum": 9007199254740991,
+                          "minimum": 2,
+                          "type": "integer"
+                        },
+                        "since": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "limit",
+                        "minAttempts"
+                      ],
+                      "type": "object"
+                    },
+                    "forceNew": {
+                      "items": {
+                        "$ref": "#/$defs/__schema1"
+                      },
+                      "type": "array"
+                    },
+                    "gateActiveSince": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "generatedAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "repeatedBlocked": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actorId": {
+                            "type": "string"
+                          },
+                          "artifactId": {
+                            "type": "string"
+                          },
+                          "artifactKind": {
+                            "enum": [
+                              "component",
+                              "composition",
+                              "prototype"
+                            ],
+                            "type": "string"
+                          },
+                          "attempts": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "blocked": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "candidateIds": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "designSystem": {
+                            "type": "string"
+                          },
+                          "firstAt": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "lastAt": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "lastDecisionId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lastReason": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "wouldBlock": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "actorId",
+                          "artifactKind",
+                          "artifactId",
+                          "designSystem",
+                          "attempts",
+                          "blocked",
+                          "wouldBlock",
+                          "firstAt",
+                          "lastAt",
+                          "lastDecisionId",
+                          "lastReason",
+                          "candidateIds"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "totals": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "actors": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "byDecision": {
+                          "additionalProperties": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "byGateMode": {
+                          "additionalProperties": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "decisions": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "decisions",
+                        "actors",
+                        "byDecision",
+                        "byGateMode"
+                      ],
+                      "type": "object"
+                    },
+                    "unreviewed": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "artifacts": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "createdAt": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "createdBeforeGate": {
+                                "type": "boolean"
+                              },
+                              "designSystem": {
+                                "type": "string"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "enum": [
+                                  "component",
+                                  "composition",
+                                  "prototype"
+                                ],
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "id",
+                              "name",
+                              "designSystem",
+                              "createdAt",
+                              "createdBeforeGate"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "total": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "artifacts"
+                      ],
+                      "type": "object"
+                    },
+                    "wouldBlock": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "actors": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "byActor": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "actorId": {
+                                "type": "string"
+                              },
+                              "count": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "actorId",
+                              "count"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "decisions": {
+                          "items": {
+                            "$ref": "#/$defs/__schema1"
+                          },
+                          "type": "array"
+                        },
+                        "total": {
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "actors",
+                        "byActor",
+                        "decisions"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "gateActiveSince",
+                    "filter",
+                    "totals",
+                    "forceNew",
+                    "repeatedBlocked",
+                    "canonicalRoleConflicts",
+                    "wouldBlock",
+                    "unreviewed"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "unauthorized (authentication is required)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (administrator access required; share/capture principals are rejected)"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed"
+          }
+        },
+        "summary": "Admin-only read model over the append-only reuse-decision audit: force-new overrides, repeated blocked attempts aggregated by actor/artifact, canonical-role conflicts, shadow-phase would-block counters, and catalog artifacts that never went through a reuse review. Read-only: the table is append-only in the database.",
         "x-easyui-validated": true
       }
     },
