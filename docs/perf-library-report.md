@@ -1,6 +1,6 @@
 # Library inline-preview performance gate
 
-Generated: 2026-07-31T08:08:41.045Z
+Generated: 2026-07-31T08:34:04.259Z
 
 Command: `npm run perf:library -- --url http://127.0.0.1:4173/ --data-dir .e2e-data/perf-library --runs 5`
 
@@ -16,12 +16,12 @@ Viewport: 1440×900. Network: 40 ms RTT, 5 Mbit/s down, 1 Mbit/s up. Кажды�
 |---|---:|---:|---|
 | Точных `GET /api/components/:id` при первичной навигации | 0 | = 0 | PASS |
 | iframe превью | 0 | = 0 | PASS |
-| Пиковая одновременность задач планировщика | 4 | ≤ 4 | PASS |
-| Запросов до первого превью (медиана) | 21 | ≤ 30 | PASS |
+| Пиковая одновременность задач планировщика | 3 | ≤ 4 | PASS |
+| Запросов до первого превью (медиана) | 19 | ≤ 30 | PASS |
 | Трафик до первого превью (медиана) | 1.60 MiB | ≤ 3.00 MiB | PASS |
-| Смонтированных превью после успокоения (пик) | 6 | ≤ 12 | PASS |
-| Прирост JS heap после полного скролла (медиана) | 2.50 MiB | ≤ 80.00 MiB | PASS |
-| Деградация searchable-ready (full vs baseline) | 0.33% | < 20% | PASS |
+| Смонтированных превью после успокоения (пик) | 3 | ≤ 12 | PASS |
+| Прирост JS heap после полного скролла (медиана) | 2.62 MiB | ≤ 80.00 MiB | PASS |
+| Деградация searchable-ready (full vs baseline) | 0.58% | < 20% | PASS |
 
 Итог: **PASS**.
 
@@ -29,8 +29,8 @@ Viewport: 1440×900. Network: 40 ms RTT, 5 Mbit/s down, 1 Mbit/s up. Кажды�
 
 | Метрика | Baseline, ms | Full, ms | Деградация | Потолок спеки |
 |---|---:|---:|---:|---:|
-| Searchable ready (`[data-library-ready="true"]`) | 2796.6 | 2805.9 | 0.33% | 2500 |
-| First preview ready | — | 3061.2 | 9.46% vs baseline searchable | 4000 |
+| Searchable ready (`[data-library-ready="true"]`) | 2787.7 | 2804.0 | 0.58% | 2500 |
+| First preview ready | — | 3044.2 | 9.20% vs baseline searchable | 4000 |
 
 Абсолютные времена машинозависимы (эмулированная сеть + контейнер), поэтому блокирует только
 относительная деградация searchable-ready. У first-preview-ready нет аналога в baseline-арме
@@ -43,20 +43,20 @@ baseline и остаётся справочной.
 |---|---:|
 | api | 1 |
 | appAsset | 7 |
-| bundle | 4 |
+| bundle | 3 |
 | catalog | 1 |
 | designSystem | 1 |
 | document | 1 |
-| preview | 4 |
+| preview | 3 |
 | shim | 2 |
 
 ## Прочее (медианы full-арма)
 
-- карточек с превью-зоной: 77, смонтированных после успокоения: 6, в состоянии error: 0
-- long tasks: 1 шт., суммарно 90 ms (baseline: 1 шт. / 90 ms)
-- JS heap: 8.03 MiB → 10.53 MiB
-- всего за прогон: 155 запросов / 1.81 MiB (baseline: 11 / 1.58 MiB)
-- неудавшихся запросов (aborted при размонтировании превью — скролл и финальный поиск снимают задачи на лету): full 7, baseline 0
+- карточек с превью-зоной: 65, смонтированных после успокоения: 3, в состоянии error: 0
+- long tasks: 1 шт., суммарно 84 ms (baseline: 1 шт. / 78 ms)
+- JS heap: 7.62 MiB → 10.24 MiB
+- всего за прогон: 139 запросов / 1.80 MiB (baseline: 11 / 1.58 MiB)
+- неудавшихся запросов (aborted при размонтировании превью — скролл и финальный поиск снимают задачи на лету): full 5, baseline 0
 - точных `GET /api/components/:id` за весь прогон: full 0, baseline 0
 
 <details><summary>Raw samples</summary>
@@ -66,22 +66,22 @@ baseline и остаётся справочной.
   "baseline": [
     {
       "settled": true,
-      "libraryReady": 2818.5,
+      "libraryReady": 2790.6000003814697,
       "firstPreviewReady": null,
       "peakSchedulerTasks": 0,
       "peakActive": 0,
       "longTasks": 1,
-      "longTaskMs": 89,
+      "longTaskMs": 75,
       "iframes": 0,
       "mounted": 0,
       "active": 0,
       "failedPreviews": 0,
       "cards": 0,
-      "heapBefore": 7310564,
-      "heapAfter": 7316176,
-      "heapGrowth": 5612,
+      "heapBefore": 7242500,
+      "heapAfter": 7248124,
+      "heapGrowth": 5624,
       "requestsThroughFirstPreview": 11,
-      "bytesThroughFirstPreview": 1659738,
+      "bytesThroughFirstPreview": 1660103,
       "exactComponentInitial": 0,
       "exactComponentTotal": 0,
       "categories": {
@@ -92,27 +92,27 @@ baseline и остаётся справочной.
         "designSystem": 1
       },
       "totalRequests": 11,
-      "totalBytes": 1659738,
+      "totalBytes": 1660103,
       "failedRequests": 0
     },
     {
       "settled": true,
-      "libraryReady": 2796.5999999046326,
+      "libraryReady": 2787.699999809265,
       "firstPreviewReady": null,
       "peakSchedulerTasks": 0,
       "peakActive": 0,
       "longTasks": 1,
-      "longTaskMs": 90,
+      "longTaskMs": 82,
       "iframes": 0,
       "mounted": 0,
       "active": 0,
       "failedPreviews": 0,
       "cards": 0,
-      "heapBefore": 7313904,
-      "heapAfter": 7319560,
+      "heapBefore": 7242460,
+      "heapAfter": 7248116,
       "heapGrowth": 5656,
       "requestsThroughFirstPreview": 11,
-      "bytesThroughFirstPreview": 1659738,
+      "bytesThroughFirstPreview": 1660103,
       "exactComponentInitial": 0,
       "exactComponentTotal": 0,
       "categories": {
@@ -123,27 +123,27 @@ baseline и остаётся справочной.
         "designSystem": 1
       },
       "totalRequests": 11,
-      "totalBytes": 1659738,
+      "totalBytes": 1660103,
       "failedRequests": 0
     },
     {
       "settled": true,
-      "libraryReady": 2790.4000000953674,
+      "libraryReady": 2782.800000190735,
       "firstPreviewReady": null,
       "peakSchedulerTasks": 0,
       "peakActive": 0,
-      "longTasks": 2,
-      "longTaskMs": 137,
+      "longTasks": 1,
+      "longTaskMs": 78,
       "iframes": 0,
       "mounted": 0,
       "active": 0,
       "failedPreviews": 0,
       "cards": 0,
-      "heapBefore": 7310368,
-      "heapAfter": 7315968,
+      "heapBefore": 7244756,
+      "heapAfter": 7250356,
       "heapGrowth": 5600,
       "requestsThroughFirstPreview": 11,
-      "bytesThroughFirstPreview": 1659738,
+      "bytesThroughFirstPreview": 1660103,
       "exactComponentInitial": 0,
       "exactComponentTotal": 0,
       "categories": {
@@ -154,12 +154,43 @@ baseline и остаётся справочной.
         "designSystem": 1
       },
       "totalRequests": 11,
-      "totalBytes": 1659738,
+      "totalBytes": 1660103,
       "failedRequests": 0
     },
     {
       "settled": true,
-      "libraryReady": 2782.5,
+      "libraryReady": 2789.7000002861023,
+      "firstPreviewReady": null,
+      "peakSchedulerTasks": 0,
+      "peakActive": 0,
+      "longTasks": 1,
+      "longTaskMs": 84,
+      "iframes": 0,
+      "mounted": 0,
+      "active": 0,
+      "failedPreviews": 0,
+      "cards": 0,
+      "heapBefore": 7242848,
+      "heapAfter": 7248504,
+      "heapGrowth": 5656,
+      "requestsThroughFirstPreview": 11,
+      "bytesThroughFirstPreview": 1660103,
+      "exactComponentInitial": 0,
+      "exactComponentTotal": 0,
+      "categories": {
+        "document": 1,
+        "appAsset": 7,
+        "api": 1,
+        "catalog": 1,
+        "designSystem": 1
+      },
+      "totalRequests": 11,
+      "totalBytes": 1660103,
+      "failedRequests": 0
+    },
+    {
+      "settled": true,
+      "libraryReady": 2782.3999996185303,
       "firstPreviewReady": null,
       "peakSchedulerTasks": 0,
       "peakActive": 0,
@@ -170,11 +201,11 @@ baseline и остаётся справочной.
       "active": 0,
       "failedPreviews": 0,
       "cards": 0,
-      "heapBefore": 7311612,
-      "heapAfter": 7317224,
-      "heapGrowth": 5612,
+      "heapBefore": 7247512,
+      "heapAfter": 7253136,
+      "heapGrowth": 5624,
       "requestsThroughFirstPreview": 11,
-      "bytesThroughFirstPreview": 1659738,
+      "bytesThroughFirstPreview": 1660103,
       "exactComponentInitial": 0,
       "exactComponentTotal": 0,
       "categories": {
@@ -185,60 +216,29 @@ baseline и остаётся справочной.
         "designSystem": 1
       },
       "totalRequests": 11,
-      "totalBytes": 1659738,
-      "failedRequests": 0
-    },
-    {
-      "settled": true,
-      "libraryReady": 2810.0999999046326,
-      "firstPreviewReady": null,
-      "peakSchedulerTasks": 0,
-      "peakActive": 0,
-      "longTasks": 2,
-      "longTaskMs": 135,
-      "iframes": 0,
-      "mounted": 0,
-      "active": 0,
-      "failedPreviews": 0,
-      "cards": 0,
-      "heapBefore": 7309536,
-      "heapAfter": 7315148,
-      "heapGrowth": 5612,
-      "requestsThroughFirstPreview": 11,
-      "bytesThroughFirstPreview": 1659738,
-      "exactComponentInitial": 0,
-      "exactComponentTotal": 0,
-      "categories": {
-        "document": 1,
-        "appAsset": 7,
-        "api": 1,
-        "catalog": 1,
-        "designSystem": 1
-      },
-      "totalRequests": 11,
-      "totalBytes": 1659738,
+      "totalBytes": 1660103,
       "failedRequests": 0
     }
   ],
   "preview": [
     {
       "settled": true,
-      "libraryReady": 2788.5,
-      "firstPreviewReady": 3040.9000000953674,
-      "peakSchedulerTasks": 4,
-      "peakActive": 6,
+      "libraryReady": 2807.0999999046326,
+      "firstPreviewReady": 3044.199999809265,
+      "peakSchedulerTasks": 3,
+      "peakActive": 3,
       "longTasks": 1,
-      "longTaskMs": 81,
+      "longTaskMs": 94,
       "iframes": 0,
-      "mounted": 6,
-      "active": 6,
+      "mounted": 3,
+      "active": 3,
       "failedPreviews": 0,
-      "cards": 77,
-      "heapBefore": 8426920,
-      "heapAfter": 10960560,
-      "heapGrowth": 2533640,
-      "requestsThroughFirstPreview": 21,
-      "bytesThroughFirstPreview": 1681692,
+      "cards": 65,
+      "heapBefore": 7990224,
+      "heapAfter": 10690240,
+      "heapGrowth": 2700016,
+      "requestsThroughFirstPreview": 19,
+      "bytesThroughFirstPreview": 1679909,
       "exactComponentInitial": 0,
       "exactComponentTotal": 0,
       "categories": {
@@ -246,33 +246,33 @@ baseline и остаётся справочной.
         "appAsset": 7,
         "api": 1,
         "catalog": 1,
-        "preview": 4,
+        "preview": 3,
         "designSystem": 1,
-        "bundle": 4,
+        "bundle": 3,
         "shim": 2
       },
-      "totalRequests": 152,
-      "totalBytes": 1895914,
-      "failedRequests": 7
+      "totalRequests": 137,
+      "totalBytes": 1884410,
+      "failedRequests": 4
     },
     {
       "settled": true,
-      "libraryReady": 2805.9000000953674,
-      "firstPreviewReady": 3061.199999809265,
-      "peakSchedulerTasks": 4,
-      "peakActive": 6,
-      "longTasks": 2,
-      "longTaskMs": 138,
+      "libraryReady": 2804,
+      "firstPreviewReady": 3058.4000000953674,
+      "peakSchedulerTasks": 3,
+      "peakActive": 3,
+      "longTasks": 1,
+      "longTaskMs": 89,
       "iframes": 0,
-      "mounted": 6,
-      "active": 6,
+      "mounted": 3,
+      "active": 3,
       "failedPreviews": 0,
-      "cards": 77,
-      "heapBefore": 8424092,
-      "heapAfter": 11105668,
-      "heapGrowth": 2681576,
-      "requestsThroughFirstPreview": 21,
-      "bytesThroughFirstPreview": 1681692,
+      "cards": 65,
+      "heapBefore": 7988896,
+      "heapAfter": 10784072,
+      "heapGrowth": 2795176,
+      "requestsThroughFirstPreview": 19,
+      "bytesThroughFirstPreview": 1679909,
       "exactComponentInitial": 0,
       "exactComponentTotal": 0,
       "categories": {
@@ -280,33 +280,67 @@ baseline и остаётся справочной.
         "appAsset": 7,
         "api": 1,
         "catalog": 1,
-        "preview": 4,
+        "preview": 3,
         "designSystem": 1,
-        "bundle": 4,
+        "bundle": 3,
         "shim": 2
       },
-      "totalRequests": 156,
-      "totalBytes": 1901347,
+      "totalRequests": 139,
+      "totalBytes": 1886344,
+      "failedRequests": 3
+    },
+    {
+      "settled": true,
+      "libraryReady": 2793.2000002861023,
+      "firstPreviewReady": 3029.2000002861023,
+      "peakSchedulerTasks": 3,
+      "peakActive": 3,
+      "longTasks": 1,
+      "longTaskMs": 82,
+      "iframes": 0,
+      "mounted": 3,
+      "active": 3,
+      "failedPreviews": 0,
+      "cards": 65,
+      "heapBefore": 7927644,
+      "heapAfter": 10725420,
+      "heapGrowth": 2797776,
+      "requestsThroughFirstPreview": 19,
+      "bytesThroughFirstPreview": 1679909,
+      "exactComponentInitial": 0,
+      "exactComponentTotal": 0,
+      "categories": {
+        "document": 1,
+        "appAsset": 7,
+        "api": 1,
+        "catalog": 1,
+        "preview": 3,
+        "designSystem": 1,
+        "bundle": 3,
+        "shim": 2
+      },
+      "totalRequests": 139,
+      "totalBytes": 1888751,
       "failedRequests": 5
     },
     {
       "settled": true,
-      "libraryReady": 2804.5,
-      "firstPreviewReady": 3057.5999999046326,
-      "peakSchedulerTasks": 4,
-      "peakActive": 6,
+      "libraryReady": 2793.199999809265,
+      "firstPreviewReady": 3027.0999999046326,
+      "peakSchedulerTasks": 3,
+      "peakActive": 3,
       "longTasks": 1,
-      "longTaskMs": 85,
+      "longTaskMs": 84,
       "iframes": 0,
-      "mounted": 6,
-      "active": 6,
+      "mounted": 3,
+      "active": 3,
       "failedPreviews": 0,
-      "cards": 77,
-      "heapBefore": 8425028,
-      "heapAfter": 11023280,
-      "heapGrowth": 2598252,
-      "requestsThroughFirstPreview": 21,
-      "bytesThroughFirstPreview": 1681692,
+      "cards": 65,
+      "heapBefore": 7988644,
+      "heapAfter": 10739296,
+      "heapGrowth": 2750652,
+      "requestsThroughFirstPreview": 19,
+      "bytesThroughFirstPreview": 1679909,
       "exactComponentInitial": 0,
       "exactComponentTotal": 0,
       "categories": {
@@ -314,33 +348,33 @@ baseline и остаётся справочной.
         "appAsset": 7,
         "api": 1,
         "catalog": 1,
-        "preview": 4,
+        "preview": 3,
         "designSystem": 1,
-        "bundle": 4,
+        "bundle": 3,
         "shim": 2
       },
-      "totalRequests": 152,
-      "totalBytes": 1898096,
-      "failedRequests": 6
+      "totalRequests": 139,
+      "totalBytes": 1886344,
+      "failedRequests": 3
     },
     {
       "settled": true,
-      "libraryReady": 2807.800000190735,
-      "firstPreviewReady": 3068.0999999046326,
-      "peakSchedulerTasks": 4,
-      "peakActive": 6,
+      "libraryReady": 2808.4000000953674,
+      "firstPreviewReady": 3047.800000190735,
+      "peakSchedulerTasks": 3,
+      "peakActive": 3,
       "longTasks": 1,
-      "longTaskMs": 90,
+      "longTaskMs": 84,
       "iframes": 0,
-      "mounted": 6,
-      "active": 6,
+      "mounted": 3,
+      "active": 3,
       "failedPreviews": 0,
-      "cards": 77,
-      "heapBefore": 8388220,
-      "heapAfter": 11064300,
-      "heapGrowth": 2676080,
-      "requestsThroughFirstPreview": 21,
-      "bytesThroughFirstPreview": 1681692,
+      "cards": 65,
+      "heapBefore": 7987812,
+      "heapAfter": 10738512,
+      "heapGrowth": 2750700,
+      "requestsThroughFirstPreview": 19,
+      "bytesThroughFirstPreview": 1679909,
       "exactComponentInitial": 0,
       "exactComponentTotal": 0,
       "categories": {
@@ -348,47 +382,13 @@ baseline и остаётся справочной.
         "appAsset": 7,
         "api": 1,
         "catalog": 1,
-        "preview": 4,
+        "preview": 3,
         "designSystem": 1,
-        "bundle": 4,
+        "bundle": 3,
         "shim": 2
       },
-      "totalRequests": 156,
-      "totalBytes": 1902509,
-      "failedRequests": 5
-    },
-    {
-      "settled": true,
-      "libraryReady": 2815.2999997138977,
-      "firstPreviewReady": 3069.5,
-      "peakSchedulerTasks": 4,
-      "peakActive": 6,
-      "longTasks": 1,
-      "longTaskMs": 92,
-      "iframes": 0,
-      "mounted": 6,
-      "active": 6,
-      "failedPreviews": 0,
-      "cards": 77,
-      "heapBefore": 8425260,
-      "heapAfter": 11043076,
-      "heapGrowth": 2617816,
-      "requestsThroughFirstPreview": 21,
-      "bytesThroughFirstPreview": 1681692,
-      "exactComponentInitial": 0,
-      "exactComponentTotal": 0,
-      "categories": {
-        "document": 1,
-        "appAsset": 7,
-        "api": 1,
-        "catalog": 1,
-        "preview": 4,
-        "designSystem": 1,
-        "bundle": 4,
-        "shim": 2
-      },
-      "totalRequests": 155,
-      "totalBytes": 1898522,
+      "totalRequests": 139,
+      "totalBytes": 1886344,
       "failedRequests": 3
     }
   ]
