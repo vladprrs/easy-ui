@@ -6,6 +6,7 @@ import type { Database } from "bun:sqlite";
 import { openDatabase } from "./db";
 import { BOOTSTRAP_ADMIN_ID } from "./users";
 import { fingerprintId, fingerprintJson, type Fingerprint } from "./visual/fingerprint";
+import { catalogRevision, catalogRevisionRows, type CatalogRevisionSource } from "./catalogRevision";
 import { componentLibraryStatus } from "../src/library/libraryModel";
 import type { ComponentVersionSummary, VisualReference } from "../src/api/client";
 
@@ -15,6 +16,14 @@ import type { ComponentVersionSummary, VisualReference } from "../src/api/client
 // Компоненты сидятся напрямую в БД: настоящая публикация — подпроцесс extract + typecheck +
 // compile на каждый компонент, а проверяемое здесь поведение зависит только от строк
 // `components`/`component_revisions`/`component_publishes`.
+//
+// СМЕНА КОНТРАКТА относительно проекта 1 (план 2026-07-31 §2 D2 / §3.4, задача T1): раньше
+// `catalogRevision` хэшировал запись read-model целиком, поэтому менялся от `headUsageCount`,
+// `status.verified`, `figma`, `preview` и `bundleUrl`. Теперь он считается по стабильной
+// discovery-проекции `{kind, designSystem, id, version, metaHash}`. Ослабление ревизии —
+// осознанное: проект 2 использует её как защиту override от гонки каталога, и волатильность от
+// чужого прототипа или фонового visual-run делала бы её бесполезной. Тесты ниже пинят обе
+// стороны контракта: что ревизия меняется, и что она НЕ меняется.
 
 const dirs: string[] = [];
 afterEach(async () => { for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true }); });
@@ -55,6 +64,36 @@ function seedComponent(db: Database, id: string, name: string, versions: SeedVer
     db.query("INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,message,published_at) VALUES (?,?,?,?,?,?,?,?,?,NULL,?)")
       .run(id, rev, rev, version.status, "export default () => null;", JSON.stringify(version.meta ?? seedMeta()), `sh-${id}-${rev}`, `bh-${id}-${rev}`, 4, at(rev));
   });
+}
+
+/** Новая активная публикация поверх существующего компонента (rev = version = head + 1). */
+function seedNewVersion(db: Database, id: string, designSystem: string, meta?: Record<string, unknown>): void {
+  const head = (db.query("SELECT head_rev rev FROM components WHERE id=?").get(id) as { rev: number }).rev;
+  const rev = head + 1;
+  db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,figma_json,message,created_at) VALUES (?,?,?,?,NULL,NULL,?)")
+    .run(id, rev, SEED_SOURCE, designSystem, at(rev));
+  db.query("INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,message,published_at) VALUES (?,?,?,?,?,?,?,?,?,NULL,?)")
+    .run(id, rev, rev, "active", "export default () => null;", JSON.stringify(meta ?? seedMeta()), `sh-${id}-${rev}`, `bh-${id}-${rev}`, 4, at(rev));
+  db.query("UPDATE components SET head_rev=? WHERE id=?").run(rev, id);
+}
+
+/** Сохранение драфта: новая ревизия без публикации, head двигается (в т.ч. figma головы). */
+function seedDraft(db: Database, id: string, designSystem: string, figmaJson: string | null): void {
+  const head = (db.query("SELECT head_rev rev FROM components WHERE id=?").get(id) as { rev: number }).rev;
+  const rev = head + 1;
+  db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,figma_json,message,created_at) VALUES (?,?,?,?,?,NULL,?)")
+    .run(id, rev, `${SEED_SOURCE}\n// draft`, designSystem, figmaJson, at(rev));
+  db.query("UPDATE components SET head_rev=? WHERE id=?").run(rev, id);
+}
+
+/** Прототип, использующий версию компонента, — единственный источник `headUsageCount`. */
+function seedPrototype(db: Database, id: string, componentId: string, componentVersion: number, updatedAt: string): void {
+  db.query("INSERT INTO prototypes (id,name,description,device,screen_count,head_rev,created_at,updated_at,design_system,instance_id,owner_id,status,kind,tags,derived_from) VALUES (?,?,NULL,?,?,?,?,?,?,?,?,?,?,NULL,NULL)")
+    .run(id, `Proto ${id}`, "mobile", 1, 1, at(0), updatedAt, "lib-a", crypto.randomUUID(), BOOTSTRAP_ADMIN_ID, "private", "product-flow");
+  db.query("INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,message,author,created_at,design_system_meta_version,figma_json) VALUES (?,?,?,?,NULL,NULL,?,NULL,NULL)")
+    .run(id, 1, JSON.stringify({ screens: [] }), "hash", at(0));
+  db.query("INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version) VALUES (?,?,?,?)")
+    .run(id, 1, componentId, componentVersion);
 }
 
 function seedAsset(db: Database, id: string): string {
@@ -239,6 +278,112 @@ describe("GET /api/catalog/library", () => {
     db.close();
   });
 
+  // --- catalogRevision: стабильная discovery-проекция (план §3.4, T1) ---
+
+  const revisionOf = async (handler: (r: Request) => Promise<Response>): Promise<string> =>
+    (await body<LibraryResponse>(await get(handler, "/catalog/library"))).catalogRevision;
+
+  test("ревизия меняется при публикации новой версии и при смене discovery-меты", async () => {
+    const { db, handler } = await setup();
+    seedSystem(db, "lib-a");
+    seedComponent(db, "rev-one", "RevOne", [{ status: "active", designSystem: "lib-a" }]);
+    const initial = await revisionOf(handler);
+
+    seedNewVersion(db, "rev-one", "lib-a");
+    const published = await revisionOf(handler);
+    expect(published).not.toBe(initial);
+
+    // Каждое поле discovery-проекции двигает ревизию по отдельности.
+    const seen = new Set([initial, published]);
+    const metaChanges: Record<string, unknown>[] = [
+      { description: "Другое описание" },
+      { atomicLevel: "molecule" },
+      { scope: "section" },
+      { canonicalFor: ["checkout-summary"] },
+      { replacement: "rev-two" },
+      // Сигнатура пропов: имя, обязательность и форма — каждая часть значима.
+      { propsJsonSchema: { type: "object", properties: { renamed: { type: "number" } } } },
+      { propsJsonSchema: { type: "object", properties: { value: { type: "number" } }, required: ["value"] } },
+      { propsJsonSchema: { type: "object", properties: { value: { type: "string" } } } },
+      { propsJsonSchema: { type: "object", properties: { value: { type: "string", enum: ["a", "b"] } } } },
+      // Сигнатура io.
+      { events: ["press"] },
+      { slots: ["body", "footer"] },
+    ];
+    for (const change of metaChanges) {
+      db.query("UPDATE component_publishes SET definition_meta=? WHERE component_id=? AND version=2")
+        .run(JSON.stringify(seedMeta(change)), "rev-one");
+      const revision = await revisionOf(handler);
+      expect({ change, fresh: seen.has(revision) }).toEqual({ change, fresh: false });
+      seen.add(revision);
+    }
+    db.close();
+  });
+
+  test("ревизия не зависит от порядка событий и слотов, но зависит от их состава", async () => {
+    const { db, handler } = await setup();
+    seedSystem(db, "lib-a");
+    seedComponent(db, "rev-io", "RevIo", [{ status: "active", designSystem: "lib-a", meta: seedMeta({ events: ["press", "cancel"], slots: ["body", "footer"] }) }]);
+    const initial = await revisionOf(handler);
+    db.query("UPDATE component_publishes SET definition_meta=? WHERE component_id=? AND version=1")
+      .run(JSON.stringify(seedMeta({ events: ["cancel", "press"], slots: ["footer", "body"] })), "rev-io");
+    expect(await revisionOf(handler)).toBe(initial);
+    db.query("UPDATE component_publishes SET definition_meta=? WHERE component_id=? AND version=1")
+      .run(JSON.stringify(seedMeta({ events: ["cancel"], slots: ["footer", "body"] })), "rev-io");
+    expect(await revisionOf(handler)).not.toBe(initial);
+    db.close();
+  });
+
+  test("ревизия не меняется от правки прототипа: headUsageCount вне проекции", async () => {
+    const { db, handler } = await setup();
+    seedSystem(db, "lib-a");
+    seedComponent(db, "rev-usage", "RevUsage", [{ status: "active", designSystem: "lib-a" }]);
+    const initial = await revisionOf(handler);
+
+    seedPrototype(db, "proto-one", "rev-usage", 1, at(30));
+    const after = await body<LibraryResponse>(await get(handler, "/catalog/library"));
+    // Учёт использования действительно поехал — иначе тест был бы холостым.
+    expect(entryOf(after, "lib-a", "rev-usage").headUsageCount).toBe(1);
+    expect(after.catalogRevision).toBe(initial);
+
+    seedPrototype(db, "proto-two", "rev-usage", 1, at(40));
+    const twice = await body<LibraryResponse>(await get(handler, "/catalog/library"));
+    expect(entryOf(twice, "lib-a", "rev-usage").headUsageCount).toBe(2);
+    expect(twice.catalogRevision).toBe(initial);
+    db.close();
+  });
+
+  test("ревизия не меняется от завершения visual-run: status.verified вне проекции", async () => {
+    const { db, handler } = await setup();
+    seedSystem(db, "lib-a");
+    seedComponent(db, "rev-visual", "RevVisual", [{ status: "active", designSystem: "lib-a" }]);
+    const before = await body<LibraryResponse>(await get(handler, "/catalog/library"));
+    expect(entryOf(before, "lib-a", "rev-visual").status.verified).toBe(false);
+
+    const asset = seedAsset(db, "asset_rev");
+    seedRun(db, "run-rev", seedReference(db, componentFingerprint("rev-visual", 1), asset), asset, "pass", at(10));
+    const after = await body<LibraryResponse>(await get(handler, "/catalog/library"));
+    expect(entryOf(after, "lib-a", "rev-visual").status.verified).toBe(true);
+    expect(after.catalogRevision).toBe(before.catalogRevision);
+    db.close();
+  });
+
+  test("ревизия не меняется при сохранении драфта, даже когда драфт двигает figma головы", async () => {
+    const { db, handler } = await setup();
+    seedSystem(db, "lib-a");
+    seedComponent(db, "rev-draft", "RevDraft", [{ status: "active", designSystem: "lib-a" }]);
+    const before = await body<LibraryResponse>(await get(handler, "/catalog/library"));
+    expect(entryOf(before, "lib-a", "rev-draft").figma).toBeNull();
+
+    seedDraft(db, "rev-draft", "lib-a", JSON.stringify({ fileKey: "DRAFTKEY", nodeIds: ["1:2"] }));
+    const after = await body<LibraryResponse>(await get(handler, "/catalog/library"));
+    // Драфт виден в записи (figma головы), но не в ревизии: активная версия та же.
+    expect(entryOf(after, "lib-a", "rev-draft").figma).toEqual({ fileKey: "DRAFTKEY", nodeCount: 1 });
+    expect(entryOf(after, "lib-a", "rev-draft").version).toBe(1);
+    expect(after.catalogRevision).toBe(before.catalogRevision);
+    db.close();
+  });
+
   test("отдаёт figma-сводку, canonicalFor и bundle-координаты, но не source и не propsJsonSchema", async () => {
     const { db, handler } = await setup();
     seedSystem(db, "lib-a");
@@ -276,6 +421,47 @@ describe("GET /api/catalog/library", () => {
     expect((await get(handler, "/catalog/library?designSystem=Bad_Slug")).status).toBe(422);
     expect((await handler(new Request("http://test/api/catalog/library", { method: "POST", headers: { origin: "http://test" } }))).status).toBe(405);
     db.close();
+  });
+});
+
+describe("catalogRevision (чистая проекция)", () => {
+  const source = (extra: Partial<CatalogRevisionSource> = {}): CatalogRevisionSource => ({
+    kind: "component", designSystem: "lib-a", id: "rev-pure", version: 1,
+    description: "Seeded component", canonicalFor: [],
+    meta: { propsJsonSchema: { type: "object", properties: { value: { type: "number" } } }, events: [], slots: ["body"] },
+    ...extra,
+  });
+
+  // Регресс-гард против первопричины B1 (план §2): раньше в хэш попадали ФАКТИЧЕСКИЕ ключи
+  // записи, поэтому любое новое поле `LibraryCatalogEntry` молча становилось частью ревизии.
+  // Побайтовое равенство ревизий библиотеки и кандидатов этот баг не ловит — оно остаётся
+  // зелёным и при его возврате.
+  test("добавление поля в LibraryCatalogEntry не меняет catalogRevision", () => {
+    const base = source();
+    const withExtras = {
+      ...base,
+      headUsageCount: 7, bundleUrl: "/api/components/rev-pure/versions/1/bundle.js", bundleHash: "bh-x",
+      name: "RevPure", hostAbiVersion: 4, layoutNeutral: true, deprecated: true,
+      status: { published: true, verified: true, visualPending: false, blocked: false, rejected: false },
+      figma: { fileKey: "F", nodeCount: 2 }, preview: { selector: "legacy" },
+      // Поле, которого сегодня в записи ещё нет, — ровно тот сценарий, что протёк в B1.
+      fieldAddedTomorrow: "whatever",
+    } as CatalogRevisionSource;
+    expect(catalogRevision([withExtras])).toBe(catalogRevision([base]));
+    expect(catalogRevisionRows([withExtras])).toEqual(catalogRevisionRows([base]));
+    expect(Object.keys(catalogRevisionRows([withExtras])[0]!).sort()).toEqual(["designSystem", "id", "kind", "metaHash", "version"]);
+  });
+
+  test("ревизия не зависит от порядка строк на входе", () => {
+    const rows = [source(), source({ id: "rev-b" }), source({ id: "rev-a", designSystem: "lib-b" })];
+    expect(catalogRevision([...rows].reverse())).toBe(catalogRevision(rows));
+  });
+
+  test("проекция не ходит в БД и не мутирует вход", () => {
+    const rows = [source({ canonicalFor: ["role-a"], meta: { events: ["b", "a"], slots: ["y", "x"] } })];
+    const snapshot = structuredClone(rows);
+    catalogRevision(rows);
+    expect(rows).toEqual(snapshot);
   });
 });
 

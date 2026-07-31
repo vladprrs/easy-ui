@@ -1,5 +1,6 @@
 import type { AtomicLevel, CatalogComponent, ComponentVersionSummary, DesignSystemSummary, LibraryCatalogStatus, VisualReference } from "../api/client";
 import { libraryStatusLabels } from "../app/strings/library";
+import { tokenize } from "./text";
 
 export type LibrarySelection = { kind: "custom"; componentId: string; designSystem: string };
 
@@ -46,8 +47,9 @@ export function selectionKey(selection: LibrarySelection): string {
 // запроса что-то нашёл.
 const ROLE_EXACT = 100, ROLE_PREFIX = 60, NAME_EXACT = 50, NAME_PARTIAL = 40, CLASSIFIER = 20, DESCRIPTION = 10;
 
-export const tokenize = (value: string): string[] =>
-  value.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((token) => token.length > 0);
+// Токенизатор общий с серверным матчером дубликатов (`src/library/text.ts`): «найти компонент
+// по работе» и «этот компонент уже есть» обязаны нормализовать текст одинаково.
+export { tokenize };
 
 export interface ComponentSearchFields {
   name: string;
