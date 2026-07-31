@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
-import { Modal } from "../../app/Modal";
 import { panel, pillGhost, pillPrimary } from "../../app/chrome";
 import { EmptyState, ErrorState, Skeleton } from "../../app/states";
+import { agentAuthoring } from "../../app/strings/agentAuthoring";
 import { library } from "../../app/strings/library";
 
 /**
@@ -17,12 +17,12 @@ export function LibraryFailed({ label, onRetry }: { label: string; onRetry: () =
   return <ErrorState title={label} retryLabel={library.retry} onRetry={onRetry} />;
 }
 
-/** Компонентов нет вообще: единственный выход — публикация через API. */
-export function LibraryEmpty({ onPublish }: { onPublish: () => void }): ReactElement {
+/** Компонентов нет вообще: агент добавит и опубликует их в ходе сборки прототипа. */
+export function LibraryEmpty({ onBuild }: { onBuild: () => void }): ReactElement {
   return <EmptyState
     title={library.emptyTitle}
     description={library.emptyDescription}
-    primary={<button type="button" className={pillPrimary} onClick={onPublish}>{library.publishCta}</button>}
+    primary={<button type="button" className={pillPrimary} onClick={onBuild}>{agentAuthoring.cta}</button>}
   />;
 }
 
@@ -32,25 +32,4 @@ export function LibraryNoMatches({ searching, onReset }: { searching: boolean; o
     <p className="text-eui-slate-500">{searching ? library.searchEmpty : library.emptyFiltered}</p>
     <button type="button" className={pillGhost} onClick={onReset}>{library.resetFilters}</button>
   </section>;
-}
-
-/**
- * Диалог публикации (макет 08). Авторинга компонентов в UI нет — вместо кнопки
- * в никуда экран честно показывает два запроса API и ссылку на описание.
- */
-export function PublishDialog({ onClose }: { onClose: () => void }): ReactElement {
-  return <Modal
-    title={library.publishDialogTitle}
-    onClose={onClose}
-    footer={<>
-      <button type="button" className={pillGhost} onClick={onClose}>{library.close}</button>
-      <a className={pillPrimary} href="/api/openapi.json">{library.emptyApiLink}</a>
-    </>}
-  >
-    <p className="mt-3 text-sm text-eui-slate-500">{library.publishDialogBody}</p>
-    <ol className="mt-5 space-y-3 text-sm">
-      <li><span className="font-medium">1.</span> {library.emptyCreateStep} <code className="rounded-item bg-pay-lavender-tint px-1.5 py-0.5">POST /api/components</code></li>
-      <li><span className="font-medium">2.</span> {library.emptyPublishStep} <code className="rounded-item bg-pay-lavender-tint px-1.5 py-0.5">POST /api/components/&#123;id&#125;/publish</code></li>
-    </ol>
-  </Modal>;
 }

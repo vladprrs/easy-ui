@@ -81,7 +81,10 @@ describe("LibraryPage витрина компонентов", () => {
     // Ни одно превью не готово, но метаданные уже на экране и ищутся.
     expect(document.querySelectorAll("[data-component-preview-state='ready']").length).toBe(0);
     expect(document.querySelectorAll("iframe").length).toBe(0);
-    fireEvent.change(screen.getByPlaceholderText(/navbar/), { target: { value: "ctyp-rating" } });
+    expect(screen.getByRole("heading", { level: 1, name: "Компоненты вашей дизайн-системы" })).toBeTruthy();
+    expect(screen.getByText("Агент использует их в прототипах и добавляет новые, когда нужно.")).toBeTruthy();
+    expect(screen.getByPlaceholderText("Например, кнопка оплаты или экран успеха")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Поиск по задаче"), { target: { value: "ctyp-rating" } });
     const found = screen.getByLabelText("Нашлось 1 компонент");
     expect(within(found).getByRole("link", { name: "Rating" }).getAttribute("href")).toBe("/library/c/rating?v=3");
   });
@@ -130,14 +133,14 @@ describe("LibraryPage витрина компонентов", () => {
   it("в компактном индексе превью раскрывается только по действию пользователя", async () => {
     renderLibrary();
     const atoms = await screen.findByLabelText("Атомы и лэйаут");
-    expect(within(atoms).queryByText(/не заданы example-props/)).toBeNull();
+    expect(within(atoms).queryByText("Превью недоступно: не заданы примерные параметры.")).toBeNull();
 
     const button = within(atoms).getByRole("button", { name: "Показать превью" });
     expect(button.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(button);
     expect(button.getAttribute("aria-expanded")).toBe("true");
-    // У Chip нет example-props — превью честно объясняет своё отсутствие.
-    expect(within(atoms).getByText(/не заданы example-props/)).toBeTruthy();
+    // У Chip нет примерных параметров — превью честно объясняет своё отсутствие.
+    expect(within(atoms).getByText("Превью недоступно: не заданы примерные параметры.")).toBeTruthy();
   });
 
   it("фильтрует по дизайн-системе и по статусу", async () => {
@@ -167,28 +170,29 @@ describe("LibraryPage витрина компонентов", () => {
   it("сбрасывает фильтры из пустого состояния поиска", async () => {
     renderLibrary();
     await screen.findByLabelText("Молекулы");
-    fireEvent.change(screen.getByPlaceholderText(/navbar/), { target: { value: "нетакого" } });
-    expect(screen.getByText(/Ничего не нашлось/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Поиск по задаче"), { target: { value: "нетакого" } });
+    expect(screen.getByText("Ничего не нашли. Попробуйте описать задачу иначе.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Сбросить фильтры" }));
     expect(screen.getByLabelText("Молекулы")).toBeTruthy();
   });
 
-  it("объясняет публикацию через API вместо кнопки в никуда", async () => {
+  it("не предлагает ручную публикацию компонента в непустой библиотеке", async () => {
     renderLibrary();
     await screen.findByLabelText("Молекулы");
-
-    fireEvent.click(screen.getByRole("button", { name: "Опубликовать компонент" }));
-    const dialog = screen.getByRole("dialog", { name: "Как опубликовать компонент" });
-    expect(within(dialog).getByText("POST /api/components")).toBeTruthy();
-    expect(within(dialog).getByRole("link", { name: "Открыть описание API" }).getAttribute("href")).toBe("/api/openapi.json");
-    fireEvent.keyDown(dialog, { key: "Escape" });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Опубликовать компонент" })).toBeNull();
+    expect(screen.queryByText("POST /api/components")).toBeNull();
   });
 
   it("показывает пустое состояние библиотеки, когда компонентов нет", async () => {
     vi.mocked(getLibraryCatalog).mockResolvedValue(catalog({ components: [], systems: [] }));
     renderLibrary();
-    expect(await screen.findByRole("heading", { name: "В библиотеке пока нет компонентов" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Компонентов пока нет" })).toBeTruthy();
+    expect(screen.getAllByText("Агент добавит нужные компоненты при сборке прототипа.").length).toBeGreaterThan(0);
+    expect(screen.getByText("Агент добавит и опубликует нужные компоненты при сборке прототипа.")).toBeTruthy();
     expect(screen.queryByLabelText("Дизайн-системы")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Опубликовать компонент" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Собрать с агентом" }));
+    const dialog = screen.getByRole("dialog", { name: "Соберите прототип с агентом" });
+    expect(within(dialog).getByText("Откройте Codex или Claude со скиллом Easy UI и опишите идею. Агент соберёт прототип и добавит его в галерею.")).toBeTruthy();
   });
 });

@@ -2,7 +2,8 @@ import { useCallback, useState } from "react";
 import { Link } from "react-router";
 import { getComposition, getCompositionUsages, listCompositions, type CompositionSummary, type CompositionUsageReport } from "../api/client";
 import { useApi } from "../api/hooks";
-import { chip, kicker, panel, panelPadded, pillPrimary, transition } from "../app/chrome";
+import { chip, kicker, panel, panelPadded, transition } from "../app/chrome";
+import { gallery } from "../app/strings/gallery";
 import { compositions as strings } from "../app/strings/library";
 import { componentStatusBadge } from "./statusBadge";
 
@@ -42,14 +43,8 @@ export function CompositionsSection() {
 function EmptyCompositions() {
   return <div className={`${panelPadded} flex flex-1 items-center justify-center`}>
     <div className="max-w-xl">
-      <p className={kicker}>{strings.emptyGuideTitle}</p>
-      <h3 className="pay-display mt-2 text-[30px] leading-[0.9]">{strings.emptyTitle}</h3>
+      <h3 className="pay-display text-[30px] leading-[0.9]">{strings.emptyTitle}</h3>
       <p className="mt-3 text-sm leading-6 text-eui-slate-500">{strings.emptyDescription}</p>
-      <ol className="mt-5 space-y-3 text-sm">
-        <li><span className="font-medium">1.</span> {strings.emptyCreateStep} <code className="rounded-item bg-pay-lavender-tint px-1.5 py-0.5">POST /api/compositions</code></li>
-        <li><span className="font-medium">2.</span> {strings.emptyPublishStep} <code className="rounded-item bg-pay-lavender-tint px-1.5 py-0.5">POST /api/compositions/&#123;id&#125;/publish</code></li>
-      </ol>
-      <a className={`${pillPrimary} mt-6`} href="/api/openapi.json">{strings.emptyApiLink}</a>
     </div>
   </div>;
 }
@@ -140,7 +135,7 @@ function CompositionUsages({ compositionId }: { compositionId: string }) {
     {report?.currentHeadUsages.length ? <ul className="mt-2 space-y-1 text-sm" aria-label={strings.usageAria}>
       {report.currentHeadUsages.map((usage) => <li key={usage.prototypeId} className="flex flex-wrap items-center gap-2">
         <span className="font-medium">{usage.name}</span>
-        <span className={kicker}>{strings.usageEntryMeta(usage.kind, usage.rev, usage.version)}</span>
+        <span className={kicker}>{strings.usageEntryMeta(gallery.kindNames[usage.kind] ?? usage.kind, usage.rev, usage.version)}</span>
         <Link className="underline" to={`/p/${encodeURIComponent(usage.prototypeId)}/edit`}>{strings.openInEditor}</Link>
         <Link className="underline" to={`/p/${encodeURIComponent(usage.prototypeId)}`}>{strings.openInPlayer}</Link>
       </li>)}

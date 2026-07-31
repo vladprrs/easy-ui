@@ -96,7 +96,13 @@ export async function ensureCustomDsFixture(request: APIRequestContext, api = DE
 
   const source = await readFile("server/fixtures/rating-stars.tsx", "utf8");
   const component = await request.post(`${api}/components`, {
-    data: { id: CUSTOM_DS_COMPONENT_ID, name: CUSTOM_DS_COMPONENT_NAME, source, designSystem: CUSTOM_DS_ID },
+    data: {
+      id: CUSTOM_DS_COMPONENT_ID,
+      name: CUSTOM_DS_COMPONENT_NAME,
+      source,
+      designSystem: CUSTOM_DS_ID,
+      intent: "Интерактивная оценка товара звёздами в пользовательском сценарии",
+    },
   });
   await expectStatus("create component", component.status(), [201, 409]);
   const componentPublish = await request.post(`${api}/components/${CUSTOM_DS_COMPONENT_ID}/publish`, {
@@ -119,6 +125,36 @@ type ComponentSeed = {
   designSystem?: string;
 };
 
+type ReuseRequired = {
+  error?: {
+    code?: string;
+    overrideTemplate?: { catalogRevision: string; candidateKeys: string[] };
+  };
+};
+
+/** E2E keeps a few deliberately similar compatibility fixtures as separate components. */
+async function createFixtureComponent(
+  request: APIRequestContext,
+  api: string,
+  data: Record<string, unknown>,
+) {
+  let response = await request.post(`${api}/components`, { data });
+  if (response.status() !== 409) return response;
+  const rejection = await response.json() as ReuseRequired;
+  const override = rejection.error?.code === "component_reuse_required" ? rejection.error.overrideTemplate : undefined;
+  if (!override) return response;
+  response = await request.post(`${api}/components`, {
+    data: {
+      ...data,
+      reuseOverride: {
+        ...override,
+        reason: "Отдельная E2E-фикстура нужна для проверки совместимости разных контрактов",
+      },
+    },
+  });
+  return response;
+}
+
 async function componentExists(request: APIRequestContext, api: string, id: string): Promise<boolean> {
   const response = await request.get(`${api}/components/${id}`);
   if (response.status() === 404) return false;
@@ -129,8 +165,12 @@ async function componentExists(request: APIRequestContext, api: string, id: stri
 async function publishFixture(request: APIRequestContext, api: string, seed: ComponentSeed): Promise<void> {
   if (await componentExists(request, api, seed.id)) return;
   const source = await readFile(`server/fixtures/${seed.fixture}`, "utf8");
-  const created = await request.post(`${api}/components`, {
-    data: { id: seed.id, name: seed.name, source, designSystem: seed.designSystem ?? STARTER_DS_ID },
+  const created = await createFixtureComponent(request, api, {
+    id: seed.id,
+    name: seed.name,
+    source,
+    designSystem: seed.designSystem ?? STARTER_DS_ID,
+    intent: `Тестовый компонент ${seed.name} для проверки продуктового интерфейса`,
   });
   await expectStatus(`create component ${seed.id}`, created.status(), [201]);
   const published = await request.post(`${api}/components/${seed.id}/publish`, { data: { baseRev: 1 } });
@@ -143,8 +183,12 @@ export async function ensureComponentPageFixtures(request: APIRequestContext, ap
 
   if (!(await componentExists(request, api, COMPONENT_PAGE_IDS.propsBadge))) {
     const firstSource = await readFile("server/fixtures/props-badge.tsx", "utf8");
-    await expectStatus("create props badge", (await request.post(`${api}/components`, {
-      data: { id: COMPONENT_PAGE_IDS.propsBadge, name: "E2ePropsBadge", source: firstSource, designSystem: STARTER_DS_ID },
+    await expectStatus("create props badge", (await createFixtureComponent(request, api, {
+      id: COMPONENT_PAGE_IDS.propsBadge,
+      name: "E2ePropsBadge",
+      source: firstSource,
+      designSystem: STARTER_DS_ID,
+      intent: "Статусная метка с настраиваемыми свойствами для карточки",
     })).status(), [201]);
     await expectStatus("publish props badge v1", (await request.post(`${api}/components/${COMPONENT_PAGE_IDS.propsBadge}/publish`, {
       data: { baseRev: 1 },

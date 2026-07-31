@@ -108,6 +108,7 @@ describe("player navigation", () => {
       await waitFor(() => expect(screen.getByTestId("reason").textContent).toBe("bootstrap"));
       expect(router.state.location.pathname).toBe("/p/a/s/two");
       const banner = screen.getByTestId("flow-reset-banner");
+      expect(banner.textContent).toContain("Состояние прототипа сброшено — ссылка вела не на стартовый экран.");
       await act(async () => banner.querySelector("button")!.click()); // «Начать сначала»
       expect(router.state.location.pathname).toBe("/p/a/s/one");
       expect(screen.queryByTestId("flow-reset-banner")).toBeNull();

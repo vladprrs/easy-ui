@@ -15,6 +15,12 @@ type StarterDescription = {
   components: Array<{ id: string; name: string; source: string }>;
 };
 
+const starterIntents: Record<string, string> = {
+  "e2e-button": "Основное действие пользователя на экране прототипа",
+  "e2e-text": "Текстовый контент и пояснения на экране прототипа",
+  "e2e-stack": "Вертикальная компоновка содержимого экрана прототипа",
+};
+
 async function expectStatus(step: string, response: { status(): number; text(): Promise<string> }, allowed: number[]) {
   if (allowed.includes(response.status())) return;
   throw new Error(`starter fixture: ${step} failed with HTTP ${response.status()}: ${await response.text()}`);
@@ -37,7 +43,13 @@ export async function ensureStarterDesignSystem(request: APIRequestContext, api 
     }
     const source = await readFile(`${root}/${component.source}`, "utf8");
     const created = await request.post(`${api}/components`, {
-      data: { id: component.id, name: component.name, source, designSystem: description.id },
+      data: {
+        id: component.id,
+        name: component.name,
+        source,
+        designSystem: description.id,
+        intent: starterIntents[component.id] ?? `Компонент ${component.name} стартовой дизайн-системы`,
+      },
     });
     await expectStatus(`create component ${component.id}`, created, [201]);
     const published = await request.post(`${api}/components/${component.id}/publish`, { data: { baseRev: 1 } });

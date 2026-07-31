@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation } from "react-router";
 import { getLibraryCatalog, type LibraryCatalogEntry, type ThemeContent } from "../api/client";
 import { useApi } from "../api/hooks";
+import { AgentAuthoringDialog } from "../app/AgentAuthoringDialog";
 import { kicker } from "../app/chrome";
 import { library } from "../app/strings/library";
 import { useDocumentTitle } from "../app/useDocumentTitle";
@@ -11,7 +12,7 @@ import { CompositionsSection } from "./CompositionsSection";
 import { CompactIndex } from "./components/CompactIndex";
 import { ComponentCard } from "./components/ComponentCard";
 import { LibraryHero } from "./components/LibraryHero";
-import { LibraryEmpty, LibraryFailed, LibraryNoMatches, LibrarySkeletons, PublishDialog } from "./components/LibraryStates";
+import { LibraryEmpty, LibraryFailed, LibraryNoMatches, LibrarySkeletons } from "./components/LibraryStates";
 import { LibraryToolbar, type LibraryTab } from "./components/LibraryToolbar";
 import { applicableLibraryStatusKeys, matchesLibraryFilter, searchComponents, tokenize, type LibraryStatusKey } from "./libraryModel";
 import { libraryEntryKey, partitionTiers, previewPriorityFor, type PreviewIntent } from "./libraryTiers";
@@ -37,7 +38,7 @@ export function LibraryPage() {
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [status, setStatus] = useState<LibraryStatusKey | null>(null);
   const [query, setQuery] = useState("");
-  const [publishOpen, setPublishOpen] = useState(false);
+  const [agentDialogOpen, setAgentDialogOpen] = useState(false);
 
   const loading = catalog.status === "loading";
   const failed = catalog.status === "error";
@@ -102,12 +103,12 @@ export function LibraryPage() {
   // Канва и gutter приходят из Layout: страница — только колонка панелей с gap 20.
   return <main className="mx-auto flex h-full w-full max-w-[1400px] flex-col gap-5 font-pay-text" data-library-ready={!loading && !failed ? "true" : "false"}>
     {dominantTheme}
-    <LibraryHero counts={loading || failed ? null : { components: entries.length, systems: systems.length }} onPublish={() => setPublishOpen(true)} />
+    <LibraryHero componentCount={loading || failed ? null : entries.length} />
     {toolbar}
     {tab === "compositions" ? <CompositionsSection /> : <>
       {loading ? <LibrarySkeletons /> : null}
       {failed ? <LibraryFailed label={library.unavailable} onRetry={catalog.reload} /> : null}
-      {!loading && !failed && !entries.length ? <LibraryEmpty onPublish={() => setPublishOpen(true)} /> : null}
+      {!loading && !failed && !entries.length ? <LibraryEmpty onBuild={() => setAgentDialogOpen(true)} /> : null}
       {!loading && !failed && entries.length > 0 && !visible.length ? <LibraryNoMatches searching={searching} onReset={reset} /> : null}
       {!loading && !failed && visible.length ? (searching
         ? <Section title={library.foundTitle(visible.length)}>{cardsFor(visible, "explicit")}</Section>
@@ -119,7 +120,7 @@ export function LibraryPage() {
           {tiers.retired.length ? <CompactSection title={library.tierRetired} meta={library.levelCount(tiers.retired.length)}>{compact(tiers.retired, library.tierRetired)}</CompactSection> : null}
         </>) : null}
     </>}
-    {publishOpen ? <PublishDialog onClose={() => setPublishOpen(false)} /> : null}
+    {agentDialogOpen ? <AgentAuthoringDialog onClose={() => setAgentDialogOpen(false)} /> : null}
   </main>;
 }
 

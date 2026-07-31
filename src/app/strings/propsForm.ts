@@ -13,7 +13,7 @@ export const propsForm = {
   setNull: "Установить null",
   requiredEmptyWarning: "Обязательное поле пустое",
   defaultHint: (value: unknown) => `По умолчанию: ${String(value)}`,
-  validationException: "Схема требует асинхронной валидации, живые контролы недоступны",
+  validationException: "Схема требует асинхронной валидации, настройки недоступны",
 };
 
 export type PropsFormStrings = typeof propsForm;

@@ -77,7 +77,7 @@ describe("shared PropsForm core", () => {
     const schema = z.object({ label: z.string() }).refine(async () => true);
     const { view } = form(schema, { label: "x" });
     expect(() => render(view)).not.toThrow();
-    expect(screen.getByRole("alert").textContent).toContain("асинхронной валидации");
+    expect(screen.getByRole("alert").textContent).toBe("Схема требует асинхронной валидации, настройки недоступны");
   });
 
   it("falls back to whole JSON when field introspection throws", () => {
@@ -86,6 +86,6 @@ describe("shared PropsForm core", () => {
     const { view } = form(schema, {}, vi.fn(), validate);
     expect(() => render(view)).not.toThrow();
     expect(screen.getByLabelText("Props (JSON)")).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain("асинхронной валидации");
+    expect(screen.getByRole("alert").textContent).toBe("Схема требует асинхронной валидации, настройки недоступны");
   });
 });

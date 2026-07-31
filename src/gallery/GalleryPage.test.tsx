@@ -1,13 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, createPrototype, getCatalogManifest, getPrototypeDraft, listDesignSystems, listPrototypes, listPrototypeVersions, setPrototypeLifecycle, setPrototypeStatus, type PrototypeKind, type PrototypeSummary } from "../api/client";
+import { ApiError, getCatalogManifest, getPrototypeDraft, listDesignSystems, listPrototypes, listPrototypeVersions, setPrototypeLifecycle, setPrototypeStatus, type PrototypeKind, type PrototypeSummary } from "../api/client";
 import { filterAndSortPrototypes, GalleryPage } from "./GalleryPage";
 import type { GalleryTab } from "./galleryModel";
 
 vi.mock("../api/client", async (importOriginal) => {
   const original = await importOriginal<typeof import("../api/client")>();
-  return { ...original, createPrototype: vi.fn(), getCatalogManifest: vi.fn(), getPrototypeDraft: vi.fn(), listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn(), setPrototypeLifecycle: vi.fn(), setPrototypeStatus: vi.fn() };
+  return { ...original, getCatalogManifest: vi.fn(), getPrototypeDraft: vi.fn(), listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn(), setPrototypeLifecycle: vi.fn(), setPrototypeStatus: vi.fn() };
 });
 vi.mock("../auth", () => ({ useAuth: () => ({ user: { userId: "user-me", name: "Я", isAdmin: false }, loading: false }) }));
 vi.mock("./GalleryShareDialog", () => ({
@@ -64,7 +64,6 @@ describe("GalleryPage", () => {
     vi.mocked(listPrototypes).mockReset();
     vi.mocked(listDesignSystems).mockReset();
     vi.mocked(listPrototypeVersions).mockReset();
-    vi.mocked(createPrototype).mockReset();
     vi.mocked(getCatalogManifest).mockReset();
     vi.mocked(getPrototypeDraft).mockReset();
     vi.mocked(setPrototypeStatus).mockReset();
@@ -89,7 +88,6 @@ describe("GalleryPage", () => {
       { id: "starter", name: "Starter", designSystem: "shadcn", version: 1, bundleUrl: "/starter.js", bundleHash: "hash", hostAbiVersion: 3, description: "", events: [], slots: [] },
       { id: "starter-wire", name: "StarterWire", designSystem: "wireframe", version: 1, bundleUrl: "/starter-wire.js", bundleHash: "hash", hostAbiVersion: 3, description: "", events: [], slots: [] },
     ] });
-    vi.mocked(createPrototype).mockResolvedValue({ id: "created-prototype", rev: 1, warnings: [] });
     vi.mocked(setPrototypeStatus).mockImplementation(async (_id, status) => ({ status }));
     vi.mocked(listPrototypeVersions).mockResolvedValue([{ version: 2, rev: 3, publishedAt: "2026-07-10T00:00:00.000Z" }]);
     vi.mocked(listDesignSystems).mockResolvedValue({ designSystems: [
@@ -105,6 +103,8 @@ describe("GalleryPage", () => {
     expect(screen.getByText("Загружаем прототипы…")).toBeTruthy();
     expect(document.title).toBe("Прототипы — easy-ui");
     await act(async () => request.resolve([summary]));
+    expect(screen.getByRole("heading", { level: 1, name: "1 прототип, который ощущается как продукт" })).toBeTruthy();
+    expect(screen.getByText("Агент быстро собирает его из компонентов вашей дизайн-системы.")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Hello World" })).toBeTruthy();
     const card = screen.getByRole("heading", { name: "Hello World" }).closest("li")!;
     // Мета-строка карточки: экраны, сценарии, дата — и ничего больше (макет 01).
@@ -236,7 +236,7 @@ describe("GalleryPage", () => {
     renderGallery();
     expect(await screen.findByText("API недоступен")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
-    expect(await screen.findByRole("heading", { name: "Создайте первый прототип" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Попросите агента собрать первый прототип" })).toBeTruthy();
     expect(listPrototypes).toHaveBeenCalledTimes(2);
   });
 
@@ -310,8 +310,8 @@ describe("GalleryPage", () => {
     // Теги и происхождение с карточки убраны: они не помогают выбрать прототип в гриде.
     expect(within(lab).queryByText("Производный от: flow")).toBeNull();
     expect(within(lab).queryByText("draft")).toBeNull();
-    // Продуктовый флоу не показывает чип вида по умолчанию.
-    expect(within(screen.getByRole("heading", { name: "Флоу" }).closest("li")!).queryByText("Продуктовый флоу")).toBeNull();
+    // Продуктовый прототип не показывает чип вида по умолчанию.
+    expect(within(screen.getByRole("heading", { name: "Флоу" }).closest("li")!).queryByText("Продуктовый прототип")).toBeNull();
 
     const kindFilter = screen.getByLabelText("Вид");
     fireEvent.change(kindFilter, { target: { value: "experiment" } });
@@ -373,27 +373,20 @@ describe("GalleryPage", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("текущая ревизия не отображается");
   });
 
-  it("creates a host-only template from the empty-state CTA and opens its editor", async () => {
+  it("opens the shared external-agent instruction from the empty-state CTA", async () => {
     vi.mocked(listPrototypes).mockResolvedValue([]);
-    const router = renderGallery();
-    await screen.findByRole("heading", { name: "Создайте первый прототип" });
-    fireEvent.click(screen.getAllByRole("button", { name: "Новый прототип" }).at(-1)!);
-    const dialog = screen.getByRole("dialog", { name: "Новый прототип" });
-    fireEvent.change(within(dialog).getByLabelText("Название прототипа"), { target: { value: "Новый сценарий" } });
-    fireEvent.change(within(dialog).getByLabelText("Дизайн-система"), { target: { value: "wireframe" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Создать прототип" }));
-
-    await screen.findByText("Редактор нового прототипа");
-    expect(router.state.location.pathname).toBe("/p/created-prototype/edit");
-    expect(createPrototype).toHaveBeenCalledWith(expect.objectContaining({
-      name: "Новый сценарий",
-      designSystem: "wireframe",
-      startScreen: "start",
-      screens: expect.arrayContaining([expect.objectContaining({ id: "start" })]),
-    }), "Стартовый шаблон v2");
+    renderGallery();
+    await screen.findByRole("heading", { name: "Попросите агента собрать первый прототип" });
+    expect(screen.queryByRole("button", { name: "Новый прототип" })).toBeNull();
+    fireEvent.click(screen.getAllByRole("button", { name: "Собрать с агентом" }).at(-1)!);
+    const dialog = screen.getByRole("dialog", { name: "Соберите прототип с агентом" });
+    expect(within(dialog).getByText(/Откройте Codex или Claude со скиллом Easy UI/)).toBeTruthy();
+    expect(within(dialog).queryByRole("textbox")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Понятно" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("offers design-system creation when no active components are usable", async () => {
+  it("explains that the agent will add components when none are usable", async () => {
     vi.mocked(listPrototypes).mockResolvedValue([]);
     vi.mocked(getCatalogManifest).mockResolvedValue({ components: [] });
     vi.mocked(listDesignSystems).mockResolvedValue({ designSystems: [
@@ -401,12 +394,10 @@ describe("GalleryPage", () => {
       { id: "custom-empty", name: "Custom Empty", description: "", builtinCatalogHash: "custom", components: [{ name: "NeedsProps", atomicLevel: "atom", layoutNeutral: false, description: "", events: [], slots: [] }] },
     ] });
     renderGallery();
-    // Пустая галерея без пригодных систем — одно ветвящееся состояние, а не два подряд:
-    // заголовок называет препятствие, главное действие ведёт создавать дизайн-систему.
-    await screen.findByRole("heading", { name: "Нужна дизайн-система с компонентами" });
-    expect(screen.queryByRole("heading", { name: "Создайте первый прототип" })).toBeNull();
-    expect(screen.getByRole("link", { name: "Создать дизайн-систему" }).getAttribute("href")).toBe("/library");
-    expect(screen.queryByRole("button", { name: "Новый прототип" })).toBeNull();
-    expect(createPrototype).not.toHaveBeenCalled();
+    await screen.findByRole("heading", { name: "В дизайн-системе пока нет компонентов" });
+    expect(screen.getByText("Агент добавит нужные компоненты перед сборкой прототипа.")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Создать дизайн-систему" })).toBeNull();
+    fireEvent.click(screen.getAllByRole("button", { name: "Собрать с агентом" }).at(-1)!);
+    expect(screen.getByRole("dialog", { name: "Соберите прототип с агентом" })).toBeTruthy();
   });
 });

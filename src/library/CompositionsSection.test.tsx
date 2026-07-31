@@ -62,6 +62,8 @@ describe("CompositionsSection", () => {
     renderSection();
     const usages = await screen.findByLabelText("Использование композиции в head");
     expect(within(usages).getByText("Checkout")).toBeTruthy();
+    expect(within(usages).getByText("Продуктовый прототип · rev 7 · v2")).toBeTruthy();
+    expect(within(usages).queryByText(/product-flow/)).toBeNull();
     expect(within(usages).getByRole("link", { name: "Редактор" }).getAttribute("href")).toBe("/p/checkout/edit");
     expect(within(usages).getByRole("link", { name: "Плеер" }).getAttribute("href")).toBe("/p/checkout");
     expect(screen.getByText("1 прототип")).toBeTruthy();
@@ -84,6 +86,8 @@ describe("CompositionsSection", () => {
     vi.mocked(listCompositions).mockResolvedValue([]);
     renderSection();
     expect(await screen.findByRole("heading", { name: "Композиций пока нет" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Открыть описание API" }).getAttribute("href")).toBe("/api/openapi.json");
+    expect(screen.getByText("Агент создаёт их из повторяющихся частей прототипов.")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Открыть описание API" })).toBeNull();
+    expect(screen.queryByText(/POST \/api\/compositions/)).toBeNull();
   });
 });

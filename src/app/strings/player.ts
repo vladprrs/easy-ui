@@ -46,7 +46,7 @@ export const player = {
   screenMissingTitle: "Экран не найден",
   screenMissingBody: (docName: string) => `В прототипе «${docName}» нет такого экрана.`,
   // Баннер сброса состояния флоу (W1-5): bootstrap-вход не на стартовом экране.
-  flowResetMessage: "Состояние флоу сброшено — ссылка вела в середину флоу.",
+  flowResetMessage: "Состояние прототипа сброшено — ссылка вела не на стартовый экран.",
   flowResetRestart: "Начать сначала",
   flowResetDismiss: "Скрыть уведомление о сбросе",
   hotkeysTitle: "Горячие клавиши",

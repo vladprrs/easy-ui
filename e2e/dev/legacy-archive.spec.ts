@@ -15,13 +15,10 @@ test("v15-unrenderable prototype stays in Archive and every player entry shows t
   await expect(page.getByText("Эта ревизия использует удалённые компоненты и больше не может быть отображена.")).toBeVisible();
 });
 
-test("retired systems are absent from create and reject new references and theme patches", async ({ page, request }) => {
+test("retired systems reject new references and theme patches", async ({ page, request }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Новый прототип" }).first().click();
-  const select = page.getByRole("dialog", { name: "Новый прототип" }).getByLabel("Дизайн-система");
-  await expect(select.locator('option[value="shadcn"]')).toHaveCount(0);
-  await expect(select.locator('option[value="wireframe"]')).toHaveCount(0);
-  await expect(select.locator('option[value="e2e-starter"]')).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Новый прототип" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Собрать с агентом" }).first()).toBeVisible();
 
   const retiredCreate = await request.post("/api/prototypes", { data: { doc: {
     version: 1, id: "retired-create-rejected", name: "Retired create", designSystem: "shadcn", device: "mobile", startScreen: "main", state: {},

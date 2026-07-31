@@ -1,12 +1,12 @@
 import type { ReactElement } from "react";
 import { headingHero, inset, panel, pillGhost, pillPrimary } from "../../app/chrome";
+import { agentAuthoring } from "../../app/strings/agentAuthoring";
 import { gallery } from "../../app/strings/gallery";
 
 export interface GalleryHeroProps {
   count: number | null;
   showActions: boolean;
-  canCreate: boolean;
-  onCreate: () => void;
+  onBuild: () => void;
   onImport: () => void;
   notice: string | null;
 }
@@ -17,7 +17,7 @@ export interface GalleryHeroProps {
  * акцент на экране бренд запрещает, поэтому подзаголовок и кнопки нейтральны.
  */
 export function GalleryHero(props: GalleryHeroProps): ReactElement {
-  const { count, showActions, canCreate, onCreate, onImport, notice } = props;
+  const { count, showActions, onBuild, onImport, notice } = props;
 
   return (
     <header className={`${panel} px-8 py-9 sm:px-12 sm:py-11`}>
@@ -25,9 +25,9 @@ export function GalleryHero(props: GalleryHeroProps): ReactElement {
         <div className="min-w-0">
           <h1 className={`${headingHero} max-sm:text-[46px]`}>
             <span className="pay-accent">{count === null ? gallery.heroFallback : gallery.heroAccent(count)}</span>{" "}
-            {gallery.heroRest}
+            {gallery.heroRest(count)}
           </h1>
-          <p className="mt-4 text-[19px] font-medium text-eui-slate-700">{gallery.subtitle}</p>
+          <p className="mt-4 text-[19px] font-medium text-eui-slate-700">{gallery.subtitle(count)}</p>
         </div>
         {/* Ровно два действия (макет 01): импорт и главный CTA. «Экспортировать всё» —
             редкое сервисное действие, оно живёт тихой строкой под гридом. */}
@@ -36,11 +36,9 @@ export function GalleryHero(props: GalleryHeroProps): ReactElement {
             <button type="button" className={pillGhost} onClick={onImport}>
               {gallery.importButton}
             </button>
-            {canCreate ? (
-              <button type="button" className={`${pillPrimary} max-sm:w-full`} onClick={onCreate}>
-                {gallery.newPrototype}
-              </button>
-            ) : null}
+            <button type="button" className={`${pillPrimary} max-sm:w-full`} onClick={onBuild}>
+              {agentAuthoring.cta}
+            </button>
           </div>
         ) : null}
       </div>
