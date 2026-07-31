@@ -30,7 +30,14 @@ node driver.mjs get prototypes
 
 ## Сценарий 1: прототип из custom/host компонентов
 
-1. Перед авторингом получить актуальный каталог выбранной системы: `node driver.mjs catalog yandex-pay [catalog.json]`. Использовать только возвращённые exact definitions активных custom-компонентов и host descriptors. Props валидируются строго: неизвестный ключ = ошибка.
+1. Перед авторингом открыть каталог выбранной системы **двумя шагами** (политика — `docs/agent-authoring-policy.md`):
+
+```bash
+node driver.mjs catalog list yandex-pay                      # инвентарь: id, name, version, atomicLevel, events, slots, description
+node driver.mjs catalog get yandex-pay YpScreen YpBox YpText # exact definitions только выбранных артефактов
+```
+
+   `catalog list` даёт имена, `catalog get` — exact definition (props/JSON Schema, examples, payloads) тех компонентов, которые реально нужны экрану. Props валидируются строго: неизвестный ключ = ошибка, поэтому писать документ без `catalog get` нельзя. Полный дамп (`node driver.mjs catalog yandex-pay [catalog.json] [--full]`) примерно на порядок дороже по контексту — запускать только когда нужен весь каталог целиком (инвентаризация, миграция, генерация SDK).
 2. Написать документ по грамматике ниже (рабочий образец — `examples/rating-demo.json`, но замените в нём кастомный тип `RatingStars` на встроенный, если компонент не публиковали).
 3. Отправить:
 
@@ -126,7 +133,7 @@ Condition: boolean, truthiness `{"$state":"/path"}`, либо `{"$state":"/path"
 - `paddingX` — внутренний отступ по logical inline axis, перекрывает `padding` на этой оси;
 - `paddingY` — внутренний отступ по logical block axis, перекрывает `padding` на этой оси.
 
-Шкала `spaceToken`: `none | xs | sm | md | lg | xl | 2xl | 3xl | 4xl`. Канонические fallback-значения: `0 | 4 | 8 | 12 | 16 | 24 | 32 | 48 | 64px`. Фактические значения дизайн-системы брать из `resolvedSpaceScale` каталога (`node driver.mjs catalog <system>`) или capabilities сервера: тема может переопределять шкалу. `none` всегда равен нулю; отсутствие пропа сохраняет собственный дефолт компонента. Токены `2xl+` оставлять для макроотступов — секций, границ экрана и крупных пустых состояний, а не для обычных интервалов внутри контролов.
+Шкала `spaceToken`: `none | xs | sm | md | lg | xl | 2xl | 3xl | 4xl`. Канонические fallback-значения: `0 | 4 | 8 | 12 | 16 | 24 | 32 | 48 | 64px`. Фактические значения дизайн-системы брать из `resolvedSpaceScale` каталога (`node driver.mjs catalog list <system> --json` → `designSystem.resolvedSpaceScale`) или capabilities сервера: тема может переопределять шкалу. `none` всегда равен нулю; отсутствие пропа сохраняет собственный дефолт компонента. Токены `2xl+` оставлять для макроотступов — секций, границ экрана и крупных пустых состояний, а не для обычных интервалов внутри контролов.
 
 Предпочитать `gap` на родительском `YpBox` штабелям `YpSpacer`; spacer оставлять для legacy-композиций, где родитель не поддерживает spacing contract. Например:
 
@@ -207,6 +214,8 @@ curl -u "$EASYUI_LEGACY_BASIC_AUTH" -b /tmp/easyui.cookies -X POST \
 
 ### Reuse gate: обязательная остановка перед новым компонентом
 
+Канон политики — **`docs/agent-authoring-policy.md`** (та же политика для агентов без скиллов — `AGENTS.md`); контракт эндпоинтов — `docs/server-api.md`. Ниже — рабочая выжимка.
+
 Перед созданием нового custom-компонента сформулируйте содержательный `intent` — продуктовую задачу, которую он решает. Для нового id `driver.mjs component` требует `--intent <text>`; после trim это 8..500 символов и хотя бы один токен вне стоп-набора `component`, `компонент`, `element`, `элемент`, `ui`. Обновление существующего компонента intent не требует.
 
 Начинайте с компактного каталога и раскрывайте только подходящие артефакты; `--json` удобен для машинного выбора:
@@ -233,6 +242,10 @@ node driver.mjs component rating-stars RatingStars examples/rating-stars.tsx \
 ```
 
 Для override драйвер использует server-authored `overrideTemplate` из свежего authoritative discovery verbatim: передаёт `catalogRevision` и полный `candidateKeys` без изменений и добавляет подтверждённую человеком причину. Raw HTTP API остаётся допустим для собственных клиентов, но это дополнительный путь; он обязан соблюдать тот же двухфазный STOP/override-контракт. Предпочтительный поддерживаемый путь для агента — `driver.mjs`.
+
+Если задача — собрать экран из уже существующих компонентов, это **композиция**, а не новый компонент: `node driver.mjs composition <id> <doc.json> --design-system yandex-pay`, затем `node driver.mjs composition publish <id>`.
+
+`definition.canonicalFor` объявлять только слагами из `docs/canonical-roles.md` и только если компонент — канонический выбор системы для этой продуктовой роли: роль уникальна внутри дизайн-системы, попытка забрать занятую даёт терминальный `409 canonical_role_conflict` и на create, и на publish.
 
 Контракт TSX-модуля — named export `definition` + default plain function component (`memo`/`forwardRef` нельзя). Образцы: `examples/rating-stars.tsx` (простейший, ABI v1) и `examples/plan-picker.tsx` (typed events + named slots, ABI v2):
 

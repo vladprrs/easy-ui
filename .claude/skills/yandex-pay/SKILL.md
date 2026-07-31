@@ -7,13 +7,22 @@ description: Author and edit components and prototypes in the yandex-pay design 
 
 Скилл — how-to для добавления и правки компонентов и прототипов **в дизайн-системе yandex-pay** (custom-only, 100 компонентов `yp-*`). Источник истины по канону/шкалам/ролям — **`docs/design/yandex-pay.md`** (читай его перед работой). Механика публикации (driver.mjs, setup, скриншоты, версии) — общий скилл **`.claude/skills/author/SKILL.md`**; сборка **прототипов** в YP (скелет экрана, FlowRoot-футер, грабли YpBox/state) — скилл **`.claude/skills/yp-prototype/SKILL.md`**; здесь они не дублируются.
 
-Перед авторингом получи актуальный каталог: `node driver.mjs catalog yandex-pay` — только возвращённые exact definitions и `resolvedSpaceScale`.
+Перед авторингом открой каталог **двумя шагами** (полный дамп не запускать — он примерно на порядок дороже по контексту; политика — `docs/agent-authoring-policy.md`):
+
+```bash
+node driver.mjs catalog list yandex-pay --json   # инвентарь + designSystem.resolvedSpaceScale
+node driver.mjs catalog get yandex-pay yp-box yp-text   # exact definitions только нужных компонентов
+```
+
+Использовать только возвращённые exact definitions и `resolvedSpaceScale`.
+
+**Новый компонент — последнее средство.** Сначала `node driver.mjs catalog search yandex-pay --intent "<продуктовая задача>" --json`; кандидат покрывает задачу — переиспользуй, почти покрывает — расширь его non-breaking ревизией. Создание нового id требует `--intent`, а `409 component_reuse_required|canonical_role_conflict|catalog_changed` — терминальный STOP без ретраев (обход `--force-new --reason` — только админ после решения человека). Роли `canonicalFor` — из `docs/canonical-roles.md`.
 
 ## 1. Главное правило: Renderer НЕ применяет zod-дефолты
 
 Props приходят в рендер **как есть из дока**; `.default(X)` в схеме — только подсказка редактору. Это причина №1 находок аудита (77 находок, 51 компонент): краш / NaN-геометрия / неверная ветка при валидном по схеме доке.
 
-**Каждый `.default(X)` схемы обязан дублироваться `?? X` в render-коде.** Дефолт в `??` **всегда равен дефолту схемы этого файла** (не «разумному значению»). Схему при этом НЕ менять (non-breaking). Эталон — компонент `yp-box` из каталога (исходник: `GET /api/components/yp-box`, определение — в `node driver.mjs catalog yandex-pay`).
+**Каждый `.default(X)` схемы обязан дублироваться `?? X` в render-коде.** Дефолт в `??` **всегда равен дефолту схемы этого файла** (не «разумному значению»). Схему при этом НЕ менять (non-breaking). Эталон — компонент `yp-box` из каталога (исходник: `GET /api/components/yp-box`, определение — `node driver.mjs catalog get yandex-pay yp-box`).
 
 ```
 const size  = props.size ?? "16";               // скаляр
@@ -87,7 +96,7 @@ boxShadow:  color("shadow-medium", "0 8px 24px rgba(0,0,0,.12)")
 
 ## 7. Публикация
 
-Через driver.mjs общего скилла: `node driver.mjs component <id> <Name> <file.tsx> --design-system yandex-pay`, затем прототип `node driver.mjs prototype <doc.json>`. Полная механика (setup, версии/publish, `snap`/`baseline`/`check`, troubleshooting) — **`.claude/skills/author/SKILL.md`**. Не изобретать заново.
+Через driver.mjs общего скилла: `node driver.mjs component <id> <Name> <file.tsx> --design-system yandex-pay` (для **нового** id обязателен ещё `--intent "<продуктовая задача>"`), затем прототип `node driver.mjs prototype <doc.json>`. Полная механика (setup, версии/publish, `snap`/`baseline`/`check`, troubleshooting) — **`.claude/skills/author/SKILL.md`**. Не изобретать заново.
 
 **Грабли (волна 3):**
 - **База правки — актуальный active-source с прода** (`GET /api/components/<id>/versions/<v>` для текущей версии), **не** локальный снапшот `work/*`. Публикация со stale-снапшота теряет уже выкаченные изменения (в W-C `yp-payment-method-card` v15 откатил ABI 4→2 с отставшего снапшота — пришлось republish v16). `?version=` в url source **игнорируется** сервером — версию брать через путь `/versions/:v`.

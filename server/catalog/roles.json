@@ -1,0 +1,107 @@
+{
+  "$comment": "Глоссарий канонических продуктовых ролей (`definition.canonicalFor`). Человекочитаемая версия и процедура пополнения — docs/canonical-roles.md. Слаг обязан соответствовать ^[a-z0-9]+(?:-[a-z0-9]+)*$ (server/components/extract-subprocess.ts); на компонент допускается не более 12 ролей. Файл сегодня не читается серверным кодом: уникальность роли внутри дизайн-системы проверяет server/catalog/gate.ts по фактическим definition_meta, а валидации «слаг известен глоссарию» ещё нет (TODO в docs/canonical-roles.md §4).",
+  "version": 1,
+  "updatedAt": "2026-07-31",
+  "roles": [
+    {
+      "slug": "screen-shell",
+      "ru": "Каркас экрана: навигация, заголовок/подзаголовок, зона контента, собственный футер.",
+      "en": "Screen shell: navigation, title/subtitle, content area and its own footer.",
+      "candidate": { "yandex-pay": "yp-screen" }
+    },
+    {
+      "slug": "layout-primitive",
+      "ru": "Базовый layout-примитив: строка/колонка с gap и паддингами по шкале spacing.",
+      "en": "Base layout primitive: row/column with spacing-scale gap and padding.",
+      "candidate": { "yandex-pay": "yp-box" }
+    },
+    {
+      "slug": "section-panel",
+      "ru": "Голая структурная секция без декора: header/content/footer, sticky-футер.",
+      "en": "Bare structural section without decoration: header/content/footer, sticky footer.",
+      "candidate": { "yandex-pay": "yp-panel" }
+    },
+    {
+      "slug": "typography",
+      "ru": "Текстовый примитив системы: размеры, начертания, цвета текста.",
+      "en": "Text primitive of the system: sizes, weights, text colors.",
+      "candidate": { "yandex-pay": "yp-text" }
+    },
+    {
+      "slug": "separator",
+      "ru": "Разделитель между блоками контента.",
+      "en": "Separator between content blocks.",
+      "candidate": { "yandex-pay": "yp-separator" }
+    },
+    {
+      "slug": "money-amount",
+      "ru": "Отображение денежной суммы: локализованный формат и символ валюты.",
+      "en": "Money amount display: localized format and currency symbol.",
+      "candidate": { "yandex-pay": "yp-amount" }
+    },
+    {
+      "slug": "promo-banner",
+      "ru": "Промо-баннер с изображением и CTA.",
+      "en": "Promotional banner with image and CTA.",
+      "candidate": { "yandex-pay": "yp-promo-banner" },
+      "evidence": "docs/audit/2026-07-20-yp-catalog-findings.md: yp-banner-mid поглощён yp-promo-banner и снят с публикации."
+    },
+    {
+      "slug": "badge",
+      "ru": "Компактный маркер статуса/скидки поверх карточки или рядом с текстом.",
+      "en": "Compact status/discount marker next to or on top of a card.",
+      "candidate": { "yandex-pay": "yp-badge" },
+      "evidence": "Известная пара аудита yp-loyalty-badge ↔ yp-badge (docs/audit/2026-07-31-matcher-calibration.md, замер 7)."
+    },
+    {
+      "slug": "tooltip",
+      "ru": "Всплывающая подсказка, привязанная к элементу.",
+      "en": "Tooltip anchored to an element.",
+      "candidate": { "yandex-pay": "yp-tooltip" },
+      "evidence": "Известная пара аудита yp-promo-tooltip ↔ yp-tooltip."
+    },
+    {
+      "slug": "collapsible",
+      "ru": "Раскрывающийся блок с анимацией высоты.",
+      "en": "Collapsible block with height animation.",
+      "candidate": { "yandex-pay": "yp-collapsible" },
+      "evidence": "Известная пара аудита yp-collapsible ↔ yp-animated-collapse."
+    },
+    {
+      "slug": "payment-method-card",
+      "ru": "Плитка выбора способа оплаты (карта, СБП, банк) с состоянием выбора.",
+      "en": "Payment method tile (card, SBP, bank) with selection state.",
+      "candidate": { "yandex-pay": "yp-payment-method-card" }
+    },
+    {
+      "slug": "payment-cta-footer",
+      "ru": "Закреплённый футер оплаты: сумма, основной CTA, юридическая сноска.",
+      "en": "Sticky payment footer: amount, primary CTA, legal note.",
+      "candidate": { "yandex-pay": "yp-sticky-payment-footer" }
+    },
+    {
+      "slug": "payment-success-card",
+      "ru": "Карточка успешной оплаты: подтверждение, маска карты.",
+      "en": "Successful payment card: confirmation and masked card number.",
+      "candidate": { "yandex-pay": "yp-success-payment-card" }
+    }
+  ],
+  "needsTriage": [
+    {
+      "pair": ["yp-split-discount-info", "yp-discount-info-with-cashback"],
+      "question": "Одна ли это роль «информация о скидке/кэшбэке» или две разные продуктовые задачи?"
+    },
+    {
+      "pair": ["yp-radio-button", "yp-pseudo-radio"],
+      "question": "Скилл yandex-pay §2 объявляет их разными сущностями (слот-фасад группы vs автономный radio) — общая роль не назначается без решения владельца DS."
+    },
+    {
+      "pair": ["yp-app-home-savers", "yp-app-home-loans"],
+      "question": "Аудит 2026-07-20 признал это осознанным форком, а матчер блокирует пару (score 0.7845) — роль назначать только вместе с решением по форку."
+    },
+    {
+      "pair": ["yp-base-card-mini", "yp-best-profit-base-card-mini"],
+      "question": "Мини-карточка продукта — одна роль с параметром или два разных блока?"
+    }
+  ]
+}

@@ -26,7 +26,8 @@ node driver.mjs get prototypes        # smoke-проверка доступа
 ## Рабочий цикл
 
 ```bash
-node driver.mjs catalog yandex-pay /tmp/catalog.json   # 1. актуальные exact definitions
+node driver.mjs catalog list yandex-pay                        # 1a. инвентарь: имена, версии, events/slots, description
+node driver.mjs catalog get yandex-pay YpScreen YpBox YpText   # 1b. exact definitions только тех компонентов, что нужны экрану
 # 2. написать doc.json (см. examples/yp-checkout-demo.json)
 node driver.mjs prototype my-flow.json                 # 3. create-or-update по doc.id
 node driver.mjs status my-flow --all-screens            # 4. renderable + пины/бандлы по всем экранам
@@ -36,7 +37,9 @@ node driver.mjs snap my-flow ./shots                   # 6. серверные P
 
 Exit codes `snap`: `0` — PNG на всех экранах и product-ошибок нет, `2` — PNG есть, но прототип логировал ошибки, `1` — PNG не создан (инфраструктура; драйвер уже сделал 2 попытки на экран). Любой verb принимает `--json`.
 
-Записи каталога: `{id, name, version, atomicLevel, description, events[], slots[], example, propsJsonSchema}`. Props валидируются строго по `propsJsonSchema` — неизвестный ключ = 422. `designSystem: "yandex-pay"` в корне документа обязателен.
+**Полный дамп каталога не запускать.** `catalog list` — строки `{kind, id, name, version, atomicLevel, deprecated, events[], slots[], description}` без схем; `catalog get <ds> <artifact…>` добирает exact definition (`propsJsonSchema`, `examples`, payloads событий) названных артефактов — вместе это примерно на порядок дешевле по контексту, чем `catalog yandex-pay --full`, и даёт тот же материал для авторинга. Props валидируются строго по `propsJsonSchema` — неизвестный ключ = 422, поэтому `catalog get` по каждому используемому типу обязателен. `designSystem: "yandex-pay"` в корне документа обязателен.
+
+Нужного компонента в каталоге нет — сначала `node driver.mjs catalog search yandex-pay --intent "<продуктовая задача>" --json`, и только потом создание нового (политика — `docs/agent-authoring-policy.md`, механика — скилл `author`). Прототип из существующих компонентов новых публикаций не требует.
 
 ### Клик-проверка интерактива (headless, проверено)
 

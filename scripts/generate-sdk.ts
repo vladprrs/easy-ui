@@ -40,13 +40,29 @@ export interface ManifestComponent {
   canonicalFor?: string[];
 }
 
-export interface CatalogManifestSnapshot { components: ManifestComponent[] }
+/**
+ * Discovery summary of the reuse gate, read from `GET /api/capabilities` (`reuseGate`).
+ * The SDK carries it because the phase decides whether `intent` is mandatory on component
+ * creation — see docs/agent-authoring-policy.md §4 and docs/server-api.md.
+ */
+export interface ReuseGateSummary { mode: string; intentRequired: boolean; policyVersion: number }
+
+export interface CatalogManifestSnapshot { components: ManifestComponent[]; reuseGate?: ReuseGateSummary }
+
 
 const COMPONENT_NAME_PATTERN = /^[A-Z][A-Za-z0-9]*$/;
 const JSON_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isReuseGateSummary = (value: unknown): value is ReuseGateSummary =>
+  isObject(value) && typeof value.mode === "string" && typeof value.intentRequired === "boolean" && typeof value.policyVersion === "number";
+
+/** Header line describing the gate phase; omitted when the manifest source carries no capabilities. */
+export const reuseGateNote = (gate: ReuseGateSummary | undefined): string[] => (gate
+  ? [`// Reuse gate: ${gate.mode} · intent ${gate.intentRequired ? "required" : "optional"} for new components · policy v${gate.policyVersion} (GET /api/capabilities)`]
+  : []);
 
 const quote = (value: string) => JSON.stringify(value);
 const propertyKey = (name: string) => (JSON_IDENTIFIER.test(name) ? name : quote(name));
@@ -239,6 +255,7 @@ export function renderCatalogDts(manifest: CatalogManifestSnapshot, designSystem
   return [
     ...HEADER_NOTE,
     `// Design system: ${designSystem} · components: ${components.length}`,
+    ...reuseGateNote(manifest.reuseGate),
     "",
     PRELUDE,
     "",
@@ -253,6 +270,19 @@ export function readSnapshot(path: string): CatalogManifestSnapshot {
   const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
   if (!isObject(parsed) || !Array.isArray(parsed.components)) throw new Error(`${path} is not a catalog manifest ({components: [...]})`);
   return parsed as unknown as CatalogManifestSnapshot;
+}
+
+/**
+ * Reads the reuse-gate phase from discovery. Never fatal: an instance that does not publish
+ * `reuseGate` (or an unreachable one) simply produces types without the discovery summary line.
+ */
+export async function fetchReuseGate(apiBase: string): Promise<ReuseGateSummary | undefined> {
+  const client = createEasyUiClient({ apiBase, credentials: easyUiCredentials() });
+  const response = await client.request("/capabilities");
+  if (!response.ok) return undefined;
+  const capabilities = await response.json() as unknown;
+  const gate = isObject(capabilities) ? capabilities.reuseGate : undefined;
+  return isReuseGateSummary(gate) ? gate : undefined;
 }
 
 export async function fetchManifest(apiBase: string, designSystem: string): Promise<CatalogManifestSnapshot> {
@@ -271,6 +301,7 @@ export const renderSnapshotJson = (manifest: CatalogManifestSnapshot, designSyst
       .filter((component) => component.designSystem === designSystem)
       .slice()
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+    ...(manifest.reuseGate === undefined ? {} : { reuseGate: manifest.reuseGate }),
   }, null, 2) + "\n";
 
 // --- CLI ------------------------------------------------------------------------------------
@@ -287,6 +318,10 @@ export async function main(argv: string[]): Promise<void> {
   const apiBase = argument(argv, "--api", process.env.EASYUI_API ?? "http://127.0.0.1:8787/api")!;
 
   const manifest = from ? readSnapshot(resolve(from)) : await fetchManifest(apiBase, designSystem);
+  if (!from && manifest.reuseGate === undefined) manifest.reuseGate = await fetchReuseGate(apiBase);
+  console.log(manifest.reuseGate
+    ? `Reuse gate: ${manifest.reuseGate.mode} · intent ${manifest.reuseGate.intentRequired ? "required" : "optional"} for new components · policy v${manifest.reuseGate.policyVersion}`
+    : "Reuse gate: unknown (source carries no capabilities; regenerate with --api to record it)");
   const snapshotOut = argument(argv, "--snapshot-out");
   if (snapshotOut) {
     const path = resolve(snapshotOut);

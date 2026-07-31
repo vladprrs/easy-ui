@@ -31,6 +31,33 @@ npm run generate:sdk -- --design-system yandex-pay --snapshot-out sdk/fixtures/c
 Вывод детерминирован: компоненты и свойства сортируются по имени, поэтому повторный запуск на
 неизменённом манифесте — no-op.
 
+### Discovery summary: фаза reuse-гейта
+
+В живом режиме генератор дополнительно читает `GET /api/capabilities` → `reuseGate` и печатает
+строку вида:
+
+```
+Reuse gate: enforce · intent required for new components · policy v1
+```
+
+Та же строка попадает **в шапку** `sdk/catalog.<ds>.d.ts` и в снапшот (`--snapshot-out`), если он
+сохраняется из живого API:
+
+```ts
+// Reuse gate: enforce · intent required for new components · policy v1 (GET /api/capabilities)
+```
+
+Смысл для авторинга: `intentRequired` истинно ровно в фазе `enforce`, и тогда `POST /api/components`
+без `intent` отвечает `400 invalid_request`. Клиент, который умеет обе фазы, шлёт `intent` всегда —
+политика и разбор `409` описаны в `docs/agent-authoring-policy.md`, контракт полей — в
+`docs/server-api.md`. `policyVersion` — версия политики матчинга, та же, что в ответах
+`/api/catalog/candidates` и в записях аудита.
+
+Офлайн-режим (`--from snapshot.json`) capabilities не выдумывает: снапшот без поля `reuseGate`
+даёт типы без этой строки, а генератор печатает `Reuse gate: unknown (…)`. Поэтому drift-проверка
+остаётся детерминированной и не требует сервера. Недоступное или не отдающее `reuseGate` API
+тоже не роняет генерацию — строка просто не появляется.
+
 Что попадает в `catalog.<ds>.d.ts` на каждый компонент:
 
 | Тип | Источник в манифесте |

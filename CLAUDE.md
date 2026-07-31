@@ -14,6 +14,10 @@
 - Окружение: code-server **игнорирует флаги портов** — реальный порт брать из лога сервера; reverse-proxy хосты `*.coder` разрешены в `vite.config.ts` (`server`/`preview.allowedHosts`).
 - Рецепт runtime-верификации: `.claude/skills/verify/SKILL.md`.
 
+## Авторинг: переиспользуй, прежде чем создавать
+
+Канон для всех агентов — **`docs/agent-authoring-policy.md`** (тот же текст в операционном виде для Codex — `AGENTS.md`). Коротко: каталог открывать циклом `catalog list <ds>` → `catalog search <ds> --intent …` → `catalog get <ds> <artifact…>` (полный дамп — примерно на порядок дороже по контексту); новому компоненту предшествует поиск кандидата и содержательный `intent`; `409 component_reuse_required|canonical_role_conflict|catalog_changed` — терминальный STOP без ретраев, обход `--force-new --reason` — только админ после решения человека. Роли `canonicalFor` — из `docs/canonical-roles.md`; фаза гейта — `GET /api/capabilities` → `reuseGate`.
+
 ## Workflow: Fable 5 (orchestrator) + subagents/workflows (Opus)
 
 Every non-trivial task goes through three stages: planning → adversarial plan review → delegated execution. Do not start implementation until the plan has passed review.
