@@ -1,6 +1,7 @@
 # План: разбор прод-инцидента reuse-gate (enforce без shadow-фазы)
 
-Дата: 2026-07-31 · Статус: **I1–I4 complete; I5 decision recorded / enforce not eligible**
+Дата: 2026-07-31 · Статус: **I1–I2 complete/deployed; I3–I4 implemented locally,
+production verification pending; I5 decision recorded / enforce not eligible**
 Родительский план: `docs/plans/2026-07-31-component-reuse-enforcement.md` (проект 2, волны 0–2 выполнены)
 Спека: `docs/superpowers/specs/2026-07-30-component-reuse-enforcement-design.md`
 
@@ -139,23 +140,23 @@ POST /api/components → 400
 
 ## 7. Задачи
 
-**I1 — Вернуть прод в shadow — COMPLETE** (владеет: оркестратор; вне кода)
+**I1 — Вернуть прод в shadow — COMPLETE / DEPLOYED** (владеет: оркестратор; вне кода)
 Задать `REUSE_GATE=shadow` в Dokploy env сервиса easy-ui, редеплой
 (`node .claude/skills/deploy/driver.mjs deploy "reuse gate → shadow"`).
 Критерий: зонд `POST /api/components` без `intent` возвращает не 400 `intent is required`;
 `driver.mjs` создаёт компонент; в аудите появляется строка `intent_missing`.
 
-**I2 — Явная переменная в compose — COMPLETE** (владеет: `docker-compose.yml`, `docs/server-api.md#deployment`)
+**I2 — Явная переменная в compose — COMPLETE / DEPLOYED** (владеет: `docker-compose.yml`, `docs/server-api.md#deployment`)
 Объявить `REUSE_GATE` в compose со значением `shadow` — фаза гейта не должна зависеть от того,
 помнит ли кто-то про необъявленную переменную окружения. Критерий: переменная видна в файле,
 описана в §deployment, смена фазы — правка одной строки + редеплой.
 
-**I3 — Волна 3 родительского плана — COMPLETE** (T6a → T6b ∥ T7)
+**I3 — Волна 3 родительского плана — IMPLEMENTED LOCALLY / PRODUCTION VERIFICATION PENDING** (T6a → T6b ∥ T7)
 Механическая простановка `intent` в фикстурах, триаж коллизий гейта, CLI (`--intent`,
 `--force-new`, `catalog list|search|get`). Критерий: `npm run verify` и `npm run e2e` зелёные.
 Включает правку `.claude/skills/author/driver.mjs:807`.
 
-**I4 — Контрактный слой — COMPLETE** (владеет: `server/openapi.json`, `docs/server-api.md`, `author/SKILL.md`)
+**I4 — Контрактный слой — IMPLEMENTED LOCALLY / PRODUCTION VERIFICATION PENDING** (владеет: `server/openapi.json`, `docs/server-api.md`, `author/SKILL.md`)
 `npm run generate:openapi`; описать `intent`, `reuseOverride` и 409-конверт с `reuseCode` в
 `docs/server-api.md`; добавить в скилл авторинга обязательность `intent` и стоп-набор.
 Критерий: `npm run verify:openapi` зелёный; `GET /api/openapi.json` на проде описывает
