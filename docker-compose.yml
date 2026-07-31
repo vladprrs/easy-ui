@@ -12,6 +12,7 @@ services:
       ADMIN_NAME: ${ADMIN_NAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required}
+      REUSE_GATE: ${REUSE_GATE:-shadow}
     expose:
       - "8787"
     volumes:
