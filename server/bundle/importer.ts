@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { unzipSync, type UnzipFileInfo } from "fflate";
+import { z } from "zod";
 import {
   bundleManifestSchema,
   type BundleComponent,
@@ -21,10 +22,15 @@ import { ComponentRepo } from "../repos/components";
 import { CompositionRepo, compositionSourceHash } from "../repos/compositions";
 import { PrototypeRepo } from "../repos/prototypes";
 import { sha256 } from "../components/pipeline";
+import type { ExtractResult } from "../components/extract-subprocess";
 import { getDesignSystemVersion, getIncludingRetired, latestDesignSystemMetaVersion } from "../designSystems";
 import { validateThemeAssets, type ThemeContent } from "../designSystemsMeta";
-import { publishComponent } from "../routes/components";
+import { checkSource, publishComponent } from "../routes/components";
 import { createPrototypeFromDoc, updatePrototypeFromDoc } from "../routes/prototypes";
+import {
+  cacheSourceShingles, matchAndDecide, recordBlockedAttempt, ReuseGateRejection, stageAndExtract,
+  DEFAULT_REUSE_GATE_MODE, type ReuseGateMode, type ReuseOverride,
+} from "../catalog/gate";
 
 // ZIP bundle importer (plan T3). Reconstructs assets, design systems, components and prototypes
 // from an exported bundle. There is no global rollback (component publishing shells out): every
@@ -215,7 +221,56 @@ function insertThemeVersion(db: Database, systemId: string, version: number, the
 
 interface ComponentRow { id: string; name: string; head_rev: number; deleted_at: string | null; owner_id: string | null }
 
-async function importComponent(db: Database, dataDir: string, component: BundleComponent, source: string, importerId: string, mode: ImportMode, report: Report): Promise<void> {
+/**
+ * Извлечение меты для гейта — **до** `repo.create`, над одноразовым staging-модулем. Тот же
+ * `checkSource`, что и на публикации, и с тем же `smoke:true`: результат отдаётся дальше в
+ * `publishComponent` как `preExtracted`, поэтому обязан быть побайтово тем же, что публикация
+ * посчитала бы сама (план §3.7, A7) — иначе импорт сотни компонентов платит второй спавн по 10 с.
+ */
+const extractForImport = (dataDir: string, id: string, source: string): Promise<ExtractResult> =>
+  stageAndExtract(dataDir, id, source, (path) => checkSource(source, path, true));
+
+/**
+ * `dry-run` обязан **предсказывать** решение гейта, но не оставлять следов: иначе любой
+ * аутентифицированный пользователь бесконечно засоряет append-only `catalog_reuse_decisions`,
+ * и `repeatedAttempts` в теле 409 начинает врать (план §3.7, A15). Прогон идёт по тому же
+ * коду, что и apply, и целиком откатывается — второй реализации матчинга не появляется.
+ */
+const DRY_RUN_ROLLBACK = Symbol("bundle import dry-run rollback");
+function withRollback<T>(db: Database, run: () => T): T {
+  let result: T | undefined;
+  try { db.transaction(() => { result = run(); throw DRY_RUN_ROLLBACK; })(); }
+  catch (error) { if (error !== DRY_RUN_ROLLBACK) throw error; }
+  return result as T;
+}
+
+/** Контекст гейта переиспользования на импорте (план §3.7). */
+export interface ImportReuseContext {
+  mode: ReuseGateMode;
+  actor: { userId: string; isAdmin: boolean };
+  /** Синтезированный intent per-item: бандл его не несёт (`src/bundle/schema.ts`). */
+  intent: string;
+  /** Подтверждённые ключи именно этой позиции; только от админа (см. `routes/bundles.ts`). */
+  override?: ReuseOverride;
+}
+
+/** Позиция отчёта для заблокированной попытки: машинные поля — вход второй фазы override. */
+function rejectionReport(db: Database, rejection: ReuseGateRejection, audit: boolean): Pick<ImportReportItem, "detail" | "catalogRevision" | "candidateKeys" | "decisionId" | "reuseCode"> {
+  const recorded = audit ? recordBlockedAttempt(db, rejection.attempt) : null;
+  return {
+    detail: "reuse_blocked",
+    reuseCode: rejection.code,
+    catalogRevision: rejection.payload.catalogRevision,
+    candidateKeys: rejection.payload.overrideTemplate.candidateKeys,
+    decisionId: recorded?.decisionId ?? null,
+  };
+}
+
+/** Предупреждения гейта/публикации доезжают до вызывающего единственным свободным полем отчёта. */
+const warningDetail = (warnings: readonly string[]): { detail?: string } =>
+  warnings.length === 0 ? {} : { detail: warnings.join(" | ").slice(0, 1000) };
+
+async function importComponent(db: Database, dataDir: string, component: BundleComponent, source: string, importerId: string, mode: ImportMode, reuse: ImportReuseContext, report: Report): Promise<void> {
   const repo = new ComponentRepo(db);
   const base = { type: "component" as const, id: component.id, name: component.name };
   if (builtinNameReserved(component.name)) { report.push({ ...base, action: "error", detail: "builtin_name_reserved" }); return; }
@@ -234,23 +289,63 @@ async function importComponent(db: Database, dataDir: string, component: BundleC
     const active = latestActiveVersion(db, liveId);
     if (sameSource && active !== null) { report.push({ ...base, action: "reused", version: active, ...(remappedTo ? { remappedTo } : {}) }); return; }
     if (mode === "dry-run") { report.push({ ...base, action: "created", version: (latestActiveVersion(db, liveId) ?? 0) + 1, ...(remappedTo ? { remappedTo } : {}) }); return; }
+    // Существующий компонент — это **update**, и гейт создания на нём не стоит (отступление D4).
+    // Но обход «завести компонент → импортом подменить исходник» обязан быть наблюдаем, поэтому
+    // publish-предупреждение о дубликате доезжает до отчёта.
     try {
       let baseRev = head.rev;
-      if (!sameSource) baseRev = repo.save(liveId, source, component.designSystem, head.rev).rev;
-      const result = await publishComponent(db, repo, liveId, baseRev, dataDir);
-      report.push({ ...base, action: "created", version: result.version, ...(remappedTo ? { remappedTo } : {}) });
+      if (!sameSource) {
+        baseRev = repo.save(liveId, source, component.designSystem, head.rev).rev;
+        cacheSourceShingles(db, liveId, baseRev, source);
+      }
+      const result = await publishComponent(db, repo, liveId, baseRev, dataDir, undefined, {}, { actor: reuse.actor, mode: reuse.mode, ...(reuse.override === undefined ? {} : { override: reuse.override }) });
+      report.push({ ...base, action: "created", version: result.version, ...(remappedTo ? { remappedTo } : {}), ...warningDetail(result.warnings) });
     } catch (error) {
+      if (error instanceof ReuseGateRejection) { report.push({ ...base, action: "error", ...rejectionReport(db, error, true) }); return; }
       report.push({ ...base, action: "error", detail: error instanceof ApiError ? error.message : String(error) });
     }
     return;
   }
-  // Both id and name are free: create fresh and publish.
-  if (mode === "dry-run") { report.push({ ...base, action: "created", version: 1 }); return; }
+
+  // Оба id и name свободны: create + publish — это **создание активного компонента**, и оно
+  // обязано проходить тот же гейт, что `POST /api/components`. Без этого любой пользователь
+  // экспортировал бы чужой компонент и импортировал его под свободным id мимо гейта
+  // (план §1.1, B2). Извлечение делается **до** create — иначе гейту нечего сопоставлять —
+  // и переиспользуется публикацией (план §3.7, A7).
+  let extracted: ExtractResult;
+  try { extracted = await extractForImport(dataDir, component.id, source); }
+  catch (error) { report.push({ ...base, action: "error", detail: error instanceof ApiError ? error.message : String(error) }); return; }
+
+  const gate = {
+    mode: reuse.mode, actor: reuse.actor, userAgent: "bundle-import",
+    designSystem: component.designSystem, artifactId: component.id, name: component.name,
+    source, meta: extracted.meta!, intent: reuse.intent, intentProvided: true,
+    ...(reuse.override === undefined ? {} : { override: reuse.override }),
+  };
+  let outcome;
   try {
-    repo.create(component.id, component.name, source, component.designSystem, undefined, null, importerId);
-    const result = await publishComponent(db, repo, component.id, 1, dataDir);
-    report.push({ ...base, action: "created", version: result.version });
+    // Матчинг, create и аудит — одна синхронная транзакция гейта. В dry-run она целиком
+    // откатывается: решение предсказано, но ни компонента, ни аудит-строки не остаётся.
+    outcome = mode === "dry-run"
+      ? withRollback(db, () => matchAndDecide(db, gate, () => null))
+      : matchAndDecide(db, gate, () => {
+        const created = repo.create(component.id, component.name, source, component.designSystem, undefined, null, importerId);
+        cacheSourceShingles(db, component.id, 1, source);
+        return created;
+      });
   } catch (error) {
+    // Блокировка — позиция отчёта, а не отказ запроса: импорт по-элементный, остальные
+    // позиции обязаны доехать.
+    if (error instanceof ReuseGateRejection) { report.push({ ...base, action: "error", ...rejectionReport(db, error, mode === "apply") }); return; }
+    report.push({ ...base, action: "error", detail: error instanceof ApiError ? error.message : String(error) });
+    return;
+  }
+  if (mode === "dry-run") { report.push({ ...base, action: "created", version: 1, ...warningDetail(outcome.warnings) }); return; }
+  try {
+    const result = await publishComponent(db, repo, component.id, 1, dataDir, undefined, {}, { actor: reuse.actor, mode: reuse.mode, ...(reuse.override === undefined ? {} : { override: reuse.override }) }, { sourceHash: sha256(source), extracted });
+    report.push({ ...base, action: "created", version: result.version, ...warningDetail([...outcome.warnings, ...result.warnings]) });
+  } catch (error) {
+    if (error instanceof ReuseGateRejection) { report.push({ ...base, action: "error", ...rejectionReport(db, error, true) }); return; }
     report.push({ ...base, action: "error", detail: error instanceof ApiError ? error.message : String(error) });
   }
 }
@@ -379,10 +474,53 @@ const canonical = (doc: PrototypeDoc): string => JSON.stringify(doc);
 
 // --- Orchestration ----------------------------------------------------------
 
-export async function importBundle(db: Database, dataDir: string, zip: Uint8Array, importerId: string, mode: ImportMode): Promise<ImportReport> {
+/**
+ * Двухфазный override гейта на импорте (план §3.7, отступление D9, находка A6).
+ *
+ * Бланкетного флага «пропусти гейт» здесь нет: он был бы контрактом слабее спеки §4. Фаза 1 —
+ * `mode=dry-run`, она возвращает per-item `reuse_blocked` с `candidateKeys` и текущим
+ * `catalogRevision`. Фаза 2 — `apply` с этим объектом **в теле** (поле `reuseOverride`
+ * multipart-формы): каждый подтверждаемый компонент называет свои ключи, ревизия обязана
+ * совпасть с сегодняшней, `reason` — 20..500 после trim. Проверку выполняет сам гейт;
+ * админский барьер стоит на маршруте (`routes/bundles.ts`).
+ *
+ * Ревизия каталога может сдвинуться между фазами — тогда гейт бросает `catalog_changed`, и это
+ * попадает в отчёт позицией `reuse_override_stale`, а не игнорируется (D9).
+ */
+export const bundleReuseOverrideSchema = z.strictObject({
+  catalogRevision: z.string().min(1).max(128),
+  reason: z.string().trim().min(20).max(500),
+  components: z.array(z.strictObject({
+    id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(64),
+    candidateKeys: z.array(z.string().min(1).max(256)).min(1).max(64),
+  })).min(1).max(256),
+}).superRefine((value, ctx) => {
+  const seen = new Set<string>();
+  value.components.forEach((component, index) => {
+    if (seen.has(component.id)) ctx.addIssue({ code: "custom", path: ["components", index, "id"], message: "component id must be unique" });
+    seen.add(component.id);
+  });
+});
+export type BundleReuseOverride = z.infer<typeof bundleReuseOverrideSchema>;
+
+export interface ImportReuseOptions {
+  /** Фаза гейта процесса. По умолчанию — `enforce` в коде, как и на `POST /api/components`. */
+  mode?: ReuseGateMode;
+  /** Админ ли импортирующий: без этого `override` не имеет силы. */
+  isAdmin?: boolean;
+  override?: BundleReuseOverride;
+}
+
+export async function importBundle(db: Database, dataDir: string, zip: Uint8Array, importerId: string, mode: ImportMode, reuse: ImportReuseOptions = {}): Promise<ImportReport> {
   const files = inflate(zip);
   const manifest = parseManifest(files);
   crossCheck(manifest, files);
+  if (reuse.override !== undefined) {
+    if (reuse.isAdmin !== true) throw new ApiError(403, "admin_required", "Only an admin may override the reuse gate");
+    const manifestIds = new Set(manifest.components.map((component) => component.id));
+    const unknown = reuse.override.components.map((component) => component.id).filter((id) => !manifestIds.has(id));
+    if (unknown.length) throw new ApiError(422, "validation_failed", "reuseOverride references components absent from the bundle", { issues: unknown.map((id) => ({ path: ["reuseOverride", "components"], message: `unknown component: ${id}` })) });
+  }
   const report = new Report();
 
   await importAssets(db, dataDir, manifest, files, mode, report);
@@ -395,10 +533,21 @@ export async function importBundle(db: Database, dataDir: string, zip: Uint8Arra
   }
 
   // Components resolved created/reused become available to prototype dependency checks (by name+DS).
+  // Бандл не несёт intent (`src/bundle/schema.ts`), поэтому он синтезируется из происхождения
+  // архива: аудит обязан отвечать на вопрос «откуда это приехало».
+  const intent = `imported from ${manifest.source.origin || "an exported bundle"}`.slice(0, 500);
+  const actor = { userId: importerId, isAdmin: reuse.isAdmin === true };
+  const overrideFor = (id: string): ReuseOverride | undefined => {
+    const entry = reuse.override?.components.find((item) => item.id === id);
+    return entry === undefined ? undefined
+      : { catalogRevision: reuse.override!.catalogRevision, candidateKeys: entry.candidateKeys, reason: reuse.override!.reason };
+  };
   const available = new Set<string>();
   for (const component of manifest.components) {
     const before = report.items.length;
-    await importComponent(db, dataDir, component, new TextDecoder().decode(files[component.sourcePath]!), importerId, mode, report);
+    const override = overrideFor(component.id);
+    const context: ImportReuseContext = { mode: reuse.mode ?? DEFAULT_REUSE_GATE_MODE, actor, intent, ...(override === undefined ? {} : { override }) };
+    await importComponent(db, dataDir, component, new TextDecoder().decode(files[component.sourcePath]!), importerId, mode, context, report);
     const outcome = report.items[before];
     if (outcome && (outcome.action === "created" || outcome.action === "reused")) available.add(`${component.designSystem}::${component.name}`);
   }

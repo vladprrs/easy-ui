@@ -33,7 +33,7 @@ function int(v:unknown,name:string){if(typeof v!=="number"||!Number.isInteger(v)
 function base(b:Record<string,unknown>){if(!Object.hasOwn(b,"baseRev"))throw new ApiError(400,"base_rev_required","baseRev is required");return int(b.baseRev,"baseRev");}
 function text(v:unknown,name:string,required=true){if(v===undefined&&!required)return undefined;if(typeof v!=="string")throw new ApiError(400,"invalid_request",`${name} must be a string`);return v;}
 function reserveHostPrimitiveName(name:string):void{if(hostPrimitiveNames.has(name))throw new ApiError(409,"already_exists","Component name is reserved for a host primitive");}
-async function checkSource(source:string,path:string,smoke=false){
+export async function checkSource(source:string,path:string,smoke=false){
   if(new TextEncoder().encode(source).byteLength>262144)throw new ApiError(413,"payload_too_large","Component source exceeds 256 KB");
   try { new Bun.Transpiler({loader:"tsx"}).transformSync(source); } catch(error){bad(`Syntax error: ${error instanceof Error?error.message:String(error)}`);}
   const extracted=await extractDefinition(path,{smoke});
@@ -77,12 +77,23 @@ export type PublishHooks={afterStage?:(x:{id:string;version:number;rev:number})=
  * проверяют роль от имени системного актора в `enforce`.
  */
 export type PublishReuseContext={actor:{userId:string;isAdmin:boolean};mode:ReuseGateMode;override?:import("../catalog/gate").ReuseOverride};
-export async function publishComponent(db:Database,repo:ComponentRepo,id:string,baseRev:number,dataDir:string,message?:string,hooks:PublishHooks={},reuse:PublishReuseContext={actor:{userId:"system",isAdmin:false},mode:DEFAULT_REUSE_GATE_MODE}){
+/**
+ * Уже посчитанное извлечение того же исходника (план §3.7, A7). Импортёр бандла обязан
+ * извлечь мету **до** `repo.create` — иначе гейту переиспользования нечего сопоставлять, — и
+ * без этого параметра платил бы второй subprocess-спавн (таймаут 10 с) на каждый компонент.
+ *
+ * Переиспользуется **только** при совпадении sha256 публикуемой ревизии: расхождение
+ * (чужой/устаревший результат) молча игнорируется и публикация извлекает заново. Результат
+ * обязан быть получен тем же `checkSource(source,path,true)` — со smoke-рендером, иначе
+ * потеряются его предупреждения.
+ */
+export type PublishExtraction={sourceHash:string;extracted:Awaited<ReturnType<typeof checkSource>>};
+export async function publishComponent(db:Database,repo:ComponentRepo,id:string,baseRev:number,dataDir:string,message?:string,hooks:PublishHooks={},reuse:PublishReuseContext={actor:{userId:"system",isAdmin:false},mode:DEFAULT_REUSE_GATE_MODE},preExtracted?:PublishExtraction){
   reserveHostPrimitiveName(repo.meta(id).name);
   const revision=repo.source(id); const path=await materializeSource(dataDir,id,revision.rev,revision.source);
   // Validate /api/assets/asset_<sha256> literals in source before staging so a dangling ref fails fast.
   const assetIds=collectAndValidateComponentAssetRefs(db,revision.source);
-  const extracted=await checkSource(revision.source,path,true);
+  const extracted=preExtracted!==undefined&&preExtracted.sourceHash===sha256(revision.source)?preExtracted.extracted:await checkSource(revision.source,path,true);
   // Роль проверяется **до** `repo.stage`: после 409 не должно оставаться ни staging-публикации,
   // ни материализованного клиентского модуля.
   assertPublishRoleAvailable(db,{designSystem:revision.designSystem,id,canonicalFor:extracted.meta!.canonicalFor??[],actor:reuse.actor,mode:reuse.mode,sourceHash:sha256(revision.source),intent:extracted.meta!.description,...(reuse.override===undefined?{}:{override:reuse.override})});

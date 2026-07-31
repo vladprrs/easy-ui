@@ -17,7 +17,7 @@ const svg = (id: string) => new TextEncoder().encode(`<svg xmlns="http://www.w3.
 const sha256hex = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
 // One in-memory server with its own data dir (kept inside the project root so materialized TSX resolves deps).
-async function makeServer(prefix: string, userNames: string[]) {
+async function makeServer(prefix: string, userNames: string[], reuseGateMode: "enforce" | "shadow" = "enforce") {
   const dir = await mkdtemp(resolve(process.cwd(), `.bundle-import-${prefix}-`));
   dirs.push(dir);
   const db = openDatabase(":memory:");
@@ -27,17 +27,17 @@ async function makeServer(prefix: string, userNames: string[]) {
   const tokens: Record<string, string> = {};
   for (const name of userNames) {
     const id = `user_${name}`;
-    db.query("INSERT INTO users (id,name,password_hash,is_admin,created_at) VALUES (?,?,?,?,?)").run(id, name, "unused", 0, at);
+    db.query("INSERT INTO users (id,name,password_hash,is_admin,created_at) VALUES (?,?,?,?,?)").run(id, name, "unused", name === "operator" ? 1 : 0, at);
     tokens[name] = users.createSession(id).token;
   }
-  const handler = createHandler(db, { dataDir: dir, publicOrigin: "http://test" });
+  const handler = createHandler(db, { dataDir: dir, publicOrigin: "http://test", reuseGateMode });
   const call = (who: string | null, method: string, path: string, body?: unknown, contentType = "application/json") => {
     const headers: Record<string, string> = {};
     if (who) headers.cookie = `easyui_session=${tokens[who]}`;
     if (method !== "GET" && method !== "HEAD") headers.origin = "http://test";
-    if (body !== undefined) headers["content-type"] = contentType;
+    if (body !== undefined && !(body instanceof FormData)) headers["content-type"] = contentType;
     const init: RequestInit = { method, headers };
-    if (body !== undefined) init.body = typeof body === "string" || body instanceof Uint8Array ? (body as BodyInit) : JSON.stringify(body);
+    if (body !== undefined) init.body = body instanceof FormData || typeof body === "string" || body instanceof Uint8Array ? (body as BodyInit) : JSON.stringify(body);
     return handler(new Request(`http://test/api${path}`, init));
   };
   const upload = async (who: string, bytes: Uint8Array, mime: string) => {
@@ -59,7 +59,7 @@ async function seed(server: Server, who: string) {
   const protoAsset = await upload(who, svg("prototype"), "image/svg+xml");
   expect((await call(who, "PATCH", "/design-systems/bundle-ds", { fonts: [{ family: "Inter", src: fontAsset }], baseVersion: 0 })).status).toBe(200);
   const source = `// asset: /api/assets/${componentAsset}\n${ratingStars}`;
-  expect((await call(who, "POST", "/components", { id: "rating-stars", name: "RatingStars", source, designSystem: "bundle-ds" })).status).toBe(201);
+  expect((await call(who, "POST", "/components", { id: "rating-stars", name: "RatingStars", source, designSystem: "bundle-ds", intent: "Display an interactive product rating with stars" })).status).toBe(201);
   expect((await call(who, "POST", "/components/rating-stars/publish", { baseRev: 1 })).status).toBe(201);
   const doc = {
     version: 1, id: "bundle-proto", name: "Bundle proto", designSystem: "bundle-ds", device: "desktop", startScreen: "rate", state: {},
@@ -78,14 +78,32 @@ async function exportZip(server: Server, who: string, path = "/prototypes/bundle
   return new Uint8Array(await response.arrayBuffer());
 }
 
-async function importZip(server: Server, who: string, zip: Uint8Array, mode?: "dry-run" | "apply"): Promise<{ status: number; report: ImportReport }> {
-  const response = await server.call(who, "POST", `/bundles/import${mode ? `?mode=${mode}` : ""}`, zip, "application/zip");
+async function importZip(server: Server, who: string, zip: Uint8Array, mode?: "dry-run" | "apply", reuseOverride?: unknown): Promise<{ status: number; report: ImportReport }> {
+  const body = reuseOverride === undefined ? zip : (() => {
+    const form = new FormData();
+    form.append("file", new Blob([zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength) as ArrayBuffer], { type: "application/zip" }), "bundle.zip");
+    form.append("reuseOverride", JSON.stringify(reuseOverride));
+    return form;
+  })();
+  const response = await server.call(who, "POST", `/bundles/import${mode ? `?mode=${mode}` : ""}`, body, "application/zip");
   const report = response.status === 200 ? importReportSchema.parse(await response.json()) : (await response.json() as ImportReport);
   return { status: response.status, report };
 }
 
 const itemFor = (report: ImportReport, type: string, id: string) => report.items.find((item) => item.type === type && (item.id === id || item.name === id));
 const count = (db: Server["db"], table: string) => (db.query(`SELECT COUNT(*) c FROM ${table}`).get() as { c: number }).c;
+
+/** Seeds a differently named component whose source is byte-identical to the exported RatingStars. */
+async function seedReuseCandidate(server: Server, who: string): Promise<void> {
+  expect((await server.call(who, "POST", "/design-systems", { id: "bundle-ds", name: "Bundle DS", description: "Reuse target" })).status).toBe(201);
+  const componentAsset = await server.upload(who, svg("component"), "image/svg+xml");
+  const source = `// asset: /api/assets/${componentAsset}\n${ratingStars}`;
+  expect((await server.call(who, "POST", "/components", {
+    id: "existing-stars", name: "ExistingStars", source, designSystem: "bundle-ds",
+    intent: "Display an interactive product rating with stars",
+  })).status).toBe(201);
+  expect((await server.call(who, "POST", "/components/existing-stars/publish", { baseRev: 1 })).status).toBe(201);
+}
 
 
 // --- Composition fixture (bundle format 2) ----------------------------------
@@ -158,9 +176,9 @@ const composedDoc = {
 /** Requires `seed()` first (it owns bundle-ds). Publishes both components, the composition and the prototype. */
 async function seedComposition(server: Server, who: string) {
   const { call } = server;
-  expect((await call(who, "POST", "/components", { id: "bundle-shell-component", name: "BundleShell", source: SHELL_SRC, designSystem: "bundle-ds" })).status).toBe(201);
+  expect((await call(who, "POST", "/components", { id: "bundle-shell-component", name: "BundleShell", source: SHELL_SRC, designSystem: "bundle-ds", intent: "Provide a reusable shell for composed bundle content" })).status).toBe(201);
   expect((await call(who, "POST", "/components/bundle-shell-component/publish", { baseRev: 1 })).status).toBe(201);
-  expect((await call(who, "POST", "/components", { id: "bundle-badge", name: "BundleBadge", source: BADGE_SRC, designSystem: "bundle-ds" })).status).toBe(201);
+  expect((await call(who, "POST", "/components", { id: "bundle-badge", name: "BundleBadge", source: BADGE_SRC, designSystem: "bundle-ds", intent: "Display an amount badge inside composed bundle content" })).status).toBe(201);
   expect((await call(who, "POST", "/components/bundle-badge/publish", { baseRev: 1 })).status).toBe(201);
   expect((await call(who, "POST", "/compositions", { id: "bundle-shell", designSystem: "bundle-ds", doc: compositionDoc })).status).toBe(201);
   expect((await call(who, "POST", "/compositions/bundle-shell/publish", { baseRev: 1 })).status).toBe(201);
@@ -242,7 +260,7 @@ describe("bundle import", () => {
     const b = await makeServer("b", ["bob", "carol"]);
     // Carol owns an unpublished component named RatingStars in a different system.
     expect((await b.call("carol", "POST", "/design-systems", { id: "carol-ds", name: "Carol DS", description: "Rival system" })).status).toBe(201);
-    expect((await b.call("carol", "POST", "/components", { id: "other-stars", name: "RatingStars", source: `import { z } from "zod";\nexport const definition = { props: z.strictObject({}), description: "Rival" };\nexport default function Rival() { return null; }\n`, designSystem: "carol-ds" })).status).toBe(201);
+    expect((await b.call("carol", "POST", "/components", { id: "other-stars", name: "RatingStars", source: `import { z } from "zod";\nexport const definition = { props: z.strictObject({}), description: "Rival" };\nexport default function Rival() { return null; }\n`, designSystem: "carol-ds", intent: "Provide a deliberately conflicting rating component fixture" })).status).toBe(201);
 
     const result = await importZip(b, "bob", zip);
     expect(result.status).toBe(200);
@@ -261,7 +279,7 @@ describe("bundle import", () => {
 
     const b = await makeServer("b", ["bob"]);
     expect((await b.call("bob", "POST", "/design-systems", { id: "bundle-ds", name: "Bundle DS", description: "pre-existing" })).status).toBe(201);
-    expect((await b.call("bob", "POST", "/components", { id: "rating-stars", name: "Doomed", source: `import { z } from "zod";\nexport const definition = { props: z.strictObject({}), description: "Doomed" };\nexport default function Doomed() { return null; }\n`, designSystem: "bundle-ds" })).status).toBe(201);
+    expect((await b.call("bob", "POST", "/components", { id: "rating-stars", name: "Doomed", source: `import { z } from "zod";\nexport const definition = { props: z.strictObject({}), description: "Doomed" };\nexport default function Doomed() { return null; }\n`, designSystem: "bundle-ds", intent: "Create a disposable component for deleted conflict coverage" })).status).toBe(201);
     expect((await b.call("bob", "DELETE", "/components/rating-stars", { baseRev: 1 })).status).toBe(204);
 
     const result = await importZip(b, "bob", zip);
@@ -304,6 +322,124 @@ describe("bundle import", () => {
     expect({ ds: count(b.db, "design_systems"), components: count(b.db, "components"), prototypes: count(b.db, "prototypes"), assets: count(b.db, "assets"), publishes: count(b.db, "component_publishes") }).toEqual(before);
     a.db.close(); b.db.close();
   }, 60_000);
+
+  test("a fresh component that duplicates the target catalog is blocked; dry-run returns override material without audit", async () => {
+    const a = await makeServer("reuse-source", ["alice"]);
+    await seed(a, "alice");
+    const zip = await exportZip(a, "alice");
+
+    const b = await makeServer("reuse-target", ["bob"]);
+    await seedReuseCandidate(b, "bob");
+    const decisionsBefore = count(b.db, "catalog_reuse_decisions");
+
+    const dry = await importZip(b, "bob", zip, "dry-run");
+    const dryItem = itemFor(dry.report, "component", "rating-stars") as ImportReport["items"][number] & { catalogRevision: string; candidateKeys: string[] };
+    expect(dryItem).toMatchObject({ action: "error", detail: "reuse_blocked" });
+    expect(dryItem.catalogRevision.length).toBeGreaterThan(0);
+    expect(dryItem.candidateKeys).toContain("component:bundle-ds:existing-stars");
+    expect(count(b.db, "catalog_reuse_decisions")).toBe(decisionsBefore);
+    expect(b.db.query("SELECT 1 ok FROM components WHERE id='rating-stars'").get()).toBeNull();
+
+    const applied = await importZip(b, "bob", zip, "apply");
+    const appliedItem = itemFor(applied.report, "component", "rating-stars") as ImportReport["items"][number] & { catalogRevision: string; candidateKeys: string[] };
+    expect(appliedItem).toMatchObject({ action: "error", detail: "reuse_blocked" });
+    expect(appliedItem.candidateKeys).toContain("component:bundle-ds:existing-stars");
+    expect(count(b.db, "catalog_reuse_decisions")).toBe(decisionsBefore + 1);
+    expect(b.db.query("SELECT 1 ok FROM components WHERE id='rating-stars'").get()).toBeNull();
+    const decision = b.db.query("SELECT actor_id,artifact_id,decision,intent FROM catalog_reuse_decisions WHERE artifact_id='rating-stars'").get() as { actor_id: string; artifact_id: string; decision: string; intent: string };
+    expect(decision).toEqual({ actor_id: "user_bob", artifact_id: "rating-stars", decision: "blocked", intent: "imported from http://test" });
+    a.db.close(); b.db.close();
+  }, 120_000);
+
+  test("shadow import creates the duplicate and records would_block", async () => {
+    const a = await makeServer("shadow-source", ["alice"]);
+    await seed(a, "alice");
+    const zip = await exportZip(a, "alice");
+
+    const b = await makeServer("shadow-target", ["bob"], "shadow");
+    await seedReuseCandidate(b, "bob");
+    const result = await importZip(b, "bob", zip, "apply");
+    expect(itemFor(result.report, "component", "rating-stars")).toMatchObject({ action: "created", version: 1 });
+    expect(b.db.query("SELECT 1 ok FROM components WHERE id='rating-stars'").get()).not.toBeNull();
+    expect((b.db.query("SELECT decision FROM catalog_reuse_decisions WHERE artifact_id='rating-stars'").get() as { decision: string }).decision).toBe("would_block");
+    a.db.close(); b.db.close();
+  }, 120_000);
+
+  test("an admin can apply the exact per-item dry-run override", async () => {
+    const a = await makeServer("override-source", ["alice"]);
+    await seed(a, "alice");
+    const zip = await exportZip(a, "alice");
+
+    const b = await makeServer("override-target", ["operator"]);
+    await seedReuseCandidate(b, "operator");
+    const dry = await importZip(b, "operator", zip, "dry-run");
+    const dryItem = itemFor(dry.report, "component", "rating-stars") as ImportReport["items"][number] & { catalogRevision: string; candidateKeys: string[] };
+    const reuseOverride = {
+      catalogRevision: dryItem.catalogRevision,
+      reason: "The imported component is intentionally retained for migration compatibility",
+      components: [{ id: "rating-stars", candidateKeys: dryItem.candidateKeys }],
+    };
+
+    const result = await importZip(b, "operator", zip, "apply", reuseOverride);
+    expect(result.status).toBe(200);
+    expect(itemFor(result.report, "component", "rating-stars")).toMatchObject({ action: "created", version: 1 });
+    expect((b.db.query("SELECT decision FROM catalog_reuse_decisions WHERE artifact_id='rating-stars'").get() as { decision: string }).decision).toBe("force_new");
+    a.db.close(); b.db.close();
+  }, 120_000);
+
+  test("a non-admin cannot submit a bundle reuse override", async () => {
+    const a = await makeServer("override-denied-source", ["alice"]);
+    await seed(a, "alice");
+    const zip = await exportZip(a, "alice");
+
+    const b = await makeServer("override-denied-target", ["bob"]);
+    await seedReuseCandidate(b, "bob");
+    const dry = await importZip(b, "bob", zip, "dry-run");
+    const dryItem = itemFor(dry.report, "component", "rating-stars") as ImportReport["items"][number] & { catalogRevision: string; candidateKeys: string[] };
+    const result = await importZip(b, "bob", zip, "apply", {
+      catalogRevision: dryItem.catalogRevision,
+      reason: "A regular user must not be able to force a duplicate component",
+      components: [{ id: "rating-stars", candidateKeys: dryItem.candidateKeys }],
+    });
+    expect(result.status).toBe(403);
+    a.db.close(); b.db.close();
+  }, 120_000);
+
+  test("a blocked item does not stop the rest, and each component is extracted exactly once", async () => {
+    const a = await makeServer("per-item-source", ["alice"]);
+    await seed(a, "alice");
+    // Второй компонент, ни на что не похожий: он обязан доехать, несмотря на блокировку первого.
+    expect((await a.call("alice", "POST", "/components", { id: "bundle-badge", name: "BundleBadge", source: BADGE_SRC, designSystem: "bundle-ds", intent: "Display an amount badge inside composed bundle content" })).status).toBe(201);
+    expect((await a.call("alice", "POST", "/components/bundle-badge/publish", { baseRev: 1 })).status).toBe(201);
+    const zip = await exportZip(a, "alice", "/bundles/export");
+
+    const b = await makeServer("per-item-target", ["bob"]);
+    await seedReuseCandidate(b, "bob");
+
+    // Счётчик спавнов извлекателя. Гейту мета нужна **до** create, а публикация обязана
+    // переиспользовать тот же результат: без этого каждый созданный компонент платил бы
+    // второй subprocess-спавн с таймаутом 10 с (план §3.7, A7).
+    const realSpawn = Bun.spawn;
+    let extractions = 0;
+    (Bun as { spawn: typeof Bun.spawn }).spawn = ((...args: Parameters<typeof Bun.spawn>) => {
+      const first = args[0] as unknown;
+      const cmd = (Array.isArray(first) ? first : (first as { cmd?: unknown[] }).cmd ?? []) as unknown[];
+      if (cmd.some((part) => typeof part === "string" && part.includes("extract-subprocess"))) extractions += 1;
+      return realSpawn(...args);
+    }) as typeof Bun.spawn;
+    let result;
+    try { result = await importZip(b, "bob", zip, "apply"); }
+    finally { (Bun as { spawn: typeof Bun.spawn }).spawn = realSpawn; }
+
+    // Дубликат заблокирован, а соседняя позиция всё равно создана и опубликована.
+    expect(itemFor(result.report, "component", "rating-stars")).toMatchObject({ action: "error", detail: "reuse_blocked" });
+    expect(itemFor(result.report, "component", "bundle-badge")).toMatchObject({ action: "created", version: 1 });
+    expect((await b.call("bob", "GET", "/components/bundle-badge/versions/1/bundle.js")).status).toBe(200);
+    // Ровно одно извлечение на компонент: одно на заблокированный (до гейта, публикации не было)
+    // и одно на созданный (гейт + переиспользование публикацией), а не два.
+    expect(extractions).toBe(2);
+    a.db.close(); b.db.close();
+  }, 120_000);
 
   test("malformed bundles are rejected before any write", async () => {
     const b = await makeServer("b", ["bob"]);

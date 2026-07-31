@@ -159,6 +159,12 @@ const importItemSchema = z.object({
   detail: z.string().optional(),
   remappedTo: z.string().optional(),
   version: z.number().optional(),
+  // Present when a fresh component was rejected by the reuse gate. A dry-run returns the
+  // exact material an administrator must acknowledge on the subsequent apply request.
+  catalogRevision: z.string().optional(),
+  candidateKeys: z.array(z.string()).optional(),
+  decisionId: z.string().nullable().optional(),
+  reuseCode: z.enum(["component_reuse_required", "catalog_changed", "canonical_role_conflict"]).optional(),
 });
 
 const importSummarySchema = z.object({
