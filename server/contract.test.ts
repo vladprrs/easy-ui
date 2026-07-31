@@ -15,7 +15,7 @@ import {
 } from "../src/prototype/schema";
 import { ELEMENTS_PER_SCREEN_LIMIT, REPEAT_ELEMENT_LIMIT, REPEAT_RENDER_COST_BUDGET, TREE_DEPTH_LIMIT } from "../src/prototype/validate";
 import { MAX_ASSET_BYTES } from "./assets/validate";
-import { capabilitiesResponseSchema, listContracts, type RouteContract } from "./contracts";
+import { capabilitiesResponseSchema, createComponentContract, listContracts, type RouteContract } from "./contracts";
 import { openDatabase } from "./db";
 import { MAX_JSON_BODY_BYTES } from "./http";
 import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "./screenshot/service";
@@ -77,8 +77,24 @@ async function flowDoc(id: string, screenIds = ["home", "a", "b"]): Promise<Prot
 }
 
 const componentSource = await Bun.file("server/fixtures/rating-stars.tsx").text();
-// Тот же компонент без `example` — им покрывается `422 example_unavailable` превью-эндпоинта.
-const componentSourceWithoutExample = componentSource.replace("  example: { value: 3 },\n", "");
+const componentPreviewSource = `import { z } from "zod";
+import type { BaseComponentProps } from "@json-render/react";
+
+export const definition = {
+  props: z.strictObject({ label: z.string().min(1) }),
+  events: [],
+  slots: [],
+  description: "A compact preview label for the component library",
+  example: { label: "Preview" },
+};
+
+type Props = z.output<typeof definition.props>;
+
+export default function ContractPreview({ props }: BaseComponentProps<Props>) {
+  return <span>{props.label}</span>;
+}
+`;
+const componentPreviewSourceWithoutExample = componentPreviewSource.replace('  example: { label: "Preview" },\n', "");
 
 // Композиция контрактного теста держится только на host-примитивах: `assertKnownTypes`
 // требует опубликованных компонентов, а contract-stars намеренно остаётся неопубликованным.
@@ -173,7 +189,7 @@ function orderedCases(): [string, Case][] {
     ["GET /api/visual-runs/{runId}", { run: () => call("GET", "/api/visual-runs/nope"), expected: err(404, "run_not_found") }],
     // Components: create/save/read happy paths; publish is exercised as its CAS error
     // envelope (activation runs typecheck + import — out of scope for a contract test)
-    ["POST /api/components", { run: () => call("POST", "/api/components", { id: "contract-stars", name: "ContractStars", source: componentSource, designSystem:"contract-ds" }), expected: ok(201) }],
+    ["POST /api/components", { run: () => call("POST", "/api/components", { id: "contract-stars", name: "ContractStars", source: componentSource, designSystem:"contract-ds", intent: "Interactive rating stars for product cards" }), expected: ok(201) }],
     ["GET /api/components", { run: () => call("GET", "/api/components"), expected: ok() }],
     ["GET /api/components/{id}", { run: () => call("GET", "/api/components/contract-stars"), expected: ok() }],
     ["PUT /api/components/{id}", { run: () => call("PUT", "/api/components/contract-stars", { source: componentSource + "\n// v2\n", baseRev: 1 }), expected: ok() }],
@@ -189,9 +205,9 @@ function orderedCases(): [string, Case][] {
     ["POST /api/components/{id}/versions/{version}/status", { run: () => call("POST", "/api/components/contract-stars/versions/1/status", { status: "deprecated", baseStatusRev: 1 }), expected: err(404, "not_found") }],
     // Инлайн-превью библиотеки: единственный по-настоящему опубликованный компонент контракт-теста.
     // v1 несёт legacy-`example`, v2 — нет, поэтому обе 422-ветки покрываются одним компонентом.
-    ["POST /api/components", { run: () => call("POST", "/api/components", { id: "contract-preview", name: "ContractPreview", source: componentSource, designSystem: "contract-ds" }), expected: ok(201) }],
+    ["POST /api/components", { run: () => call("POST", "/api/components", { id: "contract-preview", name: "ContractPreview", source: componentPreviewSource, designSystem: "contract-ds", intent: "Preview component for contract coverage" }), expected: ok(201) }],
     ["POST /api/components/{id}/publish", { run: () => call("POST", "/api/components/contract-preview/publish", { baseRev: 1 }), expected: ok(201) }],
-    ["PUT /api/components/{id}", { run: () => call("PUT", "/api/components/contract-preview", { source: componentSourceWithoutExample, baseRev: 1 }), expected: ok() }],
+    ["PUT /api/components/{id}", { run: () => call("PUT", "/api/components/contract-preview", { source: componentPreviewSourceWithoutExample, baseRev: 1 }), expected: ok() }],
     ["POST /api/components/{id}/publish", { run: () => call("POST", "/api/components/contract-preview/publish", { baseRev: 2 }), expected: ok(201) }],
     ["GET /api/components/{id}/versions/{version}/preview", { run: () => call("GET", "/api/components/contract-preview/versions/1/preview?selector=legacy"), expected: ok() }],
     ["GET /api/components/{id}/versions/{version}/preview", { run: () => call("GET", "/api/components/contract-preview/versions/1/preview?selector=named&name=missing"), expected: err(422, "unknown_example") }],
@@ -300,6 +316,73 @@ describe("route contracts", () => {
 
   test("server/openapi.json has no drift against the contract registry", () => {
     expect(readFileSync(OPENAPI_PATH, "utf8")).toBe(renderOpenApiJson());
+  });
+
+  test("POST /api/components contract retains reuse-gate input and declared rejections", () => {
+    const request = createComponentContract.requestSchema!;
+    const parsed = request.parse({
+      id: "contract-reuse",
+      name: "ContractReuse",
+      source: componentSource,
+      designSystem: "contract-ds",
+      intent: "A distinct product control for curated ratings",
+      reuseOverride: {
+        catalogRevision: "catalog-revision-1",
+        candidateKeys: ["component:contract-ds:existing-rating"],
+        reason: "The approved product exception needs an independently owned control.",
+      },
+    }) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      intent: "A distinct product control for curated ratings",
+      reuseOverride: {
+        catalogRevision: "catalog-revision-1",
+        candidateKeys: ["component:contract-ds:existing-rating"],
+      },
+    });
+    expect(createComponentContract.errors.map(({ status, code }) => ({ status, code }))).toEqual(expect.arrayContaining([
+      { status: 403, code: "admin_required" },
+      { status: 409, code: "component_reuse_required" },
+      { status: 409, code: "catalog_changed" },
+      { status: 409, code: "canonical_role_conflict" },
+    ]));
+    const errorResponseSchemas = (createComponentContract as RouteContract & {
+      errorResponseSchemas?: Readonly<Record<number, { safeParse(value: unknown): { success: boolean } }>>;
+    }).errorResponseSchemas;
+    expect(errorResponseSchemas?.[409]?.safeParse({
+      error: {
+        code: "component_reuse_required",
+        message: "An existing component already covers this proposal",
+        catalogRevision: "catalog-revision-1",
+        policyVersion: 1,
+        candidates: [{
+          kind: "component", key: "component:contract-ds:existing-rating", id: "existing-rating", name: "ExistingRating",
+          designSystem: "contract-ds", version: 1, draft: false, description: "Existing rating", canonicalFor: [],
+          deprecated: false, recommendable: true, headUsageCount: 0, score: 0.95, blocking: true, reasons: ["same product job"],
+        }],
+        retryable: false,
+        resolution: "reuse",
+        nextSteps: ["Reuse the existing component"],
+        overrideTemplate: { catalogRevision: "catalog-revision-1", candidateKeys: ["component:contract-ds:existing-rating"] },
+        decisionId: "decision-1",
+        repeatedAttempts: 1,
+      },
+    }).success).toBe(true);
+  });
+
+  test("generated POST /api/components 409 schema exposes the reuse-gate envelope", () => {
+    const document = JSON.parse(renderOpenApiJson()) as {
+      paths: Record<string, { post: { responses: Record<string, { content: Record<string, { schema: Record<string, unknown> }> }> } }>;
+    };
+    const schema = document.paths["/api/components"]!.post.responses["409"]!.content["application/json"]!.schema;
+    expect(schema).not.toEqual({ $ref: "#/components/schemas/ErrorEnvelope" });
+    const error = schema.properties as Record<string, { anyOf: Array<{ properties: Record<string, unknown> }> }>;
+    const reuseError = error.error.anyOf.find((variant) => Object.hasOwn(variant.properties, "catalogRevision"))!;
+    expect(reuseError.properties.code).toMatchObject({ enum: ["component_reuse_required", "catalog_changed", "canonical_role_conflict"] });
+    expect(reuseError.properties.catalogRevision).toMatchObject({ type: "string" });
+    expect(reuseError.properties.decisionId).toMatchObject({ anyOf: [{ type: "string" }, { type: "null" }] });
+    expect(reuseError.properties.overrideTemplate).toMatchObject({
+      properties: { candidateKeys: { type: "array", items: { type: "string" } } },
+    });
   });
 
   test("GET /api/capabilities exposes actions, directives, param sources, limits and design systems", async () => {

@@ -806,6 +806,25 @@
                             ],
                             "type": "string"
                           },
+                          "candidateKeys": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "catalogRevision": {
+                            "type": "string"
+                          },
+                          "decisionId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "detail": {
                             "type": "string"
                           },
@@ -816,6 +835,14 @@
                             "type": "string"
                           },
                           "remappedTo": {
+                            "type": "string"
+                          },
+                          "reuseCode": {
+                            "enum": [
+                              "component_reuse_required",
+                              "catalog_changed",
+                              "canonical_role_conflict"
+                            ],
                             "type": "string"
                           },
                           "type": {
@@ -2598,8 +2625,14 @@
                   "__schema2": {
                     "pattern": "^asset_[0-9a-f]{64}$",
                     "type": "string"
+                  },
+                  "__schema3": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
                   }
                 },
+                "additionalProperties": false,
                 "properties": {
                   "designSystem": {
                     "$ref": "#/$defs/__schema0"
@@ -2643,12 +2676,46 @@
                   "id": {
                     "$ref": "#/$defs/__schema0"
                   },
+                  "intent": {
+                    "maxLength": 500,
+                    "minLength": 8,
+                    "type": "string"
+                  },
                   "message": {
                     "type": "string"
                   },
                   "name": {
                     "pattern": "^[A-Z][A-Za-z0-9]*$",
                     "type": "string"
+                  },
+                  "reuseOverride": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "candidateKeys": {
+                        "items": {
+                          "$ref": "#/$defs/__schema3"
+                        },
+                        "maxItems": 64,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "catalogRevision": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "reason": {
+                        "maxLength": 500,
+                        "minLength": 20,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "catalogRevision",
+                      "candidateKeys",
+                      "reason"
+                    ],
+                    "type": "object"
                   },
                   "source": {
                     "type": "string"
@@ -2657,7 +2724,8 @@
                 "required": [
                   "id",
                   "name",
-                  "source"
+                  "source",
+                  "designSystem"
                 ],
                 "type": "object"
               }
@@ -2678,6 +2746,12 @@
                     "rev": {
                       "const": 1,
                       "type": "number"
+                    },
+                    "warnings": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
                     }
                   },
                   "required": [
@@ -2700,7 +2774,7 @@
             },
             "description": "invalid_request"
           },
-          "409": {
+          "403": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2708,7 +2782,266 @@
                 }
               }
             },
-            "description": "already_exists"
+            "description": "admin_required (reuseOverride is admin-only)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "code": {
+                              "const": "already_exists",
+                              "type": "string"
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "message"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "candidates": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "atomicLevel": {
+                                    "type": "string"
+                                  },
+                                  "blocking": {
+                                    "type": "boolean"
+                                  },
+                                  "canonicalFor": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "deprecated": {
+                                    "type": "boolean"
+                                  },
+                                  "description": {
+                                    "type": "string"
+                                  },
+                                  "designSystem": {
+                                    "type": "string"
+                                  },
+                                  "draft": {
+                                    "type": "boolean"
+                                  },
+                                  "headUsageCount": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "key": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "const": "component",
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "propsDelta": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "added": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "type": "array"
+                                      },
+                                      "removed": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "type": "array"
+                                      },
+                                      "typeChanged": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "added",
+                                      "removed",
+                                      "typeChanged"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "reasons": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "recommendable": {
+                                    "type": "boolean"
+                                  },
+                                  "replacement": {
+                                    "type": "string"
+                                  },
+                                  "scope": {
+                                    "type": "string"
+                                  },
+                                  "score": {
+                                    "type": "number"
+                                  },
+                                  "version": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "key",
+                                  "id",
+                                  "name",
+                                  "designSystem",
+                                  "version",
+                                  "draft",
+                                  "description",
+                                  "canonicalFor",
+                                  "deprecated",
+                                  "recommendable",
+                                  "headUsageCount",
+                                  "score",
+                                  "blocking",
+                                  "reasons"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "catalogRevision": {
+                              "type": "string"
+                            },
+                            "code": {
+                              "enum": [
+                                "component_reuse_required",
+                                "catalog_changed",
+                                "canonical_role_conflict"
+                              ],
+                              "type": "string"
+                            },
+                            "conflictingRoles": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "decisionId": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "message": {
+                              "type": "string"
+                            },
+                            "nextSteps": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "overrideTemplate": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "candidateKeys": {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "catalogRevision": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "catalogRevision",
+                                "candidateKeys"
+                              ],
+                              "type": "object"
+                            },
+                            "policyVersion": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "repeatedAttempts": {
+                              "anyOf": [
+                                {
+                                  "maximum": 9007199254740991,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "resolution": {
+                              "enum": [
+                                "reuse",
+                                "escalate"
+                              ],
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "message",
+                            "catalogRevision",
+                            "policyVersion",
+                            "candidates",
+                            "retryable",
+                            "resolution",
+                            "nextSteps",
+                            "overrideTemplate",
+                            "decisionId",
+                            "repeatedAttempts"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "already_exists | component_reuse_required | catalog_changed | canonical_role_conflict"
           },
           "413": {
             "content": {
@@ -2731,7 +3064,7 @@
             "description": "validation_failed"
           }
         },
-        "summary": "Create a custom component from TSX source (syntax-checked and definition-extracted).",
+        "summary": "Create a custom component from TSX source (syntax-checked and definition-extracted). In enforce mode, intent is required; reuse conflicts return a terminal 409 with candidates and a human-confirmed override template.",
         "x-easyui-validated": false
       }
     },

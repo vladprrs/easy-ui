@@ -33,6 +33,8 @@ export interface RouteContract {
   requestSchema?: z.ZodType;
   responseSchema?: z.ZodType;
   errors: RouteError[];
+  /** Optional status-specific error bodies for OpenAPI; unspecified statuses use ErrorEnvelope. */
+  errorResponseSchemas?: Readonly<Partial<Record<number, z.ZodType>>>;
   /** Success status code for the OpenAPI document (default 200). */
   status?: number;
   /** Content type of a non-JSON success response (openapi: content key without schema). */
@@ -518,6 +520,13 @@ const issueSchema = validationIssueSchema.loose();
 const screenUrlSchema = z.object({ id: z.string(), url: z.string() });
 const casBody = { baseRev: positiveInt, message: z.string().optional() };
 
+/** Versioned with the public create/discovery contract: generic labels alone are not intent. */
+export const REUSE_INTENT_STOP_SET: readonly string[] = ["component", "компонент", "element", "элемент", "ui"];
+/** 8..500 characters after trim, with at least one product-specific token. */
+export const reuseIntentSchema = z.string().trim().min(8).max(500)
+  .refine((value) => tokenize(value).some((token) => !REUSE_INTENT_STOP_SET.includes(token)),
+    `intent must contain at least one token outside the generic stop set: ${REUSE_INTENT_STOP_SET.join(", ")}`);
+
 // --- Prototype lifecycle metadata (миграция v16) ---
 // Таксономия `kind` живёт в одном месте (src/api/client.ts) и здесь превращается в zod-enum:
 // столбец `prototypes.kind` намеренно без CHECK, поэтому именно контракт — точка контроля.
@@ -923,13 +932,46 @@ export const listComponentsContract = registerContract({
   errors: [errorCatalog.methodNotAllowed],
 });
 
+const componentReuseOverrideSchema = z.strictObject({
+  catalogRevision: z.string().min(1).max(128),
+  candidateKeys: z.array(z.string().min(1).max(256)).min(1).max(64),
+  reason: z.string().trim().min(20).max(500),
+});
+
+const componentReuseCandidateSchema = z.looseObject({
+  kind: z.literal("component"), key: z.string(), id: z.string(), name: z.string(), designSystem: z.string(),
+  version: z.number().int().nonnegative(), draft: z.boolean(), description: z.string(),
+  atomicLevel: z.string().optional(), scope: z.string().optional(), canonicalFor: z.array(z.string()),
+  replacement: z.string().optional(), deprecated: z.boolean(), recommendable: z.boolean(),
+  headUsageCount: z.number().int().nonnegative(), score: z.number(), blocking: z.boolean(), reasons: z.array(z.string()),
+  propsDelta: z.strictObject({ added: z.array(z.string()), removed: z.array(z.string()), typeChanged: z.array(z.string()) }).optional(),
+});
+
+const componentReuseErrorSchema = z.looseObject({
+  code: z.enum(["component_reuse_required", "catalog_changed", "canonical_role_conflict"]),
+  message: z.string(), catalogRevision: z.string(), policyVersion: z.number().int().nonnegative(),
+  candidates: z.array(componentReuseCandidateSchema), retryable: z.literal(false), resolution: z.enum(["reuse", "escalate"]),
+  nextSteps: z.array(z.string()),
+  overrideTemplate: z.strictObject({ catalogRevision: z.string(), candidateKeys: z.array(z.string()) }),
+  decisionId: z.string().nullable(), repeatedAttempts: z.number().int().nonnegative().nullable(),
+  conflictingRoles: z.array(z.string()).optional(),
+});
+
+const componentCreateConflictEnvelopeSchema = z.strictObject({
+  error: z.union([
+    z.looseObject({ code: z.literal("already_exists"), message: z.string() }),
+    componentReuseErrorSchema,
+  ]),
+});
+
 export const createComponentContract = registerContract({
   method: "POST", path: "/api/components",
-  summary: "Create a custom component from TSX source (syntax-checked and definition-extracted).",
+  summary: "Create a custom component from TSX source (syntax-checked and definition-extracted). In enforce mode, intent is required; reuse conflicts return a terminal 409 with candidates and a human-confirmed override template.",
   status: 201,
-  requestSchema: z.object({ id: slugString, name: z.string().regex(/^[A-Z][A-Za-z0-9]*$/), source: z.string(), designSystem: slugString.optional(), message: z.string().optional(), figma: figmaSchema.optional() }),
-  responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1) }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.payloadTooLarge, errorCatalog.validationFailed],
+  requestSchema: z.strictObject({ id: slugString, name: z.string().regex(/^[A-Z][A-Za-z0-9]*$/), source: z.string(), designSystem: slugString, message: z.string().optional(), figma: figmaSchema.optional(), intent: reuseIntentSchema.optional(), reuseOverride: componentReuseOverrideSchema.optional() }),
+  responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(z.string()).optional() }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.payloadTooLarge, errorCatalog.validationFailed, { status: 403, code: "admin_required", description: "reuseOverride is admin-only" }, { status: 409, code: "component_reuse_required" }, { status: 409, code: "catalog_changed" }, { status: 409, code: "canonical_role_conflict" }],
+  errorResponseSchemas: { 409: componentCreateConflictEnvelopeSchema },
 });
 
 export const getComponentContract = registerContract({
@@ -1362,19 +1404,6 @@ export const catalogLibraryContract = registerContract({
 });
 
 // --- Discovery кандидатов на переиспользование (проект 2, спека §2, план 2026-07-31 §4 T4) ---
-
-/**
- * Стоп-набор `intent` (спека §2, версионируется вместе с контрактом): одного слова «компонент»
- * недостаточно, чтобы описать задачу, а именно такой intent и присылает автоматика «лишь бы
- * поле было заполнено». Требование «хотя бы один токен вне набора» — единственная защита от
- * вырождения сигнала описания в шум.
- */
-export const REUSE_INTENT_STOP_SET: readonly string[] = ["component", "компонент", "element", "элемент", "ui"];
-
-/** 8..500 символов **после** trim; `.trim()` в zod 4 выполняется до проверок длины. */
-export const reuseIntentSchema = z.string().trim().min(8).max(500)
-  .refine((value) => tokenize(value).some((token) => !REUSE_INTENT_STOP_SET.includes(token)),
-    `intent must contain at least one token outside the generic stop set: ${REUSE_INTENT_STOP_SET.join(", ")}`);
 
 /** 1..20, default 8 (спека §2). Дефолт подставляет хендлер — один на оба метода. */
 const reuseLimitSchema = z.number().int().min(1).max(20);

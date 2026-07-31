@@ -205,6 +205,14 @@ curl -u "$EASYUI_LEGACY_BASIC_AUTH" -b /tmp/easyui.cookies -X POST \
 
 ## Сценарий 2: кастомный компонент + прототип
 
+### Reuse gate: обязательная остановка перед новым компонентом
+
+Перед созданием нового custom-компонента сформулируйте содержательный `intent` — что именно делает компонент для продукта. В фазе `enforce` raw `POST /api/components` требует его: после trim это 8..500 символов и хотя бы один токен вне стоп-набора `component`, `компонент`, `element`, `элемент`, `ui`. В `shadow` отсутствие поля временно допустимо, но сервер синтезирует intent и записывает аудит `intent_missing`; это не повод посылать пустое или шаблонное описание.
+
+Сначала запросите `GET`/`POST /api/catalog/candidates` для той же дизайн-системы и используйте существующий компонент, если он покрывает задачу. Если raw create возвращает `409` reuse gate, агент **не** делает авто-ретрай и **не** выполняет `force-new`: останавливается, показывает человеку кандидатов и `decisionId`, затем ждёт решения. Админский `reuseOverride` — только двухфазный raw API-контракт: человек подтверждает актуальные `catalogRevision` и полный `candidateKeys`, после чего админ передаёт их вместе с причиной 20..500 символов. При `catalog_changed` снова запросите кандидатов; не переносите старое подтверждение.
+
+Текущий `driver.mjs component` пока не передаёт `intent` или `reuseOverride`; не выдавайте несуществующие CLI-флаги за доступные. Для enforce-создания и подтверждённого override используйте raw HTTP API с обычными cookie/`Origin` из Setup либо дождитесь поддержки драйвера.
+
 Контракт TSX-модуля — named export `definition` + default plain function component (`memo`/`forwardRef` нельзя). Образцы: `examples/rating-stars.tsx` (простейший, ABI v1) и `examples/plan-picker.tsx` (typed events + named slots, ABI v2):
 
 - `definition.props` — Zod **strict** схема; `description: string` обязателен; опционально `slots?: string[]`, `example?`, `examples?`, `atomicLevel?`, `capabilities?: {typedEvents?, namedSlots?}` (тип требует литеральные `true` — писать `{...} as const`), семантика для валидатора (`interactive?`, `accessibleLabelProps?`, `urlProps?`). `examples` содержит до 8 именованных наборов props: имя — slug 1–32 символа, `default` зарезервирован; каждый input ≤16 KiB, все examples компонента вместе ≤64 KiB. Сервер сохраняет провалидированный **input**, а не результат Zod transform/default.

@@ -272,7 +272,7 @@ Meta-ответы прототипов и компонентов additively не
 | Метод и путь | Тело / ответ |
 |---|---|
 | `GET /components` | `{id,name,designSystem,headRev,latestVersion:number|null,updatedAt}[]`; `?includeDeleted=1` дополнительно возвращает надгробия с `{deleted:true,deletedAt,reason,replacement}` |
-| `POST /components` | `{id,name,source,designSystem?,message?}` → 201 `{id,rev}` и `Location`; `designSystem` по умолчанию `shadcn` |
+| `POST /components` | `{id,name,source,designSystem,message?,figma?,intent?,reuseOverride?}` → 201 `{id,rev,warnings?}` и `Location`; создание проходит reuse gate — детали ниже |
 | `GET /components/:id` | `{id,name,designSystem,headRev,versions:ComponentVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable}` (lifecycle-поля — см. [Lifecycle-модель](#lifecycle-модель)); мягко удалённый компонент — **404**, если не передан `?includeDeleted=1` (тогда meta дополняется `{deleted:true,deletedAt,reason,replacement}`) |
 | `PUT /components/:id` | `{source?,designSystem?,message?,baseRev}` → `{rev}`; хотя бы одно из `source`/`designSystem`, смена системы наследует текущий source |
 | `DELETE /components/:id` | `{baseRev, reason?, replacement?, force?}` → 204; `409 component_in_use` пока компонент пинуют головные ревизии (обход — `force:true` от админа, иначе `403 admin_required`); `replacement` — id живого компонента, иначе `422` |
@@ -287,6 +287,16 @@ Meta-ответы прототипов и компонентов additively не
 | `GET /components/:id/versions/:version` | Метадата версии **любого статуса**: `{version,rev,status,statusReason,supersededBy,statusRev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?,scope?,allowedAsRoot?,canonicalFor?,sourceBounded?,ownership?,replacement?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; `propsJsonSchema` описывает input (до Zod defaults/transforms); immutable |
 | `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); отдаётся при статусе `active\|deprecated\|superseded`, иначе `404 bundle_unavailable`; immutable |
 | `POST /components/:id/versions/:version/status` | `{status, reason?, supersededBy?, baseStatusRev}` → 200 `{status, statusRev}`; см. [Статусы версий](#статусы-версий-компонентов) |
+
+### Reuse gate при создании компонента
+
+`POST /components` сопоставляет новую TSX-реализацию с актуальным каталогом той же дизайн-системы. Перед созданием клиенту следует вызвать `GET` или `POST /catalog/candidates`: ответ содержит `catalogRevision` и кандидатов с их ключами. Это помогает выбрать уже существующий компонент, но не заменяет проверку самого `POST /components` — сервер повторно вычисляет решение в одной транзакции.
+
+`intent` описывает продуктовую задачу нового компонента. В фазе `enforce` он обязателен; строка сначала `trim`-ится, затем должна иметь от 8 до 500 символов и хотя бы один токен вне стоп-набора `component`, `компонент`, `element`, `элемент`, `ui`. В `shadow` поле можно не передавать: сервер синтезирует intent из имени, возвращает предупреждение и отдельно пишет в аудит решение `intent_missing`. Если `intent` передан в любой фазе, он всегда валидируется по тем же правилам.
+
+Когда сервер требует повторно использовать компонент или обнаруживает конфликт канонической роли, он возвращает `409` с конвертом `error`. `error.code` — один из `component_reuse_required`, `catalog_changed`, `canonical_role_conflict`. В конверте есть `catalogRevision`, `decisionId`, `candidates` (доступный материал кандидатов: `key`, id/name, дизайн-система, версия/draft, description, atomic/scope/canonical metadata, recommendation/deprecation, usage, score, blocking, reasons и при наличии `propsDelta`), `policyVersion`, `resolution`, `nextSteps`, `overrideTemplate:{catalogRevision,candidateKeys}` и `retryable:false`. Для `canonical_role_conflict` дополнительно есть `conflictingRoles`. Полный набор требуемых blocking-ключей берите из `overrideTemplate.candidateKeys`; top-level `candidateKeys` в create-409 нет, и нельзя подменять этот набор отфильтрованной UI-выборкой.
+
+`reuseOverride` — только для администратора и только после двухфазного подтверждения человеком. Сначала прочитайте кандидатов/получите `409` и сохраните его `catalogRevision` с **полным** `candidateKeys`; затем повторите raw API-запрос с `{catalogRevision,candidateKeys,reason}`. `reason` после trim должен быть 20..500 символов. Сервер заново считает кандидатов: устаревшая ревизия даёт `409 catalog_changed`, а неполный список ключей не подтверждает override. Не делайте авто-ретрай и не выполняйте auto-`force-new`: покажите кандидатов и `decisionId` человеку для решения.
 
 ### Граф использования компонентов
 

@@ -102,7 +102,16 @@ const errorResponses = (contract: RouteContract): JsonObject => {
   return Object.fromEntries(
     [...byStatus.entries()].map(([status, codes]) => [
       String(status),
-      { description: codes.join(" | "), content: { "application/json": { schema: { $ref: ERROR_ENVELOPE_REF } } } },
+      {
+        description: codes.join(" | "),
+        content: {
+          "application/json": {
+            schema: contract.errorResponseSchemas?.[status]
+              ? toJsonSchema(contract.errorResponseSchemas[status]!, "output")
+              : { $ref: ERROR_ENVELOPE_REF },
+          },
+        },
+      },
     ]),
   );
 };
