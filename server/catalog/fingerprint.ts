@@ -208,9 +208,16 @@ export interface StructuralMeta {
 export function structuralFingerprint(meta: StructuralMeta): string | undefined {
   const props = propsSignature(meta.propsJsonSchema);
   if (props === undefined) return undefined;
+  const io = ioSignature(meta.events, meta.slots);
+  // Отпечаток блокирует **без порога**, поэтому он обязан на чём-то различать. Компонент без
+  // единого пропа, события и слота не описан ничем, кроме атомарного уровня, и совпал бы с
+  // любым другим таким же: калибровка (docs/audit/2026-07-31-matcher-calibration.md, замер 5)
+  // нашла на проде ровно такую пару — `yp-no-pay-card-info ↔ yp-separator`. Пустая схема здесь
+  // равнозначна отсутствующей: сигнал неприменим, решение остаётся за порогом.
+  if (props.properties.length === 0 && io.events.length === 0 && io.slots.length === 0) return undefined;
   const payload = {
     props,
-    io: ioSignature(meta.events, meta.slots),
+    io,
     atomicLevel: meta.atomicLevel ?? null,
     scope: meta.scope ?? null,
   };

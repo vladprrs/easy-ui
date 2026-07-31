@@ -3,7 +3,7 @@ import { sourceShingles } from "./fingerprint";
 import { CORPUS, FIXTURE_IDF, PAY_BUTTON_SCHEMA, activeCandidate, draftCandidate, payButton } from "./fixtures/corpus";
 import { PAY_BUTTON_SOURCE, PROMO_CARD_SOURCE, RATING_STARS_SOURCE, RENAMED_PAY_BUTTON_SOURCE } from "./fixtures/sources";
 import { matchCandidates, score, type CorpusCandidate, type ProposedArtifact } from "./matcher";
-import { SPEC_DEFAULT_POLICY, type MatchPolicy } from "./policy";
+import { CALIBRATED_POLICY, SPEC_DEFAULT_POLICY, totalWeight, type MatchPolicy } from "./policy";
 
 // Политика инъектируется параметром (план D7): здесь она берётся из `policy.ts` только как
 // стартовая точка. Тесты, зависящие от конкретного порога, задают свою политику явно —
@@ -319,6 +319,22 @@ describe("matchCandidates — пороги, выдача и дельта про�
       for (const [, specifier] of code.matchAll(/from\s+"([^"]+)"/g)) expect([specifier, allowed.has(specifier ?? "")]).toEqual([specifier, true]);
       expect(code).not.toMatch(/\bawait\b/);
       expect(code).not.toMatch(/\bfetch\(/);
+    }
+  });
+
+  test("калиброванная политика: инварианты и три обязательных сценария T0", () => {
+    // Числа выбирает калибровка (`scripts/calibrate-matcher.ts`, отчёт
+    // `docs/audit/2026-07-31-matcher-calibration.md`), а не этот тест — здесь фиксируется
+    // только то, что политика прода вообще пригодна: веса нормированы, пороги упорядочены,
+    // версия не provisional, и обязательные сценарии §10 под ней блокируются.
+    expect(totalWeight(CALIBRATED_POLICY.weights)).toBeCloseTo(1, 10);
+    expect(Object.values(CALIBRATED_POLICY.weights).every((weight) => weight > 0)).toBe(true);
+    expect(CALIBRATED_POLICY.reviewThreshold).toBeLessThan(CALIBRATED_POLICY.blockingThreshold);
+    expect(CALIBRATED_POLICY.policyVersion).toBeGreaterThanOrEqual(1);
+
+    for (const proposed of [proposedPayButtonClone, { ...proposedPayButtonClone, description: "Совершенно другое описание" }, renamedCopyPaste]) {
+      const [top] = matchCandidates(CORPUS, proposed, CALIBRATED_POLICY, options).candidates;
+      expect([proposed.name, top?.id, top?.blocking]).toEqual([proposed.name, "yp-pay-button", true]);
     }
   });
 

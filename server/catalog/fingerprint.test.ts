@@ -120,4 +120,19 @@ describe("structuralFingerprint", () => {
   test("без объявленной схемы props отпечатка нет — иначе два безпропсовых компонента блокировали бы друг друга", () => {
     expect(structuralFingerprint({ events: [], slots: [] })).toBeUndefined();
   });
+
+  // Калибровка на проде (docs/audit/2026-07-31-matcher-calibration.md, замер 5) нашла пару
+  // `yp-no-pay-card-info ↔ yp-separator`: у обоих схема объявлена, но пуста, и отпечаток
+  // блокировал их друг об друга без порога. Пустая схема равнозначна отсутствующей.
+  test("пустая схема без событий и слотов не даёт отпечатка", () => {
+    const empty = { type: "object", properties: {} };
+    expect(structuralFingerprint({ propsJsonSchema: empty, events: [], slots: [], atomicLevel: "atom" })).toBeUndefined();
+    expect(structuralFingerprint({ propsJsonSchema: { type: "object" }, events: [], slots: [] })).toBeUndefined();
+  });
+
+  test("одного события или слота уже достаточно, чтобы отпечаток различал", () => {
+    const empty = { type: "object", properties: {} };
+    expect(structuralFingerprint({ propsJsonSchema: empty, events: ["press"], slots: [] })).toBeDefined();
+    expect(structuralFingerprint({ propsJsonSchema: empty, events: [], slots: ["footer"] })).toBeDefined();
+  });
 });
