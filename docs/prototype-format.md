@@ -188,9 +188,44 @@ The root object is strict: `version: 1`, `name` (1–120 characters), optional `
 
 The reference itself is checked at expansion: an unknown parameter name in `props.params`, a missing `required` parameter, a value whose type does not match the declaration (`asset` expects `{"$asset":"asset_<sha256>"}`, `json` accepts anything), a `$param` naming an undeclared parameter, or a child routed into a slot the composition does not declare are all errors.
 
+### Composition document v2
+
+`compositionDocSchema` is a discriminated union over `version`: `1` (frozen, non-nesting) and `2`. A v2 document keeps every v1 field and adds Atomic Design metadata plus the right to nest:
+
+```json
+{
+  "version": 2,
+  "name": "PaymentMethodPicker",
+  "atomicLevel": "organism",
+  "scope": "section",
+  "canonicalFor": ["payment-method-picker"],
+  "ownership": { "reason": "…", "provenance": "…" },
+  "replacement": "yp-payment-picker",
+  "params": { "title": { "type": "string" } },
+  "slots": ["footer"],
+  "spec": {
+    "root": "list",
+    "elements": {
+      "list": { "type": "YpBox", "props": {}, "children": ["row"] },
+      "row": { "type": "@eui/Composition", "props": { "composition": "payment-method-row", "params": { "label": { "$param": "title" } } } }
+    }
+  }
+}
+```
+
+- `atomicLevel` ∈ `molecule | organism | template | page` — **required** in v2; `scope` ∈ `section | shell | screen` is optional. Both mirror the component `definition` fields, so audit and Library treat a composition and a component as the same kind of catalog artifact.
+- `canonicalFor` follows the same role uniqueness policy as components (see [canonical roles](canonical-roles.md)); `ownership.reason` (≤500) explains irreducibility; `replacement` names the artifact that supersedes this one.
+- Everything else — `params`, `slots`, `spec`, `provenance`, the 50/20/300 limits, the no-`region`, no-`@eui/FlowRoot`, slot-matching and single-parent rules — is identical to v1.
+
+**Nesting.** A v2 spec may contain `@eui/Composition`. Each nested reference must resolve to a published composition of the **same active design system**; the published dependency graph must be acyclic; the nesting depth is at most **5**, counting the outer composition (`COMPOSITION_DEPTH_LIMIT`, reported as `limits.compositionDepth` in `GET /api/capabilities`). A cycle is reported with its full path, e.g. `checkout-page@2 → payment-picker@4 → payment-row@3 → checkout-page@2`. The fully expanded tree still has to satisfy the per-screen budgets: 500 elements (`EXPANDED_ELEMENTS_LIMIT`) and tree depth 50 (`EXPANDED_TREE_DEPTH_LIMIT`).
+
+`@eui/Slot` and `$param` keep their semantics at every level: a nested composition receives its parameters from the `props.params` of the referencing element (which may itself be a `$param` of the outer composition), and children routed into an outer slot travel through the nested slot they were addressed to. A v1 document referenced from a v2 parent keeps v1 behaviour — its own document is still rejected if it nests.
+
+**Origins are reversible through every layer.** Expanded keys stay `<hostKey>$<innerKey>` at each level (`checkout$picker$row$label`), and `expandedFrom[key]` carries the flat v1 fields (`compositionId`, `hostKey`, `innerKey`) plus `chain: Array<{compositionId, version, hostKey, innerKey}>` describing every layer from the screen down.
+
 ### v1 restrictions
 
-`compositionDocSchema` enforces all of the following:
+`compositionDocSchema` enforces all of the following for a **v1** document (v2 lifts only the nesting rule):
 
 - **No `region` markers.** A composition never carries `statusBar`/`header`/`footer` markers. Regions stay authored on the screen: `analyzeScreenRegions` works on the **authored** screen spec, and a `region` on the `@eui/Composition` element itself is carried onto the root of the expanded composition — so a composition can still fill a region, but only as marked by the screen that references it.
 - **No `@eui/FlowRoot`** — it is the screen root only.
@@ -212,7 +247,7 @@ The key contract is **load-bearing**: expanded keys are `<hostKey>$<innerKey>`, 
 
 ### Where expansion happens
 
-Expansion runs in the **save path** on the server (`expandPrototypeForSave`), **before** `snapshotDefinitions` and `collectAndValidateAssetRefs` — so a component or asset that occurs only inside a composition still lands in `prototype_revision_components` / `prototype_revision_assets` and cannot be deleted out from under a published revision. The database stores the **authored** document (with `@eui/Composition`); component, asset and composition pins are derived from the **expanded** one, and publishing additionally requires every referenced composition to be pinned. The client (`src/prototype/loader.ts`) performs the same expansion using the composition documents returned alongside the draft/revision/version, so player, CJM, capture and gallery all render the expanded tree while the editor keeps the authored one.
+Expansion runs in the **save path** on the server (`expandPrototypeForSave`), **before** `snapshotDefinitions` and `collectAndValidateAssetRefs` — so a component or asset that occurs only inside a composition still lands in `prototype_revision_components` / `prototype_revision_assets` and cannot be deleted out from under a published revision. With v2 the save path expands the whole nested closure (up to the depth limit) and pins **every** composition in it, not only the top-level hosts: `prototype_revision_compositions` receives the transitive set, and component pins are taken from the dependency manifest of each pinned publication, so a later republication of a nested composition cannot change an existing prototype revision. The database stores the **authored** document (with `@eui/Composition`); component, asset and composition pins are derived from the **expanded** one, and publishing additionally requires every referenced composition to be pinned. The client (`src/prototype/loader.ts`) performs the same expansion using the composition documents returned alongside the draft/revision/version, so player, CJM, capture and gallery all render the expanded tree while the editor keeps the authored one.
 
 ## Spacing & layout contract v1
 

@@ -431,7 +431,56 @@ Meta-ответы прототипов и компонентов additively не
 
 **Чтение прототипа.** `GET /prototypes/:id/draft`, `…/revisions/:rev` и `…/versions/:v` additively отдают `compositions: CompositionPin[]` — `{id,name,version,sourceHash,doc}` по пинам ревизии. Клиент раскрывает авторский документ этими документами перед построением runtime-спека, поэтому плеер и capture видят ровно ту версию композиции, что была закреплена.
 
+### Композиции версии 2 (вложенность)
+
+`POST`/`PUT` принимают документ версии **1** или **2** (`compositionDocSchema` — discriminated union по `version`; грамматика — в [формате прототипа](prototype-format.md#composition-document-v2)). Поведение v1 заморожено: её документ, `sourceHash` и раскрытие не изменились ни на байт, а `@eui/Composition` внутри v1-документа по-прежнему `422`.
+
+Миграция **v21** добавила публикации композиций два столбца (`ALTER TABLE ... ADD COLUMN` с дефолтами, перестройки нет):
+
+- `composition_publishes.dependency_manifest_json` — манифест замыкания `{version:1, root:{id,version}, compositions:CompositionDependencyPin[], components:ComponentDependencyPin[], hash}`; у исторических публикаций остаётся `'[]'`;
+- `composition_publishes.dependency_manifest_hash` — sha256 канонического манифеста (списки отсортированы по `id`,`version`), продублированный столбцом ради дешёвой сверки; расхождение столбца и payload при чтении → `422 invalid_stored_revision`.
+
+Также v21 навесила на `compositions`/`composition_revisions` те же триггеры запрета retired-дизайн-системы, что уже стояли на компонентах и прототипах, и `assertRegistryIntegrity` теперь проверяет композиции наравне с компонентами (висячая система, расхождение системы головы и ревизии).
+
+**Публикация v2** резолвит каждую вложенную ссылку в последнюю `active`-публикацию композиции **той же** дизайн-системы, фиксирует прямые и транзитивные пины, проверяет ацикличность и глубину, раскрывает параметры и слоты и валидирует полностью раскрытое дерево — всё это **до** записи публикации, поэтому неудачный publish не оставляет ни строки в `composition_publishes`. Ошибки — `422 validation_failed` с говорящим `issues[].message`: `different design system`, полный путь цикла (`a@1 → b@1 → a@1`), `composition nesting exceeds 5`, а также обычные ошибки параметров/слотов, вычисленные на раскрытой публикации (например, недостающий `required`-параметр вложенной композиции).
+
+**Пины прототипа** при v2 — это всё замыкание, а не только верхнеуровневые хосты: `prototype_revision_compositions` получает транзитивный набор, а компонентные пины берутся из манифеста каждой запинованной публикации, поэтому более поздняя публикация вложенной композиции не меняет уже сохранённую ревизию прототипа. `classifyRevision` проверяет статус **каждого** пина замыкания, а не только композиций, встреченных в авторском документе.
+
 **Мягкое удаление.** `DELETE` только помечает `deleted_at`/`delete_reason`: композиция исчезает из списка и не доступна новым сохранениям, но уже закреплённые публикации продолжают читаться по версии (их защищает FK RESTRICT), а `usages` остаётся читаемым и для надгробия. Повреждённая строка ревизии при чтении даёт `422 invalid_stored_revision`.
+
+## Атомарная политика и миграция каталога
+
+Спека — `docs/superpowers/specs/2026-07-30-composition-v2-dedup-migration-design.md`. Возможности объявлены в `/api/capabilities` как `features.compositionV2` и `features.catalogMigration`.
+
+### Атомарная политика
+
+Представление артефакта выбирается по ответственности: атом — TSX, молекула/организм/шаблон/страница — композиция. TSX-молекула или TSX-организм допустимы, только если поведение нельзя выразить событиями, state-директивами, параметрами и слотами, и тогда `definition.ownership.reason` обязан это объяснять.
+
+Правило применяется **к новым артефактам**: миграция v21 создала однострочную таблицу `atomic_policy(id=1, activated_at, policy_version, activated_by)`, и граница берётся из БД, а не из окружения, — рестарт или восстановление образа не могут выбрать другой рубеж. Компонент с `components.created_at >= atomic_policy.activated_at`, у которого `atomicLevel` ∈ `molecule|organism` и нет непустого `ownership.reason`, получает на `POST /components/:id/publish` ошибку **`422 atomic_policy_violation`** с `issues[].path = ["ownership","reason"]`. Более старые id остаются публикуемыми на время аудируемой миграции, но попадают в отчёт аудита.
+
+### Maintenance-lock
+
+Защищённый cutover берёт эксклюзивный однострочный лок `maintenance_locks`. Пока он держится, **чтение и воспроизведение работают**, а любой небезопасный метод (всё, кроме `GET`/`HEAD`/`OPTIONS`) отвечает **`503 maintenance_in_progress`** с `details.runId` и `details.retryAfterSeconds`. Исключений два: сам префикс `/api/catalog/migrations` (иначе нельзя было бы завершить или откатить активный прогон) и `/api/auth/*` — проверка выполняется после роутера аутентификации, поэтому логин под локом не ломается. Попытка взять уже занятый лок — тоже `503`; потеря лока во время защищённой операции — `409 maintenance_lock_lost`.
+
+### Endpoints миграции каталога
+
+Все — **только админ** (`401 unauthorized` анонимному, `403 admin_required` не-админу).
+
+| Метод и путь | Тело / ответ |
+|---|---|
+| `GET /catalog/migrations/audit` | Read-only аудит согласованного снапшота: `{generatedAt,catalogRevision,dataFingerprint,artifacts[],duplicateGroups[],plan}`. Каждый артефакт классифицируется как `irreducible-code | composition-candidate | semantic-duplicate | metadata-only-fix | deprecated-unused | documented-exception` и несёт граф зависимостей, счётчики использования и метаданные. `plan` — готовый `CatalogMigrationPlan` версии 1 |
+| `GET /catalog/migrations` | `{runs:[{id,planHash,catalogRevision,dataFingerprint,status,generatedAt,startedAt,completedAt,backupId,reason}]}`, `status` ∈ `prepared | applying | applied | aborted | rolled_back` |
+| `POST /catalog/migrations/prepare` | Тело — план; → 201 `{runId,planHash,status}`. Идемпотентен по `planHash`: повторный prepare того же плана возвращает существующий прогон. Устаревшие `catalogRevision`/`dataFingerprint` → `409 migration_plan_stale` **до** любых записей |
+| `POST /catalog/migrations/:runId/apply` | Тело — тот же план; → `{runId,status:"applied",backupId}`. Берёт maintenance-lock, снимает полный образ SQLite, повторно сверяет отпечатки и выполняет весь cutover **одной транзакцией**; повтор для уже применённого прогона идемпотентен. Чужой план → `409 migration_plan_mismatch`, неподготовленный прогон → `409 migration_run_not_prepared` |
+| `POST /catalog/migrations/:runId/rollback` | `{backupId?,reason?}` → `{runId,backupId,backupSha256,bytes,status:"rolled_back"}`. Восстанавливает образ cutover и переводит прогон в `rolled_back`. `404 migration_backup_not_found`, `409 migration_backup_mismatch|migration_backup_corrupt|migration_run_not_rollbackable` |
+
+**План** (`CatalogMigrationPlan`) содержит `groups[]` (канон, отставляемые, confidence, причины, адаптер, затронутые головы, неизменяемые использования), `compositionConversions[]`, `metadataRevisions[]`, `documentedExceptions[]`. Канонический сериализованный план хешируется, и `apply` требует ровно тот план, которым владеет прогон. Выбор канона детерминирован: активный раньше deprecated → валидная каноническая роль → больше использований в головах → пройденный визуальный эталон → полные архитектурные метаданные → более старая стабильная публикация как последний тайбрейк.
+
+**Адаптеры** декларативны (`typeMap`, `props.rename|defaults|enumMap|drop`, `events.rename|payloadMap`, `slots.rename|defaultTarget`), чисты и идемпотентны. Отбрасывание заполненного пропса, обработчика или слота запрещено и даёт отказ адаптера, если в плане нет артефакт-специфичного `documentedException`; преобразованный документ проходит обычную серверную валидацию — миграция не обходит схемы и линты.
+
+**Таблицы** (миграция v21): `catalog_replacements(from_kind,from_id,from_design_system PK, to_*, migration_run_id, reason, created_at)` — межартефактный реестр замен, переживающий мягкое удаление источника (FK на источник намеренно нет; поддерживает component→component, component→composition, composition→composition); `catalog_migration_runs`; `catalog_migration_staging(run_id,kind,artifact_id,design_system,payload_json,status)` — план-owned staging стадии A, недоступный обычному авторингу.
+
+**Бэкапы cutover** удерживаются и в процессе, и на диске: `apply` пишет образ в `DATA_DIR/catalog-migrations/<backupId>.sqlite` плюс sidecar `<...>.sqlite.json` с `sha256`/`bytes`/`createdAt`. Поэтому откат остаётся возможен после рестарта или редеплоя; при восстановлении сверяются контрольная сумма и совпадение схемы (`409 migration_backup_incompatible`), а `audit_events` и `catalog_reuse_decisions` намеренно **не** откатываются — это append-only свидетельства, включая запись о самом откате (`catalog.migration.rolled_back`).
 
 ## Bundles (экспорт/импорт ZIP)
 
@@ -804,11 +853,11 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
   "directives": ["$state", "$bindState", "$template", "$cond", "$asset"],
   "paramSources": ["$event", "$elementId", "$itemIndex", "$itemKey"],
   "conditions": ["$and", "$or", "$state", "$item", "$index", "eq", "neq", "gt", "gte", "lt", "lte", "not"],
-  "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5, "geometryRects": 2000, "flows": 24, "flowSteps": 50, "flowTotalSteps": 320, "flowDepth": 4 },
+  "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5, "geometryRects": 2000, "flows": 24, "flowSteps": 50, "flowTotalSteps": 320, "flowDepth": 4, "compositionDepth": 5 },
   "designSystems": ["shadcn", "wireframe", "..."],
   "resolvedSpaceScales": { "shadcn": { "none": "0px", "xs": "4px", "sm": "8px", "md": "12px", "lg": "16px", "xl": "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" } },
   "regions": ["statusBar", "header", "footer"],
-  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true, "screenRegions": true, "bundleExport": true, "bundleImport": true, "componentReuseGate": true },
+  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true, "screenRegions": true, "bundleExport": true, "bundleImport": true, "componentReuseGate": true, "compositionV2": true, "catalogMigration": true },
   "reuseGate": { "mode": "shadow", "intentRequired": false, "policyVersion": 1 }
 }
 ```
@@ -816,6 +865,8 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 `reuseGate` описывает фазу [reuse-гейта](#reuse-gate-при-создании-и-публикации-компонента) этого инстанса: `mode` — `shadow` либо `enforce`, `intentRequired` истинно ровно в `enforce`, `policyVersion` — версия политики матчинга, та же, что в ответах `/api/catalog/candidates` и в записях аудита. Значение приходит из `REUSE_GATE`, прочитанной один раз на входе процесса, — повторного чтения окружения на запросе нет, поэтому discovery и сам гейт не могут разойтись.
 
 `designSystems` читается из живого реестра БД; `resolvedSpaceScales` резолвится для каждой системы из её последней merged-темы с canonical fallback. Значения `limits` импортируются из модулей, где они реально enforce'ятся (`src/prototype/schema.ts`, `src/prototype/validate.ts`, `server/assets/validate.ts`, `server/screenshot/service.ts`, `server/http.ts`), — двойного хардкода нет.
+
+`features.compositionV2` — инстанс принимает документы композиций версии 2 (вложенность, `atomicLevel`); `features.catalogMigration` — доступны админские эндпоинты аудита и миграции каталога. `limits.compositionDepth` — максимальная глубина вложенности композиций, **внешняя композиция считается уровнем 1** (см. [формат](prototype-format.md#composition-document-v2)).
 
 `limits.flowDepth` — максимальная глубина дерева сценариев (`flow.parentId`), и **корень считается уровнем 1**: при `flowDepth: 4` законна цепочка «корень → ребёнок → внук → правнук», а пятый уровень отвергается входной схемой. Правила иерархии описаны в `docs/prototype-format.md#scenario-tree-flowparentid`; они исполняются только на записи — сохранённые ревизии парсятся без авторских правил и лимитов, чтобы откат образа читал документы без потерь.
 
