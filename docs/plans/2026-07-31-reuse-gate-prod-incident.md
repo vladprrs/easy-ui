@@ -1,7 +1,7 @@
 # План: разбор прод-инцидента reuse-gate (enforce без shadow-фазы)
 
-Дата: 2026-07-31 · Статус: **I1–I2 complete/deployed; I3–I4 implemented locally,
-production verification pending; I5 decision recorded / enforce not eligible**
+Дата: 2026-07-31 · Статус: **I1–I4 complete/deployed/verified; I5 decision recorded /
+enforce not eligible — KEEP SHADOW**
 Родительский план: `docs/plans/2026-07-31-component-reuse-enforcement.md` (проект 2, волны 0–2 выполнены)
 Спека: `docs/superpowers/specs/2026-07-30-component-reuse-enforcement-design.md`
 
@@ -151,12 +151,12 @@ POST /api/components → 400
 помнит ли кто-то про необъявленную переменную окружения. Критерий: переменная видна в файле,
 описана в §deployment, смена фазы — правка одной строки + редеплой.
 
-**I3 — Волна 3 родительского плана — IMPLEMENTED LOCALLY / PRODUCTION VERIFICATION PENDING** (T6a → T6b ∥ T7)
+**I3 — Волна 3 родительского плана — COMPLETE / DEPLOYED / VERIFIED** (T6a → T6b ∥ T7)
 Механическая простановка `intent` в фикстурах, триаж коллизий гейта, CLI (`--intent`,
 `--force-new`, `catalog list|search|get`). Критерий: `npm run verify` и `npm run e2e` зелёные.
 Включает правку `.claude/skills/author/driver.mjs:807`.
 
-**I4 — Контрактный слой — IMPLEMENTED LOCALLY / PRODUCTION VERIFICATION PENDING** (владеет: `server/openapi.json`, `docs/server-api.md`, `author/SKILL.md`)
+**I4 — Контрактный слой — COMPLETE / DEPLOYED / VERIFIED** (владеет: `server/openapi.json`, `docs/server-api.md`, `author/SKILL.md`)
 `npm run generate:openapi`; описать `intent`, `reuseOverride` и 409-конверт с `reuseCode` в
 `docs/server-api.md`; добавить в скилл авторинга обязательность `intent` и стоп-набор.
 Критерий: `npm run verify:openapi` зелёный; `GET /api/openapi.json` на проде описывает
@@ -169,6 +169,25 @@ POST /api/components → 400
 автоматическое переключение.
 
 Порядок: **I1 → I2 ∥ I4 → I3 → I5**. I1 срочный, остальное — обычной волной.
+
+### Итог исправления 2026-07-31
+
+- Прод работает с `REUSE_GATE=shadow`; после возврата в shadow режим `enforce` повторно не
+  включался.
+- Финальный [code/test-коммит `519a1ff`](https://github.com/vladprrs/easy-ui/commit/519a1ff37237ff46d7610cee5cafea3cf5813b5e)
+  прошёл GitHub Actions: [`CI` run 30650309996](https://github.com/vladprrs/easy-ui/actions/runs/30650309996)
+  (`npm run verify` и полный `npm run e2e`) и
+  [`build-image` run 30650309405](https://github.com/vladprrs/easy-ui/actions/runs/30650309405)
+  зелёные. Локально: 1053 Vitest + 494 server + 13 SDK тестов; Playwright — 119 passed /
+  1 intentional skip.
+- Dokploy deployment завершён со статусом `done`; runtime verify — 5/5 PASS (health, auth,
+  SPA, login cookie, authenticated API).
+- Продовый `GET /api/openapi.json` содержит `intent`, create/publish `reuseOverride`,
+  типизированные publish-409 и авторитетный candidate `overrideTemplate`.
+- Безопасный missing-intent зонд в shadow дошёл до валидации исходника (`422
+  validation_failed`) и не оставил артефакт: component GET был `404` до и после запроса.
+- I5 остаётся закрытым: [запись приёмки](../audit/2026-07-31-reuse-gate-enforce-readiness.md)
+  требует **KEEP SHADOW** до выполнения всей конъюнкции критериев.
 
 ## 8. Организационный вывод
 
