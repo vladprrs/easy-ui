@@ -45,7 +45,9 @@ export function CjmCounters({ doc, graph }: { doc: PrototypeDoc; graph: Navigati
   }, [doc.flows, graph]);
 
   const hasFlows = flows.length > 0;
-  return <dl className="mx-auto grid max-w-[1600px] gap-5 sm:grid-cols-2 lg:grid-cols-4" aria-label={cjm.countersAria}>
+  // max-*-варианты, а не sm:/lg:: compat-CSS глушит responsive-оверрайды базовых
+  // утилит, и `lg:grid-cols-4` проигрывал бы `sm:grid-cols-2` — ряд разъезжался в 2×2.
+  return <dl className="mx-auto grid max-w-[1600px] grid-cols-4 gap-5 max-lg:grid-cols-2 max-sm:grid-cols-1" aria-label={cjm.countersAria}>
     <Counter value={String(doc.screens.length)} label={cjm.counterScreens} />
     <Counter value={String(flows.length)} label={cjm.counterFlows} accent={hasFlows} />
     {hasFlows ? <>
@@ -65,7 +67,7 @@ export function CjmCounters({ doc, graph }: { doc: PrototypeDoc; graph: Navigati
           <dd className="text-[15px] text-eui-slate-500">{connectivity.missing === 0 ? cjm.readinessReady : cjm.readinessGaps(connectivity.missing)}</dd>
         </div>
       </div>
-    </> : <div className={`${panel} p-6 sm:col-span-2`}>
+    </> : <div className={`${panel} col-span-2 p-6 max-sm:col-span-1`}>
       {/* Без флоу обе ячейки связности были ложью: «12 проверок» = 0 и
           «Готов к публикации» — похвала пустоте. Вместо них одна подпись. */}
       <dt className="text-[15px] font-medium text-eui-ink">{cjm.countersLinearTitle}</dt>

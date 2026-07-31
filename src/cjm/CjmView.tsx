@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { PrototypeChrome } from "../app/PrototypeChrome";
-import { inset, panel, pillGhost, pillPrimary, segmentActive, segmentIdle, segmentTrack } from "../app/chrome";
+import { inset, pillGhost, pillPrimary, segmentActive, segmentIdle, segmentTrack } from "../app/chrome";
 // Загрузчик списка версий для ShareDialog переиспользуется как есть: W6 сливает
 // шаринг в одно окно, и заводить здесь вторую копию загрузки было бы работой в стол.
 import { GalleryShareDialog } from "../gallery/GalleryShareDialog";
@@ -268,7 +268,9 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
           renderStage={(screenId) => renderTile(screenId, undefined, undefined, undefined, "stage")}
         />
       </div> : <div className="mt-5">
-        <div className={`cjm-grid-scroll ${panel} overflow-x-auto p-5`}>
+        {/* Лавандовая вставка, а не белая панель: тайлы дорожек белые, и на белом фоне
+            их границы пропадали — иерархия в бренде держится только на цвете. */}
+        <div className={`cjm-grid-scroll ${inset} overflow-x-auto p-5`}>
           <div
             className="cjm-grid relative mx-auto grid w-max items-start"
             aria-label={cjm.lanesAria}
@@ -289,7 +291,9 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
               // горизонтальном скролле тайлы просвечивали в 20px слева от лейбла.
               // Отрицательный sticky-офсет равен натуральной позиции, поэтому в
               // покое лейбл не сдвигается.
-              className="cjm-lane-label sticky -left-5 z-30 -ml-5 self-stretch bg-white py-3 pr-4 pl-5"
+              // Фон — цвет вставки, а не белый: лейбл обязан закрывать проезжающие
+              // под ним тайлы при горизонтальном скролле, но не читаться как пустая карточка.
+              className="cjm-lane-label sticky -left-5 z-30 -ml-5 self-stretch bg-pay-lavender py-3 pr-4 pl-5"
               data-cjm-lane={laneIndex}
               data-testid="cjm-lane-label"
               style={{ gridColumn: 1, gridRow: laneIndex + 1 }}
