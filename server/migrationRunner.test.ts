@@ -188,7 +188,9 @@ describe("catalog migration runner", () => {
   test("restores from the retained image after the process cache is gone", () => {
     const dataDir = mkdtempSync(resolve(process.cwd(), ".migration-runner-test-"));
     tempDirs.push(dataDir);
-    const db = openDatabase(":memory:");
+    // A file-backed database, not `:memory:`: production runs in WAL mode and a WAL image
+    // cannot be reopened read-only, which an in-memory fixture would never reveal.
+    const db = openDatabase(resolve(dataDir, "easy-ui.db"));
     component(db, "old-card", "OldCard");
     component(db, "new-card", "NewCard");
     prototype(db);

@@ -1,6 +1,7 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { canonicalStringify } from "../src/capture/canonicalJson";
 import { inputPrototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
 import { compositionDocSchema, collectCompositionRefs, type CompositionDoc } from "../src/prototype/composition";
@@ -493,7 +494,13 @@ const appendOnlyRestoreTables = new Set(["audit_events", "catalog_reuse_decision
 
 /** Copy a serialized SQLite image into the live connection without changing its schema. */
 function restoreDatabaseImage(db: Database, image: Buffer, lock: MaintenanceLock, afterRestore: () => void): void {
-  const source = Database.deserialize(image, { readonly: true, strict: true });
+  // Materialize the image as a real file instead of `Database.deserialize`: production images
+  // carry `journal_mode=WAL`, and SQLite cannot open a WAL database that has no file behind it
+  // (SQLITE_CANTOPEN). The copy is read-only in practice and removed right after the restore.
+  const scratch = mkdtempSync(join(tmpdir(), "easy-ui-restore-"));
+  const scratchImage = join(scratch, "image.sqlite");
+  writeFileSync(scratchImage, image);
+  const source = new Database(scratchImage, { strict: true });
   try {
     const sourceTables = databaseTables(source);
     const targetTables = databaseTables(db);
@@ -535,6 +542,7 @@ function restoreDatabaseImage(db: Database, image: Buffer, lock: MaintenanceLock
     }
   } finally {
     source.close();
+    rmSync(scratch, { recursive: true, force: true });
   }
 }
 
