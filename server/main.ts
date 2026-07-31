@@ -31,11 +31,14 @@ import { LoginRateLimiter, routeAuth } from "./routes/auth";
 import { routeUsers } from "./routes/users";
 import { assertOwnersPresent, ensureBootstrapAdmin } from "./users";
 import { sweepStagingModules } from "./components/pipeline";
+import { DEFAULT_REUSE_GATE_MODE, resolveReuseGateMode, type ReuseGateMode } from "./catalog/gate";
 
 export type HandlerOptions = {
   ready?: () => boolean;
   serveDist?: string;
   dataDir?: string;
+  /** Режим reuse-гейта; дефолт `enforce`. Env читается только на входе процесса (см. startServer). */
+  reuseGateMode?: ReuseGateMode;
   /** Optional reverse-proxy compatibility barrier; application auth remains cookie-based. */
   legacyBasicAuth?: string;
   /** @deprecated test/backward-compatible alias for legacyBasicAuth. */
@@ -161,7 +164,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         const bundles=await routeBundles(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"); if(bundles) return finish(bundles);
         const scenarios=await routeScenarios(request,db,segments.slice(1),principal); if(scenarios) return finish(scenarios);
         if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),principal,options.dataDir,options.serveDist));
-        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
+        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE));
         if(segments[1]==="compositions") return finish(await routeCompositions(request,db,segments.slice(1),principal));
         if(segments[1]==="assets") return finish(await routeAssets(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
         if(segments[1]==="design-systems") return finish(await routeDesignSystems(request,db,segments.slice(1),principal));
@@ -200,7 +203,7 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     const captureHost=host==="0.0.0.0"||host==="::"?"127.0.0.1":host;
     const screenshots=new ScreenshotServiceImpl({db,dataDir,serveDist,captureOrigin:`http://${captureHost}:${port}`,chromiumAvailable:chromiumAvailable(),runJob:spawnWorker});
     const visual=new VisualServiceImpl({db,dataDir,screenshots});
-    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,legacyBasicAuth:resolveLegacyBasicAuthEnv(),publicOrigin,screenshots,visual})});
+    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,reuseGateMode:resolveReuseGateMode(process.env.REUSE_GATE),legacyBasicAuth:resolveLegacyBasicAuthEnv(),publicOrigin,screenshots,visual})});
     return {server,db};
   } catch(error) { db.close(); throw error; }
 }

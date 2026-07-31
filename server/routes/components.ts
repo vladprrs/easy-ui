@@ -3,7 +3,7 @@ import { z } from "zod";
 import { designSystems } from "../../src/designSystems";
 import { compileComponent, typecheckComponent } from "../components/compile";
 import { extractDefinition } from "../components/extract-subprocess";
-import { EVENT_SCHEMA_NOT_SERIALIZABLE, importPublished, materializeClientSource, materializeSource, sha256, withStagedSource } from "../components/pipeline";
+import { EVENT_SCHEMA_NOT_SERIALIZABLE, importPublished, materializeClientSource, materializeSource, sha256 } from "../components/pipeline";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
 import { ComponentRepo } from "../repos/components";
 import { requireActiveDesignSystem } from "../designSystems";
@@ -17,9 +17,14 @@ import { writeAuditEvent } from "../audit";
 import { BundleClosure } from "../bundle/exporter";
 import { zipResponse } from "./bundles";
 import { catalogUsages, componentUsages, componentUsageTree, headUsageCounts } from "../usageGraph";
-import { catalogUsagesQuerySchema, componentUsagesQuerySchema, parseQuery } from "../contracts";
+import { catalogUsagesQuerySchema, componentUsagesQuerySchema, parseQuery, parseWith, reuseIntentSchema } from "../contracts";
 import { parsePreviewSelector } from "../components/previewSelector";
 import type { DefinitionMeta } from "../components/types";
+import {
+  assertPublishRoleAvailable, cacheSourceShingles, duplicateWarnings, matchAndDecide, recordBlockedAttempt,
+  ReuseGateRejection, reuseOverrideSchema, stageAndExtract, synthesizeIntent, DEFAULT_REUSE_GATE_MODE,
+  type ReuseGateMode,
+} from "../catalog/gate";
 
 const slug=/^[a-z0-9]+(?:-[a-z0-9]+)*$/, componentName=/^[A-Z][A-Za-z0-9]*$/;
 function bad(message:string,path="source"):never{throw new ApiError(422,"validation_failed","Component is invalid",{issues:[{path:[path],message}]});}
@@ -66,12 +71,22 @@ export function architectureWarnings(db:Database,id:string,meta:{scope?:string;o
 }
 
 export type PublishHooks={afterStage?:(x:{id:string;version:number;rev:number})=>void|Promise<void>;beforeImport?:(x:{id:string;version:number;rev:number})=>void|Promise<void>};
-export async function publishComponent(db:Database,repo:ComponentRepo,id:string,baseRev:number,dataDir:string,message?:string,hooks:PublishHooks={}){
+/**
+ * Reuse-контекст публикации (план §3.5/D4): уникальность канонической роли проверяется и здесь,
+ * а дубликат печатается предупреждением. Необязателен — прямые вызовы из тестов и скриптов
+ * проверяют роль от имени системного актора в `enforce`.
+ */
+export type PublishReuseContext={actor:{userId:string;isAdmin:boolean};mode:ReuseGateMode;override?:import("../catalog/gate").ReuseOverride};
+export async function publishComponent(db:Database,repo:ComponentRepo,id:string,baseRev:number,dataDir:string,message?:string,hooks:PublishHooks={},reuse:PublishReuseContext={actor:{userId:"system",isAdmin:false},mode:DEFAULT_REUSE_GATE_MODE}){
   reserveHostPrimitiveName(repo.meta(id).name);
   const revision=repo.source(id); const path=await materializeSource(dataDir,id,revision.rev,revision.source);
   // Validate /api/assets/asset_<sha256> literals in source before staging so a dangling ref fails fast.
   const assetIds=collectAndValidateComponentAssetRefs(db,revision.source);
-  const extracted=await checkSource(revision.source,path,true); await typecheckComponent(path); let clientPath=path;if(extracted.serverOnly?.conformanceProps===true)try{clientPath=await materializeClientSource(dataDir,id,revision.rev,revision.source,true);}catch(error){bad(error instanceof Error?error.message:String(error));}const compiled=await compileComponent(clientPath,{capabilities:extracted.meta!.capabilities});
+  const extracted=await checkSource(revision.source,path,true);
+  // Роль проверяется **до** `repo.stage`: после 409 не должно оставаться ни staging-публикации,
+  // ни материализованного клиентского модуля.
+  assertPublishRoleAvailable(db,{designSystem:revision.designSystem,id,canonicalFor:extracted.meta!.canonicalFor??[],actor:reuse.actor,mode:reuse.mode,sourceHash:sha256(revision.source),intent:extracted.meta!.description,...(reuse.override===undefined?{}:{override:reuse.override})});
+  await typecheckComponent(path); let clientPath=path;if(extracted.serverOnly?.conformanceProps===true)try{clientPath=await materializeClientSource(dataDir,id,revision.rev,revision.source,true);}catch(error){bad(error instanceof Error?error.message:String(error));}const compiled=await compileComponent(clientPath,{capabilities:extracted.meta!.capabilities});
   const staged=repo.stage(id,baseRev,{compiledJs:compiled.compiledJs,bundleHash:compiled.bundleHash,sourceHash:sha256(revision.source),meta:extracted.meta!},message);
   // stage() persists host_abi_version=1; update to the computed ABI (max of imports/capabilities).
   if(compiled.hostAbiVersion!==1) db.query("UPDATE component_publishes SET host_abi_version=? WHERE component_id=? AND version=?").run(compiled.hostAbiVersion,id,staged.version);
@@ -82,6 +97,9 @@ export async function publishComponent(db:Database,repo:ComponentRepo,id:string,
   const warnings=[...extracted.warnings];
   if(!extracted.meta!.atomicLevel) warnings.push("Atomic design level is not provided; component will be classified as Other");
   warnings.push(...architectureWarnings(db,id,extracted.meta!,revision.source));
+  // D4: publish — это update, гейт создания на нём не стоит, но обход «PUT → publish» обязан
+  // быть наблюдаем. Warn-only и с обязательным исключением самого артефакта из корпуса.
+  warnings.push(...duplicateWarnings(db,{designSystem:revision.designSystem,id,name:repo.meta(id).name,source:revision.source,meta:extracted.meta!}));
   return {version:staged.version,hostAbiVersion:compiled.hostAbiVersion,warnings};
 }
 
@@ -138,23 +156,70 @@ export function routeCatalogUsages(request:Request,db:Database):Response{
   return json(catalogUsages(db,designSystem),200,noStore);
 }
 
-export async function routeComponents(request:Request,db:Database,segments:string[],principal:Principal,dataDir:string):Promise<Response>{
+/**
+ * Тело `409` гейта переиспользования (план §3.5). Конверт ошибки — общий для всего API
+ * (`{error:{code,message,…}}`), поэтому поля плана лежат внутри `error`: `driver.mjs` и
+ * `src/api/client.ts` читают именно `body.error.code`.
+ *
+ * `decisionId`/`repeatedAttempts` знает только аудит, который пишется **снаружи** транзакции и
+ * best-effort: при его отказе оба поля уходят `null` (именно `null`, а не `0`).
+ */
+function reuseRejectionResponse(db:Database,rejection:ReuseGateRejection):Response{
+  const audit=recordBlockedAttempt(db,rejection.attempt);
+  return json({error:{code:rejection.code,message:rejection.message,...rejection.payload,decisionId:audit?.decisionId??null,repeatedAttempts:audit?.repeatedAttempts??null}},409,noStore);
+}
+
+export async function routeComponents(request:Request,db:Database,segments:string[],principal:Principal,dataDir:string,reuseGateMode:ReuseGateMode=DEFAULT_REUSE_GATE_MODE):Promise<Response>{
   const repo=new ComponentRepo(db);
   // `?includeDeleted=1` — единственный способ увидеть надгробия: голый GET по-прежнему
   // отдаёт 404 для мягко удалённого компонента (совместимость с driver.mjs и src/api/client.ts).
   const includeDeleted=new URL(request.url).searchParams.get("includeDeleted")==="1";
-  if(segments.length===1){if(request.method==="GET")return json(repo.list(includeDeleted),200,noStore);if(request.method==="POST"){const actor=requireUser(principal);const b=body(await readJson(request));for(const key of Object.keys(b))if(!["id","name","source","designSystem","message","figma"].includes(key))throw new ApiError(400,"invalid_request",`Unknown field: ${key}`);const id=text(b.id,"id")!,name=text(b.name,"name")!,source=text(b.source,"source")!,designSystem=text(b.designSystem,"designSystem")!;requireResourceOwner(db,"design_systems",designSystem,principal);if(!slug.test(id))bad("id must be a slug","id");if(!componentName.test(name))bad("name must match ^[A-Z][A-Za-z0-9]*$","name");reserveHostPrimitiveName(name);requireActiveDesignSystem(db,designSystem,["designSystem"]);if(Object.values(designSystems).some(system=>Object.hasOwn(system.definitions,name)))throw new ApiError(409,"already_exists","Component name conflicts with a builtin component");
+  if(segments.length===1){if(request.method==="GET")return json(repo.list(includeDeleted),200,noStore);if(request.method==="POST"){const actor=requireUser(principal);const b=body(await readJson(request));for(const key of Object.keys(b))if(!["id","name","source","designSystem","message","figma","intent","reuseOverride"].includes(key))throw new ApiError(400,"invalid_request",`Unknown field: ${key}`);const id=text(b.id,"id")!,name=text(b.name,"name")!,source=text(b.source,"source")!,designSystem=text(b.designSystem,"designSystem")!;requireResourceOwner(db,"design_systems",designSystem,principal);if(!slug.test(id))bad("id must be a slug","id");if(!componentName.test(name))bad("name must match ^[A-Z][A-Za-z0-9]*$","name");reserveHostPrimitiveName(name);requireActiveDesignSystem(db,designSystem,["designSystem"]);if(Object.values(designSystems).some(system=>Object.hasOwn(system.definitions,name)))throw new ApiError(409,"already_exists","Component name conflicts with a builtin component");
     // Занятость id/name — тем же условием, что и `repo.create` (`repos/components.ts:20`:
     // `name` глобально UNIQUE, надгробия считаются занятыми), но **до** дорогого извлечения.
     if(db.query("SELECT 1 FROM components WHERE id=? OR name=?").get(id,name))throw new ApiError(409,"already_exists","Component id or name already exists");
+    // `reuseOverride` — только админ и только валидной формы (спека §4). Проверка дешёвая и
+    // потому стоит **до** извлечения: не-админу незачем платить за subprocess.
+    const override=b.reuseOverride===undefined?undefined:parseWith(reuseOverrideSchema,b.reuseOverride,"reuseOverride is invalid");
+    if(override!==undefined&&!actor.isAdmin)throw new ApiError(403,"admin_required","Only an admin may override the reuse gate");
+    // `intent` по фазе гейта (план §3.5.2): в enforce обязателен, в shadow синтезируется из
+    // имени, а ответ несёт `warnings[]` и аудит помечается `intent_missing`. Присланный intent
+    // валидируется в обеих фазах — поле есть поле.
+    const intentProvided=b.intent!==undefined;
+    if(reuseGateMode==="enforce"&&!intentProvided)throw new ApiError(400,"invalid_request","intent is required: describe the product job this component does (8..500 characters)");
+    const intent=intentProvided?parseWith(reuseIntentSchema,b.intent,"intent is invalid"):synthesizeIntent(name);
     const figma=parseFigmaInput(db,b.figma,"figma");
     // Извлечение — над одноразовым staging-модулем. Durable-модуль на create не пишется вовсе:
     // `publishComponent` материализует его заново из `repo.source(id)` (см. :71), а путь
     // content-addressed и идемпотентен, поэтому предварительная запись ничего не экономила.
-    await withStagedSource(dataDir,id,source,path=>checkSource(source,path));
-    const result=repo.create(id,name,source,designSystem,text(b.message,"message",false),figma,actor.userId);db.query("UPDATE component_revisions SET author=? WHERE component_id=? AND rev=1").run(actor.userId,id);writeAuditEvent(db,{actorId:actor.userId,action:"component.revision.saved",subjectType:"component",subjectId:id,detail:{rev:1}});return json(result,201,{...noStore,location:`/api/components/${id}`});}throw new ApiError(405,"method_not_allowed","Method not allowed");}
+    // Ошибка извлечения остаётся 422 и матчинг не запускает (спека §9).
+    const extracted=await stageAndExtract(dataDir,id,source,path=>checkSource(source,path));
+    let outcome;
+    try {
+      // Матчинг + create + аудит — одна **синхронная** транзакция: пересчёт закрывает TOCTOU
+      // между конкурентными POST, а 409 бросается изнутри, поэтому откат гарантирован.
+      outcome=matchAndDecide(db,{
+        mode:reuseGateMode,actor:{userId:actor.userId,isAdmin:actor.isAdmin},userAgent:request.headers.get("user-agent"),
+        designSystem,artifactId:id,name,source,meta:extracted.meta!,intent,intentProvided,...(override===undefined?{}:{override}),
+      },()=>{
+        const created=repo.create(id,name,source,designSystem,text(b.message,"message",false),figma,actor.userId);
+        db.query("UPDATE component_revisions SET author=? WHERE component_id=? AND rev=1").run(actor.userId,id);
+        // Write-through кэша шинглов: свежий драфт обязан участвовать в корпусе с первой же
+        // проверки, иначе обход «создать N драфтов → опубликовать» переоткрывается.
+        cacheSourceShingles(db,id,1,source);
+        writeAuditEvent(db,{actorId:actor.userId,action:"component.revision.saved",subjectType:"component",subjectId:id,detail:{rev:1}});
+        return created;
+      });
+    } catch(error){
+      if(error instanceof ReuseGateRejection) return reuseRejectionResponse(db,error);
+      throw error;
+    }
+    return json({...outcome.created,...(outcome.warnings.length?{warnings:outcome.warnings}:{})},201,{...noStore,location:`/api/components/${id}`});}throw new ApiError(405,"method_not_allowed","Method not allowed");}
   const id=segments[1]!,tail=segments.slice(2);
-  if(!tail.length){if(request.method==="GET")return json(repo.meta(id,includeDeleted),200,noStore);if(request.method==="PUT"){const actor=requireResourceOwner(db,"components",id,principal);reserveHostPrimitiveName(repo.meta(id).name);const b=body(await readJson(request)),source=text(b.source,"source",false),designSystem=text(b.designSystem,"designSystem",false),baseRev=base(b);const figmaProvided=Object.hasOwn(b,"figma");const figma=figmaProvided?parseFigmaInput(db,b.figma,"figma"):null;if(source===undefined&&designSystem===undefined&&!figmaProvided)throw new ApiError(400,"invalid_request","source, designSystem or figma is required");if(designSystem!==undefined){requireActiveDesignSystem(db,designSystem,["designSystem"]);requireResourceOwner(db,"design_systems",designSystem,principal);}const current=repo.cas(id,baseRev),head=repo.source(id,current.head_rev),nextSource=source??head.source,nextSystem=designSystem??current.design_system;if(nextSource===head.source&&nextSystem===current.design_system&&!figmaProvided)throw new ApiError(400,"invalid_request","Component source and design system are unchanged");const next=current.head_rev+1,path=await materializeSource(dataDir,id,next,nextSource);await checkSource(nextSource,path);const result=repo.save(id,source,designSystem,baseRev,text(b.message,"message",false),figma);db.query("UPDATE component_revisions SET author=? WHERE component_id=? AND rev=?").run(actor.userId,id,result.rev);writeAuditEvent(db,{actorId:actor.userId,action:"component.revision.saved",subjectType:"component",subjectId:id,detail:{rev:result.rev}});return json(result,200,noStore);}if(request.method==="DELETE"){const actor=requireResourceOwner(db,"components",id,principal);const b=body(await readJson(request));const baseRev=base(b);const reason=text(b.reason,"reason",false);const replacement=text(b.replacement,"replacement",false);if(b.force!==undefined&&typeof b.force!=="boolean")throw new ApiError(400,"invalid_request","force must be a boolean");
+  if(!tail.length){if(request.method==="GET")return json(repo.meta(id,includeDeleted),200,noStore);if(request.method==="PUT"){const actor=requireResourceOwner(db,"components",id,principal);reserveHostPrimitiveName(repo.meta(id).name);const b=body(await readJson(request)),source=text(b.source,"source",false),designSystem=text(b.designSystem,"designSystem",false),baseRev=base(b);const figmaProvided=Object.hasOwn(b,"figma");const figma=figmaProvided?parseFigmaInput(db,b.figma,"figma"):null;if(source===undefined&&designSystem===undefined&&!figmaProvided)throw new ApiError(400,"invalid_request","source, designSystem or figma is required");if(designSystem!==undefined){requireActiveDesignSystem(db,designSystem,["designSystem"]);requireResourceOwner(db,"design_systems",designSystem,principal);}const current=repo.cas(id,baseRev),head=repo.source(id,current.head_rev),nextSource=source??head.source,nextSystem=designSystem??current.design_system;if(nextSource===head.source&&nextSystem===current.design_system&&!figmaProvided)throw new ApiError(400,"invalid_request","Component source and design system are unchanged");const next=current.head_rev+1,path=await materializeSource(dataDir,id,next,nextSource);await checkSource(nextSource,path);const result=repo.save(id,source,designSystem,baseRev,text(b.message,"message",false),figma);db.query("UPDATE component_revisions SET author=? WHERE component_id=? AND rev=?").run(actor.userId,id,result.rev);
+    // Write-through кэша шинглов и на PUT: head-драфт участвует в корпусе, поэтому «сохранил
+    // дубликат в драфт → опубликовал» ловится тем же матчером (§3.6, план §3.1).
+    cacheSourceShingles(db,id,result.rev,nextSource);writeAuditEvent(db,{actorId:actor.userId,action:"component.revision.saved",subjectType:"component",subjectId:id,detail:{rev:result.rev}});return json(result,200,noStore);}if(request.method==="DELETE"){const actor=requireResourceOwner(db,"components",id,principal);const b=body(await readJson(request));const baseRev=base(b);const reason=text(b.reason,"reason",false);const replacement=text(b.replacement,"replacement",false);if(b.force!==undefined&&typeof b.force!=="boolean")throw new ApiError(400,"invalid_request","force must be a boolean");
     if(replacement!==undefined&&!db.query("SELECT 1 ok FROM components WHERE id=? AND deleted_at IS NULL").get(replacement))bad(`replacement references an unknown component: ${replacement}`,"replacement");
     // Компонент, живущий в головных ревизиях, нельзя убрать молча: 409 с графом использования.
     // Обход — force от админа, по образцу admin-гейта на смену статуса пиннутой версии.
@@ -172,7 +237,14 @@ export async function routeComponents(request:Request,db:Database,segments:strin
   if(tail[0]==="export"&&tail.length===1){if(request.method!=="GET")throw new ApiError(405,"method_not_allowed","Method not allowed");requireUser(principal);repo.row(id);const versionRaw=new URL(request.url).searchParams.get("version");const version=versionRaw===null?undefined:int(Number(versionRaw),"version");const closure=new BundleClosure(db,dataDir);const exported=closure.addComponent(id,version);const bytes=await closure.buildZip("component",new URL(request.url).origin);const suffix=exported.version!==null?`v${exported.version}`:`draft-r${exported.rev}`;return zipResponse(bytes,`easy-ui-component-${id}-${suffix}.zip`);}
   if(tail[0]==="revisions"){if(tail.length===1)return json(repo.revisions(id),200,noStore);if(tail.length===2)return json(repo.source(id,int(Number(tail[1]),"rev")),200,noStore);}
   if(tail[0]==="restore"&&tail.length===1){const actor=requireResourceOwner(db,"components",id,principal);const b=body(await readJson(request));const result=repo.restore(id,int(b.rev,"rev"),base(b));db.query("UPDATE component_revisions SET author=? WHERE component_id=? AND rev=?").run(actor.userId,id,result.rev);writeAuditEvent(db,{actorId:actor.userId,action:"component.revision.saved",subjectType:"component",subjectId:id,detail:{rev:result.rev,restore:true}});return json(result,200,noStore);}
-  if(tail[0]==="publish"&&tail.length===1){if(request.method!=="POST")throw new ApiError(405,"method_not_allowed","Method not allowed");const actor=requireResourceOwner(db,"components",id,principal);const systemId=repo.row(id).design_system;requireActiveDesignSystem(db,systemId,["designSystem"]);requireResourceOwner(db,"design_systems",systemId,principal);const b=body(await readJson(request));const result=await publishComponent(db,repo,id,base(b),dataDir,text(b.message,"message",false));writeAuditEvent(db,{actorId:actor.userId,action:"component.version.published",subjectType:"component",subjectId:id,detail:{version:result.version}});return json(result,201,{...noStore,location:`/api/components/${id}/versions/${result.version}`});}
+  if(tail[0]==="publish"&&tail.length===1){if(request.method!=="POST")throw new ApiError(405,"method_not_allowed","Method not allowed");const actor=requireResourceOwner(db,"components",id,principal);const systemId=repo.row(id).design_system;requireActiveDesignSystem(db,systemId,["designSystem"]);requireResourceOwner(db,"design_systems",systemId,principal);const b=body(await readJson(request));
+    for(const key of Object.keys(b))if(!["baseRev","message","reuseOverride"].includes(key))throw new ApiError(400,"invalid_request",`Unknown field: ${key}`);
+    const publishOverride=b.reuseOverride===undefined?undefined:parseWith(reuseOverrideSchema,b.reuseOverride,"reuseOverride is invalid");
+    if(publishOverride!==undefined&&!actor.isAdmin)throw new ApiError(403,"admin_required","Only an admin may override the reuse gate");
+    let result;
+    try { result=await publishComponent(db,repo,id,base(b),dataDir,text(b.message,"message",false),{},{actor:{userId:actor.userId,isAdmin:actor.isAdmin},mode:reuseGateMode,...(publishOverride===undefined?{}:{override:publishOverride})}); }
+    catch(error){ if(error instanceof ReuseGateRejection) return reuseRejectionResponse(db,error); throw error; }
+    writeAuditEvent(db,{actorId:actor.userId,action:"component.version.published",subjectType:"component",subjectId:id,detail:{version:result.version}});return json(result,201,{...noStore,location:`/api/components/${id}/versions/${result.version}`});}
   if(tail[0]==="versions"){
     // POST /versions/:version/status — manual lifecycle transition with CAS on statusRev (K.2).
     // TODO(T9): register this endpoint in server/contracts.ts (owned by T9; contract left unregistered here).
