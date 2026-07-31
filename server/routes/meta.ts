@@ -20,6 +20,8 @@ import { listActiveDesignSystems } from "../designSystems";
 import { getLatestDesignSystemContent } from "../designSystems";
 import { ApiError, json, MAX_JSON_BODY_BYTES, noStore } from "../http";
 import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "../screenshot/service";
+import { DEFAULT_REUSE_GATE_MODE, type ReuseGateMode } from "../catalog/gate";
+import { CALIBRATED_POLICY } from "../catalog/policy";
 
 // Discovery endpoints (plan §G): /api/openapi.json, /api/schemas/*, /api/capabilities.
 // The OpenAPI document is the committed artifact generated from server/contracts.ts;
@@ -36,7 +38,20 @@ export const CAPABILITY_PARAM_SOURCES = ["$event", "$elementId", "$itemIndex", "
 // Closed v1 condition grammar operators (see checkCondition in src/prototype/validate.ts).
 export const CAPABILITY_CONDITIONS = ["$and", "$or", "$state", "$item", "$index", "eq", "neq", "gt", "gte", "lt", "lte", "not"] as const;
 
-export function capabilities(db: Database): JsonObject {
+/**
+ * Фаза reuse-гейта — часть discovery, а не деталь деплоя (план 2026-07-31 §3.5/§5, T9).
+ *
+ * Агент обязан узнать **до** `POST /api/components`, обязателен ли `intent` и будет ли
+ * совпадение блокировать создание: в `shadow` тот же запрос без `intent` проходит с
+ * предупреждением, в `enforce` — падает с `400 invalid_request`. Без этого поля единственный
+ * способ выяснить фазу — сломать собственный create.
+ *
+ * Режим **не читается из env здесь**: он приезжает параметром из `HandlerOptions`
+ * (`server/main.ts` резолвит `REUSE_GATE` ровно один раз, на входе процесса). Повторное чтение
+ * env внутри роута сделало бы discovery и гейт двумя источниками истины, а тесты в общем
+ * процессе `bun test` мутировали бы друг другу глобальный env.
+ */
+export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE): JsonObject {
   const systems = listActiveDesignSystems(db);
   return {
     apiVersion: 1,
@@ -82,6 +97,17 @@ export function capabilities(db: Database): JsonObject {
       screenRegions: true,
       bundleExport: true,
       bundleImport: true,
+      componentReuseGate: true,
+    },
+    reuseGate: {
+      mode: reuseGateMode,
+      // Единственное правило фазы, наблюдаемое клиентом: `intent` обязателен ровно в `enforce`
+      // (`server/contracts.ts` — reuseIntentSchema применяется по режиму).
+      intentRequired: reuseGateMode === "enforce",
+      // Версия политики матчинга: score корпус-относителен, и без неё решение гейта
+      // невоспроизводимо задним числом (план §3.3). Совпадает с `policyVersion` в
+      // `/api/catalog/candidates` и в аудит-записях.
+      policyVersion: CALIBRATED_POLICY.policyVersion,
     },
   };
 }
@@ -249,8 +275,13 @@ let cachedComponentDefinitionSchema: string | null = null;
 const jsonText = (body: string): Response =>
   new Response(body, { headers: { "content-type": "application/json; charset=utf-8", ...noStore } });
 
-/** Handles /api/openapi.json, /api/schemas/*, /api/capabilities; null when the path is not a meta route. */
-export function routeMeta(request: Request, db: Database, segments: string[]): Response | null {
+/**
+ * Handles /api/openapi.json, /api/schemas/*, /api/capabilities; null when the path is not a meta route.
+ *
+ * `reuseGateMode` едет от `HandlerOptions` (`server/main.ts`). Дефолт здесь существует только
+ * ради вызывающих, которым фаза не важна (схемы и OpenAPI её не касаются).
+ */
+export function routeMeta(request: Request, db: Database, segments: string[], reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE): Response | null {
   const requireGet = () => { if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed"); };
   if (segments[0] === "openapi.json" && segments.length === 1) {
     requireGet();
@@ -259,7 +290,7 @@ export function routeMeta(request: Request, db: Database, segments: string[]): R
   }
   if (segments[0] === "capabilities" && segments.length === 1) {
     requireGet();
-    return json(capabilities(db), 200, noStore);
+    return json(capabilities(db, reuseGateMode), 200, noStore);
   }
   if (segments[0] === "schemas" && segments.length === 2) {
     requireGet();

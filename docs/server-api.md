@@ -288,9 +288,45 @@ Meta-ответы прототипов и компонентов additively не
 | `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); отдаётся при статусе `active\|deprecated\|superseded`, иначе `404 bundle_unavailable`; immutable |
 | `POST /components/:id/versions/:version/status` | `{status, reason?, supersededBy?, baseStatusRev}` → 200 `{status, statusRev}`; см. [Статусы версий](#статусы-версий-компонентов) |
 
+### Поиск кандидатов на переиспользование
+
+| Метод и путь | Тело / ответ |
+|---|---|
+| `GET /catalog/candidates?designSystem=&intent=&limit=` | `{designSystem,catalogRevision,policyVersion,candidates[]}`; поиск по одной формулировке задачи |
+| `POST /catalog/candidates` | `{designSystem,intent,limit?,proposed?}` → то же тело; при `proposed.source` дополнительно `overrideTemplate:{catalogRevision,candidateKeys}` |
+
+Оба метода требуют именованного пользователя: share- и capture-принципалы получают `403 forbidden` — иначе публичная ссылка на прототип открывала бы индекс каталога. Ответ `no-store`.
+
+`GET` существует ради вызывающих без браузерного `Origin` (агент, CLI): `enforceOrigin` срабатывает только на unsafe-методах, поэтому `POST` без `Origin` даёт `403 origin_required`. Плата — отсутствие `proposed`: в query едут только `designSystem`, `intent` и `limit`.
+
+`intent` валидируется так же, как в `POST /components` (см. ниже). `limit` — 1..20, по умолчанию 8; он усекает **только выдачу** и не влияет ни на blocking-набор гейта, ни на `overrideTemplate.candidateKeys`. Неизвестная или отставленная (`retired`) система — `404 not_found`; `proposed.kind:"composition"` — `422 unsupported_kind` (дедупликация композиций отложена).
+
+Строка кандидата компактная: `{kind,id,name,designSystem,version,draft,description,atomicLevel?,scope?,canonicalFor,replacement?,deprecated,recommendable,headUsageCount,score,blocking,reasons[]}`. Ни исходника, ни `propsJsonSchema`, ни примеров, ни внутренних `signals` в ней нет — за точным определением выбранного кандидата идите в `GET /components/:id/versions/:version`. `draft:true` и `version:0` означают head-драфт: он участвует в корпусе, но метаданных публикации у него ещё нет. `recommendable:false` — кандидат показан ради объяснения (deprecated с живой заменой), а не как цель переиспользования.
+
+`proposed` описывает то, что вызывающий собирается создать: `{kind:"component",id?,name?,description?,atomicLevel?,scope?,canonicalFor?,propsJsonSchema?,events?,slots?,source?}`. Если передан `source`, сервер извлекает метаданные из него сам, а присланные `propsJsonSchema`/`canonicalFor` проигрывают извлечённым: подделать сигналы через тело нельзя. Невалидный исходник отвечает теми же кодами, что и создание компонента (`422 validation_failed`, `422 event_schema_not_serializable`, `413 payload_too_large`). Артефакт с тем же `(designSystem, proposed.id)` из корпуса исключается — поиск по существующему id не возвращает его самого.
+
+`catalogRevision` — sha256-проекция каталога, общая с `GET /catalog/library` и с гейтом: она **не** реагирует на счётчики использования, статусы визуальных прогонов, figma и preview, поэтому подготовленный override не протухает от чужой работы. `policyVersion` — версия политики матчинга (веса и пороги); score корпус-относителен, и без неё решение невоспроизводимо задним числом. Оба значения совпадают с теми, что вернутся из `GET /api/capabilities` (`reuseGate.policyVersion`) и лягут в аудит.
+
 ### Reuse gate при создании и публикации компонента
 
 `POST /components` сопоставляет новую TSX-реализацию с актуальным каталогом той же дизайн-системы. Перед созданием клиенту следует вызвать `GET` или `POST /catalog/candidates`: ответ содержит `catalogRevision` и компактные строки кандидатов, которые не обещают поле `key`. Только source-backed `POST /catalog/candidates` возвращает полный авторитетный набор ключей, и только в `overrideTemplate.candidateKeys`. Поиск помогает выбрать уже существующий компонент, но не заменяет проверку самого `POST /components` — сервер повторно вычисляет решение в одной транзакции.
+
+**Фазы гейта.** У гейта две фазы, и они меняют поведение одних и тех же запросов, поэтому фазу нужно прочитать **до** create, а не выяснять по ошибке:
+
+| | `shadow` | `enforce` |
+|---|---|---|
+| `intent` в `POST /components` | необязателен; синтезируется из имени, ответ несёт `warnings[]` | обязателен, иначе `400 invalid_request` |
+| blocking-совпадение на create | компонент создаётся, ответ несёт `warnings[]` | `409 component_reuse_required`, артефакта не остаётся |
+| запись аудита | `would_block` (плюс отдельная `intent_missing`, если поле не прислали) | `blocked` |
+| `reuse_blocked` в отчёте `POST /bundles/import` | не выставляется | выставляется по-элементно |
+
+От фазы **не зависят**: конфликт канонической роли (`409 canonical_role_conflict` на create и publish), валидация уже присланного `intent`, правила `reuseOverride` и сама запись решений в аудит. Фаза задаётся переменной окружения `REUSE_GATE` (см. [Deployment](#deployment)), читается один раз на старте процесса и публикуется в discovery:
+
+```json
+"reuseGate": { "mode": "shadow", "intentRequired": false, "policyVersion": 1 }
+```
+
+`GET /api/capabilities` — единственный поддерживаемый способ узнать фазу: `reuseGate.intentRequired` истинно ровно в `enforce`. Клиент, который умеет обе фазы, шлёт `intent` всегда (в `shadow` он тоже валидируется и попадает в аудит) и не полагается на то, что создание дубликата пройдёт.
 
 `intent` описывает продуктовую задачу нового компонента. В фазе `enforce` он обязателен; строка сначала `trim`-ится, затем должна иметь от 8 до 500 символов и хотя бы один токен вне стоп-набора `component`, `компонент`, `element`, `элемент`, `ui`. В `shadow` поле можно не передавать: сервер синтезирует intent из имени, возвращает предупреждение и отдельно пишет в аудит решение `intent_missing`. Если `intent` передан в любой фазе, он всегда валидируется по тем же правилам.
 
@@ -299,6 +335,12 @@ Meta-ответы прототипов и компонентов additively не
 `reuseOverride` — только для администратора и только после двухфазного подтверждения человеком. Сначала прочитайте кандидатов/получите `409` и сохраните его `catalogRevision` с **полным** `candidateKeys`; затем повторите raw API-запрос с `{catalogRevision,candidateKeys,reason}`. `reason` после trim должен быть 20..500 символов. Сервер заново считает кандидатов: устаревшая ревизия даёт `409 catalog_changed`, а неполный список ключей не подтверждает override. Не делайте авто-ретрай и не выполняйте auto-`force-new`: покажите кандидатов и `decisionId` человеку для решения.
 
 `POST /components/:id/publish` не запускает create-only решение `component_reuse_required`, но перед staging проверяет уникальность новых `canonicalFor` публикуемой ревизии. При конфликте первый запрос без override терминально отвечает `409 canonical_role_conflict` (`retryable:false`) с тем же типизированным reuse-конвертом и авторитетным `overrideTemplate`. После решения человека администратор может повторить publish с `reuseOverride:{catalogRevision,candidateKeys,reason}`; не-администратор получает `403 admin_required`, а сдвиг каталога между фазами — терминальный `409 catalog_changed` с обновлённым шаблоном. Клиент не должен автоматически повторять ни один из этих `409`: он снова показывает результат человеку и начинает двухфазное подтверждение с актуального `overrideTemplate`.
+
+### Аудит решений гейта
+
+`GET /catalog/reuse-decisions` — **только админ** (`401 unauthorized` анонимному, `403 forbidden` не-админу и share/capture-принципалам), только чтение: таблица решений append-only и защищена триггерами БД. Фильтры query: `since` (ISO, строго новее), `designSystem`, `actorId`, `limit`, `minAttempts`. Ответ `no-store` и собирается одной транзакцией, поэтому агрегаты сходятся с перечислениями под ними: `{generatedAt, gateActiveSince, filter, totals, forceNew[], repeatedBlocked[], canonicalRoleConflicts[], wouldBlock[], unreviewed[]}`.
+
+`forceNew` — кто и по какой человеческой причине обошёл гейт; `repeatedBlocked` — агрегация повторных блокировок по паре actor/artifact (порог — `minAttempts`), то есть застрявшие вызывающие; `canonicalRoleConflicts` — попытки забрать занятую каноническую роль; `wouldBlock` — то, что в `shadow` было бы отклонено в `enforce` (материал критерия включения фазы); `unreviewed` — компоненты каталога, созданные до гейта и ни разу не проходившие reuse-review. `gateActiveSince` — время первой записи: без него нулевые выборки читаются как «нарушений нет», хотя означают «гейта тогда ещё не было».
 
 ### Граф использования компонентов
 
@@ -402,7 +444,7 @@ Meta-ответы прототипов и компонентов additively не
 | `GET /prototypes/:id/export?version=N` | `requirePrototypeRead`; draft (без `?version`) — только owner; не-owner по умолчанию — последняя published-версия (иначе `404 version_not_found`) | Прототип выбранной ревизии + полное замыкание зависимостей. Файл `easy-ui-prototype-<id>-{draft-r<rev>\|v<N>}.zip` |
 | `GET /components/:id/export?version=N` | `requireUser` (как `/source`) | По умолчанию последняя active-версия; без публикаций — head draft (`version: null` в манифесте). Файл `easy-ui-component-<id>-{v<N>\|draft-r<rev>}.zip` |
 | `GET /bundles/export` | `requireUser` | Всё owned вызывающим. Для каждого прототипа — последняя published-версия, head draft **только если публикаций нет**; компоненты — последняя active, иначе head draft. Файл `easy-ui-export-<yyyymmdd>.zip` |
-| `POST /bundles/import?mode=dry-run\|apply` | `requireUser` | Импорт бандла. `mode` по умолчанию `apply`. Тело — multipart (`file`) **или** raw `application/zip`. Ответ — отчёт `importReportSchema` (см. ниже) |
+| `POST /bundles/import?mode=dry-run\|apply` | `requireUser` | Импорт бандла. `mode` по умолчанию `apply`. Тело — multipart (`file`, опционально `reuseOverride` — только админ) **или** raw `application/zip`. Ответ — отчёт `importReportSchema` (см. ниже) |
 
 Ответ на все три export'а — бинарный `application/zip` с `content-disposition: attachment; filename="…"` и `no-store` (свежая материализация замыкания, кэшировать нельзя). Per-resource `export`-хвосты живут в `routes/prototypes.ts`/`routes/components.ts` (authz на месте); `/bundles/*` — в `routes/bundles.ts`.
 
@@ -446,9 +488,13 @@ assets/<sha256>                        # сырые байты, имя = sha256 
 |---|---|---|---|---|
 | **Ассеты** | новый sha ingest'ится | sha уже есть (`ingest` идемпотентен) | — | байты не сходятся с заявленным sha256, либо `id ≠ asset_<sha>` |
 | **Дизайн-системы** | custom id свободен → создаётся (owner = импортёр); своя тема пишется как version 1 после `validateThemeAssets` | id существует → **reuse by reference** (реестр глобальный); своя (owner=импортёр) отличающаяся тема → новая версия `latest+1`; чужая отличающаяся тема → reuse + `detail` «theme drift: not owner…» | — | builtin отсутствует на цели → `design_system_missing` |
-| **Компоненты** | оба свободны → `create`+publish; свой id/name с отличающимся source → новая версия; `compiled_js` бандла **не** используется — только `publishComponent` | свой id/name, head sourceHash совпадает и есть active publish | — | чужой занятый name → `name_conflict`; soft-deleted строка по id/name → `deleted_conflict` (v1 без revive); имя = builtin-каталог → `builtin_name_reserved`; провал publish-пайплайна → его сообщение |
+| **Компоненты** | оба свободны → `create`+publish; свой id/name с отличающимся source → новая версия; `compiled_js` бандла **не** используется — только `publishComponent` | свой id/name, head sourceHash совпадает и есть active publish | — | чужой занятый name → `name_conflict`; soft-deleted строка по id/name → `deleted_conflict` (v1 без revive); имя = builtin-каталог → `builtin_name_reserved`; провал publish-пайплайна → его сообщение; создание нового компонента, дублирующего каталог цели, в фазе `enforce` → `reuse_blocked` |
 | **Композиции** | оба свободны → `create`+`publish`; свой id с отличающимся документом → новая ревизия + новая версия | свой id, `sourceHash` головы совпадает и есть active-публикация | — | чужой занятый id/name либо совпадение по имени под **другим** id → `name_conflict` (remap невозможен: прототип адресует композицию по id); soft-deleted строка → `deleted_conflict`; недоступная система или неопубликованный внутренний тип → `dependency_failed: …`; невалидный документ → `invalid_document: …` |
 | **Прототипы** | id свободен → created; чужой/tombstone id → remap `<id>-imported-<n>` (`remappedTo` в отчёте) | — | свой id, doc идентичен head | зависимость (DS/компонент/композиция) не разрешима → `dependency_failed: …` / `dependency_failed: composition …`; невалидный doc при `renderContractVersion`/`builtinCatalogHash` новее целевых → `format_too_new: …` |
+
+**Reuse gate на импорте.** Создание нового компонента бандлом проходит тот же гейт, что и `POST /components`: иначе импорт был бы обходным путём вокруг него. Ветка «существующий свой id → новая версия» гейт не проходит (это update). Заблокированный элемент отчёта несёт `{action:"error", detail:"reuse_blocked", reuseCode, catalogRevision, candidateKeys[], decisionId}` и не роняет весь запрос — остальные элементы обрабатываются. В фазе `shadow` `reuse_blocked` не выставляется вовсе.
+
+Обход — двухфазный и только для администратора; бланкетного флага «пропусти гейт» нет. Фаза 1 — `mode=dry-run`: отчёт называет заблокированные компоненты, их `candidateKeys` и текущий `catalogRevision` (аудит в dry-run **не пишется**). Фаза 2 — `mode=apply` с multipart-полем `reuseOverride` = `{catalogRevision, reason, components:[{id, candidateKeys[]}]}` (у raw `application/zip` места для него нет by design): `reason` — 20..500 символов после trim, id должны присутствовать в бандле (иначе `422 validation_failed`), не-администратор — `403 admin_required`. Каталог, сдвинувшийся между фазами, не применяется молча: элемент остаётся `reuse_blocked`, но уже с `reuseCode:"catalog_changed"` и свежими `catalogRevision`/`candidateKeys` для следующей попытки.
 
 **`mode=dry-run`** ничего не пишет и не компилирует: действия предсказываются по хешам/именам/id. Строки dry-run-отчёта **предварительные** — компиляция компонентов оценивается только на `apply`, поэтому провал пайплайна в предпросмотре не виден. UI помечает предпросмотр явно.
 
@@ -749,9 +795,12 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
   "designSystems": ["shadcn", "wireframe", "..."],
   "resolvedSpaceScales": { "shadcn": { "none": "0px", "xs": "4px", "sm": "8px", "md": "12px", "lg": "16px", "xl": "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" } },
   "regions": ["statusBar", "header", "footer"],
-  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true, "screenRegions": true, "bundleExport": true, "bundleImport": true }
+  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true, "screenRegions": true, "bundleExport": true, "bundleImport": true, "componentReuseGate": true },
+  "reuseGate": { "mode": "shadow", "intentRequired": false, "policyVersion": 1 }
 }
 ```
+
+`reuseGate` описывает фазу [reuse-гейта](#reuse-gate-при-создании-и-публикации-компонента) этого инстанса: `mode` — `shadow` либо `enforce`, `intentRequired` истинно ровно в `enforce`, `policyVersion` — версия политики матчинга, та же, что в ответах `/api/catalog/candidates` и в записях аудита. Значение приходит из `REUSE_GATE`, прочитанной один раз на входе процесса, — повторного чтения окружения на запросе нет, поэтому discovery и сам гейт не могут разойтись.
 
 `designSystems` читается из живого реестра БД; `resolvedSpaceScales` резолвится для каждой системы из её последней merged-темы с canonical fallback. Значения `limits` импортируются из модулей, где они реально enforce'ятся (`src/prototype/schema.ts`, `src/prototype/validate.ts`, `server/assets/validate.ts`, `server/screenshot/service.ts`, `server/http.ts`), — двойного хардкода нет.
 
