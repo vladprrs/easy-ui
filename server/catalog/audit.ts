@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import { sourceShingles, structuralFingerprint } from "./fingerprint";
 import { currentCatalogRevision, currentDataFingerprint } from "../migrationRunner";
+import { collectCorpus } from "./corpus";
+import { matchCandidates, type ProposedArtifact } from "./matcher";
+import { CALIBRATED_POLICY } from "./policy";
 import { compareArtifactKeys, createCatalogMigrationPlan, selectCanonicalArtifact, type ArtifactKey, type CanonicalSelectionCandidate, type CatalogMigrationPlan } from "./migrationPlan";
 
 const canonicalRoleSlugs = new Set<string>((JSON.parse(readFileSync(new URL("./roles.json", import.meta.url), "utf8")) as { roles?: Array<{ slug?: unknown }> }).roles
@@ -25,6 +28,8 @@ export interface CatalogAuditArtifact {
   atomicLevel?: string;
   scope?: string;
   canonicalFor: string[];
+  /** Declared justification for keeping a composite artifact as code (atomic policy §5). */
+  ownershipReason?: string;
   currentHeadUsageCount: number;
   immutableUsageCount: number;
   classification: AuditClassification;
@@ -157,13 +162,20 @@ const compositionSignature = (row: CompositionRow): string => {
   });
 };
 
-const artifactMeta = (artifact: ArtifactKey, row: ComponentRow | CompositionRow): { atomicLevel?: string; scope?: string; canonicalFor: string[] } => {
+const ownershipReason = (value: unknown): string | undefined => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const reason = (value as { reason?: unknown }).reason;
+  return typeof reason === "string" && reason.trim() ? reason.trim() : undefined;
+};
+
+const artifactMeta = (artifact: ArtifactKey, row: ComponentRow | CompositionRow): { atomicLevel?: string; scope?: string; canonicalFor: string[]; ownershipReason?: string } => {
   if (artifact.kind === "component") {
     const meta = metaOf(row as ComponentRow);
     return {
       atomicLevel: typeof meta.atomicLevel === "string" ? meta.atomicLevel : undefined,
       scope: typeof meta.scope === "string" ? meta.scope : undefined,
       canonicalFor: strings(meta.canonicalFor),
+      ownershipReason: ownershipReason(meta.ownership),
     };
   }
   const doc = parseObject((row as CompositionRow).doc);
@@ -171,7 +183,28 @@ const artifactMeta = (artifact: ArtifactKey, row: ComponentRow | CompositionRow)
     atomicLevel: typeof doc.atomicLevel === "string" ? doc.atomicLevel : undefined,
     scope: typeof doc.scope === "string" ? doc.scope : undefined,
     canonicalFor: strings(doc.canonicalFor),
+    ownershipReason: ownershipReason(doc.ownership),
   };
+};
+
+/**
+ * Atomic Design classification of a published TSX component.
+ *
+ * `scope` deliberately plays no part: it is optional architecture metadata that no production
+ * component declares, and the codebase forbids inferring it (`src/designSystems/scope.ts`).
+ * Gating on it would label every molecule and organism `metadata-only-fix` and hide the whole
+ * point of the audit — which artifacts should become compositions.
+ */
+const classifyComponent = (
+  meta: { atomicLevel?: string; ownershipReason?: string },
+  deprecatedAndUnused: boolean,
+): AuditClassification => {
+  if (deprecatedAndUnused) return "deprecated-unused";
+  if (meta.atomicLevel === undefined) return "metadata-only-fix";
+  if (meta.atomicLevel === "atom") return "irreducible-code";
+  // A composite level in TSX is a candidate for declarative composition unless its author
+  // already justified the irreducibility the atomic policy asks for.
+  return meta.ownershipReason === undefined ? "composition-candidate" : "documented-exception";
 };
 
 const componentUsage = (db: Database, artifact: ArtifactKey, compositionUsages: CompositionUsageIndex): { current: number; immutable: number } => {
@@ -310,6 +343,60 @@ const selectionCandidate = (artifact: CatalogAuditArtifact, publishedAt?: string
   ...(publishedAt === undefined ? {} : { stablePublication: { version: artifact.version, publishedAt } }),
 });
 
+/** Order-independent identity of an unordered artifact pair. */
+const pairKey = (left: ArtifactKey, right: ArtifactKey): string => {
+  const a = `${left.kind}\0${left.designSystem}\0${left.id}`;
+  const b = `${right.kind}\0${right.designSystem}\0${right.id}`;
+  return a < b ? `${a}${b}` : `${b}${a}`;
+};
+
+/**
+ * Blocking pairs according to the enforcement project's calibrated matcher (`CALIBRATED_POLICY`).
+ * Every published component is scored against the corpus of its own design system with itself
+ * excluded; head drafts in the corpus are ignored because the audit only retires published
+ * artifacts. The score is symmetric in practice but not by construction, so a pair blocking in
+ * either direction counts — the matcher is the gate's own definition of "already exists".
+ */
+function calibratedDuplicatePairs(
+  db: Database,
+  candidates: readonly CatalogAuditArtifact[],
+  componentRowsByKey: ReadonlyMap<string, ComponentRow>,
+): Map<string, number> {
+  const pairs = new Map<string, number>();
+  const componentCandidates = candidates.filter((candidate) => candidate.artifact.kind === "component");
+  const published = new Set(componentCandidates.map((candidate) => `${candidate.artifact.designSystem}\0${candidate.artifact.id}`));
+  const designSystems = [...new Set(componentCandidates.map((candidate) => candidate.artifact.designSystem))].sort();
+  for (const designSystem of designSystems) {
+    const corpus = collectCorpus(db, designSystem).candidates;
+    if (corpus.length < 2) continue;
+    for (const candidate of componentCandidates) {
+      if (candidate.artifact.designSystem !== designSystem) continue;
+      const row = componentRowsByKey.get(`${candidate.artifact.id}\0${designSystem}\0${candidate.version}`);
+      if (row === undefined) continue;
+      const meta = metaOf(row);
+      const proposed: ProposedArtifact = {
+        kind: "component",
+        id: candidate.artifact.id,
+        name: candidate.name,
+        designSystem,
+        description: typeof meta.description === "string" ? meta.description : "",
+        source: row.source,
+        ...(candidate.atomicLevel === undefined ? {} : { atomicLevel: candidate.atomicLevel }),
+        ...(candidate.scope === undefined ? {} : { scope: candidate.scope }),
+        ...(candidate.canonicalFor.length ? { canonicalFor: candidate.canonicalFor } : {}),
+        meta: { propsJsonSchema: meta.propsJsonSchema, events: strings(meta.events), slots: strings(meta.slots) },
+      };
+      const result = matchCandidates(corpus, proposed, CALIBRATED_POLICY, { exclude: { designSystem, id: candidate.artifact.id } });
+      for (const blocking of result.blocking) {
+        if (blocking.draft || !published.has(`${designSystem}\0${blocking.id}`)) continue;
+        const key = pairKey(candidate.artifact, { kind: "component", id: blocking.id, designSystem });
+        pairs.set(key, Math.max(pairs.get(key) ?? 0, blocking.score));
+      }
+    }
+  }
+  return pairs;
+}
+
 /**
  * Read-only production audit. All reads execute in one SQLite transaction and the function does
  * not populate caches or write an audit row; the returned plan is the only materialized output.
@@ -335,9 +422,7 @@ export function auditCatalog(db: Database): CatalogAuditReport {
       const artifact: ArtifactKey = { kind: "component", id: row.id, designSystem: row.designSystem, version: row.version };
       const meta = artifactMeta(artifact, row);
       const usage = componentUsage(db, artifact, compositionUsages);
-      const classification: AuditClassification = row.status !== "active" && usage.current === 0 ? "deprecated-unused"
-        : meta.atomicLevel === undefined || meta.scope === undefined ? "metadata-only-fix"
-          : meta.atomicLevel === "molecule" || meta.atomicLevel === "organism" ? "composition-candidate" : "irreducible-code";
+      const classification = classifyComponent(meta, row.status !== "active" && usage.current === 0);
       const entry = { artifact, name: row.name, version: row.version, active: row.status === "active", deprecated: row.status !== "active", ...meta, currentHeadUsageCount: usage.current, immutableUsageCount: usage.immutable, classification, dependencyGraph: [] } satisfies CatalogAuditArtifact;
       artifacts.push(entry);
     }
@@ -361,6 +446,10 @@ export function auditCatalog(db: Database): CatalogAuditReport {
       if (previous === undefined || artifact.version > previous.version) latestByArtifact.set(key, artifact);
     }
     const candidates = [...latestByArtifact.values()].sort((left, right) => compareArtifactKeys(left.artifact, right.artifact));
+    // Design §6.1: the audit applies the *calibrated* matcher of the enforcement project rather
+    // than a private similarity rule, so what the gate refuses to create is exactly what the
+    // audit proposes to retire. Exact-signature grouping below stays as a cheap superset.
+    const matcherPairs = calibratedDuplicatePairs(db, candidates, componentRowsByKey);
     const groups: CatalogAuditArtifact[][] = [];
     const sameSignature = (left: CatalogAuditArtifact, right: CatalogAuditArtifact): boolean => {
       if (left.artifact.kind !== right.artifact.kind || left.artifact.designSystem !== right.artifact.designSystem || left.artifact.id === right.artifact.id) return false;
@@ -373,6 +462,7 @@ export function auditCatalog(db: Database): CatalogAuditReport {
       const rightRow = componentRowsByKey.get(`${right.artifact.id}\0${right.artifact.designSystem}\0${right.version}`);
       if (leftRow === undefined || rightRow === undefined) return false;
       if (componentSignature(leftRow) === componentSignature(rightRow)) return true;
+      if (matcherPairs.has(pairKey(left.artifact, right.artifact))) return true;
       const leftStructural = structuralFingerprint(metaOf(leftRow));
       const rightStructural = structuralFingerprint(metaOf(rightRow));
       return leftStructural !== undefined && leftStructural === rightStructural && jaccard(sourceShingles(leftRow.source), sourceShingles(rightRow.source)) >= 0.82;
@@ -399,8 +489,14 @@ export function auditCatalog(db: Database): CatalogAuditReport {
         const right = canonical.artifact.kind === "component" ? componentRowsByKey.get(`${canonical.artifact.id}\0${canonical.artifact.designSystem}\0${canonical.version}`) : undefined;
         return left !== undefined && right !== undefined && componentSignature(left) === componentSignature(right);
       });
-      const confidence = exact ? 1 : 0.9;
-      const reason = exact ? "normalized source/composition structure and IO are identical" : "normalized structure and token shingles indicate a near-duplicate";
+      // A group found only by the calibrated matcher carries that matcher's own score, so the
+      // plan never claims more certainty than the gate had: 0.9 is reserved for the structural
+      // near-duplicate rule, and the exact rule for identical normalized structure and IO.
+      const matcherScore = Math.max(0, ...retiredCandidates.map((candidate) => matcherPairs.get(pairKey(candidate.artifact, canonical.artifact)) ?? 0));
+      const confidence = exact ? 1 : matcherScore > 0 ? matcherScore : 0.9;
+      const reason = exact ? "normalized source/composition structure and IO are identical"
+        : matcherScore > 0 ? `calibrated reuse matcher (policy ${CALIBRATED_POLICY.policyVersion}) scores the pair blocking at ${matcherScore.toFixed(4)}`
+          : "normalized structure and token shingles indicate a near-duplicate";
       duplicateGroups.push({ canonical: canonical.artifact, retired, confidence, reason });
       const typeMap = Object.fromEntries(candidatesInGroup.filter((candidate) => candidate.artifact.kind === "component" && candidate !== canonical).map((candidate) => [candidate.name, canonical.name]));
       const affectedPrototypeHeads = [...new Set(retired.flatMap((artifact) => currentHeadUsages(db, artifact)))].sort();

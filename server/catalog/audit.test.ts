@@ -42,6 +42,46 @@ test("catalog audit returns a deterministic duplicate mapping with real usage co
   db.close();
 });
 
+test("classifies composite TSX by ownership, not by the optional scope field", () => {
+  const db = openDatabase(":memory:");
+  // Descriptions, props and bodies are deliberately unrelated: the calibrated matcher must not
+  // fold these four into one duplicate group, because the subject here is classification.
+  const meta = (id: string, extra: object) => JSON.stringify({
+    description: `${id} owns an unrelated responsibility ${id}`,
+    events: [], slots: [],
+    propsJsonSchema: { type: "object", properties: { [`${id}Value`]: { type: "string" } } },
+    ...extra,
+  });
+  seedComponent(db, "atom-one", "AtomOne");
+  seedComponent(db, "organism-plain", "OrganismPlain");
+  seedComponent(db, "organism-owned", "OrganismOwned");
+  seedComponent(db, "no-level", "NoLevel");
+  // Distinct bodies keep these four out of duplicate grouping: the subject here is classification.
+  const bodies: Record<string, string> = {
+    "atom-one": "const total = items.reduce((sum, item) => sum + item.price, 0); return total.toFixed(2);",
+    "organism-plain": "const [open, setOpen] = useState(false); useEffect(() => { window.addEventListener('resize', measure); }, []); return open;",
+    "organism-owned": "const rect = ref.current?.getBoundingClientRect(); const scale = Math.min(1, viewport.height / rect.height); return scale;",
+    "no-level": "const formatted = new Intl.DateTimeFormat('ru-RU', { month: 'long' }).format(date); return formatted;",
+  };
+  for (const [id, body] of Object.entries(bodies)) {
+    db.query("UPDATE component_revisions SET source=? WHERE component_id=?")
+      .run(`export const definition = { props: {}, events: [], slots: [], description: "${id}" }; export default function C(){ ${body} }`, id);
+  }
+  // No component declares `scope`: production never does, and the audit must still tell a
+  // composition candidate from an artifact whose author justified keeping it as code.
+  db.query("UPDATE component_publishes SET definition_meta=? WHERE component_id='atom-one'").run(meta("atom-one", { atomicLevel: "atom" }));
+  db.query("UPDATE component_publishes SET definition_meta=? WHERE component_id='organism-plain'").run(meta("organism-plain", { atomicLevel: "organism" }));
+  db.query("UPDATE component_publishes SET definition_meta=? WHERE component_id='organism-owned'")
+    .run(meta("organism-owned", { atomicLevel: "organism", ownership: { reason: "Owns viewport geometry that slots cannot express" } }));
+
+  const byId = Object.fromEntries(auditCatalog(db).artifacts.map((artifact) => [artifact.artifact.id, artifact.classification]));
+  expect(byId["atom-one"]).toBe("irreducible-code");
+  expect(byId["organism-plain"]).toBe("composition-candidate");
+  expect(byId["organism-owned"]).toBe("documented-exception");
+  expect(byId["no-level"]).toBe("metadata-only-fix");
+  db.close();
+});
+
 test("catalog audit counts nested active composition manifest usage", () => {
   const db = openDatabase(":memory:");
   seedComponent(db, "component-a", "ComponentA");
