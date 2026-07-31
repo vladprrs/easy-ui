@@ -2,7 +2,7 @@ import { render, cleanup } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ThemeContent } from "../api/client";
-import { cssEscapeString, flattenTokens, iconRegistry, serializeThemeCss, ThemeStyle, tokenCssVar } from "./theme";
+import { cssEscapeString, flattenTokens, iconRegistry, serializeFontFaceCss, serializeThemeCss, ThemeStyle, tokenCssVar } from "./theme";
 
 // cleanup() unmounts, which triggers ThemeStyle's insertion-effect cleanup to restore the prior
 // runtime snapshot — so we must not delete the shared global (that would pollute other test files
@@ -50,6 +50,16 @@ describe("theme serialization", () => {
     expect(css).toContain("--eui-color-primary");
   });
 
+  it("omits @font-face in tokens-only mode and keeps the default byte-identical", () => {
+    const full = serializeThemeCss(theme);
+    expect(serializeThemeCss(theme, {})).toBe(full);
+    expect(serializeThemeCss(theme, { fonts: true })).toBe(full);
+    const tokensOnly = serializeThemeCss(theme, { fonts: false });
+    expect(tokensOnly).not.toContain("@font-face");
+    expect(tokensOnly).toBe(full.slice(0, full.indexOf("@font-face")));
+    expect(full).toBe(`${tokensOnly}${serializeFontFaceCss(theme.fonts)}`);
+  });
+
   it("escapes dangerous characters in string token values", () => {
     // Grammar bans ;{}<> but backslashes/quotes are still escaped as CSS hex sequences.
     expect(cssEscapeString('a"b\\c')).toBe("a\\22 b\\5c c");
@@ -73,6 +83,16 @@ describe("ThemeStyle runtime snapshot", () => {
     expect(style!.textContent).toContain("--eui-color-primary");
     expect(globalThis.__easyUiShared?.tokens).toEqual(flattenTokens(theme));
     expect(globalThis.__easyUiShared?.icons?.close?.assetUrl).toBe(`/api/assets/asset_${"b".repeat(64)}`);
+  });
+
+  it("emits tokens without @font-face when the owner is tokens-only", () => {
+    const view = render(<ThemeStyle content={theme} fonts={false} />);
+    expect(activeCss()).toContain("--eui-color-primary");
+    expect(activeCss()).not.toContain("@font-face");
+    // Снапшот token()/Icon наполняется независимо от режима шрифтов.
+    expect(globalThis.__easyUiShared?.tokens).toEqual(flattenTokens(theme));
+    view.rerender(<ThemeStyle content={theme} />);
+    expect(activeCss()).toContain("@font-face");
   });
 
   it("restores the previous snapshot on unmount (cleanup)", () => {

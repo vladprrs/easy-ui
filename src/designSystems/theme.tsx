@@ -50,22 +50,32 @@ export function iconRegistry(content: ThemeContent): Record<string, EasyUiShared
   return out;
 }
 
-/** Serializes a validated theme into a stylesheet: :root custom properties + @font-face rules. */
-export function serializeThemeCss(content: ThemeContent): string {
-  const declarations = Object.entries(content.tokens)
-    .filter(([key]) => !key.startsWith("space."))
-    .map(([key, value]) => `${tokenCssVar(key)}: ${tokenValueCss(value)};`);
-  const root = declarations.length ? `:root{${declarations.join("")}}` : "";
-  const fonts = content.fonts.map((font) => {
+/** Serializes @font-face rules for a theme; the single source of the font grammar (fontRegistry reuses it). */
+export function serializeFontFaceCss(fonts: ThemeContent["fonts"]): string {
+  return fonts.map((font) => {
     const parts = [`font-family: "${cssEscapeString(font.family)}";`, `src: url("${assetUrl(font.src)}");`];
     if (font.weight !== undefined) parts.push(`font-weight: ${typeof font.weight === "number" ? font.weight : cssEscapeString(font.weight)};`);
     if (font.style !== undefined) parts.push(`font-style: ${cssEscapeString(font.style)};`);
     return `@font-face{${parts.join("")}}`;
   }).join("");
+}
+
+/**
+ * Serializes a validated theme into a stylesheet: :root custom properties + @font-face rules.
+ * `fonts: false` — tokens-only режим: библиотека держит документного владельца темы только ради
+ * снапшота token()/Icon, а @font-face отдаёт fontRegistry, который умеет не переобъявлять
+ * семейство, уже доступное документу (иначе тема переопределила бы шрифты всей страницы).
+ */
+export function serializeThemeCss(content: ThemeContent, options: { fonts?: boolean } = {}): string {
+  const declarations = Object.entries(content.tokens)
+    .filter(([key]) => !key.startsWith("space."))
+    .map(([key, value]) => `${tokenCssVar(key)}: ${tokenValueCss(value)};`);
+  const root = declarations.length ? `:root{${declarations.join("")}}` : "";
+  const fonts = options.fonts === false ? "" : serializeFontFaceCss(content.fonts);
   return `${root}${fonts}`;
 }
 
-interface ThemeOwner { order: number; content: ThemeContent | null }
+interface ThemeOwner { order: number; content: ThemeContent | null; fonts: boolean }
 interface ThemeManagerState {
   nextOrder: number;
   owners: Map<symbol, ThemeOwner>;
@@ -115,7 +125,7 @@ function applyActiveTheme(manager: ThemeManagerState) {
     manager.style.dataset.euiTheme = "";
     document.head.append(manager.style);
   }
-  manager.style.textContent = serializeThemeCss(active.content);
+  manager.style.textContent = serializeThemeCss(active.content, { fonts: active.fonts });
   shared.tokens = flattenTokens(active.content);
   shared.icons = iconRegistry(active.content);
 }
@@ -131,15 +141,16 @@ function registerThemeOwner(id: symbol, order: number) {
       hadIcons: Object.hasOwn(shared, "icons"),
     };
   }
-  manager.owners.set(id, { order, content: null });
+  manager.owners.set(id, { order, content: null, fonts: true });
   applyActiveTheme(manager);
 }
 
-function updateThemeOwner(id: symbol, content: ThemeContent | null) {
+function updateThemeOwner(id: symbol, content: ThemeContent | null, fonts: boolean) {
   const manager = themeManager();
   const owner = manager.owners.get(id);
   if (!owner) return;
   owner.content = content;
+  owner.fonts = fonts;
   applyActiveTheme(manager);
 }
 
@@ -149,14 +160,17 @@ function unregisterThemeOwner(id: symbol) {
   applyActiveTheme(manager);
 }
 
-/** Thin owner client for the document-wide, single-active-theme manager. */
-export function ThemeStyle({ content }: { content: ThemeContent | null }) {
+/**
+ * Thin owner client for the document-wide, single-active-theme manager.
+ * `fonts={false}` — владелец эмитит только :root-токены (см. serializeThemeCss).
+ */
+export function ThemeStyle({ content, fonts = true }: { content: ThemeContent | null; fonts?: boolean }) {
   const [owner] = useState(allocateThemeOwner);
   useInsertionEffect(() => {
     registerThemeOwner(owner.id, owner.order);
     return () => unregisterThemeOwner(owner.id);
   }, [owner]);
-  useInsertionEffect(() => updateThemeOwner(owner.id, content), [content, owner]);
+  useInsertionEffect(() => updateThemeOwner(owner.id, content, fonts), [content, fonts, owner]);
   return null;
 }
 
