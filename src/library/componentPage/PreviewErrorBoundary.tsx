@@ -1,8 +1,16 @@
 import { Component, type ReactNode } from "react";
-import { ErrorState } from "../../app/states";
-import { componentPage as strings } from "../../app/strings/componentPage";
 
-type Props = { children: ReactNode; resetGeneration: number; reportedError: boolean; onErrorStateChange: (errored: boolean) => void };
+type Props = {
+  children: ReactNode;
+  resetGeneration: number;
+  reportedError: boolean;
+  onErrorStateChange: (errored: boolean) => void;
+  /**
+   * Что показать вместо упавшего превью. Параметризовано (план §4.4): странице компонента нужна
+   * полноразмерная плашка без ретрая, карточке библиотеки — компактная с «Повторить».
+   */
+  fallback: ReactNode;
+};
 type State = { error: Error | null };
 
 export class PreviewErrorBoundary extends Component<Props, State> {
@@ -25,8 +33,6 @@ export class PreviewErrorBoundary extends Component<Props, State> {
   }
 
   render() {
-    return this.state.error
-      ? <ErrorState title={strings.previewCrashed} />
-      : this.props.children;
+    return this.state.error ? this.props.fallback : this.props.children;
   }
 }

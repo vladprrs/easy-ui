@@ -36,6 +36,11 @@ export const library = {
     : `используется в ${count} ${pluralRu(count, ["прототипе", "прототипах", "прототипах"])}`,
   previewMissing: "Живого превью нет: у компонента не заданы example-props",
   previewAria: (componentName: string) => `Живое превью компонента ${componentName}`,
+  // Плашка сбоя инлайн-превью: вид сбоя (метаданные/тема/бандл/рендер) виден только в data-*,
+  // пользователю адресован один текст и одно действие.
+  previewFailed: "Превью не загрузилось",
+  previewReloadRequired: "Обновите страницу, чтобы загрузить превью",
+  previewReload: "Обновить страницу",
   // Результаты поиска и фильтров.
   foundTitle: (count: number) => `Нашлось ${count} ${pluralRu(count, ["компонент", "компонента", "компонентов"])}`,
   levelCount: (count: number) => `${count} ${pluralRu(count, ["компонент", "компонента", "компонентов"])}`,

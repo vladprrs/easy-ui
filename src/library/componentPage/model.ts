@@ -39,14 +39,23 @@ export type PreviewTreeElement = {
   slot?: string;
 };
 
-export function buildPreviewSpec(name: string, props: Record<string, unknown>, version: ComponentVersion, placeholderName: string) {
+/**
+ * Всё, что нужно построителю дерева превью. Сужено с `ComponentVersion` до двух полей (план §3.2/M1):
+ * ответ preview-эндпоинта библиотеки несёт ровно их и подставляется сюда без адаптера.
+ */
+export interface PreviewSlotSource {
+  slots: readonly string[];
+  capabilities?: { namedSlots?: true };
+}
+
+export function buildPreviewSpec(name: string, props: Record<string, unknown>, source: PreviewSlotSource, placeholderName: string) {
   const elements: Record<string, PreviewTreeElement> = { component: { type: name, props } };
   const children: string[] = [];
-  if (version.slots.length > 0) {
+  if (source.slots.length > 0) {
     children.push("placeholder-default");
     elements["placeholder-default"] = { type: placeholderName, props: { slot: "default" } };
-    if (version.capabilities?.namedSlots) {
-      for (const slot of [...new Set(version.slots)].filter((name) => name !== "default")) {
+    if (source.capabilities?.namedSlots) {
+      for (const slot of [...new Set(source.slots)].filter((name) => name !== "default")) {
         const key = `placeholder-${children.length}`;
         children.push(key);
         elements[key] = { type: placeholderName, props: { slot }, slot };

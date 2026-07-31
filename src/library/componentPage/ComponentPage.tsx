@@ -1,6 +1,5 @@
-import { Component, createElement, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useParams, useSearchParams } from "react-router";
-import { z } from "zod";
 import {
   ApiError,
   getComponentUsages,
@@ -17,18 +16,15 @@ import { chip, chipActive, headingPage, inputBase, kicker, kickerOnDark, pillGho
 import { ErrorState as StateError, Skeleton } from "../../app/states";
 import { componentPage as strings, componentStatusLabels } from "../../app/strings/componentPage";
 import { useDocumentTitle } from "../../app/useDocumentTitle";
-import type { ComponentDefinition } from "../../catalog/definitions";
 import type { CustomPlayerRuntime } from "../../catalog/runtime";
-import { CaptureSurface } from "../../capture/CaptureSurface";
 import { FullDocumentReloadRequiredError, loadCustomComponents } from "../../customComponents/loader";
 import { SurfaceSpacingScope } from "../../designSystems/SurfaceSpacingScope";
 import { ThemeStyle } from "../../designSystems/theme";
 import { PropsForm, validateZodCandidate, type PropsValidation } from "../../propsForm";
-import { toRuntimeSpec } from "../../prototype/runtimeSpec";
+import { RuntimePreview, usePreviewRuntime } from "../preview/renderPreview";
 import { EventsSection, MetaSection, PropsTable, SlotsSection, SourceView } from "../componentDocs";
 import { PreviewErrorBoundary } from "./PreviewErrorBoundary";
 import {
-  buildPreviewSpec,
   initialCandidate,
   parseVersionQuery,
   renderableStatuses,
@@ -37,27 +33,6 @@ import {
 } from "./model";
 import { useKeyedRequest, type KeyedRequestState } from "./useKeyedRequest";
 import { UsageTree } from "../UsageTree";
-
-const PLACEHOLDER_NAME = "__preview_placeholder__";
-const EMPTY_SCREEN_IDS = new Set<string>();
-const EMPTY_STATE = {};
-const placeholderDefinition: ComponentDefinition = {
-  props: z.object({ slot: z.string() }),
-  description: "Preview-only slot placeholder",
-  slots: [],
-};
-
-const SlotPlaceholder = (({ props }: { props: { slot: string } }) =>
-  <span data-preview-placeholder={props.slot} className="inline-flex min-h-10 min-w-28 items-center justify-center rounded-inset border border-dashed border-eui-brand/50 bg-eui-lilac-100 px-3 py-2 font-eui-ui text-xs text-eui-brand">
-    {strings.placeholder(props.slot)}
-  </span>) as ComponentType;
-
-class RuntimeComponentErrorReporter extends Component<{ children: ReactNode; onError: () => void }, { failed: boolean }> {
-  state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
-  componentDidCatch() { this.props.onError(); }
-  render() { return this.state.failed ? null : this.props.children; }
-}
 
 async function componentMetaNoStore(id: string, signal: AbortSignal): Promise<ComponentMeta> {
   const response = await fetch(`/api/components/${encodeURIComponent(id)}`, { signal, cache: "no-store" });
@@ -351,14 +326,7 @@ function ShowcaseRuntime({ componentName, requestKey, version, loaded, theme }: 
   const [boundaryErrored, setBoundaryErrored] = useState(false);
   const [runtimeReportedError, setRuntimeReportedError] = useState(false);
   const [resetGeneration, setResetGeneration] = useState(0);
-  const runtime = useMemo<CustomPlayerRuntime>(() => ({
-    definitions: { ...loaded.definitions, [PLACEHOLDER_NAME]: placeholderDefinition },
-    components: {
-      ...Object.fromEntries(Object.entries(loaded.components).map(([name, LoadedComponent]) => [name, (props: object) =>
-        <RuntimeComponentErrorReporter onError={() => setRuntimeReportedError(true)}>{createElement(LoadedComponent, props)}</RuntimeComponentErrorReporter>])),
-      [PLACEHOLDER_NAME]: SlotPlaceholder,
-    },
-  }), [loaded]);
+  const runtime = usePreviewRuntime(loaded, () => setRuntimeReportedError(true));
   const presets = useMemo(() => [
     ...(version.example ? [{ name: strings.defaultPreset, value: version.example }] : []),
     ...Object.entries(version.examples ?? {}).map(([name, value]) => ({ name, value })),
@@ -402,8 +370,8 @@ function ShowcaseRuntime({ componentName, requestKey, version, loaded, theme }: 
           <div className={`flex min-h-72 items-center justify-center overflow-auto rounded-popover p-6 transition-colors ${darkBackground ? "bg-eui-ink" : "bg-white"}`}>
             {theme.status === "loading" || theme.status === "idle" ? null
               : previewProps === null ? <p className={darkBackground ? "text-white" : "text-eui-slate-500"}>{strings.requiredProps}</p>
-              : <PreviewErrorBoundary key={requestKey} resetGeneration={resetGeneration} reportedError={runtimeReportedError} onErrorStateChange={setBoundaryErrored}>
-                <RuntimePreview componentName={componentName} version={version} props={previewProps} runtime={runtime} onError={() => setRuntimeReportedError(true)} />
+              : <PreviewErrorBoundary key={requestKey} resetGeneration={resetGeneration} reportedError={runtimeReportedError} onErrorStateChange={setBoundaryErrored} fallback={<StateError title={strings.previewCrashed} />}>
+                <RuntimePreview componentName={componentName} designSystem={version.designSystem} source={version} props={previewProps} runtime={runtime} onError={() => setRuntimeReportedError(true)} />
               </PreviewErrorBoundary>}
           </div>
         </div>
@@ -442,12 +410,4 @@ function AccessiblePropsForm({ children }: { children: ReactNode }) {
     });
   });
   return <div ref={ref}>{children}</div>;
-}
-
-function RuntimePreview({ componentName, version, props, runtime, onError }: { componentName: string; version: ComponentVersion; props: Record<string, unknown>; runtime: CustomPlayerRuntime; onError: () => void }) {
-  const tree = useMemo(() => toRuntimeSpec(
-    buildPreviewSpec(componentName, props, version, PLACEHOLDER_NAME) as Parameters<typeof toRuntimeSpec>[0],
-    { customTypes: new Set([componentName, PLACEHOLDER_NAME]) },
-  ), [componentName, props, version]);
-  return <CaptureSurface designSystem={version.designSystem} custom={runtime} tree={tree} initialState={EMPTY_STATE} screenIds={EMPTY_SCREEN_IDS} onError={onError} />;
 }
