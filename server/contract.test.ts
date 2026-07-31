@@ -375,14 +375,31 @@ describe("route contracts", () => {
     };
     const schema = document.paths["/api/components"]!.post.responses["409"]!.content["application/json"]!.schema;
     expect(schema).not.toEqual({ $ref: "#/components/schemas/ErrorEnvelope" });
-    const error = schema.properties as Record<string, { anyOf: Array<{ properties: Record<string, unknown> }> }>;
+    const error = schema.properties as Record<string, { anyOf: Array<{ properties: Record<string, Record<string, unknown>>; required: string[] }> }>;
     const reuseError = error.error.anyOf.find((variant) => Object.hasOwn(variant.properties, "catalogRevision"))!;
     expect(reuseError.properties.code).toMatchObject({ enum: ["component_reuse_required", "catalog_changed", "canonical_role_conflict"] });
     expect(reuseError.properties.catalogRevision).toMatchObject({ type: "string" });
+    expect(reuseError.properties.policyVersion).toMatchObject({ type: "integer", minimum: 0 });
+    expect(reuseError.properties.candidates).toMatchObject({
+      type: "array",
+      items: { type: "object", properties: { key: { type: "string" }, blocking: { type: "boolean" }, reasons: { type: "array" } } },
+    });
+    expect(reuseError.properties.retryable).toMatchObject({ type: "boolean", const: false });
+    expect(reuseError.properties.resolution).toMatchObject({ enum: ["reuse", "escalate"] });
+    expect(reuseError.properties.nextSteps).toMatchObject({ type: "array", items: { type: "string" } });
     expect(reuseError.properties.decisionId).toMatchObject({ anyOf: [{ type: "string" }, { type: "null" }] });
+    expect(reuseError.properties.repeatedAttempts).toMatchObject({
+      anyOf: [expect.objectContaining({ type: "integer", minimum: 0 }), { type: "null" }],
+    });
     expect(reuseError.properties.overrideTemplate).toMatchObject({
       properties: { candidateKeys: { type: "array", items: { type: "string" } } },
     });
+    expect(reuseError.properties.conflictingRoles).toMatchObject({ type: "array", items: { type: "string" } });
+    expect(reuseError.required).toEqual(expect.arrayContaining([
+      "catalogRevision", "policyVersion", "candidates", "retryable", "resolution", "nextSteps",
+      "overrideTemplate", "decisionId", "repeatedAttempts",
+    ]));
+    expect(reuseError.required).not.toContain("conflictingRoles");
   });
 
   test("GET /api/capabilities exposes actions, directives, param sources, limits and design systems", async () => {
