@@ -1,14 +1,15 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { STARTER_BUTTON, STARTER_DS_ID, STARTER_STACK, STARTER_TEXT } from "../starter-ds.fixture";
+import { createFixtureComponent } from "./reuse.fixture";
 
 const api = "/api";
 
 test("custom component hooks, events, state templates, and published navigation work", async ({ request, page }) => {
   const source = await readFile("server/fixtures/rating-stars.tsx", "utf8");
-  expect((await request.post(`${api}/components`, {
-    data: { id: "ui-rating-stars", name: "UiRatingStars", source, designSystem: STARTER_DS_ID, intent: "Collects customer ratings in the interactive product flow" },
-  })).status()).toBe(201);
+  expect((await createFixtureComponent(request, api, {
+    id: "ui-rating-stars", name: "UiRatingStars", source, designSystem: STARTER_DS_ID, intent: "Collects customer ratings in the interactive product flow",
+  }, "Отдельная UI-фикстура проверяет события, состояние и навигацию пользовательского флоу")).status()).toBe(201);
   expect((await request.post(`${api}/components/ui-rating-stars/publish`, { data: { baseRev: 1 } })).status()).toBe(201);
 
   const doc = {

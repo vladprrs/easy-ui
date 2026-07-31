@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { APIRequestContext } from "@playwright/test";
 import { STARTER_DS_ID } from "../starter-ds.fixture";
+import { createFixtureComponent } from "./reuse.fixture";
 
 /**
  * Фикстуры инлайн-превью библиотеки (план 2026-07-31 §4.3.5, §4.4, §6 «E2E»).
@@ -207,9 +208,9 @@ async function publish(request: APIRequestContext, api: string, seed: { id: stri
     return;
   }
   await expectStatus(`read component ${seed.id}`, existing, [404]);
-  const created = await request.post(`${api}/components`, {
-    data: { id: seed.id, name: seed.name, source: seed.source, designSystem: seed.designSystem, intent: previewIntent(seed.id, seed.name) },
-  });
+  const created = await createFixtureComponent(request, api, {
+    id: seed.id, name: seed.name, source: seed.source, designSystem: seed.designSystem, intent: previewIntent(seed.id, seed.name),
+  }, "Отдельные preview-фикстуры проверяют разные режимы рендера и изоляции ошибок");
   await expectStatus(`create component ${seed.id}`, created, [201]);
   const published = await request.post(`${api}/components/${seed.id}/publish`, { data: { baseRev: 1 } });
   await expectStatus(`publish component ${seed.id}`, published, [201]);

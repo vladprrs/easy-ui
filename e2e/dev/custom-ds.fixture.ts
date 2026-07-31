@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { APIRequestContext } from "@playwright/test";
 import { STARTER_DS_ID } from "../starter-ds.fixture";
+import { createFixtureComponent } from "./reuse.fixture";
 
 /**
  * W0-8 custom design system fixture, shared by e2e waves (W1/W2/W5).
@@ -124,36 +125,6 @@ type ComponentSeed = {
   fixture: string;
   designSystem?: string;
 };
-
-type ReuseRequired = {
-  error?: {
-    code?: string;
-    overrideTemplate?: { catalogRevision: string; candidateKeys: string[] };
-  };
-};
-
-/** E2E keeps a few deliberately similar compatibility fixtures as separate components. */
-async function createFixtureComponent(
-  request: APIRequestContext,
-  api: string,
-  data: Record<string, unknown>,
-) {
-  let response = await request.post(`${api}/components`, { data });
-  if (response.status() !== 409) return response;
-  const rejection = await response.json() as ReuseRequired;
-  const override = rejection.error?.code === "component_reuse_required" ? rejection.error.overrideTemplate : undefined;
-  if (!override) return response;
-  response = await request.post(`${api}/components`, {
-    data: {
-      ...data,
-      reuseOverride: {
-        ...override,
-        reason: "Отдельная E2E-фикстура нужна для проверки совместимости разных контрактов",
-      },
-    },
-  });
-  return response;
-}
 
 async function componentExists(request: APIRequestContext, api: string, id: string): Promise<boolean> {
   const response = await request.get(`${api}/components/${id}`);
