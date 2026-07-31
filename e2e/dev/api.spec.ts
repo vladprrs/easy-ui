@@ -42,7 +42,7 @@ test("API revisions, publishing, component bundles, and shim ABI work end to end
 
   const source = await readFile("server/fixtures/rating-stars.tsx", "utf8");
   const created = await request.post(`${api}/components`, {
-    data: { id: "api-rating-stars", name: "ApiRatingStars", source, designSystem: STARTER_DS_ID },
+    data: { id: "api-rating-stars", name: "ApiRatingStars", source, designSystem: STARTER_DS_ID, intent: "Collects product ratings for the API lifecycle scenario" },
   });
   expect(created.status()).toBe(201);
   const componentPublish = await request.post(`${api}/components/api-rating-stars/publish`, { data: { baseRev: 1 } });

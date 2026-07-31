@@ -186,6 +186,16 @@ async function expectStatus(step: string, response: { status(): number; text(): 
   throw new Error(`library-preview fixture: ${step} failed with HTTP ${response.status()}: ${await response.text()}`);
 }
 
+const previewIntent = (id: string, name: string) => ({
+  [PREVIEW_IDS.organism]: "Summarizes highlighted product content in a library preview card",
+  [PREVIEW_IDS.atom]: "Displays compact product metadata in a library preview card",
+  [PREVIEW_IDS.icon]: "Displays the shared product icon in a library preview card",
+  [PREVIEW_IDS.fixed]: "Shows viewport-bounded product content inside a library preview",
+  [PREVIEW_IDS.broken]: "Exercises product preview error isolation for the library",
+  [PREVIEW_IDS.accent]: "Displays the dominant design-system accent in a library preview",
+  [PREVIEW_IDS.scopedAccent]: "Displays a scoped design-system accent in a library preview",
+}[id] ?? `Displays ${name} in a product library preview`);
+
 async function publish(request: APIRequestContext, api: string, seed: { id: string; name: string; source: string; designSystem: string }): Promise<void> {
   const existing = await request.get(`${api}/components/${seed.id}`);
   if (existing.status() === 200) {
@@ -198,7 +208,7 @@ async function publish(request: APIRequestContext, api: string, seed: { id: stri
   }
   await expectStatus(`read component ${seed.id}`, existing, [404]);
   const created = await request.post(`${api}/components`, {
-    data: { id: seed.id, name: seed.name, source: seed.source, designSystem: seed.designSystem },
+    data: { id: seed.id, name: seed.name, source: seed.source, designSystem: seed.designSystem, intent: previewIntent(seed.id, seed.name) },
   });
   await expectStatus(`create component ${seed.id}`, created, [201]);
   const published = await request.post(`${api}/components/${seed.id}/publish`, { data: { baseRev: 1 } });

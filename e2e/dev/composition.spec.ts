@@ -78,7 +78,7 @@ test("seeded composition-demo renders a repeat from state and navigates between 
 
 test("typed event payload drives setState via $event, $if gates an action, slots route children, and the inspector logs the payload", async ({ request, page }) => {
   expect((await request.post(`${api}/components`, {
-    data: { id: "combo-panel", name: "ComboPanel", source: comboSource, designSystem: STARTER_DS_ID },
+    data: { id: "combo-panel", name: "ComboPanel", source: comboSource, designSystem: STARTER_DS_ID, intent: "Combines typed actions and slotted product content in a panel" },
   })).status()).toBe(201);
   expect((await request.post(`${api}/components/combo-panel/publish`, { data: { baseRev: 1 } })).status()).toBe(201);
 

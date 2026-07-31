@@ -63,7 +63,7 @@ async function seed(f: Awaited<ReturnType<typeof fixture>>) {
   const protoAsset = await upload(svg("prototype"), "image/svg+xml");
   expect((await call("alice", "PATCH", "/design-systems/bundle-ds", { fonts: [{ family: "Inter", src: fontAsset }], baseVersion: 0 })).status).toBe(200);
   const source = `// asset: /api/assets/${componentAsset}\n${ratingStars}`;
-  expect((await call("alice", "POST", "/components", { id: "rating-stars", name: "RatingStars", source, designSystem: "bundle-ds" })).status).toBe(201);
+  expect((await call("alice", "POST", "/components", { id: "rating-stars", name: "RatingStars", source, designSystem: "bundle-ds", intent: "Collects product ratings while carrying exportable asset references" })).status).toBe(201);
   expect((await call("alice", "POST", "/components/rating-stars/publish", { baseRev: 1 })).status).toBe(201);
   const doc = {
     version: 1, id: "bundle-proto", name: "Bundle proto", designSystem: "bundle-ds", device: "desktop", startScreen: "rate", state: {},
@@ -146,9 +146,9 @@ const composedDoc = {
 
 /** Publishes the two composition components, the composition and the prototype that uses it. */
 async function seedComposition(call: (who: "alice" | "bob" | null, method: string, path: string, body?: unknown, contentType?: string) => Promise<Response>) {
-  expect((await call("alice", "POST", "/components", { id: "bundle-shell-component", name: "BundleShell", source: SHELL_SRC, designSystem: "bundle-ds" })).status).toBe(201);
+  expect((await call("alice", "POST", "/components", { id: "bundle-shell-component", name: "BundleShell", source: SHELL_SRC, designSystem: "bundle-ds", intent: "Frames the exported product composition in a shell" })).status).toBe(201);
   expect((await call("alice", "POST", "/components/bundle-shell-component/publish", { baseRev: 1 })).status).toBe(201);
-  expect((await call("alice", "POST", "/components", { id: "bundle-badge", name: "BundleBadge", source: BADGE_SRC, designSystem: "bundle-ds" })).status).toBe(201);
+  expect((await call("alice", "POST", "/components", { id: "bundle-badge", name: "BundleBadge", source: BADGE_SRC, designSystem: "bundle-ds", intent: "Highlights exported product status with a compact badge" })).status).toBe(201);
   expect((await call("alice", "POST", "/components/bundle-badge/publish", { baseRev: 1 })).status).toBe(201);
   expect((await call("alice", "POST", "/compositions", { id: "bundle-shell", designSystem: "bundle-ds", doc: compositionDoc })).status).toBe(201);
   expect((await call("alice", "POST", "/compositions/bundle-shell/publish", { baseRev: 1 })).status).toBe(201);
@@ -233,7 +233,7 @@ describe("bundle export", () => {
 
     // An unpublished component exports its head draft with version null.
     const draftSource = "import { z } from \"zod\";\nexport const definition = { props: z.strictObject({}), description: \"Draft\" };\nexport default function Draft() { return null; }\n";
-    expect((await f.call("alice", "POST", "/components", { id: "draft-only", name: "DraftOnly", source: draftSource, designSystem: "bundle-ds" })).status).toBe(201);
+    expect((await f.call("alice", "POST", "/components", { id: "draft-only", name: "DraftOnly", source: draftSource, designSystem: "bundle-ds", intent: "Provides an unpublished draft for bundle export selection" })).status).toBe(201);
     const draft = (await unzip(await f.call("alice", "GET", "/components/draft-only/export"))).manifest;
     expect(draft.components[0]!.exported).toMatchObject({ version: null });
     f.db.close();

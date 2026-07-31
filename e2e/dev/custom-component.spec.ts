@@ -7,7 +7,7 @@ const api = "/api";
 test("custom component hooks, events, state templates, and published navigation work", async ({ request, page }) => {
   const source = await readFile("server/fixtures/rating-stars.tsx", "utf8");
   expect((await request.post(`${api}/components`, {
-    data: { id: "ui-rating-stars", name: "UiRatingStars", source, designSystem: STARTER_DS_ID },
+    data: { id: "ui-rating-stars", name: "UiRatingStars", source, designSystem: STARTER_DS_ID, intent: "Collects customer ratings in the interactive product flow" },
   })).status()).toBe(201);
   expect((await request.post(`${api}/components/ui-rating-stars/publish`, { data: { baseRev: 1 } })).status()).toBe(201);
 
