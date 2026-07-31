@@ -1,4 +1,4 @@
-import type { AtomicLevel, CatalogComponent, ComponentVersionSummary, DesignSystemSummary, VisualReference } from "../api/client";
+import type { AtomicLevel, CatalogComponent, ComponentVersionSummary, DesignSystemSummary, LibraryCatalogStatus, VisualReference } from "../api/client";
 import { libraryStatusLabels } from "../app/strings/library";
 
 export type LibrarySelection = { kind: "custom"; componentId: string; designSystem: string };
@@ -136,10 +136,18 @@ export const LIBRARY_STATUS_KEYS = ["published", "verified", "visual-pending", "
 export type LibraryStatusKey = (typeof LIBRARY_STATUS_KEYS)[number];
 export const libraryStatusLabel: Record<LibraryStatusKey, string> = libraryStatusLabels;
 
-export interface ComponentLibraryStatus { published: boolean; rejected: boolean; blocked: boolean; verified: boolean; visualPending: boolean }
+/** Статусный вектор карточки — он же `LibraryCatalogStatus` read-model: чипы фильтров общие. */
+export type ComponentLibraryStatus = LibraryCatalogStatus;
 
 const BLOCKED_STATUSES = new Set(["deprecated", "superseded", "archived"]);
 
+/**
+ * Легаси-вычисление статуса на клиенте. `LibraryPage` его больше не вызывает — статус приходит
+ * в записи `/api/catalog/library`. Функция и её тесты сознательно оставлены: это исполняемая
+ * спецификация той семантики, на которую ссылается таблица расхождений read-model
+ * (`server/library-catalog.test.ts`, план 2026-07-31 §3.1/B3). Удалять — отдельным шагом,
+ * вместе с таблицей.
+ */
 export function componentLibraryStatus(
   componentId: string,
   activeVersion: number,

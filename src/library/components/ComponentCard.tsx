@@ -1,18 +1,20 @@
 import type { ReactElement } from "react";
 import { Link } from "react-router";
-import type { CatalogComponent, FigmaProvenance } from "../../api/client";
+import type { LibraryCatalogEntry } from "../../api/client";
 import { figmaBadgeTitle, levelSection, library } from "../../app/strings/library";
-import { atomicLevelLabel, type ComponentLibraryStatus } from "../libraryModel";
-import { ComponentPreview, ComponentPreviewMissing } from "./ComponentPreview";
+import { atomicLevelLabel } from "../libraryModel";
+import { InlineComponentPreview } from "../preview/InlineComponentPreview";
+import type { PreviewPriority } from "../preview/previewScheduler";
 
 export interface ComponentCardProps {
-  component: CatalogComponent;
+  entry: LibraryCatalogEntry;
   /** Имя дизайн-системы; показывается, когда в гриде смешаны системы. */
   systemName: string;
   showSystem: boolean;
-  /** Статус и Figma подгружаются лениво: пока их нет, строка статуса не рисуется. */
-  status: ComponentLibraryStatus | null;
-  figma: FigmaProvenance | null;
+  /** Приоритет задачи превью; определяется ярусом карточки (`previewPriorityFor`). */
+  priority: PreviewPriority;
+  /** `?libraryPreviews=off` — превью не монтируется вовсе, метаданные рисуются как есть. */
+  previewsEnabled: boolean;
 }
 
 /** Лавандовый чип-факт: версия, уровень, система. */
@@ -28,49 +30,46 @@ function Fact({ children, title }: { children: string; title?: string }): ReactE
  * Вся карточка — одна ссылка на страницу компонента (stretched link), поэтому
  * внутри нет конкурирующих кнопок.
  */
-export function ComponentCard({ component, systemName, showSystem, status, figma }: ComponentCardProps): ReactElement {
-  const example = component.example ? null : Object.keys(component.examples ?? {}).sort()[0] ?? undefined;
-  const usageCount = component.headUsageCount ?? 0;
+export function ComponentCard({ entry, systemName, showSystem, priority, previewsEnabled }: ComponentCardProps): ReactElement {
+  const { status, figma } = entry;
   return <li className="group relative flex min-w-0 flex-col rounded-panel bg-white focus-within:z-20">
     <div className="relative flex h-[170px] items-center justify-center overflow-hidden rounded-t-panel bg-pay-lavender-tint">
-      {example === undefined
-        ? <ComponentPreviewMissing />
-        : <ComponentPreview componentId={component.id} componentName={component.name} version={component.version} example={example} />}
+      {previewsEnabled ? <InlineComponentPreview entry={entry} priority={priority} /> : null}
       <div className="absolute left-4 top-4 z-10 flex flex-wrap gap-2">
-        {component.canonicalFor?.length
-          ? <span className="rounded-full bg-pay-red px-2.5 py-1 text-xs font-medium text-white" title={library.canonicalBadgeTitle(component.canonicalFor)}>{library.canonicalBadge}</span>
+        {entry.canonicalFor.length
+          ? <span className="rounded-full bg-pay-red px-2.5 py-1 text-xs font-medium text-white" title={library.canonicalBadgeTitle(entry.canonicalFor)}>{library.canonicalBadge}</span>
           : null}
-        {component.deprecated
+        {entry.deprecated
           ? <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-pay-red" title={library.deprecatedBadgeTitle}>{library.deprecatedBadge}</span>
           : null}
-        {figma ? <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-eui-ink" title={figmaBadgeTitle(figma.fileKey, figma.nodeIds.length)}>Figma</span> : null}
+        {figma ? <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-eui-ink" title={figmaBadgeTitle(figma.fileKey, figma.nodeCount)}>Figma</span> : null}
       </div>
     </div>
     <div className="flex min-w-0 flex-1 flex-col p-5">
       <h3 className="min-w-0 text-[16px] font-medium [overflow-wrap:anywhere]">
         <Link
           className="after:absolute after:inset-0 after:rounded-panel after:content-[''] focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-pay-red"
-          to={`/library/c/${encodeURIComponent(component.id)}?v=${component.version}`}
-        >{component.name}</Link>
+          to={`/library/c/${encodeURIComponent(entry.id)}?v=${entry.version}`}
+        >{entry.name}</Link>
       </h3>
       <p className="mt-1.5 min-h-10 text-[13px] text-eui-slate-500 line-clamp-2 [overflow-wrap:anywhere]">
-        {component.description || library.noDescription}
+        {entry.description || library.noDescription}
       </p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Fact>{library.cardVersion(component.version)}</Fact>
-        <Fact>{levelSection(atomicLevelLabel(component.atomicLevel))}</Fact>
+        <Fact>{library.cardVersion(entry.version)}</Fact>
+        <Fact>{levelSection(atomicLevelLabel(entry.atomicLevel))}</Fact>
         {showSystem ? <Fact>{systemName}</Fact> : null}
       </div>
       <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 pt-4 text-[13px] text-eui-slate-500">
-        {status ? <span className="flex items-center gap-1.5" title={status.published ? library.statusTitleReady : library.statusTitleDraft}>
+        <span className="flex items-center gap-1.5" title={status.published ? library.statusTitleReady : library.statusTitleDraft}>
           <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${status.published ? "bg-pay-valid" : "bg-pay-lavender-light"}`} />
           {status.published ? library.statusReady : library.statusDraft}
-        </span> : null}
-        {status ? <span aria-hidden="true">·</span> : null}
-        <span>{library.cardUsage(usageCount)}</span>
-        {component.replacement ? <>
+        </span>
+        <span aria-hidden="true">·</span>
+        <span>{library.cardUsage(entry.headUsageCount)}</span>
+        {entry.replacement ? <>
           <span aria-hidden="true">·</span>
-          <span title={library.deprecatedBadgeTitle}>{library.replacementLink(component.replacement)}</span>
+          <span title={library.deprecatedBadgeTitle}>{library.replacementLink(entry.replacement)}</span>
         </> : null}
       </div>
     </div>
