@@ -1313,6 +1313,73 @@ export const catalogManifestContract = registerContract({
   errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed, errorCatalog.validationFailed],
 });
 
+// --- Library read model (проект 1 «Library Performance», §3.1–3.2) ---
+// Целенаправленный read-model библиотеки: он не заменяет `/api/catalog/manifest` и намеренно
+// не отдаёт `source`, `propsJsonSchema`, примеры и историю версий.
+
+export const catalogLibraryQuerySchema = z.strictObject({ designSystem: slugString.optional() });
+
+const libraryCatalogStatusSchema = z.strictObject({
+  published: z.boolean(), verified: z.boolean(), visualPending: z.boolean(), blocked: z.boolean(), rejected: z.boolean(),
+});
+
+const componentPreviewSelectorSchema = z.union([
+  z.strictObject({ selector: z.literal("legacy") }),
+  z.strictObject({ selector: z.literal("named"), name: z.string() }),
+]);
+
+export const libraryCatalogEntrySchema = z.strictObject({
+  kind: z.literal("component"),
+  id: z.string(), name: z.string(), designSystem: z.string(), version: positiveInt,
+  bundleUrl: z.string(), bundleHash: z.string(), hostAbiVersion: z.number(),
+  description: z.string(),
+  atomicLevel: z.enum(atomicLevels).optional(),
+  layoutNeutral: z.boolean(),
+  scope: z.enum(COMPONENT_SCOPES).optional(),
+  canonicalFor: z.array(z.string()),
+  replacement: z.string().optional(),
+  deprecated: z.boolean(),
+  headUsageCount: z.number().int().nonnegative(),
+  status: libraryCatalogStatusSchema,
+  figma: z.strictObject({ fileKey: z.string(), nodeCount: z.number().int().nonnegative() }).nullable(),
+  preview: componentPreviewSelectorSchema.nullable(),
+});
+
+export const catalogLibraryContract = registerContract({
+  method: "GET", path: "/api/catalog/library",
+  summary: "Library read model: latest active component versions with resolved status (published/verified/visualPending/blocked/rejected), head usage, Figma summary and the preview selector. Identity is (componentId, designSystem). Never returns source, props schemas or examples.",
+  query: catalogLibraryQuerySchema,
+  validated: true,
+  responseSchema: z.strictObject({
+    // sha256 канонического JSON **нефильтрованного** каталога: два клиента с разными
+    // `?designSystem=` обязаны видеть одну ревизию на одном состоянии БД.
+    catalogRevision: z.string(),
+    components: z.array(libraryCatalogEntrySchema),
+    systems: z.array(z.strictObject({ id: z.string(), name: z.string(), count: z.number().int().positive() })),
+  }),
+  errors: [errorCatalog.notFound, errorCatalog.methodNotAllowed, errorCatalog.validationFailed],
+});
+
+export const componentPreviewContract = registerContract({
+  method: "GET", path: "/api/components/{id}/versions/{version}/preview",
+  summary: "Preview data for one published component version: the resolved example props plus bundle coordinates, slots and capabilities. `selector=legacy` uses definition.example, `selector=named&name=` a named example. Never returns source or props schemas.",
+  query: z.strictObject({ selector: z.enum(["legacy", "named"]), name: z.string().optional() }),
+  responseSchema: z.strictObject({
+    componentId: z.string(), name: z.string(), version: positiveInt, designSystem: z.string(),
+    bundleUrl: z.string(), bundleHash: z.string(), hostAbiVersion: z.number(),
+    props: z.record(z.string(), z.unknown()),
+    // slots/capabilities нужны построителю дерева превью для слот-плейсхолдеров.
+    slots: z.array(z.string()), capabilities: componentCapabilitiesSchema.optional(),
+  }),
+  errors: [
+    errorCatalog.invalidRequest,
+    errorCatalog.notFound,
+    { status: 404, code: "bundle_unavailable" },
+    { status: 422, code: "unknown_example" },
+    { status: 422, code: "example_unavailable" },
+  ],
+});
+
 export const getShimContract = registerContract({
   method: "GET", path: "/api/shims/{abi}/{file}",
   summary: "Host-provided ESM shims for published bundles (abi v1: react/zod/…; v2 additionally easy-ui/runtime).",

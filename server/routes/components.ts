@@ -18,6 +18,8 @@ import { BundleClosure } from "../bundle/exporter";
 import { zipResponse } from "./bundles";
 import { catalogUsages, componentUsages, componentUsageTree, headUsageCounts } from "../usageGraph";
 import { catalogUsagesQuerySchema, componentUsagesQuerySchema, parseQuery } from "../contracts";
+import { parsePreviewSelector } from "../components/previewSelector";
+import type { DefinitionMeta } from "../components/types";
 
 const slug=/^[a-z0-9]+(?:-[a-z0-9]+)*$/, componentName=/^[A-Z][A-Za-z0-9]*$/;
 function bad(message:string,path="source"):never{throw new ApiError(422,"validation_failed","Component is invalid",{issues:[{path:[path],message}]});}
@@ -96,7 +98,37 @@ function deprecatedComponentIds(db:Database):Set<string>{
   return new Set(rows.filter(row=>DEPRECATED_LATEST_STATUS.has(row.status)).map(row=>row.id));
 }
 
-export function catalogManifest(db:Database,designSystem?:string){const usage=headUsageCounts(db),deprecated=deprecatedComponentIds(db);return (db.query(`SELECT c.id,c.name,r.design_system,p.version,p.bundle_hash,p.definition_meta,p.host_abi_version FROM components c JOIN component_publishes p ON p.component_id=c.id AND p.status='active' JOIN component_revisions r ON r.component_id=p.component_id AND r.rev=p.rev JOIN design_systems ds ON ds.id=r.design_system AND ds.retired=0 WHERE c.deleted_at IS NULL${designSystem===undefined?"":" AND r.design_system=?"} AND p.version=(SELECT MAX(x.version) FROM component_publishes x JOIN component_revisions xr ON xr.component_id=x.component_id AND xr.rev=x.rev WHERE x.component_id=c.id AND x.status='active' AND xr.design_system=r.design_system) ORDER BY c.id,r.design_system`).all(...(designSystem===undefined?[]:[designSystem])) as {id:string;name:string;design_system:string;version:number;bundle_hash:string;definition_meta:string;host_abi_version:number}[]).map(r=>({id:r.id,name:r.name,designSystem:r.design_system,version:r.version,bundleUrl:`/api/components/${encodeURIComponent(r.id)}/versions/${r.version}/bundle.js`,bundleHash:r.bundle_hash,...JSON.parse(r.definition_meta),hostAbiVersion:r.host_abi_version,headUsageCount:usage.get(r.id)??0,deprecated:deprecated.has(r.id)}));}
+export type ActiveCatalogRow={id:string;name:string;design_system:string;version:number;bundle_hash:string;definition_meta:string;host_abi_version:number};
+/**
+ * Строки последних активных публикаций по каждой паре `(компонент, дизайн-система)`.
+ * Общий источник для `/api/catalog/manifest` и `/api/catalog/library`, чтобы семантика
+ * «активной версии» не разъехалась между двумя read-model.
+ */
+export function activeCatalogRows(db:Database,designSystem?:string):ActiveCatalogRow[]{return db.query(`SELECT c.id,c.name,r.design_system,p.version,p.bundle_hash,p.definition_meta,p.host_abi_version FROM components c JOIN component_publishes p ON p.component_id=c.id AND p.status='active' JOIN component_revisions r ON r.component_id=p.component_id AND r.rev=p.rev JOIN design_systems ds ON ds.id=r.design_system AND ds.retired=0 WHERE c.deleted_at IS NULL${designSystem===undefined?"":" AND r.design_system=?"} AND p.version=(SELECT MAX(x.version) FROM component_publishes x JOIN component_revisions xr ON xr.component_id=x.component_id AND xr.rev=x.rev WHERE x.component_id=c.id AND x.status='active' AND xr.design_system=r.design_system) ORDER BY c.id,r.design_system`).all(...(designSystem===undefined?[]:[designSystem])) as ActiveCatalogRow[];}
+
+export function catalogManifest(db:Database,designSystem?:string){const usage=headUsageCounts(db),deprecated=deprecatedComponentIds(db);return activeCatalogRows(db,designSystem).map(r=>({id:r.id,name:r.name,designSystem:r.design_system,version:r.version,bundleUrl:`/api/components/${encodeURIComponent(r.id)}/versions/${r.version}/bundle.js`,bundleHash:r.bundle_hash,...JSON.parse(r.definition_meta),hostAbiVersion:r.host_abi_version,headUsageCount:usage.get(r.id)??0,deprecated:deprecated.has(r.id)}));}
+
+// Статусы, чей бандл ещё исполняется существующими пинами — зеркало `RENDERABLE_STATUS`
+// (`server/repos/components.ts:9`): за бандлом такой версии следующий запрос всё равно придёт.
+const PREVIEW_RENDERABLE_STATUS=new Set(["active","deprecated","superseded"]);
+type PreviewRow={name:string;design_system:string;status:string;status_reason:string|null;definition_meta:string;bundle_hash:string;host_abi_version:number};
+
+/**
+ * `GET /api/components/:id/versions/:version/preview?selector=legacy|named&name=` — данные
+ * для инлайн-превью библиотеки. Узкий SELECT вместо `repo.version()`: тот отдаёт `source`
+ * и весь `definition_meta`, включая `propsJsonSchema` и все примеры.
+ */
+export function componentPreview(db:Database,id:string,version:number,params:URLSearchParams){
+  const selector=parsePreviewSelector(params);
+  const row=db.query("SELECT c.name,r.design_system,p.status,p.status_reason,p.definition_meta,p.bundle_hash,p.host_abi_version FROM component_publishes p JOIN components c ON c.id=p.component_id JOIN component_revisions r ON r.component_id=p.component_id AND r.rev=p.rev WHERE p.component_id=? AND p.version=?").get(id,version) as PreviewRow|null;
+  if(!row)throw new ApiError(404,"not_found","Component version not found");
+  if(!PREVIEW_RENDERABLE_STATUS.has(row.status))throw new ApiError(404,"bundle_unavailable",`Component version bundle is unavailable (status ${row.status}${row.status_reason?`: ${row.status_reason}`:""})`);
+  const meta=JSON.parse(row.definition_meta) as DefinitionMeta;
+  let props:Record<string,unknown>;
+  if(selector.selector==="legacy"){if(!meta.example)throw new ApiError(422,"example_unavailable","Component version has no legacy example");props=meta.example;}
+  else{const examples=meta.examples??{};if(!Object.hasOwn(examples,selector.name))throw new ApiError(422,"unknown_example",`Unknown component example: ${selector.name}`);props=examples[selector.name]!;}
+  return {componentId:id,name:row.name,version,designSystem:row.design_system,bundleUrl:`/api/components/${encodeURIComponent(id)}/versions/${version}/bundle.js`,bundleHash:row.bundle_hash,hostAbiVersion:row.host_abi_version,props,slots:meta.slots??[],...(meta.capabilities?{capabilities:meta.capabilities}:{})};
+}
 
 /** `GET /api/catalog/usages?designSystem=` — агрегированный индекс использования (волна 3 §3.1). */
 export function routeCatalogUsages(request:Request,db:Database):Response{
@@ -136,6 +168,7 @@ export async function routeComponents(request:Request,db:Database,segments:strin
     // POST /versions/:version/status — manual lifecycle transition with CAS on statusRev (K.2).
     // TODO(T9): register this endpoint in server/contracts.ts (owned by T9; contract left unregistered here).
     if(tail.length===3&&tail[2]==="status"){if(request.method!=="POST")throw new ApiError(405,"method_not_allowed","Method not allowed");const actor=requireResourceOwner(db,"components",id,principal);const version=int(Number(tail[1]),"version");const b=body(await readJson(request));const status=text(b.status,"status")!;const current=db.query("SELECT status FROM component_publishes WHERE component_id=? AND version=?").get(id,version) as {status:string}|null;const pinned=Boolean(db.query("SELECT 1 ok FROM prototype_revision_components WHERE component_id=? AND component_version=? LIMIT 1").get(id,version));if(current?.status==="active"&&pinned&&(status==="archived"||status==="rejected")&&!actor.isAdmin)throw new ApiError(403,"admin_required","Only an admin may make a pinned active bundle unavailable");if(!Object.hasOwn(b,"baseStatusRev"))throw new ApiError(400,"invalid_request","baseStatusRev is required");const baseStatusRev=int(b.baseStatusRev,"baseStatusRev");const reason=text(b.reason,"reason",false);const supersededBy=b.supersededBy===undefined?undefined:int(b.supersededBy,"supersededBy");const result=repo.setStatus(id,version,{status,reason,supersededBy,baseStatusRev});writeAuditEvent(db,{actorId:actor.userId,action:"component.status.changed",subjectType:"component",subjectId:id,detail:{version,...result}});return json(result,200,noStore);}
-    if(request.method!=="GET")throw new ApiError(405,"method_not_allowed","Method not allowed");if(tail.length===1)return json(repo.versions(id),200,noStore);if(tail.length===2)return json(repo.version(id,int(Number(tail[1]),"version")),200,immutable);if(tail.length===3&&tail[2]==="bundle.js")return new Response(repo.bundle(id,int(Number(tail[1]),"version")).js,{headers:{...immutable,"content-type":"text/javascript; charset=utf-8"}});}
+    if(request.method!=="GET")throw new ApiError(405,"method_not_allowed","Method not allowed");if(tail.length===1)return json(repo.versions(id),200,noStore);if(tail.length===2)return json(repo.version(id,int(Number(tail[1]),"version")),200,immutable);if(tail.length===3&&tail[2]==="bundle.js")return new Response(repo.bundle(id,int(Number(tail[1]),"version")).js,{headers:{...immutable,"content-type":"text/javascript; charset=utf-8"}});
+    if(tail.length===3&&tail[2]==="preview")return json(componentPreview(db,id,int(Number(tail[1]),"version"),new URL(request.url).searchParams),200,noStore);}
   throw new ApiError(404,"not_found","API route not found");
 }

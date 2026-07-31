@@ -77,6 +77,8 @@ async function flowDoc(id: string, screenIds = ["home", "a", "b"]): Promise<Prot
 }
 
 const componentSource = await Bun.file("server/fixtures/rating-stars.tsx").text();
+// Тот же компонент без `example` — им покрывается `422 example_unavailable` превью-эндпоинта.
+const componentSourceWithoutExample = componentSource.replace("  example: { value: 3 },\n", "");
 
 // Композиция контрактного теста держится только на host-примитивах: `assertKnownTypes`
 // требует опубликованных компонентов, а contract-stars намеренно остаётся неопубликованным.
@@ -185,6 +187,19 @@ function orderedCases(): [string, Case][] {
     ["GET /api/components/{id}/versions/{version}", { run: () => call("GET", "/api/components/contract-stars/versions/1"), expected: err(404, "not_found") }],
     ["GET /api/components/{id}/versions/{version}/bundle.js", { run: () => call("GET", "/api/components/contract-stars/versions/1/bundle.js"), expected: err(404, "not_found") }],
     ["POST /api/components/{id}/versions/{version}/status", { run: () => call("POST", "/api/components/contract-stars/versions/1/status", { status: "deprecated", baseStatusRev: 1 }), expected: err(404, "not_found") }],
+    // Инлайн-превью библиотеки: единственный по-настоящему опубликованный компонент контракт-теста.
+    // v1 несёт legacy-`example`, v2 — нет, поэтому обе 422-ветки покрываются одним компонентом.
+    ["POST /api/components", { run: () => call("POST", "/api/components", { id: "contract-preview", name: "ContractPreview", source: componentSource, designSystem: "contract-ds" }), expected: ok(201) }],
+    ["POST /api/components/{id}/publish", { run: () => call("POST", "/api/components/contract-preview/publish", { baseRev: 1 }), expected: ok(201) }],
+    ["PUT /api/components/{id}", { run: () => call("PUT", "/api/components/contract-preview", { source: componentSourceWithoutExample, baseRev: 1 }), expected: ok() }],
+    ["POST /api/components/{id}/publish", { run: () => call("POST", "/api/components/contract-preview/publish", { baseRev: 2 }), expected: ok(201) }],
+    ["GET /api/components/{id}/versions/{version}/preview", { run: () => call("GET", "/api/components/contract-preview/versions/1/preview?selector=legacy"), expected: ok() }],
+    ["GET /api/components/{id}/versions/{version}/preview", { run: () => call("GET", "/api/components/contract-preview/versions/1/preview?selector=named&name=missing"), expected: err(422, "unknown_example") }],
+    ["GET /api/components/{id}/versions/{version}/preview", { run: () => call("GET", "/api/components/contract-preview/versions/2/preview?selector=legacy"), expected: err(422, "example_unavailable") }],
+    ["GET /api/components/{id}/versions/{version}/preview", { run: () => call("GET", "/api/components/contract-preview/versions/99/preview?selector=legacy"), expected: err(404, "not_found") }],
+    ["GET /api/components/{id}/versions/{version}/preview", { run: () => call("GET", "/api/components/contract-preview/versions/1/preview?selector=named"), expected: err(400, "invalid_request") }],
+    ["POST /api/components/{id}/versions/{version}/status", { run: () => call("POST", "/api/components/contract-preview/versions/1/status", { status: "archived", baseStatusRev: 1 }), expected: ok() }],
+    ["GET /api/components/{id}/versions/{version}/preview", { run: () => call("GET", "/api/components/contract-preview/versions/1/preview?selector=legacy"), expected: err(404, "bundle_unavailable") }],
     // Usage graph (волна 3)
     ["GET /api/components/{id}/usages", { run: () => call("GET", "/api/components/contract-stars/usages"), expected: ok() }],
     ["GET /api/components/{id}/usages", { run: () => call("GET", "/api/components/contract-stars/usages?format=tree"), expected: ok() }],
@@ -210,6 +225,10 @@ function orderedCases(): [string, Case][] {
     ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest?designSystem=contract-ds"), expected: ok() }],
     ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest?designSystem=missing-system"), expected: err(404, "not_found") }],
     ["GET /api/catalog/manifest", { run: () => call("GET", "/api/catalog/manifest?designSystem=Bad_slug"), expected: err(422, "validation_failed") }],
+    ["GET /api/catalog/library", { run: () => call("GET", "/api/catalog/library"), expected: ok() }],
+    ["GET /api/catalog/library", { run: () => call("GET", "/api/catalog/library?designSystem=contract-ds"), expected: ok() }],
+    ["GET /api/catalog/library", { run: () => call("GET", "/api/catalog/library?designSystem=missing-system"), expected: err(404, "not_found") }],
+    ["GET /api/catalog/library", { run: () => call("GET", "/api/catalog/library?designSystem=Bad_slug"), expected: err(422, "validation_failed") }],
     ["GET /api/shims/{abi}/{file}", { run: () => call("GET", "/api/shims/v1/react.js"), expected: ok(200, "text/javascript") }],
     // Bundle export (ZIP): owner draft, unpublished component draft, bulk (all owned)
     ["GET /api/prototypes/{id}/export", { run: () => call("GET", "/api/prototypes/contract-proto/export"), expected: ok(200, "application/zip") }],
