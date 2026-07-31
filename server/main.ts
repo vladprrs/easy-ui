@@ -30,6 +30,7 @@ import { getIncludingRetired } from "./designSystems";
 import { LoginRateLimiter, routeAuth } from "./routes/auth";
 import { routeUsers } from "./routes/users";
 import { assertOwnersPresent, ensureBootstrapAdmin } from "./users";
+import { sweepStagingModules } from "./components/pipeline";
 
 export type HandlerOptions = {
   ready?: () => boolean;
@@ -192,6 +193,9 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     failStagingPublishes(db);
     await verifyShimAbi();
     const dataDir=process.env.DATA_DIR??"data";
+    // Сироты staging-извлечения после SIGKILL при редеплое: `finally` их не переживает,
+    // а DATA_DIR в проде — постоянный том (план 2026-07-31 §3.5).
+    await sweepStagingModules(dataDir);
     const serveDist=options.serveDist??(process.env.SERVE_DIST||undefined);
     const captureHost=host==="0.0.0.0"||host==="::"?"127.0.0.1":host;
     const screenshots=new ScreenshotServiceImpl({db,dataDir,serveDist,captureOrigin:`http://${captureHost}:${port}`,chromiumAvailable:chromiumAvailable(),runJob:spawnWorker});

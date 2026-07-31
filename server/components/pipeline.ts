@@ -1,4 +1,4 @@
-import { link, mkdir, rm } from "node:fs/promises";
+import { link, mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
 import type { ArchitectureMetadata, ComponentCapabilities, DefinitionMeta } from "./types";
@@ -39,6 +39,46 @@ export async function materializeSource(dataDir:string,id:string,rev:number,sour
   catch(error) { if(!(await Bun.file(path).exists()) || await Bun.file(path).text()!==source) throw error; }
   finally { await rm(tmp,{force:true}); }
   return path;
+}
+
+/**
+ * Каталог одноразовых staging-модулей: исходник, который ещё не заслужил места в
+ * `<dataDir>/modules/`, извлекается отсюда и удаляется в `finally`.
+ *
+ * Корень **обязан** лежать под `dataDir` (а значит — под корнем проекта, см. CLAUDE.md):
+ * материализованный TSX резолвит `react`/`zod` из корневого `node_modules`, поэтому
+ * `os.tmpdir()` не подходит. Имя фиксированное, чтобы сирот после SIGKILL можно было
+ * подмести на старте (`sweepStagingModules`).
+ */
+export const STAGING_DIR_NAME=".staging";
+export const stagingRoot=(dataDir:string)=>resolve(dataDir,STAGING_DIR_NAME);
+
+/**
+ * Пишет `source` во временный модуль под `<dataDir>/.staging/<uuid>/` и отдаёт его путь в
+ * `run`. Каталог удаляется во **всех** ветках: успех, отказ, исключение, таймаут извлечения.
+ */
+export async function withStagedSource<T>(dataDir:string,name:string,source:string,run:(path:string)=>Promise<T>):Promise<T> {
+  const dir=resolve(stagingRoot(dataDir),crypto.randomUUID());
+  await mkdir(dir,{recursive:true});
+  try { const path=resolve(dir,`${name}.tsx`); await Bun.write(path,source); return await run(path); }
+  finally { await rm(dir,{recursive:true,force:true}); }
+}
+
+/**
+ * Подметает осиротевшие staging-каталоги на старте процесса: `finally` не переживает SIGKILL
+ * при редеплое, а `DATA_DIR` в проде — постоянный том. Best-effort: неудача по одной записи
+ * не должна ронять старт сервера. Возвращает число удалённых каталогов.
+ */
+export async function sweepStagingModules(dataDir:string):Promise<number> {
+  let entries;
+  try { entries=await readdir(stagingRoot(dataDir)); }
+  catch { return 0; }
+  let removed=0;
+  for(const entry of entries) {
+    try { await rm(resolve(stagingRoot(dataDir),entry),{recursive:true,force:true}); removed++; }
+    catch { /* best effort: следующий старт попробует снова */ }
+  }
+  return removed;
 }
 
 /** Removes publish-conformance-only metadata before browser bundling and bundle hashing. */
