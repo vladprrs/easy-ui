@@ -59,7 +59,7 @@ function customDoc(index: number) {
 async function ensureCustomDesignSystem(options: PerfGalleryDatasetOptions): Promise<void> {
   await api(options, "/design-systems", { method: "POST", body: JSON.stringify({ id: CUSTOM_DS_ID, name: "Perf Gallery Custom DS", description: "Reusable support fixture for the W5-3 API dataset." }) }, [201, 409]);
   const source = await readFile("server/fixtures/rating-stars.tsx", "utf8");
-  await api(options, "/components", { method: "POST", body: JSON.stringify({ id: CUSTOM_COMPONENT_ID, name: CUSTOM_COMPONENT_NAME, source, designSystem: CUSTOM_DS_ID }) }, [201, 409]);
+  await api(options, "/components", { method: "POST", body: JSON.stringify({ id: CUSTOM_COMPONENT_ID, name: CUSTOM_COMPONENT_NAME, source, designSystem: CUSTOM_DS_ID, intent: "Displays interactive star ratings in performance gallery cards" }) }, [201, 409]);
   await api(options, `/components/${CUSTOM_COMPONENT_ID}/publish`, { method: "POST", body: JSON.stringify({ baseRev: 1 }) }, [201, 409]);
 }
 

@@ -59,12 +59,12 @@ async function ensureDesignSystem() {
   pass("theme-space-scale", `v${system.latestMetaVersion}: ${Object.values(SPACE).join("/")}`);
 }
 
-async function ensureComponent({ id, name, file }) {
+async function ensureComponent({ id, name, file, intent }) {
   const source = await readExample(file);
   let metaResponse = await call("GET", `/components/${id}`);
   let rev;
   if (metaResponse.status === 404) {
-    const created = requireStatus(`create ${id}`, await call("POST", "/components", { id, name, source, designSystem: "yandex-pay", message: "W6 fixture" }), [201]);
+    const created = requireStatus(`create ${id}`, await call("POST", "/components", { id, name, source, designSystem: "yandex-pay", message: "W6 fixture", intent }), [201]);
     rev = created.rev;
   } else {
     const meta = requireStatus(`read ${id}`, metaResponse);
@@ -141,9 +141,9 @@ async function run() {
   await ensureDesignSystem();
 
   currentStep = "components";
-  await ensureComponent({ id: "yp-box", name: "YpBox", file: "yp-box.tsx" });
-  await ensureComponent({ id: "yp-block", name: "YpBlock", file: "yp-block.tsx" });
-  await ensureComponent({ id: "yp-spacer", name: "YpSpacer", file: "yp-spacer.tsx" });
+  await ensureComponent({ id: "yp-box", name: "YpBox", file: "yp-box.tsx", intent: "Groups related Yandex Pay content into a bordered panel" });
+  await ensureComponent({ id: "yp-block", name: "YpBlock", file: "yp-block.tsx", intent: "Presents Yandex Pay content in a stacked product section" });
+  await ensureComponent({ id: "yp-spacer", name: "YpSpacer", file: "yp-spacer.tsx", intent: "Creates deliberate spacing between Yandex Pay product sections" });
 
   currentStep = "composed-fixtures";
   const before = await saveFixture("yp-spacing-before.json");

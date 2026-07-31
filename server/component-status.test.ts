@@ -23,7 +23,7 @@ const fixture = (name: string) => Bun.file(resolve("server/fixtures", name)).tex
 // the transition matrix across several versions.
 async function seedComponent(handler: (r: Request) => Promise<Response>, versions = 1) {
   const source = await fixture("rating-stars.tsx");
-  expect((await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "rating-stars", name: "RatingStars", source }))).status).toBe(201);
+  expect((await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "rating-stars", name: "RatingStars", source, intent:"Collects star ratings across product lifecycle versions" }))).status).toBe(201);
   expect((await handler(req("/components/rating-stars/publish", "POST", { baseRev: 1 }))).status).toBe(201);
   for (let v = 2; v <= versions; v += 1) {
     await handler(req("/components/rating-stars", "PUT", { baseRev: v - 1, source: source.replace("five-star", `five-star v${v}`) }));

@@ -12,7 +12,7 @@ const req = (url: string, method = "GET", value?: unknown) => new Request(`http:
 const fixture = (name: string) => Bun.file(resolve("server/fixtures", name)).text();
 
 async function publishPanel(handler: (r: Request) => Promise<Response>) {
-  expect((await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "panel", name: "NamedSlotsPanel", source: await fixture("named-slots-panel.tsx") }))).status).toBe(201);
+  expect((await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "panel", name: "NamedSlotsPanel", source: await fixture("named-slots-panel.tsx"), intent:"Arranges product header and item content into named slots" }))).status).toBe(201);
   return handler(req("/components/panel/publish", "POST", { baseRev: 1 }));
 }
 

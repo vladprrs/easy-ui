@@ -108,16 +108,16 @@ describe("host primitive API lifecycle", () => {
   test("reserves host primitive names on create, update and publish, including legacy rows", async () => {
     const { db, handler } = await setup();
     const source = await Bun.file(resolve("server/fixtures/rating-stars.tsx")).text();
-    const create = await handler(request("/components", "POST", {designSystem:"yandex-pay", id: "overlay", name: "Overlay", source }));
+    const create = await handler(request("/components", "POST", {designSystem:"yandex-pay", id: "overlay", name: "Overlay", source, intent:"Tests reserved overlay naming in product layouts" }));
     expect(create.status).toBe(409);
     for (const name of ["Image", "Hotspot"]) {
-      const response = await handler(request("/components", "POST", {designSystem:"yandex-pay", id: `host-${name.toLowerCase()}`, name, source }));
+      const response = await handler(request("/components", "POST", {designSystem:"yandex-pay", id: `host-${name.toLowerCase()}`, name, source, intent:`Tests reserved ${name} naming in product layouts` }));
       expect(response.status).toBe(409);
       expect(await response.json()).toMatchObject({ error: { code: "already_exists" } });
     }
-    const namespaced = await handler(request("/components", "POST", { designSystem: "yandex-pay", id: "namespaced-flow-root", name: "@eui/FlowRoot", source }));
+    const namespaced = await handler(request("/components", "POST", { designSystem: "yandex-pay", id: "namespaced-flow-root", name: "@eui/FlowRoot", source, intent:"Tests namespaced flow root validation in layouts" }));
     expect(namespaced.status).toBe(422);
-    const ordinary = await handler(request("/components", "POST", { designSystem: "yandex-pay", id: "ordinary-flow-root", name: "FlowRoot", source }));
+    const ordinary = await handler(request("/components", "POST", { designSystem: "yandex-pay", id: "ordinary-flow-root", name: "FlowRoot", source, intent:"Provides an ordinary flow root for product layouts" }));
     expect(ordinary.status).toBe(201);
     expect((await handler(request("/components/ordinary-flow-root/publish", "POST", { baseRev: 1 }))).status).toBe(201);
 

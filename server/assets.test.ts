@@ -243,7 +243,7 @@ describe("GET /api/assets/:id/usage", () => {
     expect((await handler(proto("/prototypes", "POST", { doc }))).status).toBe(201);
 
     const source = `import { z } from "zod";\nimport type { BaseComponentProps } from "@json-render/react";\nexport const definition = { props: z.strictObject({}), events: [], slots: [], description: "Usage", example: {} };\nexport default function Usage() { return <img src="/api/assets/${asset.id}" alt="usage" />; }\n`;
-    expect((await handler(proto("/components", "POST", {designSystem:"yandex-pay", id: "usage-component", name: "UsageComponent", source }))).status).toBe(201);
+    expect((await handler(proto("/components", "POST", {designSystem:"yandex-pay", id: "usage-component", name: "UsageComponent", source, intent:"Displays asset usage inside a product content panel" }))).status).toBe(201);
     expect((await handler(proto("/components/usage-component/publish", "POST", { baseRev: 1 }))).status).toBe(201);
 
     const fingerprint = {
@@ -333,7 +333,7 @@ describe("component asset pins on publish", () => {
     const { db, handler } = await setup();
     const asset = await (await handler(upload(png(16, 16), "image/png"))).json() as { id: string; sha256: string; mime: string; size: number };
     const source = `import { z } from "zod";\nimport type { BaseComponentProps } from "@json-render/react";\nexport const definition = { props: z.strictObject({}), events: [], slots: [], description: "Logo", example: {} };\nexport default function Logo() { return <img src="/api/assets/${asset.id}" alt="logo" />; }\n`;
-    expect((await handler(proto("/components", "POST", {designSystem:"yandex-pay", id: "logo", name: "Logo", source }))).status).toBe(201);
+    expect((await handler(proto("/components", "POST", {designSystem:"yandex-pay", id: "logo", name: "Logo", source, intent:"Displays the primary product brand image" }))).status).toBe(201);
     expect((await handler(proto("/components/logo/publish", "POST", { baseRev: 1 }))).status).toBe(201);
     expect(db.query("SELECT asset_id FROM component_publish_assets WHERE component_id='logo' AND version=1").get()).toEqual({ asset_id: asset.id });
     const version = await (await handler(proto("/components/logo/versions/1"))).json() as { assets: { id: string; sha256: string; mime: string; size: number }[] };
@@ -344,7 +344,7 @@ describe("component asset pins on publish", () => {
   test("rejects publishing a component referencing a non-existent asset with 422", async () => {
     const { db, handler } = await setup();
     const source = `import { z } from "zod";\nimport type { BaseComponentProps } from "@json-render/react";\nexport const definition = { props: z.strictObject({}), events: [], slots: [], description: "Logo", example: {} };\nexport default function Logo() { return <img src="/api/assets/asset_${"b".repeat(64)}" alt="logo" />; }\n`;
-    expect((await handler(proto("/components", "POST", {designSystem:"yandex-pay", id: "logo2", name: "Logo2", source }))).status).toBe(201);
+    expect((await handler(proto("/components", "POST", {designSystem:"yandex-pay", id: "logo2", name: "Logo2", source, intent:"Displays a secondary product brand image" }))).status).toBe(201);
     const r = await handler(proto("/components/logo2/publish", "POST", { baseRev: 1 }));
     expect(r.status).toBe(422);
     expect((await r.json() as { error: { code: string } }).error.code).toBe("asset_not_found");

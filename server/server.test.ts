@@ -141,6 +141,7 @@ describe("prototype API", () => {
         name: "WireRating",
         source,
         designSystem: "test-alt",
+        intent: "Collects star ratings in the alternate product system",
       }),
     });
     expect(response.status).toBe(201);

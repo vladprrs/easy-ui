@@ -35,7 +35,7 @@ const compositionDoc = await Bun.file("test/fixtures/architecture/ctyp-payment-s
 const composedScreen = await Bun.file("test/fixtures/architecture/composition-screen.json").json();
 
 async function publishComponent(handler: (request: Request) => Promise<Response>, id: string, name: string, file: string) {
-  expect((await handler(req("/components", "POST", { designSystem: "yandex-pay", id, name, source: await fixture(file) }))).status).toBe(201);
+  expect((await handler(req("/components", "POST", { designSystem: "yandex-pay", id, name, source: await fixture(file), intent: `Renders ${name} inside a reusable product composition` }))).status).toBe(201);
   const published = await handler(req(`/components/${id}/publish`, "POST", { baseRev: 1 }));
   expect(published.status).toBe(201);
 }

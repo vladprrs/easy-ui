@@ -84,7 +84,7 @@ test("geometry probe measures custom-tree and host Image rectangles without crea
 
 test("geometry probe covers repeat instances, named slots, and Overlay extraction", async ({ request }) => {
   const slotSource=`import {z} from "zod";import type {EasyUIComponentProps} from "easy-ui/runtime";export const definition={props:z.strictObject({}),events:[],capabilities:{namedSlots:true} as const,slots:["header","items"],description:"geometry slots",example:{}};export default function GeometrySlotsPanel({slots}:EasyUIComponentProps<Record<string,never>>){return <section><header>{slots.header}</header><main>{slots.items}</main></section>}`;
-  const component=await request.post("/api/components",{data:{id:"geometry-slots-e2e",name:"GeometrySlotsPanel",source:slotSource,designSystem:STARTER_DS_ID}});
+  const component=await request.post("/api/components",{data:{id:"geometry-slots-e2e",name:"GeometrySlotsPanel",source:slotSource,designSystem:STARTER_DS_ID,intent:"Arranges geometry probe content into named product slots"}});
   expect(component.status(),await component.text()).toBe(201);
   const published=await request.post("/api/components/geometry-slots-e2e/publish",{data:{baseRev:1}});
   expect(published.status(),await published.text()).toBe(201);

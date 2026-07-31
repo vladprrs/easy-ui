@@ -19,7 +19,7 @@ export default function ArchComponent(){${render}}`;}
 
 async function publish(id:string,name:string,fields:string,render?:string){
   const {db,handler}=await setup();
-  const created=await handler(request("/components","POST",{designSystem:"yandex-pay",id,name,source:source(fields,render)}));
+  const created=await handler(request("/components","POST",{designSystem:"yandex-pay",id,name,source:source(fields,render),intent:`Renders ${name} within the declared product architecture scope`}));
   if(created.status!==201) throw new Error(`create failed: ${await created.text()}`);
   const published=await handler(request(`/components/${id}/publish`,"POST",{baseRev:1}));
   if(published.status!==201) throw new Error(`publish failed: ${await published.text()}`);
@@ -66,7 +66,7 @@ describe("component architecture metadata",()=>{
 
   test("rejects an invalid scope value at extraction",async()=>{
     const {db,handler}=await setup();
-    const response=await handler(request("/components","POST",{designSystem:"yandex-pay",id:"arch-bad",name:"ArchBad",source:source(`atomicLevel:"atom" as const,scope:"page"`)}));
+    const response=await handler(request("/components","POST",{designSystem:"yandex-pay",id:"arch-bad",name:"ArchBad",source:source(`atomicLevel:"atom" as const,scope:"page"`),intent:"Validates rejected architecture scope metadata"}));
     expect(response.status).toBe(422);
     expect(JSON.stringify(await response.json())).toContain("scope");
     db.close();

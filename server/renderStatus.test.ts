@@ -107,7 +107,7 @@ describe("render-status endpoint", () => {
   test("reports bundle_failed when a pinned component version is not renderable", async () => {
     const { db, handler } = await setup();
     const source = await fixture("rating-stars.tsx");
-    await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "rating-stars", name: "RatingStars", source }));
+    await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "rating-stars", name: "RatingStars", source, intent:"Collects ratings for render status product fixtures" }));
     await handler(req("/components/rating-stars/publish", "POST", { baseRev: 1 }));
     const original = await helloDoc("rs-bundle");
     const withRating = { ...original, screens: original.screens.map((s, i) => i ? s : { ...s, spec: { root: "rating", elements: { rating: { type: "RatingStars", props: { value: 3 } } } } }) };
@@ -152,7 +152,7 @@ describe("lifecycle meta", () => {
   test("component meta exposes validated revision and renderable head after publish", async () => {
     const { db, handler } = await setup();
     const source = await fixture("rating-stars.tsx");
-    await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "rating-stars", name: "RatingStars", source }));
+    await handler(req("/components", "POST", {designSystem:"yandex-pay", id: "rating-stars", name: "RatingStars", source, intent:"Collects ratings for lifecycle status product fixtures" }));
     let meta = await (await handler(req("/components/rating-stars"))).json() as { draftRevision: number; validatedRevision: number | null; publishedVersion: number | null; renderable: { head: boolean; published: boolean | null } };
     expect(meta).toMatchObject({ draftRevision: 1, validatedRevision: null, publishedVersion: null, renderable: { head: false, published: null } });
     await handler(req("/components/rating-stars/publish", "POST", { baseRev: 1 }));
@@ -166,7 +166,7 @@ describe("provider-less design systems", () => {
   test("records validation and serves render-status for a yandex-pay prototype", async () => {
     const { db, handler } = await setup("dist");
     const source = (await fixture("rating-stars.tsx")).replaceAll("RatingStars", "YpRating");
-    expect((await handler(req("/components", "POST", { id: "yp-rating", name: "YpRating", source, designSystem: "yandex-pay" }))).status).toBe(201);
+    expect((await handler(req("/components", "POST", { id: "yp-rating", name: "YpRating", source, designSystem: "yandex-pay", intent:"Collects Yandex Pay product ratings from customers" }))).status).toBe(201);
     expect((await handler(req("/components/yp-rating/publish", "POST", { baseRev: 1 }))).status).toBe(201);
     const doc = { version: 1, id: "yp-proto", name: "YP", designSystem: "yandex-pay", device: "desktop", startScreen: "home", state: {}, screens: [{ id: "home", name: "Home", spec: { root: "root", elements: { root: { type: "YpRating", props: { value: 3 } } } } }] };
     expect((await handler(req("/prototypes", "POST", { doc }))).status).toBe(201);
