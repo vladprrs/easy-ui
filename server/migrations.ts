@@ -442,6 +442,70 @@ const migrations = [
       author TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
       PRIMARY KEY (prototype_id, id))`);
   },
+  (db:Database) => {
+    // v20: гейт переиспользования компонентов (план 2026-07-31 §3.6).
+    //
+    // `catalog_reuse_decisions` — append-only аудит каждого решения гейта.
+    // Намеренно БЕЗ FK на `components(id)`: решения `blocked`/`would_block` ссылаются на
+    // *предложенный* id компонента, которого в базе нет и не будет (создание отклонено), а
+    // `migrate()` гоняет `PRAGMA foreign_key_check` после всех миграций — FK сделал бы такую
+    // запись невозможной. По той же причине нет FK на `actor_id`: аудит обязан пережить
+    // удаление пользователя. Целостность здесь слабее сознательно: запись аудита не должна
+    // уметь провалиться из-за чужого состояния.
+    //
+    // `decision`:
+    //   accepted_no_match — совпадений нет, компонент создан;
+    //   blocked           — enforce, создание отклонено (409);
+    //   would_block       — shadow, совпадение было, компонент всё равно создан. Без этого
+    //                       значения shadow-фаза ненаблюдаема: `accepted_no_match` соврал бы
+    //                       про отсутствие совпадения, `blocked` — про отсутствие компонента;
+    //   force_new         — админский override поверх blocking-кандидатов;
+    //   intent_missing    — intent не задан (в shadow синтезирован из имени).
+    //
+    // `candidates_json` — компактные строки (id/score/blocking/reasons/propsDelta): имена
+    // пропов допустимы, значения props, исходники и токены — нет.
+    db.run(`CREATE TABLE catalog_reuse_decisions (
+      id TEXT PRIMARY KEY,
+      actor_id TEXT NOT NULL,
+      artifact_kind TEXT NOT NULL CHECK(artifact_kind IN ('component','composition','prototype')),
+      artifact_id TEXT NOT NULL,
+      design_system TEXT NOT NULL,
+      source_or_doc_hash TEXT NOT NULL,
+      catalog_revision TEXT NOT NULL,
+      policy_version INTEGER NOT NULL,
+      gate_mode TEXT NOT NULL CHECK(gate_mode IN ('shadow','enforce')),
+      intent TEXT,
+      candidates_json TEXT NOT NULL,
+      decision TEXT NOT NULL CHECK(decision IN ('accepted_no_match','blocked','would_block','force_new','intent_missing')),
+      reason TEXT,
+      created_at TEXT NOT NULL)`);
+    // Append-only enforced в самой БД, а не соглашением в репозитории: аудит гейта, который
+    // можно переписать тем же процессом, что гейт обходит, аудитом не является.
+    db.run(`CREATE TRIGGER catalog_reuse_decisions_no_update BEFORE UPDATE ON catalog_reuse_decisions
+      BEGIN SELECT RAISE(ABORT, 'catalog_reuse_decisions is append-only'); END`);
+    db.run(`CREATE TRIGGER catalog_reuse_decisions_no_delete BEFORE DELETE ON catalog_reuse_decisions
+      BEGIN SELECT RAISE(ABORT, 'catalog_reuse_decisions is append-only'); END`);
+    // (actor_id, created_at) — «повторяющиеся попытки актора» и агрегаты §5;
+    // (artifact_id) — история конкретного предложенного id; (decision) — выборки по типу.
+    db.run("CREATE INDEX catalog_reuse_decisions_actor ON catalog_reuse_decisions (actor_id, created_at)");
+    db.run("CREATE INDEX catalog_reuse_decisions_artifact ON catalog_reuse_decisions (artifact_id)");
+    db.run("CREATE INDEX catalog_reuse_decisions_decision ON catalog_reuse_decisions (decision)");
+
+    // `component_fingerprints` — строго content-addressed КЭШ шинглов исходника, не источник
+    // истины. Ключ (component_id, rev, source_sha256): при любом расхождении содержимого ключ
+    // не совпадает, промах пересчитывается на лету и пишется write-through — restore без
+    // checkSource, импортёр и прямые скрипты самозалечиваются. Props/io/структурные подписи и
+    // описание здесь НЕ хранятся: они читаются из `definition_meta` активной публикации,
+    // поэтому двух источников истины (и их расхождения) не возникает по построению.
+    // Без FK на `components(id)`: кэш считается и для *предложенного* компонента до вставки.
+    db.run(`CREATE TABLE component_fingerprints (
+      component_id TEXT NOT NULL,
+      rev INTEGER NOT NULL,
+      source_sha256 TEXT NOT NULL,
+      shingles_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (component_id, rev, source_sha256))`);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

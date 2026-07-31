@@ -19,6 +19,9 @@ function v14():Database {
   for(const table of ["prototype_revision_compositions","composition_publishes","composition_revisions","compositions"] as const) db.run(`DROP TABLE IF EXISTS ${table}`);
   // v19 завела таблицу сценариев — тот же приём, иначе повторный migrate() упрётся в "table already exists".
   db.run("DROP TABLE IF EXISTS prototype_scenarios");
+  // v20 завела аудит переиспользования и кэш отпечатков — снимаем и их (append-only триггеры
+  // умирают вместе со своей таблицей).
+  for(const table of ["catalog_reuse_decisions","component_fingerprints"] as const) db.run(`DROP TABLE IF EXISTS ${table}`);
   db.run("PRAGMA user_version=14");
   return db;
 }
