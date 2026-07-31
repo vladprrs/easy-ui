@@ -81,9 +81,14 @@ function stubIntersectionObserver() {
   });
 }
 
-function intersect(element: Element) {
-  const observer = intersectionObservers.find((candidate) => candidate.element === element);
-  if (!observer) throw new Error(`Element is not observed: ${element.outerHTML.slice(0, 120)}`);
+// `observe()` вызывается эффектом LazyMount, а он может не успеть смыться к моменту, когда
+// обёртка уже в DOM: на медленном раннере это давало флейк «Element is not observed».
+async function intersect(element: Element) {
+  const observer = await waitFor(() => {
+    const found = intersectionObservers.find((candidate) => candidate.element === element);
+    if (!found) throw new Error(`Element is not observed: ${element.outerHTML.slice(0, 120)}`);
+    return found;
+  });
   act(() => observer.callback([{ isIntersecting: true, target: element } as IntersectionObserverEntry], {} as IntersectionObserver));
 }
 
@@ -291,7 +296,7 @@ describe("CjmShell", () => {
     expect(document.querySelectorAll("[data-cjm-node] [data-lazy-placeholder]")).toHaveLength(3);
     expect(screen.queryByRole("heading", { name: "Cart" })).toBeNull();
 
-    intersect(wrappers.find((node) => node.dataset.cjmNode === "flow:happy:0")!);
+    await intersect(wrappers.find((node) => node.dataset.cjmNode === "flow:happy:0")!);
     expect(document.querySelectorAll(".cjm-grid .cjm-tile")).toHaveLength(1);
     expect(screen.getByRole("heading", { name: "Cart" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Declined" })).toBeNull();
@@ -315,7 +320,7 @@ describe("CjmShell", () => {
     expect(section.querySelectorAll(".cjm-tile")).toHaveLength(0);
     expect(screen.queryByRole("button", { name: "показать ещё" })).toBeNull();
 
-    intersect(section.querySelector<HTMLElement>('[data-screen-id="outside-7"]')!);
+    await intersect(section.querySelector<HTMLElement>('[data-screen-id="outside-7"]')!);
     expect(section.querySelectorAll(".cjm-tile")).toHaveLength(1);
     expect(screen.getByRole("heading", { name: "Outside 7" })).toBeTruthy();
   });
