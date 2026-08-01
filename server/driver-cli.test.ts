@@ -1,7 +1,9 @@
 import { createTestHandler } from "./test-auth";
+import { createHandler } from "./main";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { createEasyUiClient } from "../scripts/easyui-auth.mjs";
 import type { Database } from "bun:sqlite";
 import { openDatabase } from "./db";
 import { ensureBootstrapAdmin } from "./users";
@@ -30,16 +32,56 @@ const driver = resolve(".claude/skills/author/driver.mjs");
 const servers: Bun.Server<unknown>[] = [];
 const directories: string[] = [];
 const databases: ReturnType<typeof openDatabase>[] = [];
+/** Кэш сессии драйвера всегда живёт в каталоге теста: сабпроцесс наследует env разработчика. */
+let sessionFile = "";
 
 afterEach(async () => {
   for (const server of servers.splice(0)) server.stop(true);
   for (const db of databases.splice(0)) db.close();
   for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
+  sessionFile = "";
+  delete process.env.EASYUI_SESSION_FILE;
+  delete process.env.EASYUI_SESSION_CACHE;
 });
 
-async function setup(legacyBasicAuth?: string, runJob?: RunJob) {
+async function testDirectory(): Promise<string> {
   const directory = await mkdtemp(resolve(process.cwd(), ".driver-cli-test-"));
   directories.push(directory);
+  sessionFile = resolve(directory, "session.json");
+  return directory;
+}
+
+/** Прямой `createHandler` (без admin-cookie из `createTestHandler`) плюс счётчик логинов. */
+async function setupCounted(legacyBasicAuth?: string) {
+  const directory = await testDirectory();
+  const db = openDatabase(":memory:");
+  databases.push(db);
+  await ensureBootstrapAdmin(db, { name: "Driver Admin", password: "driver-test-password" });
+  const handler = createHandler(db, { dataDir: directory, legacyBasicAuth });
+  let logins = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: (request, bunServer) => {
+      if (request.method === "POST" && new URL(request.url).pathname === "/api/auth/login") logins += 1;
+      return handler(request, bunServer);
+    },
+  });
+  servers.push(server);
+  return { db, directory, api: `http://127.0.0.1:${server.port}/api`, logins: () => logins };
+}
+
+async function writeSessionCache(api: string, cookie: string, username = "Driver Admin") {
+  await writeFile(sessionFile, JSON.stringify({ cookie, apiBase: api, username, savedAt: new Date().toISOString() }));
+}
+
+/** Валидный по форме (`[A-Za-z0-9_-]{43}`), но неизвестный серверу токен сессии. */
+function staleCookie(marker: string) {
+  return `easyui_session=${(marker + "x".repeat(43)).slice(0, 43)}`;
+}
+
+async function setup(legacyBasicAuth?: string, runJob?: RunJob) {
+  const directory = await testDirectory();
   const db = openDatabase(":memory:");
   databases.push(db);
   await ensureBootstrapAdmin(db, { name: "Driver Admin", password: "driver-test-password" });
@@ -76,7 +118,7 @@ async function twoScreenDoc(id: string): Promise<PrototypeDoc> {
   return { ...base, screens: [first, { ...first, id: "second" }] };
 }
 
-async function run(api: string, args: string[], legacyBasicAuth = "") {
+async function run(api: string, args: string[], legacyBasicAuth = "", extraEnv: Record<string, string> = {}) {
   const child = Bun.spawn({
     cmd: ["node", driver, ...args],
     cwd: process.cwd(),
@@ -86,6 +128,8 @@ async function run(api: string, args: string[], legacyBasicAuth = "") {
       EASYUI_LEGACY_BASIC_AUTH: legacyBasicAuth,
       EASYUI_USERNAME: "Driver Admin",
       EASYUI_PASSWORD: "driver-test-password",
+      EASYUI_SESSION_FILE: sessionFile,
+      ...extraEnv,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -504,6 +548,62 @@ export default function MoveRoleOwner() { return <div>move role owner</div>; }
     const globalBeforeSubcommand = await run(api, ["catalog", "--json", "list", "yandex-pay"]);
     expect(globalBeforeSubcommand.exitCode).toBe(0);
     expect(JSON.parse(globalBeforeSubcommand.stdout)).toMatchObject({ command: "catalog list" });
+  });
+});
+
+describe("author driver session cache", () => {
+  test("a second CLI call reuses the cached cookie instead of logging in again", async () => {
+    const { api, logins } = await setupCounted();
+    const first = await run(api, ["get", "prototypes"]);
+    expect(first.exitCode).toBe(0);
+    const second = await run(api, ["get", "prototypes"]);
+    expect(second.exitCode).toBe(0);
+    expect(JSON.parse(second.stdout)).toEqual([]);
+    expect(logins()).toBe(1);
+    const entry = JSON.parse(await Bun.file(sessionFile).text()) as { cookie: string; apiBase: string; username: string };
+    expect(entry).toMatchObject({ apiBase: api, username: "Driver Admin" });
+    expect(entry.cookie).toMatch(/^easyui_session=[A-Za-z0-9_-]{43}$/);
+  });
+
+  test("a stale cached cookie costs exactly one re-login and still succeeds", async () => {
+    const { api, logins } = await setupCounted();
+    await writeSessionCache(api, staleCookie("stale"));
+    const result = await run(api, ["get", "prototypes"]);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([]);
+    expect(logins()).toBe(1);
+    expect(JSON.parse(await Bun.file(sessionFile).text()).cookie).not.toBe(staleCookie("stale"));
+  });
+
+  test("a parallel batch on a stale cookie is deduplicated into one re-login", async () => {
+    const { api, logins } = await setupCounted();
+    await writeSessionCache(api, staleCookie("batch"));
+    process.env.EASYUI_SESSION_FILE = sessionFile;
+    const client = createEasyUiClient({ apiBase: api, credentials: { username: "Driver Admin", password: "driver-test-password" } });
+    const responses = await Promise.all(["/prototypes", "/components", "/design-systems", "/prototypes"].map((path) => client.request(path)));
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 200]);
+    expect(logins()).toBe(1);
+    expect(client.cookieHeader).toMatch(/^easyui_session=/);
+  });
+
+  test("EASYUI_SESSION_CACHE=0 restores a login per call and removes the cache file", async () => {
+    const { api, logins } = await setupCounted();
+    await writeSessionCache(api, staleCookie("off"));
+    for (let call = 0; call < 2; call += 1) {
+      const result = await run(api, ["get", "prototypes"], "", { EASYUI_SESSION_CACHE: "0" });
+      expect(result.exitCode).toBe(0);
+    }
+    expect(logins()).toBe(2);
+    expect(await Bun.file(sessionFile).exists()).toBe(false);
+  });
+
+  test("a non-JSON 401 from the legacy Basic barrier is not retried", async () => {
+    const { api, logins } = await setupCounted("edge:secret");
+    await writeSessionCache(api, staleCookie("legacy"));
+    const result = await run(api, ["get", "prototypes"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("EASYUI_LEGACY_BASIC_AUTH");
+    expect(logins()).toBe(0);
   });
 });
 
