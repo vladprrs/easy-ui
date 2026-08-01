@@ -17,7 +17,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id> | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap exits 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id> | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap exits 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -52,6 +52,13 @@ const viewportFlag = {
   },
 };
 
+/** Один разбор поверхности съёмки на все команды, снимающие экраны (baseline и snap). */
+const surfaceFlags = {
+  "--viewport": { ...viewportFlag, key: "viewport" },
+  "--theme": { value: true, key: "theme", enum: ["light", "dark"] },
+  "--dsf": { value: true, key: "dsf", enum: ["1", "2", "3"], parse: Number },
+};
+
 const jsonFlag = { "--json": { value: false, key: "json" } };
 const allScreensFlag = { "--all-screens": { value: false, key: "allScreens" } };
 const catalogLimitFlag = {
@@ -82,6 +89,8 @@ export const flagSpecs = Object.freeze({
     "--intent": { value: true, key: "intent" },
     "--force-new": { value: false, key: "forceNew" },
     "--reason": { value: true, key: "reason" },
+    // Provenance не наследуется ревизией: файл передаётся при каждом вызове (план §T2, M8).
+    "--figma": { value: true, key: "figma" },
   },
   "component-move": { ...jsonFlag, "--design-system": { value: true, key: "designSystem" } },
   composition: { ...jsonFlag, "--design-system": { value: true, key: "designSystem" } },
@@ -93,12 +102,7 @@ export const flagSpecs = Object.freeze({
   "catalog search": { ...jsonFlag, "--intent": { value: true, key: "intent" }, "--limit": catalogLimitFlag },
   "catalog get": { ...jsonFlag },
   diff: { ...jsonFlag },
-  baseline: {
-    ...jsonFlag,
-    "--viewport": { ...viewportFlag, key: "viewport" },
-    "--theme": { value: true, key: "theme", enum: ["light", "dark"] },
-    "--dsf": { value: true, key: "dsf", enum: ["1", "2", "3"], parse: Number },
-  },
+  baseline: { ...jsonFlag, ...surfaceFlags },
   check: {
     ...jsonFlag,
     "--threshold": {
@@ -115,7 +119,7 @@ export const flagSpecs = Object.freeze({
   get: { ...jsonFlag },
   delete: { ...jsonFlag },
   shoot: { ...jsonFlag },
-  snap: { ...jsonFlag, ...allScreensFlag },
+  snap: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags },
   status: { ...jsonFlag, ...allScreensFlag },
   readiness: { ...jsonFlag },
   publish: { ...jsonFlag, "--verify": { value: false, key: "verify" }, "--force": { value: false, key: "force" } },
@@ -310,6 +314,24 @@ async function getMeta(kind, id) {
   return requireOk(`GET /${kind}/${id}`, response);
 }
 
+/**
+ * `--figma <path>` — тело provenance для create/update компонента одной ревизией с source.
+ * Отсутствующий или не-JSON файл — ошибка аргументов (exit 1), а не сырой ENOENT.
+ */
+async function readFigmaProvenance(path) {
+  let text;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    invalid(`--figma file cannot be read: ${path} (${error.code ?? error.message})`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    invalid(`--figma file is not valid JSON: ${path} (${error.message})`);
+  }
+}
+
 async function discoverComponent({ id, name, source, designSystem, intent }) {
   return requireOk("catalog search", await call("POST", "/catalog/candidates", {
     designSystem,
@@ -353,6 +375,32 @@ export function assertViewportPixelBudget(viewport, deviceScaleFactor = 1) {
     throw new Error(`viewport ${width}x${height} at dsf ${deviceScaleFactor} exceeds 20 Mpx`);
   }
   return viewport;
+}
+
+/**
+ * Поверхность съёмки экрана — то, что реально попадает в PNG: canvas-стикершит снимается
+ * целиком (вьюпорт влияет только на media queries), flow-экран — по каноническому вьюпорту
+ * устройства. Не путать с `resolveViewport`: тот клампит canvas до лимитов вьюпорта.
+ */
+export function captureSurface(screen, device = "desktop") {
+  const canvas = screen?.canvas;
+  if (canvas && Number.isFinite(canvas.width) && Number.isFinite(canvas.height)) {
+    return { width: Math.round(canvas.width), height: Math.round(canvas.height) };
+  }
+  const canonical = DEVICE_VIEWPORTS[device] ?? DESKTOP_VIEWPORT;
+  return { width: canonical.width, height: canonical.height };
+}
+
+/** Лимит ингеста ассетов (server/assets/validate.ts MAX_ASSET_PIXELS): PNG больше — 413. */
+export const MAX_ASSET_PIXELS = 16 * 1024 * 1024;
+
+/** PNG = поверхность × dsf по обеим осям; проверяется до постановки задания в очередь. */
+export function assertCaptureSurfaceBudget(surface, deviceScaleFactor = 1) {
+  const pixels = surface.width * surface.height * deviceScaleFactor ** 2;
+  if (pixels > MAX_ASSET_PIXELS) {
+    throw new Error(`capture surface ${surface.width}x${surface.height} at dsf ${deviceScaleFactor} produces ${pixels} px, above the ${MAX_ASSET_PIXELS} px asset ingest limit`);
+  }
+  return surface;
 }
 
 export function buildBaselinePlan(draft, options = {}) {
@@ -601,11 +649,16 @@ export function snapExitCode(rows) {
 /** Infra failures (job error/timeout, 5xx) get one more attempt; product errors never do. */
 export const SNAP_ATTEMPTS = 2;
 
-async function snapScreen(id, screenId, outputDir) {
+async function snapScreen(id, screenId, outputDir, surface) {
   const encoded = encodeURIComponent(id);
   let failure = null;
+  const body = {
+    viewport: surface.viewport,
+    ...(surface.deviceScaleFactor === undefined ? {} : { deviceScaleFactor: surface.deviceScaleFactor }),
+    ...(surface.theme === undefined ? {} : { theme: surface.theme }),
+  };
   for (let attempt = 1; attempt <= SNAP_ATTEMPTS; attempt++) {
-    const queued = await call("POST", `/prototypes/${encoded}/screens/${encodeURIComponent(screenId)}/screenshot`, { viewport: { width: 480, height: 800 } }, { retries: 1 });
+    const queued = await call("POST", `/prototypes/${encoded}/screens/${encodeURIComponent(screenId)}/screenshot`, body, { retries: 1 });
     if (queued.status !== 202) {
       failure = `enqueue failed (${queued.status}): ${JSON.stringify(queued.json)}`;
       if (isTransient(queued.status)) continue;
@@ -616,26 +669,53 @@ async function snapScreen(id, screenId, outputDir) {
     const summary = summarizeCapture(state.result);
     const path = `${outputDir}/${screenId}.png`;
     if (summary.imageProduced) await downloadImage(state.result.imageUrl, path);
-    return { screenId, attempts: attempt, failure: summary.imageProduced ? null : "job reported no image", path: summary.imageProduced ? path : null, ...summary };
+    return { screenId, attempts: attempt, viewport: surface.viewport, failure: summary.imageProduced ? null : "job reported no image", path: summary.imageProduced ? path : null, ...summary };
   }
-  return { screenId, attempts: SNAP_ATTEMPTS, failure, path: null, imageProduced: false, captureClean: false, productErrors: [], infraNoise: [], runtimeWarnings: [] };
+  return { screenId, attempts: SNAP_ATTEMPTS, viewport: surface.viewport, failure, path: null, imageProduced: false, captureClean: false, productErrors: [], infraNoise: [], runtimeWarnings: [] };
 }
 
-async function runSnap(args) {
+/**
+ * План съёмки snap. Вьюпорт — canvas-aware, как у geometry/baseline: фиксированные 480x800
+ * считали media queries по телефону даже для стикершита. Бюджет проверяется до постановки
+ * заданий: превышение лимита ингеста ассетов иначе всплыло бы 413 после съёмки.
+ */
+export function buildSnapPlan(draft, flags = {}) {
+  return draft.doc.screens.map((screen) => {
+    const viewport = resolveViewport(screen, flags.viewport, draft.doc.device);
+    try {
+      assertCaptureSurfaceBudget(captureSurface(screen, draft.doc.device), flags.dsf ?? 1);
+      assertViewportPixelBudget(viewport, flags.dsf ?? 1);
+    } catch (error) {
+      throw new Error(`${screen.id}: ${error.message}`);
+    }
+    return { screenId: screen.id, viewport, deviceScaleFactor: flags.dsf, theme: flags.theme };
+  });
+}
+
+async function runSnap(args, flags) {
   const [id, outputDir = `author-shots/${id}`] = args;
   const draft = await requireOk("draft", await call("GET", `/prototypes/${encodeURIComponent(id)}/draft`));
+  let plan;
+  try { plan = buildSnapPlan(draft, flags); }
+  catch (error) { throw new CliError(error.message); }
   await mkdir(outputDir, { recursive: true });
   const rows = [];
-  for (const screen of draft.doc.screens) {
-    const row = await snapScreen(id, screen.id, outputDir);
+  for (const surface of plan) {
+    const row = await snapScreen(id, surface.screenId, outputDir, surface);
     rows.push(row);
     if (row.path) out(row.path);
-    if (row.failure) console.error(`${screen.id}: ${row.failure}`);
-    if (row.productErrors.length) console.error(`${screen.id} product errors:`, JSON.stringify(row.productErrors));
-    if (row.infraNoise.length && !jsonMode) console.error(`${screen.id} infra noise (ignored):`, JSON.stringify(row.infraNoise));
+    if (row.failure) console.error(`${surface.screenId}: ${row.failure}`);
+    if (row.productErrors.length) console.error(`${surface.screenId} product errors:`, JSON.stringify(row.productErrors));
+    if (row.infraNoise.length && !jsonMode) console.error(`${surface.screenId} infra noise (ignored):`, JSON.stringify(row.infraNoise));
   }
   const exitCode = snapExitCode(rows);
-  if (jsonMode) report(null, { command: "snap", prototypeId: id, outputDir, rev: draft.rev, exitCode, screens: rows });
+  if (jsonMode) {
+    report(null, {
+      command: "snap", prototypeId: id, outputDir, rev: draft.rev, exitCode,
+      // Применённые значения: сервер по умолчанию снимает dsf 1 в светлой теме.
+      dsf: flags.dsf ?? 1, theme: flags.theme ?? "light", screens: rows,
+    });
+  }
   if (exitCode === EXIT.productErrors) throw new CliError("screenshots produced with product errors", { exitCode: EXIT.productErrors });
   if (exitCode === EXIT.failed) throw new CliError("one or more screenshots produced no PNG", { exitCode: EXIT.failed });
 }
@@ -1125,6 +1205,9 @@ export async function main(argv = process.argv.slice(2)) {
   if (cmd === "component") {
     const [id, name, sourcePath] = args;
     const selectedSystem = flags.designSystem ?? process.env.EASYUI_DESIGN_SYSTEM;
+    // Provenance читается до любых сетевых вызовов: битый путь — ошибка аргументов, не ENOENT
+    // посреди публикации. Схему (fileKey/nodeIds/…) валидирует сервер.
+    const figma = flags.figma === undefined ? undefined : await readFigmaProvenance(flags.figma);
     const source = await readFile(sourcePath, "utf8");
     const meta = await getMeta("components", id);
     const systemBody = selectedSystem !== undefined && selectedSystem !== meta?.designSystem ? { designSystem: selectedSystem } : {};
@@ -1147,9 +1230,10 @@ export async function main(argv = process.argv.slice(2)) {
         }
       }
     }
+    const figmaBody = figma === undefined ? {} : { figma };
     const saved = meta === null
-      ? await call("POST", "/components", { id, name, source, ...systemBody, intent: flags.intent, ...(reuseOverride === undefined ? {} : { reuseOverride }), message: "driver save" })
-      : await call("PUT", `/components/${encodeURIComponent(id)}`, { source, ...systemBody, message: "driver save", baseRev: meta.headRev });
+      ? await call("POST", "/components", { id, name, source, ...systemBody, ...figmaBody, intent: flags.intent, ...(reuseOverride === undefined ? {} : { reuseOverride }), message: "driver save" })
+      : await call("PUT", `/components/${encodeURIComponent(id)}`, { source, ...systemBody, ...figmaBody, message: "driver save", baseRev: meta.headRev });
     if (![200, 201].includes(saved.status)) {
       failReuseConflict("component", "save", saved, id);
       await failRevisionConflict("save", saved, "components", id);
@@ -1159,6 +1243,7 @@ export async function main(argv = process.argv.slice(2)) {
     const published = await publishComponent(id, saved.json.rev, reuseOverride);
     if (jsonMode) report(null, {
       command: "component", id, rev: saved.json.rev, ...published,
+      ...(figma === undefined ? {} : { figma: true }),
       ...(discovery === undefined ? {} : { discovery }),
       ...(flags.forceNew ? { forceNew: true, acknowledgedCandidateKeys } : {}),
     });
@@ -1252,7 +1337,7 @@ export async function main(argv = process.argv.slice(2)) {
     await browser.close();
     if (jsonMode) report(null, { command: "shoot", prototypeId: id, outputDir, shots, errors });
     if (errors.length) throw new CliError(`browser errors:\n${errors.join("\n")}`);
-  } else if (cmd === "snap") await runSnap(args);
+  } else if (cmd === "snap") await runSnap(args, flags);
   else if (cmd === "status") await runStatus(args, flags);
   else if (cmd === "readiness") await runReadiness(args);
   else if (cmd === "publish") await runPublish(args, flags);

@@ -6,7 +6,7 @@
 
 - `SKILL.md` — инструкция для агента (точка входа): правила, фазы, цикл атома, приёмка.
 - `driver.mjs` + `easyui-auth.mjs` — CLI-харнес easy-ui (каталог, компоненты, прототипы, снапы, публикация).
-- `api.mjs` — хелпер поверх того же auth: PATCH темы, Figma-provenance, загрузка ассетов, произвольные вызовы.
+- `api.mjs` — хелпер поверх того же auth: PATCH темы, загрузка ассетов, произвольные вызовы, ретроактивный Figma-provenance (в обычном цикле — `driver.mjs component --figma`).
 - `compare.mjs` — пиксельный дифф Figma-эталон ↔ snap (нужен одноразовый `npm i pixelmatch pngjs` в этом каталоге).
 - `templates/atom.tsx`, `templates/probe.json` — шаблоны атома и probe-стикершита.
 - `reference/easy-ui-authoring.md` — полный справочник механики easy-ui (грамматика документов, директивы, версии, troubleshooting); `reference/host-catalog.json` — host-типы; `reference/canonical-roles.md` — согласованные слаги `canonicalFor`.

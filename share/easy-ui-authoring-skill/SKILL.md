@@ -30,7 +30,7 @@ export EASYUI_LEGACY_BASIC_AUTH="edge:secret" # только пока включ
 node driver.mjs get prototypes
 ```
 
-Любой verb принимает `--json`. Логин — один раз на процесс; между отдельными вызовами драйвера делайте паузы (на публичном API есть rate-limit на логин: 3+ вызова подряд могут дать `HTTP 429 rate_limited` — подождать минуту и повторить).
+Любой verb принимает `--json`. Сессия кэшируется на диске между вызовами (`$XDG_STATE_HOME/easyui` либо `~/.cache/easyui`, TTL 24 ч; путь переопределяет `EASYUI_SESSION_FILE`, выключатель `EASYUI_SESSION_CACHE=0`) — в норме логин один на серию вызовов. Если 429 всё же случился (кэш выключен/сброшен, лимит 5 логинов на аккаунт в минуту) — подождать минуту и повторить.
 
 ## Главное правило: переиспользуй, прежде чем создавать
 
@@ -234,10 +234,13 @@ curl -u "$EASYUI_LEGACY_BASIC_AUTH" -b /tmp/easyui.cookies -X POST \
 ```bash
 node driver.mjs component rating-stars RatingStars examples/rating-stars.tsx \
   --design-system yandex-pay \
-  --intent "Let a customer rate a product from one to five stars"
+  --intent "Let a customer rate a product from one to five stars" \
+  --figma figma.json   # опционально: provenance {fileKey, nodeIds, referenceScreenshots?, lastSyncedAt?}
 # saved rating-stars rev 1 in yandex-pay
 # published rating-stars version 1 in yandex-pay
 ```
+
+`--figma` кладёт provenance той же ревизией, что и source. Поле живёт **на ревизии** и не наследуется: update или `component-move` без `--figma` обнуляют provenance head — храни `figma.json` рядом с TSX и передавай флаг при каждом вызове.
 
 Систему для компонента выбирает `--design-system`, затем `EASYUI_DESIGN_SYSTEM`; для создания она обязательна, при обновлении сохраняется текущая. Имя — уникальное `^[A-Z][A-Za-z0-9]*$`, после создания неизменно. Драйвер делает save + publish за один вызов. Save проверяет только синтаксис и контракт; **тип-ошибки ловит publish** — в ответе вывод tsc.
 
@@ -298,8 +301,11 @@ node driver.mjs design-system my-system "My Design System" "Components for my pr
 ```bash
 node driver.mjs snap my-flow ./shots                 # server-side: job API + PNG из asset registry
 node driver.mjs snap my-flow ./shots --all-screens --json   # машинный отчёт по всем экранам
+node driver.mjs snap my-flow ./shots --dsf 2 --theme dark   # ретина-масштаб и тёмная тема
 # ./shots/<screenId>.png на каждый экран
 ```
+
+Вьюпорт по умолчанию — canvas-aware (canvas экрана, иначе канонический вьюпорт устройства — паритет с `geometry`/`baseline`); переопределяется `--viewport WxH`. PNG = capture-поверхность × dsf; бюджет `surface × dsf² ≤ 16 Mpx` (лимит ингеста ассетов) проверяется до постановки job'а — крупный canvas при `--dsf 2` может не влезть.
 
 **Exit codes `snap`:**
 
@@ -365,7 +371,7 @@ node driver.mjs diff my-flow              # head против head-1; `diff my-f
 ## Troubleshooting
 
 - `401` на login — неверны `EASYUI_USERNAME`/`EASYUI_PASSWORD` либо, при включённом внешнем барьере, `EASYUI_LEGACY_BASIC_AUTH` (формат `user:pass`). `401` после успешного login — истёкшая/отозванная cookie-сессия.
-- `HTTP 429 rate_limited` — rate-limit на логин; подождать минуту, объединять проверки в меньшее число вызовов.
+- `HTTP 429 rate_limited` — rate-limit на логин (5/мин на аккаунт); в норме не случается благодаря кэшу сессии — проверить, не задан ли `EASYUI_SESSION_CACHE=0`; подождать минуту и повторить.
 - `save failed (422) ... "Unrecognized key: \"bogus\""` — prop отсутствует в exact definition активной custom-версии; заново `catalog get`.
 - `save failed (422) ... "Unknown or unpublished component type: X"` — тип не встроенный и не опубликован как компонент; сначала `driver.mjs component ...`.
 - `publish failed (422) ... Type check failed` (компонент) — читать вывод tsc в issue; save такие ошибки не ловит.

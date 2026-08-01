@@ -311,7 +311,7 @@ node driver.mjs shoot my-flow ./shots                # локальный playwr
 | `2` | PNG создан, но прототип логировал ошибки (`productErrors`) | чинить прототип/компонент; PNG уже лежат в `./shots` |
 | `1` | PNG не создан (job error/timeout, 5xx, 501) | инфраструктура/окружение; драйвер уже сделал 2 попытки на экран |
 
-Инфраструктурный шум (favicon, расширения браузера, `ERR_NETWORK_CHANGED`, `ResizeObserver loop`, посторонние origin'ы) сервер отдаёт в `infraNoise` и он **не** влияет на exit code. `--json` печатает по экрану `{screenId, path, imageProduced, captureClean, productErrors, infraNoise, runtimeWarnings, attempts}`. Флаг `--json` есть у всех verb'ов, логин выполняется один раз на процесс, GET'ы и постановка job'а ретраятся на 5xx.
+Инфраструктурный шум (favicon, расширения браузера, `ERR_NETWORK_CHANGED`, `ResizeObserver loop`, посторонние origin'ы) сервер отдаёт в `infraNoise` и он **не** влияет на exit code. `--json` печатает по экрану `{screenId, path, imageProduced, captureClean, productErrors, infraNoise, runtimeWarnings, attempts}`. Флаг `--json` есть у всех verb'ов; сессия кэшируется на диске между вызовами (`$XDG_STATE_HOME/easyui`, выключатель `EASYUI_SESSION_CACHE=0`, путь переопределяет `EASYUI_SESSION_FILE`), поэтому логин обычно один на серию вызовов; GET'ы и постановка job'а ретраятся на 5xx.
 
 Серверные скриншоты также доступны сырым API (`POST /prototypes/:id/screens/:sid/screenshot {viewport,...}` → 202 `{jobId}` → `GET /screenshot-jobs/:jobId`; параметры theme/deviceScaleFactor/rev/version), включая скриншот одного компонента: `POST /components/:id/versions/:v/screenshot {props? | exampleName?, viewport}`.
 
