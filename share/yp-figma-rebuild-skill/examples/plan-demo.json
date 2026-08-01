@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "plan-demo",
+  "name": "Plan picker demo",
+  "description": "Typed event payload ($event), conditional action ($if) and named slots on a custom component",
+  "device": "mobile",
+  "startScreen": "pick",
+  "state": {
+    "selected": "",
+    "price": 0,
+    "plans": [
+      { "id": "free", "title": "Free", "price": 0 },
+      { "id": "pro", "title": "Pro", "price": 42 }
+    ]
+  },
+  "screens": [
+    {
+      "id": "pick",
+      "name": "Pick a plan",
+      "spec": {
+        "root": "page",
+        "elements": {
+          "page": { "type": "Stack", "props": { "direction": "vertical", "gap": "md" }, "children": ["picker", "summary", "next"] },
+          "picker": {
+            "type": "PlanPicker",
+            "props": { "plans": { "$state": "/plans" }, "selected": { "$state": "/selected" } },
+            "children": ["head", "hint"],
+            "on": {
+              "choose": [
+                { "action": "setState", "params": { "statePath": "/selected", "value": { "$event": "/id" } } },
+                { "action": "setState", "params": { "statePath": "/price", "value": { "$event": "/price" } }, "$if": { "$event": "/price", "neq": 0 } }
+              ]
+            }
+          },
+          "head": { "type": "Heading", "props": { "text": "Choose your plan", "level": "h2" }, "slot": "header" },
+          "hint": { "type": "Text", "props": { "text": "Payload of the choose event drives the state below.", "variant": "muted" }, "slot": "footer" },
+          "summary": { "type": "Text", "props": { "text": { "$template": "Selected: ${/selected}" } }, "visible": { "$state": "/selected" } },
+          "next": { "type": "Button", "props": { "label": "Continue" }, "visible": { "$state": "/selected" }, "on": { "press": { "action": "navigate", "params": { "screenId": "done" } } } }
+        }
+      }
+    },
+    {
+      "id": "done",
+      "name": "Done",
+      "spec": {
+        "root": "page",
+        "elements": {
+          "page": { "type": "Stack", "props": { "direction": "vertical", "gap": "md" }, "children": ["h", "t", "again"] },
+          "h": { "type": "Heading", "props": { "text": "Enjoy!", "level": "h2" } },
+          "t": { "type": "Text", "props": { "text": { "$template": "Plan ${/selected}, $${/price}/mo" } } },
+          "again": { "type": "Button", "props": { "label": "Start over" }, "on": { "press": { "action": "restart", "params": {} } } }
+        }
+      }
+    }
+  ]
+}

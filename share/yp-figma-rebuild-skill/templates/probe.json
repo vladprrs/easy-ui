@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "ypv2-probe-atoms",
+  "name": "YP v2 — атомы (probe-стикершит)",
+  "description": "Визуальный контракт атомов yandex-pay-v2: экран на компонент, раскладка повторяет Figma-эталон. canvas каждого экрана = размер экспортированного Figma-фрейма.",
+  "designSystem": "yandex-pay-v2",
+  "device": "mobile",
+  "startScreen": "pay-button",
+  "screens": [
+    {
+      "id": "pay-button",
+      "name": "PayButton",
+      "canvas": { "width": 390, "height": 520 },
+      "spec": {
+        "root": "sheet",
+        "elements": {
+          "sheet": {
+            "type": "PayBox",
+            "props": { "mode": "col", "gap": "md", "padding": "lg", "width": "fill", "background": "#ffffff" },
+            "children": ["primary", "secondary", "disabled"]
+          },
+          "primary":   { "type": "PayButton", "props": { "text": "Оплатить" } },
+          "secondary": { "type": "PayButton", "props": { "text": "Отмена", "kind": "secondary" } },
+          "disabled":  { "type": "PayButton", "props": { "text": "Оплатить", "disabled": true } }
+        }
+      }
+    }
+  ]
+}

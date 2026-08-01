@@ -1,0 +1,317 @@
+{
+  "version": 1,
+  "id": "yp-skill-demo",
+  "name": "YP Skill Demo — Чекаут",
+  "description": "Демо-флоу скилла создания прототипов в yandex-pay: заказ, выбор способа оплаты, успех.",
+  "designSystem": "yandex-pay",
+  "device": "mobile",
+  "startScreen": "pay",
+  "state": {
+    "method": "card",
+    "items": [
+      {
+        "title": "Капучино большой",
+        "price": "290"
+      },
+      {
+        "title": "Круассан миндальный",
+        "price": "180"
+      }
+    ],
+    "total": "470"
+  },
+  "screens": [
+    {
+      "id": "pay",
+      "name": "Оплата",
+      "spec": {
+        "root": "root",
+        "elements": {
+          "root": {
+            "type": "@eui/FlowRoot",
+            "props": {},
+            "children": [
+              "screen",
+              "footer"
+            ]
+          },
+          "screen": {
+            "type": "YpScreen",
+            "props": {
+              "title": "Оплата",
+              "subtitle": "Кофемания",
+              "fullscreen": true
+            },
+            "children": [
+              "content"
+            ]
+          },
+          "content": {
+            "type": "YpBox",
+            "props": {
+              "mode": "col",
+              "gap": "md",
+              "width": "full",
+              "paddingY": "md"
+            },
+            "children": [
+              "orderTitle",
+              "orderList",
+              "sep",
+              "totalRow",
+              "methodTitle",
+              "cardMethod",
+              "sbpMethod"
+            ]
+          },
+          "orderTitle": {
+            "type": "YpText",
+            "props": {
+              "text": "Ваш заказ",
+              "size": "18",
+              "medium": true
+            }
+          },
+          "orderList": {
+            "type": "YpBox",
+            "props": {
+              "mode": "col",
+              "gap": "sm",
+              "width": "full",
+              "shrink": true
+            },
+            "repeat": {
+              "statePath": "/items",
+              "key": "title"
+            },
+            "children": [
+              "orderRow"
+            ]
+          },
+          "orderRow": {
+            "type": "YpBox",
+            "props": {
+              "mode": "row",
+              "justify": "between",
+              "width": "full",
+              "shrink": true
+            },
+            "children": [
+              "orderName",
+              "orderPrice"
+            ]
+          },
+          "orderName": {
+            "type": "YpText",
+            "props": {
+              "text": {
+                "$item": "title"
+              },
+              "color": "secondary"
+            }
+          },
+          "orderPrice": {
+            "type": "YpAmount",
+            "props": {
+              "amount": {
+                "$item": "price"
+              }
+            }
+          },
+          "sep": {
+            "type": "YpSeparator",
+            "props": {}
+          },
+          "totalRow": {
+            "type": "YpBox",
+            "props": {
+              "mode": "row",
+              "justify": "between",
+              "width": "full",
+              "shrink": true
+            },
+            "children": [
+              "totalLabel",
+              "totalAmount"
+            ]
+          },
+          "totalLabel": {
+            "type": "YpText",
+            "props": {
+              "text": "Итого",
+              "medium": true
+            }
+          },
+          "totalAmount": {
+            "type": "YpAmount",
+            "props": {
+              "amount": {
+                "$state": "/total"
+              }
+            }
+          },
+          "methodTitle": {
+            "type": "YpText",
+            "props": {
+              "text": "Способ оплаты",
+              "size": "18",
+              "medium": true,
+              "mt": "md"
+            }
+          },
+          "cardMethod": {
+            "type": "YpPaymentMethodCard",
+            "props": {
+              "id": "card",
+              "anatomy": "bank-card",
+              "title": "Карта •• 1234",
+              "caption": "Мир",
+              "accessibleLabel": "Оплатить картой Мир 1234",
+              "selected": {
+                "$cond": {
+                  "if": {
+                    "$state": "/method",
+                    "eq": "card"
+                  },
+                  "then": true,
+                  "else": false
+                }
+              }
+            },
+            "on": {
+              "select": {
+                "action": "setState",
+                "params": {
+                  "statePath": "/method",
+                  "value": "card"
+                }
+              }
+            }
+          },
+          "sbpMethod": {
+            "type": "YpPaymentMethodCard",
+            "props": {
+              "id": "sbp",
+              "anatomy": "sbp-bank",
+              "title": "СБП",
+              "caption": "Сбербанк",
+              "accessibleLabel": "Оплатить через СБП",
+              "selected": {
+                "$cond": {
+                  "if": {
+                    "$state": "/method",
+                    "eq": "sbp"
+                  },
+                  "then": true,
+                  "else": false
+                }
+              }
+            },
+            "on": {
+              "select": {
+                "action": "setState",
+                "params": {
+                  "statePath": "/method",
+                  "value": "sbp"
+                }
+              }
+            }
+          },
+          "footer": {
+            "type": "YpStickyPaymentFooter",
+            "region": "footer",
+            "props": {
+              "ctaLabel": {
+                "$template": "Оплатить ${/total} ₽"
+              },
+              "legalPrefix": "Нажимая кнопку, вы принимаете",
+              "legalLinkText": "условия сервиса",
+              "accessibleLabel": "Нижняя панель оплаты"
+            },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": {
+                  "screenId": "success"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "success",
+      "name": "Успех",
+      "spec": {
+        "root": "screen",
+        "elements": {
+          "screen": {
+            "type": "YpScreen",
+            "props": {
+              "title": "Готово",
+              "fullscreen": true
+            },
+            "children": [
+              "content"
+            ]
+          },
+          "content": {
+            "type": "YpBox",
+            "props": {
+              "mode": "col",
+              "gap": "lg",
+              "align": "center",
+              "width": "full",
+              "paddingY": "4xl"
+            },
+            "children": [
+              "okText",
+              "okAmount",
+              "okCard",
+              "okButton"
+            ]
+          },
+          "okText": {
+            "type": "YpText",
+            "props": {
+              "text": "Оплата прошла успешно",
+              "size": "20",
+              "medium": true,
+              "align": "center"
+            }
+          },
+          "okAmount": {
+            "type": "YpAmount",
+            "props": {
+              "amount": {
+                "$state": "/total"
+              }
+            }
+          },
+          "okCard": {
+            "type": "YpSuccessPaymentCard",
+            "props": {
+              "label": "Карта •• 1234",
+              "cardMask": "1234",
+              "accessibleLabel": "Оплачено картой 1234"
+            }
+          },
+          "okButton": {
+            "type": "YpButton",
+            "props": {
+              "text": "Вернуться в магазин",
+              "variant": "default"
+            },
+            "on": {
+              "press": {
+                "action": "restart",
+                "params": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
