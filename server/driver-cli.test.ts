@@ -8,7 +8,7 @@ import type { Database } from "bun:sqlite";
 import { openDatabase } from "./db";
 import { ensureBootstrapAdmin } from "./users";
 import { prototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
-import { ScreenshotService, type RunJob } from "./screenshot/service";
+import { ScreenshotService, type RunJob, type WorkerJob } from "./screenshot/service";
 import { ReuseDecisionRepo } from "./repos/reuseDecisions";
 import {
   assertViewportPixelBudget,
@@ -88,19 +88,27 @@ async function setup(legacyBasicAuth?: string, runJob?: RunJob) {
   const screenshots = runJob
     ? new ScreenshotService({ db, dataDir: directory, serveDist: "dist", captureOrigin: "http://127.0.0.1:8787", chromiumAvailable: true, runJob })
     : undefined;
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: createTestHandler(db, { dataDir: directory, legacyBasicAuth, screenshots }) });
+  const handler = createTestHandler(db, { dataDir: directory, legacyBasicAuth, screenshots });
+  let requests = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: (request, bunServer) => { requests += 1; return handler(request, bunServer); },
+  });
   servers.push(server);
-  return { db, directory, api: `http://127.0.0.1:${server.port}/api` };
+  return { db, directory, api: `http://127.0.0.1:${server.port}/api`, requests: () => requests };
 }
 
-/** Worker stub: one PNG per call, with whatever console output the case needs. */
-function pngRunJob(consoleErrors: string[] = [], pageErrors: string[] = []): { runJob: RunJob; calls: () => number } {
+/** Worker stub: one PNG per call, recording the full job so surface flags can be asserted. */
+function pngRunJob(consoleErrors: string[] = [], pageErrors: string[] = []): { runJob: RunJob; calls: () => number; jobs: () => WorkerJob[] } {
   let calls = 0;
-  const runJob: RunJob = async () => {
+  const jobs: WorkerJob[] = [];
+  const runJob: RunJob = async (job) => {
     calls += 1;
+    jobs.push(job);
     return { ok: true, pngBase64: Buffer.from(png()).toString("base64"), width: 2, height: 3, consoleErrors, pageErrors, browserVersion: "test/1" };
   };
-  return { runJob, calls: () => calls };
+  return { runJob, calls: () => calls, jobs: () => jobs };
 }
 
 async function saveDoc(api: string, doc: PrototypeDoc) {
@@ -110,6 +118,12 @@ async function saveDoc(api: string, doc: PrototypeDoc) {
     body: JSON.stringify({ doc, message: "snap fixture" }),
   });
   expect(response.status).toBe(201);
+}
+
+/** Экран-стикершит: canvas задаёт и поверхность съёмки, и дефолтный вьюпорт snap/geometry. */
+async function canvasDoc(id: string, width: number, height: number): Promise<PrototypeDoc> {
+  const base = await fixture(id);
+  return { ...base, screens: [{ ...base.screens[0]!, canvas: { width, height } }] };
 }
 
 async function twoScreenDoc(id: string): Promise<PrototypeDoc> {
@@ -551,6 +565,66 @@ export default function MoveRoleOwner() { return <div>move role owner</div>; }
   });
 });
 
+describe("author driver figma provenance", () => {
+  const provenance = { fileKey: "Fig1_key-2", nodeIds: ["12:34", "56:78"] };
+
+  async function writeFigma(directory: string, name: string, value: unknown): Promise<string> {
+    const path = resolve(directory, name);
+    await Bun.write(path, typeof value === "string" ? value : JSON.stringify(value));
+    return path;
+  }
+
+  async function headFigma(api: string, id: string) {
+    const response = await fetch(`${api}/components/${id}`);
+    expect(response.status).toBe(200);
+    return (await response.json() as { figma: unknown }).figma;
+  }
+
+  test("--figma rides along with create and update, and an update without it clears the head", async () => {
+    const { api, directory } = await setup();
+    const figmaPath = await writeFigma(directory, "figma.json", provenance);
+    const createSource = await writeComponentSource(directory, "DriverFigmaCard", "Card rebuilt from a Figma frame", "figma-create");
+
+    const created = await run(api, ["component", "driver-figma-card", "DriverFigmaCard", createSource, "--design-system", "yandex-pay", "--intent", "Rebuild the Figma checkout card frame", "--figma", figmaPath, "--json"]);
+    expect(created.exitCode).toBe(0);
+    expect(JSON.parse(created.stdout)).toMatchObject({ command: "component", version: 1, figma: true });
+    expect(await headFigma(api, "driver-figma-card")).toEqual(provenance);
+
+    const updateSource = await writeComponentSource(directory, "DriverFigmaCard", "Card rebuilt from a Figma frame", "figma-update");
+    const updated = await run(api, ["component", "driver-figma-card", "DriverFigmaCard", updateSource, "--design-system", "yandex-pay", "--figma", figmaPath, "--json"]);
+    expect(updated.exitCode).toBe(0);
+    expect(JSON.parse(updated.stdout)).toMatchObject({ version: 2, figma: true });
+    expect(await headFigma(api, "driver-figma-card")).toEqual(provenance);
+
+    // Осознанная фиксация серверной семантики: figma_json не наследуется ревизией, поэтому
+    // update без --figma обнуляет provenance на head. Операционное правило плана §T2 (M8) —
+    // передавать --figma при каждом вызове `component`; серверное наследование вне скоупа.
+    const droppedSource = await writeComponentSource(directory, "DriverFigmaCard", "Card rebuilt from a Figma frame", "figma-dropped");
+    const dropped = await run(api, ["component", "driver-figma-card", "DriverFigmaCard", droppedSource, "--design-system", "yandex-pay", "--json"]);
+    expect(dropped.exitCode).toBe(0);
+    expect(JSON.parse(dropped.stdout).figma).toBeUndefined();
+    expect(await headFigma(api, "driver-figma-card")).toBeNull();
+  }, 30_000); // три публикации подряд: каждая платит extract+typecheck в подпроцессе
+
+  test("a missing or non-JSON --figma file is an argument error before any request", async () => {
+    const { api, directory, requests } = await setup();
+    const source = await writeComponentSource(directory, "DriverFigmaGuard", "Guarded figma provenance card", "figma-guard");
+    const args = (figmaPath: string) => ["component", "driver-figma-guard", "DriverFigmaGuard", source, "--design-system", "yandex-pay", "--intent", "Guard the figma provenance flag", "--figma", figmaPath];
+
+    const missing = await run(api, args(resolve(directory, "absent.json")));
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain("--figma file cannot be read");
+    expect(missing.stderr).toContain("ENOENT");
+
+    const brokenPath = await writeFigma(directory, "broken.json", "{ not json");
+    const broken = await run(api, args(brokenPath));
+    expect(broken.exitCode).toBe(1);
+    expect(broken.stderr).toContain("--figma file is not valid JSON");
+
+    expect(requests()).toBe(0);
+  });
+});
+
 describe("author driver session cache", () => {
   test("a second CLI call reuses the cached cookie instead of logging in again", async () => {
     const { api, logins } = await setupCounted();
@@ -658,6 +732,43 @@ describe("author driver snap contract", () => {
     const missing = await run(api, ["status", "status-all"]);
     expect(missing.exitCode).toBe(1);
     expect(missing.stderr).toContain("--all-screens");
+  });
+
+  test("--dsf and --theme reach the worker job, and the default viewport follows the canvas", async () => {
+    const stub = pngRunJob();
+    const { api, directory } = await setup(undefined, stub.runJob);
+    await saveDoc(api, await fixture("snap-flags"));
+    const flagged = await run(api, ["snap", "snap-flags", `${directory}/shots`, "--dsf", "2", "--theme", "dark", "--json"]);
+    expect(flagged.exitCode).toBe(0);
+    expect(stub.jobs()[0]).toMatchObject({ deviceScaleFactor: 2, colorScheme: "dark", viewport: { width: 1280, height: 800 } });
+    expect(JSON.parse(flagged.stdout)).toMatchObject({ command: "snap", dsf: 2, theme: "dark", screens: [{ viewport: { width: 1280, height: 800 } }] });
+
+    // Новый дефолт (план §T3, M4): вьюпорт canvas-aware, как у geometry/baseline, а не 480x800.
+    await saveDoc(api, await canvasDoc("snap-canvas", 1200, 900));
+    const canvas = await run(api, ["snap", "snap-canvas", `${directory}/canvas-shots`, "--json"]);
+    expect(canvas.exitCode).toBe(0);
+    expect(stub.jobs()[1]).toMatchObject({ deviceScaleFactor: 1, colorScheme: "light", viewport: { width: 1200, height: 900 } });
+    expect(JSON.parse(canvas.stdout)).toMatchObject({ dsf: 1, theme: "light", screens: [{ viewport: { width: 1200, height: 900 } }] });
+
+    const override = await run(api, ["snap", "snap-canvas", `${directory}/canvas-shots`, "--viewport", "390x844", "--json"]);
+    expect(override.exitCode).toBe(0);
+    expect(stub.jobs()[2]).toMatchObject({ viewport: { width: 390, height: 844 } });
+  });
+
+  test("a canvas that would exceed the asset ingest limit at --dsf 2 is refused before enqueue", async () => {
+    const stub = pngRunJob();
+    const { api, directory } = await setup(undefined, stub.runJob);
+    await saveDoc(api, await canvasDoc("snap-huge", 2000, 4000));
+    const result = await run(api, ["snap", "snap-huge", `${directory}/shots`, "--dsf", "2", "--json"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("capture surface 2000x4000 at dsf 2");
+    expect(result.stderr).toContain("asset ingest limit");
+    expect(stub.calls()).toBe(0);
+
+    // Тот же экран при dsf 1 укладывается в бюджет и снимается.
+    const fits = await run(api, ["snap", "snap-huge", `${directory}/shots`, "--json"]);
+    expect(fits.exitCode).toBe(0);
+    expect(stub.calls()).toBe(1);
   });
 
   test("snap fans out over every screen of the draft", async () => {

@@ -21,6 +21,10 @@ declare module "*/author/driver.mjs" {
       actor?: string;
       since?: string;
       minAttempts?: number;
+      viewport?: DriverViewport;
+      theme?: "light" | "dark";
+      dsf?: number;
+      figma?: string;
       [key: string]: unknown;
     };
   }
@@ -39,6 +43,13 @@ declare module "*/author/driver.mjs" {
     device?: string,
   ): DriverViewport;
   export function assertViewportPixelBudget(viewport: DriverViewport, deviceScaleFactor?: number): DriverViewport;
+  export const MAX_ASSET_PIXELS: number;
+  export function captureSurface(screen: Record<string, unknown>, device?: string): DriverViewport;
+  export function assertCaptureSurfaceBudget(surface: DriverViewport, deviceScaleFactor?: number): DriverViewport;
+  export function buildSnapPlan(
+    draft: { doc: { device?: string; screens: readonly Record<string, unknown>[] } },
+    flags?: { viewport?: DriverViewport | null; dsf?: number; theme?: string },
+  ): { screenId: string; viewport: DriverViewport; deviceScaleFactor?: number; theme?: string }[];
   export function buildBaselinePlan(
     draft: Record<string, unknown> & { rev: number; prototypeInstanceId: string },
     options?: { viewport?: DriverViewport | null; dsf?: number; theme?: string },
