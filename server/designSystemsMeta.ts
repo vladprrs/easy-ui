@@ -157,12 +157,51 @@ export interface ThemeContent {
   icons: ThemeIcon[];
 }
 
+/**
+ * PATCH-тело темы (план 2026-08-02 P6).
+ *
+ * Три режима, взаимоисключающие по каждой коллекции:
+ *  - полная замена — `tokens`/`fonts`/`icons` (историческая семантика: переданная коллекция
+ *    заменяет предыдущую, опущенная наследуется);
+ *  - sparse-добавление — `addTokens`/`addFonts`/`addIcons` поверх `baseVersion` (политика
+ *    `appendOnly`: удалять нельзя, конфликт значения → 409, а не тихая перезапись);
+ *  - `dryRun: true` — валидация + дифф + итоговая `resolvedSpaceScale` без записи версии.
+ *
+ * Проверка полноты/монотонности `space.*` для sparse-режима невозможна на уровне тела (набор
+ * достраивается из `baseVersion`), поэтому здесь проверяются только форма ключей и значений,
+ * а полная шкала валидируется на смердженном контенте в роуте (`spaceTokenIssues`).
+ */
+const partialSpaceTokenIssues = (tokens: Record<string, unknown>): { path: string[]; message: string }[] => {
+  const issues: { path: string[]; message: string }[] = [];
+  for (const [key, value] of Object.entries(tokens)) {
+    if (!key.startsWith("space.")) continue;
+    const token = key.slice("space.".length);
+    if (!(spaceTokens as readonly string[]).includes(token)) { issues.push({ path: [key], message: "unknown spacing token" }); continue; }
+    if (typeof value !== "string" || !absolutePx.test(value)) issues.push({ path: [key], message: "must be a non-negative absolute px string" });
+    else if (token === "none" && value !== "0px") issues.push({ path: [key], message: "must equal 0px" });
+  }
+  return issues;
+};
+
 export const themePatchSchema = z.strictObject({
   tokens: tokensSchema.optional(),
   fonts: fontsSchema.optional(),
   icons: iconsSchema.optional(),
+  addTokens: tokensSchema.optional(),
+  addFonts: fontsSchema.optional(),
+  addIcons: iconsSchema.optional(),
+  dryRun: z.boolean().optional(),
   baseVersion: z.number().int().min(0),
 }).superRefine((patch, context) => {
+  for (const [full, sparse] of [["tokens", "addTokens"], ["fonts", "addFonts"], ["icons", "addIcons"]] as const) {
+    if (patch[full] !== undefined && patch[sparse] !== undefined) {
+      context.addIssue({ code: "custom", path: [sparse], message: `${full} and ${sparse} are mutually exclusive` });
+    }
+  }
+  if (patch.addTokens) {
+    for (const issue of colorTokenIssues(patch.addTokens)) context.addIssue({ code: "custom", path: ["addTokens", ...issue.path], message: issue.message });
+    for (const issue of partialSpaceTokenIssues(patch.addTokens)) context.addIssue({ code: "custom", path: ["addTokens", ...issue.path], message: issue.message });
+  }
   if (!patch.tokens) return;
   // Color validation runs before the space early-return so a color-only PATCH is still checked.
   for (const issue of colorTokenIssues(patch.tokens)) context.addIssue({ code: "custom", path: ["tokens", ...issue.path], message: issue.message });
@@ -181,6 +220,104 @@ export function parseThemePatch(value: unknown): ThemePatch {
   const parsed = themePatchSchema.safeParse(value);
   if (!parsed.success) throw new ApiError(422, "validation_failed", "Design-system theme is invalid", { issues: issuesFrom(parsed.error) });
   return parsed.data;
+}
+
+// --- Sparse (append-only) operations, no-op detection and diffs (план 2026-08-02 P6.1–6.2) ---
+
+export interface AppendConflict { path: (string | number)[]; existing: unknown; incoming: unknown; message: string }
+
+const fontKey = (font: ThemeFont): string => `${font.family}|${font.weight ?? "normal"}|${font.style ?? "normal"}`;
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Sparse-мердж поверх контента `baseVersion`. Политика `appendOnly`:
+ *  - ключа/шрифта/иконки нет → добавляется;
+ *  - есть с идентичным значением → no-op (запись не растёт);
+ *  - есть с другим значением → конфликт (роут отвечает 409), а не тихая перезапись;
+ *  - удаление невозможно by construction — для него остаётся полный PATCH.
+ */
+export function applySparsePatch(previous: ThemeContent, patch: {
+  addTokens?: Record<string, ThemeToken>; addFonts?: ThemeFont[]; addIcons?: ThemeIcon[];
+}): { content: ThemeContent; conflicts: AppendConflict[] } {
+  const conflicts: AppendConflict[] = [];
+  const tokens = { ...previous.tokens };
+  for (const [key, value] of Object.entries(patch.addTokens ?? {})) {
+    if (key in tokens && !same(tokens[key], value)) {
+      conflicts.push({ path: ["addTokens", key], existing: tokens[key], incoming: value, message: `token ${key} already exists with a different value` });
+      continue;
+    }
+    tokens[key] = value;
+  }
+  const fonts = [...previous.fonts];
+  for (const font of patch.addFonts ?? []) {
+    const index = fonts.findIndex((existing) => fontKey(existing) === fontKey(font));
+    if (index === -1) { fonts.push(font); continue; }
+    if (!same(fonts[index], font)) conflicts.push({ path: ["addFonts", fontKey(font)], existing: fonts[index], incoming: font, message: `font ${fontKey(font)} already exists with a different source` });
+  }
+  const icons = [...previous.icons];
+  for (const icon of patch.addIcons ?? []) {
+    const index = icons.findIndex((existing) => existing.name === icon.name);
+    if (index === -1) { icons.push(icon); continue; }
+    if (!same(icons[index], icon)) conflicts.push({ path: ["addIcons", icon.name], existing: icons[index], incoming: icon, message: `icon ${icon.name} already exists with a different definition` });
+  }
+  return { content: { tokens, fonts, icons }, conflicts };
+}
+
+/**
+ * Семантическое равенство контента тем: токены сравниваются как множество пар (порядок ключей
+ * в JSON-словаре смысла не несёт), шрифты и иконки — по порядку (он влияет на каскад @font-face
+ * и на выбор иконки). Именно этот предикат гасит создание версии (no-op detection, P6.1).
+ */
+export function themeContentEqual(a: ThemeContent, b: ThemeContent): boolean {
+  const tokensOf = (content: ThemeContent) => JSON.stringify(Object.keys(content.tokens).sort().map((key) => [key, content.tokens[key]]));
+  return tokensOf(a) === tokensOf(b) && same(a.fonts, b.fonts) && same(a.icons, b.icons);
+}
+
+export interface ThemeDiff {
+  tokens: { added: Record<string, ThemeToken>; changed: Record<string, { from: ThemeToken; to: ThemeToken }>; removed: string[] };
+  fonts: { added: ThemeFont[]; removed: ThemeFont[] };
+  icons: { added: ThemeIcon[]; removed: ThemeIcon[] };
+  changed: boolean;
+}
+
+/** Дифф «предыдущая версия → предлагаемый контент» для dry-run и для ответа apply. */
+export function themeDiff(previous: ThemeContent, next: ThemeContent): ThemeDiff {
+  const added: Record<string, ThemeToken> = {};
+  const changed: Record<string, { from: ThemeToken; to: ThemeToken }> = {};
+  for (const [key, value] of Object.entries(next.tokens)) {
+    if (!(key in previous.tokens)) added[key] = value;
+    else if (!same(previous.tokens[key], value)) changed[key] = { from: previous.tokens[key]!, to: value };
+  }
+  const removed = Object.keys(previous.tokens).filter((key) => !(key in next.tokens));
+  const listDiff = <T,>(before: T[], after: T[]) => ({
+    added: after.filter((item) => !before.some((other) => same(other, item))),
+    removed: before.filter((item) => !after.some((other) => same(other, item))),
+  });
+  const fonts = listDiff(previous.fonts, next.fonts);
+  const icons = listDiff(previous.icons, next.icons);
+  return {
+    tokens: { added, changed, removed },
+    fonts, icons,
+    changed: !themeContentEqual(previous, next),
+  };
+}
+
+/**
+ * Дыра (а) плана P6.3: полный PATCH токенов, из которого `space.*` выпали целиком, молча уводил
+ * шкалу на базовую (для кастомных DS — каноническую). Под резолвером 2 такой патч **наследует**
+ * `space.*` базовой версии, а не подменяет шкалу; наследование применяется только если у базовой
+ * версии полный валидный набор (иначе исторический grandfathering малформленных шкал сломался бы).
+ * Возвращает список унаследованных ключей — роут отдаёт его в ответе, чтобы наследование не было
+ * ещё одной молчаливой подменой.
+ */
+export function inheritSpaceTokens(previous: ThemeContent, tokens: Record<string, ThemeToken>): { tokens: Record<string, ThemeToken>; inherited: string[] } {
+  const previousSpaceKeys = Object.keys(previous.tokens).filter((key) => key.startsWith("space."));
+  if (!previousSpaceKeys.length) return { tokens, inherited: [] };
+  if (Object.keys(tokens).some((key) => key.startsWith("space."))) return { tokens, inherited: [] };
+  if (spaceTokenIssues(previous.tokens).length) return { tokens, inherited: [] };
+  const merged = { ...tokens };
+  for (const key of previousSpaceKeys) merged[key] = previous.tokens[key]!;
+  return { tokens: merged, inherited: previousSpaceKeys };
 }
 
 const FONT_MIMES = new Set(["font/woff2", "font/ttf", "font/otf"]);

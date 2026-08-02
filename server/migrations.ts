@@ -607,6 +607,17 @@ const migrations = [
     // образа безопасен: старый код игнорирует колонку, а 'pinned' — его собственная семантика.
     db.run("ALTER TABLE prototypes ADD COLUMN track TEXT NOT NULL DEFAULT 'pinned'");
   },
+  (db: Database) => {
+    // v23: версионирование резолвера spacing-шкалы (план 2026-08-02, P6.3б). `resolveSpacingScale`
+    // стоит на read-пути (сводка DS, capabilities, пины ревизий, съёмка), поэтому «починить мердж
+    // на базу DS» и «не переехать существующим версиям» одновременно достижимо только через явную
+    // версию алгоритма на строке версии темы. Плоский ADD COLUMN по прецеденту v16/v22: все
+    // существующие строки бэкфилятся дефолтом `1` (legacy-поведение байт-в-байт), новые версии
+    // пишутся с `2` (см. CURRENT_SPACING_RESOLVER; kill-switch EASYUI_THEME_RESOLVER_V2_DISABLED
+    // возвращает запись `1`). Намеренно без CHECK — точка контроля контрактная, как у `kind`/`track`.
+    // Откат образа безопасен: старый код колонку не читает и резолвит всё legacy-путём.
+    db.run("ALTER TABLE design_system_versions ADD COLUMN spacing_resolver INTEGER NOT NULL DEFAULT 1");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

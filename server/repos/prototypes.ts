@@ -161,7 +161,8 @@ export class PrototypeRepo {
     const system=requireActiveDesignSystem(this.db,doc.designSystem,["designSystem"]);
     const pinnedTheme=pin===null?null:getDesignSystemVersion(this.db,doc.designSystem,pin);
     if(pin!==null&&!pinnedTheme) throw new ApiError(422,"validation_failed","Pinned design-system theme version does not exist",{issues:[{path:["designSystem"],message:`Unknown theme version ${pin} for ${doc.designSystem}`}]});
-    const resolvedSpaceScale=resolveSpacingScale(doc.designSystem,pinnedTheme?.tokens??{});
+    // Резолвер spacing-шкалы — свойство пиннутой версии темы (миграция v23, план P6.3б).
+    const resolvedSpaceScale=resolveSpacingScale(doc.designSystem,pinnedTheme?.tokens??{},pinnedTheme?.spacingResolver);
     this.db.query(`INSERT INTO prototype_revisions
       (prototype_id,rev,doc,builtin_catalog_hash,design_system_meta_version,figma_json,message,created_at) VALUES (?,?,?,?,?,?,?,?)`)
       .run(id,rev,JSON.stringify(doc),builtinCatalogHashFor(doc.designSystem,system.definitions,resolvedSpaceScale),pin,figmaJson,message,createdAt);

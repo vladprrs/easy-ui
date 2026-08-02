@@ -178,16 +178,21 @@ describe("PATCH /api/design-systems/:id — theme grammar", () => {
     await createCustomSystem(handler, "legacy-space");
     insertDesignSystemVersion(db, "legacy-space", 1, { tokens: { "space.md": "broken" }, fonts: [], icons: [] }, new Date().toISOString());
 
+    // Патчи, не меняющие контент, версию не создают (no-op detection, план P6.1), поэтому
+    // baseVersion остаётся 1 — grandfathering малформленной шкалы от этого не зависит.
     let response = await handler(req("/design-systems/legacy-space", "PATCH", { fonts: [], baseVersion: 1 }));
     expect(response.status).toBe(200);
     expect((await response.json() as { tokens: unknown }).tokens).toEqual({ "space.md": "broken" });
-    response = await handler(req("/design-systems/legacy-space", "PATCH", { icons: [], baseVersion: 2 }));
+    response = await handler(req("/design-systems/legacy-space", "PATCH", { icons: [], baseVersion: 1 }));
     expect(response.status).toBe(200);
-    response = await handler(req("/design-systems/legacy-space", "PATCH", { tokens: { "color.brand": "red" }, baseVersion: 3 }));
+    // Патч без `space.*` не наследует малформленную шкалу базовой версии (наследование включается
+    // только для полного валидного набора) — исторический grandfathering сохраняется.
+    response = await handler(req("/design-systems/legacy-space", "PATCH", { tokens: { "color.brand": "red" }, baseVersion: 1 }));
     expect(response.status).toBe(200);
-    response = await handler(req("/design-systems/legacy-space", "PATCH", { tokens: { "space.md": "20px" }, baseVersion: 4 }));
+    expect(await response.json() as { tokens: unknown; inheritedSpaceTokens: string[] }).toMatchObject({ tokens: { "color.brand": "red" }, inheritedSpaceTokens: [] });
+    response = await handler(req("/design-systems/legacy-space", "PATCH", { tokens: { "space.md": "20px" }, baseVersion: 2 }));
     expect(response.status).toBe(422);
-    response = await handler(req("/design-systems/legacy-space", "PATCH", { tokens: { ...fullSpace, "space.md": "20px", "space.lg": "24px", "space.xl": "32px", "space.2xl": "40px", "space.3xl": "56px", "space.4xl": "72px" }, baseVersion: 4 }));
+    response = await handler(req("/design-systems/legacy-space", "PATCH", { tokens: { ...fullSpace, "space.md": "20px", "space.lg": "24px", "space.xl": "32px", "space.2xl": "40px", "space.3xl": "56px", "space.4xl": "72px" }, baseVersion: 2 }));
     expect(response.status).toBe(200);
     db.close();
   });
@@ -216,6 +221,242 @@ describe("PATCH /api/design-systems/:id — theme grammar", () => {
     const fontId = await uploadAsset(handler, woff2(), "font/woff2");
     const r = await handler(req("/design-systems/custom-e", "PATCH", { icons: [{ name: "x", assetId: fontId }], baseVersion: 0 }));
     expect(r.status).toBe(422);
+    db.close();
+  });
+});
+
+// --- Волна W4 плана 2026-08-02 (P6): dry-run, no-op, sparse-операции, версионирование резолвера ---
+
+type PatchBody = {
+  latestMetaVersion: number | null; tokens: Record<string, unknown>; fonts: unknown[]; icons: unknown[];
+  resolvedSpaceScale: Record<string, string>;
+  dryRun: boolean; noop: boolean; nextVersion: number | null; spacingResolver: number;
+  inheritedSpaceTokens: string[];
+  diff: { tokens: { added: Record<string, unknown>; changed: Record<string, { from: unknown; to: unknown }>; removed: string[] }; fonts: { added: unknown[]; removed: unknown[] }; icons: { added: unknown[]; removed: unknown[] }; changed: boolean };
+  stalePins: { total: number; limit: number; prototypes: { id: string; name: string; pinnedVersion: number | null }[] };
+};
+const versionCount = (db: import("bun:sqlite").Database, id: string) =>
+  (db.query("SELECT COUNT(*) c FROM design_system_versions WHERE system_id=?").get(id) as { c: number }).c;
+
+describe("PATCH theme — dry-run и no-op (P6.1)", () => {
+  test("dryRun returns the token diff and the resulting resolvedSpaceScale without writing a version", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "dry-run");
+    expect((await handler(req("/design-systems/dry-run", "PATCH", { tokens: { ...fullSpace, "color.brand": "#111111" }, baseVersion: 0 }))).status).toBe(200);
+
+    const response = await handler(req("/design-systems/dry-run", "PATCH", {
+      tokens: { ...fullSpace, "space.md": "20px", "space.lg": "24px", "space.xl": "32px", "space.2xl": "40px", "space.3xl": "56px", "space.4xl": "72px", "color.accent": "#222222" },
+      baseVersion: 1, dryRun: true,
+    }));
+    expect(response.status).toBe(200);
+    const body = await response.json() as PatchBody;
+    expect(body.dryRun).toBe(true);
+    expect(body.noop).toBe(false);
+    expect(body.nextVersion).toBe(2);
+    // Итоговая шкала — та, что применилась бы после записи.
+    expect(body.resolvedSpaceScale).toMatchObject({ md: "20px", lg: "24px", "4xl": "72px" });
+    expect(body.diff.changed).toBe(true);
+    expect(body.diff.tokens.added).toEqual({ "color.accent": "#222222" });
+    expect(body.diff.tokens.changed["space.md"]).toEqual({ from: "12px", to: "20px" });
+    expect(body.diff.tokens.removed).toEqual(["color.brand"]);
+
+    // Ничего не записано: ни версии, ни сдвига latestMetaVersion.
+    expect(versionCount(db, "dry-run")).toBe(1);
+    const summary = await (await handler(req("/design-systems/dry-run"))).json() as { latestMetaVersion: number; resolvedSpaceScale: Record<string, string> };
+    expect(summary.latestMetaVersion).toBe(1);
+    expect(summary.resolvedSpaceScale).toMatchObject({ md: "12px" });
+    db.close();
+  });
+
+  test("a patch identical to the base version creates no version (noop) and keeps the CAS cursor", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "noop-theme");
+    const tokens = { ...fullSpace, "color.brand": "#123456" };
+    expect((await handler(req("/design-systems/noop-theme", "PATCH", { tokens, baseVersion: 0 }))).status).toBe(200);
+
+    // Тот же словарь в другом порядке ключей — семантически та же тема.
+    const shuffled = Object.fromEntries(Object.entries(tokens).reverse());
+    const response = await handler(req("/design-systems/noop-theme", "PATCH", { tokens: shuffled, fonts: [], icons: [], baseVersion: 1 }));
+    expect(response.status).toBe(200);
+    const body = await response.json() as PatchBody;
+    expect(body.noop).toBe(true);
+    expect(body.nextVersion).toBe(null);
+    expect(body.latestMetaVersion).toBe(1);
+    expect(body.diff.changed).toBe(false);
+    expect(versionCount(db, "noop-theme")).toBe(1);
+
+    // Следующий содержательный патч по-прежнему идёт от baseVersion 1.
+    expect((await handler(req("/design-systems/noop-theme", "PATCH", { tokens: { ...tokens, "color.brand": "#654321" }, baseVersion: 1 }))).status).toBe(200);
+    expect(versionCount(db, "noop-theme")).toBe(2);
+    db.close();
+  });
+
+  test("PATCH lists prototypes whose head revision pins an older theme version", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "stale-pins");
+    expect((await handler(req("/design-systems/stale-pins", "PATCH", { tokens: { "color.brand": "#111111" }, baseVersion: 0 }))).status).toBe(200);
+    new PrototypeRepo(db).create(customDoc("stale-proto", "stale-pins"));
+
+    const body = await (await handler(req("/design-systems/stale-pins", "PATCH", { tokens: { "color.brand": "#222222" }, baseVersion: 1 }))).json() as PatchBody;
+    expect(body.nextVersion).toBe(2);
+    expect(body.stalePins.total).toBe(1);
+    expect(body.stalePins.prototypes[0]).toMatchObject({ id: "stale-proto", pinnedVersion: 1 });
+    db.close();
+  });
+});
+
+describe("PATCH theme — sparse append-only операции (P6.2)", () => {
+  test("addTokens appends to the base version, never deletes and stays no-op for identical values", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "sparse-add");
+    expect((await handler(req("/design-systems/sparse-add", "PATCH", { tokens: { "color.brand": "#111111", "color.text": "#000000" }, baseVersion: 0 }))).status).toBe(200);
+
+    const body = await (await handler(req("/design-systems/sparse-add", "PATCH", { addTokens: { "color.accent": "#333333" }, baseVersion: 1 }))).json() as PatchBody;
+    expect(body.nextVersion).toBe(2);
+    // Удаление невозможно by construction: не переданные ключи остаются.
+    expect(body.tokens).toEqual({ "color.brand": "#111111", "color.text": "#000000", "color.accent": "#333333" });
+    expect(body.diff.tokens.removed).toEqual([]);
+
+    // Повтор того же значения — no-op, версия не растёт.
+    const repeat = await (await handler(req("/design-systems/sparse-add", "PATCH", { addTokens: { "color.accent": "#333333" }, baseVersion: 2 }))).json() as PatchBody;
+    expect(repeat.noop).toBe(true);
+    expect(versionCount(db, "sparse-add")).toBe(2);
+    db.close();
+  });
+
+  test("sparse resolution is CAS-bound to baseVersion and 409s on a value conflict instead of overwriting", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "sparse-cas");
+    expect((await handler(req("/design-systems/sparse-cas", "PATCH", { tokens: { "color.brand": "#111111" }, baseVersion: 0 }))).status).toBe(200);
+    expect((await handler(req("/design-systems/sparse-cas", "PATCH", { tokens: { "color.brand": "#111111", "color.text": "#000000" }, baseVersion: 1 }))).status).toBe(200);
+
+    // Устаревший baseVersion — обычный CAS-отказ, sparse его не обходит.
+    const stale = await handler(req("/design-systems/sparse-cas", "PATCH", { addTokens: { "color.accent": "#333333" }, baseVersion: 1 }));
+    expect(stale.status).toBe(409);
+    expect((await stale.json() as { error: { code: string; currentVersion: number } }).error).toMatchObject({ code: "version_conflict", currentVersion: 2 });
+
+    // Существующий ключ с другим значением — 409, а не тихая перезапись.
+    const conflict = await handler(req("/design-systems/sparse-cas", "PATCH", { addTokens: { "color.brand": "#999999" }, baseVersion: 2 }));
+    expect(conflict.status).toBe(409);
+    const error = await conflict.json() as { error: { code: string; issues: { path: string[]; existing: unknown; incoming: unknown }[] } };
+    expect(error.error.code).toBe("theme_append_conflict");
+    expect(error.error.issues[0]).toMatchObject({ path: ["addTokens", "color.brand"], existing: "#111111", incoming: "#999999" });
+    expect(versionCount(db, "sparse-cas")).toBe(2);
+    // Тема не изменилась.
+    expect((await (await handler(req("/design-systems/sparse-cas"))).json() as { tokens: Record<string, string> }).tokens["color.brand"]).toBe("#111111");
+    db.close();
+  });
+
+  test("addFonts/addIcons append by identity and conflict on a different definition", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "sparse-assets");
+    const fontA = await uploadAsset(handler, woff2(), "font/woff2");
+    const fontB = await uploadAsset(handler, (() => { const b = woff2(); b[8] = 1; return b; })(), "font/woff2");
+    const iconId = await uploadAsset(handler, png(), "image/png");
+    expect((await handler(req("/design-systems/sparse-assets", "PATCH", { fonts: [{ family: "Inter", src: fontA }], baseVersion: 0 }))).status).toBe(200);
+
+    const added = await (await handler(req("/design-systems/sparse-assets", "PATCH", { addFonts: [{ family: "Inter", src: fontA, weight: 700 }], addIcons: [{ name: "close", assetId: iconId }], baseVersion: 1 }))).json() as PatchBody;
+    expect(added.fonts).toHaveLength(2);
+    expect(added.icons).toHaveLength(1);
+
+    const conflict = await handler(req("/design-systems/sparse-assets", "PATCH", { addFonts: [{ family: "Inter", src: fontB }], baseVersion: 2 }));
+    expect(conflict.status).toBe(409);
+    expect((await conflict.json() as { error: { code: string } }).error.code).toBe("theme_append_conflict");
+
+    const iconConflict = await handler(req("/design-systems/sparse-assets", "PATCH", { addIcons: [{ name: "close", assetId: iconId, viewBox: "0 0 24 24" }], baseVersion: 2 }));
+    expect(iconConflict.status).toBe(409);
+    db.close();
+  });
+
+  test("sparse space.* additions are validated against the merged scale, not the partial body", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "sparse-space");
+    // База без space.*: одиночного `space.md` мало для полной шкалы → 422 на смердженном наборе.
+    const incomplete = await handler(req("/design-systems/sparse-space", "PATCH", { addTokens: { "space.md": "20px" }, baseVersion: 0 }));
+    expect(incomplete.status).toBe(422);
+
+    // Немонотонный полный набор одной append-операцией — тоже 422 (проверка идёт на результате).
+    const nonMonotonic = await handler(req("/design-systems/sparse-space", "PATCH", { addTokens: { ...fullSpace, "space.md": "40px" }, baseVersion: 0 }));
+    expect(nonMonotonic.status).toBe(422);
+    // Полный валидный набор одной append-операцией проходит.
+    expect((await handler(req("/design-systems/sparse-space", "PATCH", { addTokens: fullSpace, baseVersion: 0 }))).status).toBe(200);
+    // Неизвестный spacing-токен отсекается формой тела.
+    expect((await handler(req("/design-systems/sparse-space", "PATCH", { addTokens: { "space.5xl": "96px" }, baseVersion: 1 }))).status).toBe(422);
+    // Существующий ключ с другим значением — append-конфликт, а не молчаливая правка шкалы.
+    const overwrite = await handler(req("/design-systems/sparse-space", "PATCH", { addTokens: { "space.md": "40px" }, baseVersion: 1 }));
+    expect(overwrite.status).toBe(409);
+    db.close();
+  });
+
+  test("a collection cannot be sent in full and sparse form at once", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "sparse-exclusive");
+    const response = await handler(req("/design-systems/sparse-exclusive", "PATCH", { tokens: { "color.brand": "#111111" }, addTokens: { "color.text": "#000000" }, baseVersion: 0 }));
+    expect(response.status).toBe(422);
+    expect((await response.json() as { error: { code: string; issues: { path: string[] }[] } }).error.issues[0]!.path).toEqual(["addTokens"]);
+    db.close();
+  });
+});
+
+describe("PATCH theme — версионирование spacing-резолвера (P6.3)", () => {
+  const scaleOf = async (handler: (r: Request) => Promise<Response>, id: string) =>
+    (await (await handler(req(`/design-systems/${id}`))).json() as { resolvedSpaceScale: Record<string, string> }).resolvedSpaceScale;
+
+  test("existing (resolver 1) versions of retired builtins keep resolving byte-for-byte, new (resolver 2) ones merge onto the design-system base", async () => {
+    const { db, handler } = await setup();
+    // Ровно тот случай, где резолверы расходятся: база wireframe не каноническая.
+    insertDesignSystemVersion(db, "wireframe", 1, { tokens: { "space.md": "14px" }, fonts: [], icons: [] }, "legacy");
+    const legacy = await scaleOf(handler, "wireframe");
+    // Legacy-путь: оверрайд ложится на каноническую шкалу (md=14, lg=16 — база wireframe потеряна).
+    expect(legacy).toMatchObject({ md: "14px", lg: "16px", xl: "24px", "4xl": "64px" });
+
+    // Та же тема, записанная новым резолвером, сохраняет базу DS.
+    db.query("UPDATE design_system_versions SET spacing_resolver=2 WHERE system_id='wireframe' AND version=1").run();
+    expect(await scaleOf(handler, "wireframe")).toMatchObject({ md: "14px", lg: "24px", xl: "32px", "4xl": "80px" });
+    db.close();
+  });
+
+  test("a new theme version is written with resolver 2 and reports it on the version endpoint", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "resolver-new");
+    const body = await (await handler(req("/design-systems/resolver-new", "PATCH", { tokens: { ...fullSpace, "space.md": "20px", "space.lg": "24px", "space.xl": "32px", "space.2xl": "40px", "space.3xl": "56px", "space.4xl": "72px" }, baseVersion: 0 }))).json() as PatchBody;
+    expect(body.spacingResolver).toBe(2);
+    expect(db.query("SELECT spacing_resolver r FROM design_system_versions WHERE system_id='resolver-new' AND version=1").get()).toEqual({ r: 2 });
+    const version = await (await handler(req("/design-systems/resolver-new/versions/1"))).json() as { spacingResolver: number; resolvedSpaceScale: Record<string, string> };
+    expect(version.spacingResolver).toBe(2);
+    expect(version.resolvedSpaceScale).toMatchObject({ md: "20px", "4xl": "72px" });
+    db.close();
+  });
+
+  test("a full token patch that drops space.* inherits the base version's scale instead of silently changing it", async () => {
+    const { db, handler } = await setup();
+    await createCustomSystem(handler, "space-inherit");
+    const custom = { ...fullSpace, "space.md": "20px", "space.lg": "24px", "space.xl": "32px", "space.2xl": "40px", "space.3xl": "56px", "space.4xl": "72px" };
+    expect((await handler(req("/design-systems/space-inherit", "PATCH", { tokens: custom, baseVersion: 0 }))).status).toBe(200);
+
+    const body = await (await handler(req("/design-systems/space-inherit", "PATCH", { tokens: { "color.brand": "#111111" }, baseVersion: 1 }))).json() as PatchBody;
+    expect(body.inheritedSpaceTokens).toEqual(Object.keys(custom));
+    expect(body.tokens).toMatchObject({ "color.brand": "#111111", "space.md": "20px", "space.4xl": "72px" });
+    expect(body.resolvedSpaceScale).toMatchObject({ md: "20px", "4xl": "72px" });
+    expect(body.diff.tokens.removed).toEqual([]);
+    db.close();
+  });
+
+  test("EASYUI_THEME_RESOLVER_V2_DISABLED keeps writing resolver 1 and the legacy omission behaviour", async () => {
+    const { dir, db } = await setup();
+    const handler = createTestHandler(db, { dataDir: dir, spacingResolverV2Disabled: true });
+    await createCustomSystem(handler, "killswitch");
+    const custom = { ...fullSpace, "space.md": "20px", "space.lg": "24px", "space.xl": "32px", "space.2xl": "40px", "space.3xl": "56px", "space.4xl": "72px" };
+    expect((await handler(req("/design-systems/killswitch", "PATCH", { tokens: custom, baseVersion: 0 }))).status).toBe(200);
+    expect(db.query("SELECT spacing_resolver r FROM design_system_versions WHERE system_id='killswitch' AND version=1").get()).toEqual({ r: 1 });
+
+    const body = await (await handler(req("/design-systems/killswitch", "PATCH", { tokens: { "color.brand": "#111111" }, baseVersion: 1 }))).json() as PatchBody;
+    expect(body.spacingResolver).toBe(1);
+    expect(body.inheritedSpaceTokens).toEqual([]);
+    expect(body.tokens).toEqual({ "color.brand": "#111111" });
+
+    const features = await (await handler(req("/capabilities"))).json() as { features: Record<string, boolean> };
+    expect(features.features).toMatchObject({ themeSpacingResolverV2: false, themeDryRun: true, themeSparseOps: true });
     db.close();
   });
 });

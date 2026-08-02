@@ -255,7 +255,8 @@ export class ScreenshotService {
       const themeContent = full.designSystemMetaVersion == null
         ? getLatestDesignSystemContent(this.deps.db, designSystem)
         : getDesignSystemVersion(this.deps.db, designSystem, full.designSystemMetaVersion);
-      return resolveSpacingScale(designSystem, themeContent?.tokens ?? {});
+      // Резолвер — свойство пиннутой версии темы (миграция v23): старые версии остаются на legacy-пути.
+      return resolveSpacingScale(designSystem, themeContent?.tokens ?? {}, themeContent?.spacingResolver);
     })() : undefined;
     const geometryRoleKeys = opts.probe === "geometry" ? geometryRoleKeysOf(full.doc, screenId) : undefined;
     const theme = opts.theme === "dark" ? "dark" : "light";
@@ -299,7 +300,7 @@ export class ScreenshotService {
     const query = new URLSearchParams({ theme, dsf: String(dsf) });
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/${version}?${query}`;
     // Компонентная геометрия (P1b): шкала — из последней темы, ролей экрана у одиночного компонента нет.
-    const resolvedSpaceScale = opts.probe ? resolveSpacingScale(dto.designSystem, themeContent.tokens) : undefined;
+    const resolvedSpaceScale = opts.probe ? resolveSpacingScale(dto.designSystem, themeContent.tokens, themeContent.spacingResolver) : undefined;
     const {jobId}=this.push({ kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}) });
     return {jobId,expected};
   }
@@ -335,7 +336,7 @@ export class ScreenshotService {
     const allowedUrls = this.draftComponentAllowedUrls(id, draft.sourceHash, draft.assetIds, draft.designSystem);
     const query = new URLSearchParams({ theme, dsf: String(dsf) });
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/draft?${query}`;
-    const resolvedSpaceScale = opts.probe ? resolveSpacingScale(draft.designSystem, themeContent.tokens) : undefined;
+    const resolvedSpaceScale = opts.probe ? resolveSpacingScale(draft.designSystem, themeContent.tokens, themeContent.spacingResolver) : undefined;
     const { jobId } = this.push({
       kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false,
       draft: { name: repo.row(id).name, designSystem: draft.designSystem, bundleUrl, ...(meta.propsJsonSchema !== undefined ? { propsJsonSchema: meta.propsJsonSchema } : {}), ...(meta.examples !== undefined ? { examples: meta.examples } : {}) },

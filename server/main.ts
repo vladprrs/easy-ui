@@ -45,6 +45,12 @@ export type HandlerOptions = {
   reuseGateMode?: ReuseGateMode;
   /** Kill-switch P8: `EASYUI_VALIDATE_DISABLED=1` гасит POST /api/components/:id/validate (404 + features.componentValidate=false). */
   validateDisabled?: boolean;
+  /**
+   * Kill-switch P6.3: `EASYUI_THEME_RESOLVER_V2_DISABLED=1` — новые версии тем пишутся с legacy-резолвером
+   * spacing-шкалы (`spacing_resolver=1`) и без наследования выпавших `space.*`
+   * (features.themeSpacingResolverV2=false). Существующие версии не затрагиваются в любом случае.
+   */
+  spacingResolverV2Disabled?: boolean;
   /** Optional reverse-proxy compatibility barrier; application auth remains cookie-based. */
   legacyBasicAuth?: string;
   /** @deprecated test/backward-compatible alias for legacyBasicAuth. */
@@ -174,7 +180,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{disabled:options.validateDisabled===true}));
         if(segments[1]==="compositions") return finish(await routeCompositions(request,db,segments.slice(1),principal));
         if(segments[1]==="assets") return finish(await routeAssets(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
-        if(segments[1]==="design-systems") return finish(await routeDesignSystems(request,db,segments.slice(1),principal));
+        if(segments[1]==="design-systems") return finish(await routeDesignSystems(request,db,segments.slice(1),principal,{spacingResolverV2Disabled:options.spacingResolverV2Disabled===true}));
         if(segments[1]==="catalog"&&segments[2]==="manifest"&&segments.length===3) { if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed"); const {designSystem}=parseQuery(catalogManifestQuerySchema,requestUrl.searchParams); const system=designSystem===undefined?null:getIncludingRetired(db,designSystem); if(designSystem!==undefined&&(!system||system.retired)) throw new ApiError(404,"not_found","Design system not found"); return finish(json({components:catalogManifest(db,designSystem)},200,noStore)); }
         if(segments[1]==="catalog"&&segments[2]==="library"&&segments.length===3) return finish(routeLibraryCatalog(request,db));
         if(segments[1]==="catalog"&&segments[2]==="usages"&&segments.length===3) return finish(routeCatalogUsages(request,db));
@@ -187,7 +193,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         if(segments[1]==="shims"&&segments[2]!==undefined&&/^v[1-9]\d*$/.test(segments[2])) return finish(routeShims(request,segments.slice(1)));
         // Режим гейта — часть discovery: `/api/capabilities` обязан рапортовать фактическую
         // фазу процесса, иначе агент узнаёт её только сломав собственный create.
-        const meta=routeMeta(request,db,segments.slice(1),options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{validateDisabled:options.validateDisabled===true}); if(meta) return finish(meta);
+        const meta=routeMeta(request,db,segments.slice(1),options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{validateDisabled:options.validateDisabled===true,spacingResolverV2Disabled:options.spacingResolverV2Disabled===true}); if(meta) return finish(meta);
         throw new ApiError(404,"not_found","API route not found");
       }
       if(staticResolution) return finish(await serveResolvedStatic(request,staticResolution));
@@ -217,7 +223,7 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     const captureHost=host==="0.0.0.0"||host==="::"?"127.0.0.1":host;
     const screenshots=new ScreenshotServiceImpl({db,dataDir,serveDist,captureOrigin:`http://${captureHost}:${port}`,chromiumAvailable:chromiumAvailable(),runJob:spawnWorker});
     const visual=new VisualServiceImpl({db,dataDir,screenshots});
-    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,reuseGateMode:resolveReuseGateMode(process.env.REUSE_GATE),validateDisabled:process.env.EASYUI_VALIDATE_DISABLED==="1",legacyBasicAuth:resolveLegacyBasicAuthEnv(),publicOrigin,screenshots,visual})});
+    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,reuseGateMode:resolveReuseGateMode(process.env.REUSE_GATE),validateDisabled:process.env.EASYUI_VALIDATE_DISABLED==="1",spacingResolverV2Disabled:process.env.EASYUI_THEME_RESOLVER_V2_DISABLED==="1",legacyBasicAuth:resolveLegacyBasicAuthEnv(),publicOrigin,screenshots,visual})});
     return {server,db};
   } catch(error) { db.close(); throw error; }
 }

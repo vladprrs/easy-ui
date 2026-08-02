@@ -53,7 +53,7 @@ export const CAPABILITY_CONDITIONS = ["$and", "$or", "$state", "$item", "$index"
  * env внутри роута сделало бы discovery и гейт двумя источниками истины, а тесты в общем
  * процессе `bun test` мутировали бы друг другу глобальный env.
  */
-export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean } = {}): JsonObject {
+export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean; spacingResolverV2Disabled?: boolean } = {}): JsonObject {
   const systems = listActiveDesignSystems(db);
   return {
     apiVersion: 1,
@@ -89,7 +89,9 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
     designSystems: systems.map((system) => system.id),
     resolvedSpaceScales: Object.fromEntries(systems.map((system) => {
       const theme = getLatestDesignSystemContent(db, system.id);
-      return [system.id, resolveSpacingScale(system.id, theme.tokens)];
+      // Резолвер — свойство самой версии темы (миграция v23): discovery обязан показывать ту же
+      // шкалу, что применит рендер, а не результат текущего дефолта.
+      return [system.id, resolveSpacingScale(system.id, theme.tokens, theme.spacingResolver)];
     })),
     regions: ["statusBar", "header", "footer"],
     features: {
@@ -121,6 +123,15 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       prototypeHeadTracking: true,
       // P9: readiness-отчёт несёт `profile` (product|service).
       readinessProfile: true,
+      // P6 (план 2026-08-02): PATCH темы умеет `dryRun` (валидация + дифф + resolvedSpaceScale
+      // без записи) и no-op-детекцию (идентичная тема версию не создаёт).
+      themeDryRun: true,
+      // P6.2: sparse-операции `addTokens`/`addFonts`/`addIcons` поверх baseVersion (appendOnly).
+      themeSparseOps: true,
+      // P6.3: новые версии темы пишутся с резолвером spacing-шкалы 2 (мердж на базовую шкалу DS
+      // + наследование выпавших `space.*`); false при EASYUI_THEME_RESOLVER_V2_DISABLED=1.
+      // Существующие версии в любом случае резолвятся своим записанным резолвером.
+      themeSpacingResolverV2: options.spacingResolverV2Disabled !== true,
     },
     reuseGate: {
       mode: reuseGateMode,
@@ -304,7 +315,7 @@ const jsonText = (body: string): Response =>
  * `reuseGateMode` едет от `HandlerOptions` (`server/main.ts`). Дефолт здесь существует только
  * ради вызывающих, которым фаза не важна (схемы и OpenAPI её не касаются).
  */
-export function routeMeta(request: Request, db: Database, segments: string[], reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean } = {}): Response | null {
+export function routeMeta(request: Request, db: Database, segments: string[], reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean; spacingResolverV2Disabled?: boolean } = {}): Response | null {
   const requireGet = () => { if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed"); };
   if (segments[0] === "openapi.json" && segments.length === 1) {
     requireGet();

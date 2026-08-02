@@ -509,16 +509,57 @@ const themeFontSchema = z.object({ family: z.string(), src: z.string(), weight: 
 const themeIconSchema = z.object({ name: z.string(), assetId: z.string(), viewBox: z.string().optional(), themes: z.object({ light: z.string().optional(), dark: z.string().optional() }).optional() });
 export const themeContentSchema = z.object({ tokens: themeTokensSchema, fonts: z.array(themeFontSchema), icons: z.array(themeIconSchema) });
 
+/**
+ * Версия алгоритма резолва spacing-шкалы, записанная в строке версии темы (миграция v23,
+ * план 2026-08-02 P6.3): `1` — legacy (оверрайды и фолбэк на канонической шкале), `2` — фикшеный
+ * мердж на базовую шкалу DS. Существующие версии остаются на `1` байт-в-байт.
+ */
+const spacingResolverSchema = z.union([z.literal(1), z.literal(2)]);
+const themeDiffSchema = z.object({
+  tokens: z.object({
+    added: themeTokensSchema,
+    changed: z.record(z.string(), z.object({ from: tokenValueContractSchema, to: tokenValueContractSchema })),
+    removed: z.array(z.string()),
+  }),
+  fonts: z.object({ added: z.array(themeFontSchema), removed: z.array(themeFontSchema) }),
+  icons: z.object({ added: z.array(themeIconSchema), removed: z.array(themeIconSchema) }),
+  changed: z.boolean(),
+});
+
 export const patchDesignSystemThemeContract = registerContract({
   method: "PATCH",
   path: "/api/design-systems/{id}",
-  summary: "Append an immutable theme version (tokens/fonts/icons) to a custom design system (CAS on baseVersion).",
-  requestSchema: z.object({ tokens: themeTokensSchema.optional(), fonts: z.array(themeFontSchema).optional(), icons: z.array(themeIconSchema).optional(), baseVersion: z.number().int().min(0) }),
-  responseSchema: z.object({ id: z.string(), latestMetaVersion: z.number().nullable() }).and(themeContentSchema),
+  summary:
+    "Append an immutable theme version (tokens/fonts/icons) to a custom design system (CAS on baseVersion). " +
+    "`tokens`/`fonts`/`icons` replace a collection; `addTokens`/`addFonts`/`addIcons` are append-only operations resolved against baseVersion " +
+    "(existing entry with a different value → 409 theme_append_conflict; deletion is impossible — use the full PATCH) and are mutually exclusive with their full counterparts. " +
+    "`dryRun: true` validates and returns the diff plus the resulting resolvedSpaceScale without writing a version. " +
+    "A patch whose result equals baseVersion creates no version (`noop: true`, `nextVersion: null`). " +
+    "New versions are written with spacingResolver 2 (spacing overrides merge onto the design system's own base scale, and a full token patch that drops `space.*` inherits the base version's scale — reported in `inheritedSpaceTokens`); " +
+    "EASYUI_THEME_RESOLVER_V2_DISABLED=1 keeps writing resolver 1. `stalePins` lists prototypes whose head revision pins an older theme version.",
+  requestSchema: z.object({
+    tokens: themeTokensSchema.optional(), fonts: z.array(themeFontSchema).optional(), icons: z.array(themeIconSchema).optional(),
+    addTokens: themeTokensSchema.optional(), addFonts: z.array(themeFontSchema).optional(), addIcons: z.array(themeIconSchema).optional(),
+    dryRun: z.boolean().optional(),
+    baseVersion: z.number().int().min(0),
+  }),
+  responseSchema: z.object({
+    id: z.string(), latestMetaVersion: z.number().nullable(),
+    resolvedSpaceScale: spaceScaleSchema,
+    dryRun: z.boolean(), noop: z.boolean(), nextVersion: z.number().nullable(),
+    spacingResolver: spacingResolverSchema,
+    diff: themeDiffSchema,
+    inheritedSpaceTokens: z.array(z.string()),
+    stalePins: z.object({
+      total: z.number(), limit: z.number(),
+      prototypes: z.array(z.object({ id: z.string(), name: z.string(), pinnedVersion: z.number().nullable() })),
+    }),
+  }).and(themeContentSchema),
   errors: [
     { status: 404, code: "not_found" },
     { status: 405, code: "method_not_allowed", description: "builtin themes are immutable" },
     { status: 409, code: "version_conflict" },
+    { status: 409, code: "theme_append_conflict", description: "append-only operation hit an existing entry with a different value" },
     { status: 409, code: "design_system_retired" },
     { status: 422, code: "validation_failed" },
   ],
@@ -527,8 +568,11 @@ export const patchDesignSystemThemeContract = registerContract({
 export const getDesignSystemVersionContract = registerContract({
   method: "GET",
   path: "/api/design-systems/{id}/versions/{version}",
-  summary: "Read an immutable design-system theme version.",
-  responseSchema: z.object({ systemId: z.string(), version: z.number(), createdAt: z.string() }).and(themeContentSchema),
+  summary: "Read an immutable design-system theme version, including the spacing resolver it was written with and the scale it resolves to.",
+  responseSchema: z.object({
+    systemId: z.string(), version: z.number(), createdAt: z.string(),
+    spacingResolver: spacingResolverSchema, resolvedSpaceScale: spaceScaleSchema,
+  }).and(themeContentSchema),
   errors: [{ status: 404, code: "not_found" }],
 });
 
@@ -1883,6 +1927,12 @@ export const capabilitiesResponseSchema = z.object({
     prototypeHeadTracking: z.boolean(),
     /** Readiness-отчёт несёт `profile` (product|service) — план 2026-08-02 P9. */
     readinessProfile: z.boolean(),
+    /** PATCH темы умеет `dryRun` и no-op-детекцию (план 2026-08-02 P6.1). */
+    themeDryRun: z.boolean(),
+    /** Sparse-операции темы `addTokens`/`addFonts`/`addIcons` (план 2026-08-02 P6.2). */
+    themeSparseOps: z.boolean(),
+    /** Новые версии темы пишутся с резолвером spacing-шкалы 2; false при EASYUI_THEME_RESOLVER_V2_DISABLED=1 (P6.3). */
+    themeSpacingResolverV2: z.boolean(),
   }),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`

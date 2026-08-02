@@ -1,16 +1,23 @@
 import type {Database} from "bun:sqlite";
 import {builtinCatalogHashFor} from "../builtinHash";
 import {catalogDefinitionDescriptor,getDesignSystemVersion,getLatestDesignSystemContent,getIncludingRetired,hostPrimitiveDescriptors,insertDesignSystemVersion,latestDesignSystemMetaVersion,listActiveDesignSystems,type RegisteredDesignSystem} from "../designSystems";
-import {parseThemePatch,validateThemeAssets,type ThemeContent} from "../designSystemsMeta";
+import {applySparsePatch,inheritSpaceTokens,parseThemePatch,spaceTokenIssues,themeContentEqual,themeDiff,validateThemeAssets,type ThemeContent} from "../designSystemsMeta";
 import {ApiError,json,noStore,readJson} from "../http";
-import {resolveSpacingScale} from "../../src/designSystems/spacingScale";
+import {CURRENT_SPACING_RESOLVER,LEGACY_SPACING_RESOLVER,resolveSpacingScale,type SpacingResolver} from "../../src/designSystems/spacingScale";
 import type {Principal} from "../auth";
 import {requireResourceOwner,requireUser} from "../authorization";
 import {writeAuditEvent} from "../audit";
 
-function summary(db:Database,system:RegisteredDesignSystem) {
-  const theme=getLatestDesignSystemContent(db,system.id);
-  const resolvedSpaceScale=resolveSpacingScale(system.id,theme.tokens);
+/** Опции роута; env читается один раз на входе процесса (см. server/main.ts), как у reuseGateMode. */
+export type DesignSystemRouteOptions={
+  /** Kill-switch P6.3: `EASYUI_THEME_RESOLVER_V2_DISABLED=1` — новые версии тем пишутся с legacy-резолвером и без наследования `space.*`. */
+  spacingResolverV2Disabled?:boolean;
+};
+
+type ThemeView=ThemeContent&{latestMetaVersion:number|null;spacingResolver:SpacingResolver};
+
+function summaryOf(system:RegisteredDesignSystem,theme:ThemeView) {
+  const resolvedSpaceScale=resolveSpacingScale(system.id,theme.tokens,theme.spacingResolver);
   return {
     id:system.id,name:system.name,description:system.description,
     retired:system.retired,
@@ -21,6 +28,23 @@ function summary(db:Database,system:RegisteredDesignSystem) {
     latestMetaVersion:theme.latestMetaVersion,
     tokens:theme.tokens,fonts:theme.fonts,icons:theme.icons,
   };
+}
+
+function summary(db:Database,system:RegisteredDesignSystem) {
+  return summaryOf(system,getLatestDesignSystemContent(db,system.id));
+}
+
+/**
+ * Прототипы этой системы, чья головная ревизия пинует устаревшую версию темы (P6.4). Дёшево —
+ * один join по головным ревизиям; список ограничен, полный размер отдаётся счётчиком.
+ */
+const STALE_PIN_LIMIT=50;
+function stalePins(db:Database,systemId:string,currentVersion:number):{total:number;limit:number;prototypes:{id:string;name:string;pinnedVersion:number|null}[]} {
+  const rows=db.query(`SELECT p.id id,p.name name,r.design_system_meta_version pinnedVersion
+    FROM prototypes p JOIN prototype_revisions r ON r.prototype_id=p.id AND r.rev=p.head_rev
+    WHERE p.design_system=? AND (r.design_system_meta_version IS NULL OR r.design_system_meta_version<?)
+    ORDER BY p.id`).all(systemId,currentVersion) as {id:string;name:string;pinnedVersion:number|null}[];
+  return {total:rows.length,limit:STALE_PIN_LIMIT,prototypes:rows.slice(0,STALE_PIN_LIMIT)};
 }
 
 function validate(value:unknown):{id:string;name:string;description:string} {
@@ -40,23 +64,66 @@ async function readObjectBody(request:Request):Promise<unknown> {
   catch(error) { if(error instanceof ApiError&&error.code==="invalid_json") throw new ApiError(400,"invalid_request","Request body must be valid JSON"); throw error; }
 }
 
-// PATCH a custom system's theme: creates the immutable version baseVersion+1 (CAS on latest).
-async function patchTheme(request:Request,db:Database,system:RegisteredDesignSystem):Promise<Response> {
+/**
+ * PATCH темы кастомной системы: создаёт неизменяемую версию `baseVersion+1` (CAS на latest).
+ *
+ * План 2026-08-02 P6:
+ *  - `dryRun: true` — валидация, дифф и итоговая `resolvedSpaceScale` без записи версии;
+ *  - no-op detection — контент, семантически равный `baseVersion`, версию не создаёт;
+ *  - sparse `addTokens`/`addFonts`/`addIcons` — append-only мердж поверх `baseVersion`,
+ *    конфликт значения → `409 theme_append_conflict`;
+ *  - под резолвером 2 полный патч токенов без `space.*` наследует шкалу базовой версии
+ *    (дыра «а») и мердж идёт на базовую шкалу DS (дыра «б», версионируется в строке версии).
+ */
+async function patchTheme(request:Request,db:Database,system:RegisteredDesignSystem,options:DesignSystemRouteOptions):Promise<Response> {
   if(system.builtinProvider!==null) throw new ApiError(405,"method_not_allowed","Builtin design-system themes are immutable");
   const patch=parseThemePatch(await readObjectBody(request));
   const latest=latestDesignSystemMetaVersion(db,system.id)??0;
   if(patch.baseVersion!==latest) throw new ApiError(409,"version_conflict","Design-system theme version has changed",{currentVersion:latest});
-  const previous:ThemeContent=latest===0?{tokens:{},fonts:[],icons:[]}:getDesignSystemVersion(db,system.id,latest)!;
+  const previousRow=latest===0?null:getDesignSystemVersion(db,system.id,latest)!;
+  const previous:ThemeContent=previousRow??{tokens:{},fonts:[],icons:[]};
+  const resolverV2=options.spacingResolverV2Disabled!==true;
+
+  // Append-only слой резолвится строго против baseVersion — тот же снимок, что прошёл CAS.
+  const appended=applySparsePatch(previous,patch);
+  if(appended.conflicts.length) {
+    throw new ApiError(409,"theme_append_conflict",`Append-only theme operation conflicts with base version ${latest} (policy appendOnly: existing entries are never overwritten)`,{
+      currentVersion:latest,
+      issues:appended.conflicts.map((conflict)=>({path:conflict.path,message:conflict.message,existing:conflict.existing,incoming:conflict.incoming})),
+    });
+  }
   // PATCH semantics: a provided collection replaces the previous one; an omitted one is inherited.
-  const content:ThemeContent={
-    tokens:patch.tokens??previous.tokens,
-    fonts:patch.fonts??previous.fonts,
-    icons:patch.icons??previous.icons,
-  };
+  let tokens=patch.tokens??appended.content.tokens;
+  let inheritedSpaceTokens:string[]=[];
+  if(patch.tokens&&resolverV2) { const inherited=inheritSpaceTokens(previous,patch.tokens); tokens=inherited.tokens; inheritedSpaceTokens=inherited.inherited; }
+  const content:ThemeContent={tokens,fonts:patch.fonts??appended.content.fonts,icons:patch.icons??appended.content.icons};
+  // Полнота/монотонность шкалы для sparse-режима проверяется на смердженном наборе: тело
+  // append-операции по определению частично.
+  if(patch.addTokens&&Object.keys(patch.addTokens).some((key)=>key.startsWith("space."))) {
+    const issues=spaceTokenIssues(content.tokens);
+    if(issues.length) throw new ApiError(422,"validation_failed","Design-system theme is invalid",{issues:issues.map((issue)=>({path:["tokens",...issue.path],message:`${issue.message} (checked on the merged base ${latest} + addTokens result)`}))});
+  }
   validateThemeAssets(db,content);
-  const version=latest+1; const at=new Date().toISOString();
-  db.transaction(()=>{ insertDesignSystemVersion(db,system.id,version,content,at); db.query("UPDATE design_systems SET updated_at=? WHERE id=?").run(at,system.id); })();
-  return json(summary(db,getIncludingRetired(db,system.id)!),200,noStore);
+
+  const noop=themeContentEqual(previous,content);
+  const diff=themeDiff(previous,content);
+  // No-op не создаёт версию, поэтому и резолвер остаётся тот, что записан у baseVersion.
+  const spacingResolver:SpacingResolver=noop
+    ?(previousRow?.spacingResolver??LEGACY_SPACING_RESOLVER)
+    :(resolverV2?CURRENT_SPACING_RESOLVER:LEGACY_SPACING_RESOLVER);
+  const dryRun=patch.dryRun===true;
+  const nextVersion=noop?null:latest+1;
+  if(!dryRun&&nextVersion!==null) {
+    const at=new Date().toISOString();
+    db.transaction(()=>{ insertDesignSystemVersion(db,system.id,nextVersion,content,at,spacingResolver); db.query("UPDATE design_systems SET updated_at=? WHERE id=?").run(at,system.id); })();
+  }
+  const appliedVersion=dryRun?latest:(nextVersion??latest);
+  const view:ThemeView={...content,latestMetaVersion:appliedVersion===0?null:appliedVersion,spacingResolver};
+  return json({
+    ...summaryOf(getIncludingRetired(db,system.id)!,view),
+    dryRun,noop,nextVersion,spacingResolver,diff,inheritedSpaceTokens,
+    stalePins:stalePins(db,system.id,appliedVersion),
+  },200,noStore);
 }
 
 // Артефакты, удерживающие систему живой. Ретайр — не удаление, поэтому пустоту считаем по
@@ -94,7 +161,7 @@ function retire(db:Database,id:string,principal:Principal):Response {
   return new Response(null,{status:204,headers:noStore});
 }
 
-export async function routeDesignSystems(request:Request,db:Database,segments:string[],principal:Principal):Promise<Response> {
+export async function routeDesignSystems(request:Request,db:Database,segments:string[],principal:Principal,options:DesignSystemRouteOptions={}):Promise<Response> {
   // segments: ["design-systems", id?, "versions"?, v?]
   if(segments.length>=3) {
     if(segments.length===4&&segments[2]==="versions") {
@@ -103,7 +170,8 @@ export async function routeDesignSystems(request:Request,db:Database,segments:st
       const raw=segments[3]!; if(!/^[1-9][0-9]*$/.test(raw)) throw new ApiError(404,"not_found","Design system version not found");
       const content=getDesignSystemVersion(db,system.id,Number(raw));
       if(!content) throw new ApiError(404,"not_found","Design system version not found");
-      return json({systemId:system.id,version:content.version,tokens:content.tokens,fonts:content.fonts,icons:content.icons,createdAt:content.createdAt},200,noStore);
+      return json({systemId:system.id,version:content.version,tokens:content.tokens,fonts:content.fonts,icons:content.icons,createdAt:content.createdAt,
+        spacingResolver:content.spacingResolver,resolvedSpaceScale:resolveSpacingScale(system.id,content.tokens,content.spacingResolver)},200,noStore);
     }
     throw new ApiError(404,"not_found","Design system not found");
   }
@@ -120,6 +188,6 @@ export async function routeDesignSystems(request:Request,db:Database,segments:st
     return json(summary(db,getIncludingRetired(db,input.id)!),201,{...noStore,location:`/api/design-systems/${input.id}`});
   }
   if(request.method==="DELETE"&&id) return retire(db,id,principal);
-  if(request.method==="PATCH"&&id) { requireResourceOwner(db,"design_systems",id,principal); const system=getIncludingRetired(db,id); if(!system) throw new ApiError(404,"not_found","Design system not found"); if(system.retired) throw new ApiError(409,"design_system_retired","Retired design-system themes cannot be changed"); return patchTheme(request,db,system); }
+  if(request.method==="PATCH"&&id) { requireResourceOwner(db,"design_systems",id,principal); const system=getIncludingRetired(db,id); if(!system) throw new ApiError(404,"not_found","Design system not found"); if(system.retired) throw new ApiError(409,"design_system_retired","Retired design-system themes cannot be changed"); return patchTheme(request,db,system,options); }
   throw new ApiError(405,"method_not_allowed","Method not allowed");
 }

@@ -4,6 +4,7 @@ import { hostPrimitiveDefinitions } from "../src/catalog/hostPrimitives/definiti
 import { designSystems } from "../src/designSystems";
 import { z } from "zod";
 import type { ThemeContent } from "./designSystemsMeta";
+import { LEGACY_SPACING_RESOLVER, type SpacingResolver } from "../src/designSystems/spacingScale";
 import { ApiError } from "./http";
 
 export interface RegisteredDesignSystem {
@@ -63,33 +64,35 @@ export function latestDesignSystemMetaVersion(db:Database,systemId:string):numbe
   return row.v;
 }
 
-type VersionRow={version:number;tokens_json:string;fonts_json:string;icons_json:string;created_at:string};
-function parseVersionRow(row:VersionRow):ThemeContent&{version:number;createdAt:string} {
+type VersionRow={version:number;tokens_json:string;fonts_json:string;icons_json:string;created_at:string;spacing_resolver:number};
+function parseVersionRow(row:VersionRow):ThemeContent&{version:number;createdAt:string;spacingResolver:SpacingResolver} {
   return {
     version:row.version,
     tokens:JSON.parse(row.tokens_json) as ThemeContent["tokens"],
     fonts:JSON.parse(row.fonts_json) as ThemeContent["fonts"],
     icons:JSON.parse(row.icons_json) as ThemeContent["icons"],
     createdAt:row.created_at,
+    // Колонка v23: домиграционные строки забэкфилены `1` (legacy-резолвер), новые пишутся `2`.
+    spacingResolver:row.spacing_resolver===2?2:LEGACY_SPACING_RESOLVER,
   };
 }
 
 /** Immutable content of a specific theme version, or null when absent. */
-export function getDesignSystemVersion(db:Database,systemId:string,version:number):(ThemeContent&{version:number;createdAt:string})|null {
-  const row=db.query("SELECT version,tokens_json,fonts_json,icons_json,created_at FROM design_system_versions WHERE system_id=? AND version=?").get(systemId,version) as VersionRow|null;
+export function getDesignSystemVersion(db:Database,systemId:string,version:number):(ThemeContent&{version:number;createdAt:string;spacingResolver:SpacingResolver})|null {
+  const row=db.query("SELECT version,tokens_json,fonts_json,icons_json,created_at,spacing_resolver FROM design_system_versions WHERE system_id=? AND version=?").get(systemId,version) as VersionRow|null;
   return row?parseVersionRow(row):null;
 }
 
 /** Content of the latest theme version; empty theme + null version when the system has none. */
-export function getLatestDesignSystemContent(db:Database,systemId:string):ThemeContent&{latestMetaVersion:number|null} {
+export function getLatestDesignSystemContent(db:Database,systemId:string):ThemeContent&{latestMetaVersion:number|null;spacingResolver:SpacingResolver} {
   const latest=latestDesignSystemMetaVersion(db,systemId);
-  if(latest===null) return {...emptyTheme(),latestMetaVersion:null};
+  if(latest===null) return {...emptyTheme(),latestMetaVersion:null,spacingResolver:LEGACY_SPACING_RESOLVER};
   const content=getDesignSystemVersion(db,systemId,latest)!;
-  return {tokens:content.tokens,fonts:content.fonts,icons:content.icons,latestMetaVersion:latest};
+  return {tokens:content.tokens,fonts:content.fonts,icons:content.icons,latestMetaVersion:latest,spacingResolver:content.spacingResolver};
 }
 
 /** Appends an immutable theme version. Caller enforces CAS + validation. */
-export function insertDesignSystemVersion(db:Database,systemId:string,version:number,content:ThemeContent,at:string):void {
-  db.query("INSERT INTO design_system_versions (system_id,version,tokens_json,fonts_json,icons_json,created_at) VALUES (?,?,?,?,?,?)")
-    .run(systemId,version,JSON.stringify(content.tokens),JSON.stringify(content.fonts),JSON.stringify(content.icons),at);
+export function insertDesignSystemVersion(db:Database,systemId:string,version:number,content:ThemeContent,at:string,spacingResolver:SpacingResolver=LEGACY_SPACING_RESOLVER):void {
+  db.query("INSERT INTO design_system_versions (system_id,version,tokens_json,fonts_json,icons_json,created_at,spacing_resolver) VALUES (?,?,?,?,?,?,?)")
+    .run(systemId,version,JSON.stringify(content.tokens),JSON.stringify(content.fonts),JSON.stringify(content.icons),at,spacingResolver);
 }
