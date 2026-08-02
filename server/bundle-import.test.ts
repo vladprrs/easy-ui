@@ -7,6 +7,7 @@ import { createHandler } from "./main";
 import { createTestHandler } from "./test-auth";
 import { UserRepo } from "./users";
 import { importReportSchema, type ImportReport } from "../src/bundle/schema";
+import { COMPUTED_ENTRIES_LIMIT } from "../src/prototype/schema";
 
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
@@ -519,6 +520,50 @@ describe("bundle import", () => {
     expect(itemFor(again.report, "prototype", "bundle-composed")!.action).toBe("skipped");
     a.db.close(); b.db.close();
   }, 120_000);
+
+  // План 2026-08-02 (computed-state), T4: `doc.computed` — обычное поле документа, поэтому
+  // экспорт/импорт его не теряет. Второй assert фиксирует существующий класс поведения
+  // (как у `flows`): импортёр перепарсивает документ **input**-схемой (`importer.ts:442`),
+  // то есть авторские лимиты применяются к уже сохранённому документу.
+  test("round-trip: computed survives export/import, and authoring limits are re-applied on import", async () => {
+    const a = await makeServer("a", ["alice"]);
+    await seed(a, "alice");
+    const computed = {
+      cartCount: { op: "count", from: "/cart" },
+      cartSubtotal: { op: "sumProduct", from: "/cart", fields: ["price", "qty"] },
+      cartTotal: { op: "add", terms: ["/cartSubtotal", "/shippingFee", -100] },
+    };
+    const computedDoc = {
+      version: 1, id: "bundle-computed", name: "Bundle computed", designSystem: "bundle-ds", device: "mobile", startScreen: "cart",
+      state: { cart: [{ price: 100, qty: 2 }], shippingFee: 500 },
+      computed,
+      screens: [{ id: "cart", name: "Cart", spec: { root: "img", elements: { img: { type: "Image", props: { src: "/cart.png", alt: "cart" } } } } }],
+    };
+    expect((await a.call("alice", "POST", "/prototypes", { doc: computedDoc })).status).toBe(201);
+    const zip = await exportZip(a, "alice", "/prototypes/bundle-computed/export");
+
+    const b = await makeServer("b", ["bob"]);
+    const imported = await importZip(b, "bob", zip);
+    expect(imported.status).toBe(200);
+    expect(itemFor(imported.report, "prototype", "bundle-computed")).toMatchObject({ action: "created" });
+    const stored = (b.db.query("SELECT doc FROM prototype_revisions WHERE prototype_id='bundle-computed' AND rev=1").get() as { doc: string }).doc;
+    expect((JSON.parse(stored) as { computed: unknown }).computed).toEqual(computed);
+
+    // Тот же бандл с 21 записью (лимит авторинга — 20) отвергается на импорте.
+    const entries = unzipSync(zip);
+    const docPath = "prototypes/bundle-computed.json";
+    const overLimit = JSON.parse(strFromU8(entries[docPath]!)) as { computed: Record<string, unknown> };
+    overLimit.computed = Object.fromEntries(
+      Array.from({ length: COMPUTED_ENTRIES_LIMIT + 1 }, (_, index) => [`c${index}`, { op: "count", from: "/cart" }]),
+    );
+    entries[docPath] = strToU8(JSON.stringify(overLimit));
+    const rejected = await importZip(b, "bob", zipSync(entries));
+    expect(rejected.report.ok).toBe(false);
+    const item = itemFor(rejected.report, "prototype", "bundle-computed")!;
+    expect(item.action).toBe("error");
+    expect(item.detail).toContain("computed");
+    a.db.close(); b.db.close();
+  }, 60_000);
 
   test("dry-run predicts the composition without writing it", async () => {
     const a = await makeServer("a", ["alice"]);

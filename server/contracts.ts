@@ -835,6 +835,8 @@ export const prototypeRevisionDiffContract = registerContract({
     to: z.strictObject({ rev: z.number().int().positive(), message: diffValueSchema, createdAt: z.string() }),
     doc: z.union([z.array(docDiffFieldSchema), omittedSchema]).optional(),
     state: z.union([diffMapSchema, omittedSchema]).optional(),
+    /** Производные значения стейта (`doc.computed`) — та же map-форма, что у `state`. */
+    computed: z.union([diffMapSchema, omittedSchema]).optional(),
     screens: screensDiffSchema.optional(),
     flows: z.union([elementValueDiffSchema, omittedSchema]).optional(),
     screenOrder: z.union([z.strictObject({ from: z.array(boundedDiffString).max(100), to: z.array(boundedDiffString).max(100) }), omittedSchema]).optional(),
@@ -844,7 +846,7 @@ export const prototypeRevisionDiffContract = registerContract({
       screensAdded: z.number().int().nonnegative(), screensRemoved: z.number().int().nonnegative(), screensChanged: z.number().int().nonnegative(),
       staticElementsAdded: z.number().int().nonnegative(), staticElementsRemoved: z.number().int().nonnegative(), staticElementsChanged: z.number().int().nonnegative(),
       identical: z.boolean(), docIdentical: z.boolean(), truncated: z.boolean(),
-      omittedSections: z.array(z.enum(["props", "elements", "screens", "flows", "state", "doc", "pins", "renderInputs", "screenOrder"])),
+      omittedSections: z.array(z.enum(["props", "elements", "screens", "flows", "state", "computed", "doc", "pins", "renderInputs", "screenOrder"])),
     }),
   }),
   errors: [errorCatalog.invalidRequest, errorCatalog.prototypeNotFound, errorCatalog.revisionNotFound],
@@ -1949,6 +1951,8 @@ export const capabilitiesResponseSchema = z.object({
   directives: z.array(z.string()),
   paramSources: z.array(z.string()),
   conditions: z.array(z.string()),
+  /** Закрытый набор операций `doc.computed` v1 (план 2026-08-02, D12). */
+  computedOps: z.array(z.string()),
   limits: z.object({
     elements: z.number(), depth: z.number(), bodyMiB: z.number(), sourceKiB: z.number(),
     assetMiB: z.number(), repeatBudget: z.number(), repeatPerScreen: z.number(), screenshotQueue: z.number(), geometryRects: z.number(),
@@ -1957,6 +1961,8 @@ export const capabilitiesResponseSchema = z.object({
     // P8: троттлинг и гигиена validate-префлайта (`POST /api/components/{id}/validate`).
     validateUserConcurrent: z.number(), validateGlobalConcurrent: z.number(),
     validateCacheTtlHours: z.number(), validateCacheMiB: z.number(),
+    /** `doc.computed` (план 2026-08-02): записей в объекте, полей в `sumProduct`, термов в `add`. */
+    computedEntries: z.number(), computedFields: z.number(), computedTerms: z.number(),
   }),
   designSystems: z.array(z.string()),
   resolvedSpaceScales: z.record(z.string(), spaceScaleSchema),
@@ -1983,6 +1989,10 @@ export const capabilitiesResponseSchema = z.object({
     themeSparseOps: z.boolean(),
     /** Новые версии темы пишутся с резолвером spacing-шкалы 2; false при EASYUI_THEME_RESOLVER_V2_DISABLED=1 (P6.3). */
     themeSpacingResolverV2: z.boolean(),
+    /** `POST /api/components/:id/promote` — receipt-based promote кандидата (RFC 2026-08-02 R1); false при EASYUI_ACCEPTANCE_DISABLED=1. */
+    acceptancePromote: z.boolean(),
+    /** Top-level `doc.computed` — производные значения стейта (план 2026-08-02). */
+    computed: z.boolean(),
   }),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`

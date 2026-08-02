@@ -9,6 +9,10 @@ import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
 import {
   inputPrototypeDocSchema,
   ASSET_ID_PATTERN,
+  COMPUTED_ENTRIES_LIMIT,
+  COMPUTED_FIELDS_LIMIT,
+  COMPUTED_OPS,
+  COMPUTED_TERMS_LIMIT,
   FLOWS_LIMIT,
   FLOW_STEPS_LIMIT,
   FLOW_TOTAL_STEPS_LIMIT,
@@ -63,6 +67,9 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
     directives: [...CAPABILITY_DIRECTIVES],
     paramSources: [...CAPABILITY_PARAM_SOURCES],
     conditions: [...CAPABILITY_CONDITIONS],
+    // Закрытый набор операций `doc.computed` (план 2026-08-02, D2/D12). Импорт из места
+    // энфорса (`src/prototype/schema`), чтобы discovery не разъезжалось со схемой.
+    computedOps: [...COMPUTED_OPS],
     limits: {
       elements: ELEMENTS_PER_SCREEN_LIMIT,
       depth: TREE_DEPTH_LIMIT,
@@ -85,6 +92,10 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       validateGlobalConcurrent: VALIDATE_GLOBAL_CONCURRENT,
       validateCacheTtlHours: CANDIDATE_CACHE_TTL_MS / (60 * 60 * 1000),
       validateCacheMiB: CANDIDATE_CACHE_MAX_BYTES / (1024 * 1024),
+      // `doc.computed`: записей в объекте, полей в `sumProduct`, термов в `add`.
+      computedEntries: COMPUTED_ENTRIES_LIMIT,
+      computedFields: COMPUTED_FIELDS_LIMIT,
+      computedTerms: COMPUTED_TERMS_LIMIT,
     },
     designSystems: systems.map((system) => system.id),
     resolvedSpaceScales: Object.fromEntries(systems.map((system) => {
@@ -136,6 +147,10 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // провалидированной head-ревизии одной командой (auto-supersede прочих active).
       // false при EASYUI_ACCEPTANCE_DISABLED=1; publish при этом продолжает работать.
       acceptancePromote: options.acceptanceDisabled !== true,
+      // План 2026-08-02 (computed-state): top-level `doc.computed` — производные значения
+      // стейта, read-only, читаются обычным `$state` по bare-ключу. Набор операций —
+      // в `computedOps`, лимиты — в `limits.computed*`.
+      computed: true,
     },
     reuseGate: {
       mode: reuseGateMode,

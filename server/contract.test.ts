@@ -7,6 +7,10 @@ import type { Database } from "bun:sqlite";
 import { renderOpenApiJson, OPENAPI_PATH } from "../scripts/generate-openapi";
 import {
   prototypeDocSchema,
+  COMPUTED_ENTRIES_LIMIT,
+  COMPUTED_FIELDS_LIMIT,
+  COMPUTED_OPS,
+  COMPUTED_TERMS_LIMIT,
   FLOWS_LIMIT,
   FLOW_STEPS_LIMIT,
   FLOW_TOTAL_STEPS_LIMIT,
@@ -605,7 +609,11 @@ describe("route contracts", () => {
       validateGlobalConcurrent: 2,
       validateCacheTtlHours: 24,
       validateCacheMiB: 32,
+      computedEntries: COMPUTED_ENTRIES_LIMIT,
+      computedFields: COMPUTED_FIELDS_LIMIT,
+      computedTerms: COMPUTED_TERMS_LIMIT,
     });
+    expect(value.computedOps).toEqual([...COMPUTED_OPS]);
     // The ordered contract case may have created the fixture system already; Bun can execute
     // this independent case before or after it, so assert the stable built-in system only.
     expect(value.designSystems).toEqual(expect.arrayContaining(["yandex-pay"]));
@@ -636,6 +644,8 @@ describe("route contracts", () => {
       themeDryRun: true,
       themeSparseOps: true,
       themeSpacingResolverV2: true,
+      acceptancePromote: true,
+      computed: true,
     });
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
   });
@@ -686,6 +696,34 @@ describe("route contracts", () => {
     };
     visit(schema);
     expect(regionSchemas).toContainEqual({ type: "string", enum: ["statusBar", "header", "footer"] });
+  });
+
+  // План 2026-08-02 (computed-state), D5/D11: схема документа строится из **input**-ветки,
+  // поэтому агент видит строгую грамматику `computed` без ручных `$defs` — record с regex
+  // ключа и дискриминированным `oneOf` (не `anyOf`: варианты взаимоисключающие по `op`).
+  test("GET /api/schemas/prototype-document.json describes computed as a keyed union of the four v1 ops", async () => {
+    const response = await call("GET", "/api/schemas/prototype-document.json");
+    expect(response.status).toBe(200);
+    const schema = (await response.json()) as Record<string, unknown>;
+    const defs = schema.$defs as Record<string, Record<string, unknown>>;
+    // `reused: "ref"` выносит переиспользованные узлы в `$defs`; резолвим их по месту.
+    const deref = (node: unknown): Record<string, unknown> => {
+      let current = node as Record<string, unknown>;
+      while (typeof current.$ref === "string") current = defs[(current.$ref as string).replace("#/$defs/", "")]!;
+      return current;
+    };
+    const properties = schema.properties as Record<string, unknown>;
+    expect(properties).toHaveProperty("computed");
+    const computed = deref(properties.computed);
+    expect(computed.type).toBe("object");
+    expect(deref(computed.propertyNames).pattern).toBe("^[A-Za-z][A-Za-z0-9_-]*$");
+    const entry = deref(computed.additionalProperties);
+    expect(entry.anyOf).toBeUndefined();
+    const variants = entry.oneOf as Array<{ properties: { op: { const?: string } } }>;
+    expect(variants.map((variant) => variant.properties.op.const)).toEqual([...COMPUTED_OPS]);
+    const byOp = new Map(variants.map((variant) => [variant.properties.op.const, variant as unknown as Record<string, unknown>]));
+    expect((byOp.get("sumProduct")!.properties as Record<string, { maxItems?: number }>).fields!.maxItems).toBe(COMPUTED_FIELDS_LIMIT);
+    expect((byOp.get("add")!.properties as Record<string, { maxItems?: number }>).terms!.maxItems).toBe(COMPUTED_TERMS_LIMIT);
   });
 
   test("POST /api/prototypes rejects an unknown screen region", async () => {
