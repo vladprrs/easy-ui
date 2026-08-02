@@ -328,6 +328,25 @@ node driver.mjs preview rating-stars --rev head-draft      # сохранённ�
 
 Ограничения: published-режим работает **только по published-версии**; драфт-режим published-версии не требует, но идёт под троттлингом validate-префлайта (сборка candidate-bundle при холодном кэше; 429 `validate_in_flight` — повтор после завершения чужого прогона) и проверяет asset-refs драфта (422 `asset_not_found` до сборки); kill-switch `EASYUI_VALIDATE_DISABLED=1` гасит драфт-превью (published-режим работает). Цикл итерации без публикаций (W2): save ревизии через `PUT /api/components/:id` (verb `component` делает save+publish за вызов) → `preview --rev head-draft`; publish — один раз по итогам (повторный `component` с неизменными source+`--figma`: PUT отвечает no-op `unchanged`, и драйвер публикует голову). `--theme` — только light/dark, **версия темы не пинуется** (берётся последняя, фактическая — в `designSystemMetaVersion` вывода); viewport 64..2000 × 64..4000 и `width × height × dsf² ≤ 20 000 000` (при `--dsf 3` потолок ~2,2 Mpx); очередь скриншотов concurrency 1, cap 5 — при `429 queue_full` драйвер ретраит с бэкоффом (до 5 попыток, счётчик `queueRetries` в `--json`).
 
+### Числовая приёмка геометрии: `expect`
+
+Числовой вердикт до пиксельного: `preview … --probe geometry --out actual.json` (компонентная поверхность, `features.componentGeometry`) либо `driver.mjs geometry <protoId> <screenId> --json > actual.json` (экран прототипа), затем
+
+```bash
+node driver.mjs expect expected.json actual.json                  # ±1px по умолчанию
+node driver.mjs expect expected.json actual.json --tolerance 2 --json
+# expect expected.json vs actual.json: 5 checks, 1 mismatch (tolerance ±1px)
+# FAIL stack#0: gap expected 8, got 6
+```
+
+`expected.json` пишет автор из выписки макета: `{"tolerance":1,"elements":[{"key":"c","size":{"width":328,"height":56}},{"key":"stack","instance":0,"axis":"row","gap":8,"padding":{"left":16,"right":16},"tolerance":2}]}`. `key`/`instance` — маркер замера (у компонентной поверхности он один, ключ `c`); `size` — `{width?,height?}`; `gap` — число (все зазоры равны) или массив по порядку, меряется как наблюдаемый зазор между box'ами прямых видимых детей; `padding` — число или объект сторон, меряется как отступ между box'ом элемента и bounding box'ом детей. Ось: `axis` → computed `flexDirection` layout owner'а → вывод из rect'ов. Допуск: файловый `tolerance` (по умолчанию 1 px) < per-element `tolerance`; `--tolerance N` перекрывает файловый дефолт. Exit: 0 — сошлось, 2 — расхождения, 1 — битый файл. Верб оффлайновый.
+
+**Итоговый цикл атома:** правка → save ревизии без публикации → `preview --rev head-draft` (пиксели) → `expect` (числа) → `POST /api/components/:id/validate` (publish-набор проверок без создания версии: typecheck/compile/import, definition, asset-refs, поля provenance; receipt не покрывает canonical-role и reuse-гейт) → **publish ровно один раз**.
+
+### Служебные прототипы: галереи, `track: head`, профиль readiness
+
+Probe-прототип нужен только со стадии молекул. Служебность объявляется **lifecycle-роутом, а не полем документа**: `POST /api/prototypes/:id/lifecycle {"kind":"component-gallery","track":"head"}`. `track: "head"` (`features.prototypeHeadTracking`) резолвит компонентные пины дока на последние active-публикации прямо на чтении — пересохранять галерею после каждой публикации компонента не нужно; разрешён только для служебных `kind` непубликованного дока (`422 track_requires_service_kind`/`track_requires_unpublished`), а publish/share/visual-baseline/bundle-export такого дока → `422 prototype_head_tracking`. Версия темы остаётся пином ревизии: после PATCH темы пересохранить (список — в `stalePins` ответа PATCH). Постановка снапа возвращает разрешённые пины в `components[]`. Warnings служебной галереи — **не блокер**: readiness служебных `kind` считается с `profile: "service"`, предупреждения не поднимают статус; технические `Hotspot`'ы и `on`-биндинги ради нулевого счётчика не нужны. Тема правится sparse-операциями `addTokens`/`addFonts`/`addIcons` поверх `baseVersion` с `dryRun: true` (append-only, конфликт значения → `409 theme_append_conflict`; патч без изменений → `noop: true` без новой версии).
+
 ### Визуальная регрессия (evidence loop)
 
 Рабочий цикл: создать эталоны → внести правку → опубликовать компонент → пересохранить прототип, чтобы обновить пины → проверить кандидата.

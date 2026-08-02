@@ -30,8 +30,10 @@ export EASYUI_PASSWORD="…"
 # инстанс по умолчанию — https://easy-ui.pay-offline.ru; другой: export EASYUI_API="http://127.0.0.1:8787/api"
 
 node driver.mjs get prototypes          # smoke: API и креды живы
-node api.mjs get /capabilities          # actions, лимиты, фаза reuse-гейта
+node api.mjs get /capabilities          # actions, лимиты, фаза reuse-гейта, features
 ```
+
+Цикл ниже опирается на серверные возможности, объявленные в `features` этого инстанса: `componentValidate` (префлайт), `componentDraftPreview` (`preview --rev head-draft`), `componentGeometry` (`preview --probe geometry`), `prototypeHeadTracking` (`track: head`), `readinessProfile`, `themeDryRun`/`themeSparseOps`. Драйвер проверяет их сам и на старом инстансе падает читаемым сообщением («server does not support …»), а не странным 404 — но на старом сервере цикл деградирует до «публикация на итерацию», и это надо учитывать в плане работ.
 
 Два харнеса:
 
@@ -88,7 +90,21 @@ EOF
 node api.mjs theme yandex-pay-v2 theme.json    # версия 1 (baseVersion подставится сам)
 ```
 
-PATCH-семантика: переданная коллекция **заменяет** предыдущую целиком, опущенная наследуется — при добавлении токена шли полный словарь. Пока на токен никто не сослался, значения можно свободно править новой версией; после — каждая правка глобально меняет уже принятые компоненты, фиксируй такие правки в `BUILD_ORDER.md`. **Ревизия прототипа пинует версию темы**: после любого PATCH темы пересохрани каждый probe/ref-прототип (`driver.mjs prototype <doc>.json`) до пере-снапа, иначе snap покажет старые токены и «фикс не сработал». `preview` атома тему не пинует — берёт всегда последнюю, пересохранений не требует (§4.6).
+PATCH-семантика: переданная коллекция **заменяет** предыдущую целиком, опущенная наследуется. Но полный словарь ради двух токенов больше не нужен — правь тему **sparse-операциями с dry-run** (W4):
+
+```bash
+# 1. dry-run: валидация + дифф + итоговая resolvedSpaceScale, версия НЕ создаётся
+echo '{"addTokens":{"color.button-primary-bg":"#FFDD2D"},"dryRun":true}' > patch.json
+node api.mjs theme yandex-pay-v2 patch.json     # baseVersion подставит сам
+# 2. тот же файл без "dryRun" — запись
+```
+
+- `addTokens`/`addFonts`/`addIcons` — **append-only** поверх `baseVersion`: передаёшь только добавляемое. Существующая запись с другим значением → `409 theme_append_conflict` (тихой перезаписи нет), удаление невозможно — для него остаётся полный PATCH. Sparse-операция и её полный аналог (`tokens`/`fonts`/`icons`) в одном теле взаимоисключающи.
+- **No-op не создаёт версию**: патч, результат которого равен `baseVersion`, отвечает `{noop:true, nextVersion:null}` — 13 версий темы за миграцию больше не набегает.
+- Ответ несёт `diff` (added/changed/removed), `resolvedSpaceScale`, `spacingResolver` и **`stalePins`** — список прототипов, чья голова пинует старую версию темы. Это точный список того, что надо пересохранить, а не догадка.
+- `spacingResolver: 2` у новых версий: spacing-оверрайды мерджатся на базовую шкалу самой DS, а полный token-патч, из которого `space.*` выпали целиком, наследует шкалу базовой версии (наследованные ключи перечислены в `inheritedSpaceTokens`), а не молча уезжает на каноническую.
+
+Пока на токен никто не сослался, значения можно свободно править новой версией; после — каждая правка глобально меняет уже принятые компоненты, фиксируй такие правки в `BUILD_ORDER.md`. **Ревизия прототипа пинует версию темы**: после любого PATCH темы пересохрани каждый probe/ref-прототип из `stalePins` (`driver.mjs prototype <doc>.json`) до пере-снапа, иначе snap покажет старые токены и «фикс не сработал» — `track: head` (§4.6) резолвит только компонентные пины и от этого не спасает. `preview` атома тему не пинует — берёт всегда последнюю, пересохранений не требует (§4.6).
 
 ### 3.3 Верификация темы
 
@@ -150,7 +166,16 @@ node driver.mjs component pay-button PayButton pay-button.tsx \
 
 **`--figma` — при каждом вызове `component`**: `figma_json` живёт на ревизии и не наследуется — update или `component-move` без флага молча обнуляют provenance head. Держи `<id>.figma.json` рядом с TSX и передавай всегда. `api.mjs figma` остаётся только для ретроактивного прикрепления к уже опубликованному компоненту без правки source (он делает PUT + re-publish — лишняя версия). Лимиты ассетов: 5 MiB и 16 Mpx на файл.
 
-Save проверяет синтаксис, **тип-ошибки ловит publish** (вывод tsc в ответе). Правишь опубликованный — базой правки бери актуальный active-source с сервера (`GET /components/<id>/versions/<v>`), не локальный файл, если сессия прерывалась.
+Save проверяет синтаксис, **тип-ошибки ловит publish** (вывод tsc в ответе) — но ловить их publish'ем больше не нужно: перед публикацией прогоняй **validate-префлайт головы** (W2), он гоняет publish-набор проверок без создания версии и без изменения публичного состояния:
+
+```bash
+node api.mjs send POST /components/pay-button/validate     # тела не нужно
+# {"ok":true,"cached":false,"sourceHash":"…","bundleHash":"…","hostAbiVersion":4,"themeVersion":3,"catalogRevision":"…","warnings":[]}
+```
+
+Префлайт проверяет typecheck/compile/import, извлечение definition со smoke-рендером, asset-refs и **поля provenance** (неподдерживаемое поле вроде `pageNodeId` приезжает 422 с указанием поля — а не после всей подготовки к публикации), плюс предупреждает о рассинхроне `.default()` схемы и `??`-fallback рендера. Чего receipt **не** покрывает: canonical-role и reuse-гейт — они каталого-временные и остаются на publish. Результат кэшируется по `sourceHash` и переиспользуется самим publish'ем (второй раз за компиляцию не платим); при занятом слоте — `429 validate_in_flight`, при выключенном префлайте (`EASYUI_VALIDATE_DISABLED=1`) — 404.
+
+Правишь опубликованный — базой правки бери актуальный active-source с сервера (`GET /components/<id>/versions/<v>`), не локальный файл, если сессия прерывалась. Повторный PUT с идентичными `source`+`figma` ревизии не создаёт: ответ `{"unchanged":true,"rev":<head>}` (W2) — это норма, а не ошибка.
 
 ### 4.6 Приёмка атома: `preview`; probe — со стадии молекул
 
@@ -163,7 +188,7 @@ node driver.mjs preview pay-button --example primary --dsf 2 --out shots/pay-but
 # preview pay-button v1 bundleHash=… designSystemMetaVersion=3 viewport=1280x800 dsf=2 theme=light
 ```
 
-PNG — content-hug (воркер снимает сам элемент, не вьюпорт): размеры эталона и снапа сравниваются напрямую, без canvas-арифметики. **Цикл итерации атома (W2): правка → save ревизии без публикации → `preview --rev head-draft`; publish — один раз по итогам приёмки.** Verb `component` делает save+publish за вызов — он остаётся входом создания (reuse-гейт/discovery) и финальным publish'ем, а промежуточные сохранения идут через `api.mjs` (PUT гейт создания не проходит):
+PNG — content-hug (воркер снимает сам элемент, не вьюпорт): размеры эталона и снапа сравниваются напрямую, без canvas-арифметики. `--probe geometry` вместо PNG отдаёт замер той же поверхности (вход для `expect`, §4.7). **Итоговый цикл атома: правка → save ревизии без публикации → `preview --rev head-draft` → `expect` (+`compare` с эталоном Figma) → validate-префлайт → publish ровно один раз.** Промежуточных публикаций быть не должно: всё, что раньше требовало версии, делается на сохранённой голове. Verb `component` делает save+publish за вызов — он остаётся входом создания (reuse-гейт/discovery) и финальным publish'ем, а промежуточные сохранения идут через `api.mjs` (PUT гейт создания не проходит):
 
 ```bash
 # промежуточная итерация (без публикации):
@@ -172,6 +197,11 @@ jq -n --arg src "$(cat pay-button.tsx)" --argjson figma "$(cat pay-button.figma.
   '{source:$src, figma:$figma, baseRev:<headRev>, message:"iterate"}' > save.json
 node api.mjs send PUT /components/pay-button save.json      # → {"rev": N+1}
 node driver.mjs preview pay-button --rev head-draft --example primary --dsf 2 --out shots/pay-button.png
+node driver.mjs preview pay-button --rev head-draft --example primary --probe geometry --out actual.json
+node driver.mjs expect expected/pay-button.json actual.json          # числовой вердикт (§4.7)
+node compare.mjs figma-refs/pay-button@2x.png shots/pay-button.png diff/pay-button.png
+# приёмка сошлась → префлайт → единственная публикация:
+node api.mjs send POST /components/pay-button/validate
 # финал: PUT отвечает no-op unchanged (source+figma без изменений), драйвер публикует голову:
 node driver.mjs component pay-button PayButton pay-button.tsx \
   --design-system yandex-pay-v2 --intent "Primary action button for payment flows" --figma pay-button.figma.json
@@ -188,12 +218,63 @@ node driver.mjs geometry ypv2-probe-molecules pay-payment-method-card
 node driver.mjs snap ypv2-probe-molecules ./shots --all-screens
 ```
 
-**Пины probe: пересохранение обязательно после каждой публикации компонента и каждого PATCH темы.** Ревизия прототипа пинует конкретные версии компонентов и версию темы; publish новой версии пины не двигает. Цикл итерации молекулы всегда: publish компонента → `driver.mjs prototype ypv2-probe-<level>.json` (пере-пин) → `status` → `geometry` → `snap`. Пропустишь пересохранение — будешь гоняться за «диффом», которого уже нет в исходнике.
+**Probe-док объявляй служебным и трекающим головы — тогда пересохранения после каждой публикации компонента не нужны** (W3). `kind` и `track` — lifecycle-атрибуты прототипа (колонки, не поля документа), ставятся одним роутом сразу после создания дока:
+
+```bash
+echo '{"kind":"component-gallery","track":"head"}' > lifecycle.json
+node api.mjs send POST /prototypes/ypv2-probe-molecules/lifecycle lifecycle.json
+```
+
+- `track: "head"` разрешён только для служебных `kind` (`component-gallery`, `evidence`, `visual-reference`, `composition-fixture`) и только пока прототип не опубликован: иначе `422 track_requires_service_kind` / `track_requires_unpublished`. Для трекающего дока запрещены publish, share-грант, visual-baseline и bundle-export (`422 prototype_head_tracking`) — это цена за подвижные пины; probe-доки всё равно живут драфтами.
+- Скоуп резолва — **только компонентные пины**: DTO ревизии отдаёт последние active-публикации и `resolvedAt`, постановка снапа возвращает разрешённые пины в `components[]` (сверяй их с ожидаемыми версиями). **Версия темы остаётся пином ревизии** — после PATCH темы probe пересохранять всё равно нужно (§3.2, `stalePins`).
+- Галерея — это `kind: "component-gallery"`, выставленный тем же lifecycle-роутом, а не поле документа: формат документа не менялся.
+- **Warnings служебной галереи — не блокер.** У служебных `kind` readiness-отчёт идёт с `profile: "service"`: предупреждения (недостижимый экран, интерактивный компонент без handler) не поднимают статус и не блокируют. Не изобретай технические `Hotspot`'ы и `on`-биндинги ради нулевого warning-счётчика.
+
+Без `track: head` (обычный `pinned`-док, любой `kind`) правило прежнее: **ревизия пинует конкретные версии компонентов и версию темы, publish новой версии пины не двигает**, цикл итерации молекулы — publish компонента → `driver.mjs prototype ypv2-probe-<level>.json` (пере-пин) → `status` → `geometry` → `snap`. Пропустишь пересохранение — будешь гоняться за «диффом», которого уже нет в исходнике.
 
 ### 4.7 Сверка
 
-1. **Численно**: rect'ы из `geometry` против размеров из выписки §4.1 — допуск ±1px (иначе чинить).
-2. **Пиксельно**: `node compare.mjs figma-refs/pay-button@2x.png shots/pay-button.png diff/pay-button.png` — pixelmatch, порог чувствительности 0.1. Снап атома под @2x-эталон — `node driver.mjs preview pay-button --example <вариант> --dsf 2` (content-hug: размер PNG = элемент × dsf); снап probe-экрана — `node driver.mjs snap … --dsf 2` (поверхность = `canvas` экрана). Размеры PNG обязаны совпадать. Для probe-стикершитов бюджет: `surface × dsf² ≤ 16 Mpx` (проверяется до постановки) — очень длинный стикершит при `--dsf 2` дели на несколько экранов. Целевой mismatch ≤ 2% площади, и **весь** остаток объясним антиалиасингом текста (chromium ≠ Figma по субпиксельному рендеру — это единственная легальная разница). Любое расхождение геометрии, цвета заливки, радиуса, тени, межстрочника — дефект: чини компонент/тему и повторяй.
+Порядок жёсткий: **числовая приёмка до пиксельной**. Пиксельный дифф говорит «0,4% не совпало», числовая — «gap expected 8, got 6», то есть сразу называет правку.
+
+1. **Численно — `expect`**: замер geometry против выписки §4.1, допуск ±1px.
+
+```bash
+# actual: замер компонентной поверхности прямо на draft-ревизии (PNG не создаётся)
+node driver.mjs preview pay-button --rev head-draft --example primary --probe geometry --out actual.json
+# actual для молекулы/экрана: прототипный geometry-probe
+node driver.mjs geometry ypv2-probe-molecules pay-payment-method-card --json > actual.json
+node driver.mjs expect expected/pay-button.json actual.json
+# expect expected/pay-button.json vs actual.json: 5 checks, 1 mismatch (tolerance ±1px)
+# ok   stack#0: width expected 328, got 328
+# FAIL stack#0: gap expected 8, got 6
+```
+
+`expected.json` пишешь ты из выписки Figma. Формат минимальный:
+
+```json
+{
+  "tolerance": 1,
+  "elements": [
+    { "key": "c",     "size": { "width": 328, "height": 56 } },
+    { "key": "stack", "instance": 0, "axis": "row", "gap": 8,
+      "padding": { "left": 16, "right": 16, "top": 12, "bottom": 12 }, "tolerance": 2 }
+  ]
+}
+```
+
+- `key`/`instance` — ключ маркера в замере (`instance` по умолчанию 0). У компонентной поверхности маркер ровно один — корневой элемент дерева съёмки с ключом `c`, поэтому для атома проверяется `size` (PNG и так content-hug); `gap`/`padding` меряются там, где маркеров несколько, — на probe-экране.
+- `size` — `{width?, height?}`, любое из полей опционально.
+- `gap` — число (все зазоры между соседними видимыми детьми равны ему) либо массив ожиданий по порядку. Ось берётся из `axis`, иначе из computed `flexDirection` layout owner'а, иначе выводится из самих rect'ов. Меряется **наблюдаемый зазор** между box'ами детей — он может отличаться от CSS gap на величину margin'ов.
+- `padding` — число (все четыре стороны) либо объект сторон; это наблюдаемый отступ между box'ом элемента и bounding box'ом его прямых детей.
+- `tolerance` — файловый дефолт (1 px), перекрывается per-element; `--tolerance N` перекрывает файловый дефолт, но не per-element.
+- Выход: 0 — всё сошлось, 2 — есть расхождения (каждое строкой `FAIL`), 1 — битый файл/формат. Верб оффлайновый, сети не касается.
+
+2. **Пиксельно**: `node compare.mjs figma-refs/pay-button@2x.png shots/pay-button.png diff/pay-button.png` — pixelmatch, порог чувствительности 0.1. Отчёт кроме процента печатает:
+   - **кластеры расхождений** — bounding-box'ы связных областей (`cluster 12x3 px @ (208,41) — 36 px differ`): координата и форма кластера говорят, что именно уехало (полоса по краю блока = геометрия, россыпь по буквам = шрифт);
+   - **AA-diagnostic** — второй прогон с порогом 0,25 в том же отчёте: сколько расхождения остаётся, если списать антиалиасинг. Если основной процент большой, а AA-диагностический ≈ 0 — это шрифтовой рендер, а не дефект;
+   - **отчёт о размерах** при их несовпадении (`size mismatch: candidate 328x56 vs ref 328x58 (dw 0, dh -2)`) — дифф всё равно считается по пересечению (exit 3), а не прерывается без диагностики;
+   - `--region x,y,w,h[:maxDiff%]` (повторяемый) — процент по зоне и необязательный бюджет: превышение → exit 1. Так фиксируются локальные исключения (например зона текста) без ослабления общего порога.
+   - `--json` отдаёт то же машинно; `--clusters N` меняет число печатаемых кластеров (по умолчанию 10). Raw-эталон никогда не мутируется — записывается только `diff.png`. Снап атома под @2x-эталон — `node driver.mjs preview pay-button --example <вариант> --dsf 2` (content-hug: размер PNG = элемент × dsf); снап probe-экрана — `node driver.mjs snap … --dsf 2` (поверхность = `canvas` экрана). Размеры PNG обязаны совпадать. Для probe-стикершитов бюджет: `surface × dsf² ≤ 16 Mpx` (проверяется до постановки) — очень длинный стикершит при `--dsf 2` дели на несколько экранов. Целевой mismatch ≤ 2% площади, и **весь** остаток объясним антиалиасингом текста (chromium ≠ Figma по субпиксельному рендеру — это единственная легальная разница). Любое расхождение геометрии, цвета заливки, радиуса, тени, межстрочника — дефект: чини компонент/тему и повторяй.
 3. **Глазами**: открой diff.png и пару эталон/снап рядом. Кластеры диффа по краям блоков = геометрия, по буквам = шрифт (проверь, что снялся YS Text, а не fallback: ширины строк в geometry совпадают с Figma; если нет — шрифт не доехал, пере-snap или проверь fonts темы).
 
 ### 4.8 Фиксация
@@ -206,8 +287,8 @@ node driver.mjs snap ypv2-probe-molecules ./shots --all-screens
 - [ ] reuse-гейт пройден (search до создания; 409 не обходился);
 - [ ] каждый `.default()` схемы имеет парный `??` в рендере; `{}` (пустые props) рендерится дефолтным видом Figma;
 - [ ] цвета/тени — через `color()` с точным Figma-литералом в fallback; spacing — `space()`/union;
-- [ ] атом принят через `preview --rev head-draft` (draft rev N, bundleHash/designSystemMetaVersion из вывода зафиксированы в REPORT), publish — один раз по итогам приёмки; для молекул и выше — probe пересохранён после последней публикации компонента и последнего PATCH темы (пины указывают на актуальные версии — видно в выводе `driver.mjs prototype`);
-- [ ] geometry: размеры ±1px от Figma; compare: mismatch ≤2%, остаток — только текстовый антиалиасинг;
+- [ ] атом принят через `preview --rev head-draft` + `expect` (draft rev N, bundleHash/designSystemMetaVersion из вывода зафиксированы в REPORT) **до** первой публикации; validate-префлайт головы зелёный; publish — один раз по итогам приёмки; для молекул и выше — probe с `track: head` (или пересохранён после последней публикации компонента) и обязательно пересохранён после последнего PATCH темы (пины видно в выводе `driver.mjs prototype` и в `components[]` постановки снапа);
+- [ ] `expect`: размеры/gap/паддинги ±1px от Figma (0 mismatches); compare: mismatch ≤2%, остаток — только текстовый антиалиасинг (подтверждается AA-diagnostic), кластеры расхождений объяснены;
 - [ ] интерактив: typed events объявлены и `emit` работает (проверь в плеере `?debug=1`);
 - [ ] definition: честный `atomicLevel`, продуктовый `description`, `examples`, при согласованной роли — `canonicalFor`;
 - [ ] Figma-provenance прикреплён (`--figma` при каждом вызове `component`), эталонные PNG в реестре ассетов;

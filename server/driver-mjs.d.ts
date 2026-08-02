@@ -67,6 +67,44 @@ declare module "*/author/driver.mjs" {
     definitions: Record<string,{layout?:{flow?:unknown}}>,
     geometry: {rects:Array<{key:string;instance:number;parentKey?:string;parentInstance?:number;domIndex:number;x:number;y:number;width:number;height:number;layoutContext:{display:string;flexDirection:string;flexWrap:string;rowGap:string;columnGap:string}|null}>},
   ): Array<{key:string;instance:number;reason:string|null;cssGap:{rowGap:string;columnGap:string}|null;observed:number[]|null}>;
+  // --- expect: числовая приёмка геометрии (план agent-iteration DX, P4) ---
+  export interface DriverGeometryRect {
+    key: string; instance: number; parentKey?: string; parentInstance?: number;
+    domIndex: number; x: number; y: number; width: number; height: number; hidden?: true;
+    layoutContext: { display: string; flexDirection: string; flexWrap: string; rowGap: string; columnGap: string } | null;
+  }
+  export const DEFAULT_EXPECT_TOLERANCE: number;
+  export function readGeometryRects(document: unknown): DriverGeometryRect[];
+  export function directChildren(rects: readonly DriverGeometryRect[], rect: DriverGeometryRect): DriverGeometryRect[];
+  export function resolveAxis(rect: DriverGeometryRect, children: readonly DriverGeometryRect[], override?: "row" | "column"): "row" | "column";
+  export function observedGaps(children: readonly DriverGeometryRect[], axis: "row" | "column"): number[];
+  export function observedPadding(
+    rect: DriverGeometryRect,
+    children: readonly DriverGeometryRect[],
+  ): { top: number; right: number; bottom: number; left: number } | null;
+  export interface DriverExpectations {
+    tolerance: number;
+    elements: {
+      key: string; instance: number; axis?: "row" | "column"; tolerance?: number;
+      size?: { width?: number; height?: number };
+      gaps?: number[]; uniformGap: boolean;
+      padding?: Partial<Record<"top" | "right" | "bottom" | "left", number>>;
+    }[];
+  }
+  export function parseExpectations(document: unknown, cliTolerance?: number): DriverExpectations;
+  export interface DriverExpectCheck {
+    label: string; metric: string; expected?: number; actual?: number; ok: boolean; axis?: string; message: string;
+  }
+  export function evaluateExpectations(
+    expectations: DriverExpectations,
+    rects: readonly DriverGeometryRect[],
+  ): { tolerance: number; checks: DriverExpectCheck[]; mismatches: DriverExpectCheck[] };
+  export function expectLines(
+    evaluation: { tolerance: number; checks: readonly DriverExpectCheck[]; mismatches: readonly DriverExpectCheck[] },
+    expectedPath: string,
+    actualPath: string,
+  ): string[];
+  export function expectExitCode(evaluation: { mismatches: readonly DriverExpectCheck[] }): 0 | 2;
   export const EXIT: { readonly ok: 0; readonly failed: 1; readonly productErrors: 2 };
   export const SNAP_ATTEMPTS: number;
   export const RETRY_BACKOFF_MS: number[];

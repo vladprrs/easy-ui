@@ -17,7 +17,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file.png] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id> | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id> | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -125,7 +125,20 @@ export const flagSpecs = Object.freeze({
     ...surfaceFlags,
     "--example": { value: true, key: "example" },
     "--rev": { value: true, key: "rev", enum: ["head-draft"] },
+    "--probe": { value: true, key: "probe", enum: ["geometry"] },
     "--out": { value: true, key: "out" },
+  },
+  expect: {
+    ...jsonFlag,
+    "--tolerance": {
+      value: true,
+      key: "tolerance",
+      parse(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number) || number < 0) invalid("--tolerance must be a non-negative number of CSS px");
+        return number;
+      },
+    },
   },
   status: { ...jsonFlag, ...allScreensFlag },
   readiness: { ...jsonFlag },
@@ -161,6 +174,7 @@ const ranges = Object.freeze({
   baseline: [1, 2],
   check: [1, 1],
   geometry: [2, 2],
+  expect: [2, 2],
   get: [1, 2],
   delete: [2, 2],
   shoot: [1, 2],
@@ -667,6 +681,233 @@ async function runGeometry(args) {
   if (jsonMode) report(null, { command: "geometry", prototypeId: id, screenId, ...state.result, gaps: gapRows });
 }
 
+// --- expect: числовая приёмка геометрии против выписки из Figma (план agent-iteration DX, P4) ---
+
+/** Допуск по умолчанию: субпиксельный layout и округление до 0.01 px дают расхождение до 1 px. */
+export const DEFAULT_EXPECT_TOLERANCE = 1;
+const EXPECT_ELEMENT_KEYS = new Set(["key", "instance", "size", "gap", "padding", "axis", "tolerance"]);
+const PADDING_SIDES = ["top", "right", "bottom", "left"];
+
+/**
+ * Actual — это geometry-результат: `driver.mjs geometry <proto> <screen> --json` (прототипная
+ * поверхность) либо `driver.mjs preview <id> --probe geometry [--rev head-draft] --json`
+ * (компонентная). Принимаем и сырой результат джобы, и обёртки `{result}`/`{geometry}`.
+ */
+export function readGeometryRects(document) {
+  const source = [document, document?.result, document?.geometry].find((value) => Array.isArray(value?.rects));
+  if (!source) throw new Error("actual geometry JSON has no rects[]; pass the --json output of 'driver.mjs geometry' or 'driver.mjs preview --probe geometry'");
+  return source.rects;
+}
+
+/** Прямые дети маркера в geometry-замере; скрытые не участвуют в gap/padding. */
+export function directChildren(rects, rect) {
+  return rects.filter((item) => item.parentKey === rect.key && (item.parentInstance ?? 0) === rect.instance && item.hidden !== true);
+}
+
+/**
+ * Ось раскладки: явная из expected, иначе computed `flexDirection` layout owner'а, иначе
+ * вывод из самих прямоугольников (непересекающиеся по вертикали дети — колонка).
+ */
+export function resolveAxis(rect, children, override) {
+  if (override) return override;
+  const direction = rect.layoutContext?.flexDirection;
+  if (typeof direction === "string" && direction.length) return direction.startsWith("column") ? "column" : "row";
+  const byY = [...children].sort((a, b) => a.y - b.y);
+  const columnLike = byY.every((item, index) => index === 0 || item.y >= byY[index - 1].y + byY[index - 1].height - 0.01);
+  return columnLike && children.length > 1 ? "column" : "row";
+}
+
+/** Наблюдаемые зазоры между соседними детьми по оси (может отличаться от CSS gap из-за margins). */
+export function observedGaps(children, axis) {
+  const vertical = axis === "column";
+  const sorted = [...children].sort((a, b) => (vertical ? a.y - b.y : a.x - b.x));
+  return sorted.slice(1).map((item, index) => {
+    const previous = sorted[index];
+    const value = vertical ? item.y - (previous.y + previous.height) : item.x - (previous.x + previous.width);
+    return Math.round((value + Number.EPSILON) * 100) / 100;
+  });
+}
+
+/** Наблюдаемые отступы: зазор между box'ом элемента и bounding box'ом его прямых детей. */
+export function observedPadding(rect, children) {
+  if (!children.length) return null;
+  const left = Math.min(...children.map((item) => item.x));
+  const top = Math.min(...children.map((item) => item.y));
+  const right = Math.max(...children.map((item) => item.x + item.width));
+  const bottom = Math.max(...children.map((item) => item.y + item.height));
+  const round = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
+  return {
+    top: round(top - rect.y),
+    left: round(left - rect.x),
+    right: round(rect.x + rect.width - right),
+    bottom: round(rect.y + rect.height - bottom),
+  };
+}
+
+function expectNumber(value, label) {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${label} must be a finite number`);
+  return value;
+}
+
+/** Нормализация одной записи expected.json — формат описан в скилле авторинга (§expect). */
+function normalizeExpectation(entry, index) {
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`elements[${index}] must be an object`);
+  for (const key of Object.keys(entry)) {
+    if (!EXPECT_ELEMENT_KEYS.has(key)) throw new Error(`elements[${index}] has an unknown field ${key}; allowed: ${[...EXPECT_ELEMENT_KEYS].join(", ")}`);
+  }
+  if (typeof entry.key !== "string" || !entry.key.length) throw new Error(`elements[${index}].key must be a non-empty string`);
+  const instance = entry.instance === undefined ? 0 : expectNumber(entry.instance, `elements[${index}].instance`);
+  let size;
+  if (entry.size !== undefined) {
+    if (entry.size === null || typeof entry.size !== "object" || Array.isArray(entry.size)) throw new Error(`elements[${index}].size must be an object {width?,height?}`);
+    for (const key of Object.keys(entry.size)) if (key !== "width" && key !== "height") throw new Error(`elements[${index}].size has an unknown field ${key}`);
+    size = {};
+    if (entry.size.width !== undefined) size.width = expectNumber(entry.size.width, `elements[${index}].size.width`);
+    if (entry.size.height !== undefined) size.height = expectNumber(entry.size.height, `elements[${index}].size.height`);
+    if (!Object.keys(size).length) throw new Error(`elements[${index}].size must declare width and/or height`);
+  }
+  let gaps;
+  if (entry.gap !== undefined) {
+    gaps = Array.isArray(entry.gap)
+      ? entry.gap.map((value, position) => expectNumber(value, `elements[${index}].gap[${position}]`))
+      : [expectNumber(entry.gap, `elements[${index}].gap`)];
+    if (!gaps.length) throw new Error(`elements[${index}].gap must not be an empty array`);
+  }
+  const uniformGap = entry.gap !== undefined && !Array.isArray(entry.gap);
+  let padding;
+  if (entry.padding !== undefined) {
+    if (typeof entry.padding === "number") padding = Object.fromEntries(PADDING_SIDES.map((side) => [side, expectNumber(entry.padding, `elements[${index}].padding`)]));
+    else if (entry.padding !== null && typeof entry.padding === "object" && !Array.isArray(entry.padding)) {
+      for (const key of Object.keys(entry.padding)) if (!PADDING_SIDES.includes(key)) throw new Error(`elements[${index}].padding has an unknown side ${key}`);
+      padding = Object.fromEntries(Object.entries(entry.padding).map(([side, value]) => [side, expectNumber(value, `elements[${index}].padding.${side}`)]));
+      if (!Object.keys(padding).length) throw new Error(`elements[${index}].padding must declare at least one side`);
+    } else throw new Error(`elements[${index}].padding must be a number or an object of sides`);
+  }
+  if (entry.axis !== undefined && entry.axis !== "row" && entry.axis !== "column") throw new Error(`elements[${index}].axis must be "row" or "column"`);
+  if (size === undefined && gaps === undefined && padding === undefined) throw new Error(`elements[${index}] declares nothing to check (size/gap/padding)`);
+  return {
+    key: entry.key, instance, size, gaps, uniformGap, padding, axis: entry.axis,
+    tolerance: entry.tolerance === undefined ? undefined : expectNumber(entry.tolerance, `elements[${index}].tolerance`),
+  };
+}
+
+/** Разбор expected.json: агент пишет его из выписки Figma, поэтому ошибки формата — явные. */
+export function parseExpectations(document, cliTolerance) {
+  if (document === null || typeof document !== "object" || Array.isArray(document)) throw new Error("expected.json must contain a JSON object");
+  for (const key of Object.keys(document)) {
+    if (!["tolerance", "elements", "note"].includes(key)) throw new Error(`expected.json has an unknown field ${key}; allowed: tolerance, elements, note`);
+  }
+  if (!Array.isArray(document.elements) || !document.elements.length) throw new Error("expected.json must contain a non-empty elements[]");
+  const tolerance = cliTolerance ?? (document.tolerance === undefined ? DEFAULT_EXPECT_TOLERANCE : expectNumber(document.tolerance, "tolerance"));
+  if (tolerance < 0) throw new Error("tolerance must be non-negative");
+  return { tolerance, elements: document.elements.map(normalizeExpectation) };
+}
+
+/**
+ * Числовой вердикт до пиксельного: сравнение размеров/gap/паддингов замера с выпиской из
+ * Figma. Чистая функция — CLI-тест проверяет форматирование без сервера.
+ */
+export function evaluateExpectations(expectations, rects) {
+  const checks = [];
+  for (const element of expectations.elements) {
+    const tolerance = element.tolerance ?? expectations.tolerance;
+    const label = `${element.key}#${element.instance}`;
+    const rect = rects.find((item) => item.key === element.key && (item.instance ?? 0) === element.instance);
+    if (!rect) {
+      checks.push({ label, metric: "rect", ok: false, message: `${label}: not measured (keys in actual: ${[...new Set(rects.map((item) => item.key))].join(", ") || "none"})` });
+      continue;
+    }
+    const children = directChildren(rects, rect);
+    if (element.size) {
+      for (const [side, expectedValue] of Object.entries(element.size)) {
+        const actual = rect[side];
+        const ok = Math.abs(actual - expectedValue) <= tolerance;
+        checks.push({ label, metric: side, expected: expectedValue, actual, ok, message: `${label}: ${side} expected ${expectedValue}, got ${actual}` });
+      }
+    }
+    if (element.gaps) {
+      const axis = resolveAxis(rect, children, element.axis);
+      const observed = observedGaps(children, axis);
+      if (!observed.length) {
+        checks.push({ label, metric: "gap", ok: false, message: `${label}: gap expected ${element.gaps.join(", ")}, got nothing measurable (fewer than two visible child markers)` });
+      } else if (!element.uniformGap && element.gaps.length !== observed.length) {
+        checks.push({ label, metric: "gap", ok: false, message: `${label}: expected ${element.gaps.length} gaps, measured ${observed.length} (${observed.join(", ")})` });
+      } else {
+        observed.forEach((actual, index) => {
+          const expectedValue = element.uniformGap ? element.gaps[0] : element.gaps[index];
+          const ok = Math.abs(actual - expectedValue) <= tolerance;
+          const name = observed.length > 1 ? `gap[${index}]` : "gap";
+          checks.push({ label, metric: name, expected: expectedValue, actual, ok, axis, message: `${label}: ${name} expected ${expectedValue}, got ${actual}` });
+        });
+      }
+    }
+    if (element.padding) {
+      const observed = observedPadding(rect, children);
+      if (!observed) {
+        checks.push({ label, metric: "padding", ok: false, message: `${label}: padding expected, got nothing measurable (no visible child markers)` });
+      } else {
+        for (const side of PADDING_SIDES) {
+          if (element.padding[side] === undefined) continue;
+          const actual = observed[side];
+          const ok = Math.abs(actual - element.padding[side]) <= tolerance;
+          checks.push({ label, metric: `padding.${side}`, expected: element.padding[side], actual, ok, message: `${label}: padding.${side} expected ${element.padding[side]}, got ${actual}` });
+        }
+      }
+    }
+  }
+  const mismatches = checks.filter((check) => !check.ok);
+  return { tolerance: expectations.tolerance, checks, mismatches };
+}
+
+export function expectLines(evaluation, expectedPath, actualPath) {
+  return [
+    `expect ${expectedPath} vs ${actualPath}: ${evaluation.checks.length} checks, ${evaluation.mismatches.length} mismatch${evaluation.mismatches.length === 1 ? "" : "es"} (tolerance ±${evaluation.tolerance}px)`,
+    ...evaluation.checks.map((check) => `${check.ok ? "ok  " : "FAIL"} ${check.message}`),
+  ];
+}
+
+export const expectExitCode = (evaluation) => (evaluation.mismatches.length ? EXIT.productErrors : EXIT.ok);
+
+async function readJsonArgument(path, label) {
+  let text;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    invalid(`${label} cannot be read: ${path} (${error.code ?? error.message})`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    invalid(`${label} is not valid JSON: ${path} (${error.message})`);
+  }
+}
+
+/** `expect <expected.json> <actual.json>` — оффлайновый верб, сети не касается. */
+async function runExpect(args, flags) {
+  const [expectedPath, actualPath] = args;
+  const expectedDocument = await readJsonArgument(expectedPath, "expected.json");
+  const actualDocument = await readJsonArgument(actualPath, "actual.json");
+  let expectations;
+  let rects;
+  try {
+    expectations = parseExpectations(expectedDocument, flags.tolerance);
+    rects = readGeometryRects(actualDocument);
+  } catch (error) {
+    throw new CliError(error.message);
+  }
+  const evaluation = evaluateExpectations(expectations, rects);
+  const exitCode = expectExitCode(evaluation);
+  report(expectLines(evaluation, expectedPath, actualPath), {
+    command: "expect", expected: expectedPath, actual: actualPath,
+    tolerance: evaluation.tolerance, exitCode,
+    checks: evaluation.checks.map(({ label, metric, expected, actual, ok, message }) => ({ element: label, metric, expected, actual, ok, message })),
+    mismatches: evaluation.mismatches.length,
+  });
+  if (exitCode !== EXIT.ok) {
+    throw new CliError(`geometry does not match ${expectedPath}: ${evaluation.mismatches.map((check) => check.message).join("; ")}`, { exitCode });
+  }
+}
+
 /**
  * Normalizes a screenshot job result into the 7.1 capture contract. Servers
  * older than wave 7.1 do not classify errors, so their raw console/page errors
@@ -823,6 +1064,37 @@ async function readPropsArgument(path) {
 }
 
 /**
+ * `preview --probe geometry` (P1b + P4): geometry-замер компонентной поверхности вместо PNG.
+ * Печатает те же строки rect'ов, что и прототипный `geometry`, и по `--out` кладёт сырой
+ * результат джобы на диск — это готовый `actual.json` для `driver.mjs expect`.
+ */
+async function finishPreviewProbe(id, result, { flags, viewport, deviceScaleFactor, queueRetries, system }) {
+  const summary = summarizeCapture(result);
+  if (flags.out !== undefined) {
+    await mkdir(dirname(flags.out), { recursive: true });
+    await writeFile(flags.out, `${JSON.stringify(result, null, 2)}\n`);
+  }
+  const target = result.draftRev === undefined ? `v${result.version}` : `draft rev ${result.draftRev}`;
+  out(`preview ${id} ${target} probe=geometry bundleHash=${result.bundleHash ?? "-"} designSystemMetaVersion=${result.designSystemMetaVersion ?? system.latestMetaVersion ?? "-"} viewport=${viewport.width}x${viewport.height} dsf=${deviceScaleFactor} rects=${result.rects.length}/${result.total}${result.truncated ? " truncated" : ""}`);
+  for (const rect of result.rects) {
+    out(`${rect.key}#${rect.instance} parent=${rect.parentKey === undefined ? "-" : `${rect.parentKey}#${rect.parentInstance}`} dom=${rect.domIndex} rect=${rect.x},${rect.y} ${rect.width}x${rect.height}${rect.hidden ? " hidden" : ""}`);
+    out(`  layoutContext: ${rect.layoutContext ? JSON.stringify(rect.layoutContext) : "null"}`);
+  }
+  if (flags.out !== undefined) out(flags.out);
+  if (summary.productErrors.length) console.error(`preview ${id} product errors:`, JSON.stringify(summary.productErrors));
+  const exitCode = summary.productErrors.length ? EXIT.productErrors : EXIT.ok;
+  if (jsonMode) {
+    report(null, {
+      command: "preview", componentId: id, probe: "geometry",
+      ...result, path: flags.out ?? null, queueRetries, exitCode,
+      captureClean: summary.captureClean, productErrors: summary.productErrors,
+      infraNoise: summary.infraNoise, runtimeWarnings: summary.runtimeWarnings,
+    });
+  }
+  if (exitCode !== EXIT.ok) throw new CliError("geometry probe reported product errors", { exitCode });
+}
+
+/**
  * Компонентная съёмка опубликованной head-версии (план agent-iteration DX, P1a) поверх
  * существующего `POST /components/:id/versions/:version/screenshot`. Вывод всегда сообщает,
  * что именно отрендерено: version / bundleHash / designSystemMetaVersion — пин темы,
@@ -839,16 +1111,21 @@ async function readPropsArgument(path) {
 async function runPreview(args, flags) {
   const [id, propsPath] = args;
   const draft = flags.rev === "head-draft";
+  const probe = flags.probe === "geometry";
   const props = propsPath === undefined ? undefined : await readPropsArgument(propsPath);
   const meta = await getMeta("components", id);
   if (!meta) throw new CliError(`components/${id} not found; hint: run 'driver.mjs get components'`);
   let version;
-  if (draft) {
+  if (draft || probe) {
     const capabilities = await requireOk("capabilities", await call("GET", "/capabilities"));
-    if (capabilities.features?.componentDraftPreview !== true) {
+    if (draft && capabilities.features?.componentDraftPreview !== true) {
       throw new CliError(`server does not support component draft preview (features.componentDraftPreview is off); drop --rev head-draft or enable the validate preflight`);
     }
-  } else {
+    if (probe && capabilities.features?.componentGeometry !== true) {
+      throw new CliError(`server does not support the component geometry probe (features.componentGeometry is off); drop --probe geometry and measure on a prototype probe screen instead`);
+    }
+  }
+  if (!draft) {
     if (typeof meta.publishedVersion !== "number") {
       throw new CliError(`component ${id} has no published version; shoot the saved draft with --rev head-draft or publish first (driver.mjs component ...)`);
     }
@@ -866,12 +1143,14 @@ async function runPreview(args, flags) {
     ...(flags.theme === undefined ? {} : { theme: flags.theme }),
     ...(props === undefined ? {} : { props }),
     ...(flags.example === undefined ? {} : { exampleName: flags.example }),
+    ...(probe ? { probe: "geometry" } : {}),
   });
   const queued = await requireOk("preview enqueue", response, [202]);
   const state = await pollJob(`/screenshot-jobs/${encodeURIComponent(queued.jobId)}`, { deadlineMs: 120_000 });
-  if (state.status !== "done" || state.result?.kind !== "image") {
+  if (state.status !== "done" || state.result?.kind !== (probe ? "geometry" : "image")) {
     throw new CliError(`preview ${state.status}: ${JSON.stringify(state.error ?? state)}`);
   }
+  if (probe) return finishPreviewProbe(id, state.result, { flags, viewport, deviceScaleFactor, queueRetries, system });
   const summary = summarizeCapture(state.result);
   const draftRev = draft ? state.result.draftRev : undefined;
   const variant = flags.example ?? (propsPath === undefined ? undefined : propsPath.replace(/\.json$/i, "").split("/").pop());
@@ -1472,6 +1751,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "baseline") await runBaseline(args, flags);
   else if (cmd === "check") await runCheck(args, flags);
   else if (cmd === "geometry") await runGeometry(args);
+  else if (cmd === "expect") await runExpect(args, flags);
   else if (cmd === "get") {
     // `get` принимает и составные пути (`prototypes/<id>/draft`), поэтому алиас применяется
     // только к точному совпадению с известной коллекцией.

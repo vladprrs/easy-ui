@@ -310,7 +310,7 @@ preview rating-stars draft rev 7 bundleHash=1f9c… designSystemMetaVersion=14 v
 author-shots/rating-stars/rating-stars-draft-r7.png
 ```
 
-**Цикл итерации атома (W2):** правка исходника → сохранение ревизии **без публикации** → `preview --rev head-draft`; publish — один раз по итогам приёмки. Verb `component` делает save+publish за один вызов, поэтому промежуточные сохранения идут через HTTP (`PUT /api/components/:id` с `baseRev` — гейт создания на PUT не действует); финальная публикация головы — повторный `driver.mjs component` с неизменными source+`--figma` (PUT отвечает no-op `unchanged`, и драйвер публикует голову) либо `POST /api/components/:id/publish`. Драфт-режим снимает head-ревизию через эфемерный candidate-bundle префлайта validate: published-версия не требуется, а провал префлайта (тип-ошибки, битые asset-refs) приезжает тем же кодом, что отдаёт publish, — превью сломанного драфта сообщает причину, а не «нет бандла».
+**Итоговый цикл атома:** правка исходника → сохранение ревизии **без публикации** → `preview --rev head-draft` (пиксели) → `preview --rev head-draft --probe geometry` + `expect` (числа) → validate-префлайт (`POST /api/components/:id/validate` — publish-набор проверок без создания версии; неподдерживаемое поле provenance, тип-ошибка или битый asset-ref ловятся здесь) → **publish ровно один раз** по итогам приёмки. Verb `component` делает save+publish за один вызов, поэтому промежуточные сохранения идут через HTTP (`PUT /api/components/:id` с `baseRev` — гейт создания на PUT не действует); финальная публикация головы — повторный `driver.mjs component` с неизменными source+`--figma` (PUT отвечает no-op `unchanged`, и драйвер публикует голову) либо `POST /api/components/:id/publish`. Драфт-режим снимает head-ревизию через эфемерный candidate-bundle префлайта validate: published-версия не требуется, а провал префлайта (тип-ошибки, битые asset-refs) приезжает тем же кодом, что отдаёт publish, — превью сломанного драфта сообщает причину, а не «нет бандла».
 
 Exit-коды — как у `snap` (0 — PNG, 2 — PNG с product-ошибками, 1 — нет PNG). Честные ограничения (план agent-iteration DX, P1a/P1b):
 
@@ -321,6 +321,54 @@ Exit-коды — как у `snap` (0 — PNG, 2 — PNG с product-ошибка
 - `--theme` — только режим light/dark; **версия темы не пинуется** — рендер берёт последнюю, фактическая видна в `designSystemMetaVersion` вывода. После PATCH темы ничего пересохранять не нужно, но и воспроизвести старую тему нельзя.
 - Лимиты viewport сервера: 64..2000 × 64..4000 и `width × height × dsf² ≤ 20 000 000` — при `--dsf 3` потолок вьюпорта ~2,2 Mpx (1280×800 при dsf 3 = 9,2 Mpx — влезает, 2000×1200 — уже нет).
 - Очередь скриншотов на сервере — concurrency 1, cap 5: при занятой очереди enqueue отвечает `429 queue_full`; драйвер ретраит с бэкоффом (до 5 попыток), счётчик — `queueRetries` в `--json`.
+- `--probe geometry` вместо PNG возвращает замер компонентной поверхности (`features.componentGeometry`); `--out` кладёт сырой результат джобы на диск — это готовый вход для `expect`. Маркер на компонентной поверхности ровно один: корневой элемент дерева съёмки с ключом `c`.
+
+### Числовая приёмка геометрии: `expect`
+
+Пиксельный дифф говорит «0,4% не совпало», числовая приёмка — «gap expected 8, got 6». Гонять её **до** пиксельной.
+
+```bash
+node driver.mjs preview rating-stars --rev head-draft --probe geometry --out actual.json   # компонент
+node driver.mjs geometry my-flow checkout --json > actual.json                              # экран прототипа
+node driver.mjs expect expected/rating-stars.json actual.json             # ±1px по умолчанию
+node driver.mjs expect expected/rating-stars.json actual.json --tolerance 2 --json
+```
+
+`expected.json` пишет автор из выписки макета (Figma/дизайн-спека):
+
+```json
+{
+  "tolerance": 1,
+  "elements": [
+    { "key": "c",     "size": { "width": 328, "height": 56 } },
+    { "key": "stack", "instance": 0, "axis": "row", "gap": 8,
+      "padding": { "left": 16, "right": 16 }, "tolerance": 2 }
+  ]
+}
+```
+
+- `key`/`instance` — маркер из замера (`instance` по умолчанию 0); отсутствующий в замере ключ — не «ok по умолчанию», а FAIL с перечнем доступных ключей.
+- `size` — `{width?, height?}`; `gap` — число (все зазоры равны) либо массив по порядку; `padding` — число (все стороны) либо объект сторон.
+- `gap` меряется как **наблюдаемый зазор** между box'ами прямых видимых детей (может отличаться от CSS gap на margin'ы), `padding` — как отступ между box'ом элемента и bounding box'ом его детей. Ось: `axis` → computed `flexDirection` layout owner'а → вывод из rect'ов.
+- Допуск: `tolerance` в файле (по умолчанию 1 px), per-element `tolerance` перекрывает его, `--tolerance N` перекрывает файловый дефолт, но не per-element.
+- Exit: 0 — сошлось, 2 — есть расхождения (каждое строкой `FAIL <key>#<instance>: <метрика> expected X, got Y`), 1 — битый файл/формат. Верб оффлайновый: сети не касается.
+
+Пиксельная сверка с эталоном макета — `compare.mjs` из пакета `share/yp-figma-rebuild-skill` (кластеры расхождений, AA-diagnostic, `--region` с бюджетом, отчёт о несовпавших размерах).
+
+### Служебные прототипы: галереи, `track: head`, профиль readiness
+
+Probe-прототип (стикершит компонентов) нужен только со стадии молекул — атом принимается `preview`'ом. Если он всё же нужен, объявляй его служебным сразу после создания, **lifecycle-роутом, а не полем документа** (формат документа таких полей не имеет):
+
+```bash
+curl … -X POST -d '{"kind":"component-gallery","track":"head"}' \
+  https://easy-ui.pay-offline.ru/api/prototypes/<id>/lifecycle
+```
+
+- `track: "head"` (`features.prototypeHeadTracking`) — компонентные пины дока резолвятся на последние active-публикации прямо на чтении: пересохранять галерею после каждой публикации компонента больше не нужно. Разрешён только для служебных `kind` и только пока прототип не опубликован (`422 track_requires_service_kind` / `track_requires_unpublished`), а publish/share/visual-baseline/bundle-export такого дока отвечают `422 prototype_head_tracking`.
+- Скоуп резолва — **только компонентные пины**: версия темы остаётся пином ревизии, после PATCH темы галерею всё равно пересохранять (список устаревших пинов приходит в `stalePins` ответа PATCH).
+- Постановка снапа возвращает разрешённые пины в `components[]` — сверяй их с ожидаемыми версиями вместо гадания.
+- **Warnings служебной галереи — не блокер**: readiness служебных `kind` считается с `profile: "service"`, предупреждения не поднимают статус. Не добавляй технические `Hotspot`'ы и `on`-биндинги ради нулевого счётчика предупреждений.
+- Перевести в служебный `kind` прототип, у которого уже есть публикации, нельзя (`422 service_kind_requires_unpublished`) — это был бы обход валидаторов задним числом.
 
 ## Посмотреть результат
 
@@ -397,6 +445,8 @@ node driver.mjs get assets asset_<sha256> # все удерживающие hard
 node driver.mjs delete prototypes my-flow # hard delete (prototypes) / soft (components)
 node driver.mjs delete design-system old-ds # ретайр системы: только пустая, иначе 409
 ```
+
+Тема дизайн-системы правится **sparse-операциями с dry-run** (`PATCH /api/design-systems/:id`, `features.themeDryRun`/`themeSparseOps`): `addTokens`/`addFonts`/`addIcons` поверх `baseVersion` передают только добавляемое (append-only: существующая запись с другим значением → `409 theme_append_conflict`, удаление — только полным PATCH), `dryRun: true` возвращает дифф и итоговый `resolvedSpaceScale` без записи, а патч без фактических изменений версии не создаёт (`noop: true`). В ответе приезжает `stalePins` — прототипы, чья голова пинует старую версию темы: ровно их и надо пересохранить перед снапом (`track: head` тему не резолвит).
 
 `delete <kind> <id>` принимает и единственное число (`component`, `design-system`). Ретайр дизайн-системы — мягкий (`retired=1`): она пропадает из `get design-systems` и из записи, но остаётся читаемой по прямому GET; повторный вызов → `409 design_system_retired`.
 

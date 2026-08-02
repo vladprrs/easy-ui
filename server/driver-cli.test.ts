@@ -27,6 +27,14 @@ import {
   parseArgs,
   previewDraftOutputPath,
   previewOutputPath,
+  DEFAULT_EXPECT_TOLERANCE,
+  evaluateExpectations,
+  expectExitCode,
+  expectLines,
+  observedGaps,
+  observedPadding,
+  parseExpectations,
+  readGeometryRects,
   resolveViewport,
   type DriverReadinessGate,
 } from "../.claude/skills/author/driver.mjs";
@@ -195,6 +203,18 @@ async function createThreeRevisions(api: string, id = "driver-diff") {
     body: JSON.stringify({ baseRev: 2, doc: third, message: "three" }),
   });
   expect(response.status).toBe(200);
+}
+
+/**
+ * Замер строки из двух детей: контейнер 328x56, паддинги 16/12, наблюдаемый зазор 6 px
+ * (в макете — 8). Фикстура общая для юнит- и CLI-тестов верба `expect` (план P4).
+ */
+function expectFixtureRects() {
+  return [
+    { key: "stack", instance: 0, domIndex: 0, x: 0, y: 0, width: 328, height: 56, layoutContext: { display: "flex", flexDirection: "row", flexWrap: "nowrap", rowGap: "8px", columnGap: "8px" } },
+    { key: "a", instance: 0, parentKey: "stack", parentInstance: 0, domIndex: 1, x: 16, y: 12, width: 145, height: 32, layoutContext: null },
+    { key: "b", instance: 0, parentKey: "stack", parentInstance: 0, domIndex: 2, x: 167, y: 12, width: 145, height: 32, layoutContext: null },
+  ];
 }
 
 function png(width = 2, height = 3): Uint8Array {
@@ -880,6 +900,81 @@ describe("author driver preview verb", () => {
     expect(await Bun.file(payload.path).exists()).toBe(true);
   }, 15_000);
 
+  test("--probe geometry returns the component-surface measurement and writes it as expect input", async () => {
+    const jobs: WorkerJob[] = [];
+    const geometryJob: RunJob = async (job) => {
+      jobs.push(job);
+      return {
+        ok: true,
+        geometry: {
+          rects: [
+            { key: "c", instance: 0, domIndex: 0, x: 0, y: 0, width: 328, height: 56, layoutContext: { display: "flex", flexDirection: "row", flexWrap: "nowrap", rowGap: "8px", columnGap: "8px" } },
+          ],
+          truncated: false, total: 1,
+          safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+          roleRects: {},
+          frame: { x: 0, y: 0, width: 328, height: 56, source: "surface" as const },
+          content: { x: 0, y: 0, width: 328, height: 56 },
+          scroll: { width: 328, height: 56 },
+          viewportOwnership: { frame: { width: 328, height: 56 }, content: { width: 328, height: 56 }, scroll: { width: 328, height: 56 }, scrollable: false, owners: [], unownedPct: 0 },
+          issues: [],
+        },
+        consoleErrors: [], pageErrors: [], browserVersion: "test/geometry",
+      };
+    };
+    const { api, db, directory } = await setup(undefined, geometryJob);
+    seedComponent(db, "stars", "Stars");
+    const out = resolve(directory, "actual.json");
+    const result = await run(api, ["preview", "stars", "--probe", "geometry", "--out", out]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("preview stars v1 probe=geometry");
+    expect(result.stdout).toContain("c#0 parent=- dom=0 rect=0,0 328x56");
+    expect(jobs[0]).toMatchObject({ probe: "geometry" });
+    const written = await Bun.file(out).json() as { kind: string; surface: string; rects: unknown[] };
+    expect(written).toMatchObject({ kind: "geometry", surface: "component", componentId: "stars", version: 1 });
+    expect(written.rects).toHaveLength(1);
+  });
+
+  test("expect verb compares an expected.json against a geometry probe without touching the network", async () => {
+    const { api, directory, requests } = await setup();
+    const expectedPath = resolve(directory, "expected.json");
+    const actualPath = resolve(directory, "actual.json");
+    await Bun.write(actualPath, JSON.stringify({ kind: "geometry", surface: "component", rects: expectFixtureRects() }));
+    await Bun.write(expectedPath, JSON.stringify({ elements: [{ key: "stack", size: { width: 328, height: 56 }, gap: 8, padding: 16 }] }));
+
+    const mismatch = await run(api, ["expect", expectedPath, actualPath]);
+    expect(mismatch.exitCode).toBe(2);
+    expect(mismatch.stdout).toContain("stack#0: gap expected 8, got 6");
+    expect(mismatch.stdout).toContain("ok   stack#0: width expected 328, got 328");
+    expect(mismatch.stdout).toContain("FAIL stack#0: padding.top expected 16, got 12");
+    expect(mismatch.stderr).toContain("geometry does not match");
+    // Оффлайновый верб: ни одного запроса к API (даже логина).
+    expect(requests()).toBe(0);
+
+    await Bun.write(expectedPath, JSON.stringify({ elements: [{ key: "stack", gap: 6, padding: { left: 16, top: 12 } }] }));
+    const ok = await run(api, ["expect", expectedPath, actualPath, "--json"]);
+    expect(ok.exitCode).toBe(0);
+    expect(JSON.parse(ok.stdout)).toMatchObject({ command: "expect", tolerance: 1, mismatches: 0, exitCode: 0 });
+
+    const loose = await run(api, ["expect", expectedPath, actualPath, "--tolerance", "0"]);
+    expect(loose.exitCode).toBe(0);
+
+    await Bun.write(expectedPath, JSON.stringify({ elements: [{ key: "stack", gaps: 6 }] }));
+    const malformed = await run(api, ["expect", expectedPath, actualPath]);
+    expect(malformed.exitCode).toBe(1);
+    expect(malformed.stderr).toContain("unknown field gaps");
+
+    await Bun.write(expectedPath, JSON.stringify({ elements: [{ key: "stack", gap: 6 }] }));
+    await Bun.write(actualPath, JSON.stringify({ kind: "image" }));
+    const notGeometry = await run(api, ["expect", expectedPath, actualPath]);
+    expect(notGeometry.exitCode).toBe(1);
+    expect(notGeometry.stderr).toContain("no rects[]");
+
+    const missingFile = await run(api, ["expect", resolve(directory, "nope.json"), actualPath]);
+    expect(missingFile.exitCode).toBe(1);
+    expect(missingFile.stderr).toContain("expected.json cannot be read");
+  });
+
   test("usage error without arguments, and clear errors when the component is missing or unpublished", async () => {
     const { api, db } = await setup();
     const noArgs = await run(api, ["preview"]);
@@ -1312,6 +1407,44 @@ describe("author driver planners", () => {
     expect(parseDiffArguments(["1", "2"], 3)).toEqual({ toRev: 2, againstRev: 1 });
     expect(() => parseDiffArguments([], 1)).toThrow("revision 1");
     expect(() => parseDiffArguments(["x"], 3)).toThrow("positive integer");
+  });
+
+  test("expect derives gaps and paddings from the measured rects", () => {
+    const rects = expectFixtureRects();
+    expect(readGeometryRects({ rects })).toBe(rects);
+    expect(readGeometryRects({ result: { rects } })).toBe(rects);
+    expect(() => readGeometryRects({})).toThrow("no rects[]");
+    const parent = rects[0]!;
+    const children = rects.slice(1);
+    expect(observedGaps(children, "row")).toEqual([6]);
+    expect(observedPadding(parent, children)).toEqual({ top: 12, right: 16, bottom: 12, left: 16 });
+    expect(observedPadding(parent, [])).toBeNull();
+  });
+
+  test("expect reports the numeric verdict and rejects malformed expectations", () => {
+    const rects = expectFixtureRects();
+    const expectations = parseExpectations({
+      elements: [{ key: "stack", size: { width: 328, height: 56 }, gap: 8, padding: { left: 16, top: 12 } }],
+    });
+    expect(expectations.tolerance).toBe(DEFAULT_EXPECT_TOLERANCE);
+    const evaluation = evaluateExpectations(expectations, rects);
+    expect(expectExitCode(evaluation)).toBe(2);
+    expect(evaluation.mismatches).toHaveLength(1);
+    expect(evaluation.mismatches[0]!.message).toBe("stack#0: gap expected 8, got 6");
+    expect(expectLines(evaluation, "expected.json", "actual.json")[0]).toBe("expect expected.json vs actual.json: 5 checks, 1 mismatch (tolerance ±1px)");
+    // Допуск снимает расхождение целиком; per-element tolerance перекрывает файловый.
+    expect(expectExitCode(evaluateExpectations(parseExpectations({ tolerance: 2, elements: [{ key: "stack", gap: 8 }] }), rects))).toBe(0);
+    expect(expectExitCode(evaluateExpectations(parseExpectations({ tolerance: 2, elements: [{ key: "stack", gap: 8, tolerance: 0 }] }), rects))).toBe(2);
+    // CLI-флаг перекрывает файловый дефолт, но не per-element.
+    expect(expectExitCode(evaluateExpectations(parseExpectations({ tolerance: 0, elements: [{ key: "stack", gap: 8 }] }, 5), rects))).toBe(0);
+    // Отсутствующий rect — не «ok по умолчанию».
+    const missing = evaluateExpectations(parseExpectations({ elements: [{ key: "ghost", size: { width: 1 } }] }), rects);
+    expect(missing.mismatches[0]!.message).toContain("ghost#0: not measured");
+    expect(() => parseExpectations({ elements: [] })).toThrow("non-empty elements[]");
+    expect(() => parseExpectations({ elements: [{ key: "stack", padding: { start: 1 } }] })).toThrow("unknown side start");
+    expect(() => parseExpectations({ elements: [{ key: "stack", gapp: 8 }] })).toThrow("unknown field gapp");
+    expect(() => parseExpectations({ elements: [{ key: "stack" }] })).toThrow("declares nothing to check");
+    expect(() => parseExpectations({ elements: [{ key: "stack", gap: [8, 8] }] })).not.toThrow();
   });
 
   test("preview default output path follows the author-shots convention", () => {

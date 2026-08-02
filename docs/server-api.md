@@ -58,9 +58,9 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 
 | Метод и путь | Тело / ответ |
 |---|---|
-| `GET /prototypes?kind=` | свои прототипы любого статуса + чужие `published`; `PrototypeListItem[]`: `{id,name,description?,device,designSystem,screenCount,flowCount,headRev,latestVersion,status,owner:{id,name},updatedAt,kind,tags,derivedFrom}`; `kind` — CSV-фильтр по видам (см. [Lifecycle](#lifecycle-прототипа)) |
+| `GET /prototypes?kind=` | свои прототипы любого статуса + чужие `published`; `PrototypeListItem[]`: `{id,name,description?,device,designSystem,screenCount,flowCount,headRev,latestVersion,status,owner:{id,name},updatedAt,kind,tags,derivedFrom,track}`; `kind` — CSV-фильтр по видам (см. [Lifecycle](#lifecycle-прототипа)) |
 | `POST /prototypes` | `{doc,message?,kind?,tags?,derivedFrom?}` → 201 `{id,rev,warnings,screens}` и `Location` |
-| `GET /prototypes/:id` | `{id,name,designSystem,headRev,latestVersion:number|null,versions:PrototypeVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable,kind,tags,derivedFrom}` |
+| `GET /prototypes/:id` | `{id,name,designSystem,headRev,latestVersion:number|null,versions:PrototypeVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable,kind,tags,derivedFrom,track}` |
 | `GET /prototypes/:id/draft` | `{doc,rev,builtinCatalogHash,componentManifestHash,components:ComponentPin[],compositions:CompositionPin[],assets:AssetPin[]}` |
 | `GET /prototypes/:id/screens/:screenId/render-status?version=n\|rev=n` | Готовность экрана к рендеру — см. [Render status](#render-status) |
 | `PUT /prototypes/:id` | `{doc,message?,baseRev}` → `{rev,warnings,screens}`; `doc.id` обязан совпадать с `:id` |
@@ -73,7 +73,7 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 | `POST /prototypes/:id/repin?dryRun=1` | owner-only; пере-сохраняет head-документ, чтобы пины ушли на последние active-публикации → `{dryRun,rev,before,after,changed:[{component,from,to}]}` |
 | `POST /prototypes/:id/publish` | `{message?,baseRev,force?}` → 201 `{version,rev,screens}` и `Location`; включённый гейт готовности → `409 publish_blocked` |
 | `POST /prototypes/:id/status` | owner-only `{status:"private"|"published"|"archived"}`; граф `private↔published`, `private|published→archived`, `archived→private` |
-| `POST /prototypes/:id/lifecycle` | owner-only `{kind?,tags?,derivedFrom?}` → `{kind,tags,derivedFrom}`; аддитивный патч, см. [Lifecycle](#lifecycle-прототипа) |
+| `POST /prototypes/:id/lifecycle` | owner-only `{kind?,tags?,derivedFrom?,track?}` → `{kind,tags,derivedFrom,track}`; аддитивный патч, см. [Lifecycle](#lifecycle-прототипа) и [Head-tracking](#head-tracking-служебных-прототипов) |
 | `GET /prototypes/:id/versions` | `PrototypeVersion[]`: `{version,rev,publishedAt}` |
 | `GET /prototypes/:id/versions/:version` | `{version,rev,doc,builtinCatalogHash,componentManifestHash,components:ComponentPin[],compositions:CompositionPin[],assets:AssetPin[],publishedAt}`; immutable |
 | `POST /prototypes/:id/share` | `{version,ttlSeconds}` → 201 `{id,prototypeId,version,url,createdAt,expiresAt,activeSessions}`; bearer-token присутствует только в одноразово возвращённом `url` |
@@ -94,28 +94,50 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 - `tags` — до 16 уникальных slug'ов (`^[a-z0-9]+(?:-[a-z0-9]+)*$`, ≤ 32 символов).
 - `derivedFrom` — id прототипа-источника, до 128 символов. **Без FK и без проверки существования**: линия происхождения переживает удаление источника. Запрещена только ссылка на самого себя (`422 validation_failed`).
 
-`POST /prototypes/:id/lifecycle` — owner/admin (та же authz, что у `/status`), тело `strictObject` `{kind?,tags?,derivedFrom?}`:
+`POST /prototypes/:id/lifecycle` — owner/admin (та же authz, что у `/status`), тело `strictObject` `{kind?,tags?,derivedFrom?,track?}`:
 
 - отсутствующее поле не меняется; `derivedFrom: null` очищает связь; `tags: []` очищает теги;
 - пустое тело `{}` — read-back без записи и без audit-события;
-- успешная запись бампает `updated_at` и пишет audit `prototype.lifecycle.changed`;
-- неизвестный ключ, неизвестный `kind`, «грязный» тег или > 16 тегов → `422 validation_failed`; не-владелец → `403 forbidden`; отсутствующий прототип → `404 prototype_not_found`; любой метод, кроме POST → `405`.
+- успешная запись бампает `updated_at` и пишет audit `prototype.lifecycle.changed`; дополнительно смена `kind` пишет `prototype.kind.changed`, а смена `track` — `prototype.track.changed` (оба с `{from,to}`);
+- неизвестный ключ, неизвестный `kind`/`track`, «грязный» тег или > 16 тегов → `422 validation_failed`; не-владелец → `403 forbidden`; отсутствующий прототип → `404 prototype_not_found`; любой метод, кроме POST → `405`;
+- переход в служебный `kind` при наличии опубликованных версий → `422 service_kind_requires_unpublished`: `kind` мутабелен и снимает архитектурные линты и readiness-порог, поэтому задним числом «расслабить» уже опубликованный поток нельзя.
 
 `GET /prototypes?kind=` фильтрует список: значение — **CSV** (`?kind=evidence,experiment`); повторение параметра не поддерживается (побеждает последнее вхождение). Пустое значение (`?kind=`) означает «фильтра нет». Неизвестный вид в списке → `422 validation_failed`.
 
 Галерея использует ту же таксономию: служебные виды (`composition-fixture`, `component-gallery`, `evidence`, `visual-reference`) скрыты из табов «Мои»/«Общие» и живут в табе «Служебные»; `derivedFrom` показывается строкой на карточке.
+
+#### Head-tracking служебных прототипов
+
+Миграция **v22** добавила `prototypes.track TEXT NOT NULL DEFAULT 'pinned'` — ещё одну lifecycle-колонку рядом с `kind`/`tags`/`derived_from`. Формат документа (allowlist v1) и `documentVersion` не тронуты: `track` намеренно **не** поле документа, иначе строгая схема старого образа перестала бы читать сохранённые ревизии при откате. `CHECK` у колонки нет — точка контроля контрактная (`prototypeTrackSchema`), как у `kind`.
+
+`track ∈ pinned | head`:
+
+- `pinned` (по умолчанию, и семантика всех доков до миграции) — ревизия рендерит закреплённые пины;
+- `head` — read-пути резолвят **компонентные** пины ревизии на последние `active`-публикации тех же компонентов. Компонент без единой active-публикации остаётся на пине ревизии.
+
+Ставится **только** `POST /prototypes/:id/lifecycle` и только при двух условиях: служебный `kind` (`component-gallery`, `evidence`, `visual-reference`, `composition-fixture`) и отсутствие опубликованных версий. Нарушения — `422 track_requires_service_kind` и `422 track_requires_unpublished`.
+
+**Скоуп резолва — только компоненты.** `designSystemMetaVersion` (а с ним производный `builtinCatalogHash` и allowlist ассетов темы) остаётся пином ревизии: после PATCH темы трекающий док по-прежнему требует пересохранения. Расширение резолва на тему — вне текущего контракта.
+
+**Что резолв меняет в ответах.** DTO ревизии, черновика и версии additively несут `track` и `resolvedAt`: `resolvedAt` — момент резолва head-пинов, `null` у обычных (`pinned`) доков, где пины иммутабельны и «момента резолва» нет. `components[]` и производный `componentManifestHash` считаются из уже резолвнутого списка, поэтому плеер, `render-status`, readiness и capture видят один и тот же набор. Иммутабельность `GET /prototypes/:id/revisions/:rev` перестаёт быть инвариантом ровно для трекающих доков — их нельзя ни опубликовать, ни расшарить (см. ниже).
+
+**Съёмка.** `POST /prototypes/:id/screens/:screenId/screenshot` резолвит пины атомарно на enqueue, кладёт их в `expected` **и** в `bootstrap.target`, и поверхность рендерит именно их. Публикация новой версии компонента между постановкой и рендером поэтому не уводит джобу и не ломает exact-match handshake. Разрешённый набор возвращается в ответе постановки как `components[]`.
+
+**Операции, требующие воспроизводимого снимка**, для трекающего дока отвечают `422 prototype_head_tracking` (операция названа в `message`): `POST /prototypes/:id/publish`, создание share-гранта, `PUT /visual-baselines/prototypes/:id` и bundle-export прототипа (`GET /prototypes/:id/export`). Bulk-экспорт `GET /bundles/export` проходит тот же гейт по каждому owned-прототипу, поэтому один трекающий док отклоняет весь запрос. Чтобы выполнить любую из этих операций, верните `track: "pinned"` тем же lifecycle-роутом.
 
 ### Готовность к публикации
 
 `GET /prototypes/:id/readiness` (read-доступ) отдаёт отчёт по головной ревизии. Запрос **ничего не запускает**: ни screenshot-job'ов, ни visual-прогонов — только читает уже накопленные данные.
 
 ```json
-{ "prototypeId": "...", "rev": 12, "generatedAt": "...",
+{ "prototypeId": "...", "rev": 12, "generatedAt": "...", "profile": "product",
   "gates": [{ "id": "architecture", "status": "warn", "summary": "architecture_warnings", "...": "детали гейта разложены в тот же объект" }],
   "blocking": [], "publishable": true, "enabledGates": {} }
 ```
 
 Статусы: `pass | warn | fail | unknown`. `unknown` означает «данных нет» и **никогда** не блокирует публикацию.
+
+**Профиль отчёта.** `profile` — `service` для служебных видов (`component-gallery`, `evidence`, `visual-reference`, `composition-fixture`), `product` для остальных. У служебного профиля порог `warn` включённых гейтов не применяется: блокирует только `fail`. Предупреждения витрины — недостижимый экран, отсутствующий baseline, нет сценариев — не про готовность продукта к публикации, и «зелёный» служебного дока нельзя прочитать как «зелёный» продуктового именно потому, что профиль назван в отчёте. Ниже по стеку то же различие делает валидатор: для служебных видов подавляются ровно два предупреждения `validatePrototype` — «screen is not reachable by navigate actions» и «interactive `<type>` has no event handler and no two-way binding»; остальные предупреждения служебные доки получают как обычно, а архитектурные линты `arch/*` были kind-aware и раньше.
 
 | gate | Источник | Статусы |
 |---|---|---|
@@ -274,7 +296,7 @@ Meta-ответы прототипов и компонентов additively не
 | `GET /components` | `{id,name,designSystem,headRev,latestVersion:number|null,updatedAt}[]`; `?includeDeleted=1` дополнительно возвращает надгробия с `{deleted:true,deletedAt,reason,replacement}` |
 | `POST /components` | `{id,name,source,designSystem,message?,figma?,intent?,reuseOverride?}` → 201 `{id,rev,warnings?}` и `Location`; создание проходит reuse gate — детали ниже |
 | `GET /components/:id` | `{id,name,designSystem,headRev,versions:ComponentVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable}` (lifecycle-поля — см. [Lifecycle-модель](#lifecycle-модель)); мягко удалённый компонент — **404**, если не передан `?includeDeleted=1` (тогда meta дополняется `{deleted:true,deletedAt,reason,replacement}`) |
-| `PUT /components/:id` | `{source?,designSystem?,message?,baseRev}` → `{rev}`; хотя бы одно из `source`/`designSystem`, смена системы наследует текущий source |
+| `PUT /components/:id` | `{source?,designSystem?,figma?,message?,baseRev}` → `{rev}`; хотя бы одно из `source`/`designSystem`/`figma`, смена системы наследует текущий source; figma-only PUT, байт-идентичный head → `{unchanged:true,rev:<headRev>}` без новой ревизии (см. [Figma provenance](#figma-provenance)) |
 | `DELETE /components/:id` | `{baseRev, reason?, replacement?, force?}` → 204; `409 component_in_use` пока компонент пинуют головные ревизии (обход — `force:true` от админа, иначе `403 admin_required`); `replacement` — id живого компонента, иначе `422` |
 | `GET /components/:id/usages` | Граф использования; `?format=tree` — то же деревом. См. [Граф использования](#граф-использования-компонентов) |
 | `GET /components/:id/source` | Текущий `{rev,source,designSystem,message:string|null,createdAt}` |
@@ -282,11 +304,39 @@ Meta-ответы прототипов и компонентов additively не
 | `GET /components/:id/revisions` | `{rev,designSystem,message:string|null,createdAt}[]` |
 | `GET /components/:id/revisions/:rev` | `{rev,source,designSystem,message:string|null,createdAt}` |
 | `POST /components/:id/restore` | `{rev,baseRev}` → `{rev}` |
+| `POST /components/:id/validate` | Тело не читается → 200 receipt префлайта head-ревизии; см. [Validate-префлайт](#validate-префлайт-публикации) |
 | `POST /components/:id/publish` | `{message?,baseRev,reuseOverride?}` → 201 `{version,hostAbiVersion,warnings}` и `Location`; `reuseOverride` — только для администратора (`403 admin_required`), конфликты роли — терминальные `409 catalog_changed\|canonical_role_conflict` |
 | `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,statusReason:string\|null,supersededBy:number\|null,statusRev,designSystem,publishedAt}` |
 | `GET /components/:id/versions/:version` | Метадата версии **любого статуса**: `{version,rev,status,statusReason,supersededBy,statusRev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?,scope?,allowedAsRoot?,canonicalFor?,sourceBounded?,ownership?,replacement?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; `propsJsonSchema` описывает input (до Zod defaults/transforms); immutable |
 | `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); отдаётся при статусе `active\|deprecated\|superseded`, иначе `404 bundle_unavailable`; immutable |
 | `POST /components/:id/versions/:version/status` | `{status, reason?, supersededBy?, baseStatusRev}` → 200 `{status, statusRev}`; см. [Статусы версий](#статусы-версий-компонентов) |
+
+### Validate-префлайт публикации
+
+`POST /components/:id/validate` прогоняет publish-набор проверок над **головной ревизией** и ничего не создаёт: ни версии, ни ревизии, ни записи в public state. Тело запроса не читается; доступ — владелец компонента (или админ), как у `PUT`. Rev-адресного варианта нет сознательно: publish работает только с head.
+
+Набор проверок (в этом порядке): сохранённая figma-provenance против строгой схемы → asset-ссылки исходника → извлечение `definition` со smoke-рендером → TypeScript-check → сборка → import-верификация → parity-предупреждения «schema `.default()` ↔ render `??`-fallback». Первые две — db-зависимые и выполняются на **каждый** вызов (их результат зависит от состояния БД, а не от исходника); остальные кэшируются.
+
+Ответ — receipt:
+
+```json
+{ "ok": true, "cached": false, "sourceHash": "…", "bundleHash": "…", "hostAbiVersion": 2,
+  "themeVersion": 7, "catalogRevision": "…", "warnings": ["Parity: prop \"gap\" …"] }
+```
+
+- `cached: true` означает, что тяжёлая часть взята из candidate-кэша по `sourceHash`, а не пересчитана;
+- `themeVersion` — последняя meta-версия темы системы компонента (`null`, если версий темы нет), `catalogRevision` — та же sha256-проекция каталога, что в `/catalog/candidates` и в reuse-конверте;
+- `warnings[]` — те же строки, что вернул бы publish (extract-warnings, отсутствующий `atomicLevel`, [architecture-warnings](#architecture-metadata)) плюс parity-предупреждения.
+
+**Чего receipt НЕ покрывает.** Гарантия «publish не упадёт на 422» ограничена перечисленным набором. Каталого-временные проверки — конфликт канонической роли (`409 canonical_role_conflict`), reuse-гейт, `422 atomic_policy_violation` — остаются на publish и успешным receipt'ом не обходятся: между префлайтом и публикацией каталог мог сдвинуться.
+
+**Переиспользование publish'ем.** Если head-исходник на момент `POST …/publish` совпадает по sha256 с успешно провалидированным, публикация берёт extraction из candidate-кэша через шов `preExtracted` и не платит второй раз за `checkSource`/smoke-рендер. Расхождение sha256 молча отправляет publish извлекать заново. Кэш validate адресуется `sourceHash` и не заселяет publish-кэш import-верификации (`id@rev`), поэтому publish не пропускает собственную проверку импорта.
+
+**Кэш, троттлинг, лимиты.** Candidate-кэш файловый (`DATA_DIR/.candidates/<sourceHash>/{result.json,bundle.js}`), без миграции и без публичного URL-контракта: TTL 24 ч, потолок суммарных байт, GC на старте процесса и при каждой записи (вытесняются самые старые). Отрицательный исход (422/413/400) кэшируется так же, как положительный; неожиданные ошибки (5xx) не кэшируются. Конкурентность — один прогон на пользователя и общий cap; значения публикуются в [`/api/capabilities`](#discovery): `limits.validateUserConcurrent`, `limits.validateGlobalConcurrent`, `limits.validateCacheTtlHours`, `limits.validateCacheMiB`.
+
+**Коды ошибок.** `429 validate_in_flight` — у этой учётки уже идёт прогон; `429 queue_full` — исчерпан общий cap (оба ретраятся с бэкоффом). `422 validation_failed` — любая из проверок набора; неподдерживаемое поле provenance (исторический кейс `pageNodeId`, переживший сужение схемы или приехавший импортом бандла) приходит именно так, с полем в `issues[].path` = `["figma","pageNodeId"]`. Также `422 asset_not_found` (dangling asset-ссылка исходника или `figma.referenceScreenshots`), `422 event_schema_not_serializable`, `413 payload_too_large`, `404 not_found` для несуществующего компонента и `403 forbidden` для чужого.
+
+**Kill-switch.** `EASYUI_VALIDATE_DISABLED=1` (читается один раз на входе процесса) убирает ручку — `404 not_found` — и гасит `features.componentValidate` и `features.componentDraftPreview` в discovery.
 
 ### Поиск кандидатов на переиспользование
 
@@ -559,6 +609,8 @@ assets/<sha256>                        # сырые байты, имя = sha256 
 - Прототипы: `POST /prototypes` и `PUT /prototypes/:id` — `{doc, message?, figma?}`.
 - Компоненты: `POST /components` (`{id,name,source,…,figma?}`) и `PUT /components/:id` (`{source?,designSystem?,figma?,baseRev}`; допускается изменение **только** `figma` — создаётся новая ревизия с прежним source).
 
+**No-op figma-only PUT.** Повторная публикация неизменённого head невозможна и так (`409 already_published`), а сохранение байт-идентичного source — `400`. Оставалась одна дыра: PUT с `figma` создавал ревизию, даже когда и source, и `figma` совпадали с head. Теперь такой запрос ревизию не создаёт и отвечает `200 {unchanged:true, rev:<headRev>}` — `rev` присутствует всегда, поэтому старые клиенты, читающие только его, продолжают работать. Изменившаяся `figma` (включая явный `figma: null` при непустой provenance головы) по-прежнему создаёт ревизию: provenance — свойство ревизии, отвязка его от ревизий в контракт не входит.
+
 **Строгая схема** (`z.strictObject`, лишние ключи → `422 validation_failed`):
 
 | Поле | Правило |
@@ -581,9 +633,9 @@ assets/<sha256>                        # сырые байты, имя = sha256 
 | `GET /design-systems` | `{designSystems: DesignSystemSummary[]}` |
 | `GET /design-systems/:id` | `DesignSystemSummary`; неизвестный ID → `404 not_found` |
 | `POST /design-systems` | `{id,name,description}` → 201 `DesignSystemSummary` и `Location`; повтор ID → `409 already_exists` |
-| `PATCH /design-systems/:id` | Тема (см. §Тема) `{tokens?,fonts?,icons?,baseVersion}` → 200 `DesignSystemSummary`; builtin → `405`; CAS-конфликт → `409 version_conflict` |
+| `PATCH /design-systems/:id` | Тема (см. §Тема) `{tokens?,fonts?,icons?,addTokens?,addFonts?,addIcons?,dryRun?,baseVersion}` → 200 `DesignSystemSummary` + `{dryRun,noop,nextVersion,spacingResolver,diff,inheritedSpaceTokens,stalePins}`; builtin → `405`; CAS-конфликт → `409 version_conflict`; append-конфликт → `409 theme_append_conflict` |
 | `DELETE /design-systems/:id` | Без тела → `204`: мягкий ретайр (`retired=1`). Владелец или админ; builtin → `405`; непустая система → `409 design_system_in_use`; уже ретайрнутая → `409 design_system_retired` |
-| `GET /design-systems/:id/versions/:v` | Immutable `{systemId,version,tokens,fonts,icons,createdAt}`; отсутствует → `404 not_found` |
+| `GET /design-systems/:id/versions/:v` | Immutable `{systemId,version,tokens,fonts,icons,createdAt,spacingResolver,resolvedSpaceScale}`; отсутствует → `404 not_found` |
 
 `DesignSystemSummary` имеет `{id,name,description,builtinCatalogHash,resolvedSpaceScale,components,hostPrimitives}` плюс additively `latestMetaVersion` и содержимое последней версии темы `{tokens,fonts,icons}`; provider не раскрывается. `components[]` сериализует `propsJsonSchema` (input), `layout?` и явный `layoutNeutral`; `hostPrimitives[]` использует ту же generic-схему дескриптора и содержит host-owned `Image`, `Hotspot`, `Overlay`, `@eui/FlowRoot`, а также `@eui/Composition` и `@eui/Slot` (волна 5) для каждой системы. Они доступны runtime независимо от custom bundle и намеренно не входят в `/catalog/manifest`. `resolvedSpaceScale` — итоговые девять `none..4xl` для последней merged-темы системы. Malformed JSON/body не-object даёт `400 invalid_request`; неизвестные поля, неверные типы, невалидный slug, пустые или слишком длинные значения — `422 validation_failed` с `issues[].path`. `PUT` на collection или `:id`, `DELETE` на collection, а также `PATCH` на collection дают `405 method_not_allowed`: registry metadata в этом API неизменяемы. Повтор идентичного POST не идемпотентен и также даёт 409.
 
@@ -601,7 +653,31 @@ CLI: `node driver.mjs delete design-system <id>` (единственное и м
 
 #### Тема дизайн-системы (tokens/fonts/icons) и версии
 
-Тема кастомной системы — три строго-валидируемых коллекции, хранимые как **immutable-версии** в `design_system_versions(system_id, version, tokens_json, fonts_json, icons_json, created_at)`. `PATCH /design-systems/:id` доступен **только для кастомных систем** (builtin-provider → `405`) и создаёт версию `baseVersion+1` с CAS по последней версии: `baseVersion≠latest` → `409 version_conflict` с `currentVersion`. Первая тема создаётся при `baseVersion:0`. PATCH-семантика: переданная коллекция заменяет предыдущую, опущенная — наследуется. Версии неизменяемы и читаются через `GET …/versions/:v`.
+Тема кастомной системы — три строго-валидируемых коллекции, хранимые как **immutable-версии** в `design_system_versions(system_id, version, tokens_json, fonts_json, icons_json, created_at, spacing_resolver)`. `PATCH /design-systems/:id` доступен **только для кастомных систем** (builtin-provider → `405`) и создаёт версию `baseVersion+1` с CAS по последней версии: `baseVersion≠latest` → `409 version_conflict` с `currentVersion`. Первая тема создаётся при `baseVersion:0`. PATCH-семантика: переданная коллекция заменяет предыдущую, опущенная — наследуется. Версии неизменяемы и читаются через `GET …/versions/:v`.
+
+**Sparse-операции (append-only).** Вместо полной коллекции можно прислать `addTokens` / `addFonts` / `addIcons`: правка из двух токенов передаёт два объекта, а не весь словарь. Каждая пара «полная ↔ sparse» взаимоисключающая (`tokens` и `addTokens` вместе → `422 validation_failed`). Мердж резолвится строго против `baseVersion` — того же снимка, что прошёл CAS, — по политике `appendOnly`:
+
+- ключа/шрифта/иконки нет → добавляется;
+- есть с идентичным значением → ничего не меняется;
+- есть с другим значением → `409 theme_append_conflict` с `currentVersion` и `issues[]` вида `{path:["addTokens","<key>"],existing,incoming,message}`; тихой перезаписи не бывает;
+- **удаления под sparse нет** by construction — для него остаётся полный PATCH.
+
+Идентичность шрифта — тройка `family|weight|style`, иконки — `name`. Полнота и монотонность шкалы `space.*` для sparse-режима проверяется на смердженном наборе (тело append-операции частично по определению), поэтому нарушение приходит как `422 validation_failed` с `issues[].path = ["tokens", …]` и пометкой «checked on the merged base N + addTokens result».
+
+**`dryRun` и no-op.** `dryRun: true` выполняет всю валидацию, отдаёт `diff` и итоговую `resolvedSpaceScale`, но версию не пишет. Независимо от `dryRun` контент, семантически равный `baseVersion`, версию **не создаёт**: ответ несёт `noop: true` и `nextVersion: null` (токены сравниваются как множество пар — порядок ключей незначим; шрифты и иконки — по порядку, он влияет на каскад `@font-face` и выбор иконки). Поля ответа PATCH поверх обычного `DesignSystemSummary`:
+
+- `dryRun`, `noop`, `nextVersion` (номер созданной версии либо `null`);
+- `diff` — `{tokens:{added,changed,removed},fonts:{added,removed},icons:{added,removed},changed}` относительно `baseVersion`;
+- `spacingResolver` — резолвер, с которым версия записана (или который остаётся у `baseVersion` при no-op);
+- `inheritedSpaceTokens` — ключи `space.*`, унаследованные от базовой версии (см. ниже);
+- `stalePins` — `{total,limit,prototypes:[{id,name,pinnedVersion}]}`: головные ревизии прототипов этой системы, пинующие более старую (или отсутствующую) версию темы; список усечён до 50, полный размер — в `total`.
+
+**Версионирование резолвера spacing-шкалы.** Миграция **v23** добавила `design_system_versions.spacing_resolver INTEGER NOT NULL DEFAULT 1` (плоский `ADD COLUMN`, backfill `1`, без `CHECK` — точка контроля контрактная):
+
+- `1` — историческое поведение, сохранённое для всех существующих версий байт-в-байт: частичные `space.*`-оверрайды кладутся на **каноническую** шкалу, а не на базовую шкалу дизайн-системы, и любой невалидный/немонотонный набор откатывается на каноническую;
+- `2` — фикшеный мердж: и оверрайды, и фолбэк идут на **базовую шкалу самой системы**. Пишется только новыми версиями. Дополнительно под резолвером 2 полный патч `tokens`, из которого `space.*` выпали целиком, наследует шкалу базовой версии вместо молчаливой подмены — унаследованные ключи перечислены в `inheritedSpaceTokens`.
+
+Разница наблюдаема только там, где база системы отличается от канонической (сегодня `wireframe`/`shadcn`, чьи темы неизменяемы); для кастомных систем база каноническая и оба резолвера совпадают. Резолвер — свойство **версии**, поэтому read-пути (discovery, `DesignSystemSummary`, capture, geometry-probe) резолвят каждую версию тем алгоритмом, с которым она записана. Kill-switch `EASYUI_THEME_RESOLVER_V2_DISABLED=1` (читается один раз на входе процесса) заставляет писать новые версии с резолвером `1` и отключает наследование `space.*`; в discovery это видно как `features.themeSpacingResolverV2: false`.
 
 Грамматика (нарушение → `422 validation_failed` с `issues[].path`):
 
@@ -673,23 +749,27 @@ Cursor — каноническая строка `<ISO-8601>~<asset_id>`, нап
 
 ## Скриншоты
 
-Асинхронный job-API рендерит экран прототипа (или опубликованный компонент) через headless Chromium (playwright) в отдельном node-подпроцессе. Обычный режим создаёт PNG и складывает его в реестр ассетов (D); geometry probe возвращает только DOM-геометрию и не создаёт PNG/asset. Оба режима требуют `SERVE_DIST` **и** установленного chromium; иначе POST сразу отвечает `501 screenshot_unavailable`.
+Асинхронный job-API рендерит экран прототипа (либо компонент — опубликованную версию или сохранённую head-ревизию) через headless Chromium (playwright) в отдельном node-подпроцессе. Обычный режим создаёт PNG и складывает его в реестр ассетов (D); geometry probe возвращает только DOM-геометрию и не создаёт PNG/asset. Оба режима требуют `SERVE_DIST` **и** установленного chromium; иначе POST сразу отвечает `501 screenshot_unavailable`.
 
 | Метод и путь | Тело / ответ |
 |---|---|
 | `POST /prototypes/:id/screens/:screenId/screenshot` | `{rev?\|version?, viewport{width,height}, deviceScaleFactor?, theme?, waitForFonts?, probe?:"geometry"}` → `202 {jobId}` |
-| `POST /components/:id/versions/:version/screenshot` | `{props?\|exampleName?, viewport, deviceScaleFactor?, theme?, waitForFonts?}` → `202 {jobId}`; `props` и `exampleName` взаимоисключающие |
+| `POST /components/:id/versions/:version/screenshot` | `{props?\|exampleName?, viewport, deviceScaleFactor?, theme?, waitForFonts?, probe?:"geometry"}` → `202 {jobId}`; `props` и `exampleName` взаимоисключающие |
+| `POST /components/:id/head/screenshot` | То же тело; снимает сохранённую **неопубликованную** head-ревизию → `202 {jobId}`. См. [Draft-preview](#draft-preview-head-ревизии-компонента) |
 | `GET /screenshot-jobs/:jobId` | `{status: queued\|running\|done\|error, result?, error?}` |
 
-`result` (при `done`) — discriminated union. Image-ветка сохраняет прежние поля и получает discriminator: `{kind:"image", imageUrl, assetId, width, height, consoleErrors, pageErrors, rendererBuild, browserVersion, componentPins?|bundleHash?}`.
+Прототипная постановка additively возвращает `components[]` — разрешённые на момент enqueue пины (`{id,name,version,bundleHash}`). Для [head-tracking](#head-tracking-служебных-прототипов) дока это единственный момент, когда клиент узнаёт, какие версии компонентов реально пойдут в кадр. Постановка требует владения ресурсом; `GET /screenshot-jobs/:jobId` перепроверяет доступ по цели джобы — read-доступ к прототипу для прототипных и владение компонентом для компонентных, включая draft-джобы.
+
+`result` (при `done`) — discriminated union. Image-ветка сохраняет прежние поля и получает discriminator: `{kind:"image", imageUrl, assetId, width, height, consoleErrors, pageErrors, rendererBuild, browserVersion, componentPins?|bundleHash?}`. Draft-джоба (`/head/screenshot`) дополнительно несёт `draftRev` — номер снятой head-ревизии.
 
 **Capture-контракт (волна 7.1, аддитивно).** Обе ветки результата дополнительно несут `captureClean`, `productErrors[]`, `infraNoise[]`, `runtimeWarnings[]`; image-ветка ещё и `imageProduced: true`. `consoleErrors`/`pageErrors` остаются прежними (полный сырой список) — старые клиенты не ломаются. Классификация — единый allowlist в `server/screenshot/noise.ts`: `favicon.ico`, origin'ы браузерных расширений (`chrome-|moz-|safari-web-extension://`), `ERR_NETWORK_CHANGED`, `ResizeObserver loop …`, а также любое сообщение, все абсолютные URL которого ведут не на capture origin. Всё остальное — `productErrors`, то есть дефект самого прототипа; `captureClean === productErrors.length === 0`. `runtimeWarnings` — console-warning'и страницы (`[overlay] …` и подобные), они никогда не являются причиной провала.
 
-Geometry-ветка:
+Geometry-ветка дискриминирована по `surface`: `"prototype"` — экран прототипа, `"component"` — одиночный компонент (`probe: "geometry"` принимают обе компонентные ручки, published и draft). Замер (`rects`, `truncated`, `total`, `safeArea`, `roleRects`, `frame`, `content`, `scroll`, `viewportOwnership`, `issues`), `viewport`, `dpr` и capture-контракт качества у обеих поверхностей одинаковы; различаются только поля цели. Прототипная поверхность:
 
 ```json
 {
   "kind": "geometry",
+  "surface": "prototype",
   "resolvedRev": 3,
   "prototypeInstanceId": "instance_…",
   "componentPins": [{"id":"stack","version":1,"bundleHash":"…"}],
@@ -724,6 +804,38 @@ Geometry-ветка:
 ```
 
 Поля `safeArea`/`roleRects`/`frame`/`content`/`scroll`/`viewportOwnership`/`issues` добавлены волной 7.1 и аддитивны: прежние `rects`/`truncated`/`total` не изменились. `roleRects` покрывает роли `panel`, `frame`, `region:header`, `region:footer`, `region:statusBar`; каждая опциональна. Источник роли (`source`) — `key` (rect авторского элемента: `panel` = root экрана, регионы — из `region`-разметки спеки), `selector` (DOM-слот `[data-eui-region=…]`, `[data-eui-stage-viewport]`, `[data-eui-content-scroller]`) или `surface` (fallback фрейма на `#eui-capture-surface`). `safeArea` читается из `env(safe-area-inset-*)` временным probe-элементом (в capture-окружении обычно нули). `viewportOwnership` показывает, какую долю фрейма занимает каждая роль (`areaPct`/`heightPct`) и сколько остаётся контенту (`unownedPct`), плюс `scrollable` (scrollHeight выше фрейма). `issues[]` — структурные проверки (все `severity:"warn"`, ничего не блокируют): `content-clipped-by-frame` (контент выходит за фрейм), `overlapping-regions` (две роли пересекаются), `footer-owns-page` (футер занимает ≥50% высоты фрейма). Анализ чистый и живёт в `analyzeGeometry` (`src/capture/geometry.mjs`), сам замер — в `collectGeometry`.
+
+Компонентная поверхность вместо `resolvedRev`/`prototypeInstanceId`/`componentPins` несёт цель самого компонента:
+
+```json
+{
+  "kind": "geometry",
+  "surface": "component",
+  "componentId": "pay-button",
+  "version": 3,
+  "bundleHash": "…",
+  "designSystemMetaVersion": 7,
+  "resolvedSpaceScale": {"none":"0px","xs":"4px","…":"…"},
+  "viewport": {"width":390,"height":844},
+  "dpr": 1,
+  "rects": [],
+  "truncated": false,
+  "total": 0
+}
+```
+
+`version` и `draftRev` взаимоисключающие: published-джоба отдаёт `version`, draft-джоба (`/head/screenshot`) — `draftRev`. `designSystemMetaVersion` и `resolvedSpaceScale` берутся из **последней** версии темы системы компонента (компонентная съёмка версию темы не пинует, в отличие от прототипной, которая читает пин ревизии); шкала резолвится тем `spacingResolver`, который записан в этой версии темы — см. [Тема](#тема-дизайн-системы-tokensfontsicons-и-версии). Ролей экрана у одиночного компонента нет, поэтому `roleRects` обычно пуст, а `frame` приходит из capture-поверхности.
+
+#### Draft-preview head-ревизии компонента
+
+`POST /components/:id/head/screenshot` снимает **сохранённую, но не опубликованную** head-ревизию: атом доводится до нужной геометрии до первой публикации. Тело — как у published-ручки (`props?`|`exampleName?`, `viewport`, `deviceScaleFactor?`, `theme?`, `waitForFonts?`, `probe?:"geometry"`), доступ — владелец компонента.
+
+- Рендерится эфемерный candidate-bundle [validate-префлайта](#validate-префлайт-публикации). При холодном кэше (кандидат не собирался или вычищен GC) постановка собирает его сама, под тем же троттлингом и с тем же кэшем по `sourceHash`, поэтому ручка асинхронна и может ответить `429 validate_in_flight`/`429 queue_full`.
+- Сломанный драфт отвечает тем же ApiError, что и validate (`422 validation_failed` и остальной набор), а не «нет бандла».
+- `exampleName` и `propsJsonSchema` берутся из extract-результата драфта (published-DTO для него не существует) и едут на capture-поверхность внутри job-scoped bootstrap; неизвестное имя примера → `422 unknown_example`.
+- Asset-ссылки, извлечённые из исходника драфта, попадают в capture-allowlist джобы. Пиннинга ассетов у драфта нет — он появляется только на publish.
+- Candidate-bundle доступен исключительно внутри своей джобы (content-addressed путь в allowlist), не участвует в каталоге, резолве latest-active и bundle-экспорте и публичного URL-контракта не имеет.
+- Ручка гаснет тем же kill-switch'ем, что и validate (`EASYUI_VALIDATE_DISABLED=1` → `404`), потому что постановка джобы означает сборку кандидата.
 
 Worker обходит production-маркеры `span[data-eui-key]` после `__EUI_CAPTURE_READY__`. `instance` — нулевой ordinal одинакового `key` в DOM-порядке (в том числе для repeat), `parentKey`/`parentInstance` указывают ближайший ancestor-маркер, `domIndex` — общий DOM-порядок. Координаты округлены до 0.01 CSS px и отсчитаны от border box `#eui-capture-surface`; `dpr` не масштабирует их. Rect — union видимых box'ов DOM-поддерева маркера. Портал вне этого поддерева не включается; Overlay-layer включается, потому что его маркеры находятся внутри capture surface; fixed box целиком вне surface отбрасывается. Clipping/scroll не обрезает исходный layout rect.
 
@@ -853,11 +965,13 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
   "directives": ["$state", "$bindState", "$template", "$cond", "$asset"],
   "paramSources": ["$event", "$elementId", "$itemIndex", "$itemKey"],
   "conditions": ["$and", "$or", "$state", "$item", "$index", "eq", "neq", "gt", "gte", "lt", "lte", "not"],
-  "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5, "geometryRects": 2000, "flows": 24, "flowSteps": 50, "flowTotalSteps": 320, "flowDepth": 4, "compositionDepth": 5 },
+  "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5, "geometryRects": 2000, "flows": 24, "flowSteps": 50, "flowTotalSteps": 320, "flowDepth": 4, "compositionDepth": 5,
+    "validateUserConcurrent": 1, "validateGlobalConcurrent": 2, "validateCacheTtlHours": 24, "validateCacheMiB": 32 },
   "designSystems": ["shadcn", "wireframe", "..."],
   "resolvedSpaceScales": { "shadcn": { "none": "0px", "xs": "4px", "sm": "8px", "md": "12px", "lg": "16px", "xl": "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" } },
   "regions": ["statusBar", "header", "footer"],
-  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true, "screenRegions": true, "bundleExport": true, "bundleImport": true, "componentReuseGate": true, "compositionV2": true, "catalogMigration": true },
+  "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true, "screenRegions": true, "bundleExport": true, "bundleImport": true, "componentReuseGate": true, "compositionV2": true, "catalogMigration": true,
+    "componentValidate": true, "componentGeometry": true, "componentDraftPreview": true, "prototypeHeadTracking": true, "readinessProfile": true, "themeDryRun": true, "themeSparseOps": true, "themeSpacingResolverV2": true },
   "reuseGate": { "mode": "shadow", "intentRequired": false, "policyVersion": 1 }
 }
 ```
@@ -865,6 +979,21 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 `reuseGate` описывает фазу [reuse-гейта](#reuse-gate-при-создании-и-публикации-компонента) этого инстанса: `mode` — `shadow` либо `enforce`, `intentRequired` истинно ровно в `enforce`, `policyVersion` — версия политики матчинга, та же, что в ответах `/api/catalog/candidates` и в записях аудита. Значение приходит из `REUSE_GATE`, прочитанной один раз на входе процесса, — повторного чтения окружения на запросе нет, поэтому discovery и сам гейт не могут разойтись.
 
 `designSystems` читается из живого реестра БД; `resolvedSpaceScales` резолвится для каждой системы из её последней merged-темы с canonical fallback. Значения `limits` импортируются из модулей, где они реально enforce'ятся (`src/prototype/schema.ts`, `src/prototype/validate.ts`, `server/assets/validate.ts`, `server/screenshot/service.ts`, `server/http.ts`), — двойного хардкода нет.
+
+Флаги волны итеративного авторинга описывают возможности, которых на старом образе просто нет, поэтому клиент обязан читать их **до** вызова, а не выяснять по 404:
+
+| Флаг | Что означает | Как гаснет |
+|---|---|---|
+| `componentValidate` | доступен [`POST /components/:id/validate`](#validate-префлайт-публикации) | `EASYUI_VALIDATE_DISABLED=1` → `false` и `404` на ручке |
+| `componentDraftPreview` | доступна [съёмка head-ревизии](#draft-preview-head-ревизии-компонента) `POST /components/:id/head/screenshot` | тот же kill-switch: постановка джобы собирает candidate-bundle |
+| `componentGeometry` | `probe: "geometry"` принимают обе компонентные ручки, результат — [`surface: "component"`](#скриншоты) | — |
+| `prototypeHeadTracking` | lifecycle-роут принимает [`track: "head"`](#head-tracking-служебных-прототипов) | — |
+| `readinessProfile` | readiness-отчёт несёт [`profile`](#готовность-к-публикации) | — |
+| `themeDryRun` | PATCH темы умеет `dryRun` и no-op-детекцию | — |
+| `themeSparseOps` | PATCH темы умеет `addTokens`/`addFonts`/`addIcons` | — |
+| `themeSpacingResolverV2` | новые версии темы пишутся [резолвером 2](#тема-дизайн-системы-tokensfontsicons-и-версии) | `EASYUI_THEME_RESOLVER_V2_DISABLED=1` → `false`, новые версии остаются на резолвере 1 |
+
+Оба kill-switch'а, как и `REUSE_GATE`, читаются один раз на входе процесса, поэтому discovery и поведение ручек не могут разойтись. Флаг `false` означает «выключено на этом инстансе», а отсутствие ключа — «образ старше этой волны»; клиент обязан различать эти случаи. Лимиты `validateUserConcurrent`/`validateGlobalConcurrent` описывают, когда прилетит `429 validate_in_flight`/`429 queue_full`, а `validateCacheTtlHours`/`validateCacheMiB` — срок жизни и потолок candidate-кэша (после вытеснения следующий draft-preview просто пересоберёт кандидата).
 
 `features.compositionV2` — инстанс принимает документы композиций версии 2 (вложенность, `atomicLevel`); `features.catalogMigration` — доступны админские эндпоинты аудита и миграции каталога. `limits.compositionDepth` — максимальная глубина вложенности композиций, **внешняя композиция считается уровнем 1** (см. [формат](prototype-format.md#composition-document-v2)).
 
