@@ -3,6 +3,7 @@ import { unwrapZodSchema, zodObjectShape } from "../catalog/zodIntrospect";
 import { resolveSpacingScale } from "../designSystems/spacingScale";
 import { spaceTokens, type SpaceToken } from "../designSystems/types";
 import type { PrototypeDoc } from "./schema";
+import { surfaceDesignSystem, surfaceOf } from "./surfaces";
 import type { ValidationIssue } from "./types";
 
 export const layoutLintCodes = [
@@ -128,10 +129,22 @@ export function lintPrototypeLayouts(
 ): ValidationIssue[] {
   const warnings: ValidationIssue[] = [];
   // Validation has no client-side access to custom-DS themes. Unknown systems therefore resolve canonically.
-  const scale = resolveSpacingScale(doc.designSystem, options.themeTokens);
+  // Шкала считается от ДС **поверхности экрана** (план multi-surface, D10): у документа без
+  // `surfaces` поверхность одна (синтетическая primary) и результат прежний. `themeTokens`
+  // относятся к ДС документа, поэтому чужая ДС резолвится канонически (мульти-ДС — W3).
+  const scaleCache = new Map<string, Record<SpaceToken, string>>();
+  const scaleFor = (designSystem: string): Record<SpaceToken, string> => {
+    const cached = scaleCache.get(designSystem);
+    if (cached) return cached;
+    const resolved = resolveSpacingScale(designSystem, designSystem === doc.designSystem ? options.themeTokens : undefined);
+    scaleCache.set(designSystem, resolved);
+    return resolved;
+  };
+  const docScale = scaleFor(doc.designSystem);
   const numericOccurrences = new Map<string, { value: number; items: LocatedElement[] }>();
 
   for (const [screenIndex, screen] of doc.screens.entries()) {
+    const scale = scaleFor(surfaceDesignSystem(surfaceOf(doc, screen.id), doc) ?? doc.designSystem);
     const locatedByKey = new Map<string, LocatedElement>();
     for (const [key, element] of Object.entries(screen.spec.elements)) {
       locatedByKey.set(key, { screenIndex, key, element, definition: definitions[element.type] });
@@ -205,9 +218,10 @@ export function lintPrototypeLayouts(
     }
   }
 
+  // Агрегат по всему документу — от ДС документа (совпадает с primary-поверхностью).
   for (const { value, items } of numericOccurrences.values()) {
     if (items.length < 5) continue;
-    const token = exactTokenForPx(value, scale);
+    const token = exactTokenForPx(value, docScale);
     const advice = token
       ? `replace with spacing token "${token}" (an exact ${value}px equivalent)`
       : "replace with a semantic spacing token; there is no exact token equivalent";

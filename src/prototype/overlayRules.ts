@@ -1,4 +1,5 @@
 import type { PrototypeDoc } from "./schema";
+import { surfaceOf } from "./surfaces";
 import type { ValidationIssue } from "./types";
 
 const path = (parts: (string | number)[]) => `/${parts.map(String).join("/")}`;
@@ -32,7 +33,9 @@ export function validateOverlayRules(doc: PrototypeDoc): ValidationIssue[] {
       }
     };
     walk(screen.spec.root, undefined, false, false, false);
-    if (hasOverlay && (doc.device ?? "desktop") === "desktop" && !screen.canvas) {
+    // Девайс — от **поверхности экрана** (план multi-surface, D10). Документ без `surfaces`
+    // получает синтетическую primary из `doc.device` — поведение байт-в-байт прежнее.
+    if (hasOverlay && surfaceOf(doc, screen.id).device === "desktop" && !screen.canvas) {
       add(["screens", screenIndex], "Overlay on a desktop screen requires a canvas");
     }
   });

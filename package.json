@@ -20,11 +20,11 @@
     "verify:sdk": "tsc --noEmit -p sdk/tsconfig.json && tsx scripts/check-sdk-drift.ts && vitest run --config sdk/vitest.config.ts",
     "check:css": "node scripts/check-css.mjs",
     "preview": "vite preview",
-    "server:dev": "ADMIN_NAME=admin ADMIN_PASSWORD=easy-ui-dev-password bun --watch server/main.ts",
+    "server:dev": "ADMIN_NAME=admin ADMIN_PASSWORD=easy-ui-dev-password EASYUI_SURFACES=1 bun --watch server/main.ts",
     "server:test": "bun test server",
     "server:typecheck": "tsc --noEmit -p server/tsconfig.json",
     "migration:v15:report": "bun server/cli/migrationV15Report.ts",
-    "serve": "SERVE_DIST=dist PORT=4173 bun server/main.ts",
+    "serve": "SERVE_DIST=dist PORT=4173 EASYUI_SURFACES=1 bun server/main.ts",
     "e2e": "playwright test",
     "perf:library": "tsx scripts/perf-library.mjs",
     "verify": "npm run typecheck && npm run server:typecheck && npm run lint && npm run test -- --run && npm run server:test && npm run validate:templates && npm run verify:openapi && npm run verify:sdk && npm run build && npm run check:css"

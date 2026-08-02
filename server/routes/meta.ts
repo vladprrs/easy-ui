@@ -17,7 +17,9 @@ import {
   FLOW_STEPS_LIMIT,
   FLOW_TOTAL_STEPS_LIMIT,
   FLOW_DEPTH_LIMIT,
+  SURFACES_LIMIT,
 } from "../../src/prototype/schema";
+import { surfacesWriteEnabled } from "./prototypes";
 import { ELEMENTS_PER_SCREEN_LIMIT, REPEAT_ELEMENT_LIMIT, REPEAT_RENDER_COST_BUDGET, TREE_DEPTH_LIMIT } from "../../src/prototype/validate";
 import { MAX_ASSET_BYTES } from "../assets/validate";
 import { listActiveDesignSystems } from "../designSystems";
@@ -96,6 +98,9 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       computedEntries: COMPUTED_ENTRIES_LIMIT,
       computedFields: COMPUTED_FIELDS_LIMIT,
       computedTerms: COMPUTED_TERMS_LIMIT,
+      // `doc.surfaces`: сколько поверхностей несёт документ (v1 — ровно две).
+      // Импорт из места энфорса (`src/prototype/schema`), канон docs/server-api.md#capabilities.
+      surfaces: SURFACES_LIMIT,
     },
     designSystems: systems.map((system) => system.id),
     resolvedSpaceScales: Object.fromEntries(systems.map((system) => {
@@ -151,6 +156,13 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // стейта, read-only, читаются обычным `$state` по bare-ключу. Набор операций —
       // в `computedOps`, лимиты — в `limits.computed*`.
       computed: true,
+      // План 2026-08-02 (multi-surface-flows): формат `doc.surfaces` + `screen.surface` +
+      // `step.companions` поддержан кодом — stored-документы с поверхностями читаются всегда.
+      surfaces: true,
+      // Write-политика той же фичи (kill-switch D16, `EASYUI_SURFACES=1`): false → сохранение
+      // документа с `surfaces` отвечает `422 surfaces_disabled`. Разнесено с `surfaces`
+      // намеренно: поддержка кода и разрешение записи — разные вопросы для агента.
+      surfacesWrite: surfacesWriteEnabled(),
     },
     reuseGate: {
       mode: reuseGateMode,

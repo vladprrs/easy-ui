@@ -22,6 +22,28 @@ export const FLOW_TOTAL_STEPS_LIMIT = 320;
  */
 export const FLOW_DEPTH_LIMIT = 4;
 
+/**
+ * Мульти-поверхностные документы (план `docs/plans/2026-08-02-multi-surface-flows.md`, D1).
+ * В v1 — **ровно две** поверхности: сцена плеера, бюджеты рендера и очередь скриншотов
+ * рассчитаны на пару. Значение уезжает в `/api/capabilities` как `limits.surfaces`
+ * (канон `docs/server-api.md#capabilities`: лимит публикуется из места энфорса).
+ */
+export const SURFACES_LIMIT = 2;
+
+/**
+ * W1-временный запрет per-surface дизайн-систем (план §5, W1): сервер ещё однодизайнсистемный
+ * (пины, темы, share-гранты, capture-allowlist — W3), поэтому `surface.designSystem`, отличный
+ * от `doc.designSystem`, отвергается **входной** веткой со стабильным кодом
+ * `surface_design_system_not_supported`. Снятие в W3 — переключением этого флага в `true`
+ * (и удалением ветки в `refinePrototypeDocAuthoring`).
+ */
+export const SURFACE_DESIGN_SYSTEMS_SUPPORTED = false;
+/** Стабильный код W1-запрета; попадает в `issue.params.code` и в текст сообщения. */
+export const SURFACE_DESIGN_SYSTEM_UNSUPPORTED_CODE = "surface_design_system_not_supported";
+
+export const DEVICE_KINDS = ["mobile", "tablet", "desktop"] as const;
+export type DeviceKind = (typeof DEVICE_KINDS)[number];
+
 export const REGION_KINDS = ["statusBar", "header", "footer"] as const;
 export type RegionKind = (typeof REGION_KINDS)[number];
 
@@ -80,6 +102,12 @@ export const authoredSpecSchema = z.strictObject({
 const screenShape = <S extends z.ZodType>(spec: S) => ({
   id: slugSchema,
   name: z.string().min(1),
+  /**
+   * Принадлежность экрана поверхности (D2). Обязательна ровно тогда, когда документ несёт
+   * `surfaces`; на документе без `surfaces` поле — ошибка (никаких молчаливых дефолтов).
+   * Правило живёт в `refinePrototypeDocStructure` — то есть в обеих ветках.
+   */
+  surface: slugSchema.optional(),
   note: z.string().trim().min(1).max(500).optional(),
   stateOverrides: z.record(z.string(), jsonValueSchema).optional(),
   canvas: z.strictObject({ width: z.number().positive(), height: z.number().positive() }).optional(),
@@ -89,10 +117,21 @@ const screenShape = <S extends z.ZodType>(spec: S) => ({
 const screenSchema = z.strictObject(screenShape(storedSpecSchema));
 const authoredScreenSchema = z.strictObject(screenShape(authoredSpecSchema));
 
-const flowStepSchema = z.strictObject({
+/**
+ * Форма шага флоу. `companions` (D5) — «что в этот момент на другой поверхности»:
+ * ключ — id **не-своей** существующей поверхности, значение — её экран. Референциальная
+ * целостность проверяется в обеих ветках (`refinePrototypeDocStructure`), а stored-ветка
+ * дополнительно терпима к форме ключа: читатели игнорируют неизвестные записи
+ * (`resolveStepCompanions` в `src/prototype/surfaces.ts`).
+ */
+const flowStepShape = <C extends z.ZodType>(companions: C) => ({
   screenId: slugSchema,
   note: z.string().trim().min(1).max(500).optional(),
-});
+  companions: companions.optional(),
+}) as const;
+
+const inputFlowStepSchema = z.strictObject(flowStepShape(z.record(slugSchema, slugSchema)));
+const storedFlowStepSchema = z.strictObject(flowStepShape(z.record(z.string(), z.string())));
 
 /**
  * Общая форма флоу. `parentId` — аддитивное поле иерархии сценариев (план
@@ -111,9 +150,9 @@ const flowShape = <Steps extends z.ZodType>(steps: Steps) => ({
 }) as const;
 
 /** Входная ветка: авторские лимиты `.max()` живут только здесь. */
-const inputFlowSchema = z.strictObject(flowShape(z.array(flowStepSchema).min(1).max(FLOW_STEPS_LIMIT)));
+const inputFlowSchema = z.strictObject(flowShape(z.array(inputFlowStepSchema).min(1).max(FLOW_STEPS_LIMIT)));
 /** Stored-ветка: те же поля, но без авторских лимитов — иначе откат образа ломает чтение. */
-const storedFlowSchema = z.strictObject(flowShape(z.array(flowStepSchema).min(1)));
+const storedFlowSchema = z.strictObject(flowShape(z.array(storedFlowStepSchema).min(1)));
 
 /**
  * Идентификаторы архитектурных lint-правил (`src/prototype/architectureLints.ts`).
@@ -200,16 +239,43 @@ const storedComputedSchema = z.record(z.string(), z.unknown()).nullable()
 /** Порядок операций для `/api/capabilities.limits`/`features` (D12): импорт из места энфорса. */
 export const COMPUTED_OPS = ["count", "sum", "sumProduct", "add"] as const satisfies readonly z.output<typeof inputComputedEntrySchema>["op"][];
 
-const prototypeDocShape = <S extends z.ZodType, F extends z.ZodType, C extends z.ZodType>(screens: S, flows: F, computed: C) => ({
+/**
+ * Поверхность (D1). `designSystem` опционален, дефолт — `doc.designSystem` (ДС primary):
+ * резолв дефолта — `surfaceDesignSystem` в `src/prototype/surfaces.ts`.
+ */
+const surfaceSchema = z.strictObject({
+  id: slugSchema,
+  name: z.string().min(1).max(60),
+  device: z.enum(DEVICE_KINDS),
+  startScreen: slugSchema,
+  designSystem: slugSchema.optional(),
+});
+
+/**
+ * Входная ветка: **ровно** `SURFACES_LIMIT` поверхностей (минимум 2 — одна поверхность не
+ * добавляет ничего). Stored-ветка лимита не знает: документ, записанный более новой версией
+ * с большим числом поверхностей, обязан читаться после отката образа.
+ */
+const inputSurfacesSchema = z.array(surfaceSchema).min(2).max(SURFACES_LIMIT)
+  .describe("Поверхности документа (v1: ровно две). Каждый экран обязан нести `surface` с id одной из них.");
+const storedSurfacesSchema = z.array(surfaceSchema).min(1);
+
+const prototypeDocShape = <S extends z.ZodType, F extends z.ZodType, C extends z.ZodType, U extends z.ZodType>(screens: S, flows: F, computed: C, surfaces: U) => ({
   version: z.literal(1),
   id: slugSchema,
   name: z.string().min(1),
   description: z.string().optional(),
-  device: z.enum(["mobile", "tablet", "desktop"]).default("desktop"),
+  device: z.enum(DEVICE_KINDS).default("desktop"),
   startScreen: slugSchema,
   state: z.record(z.string(), jsonValueSchema),
   /** Производные значения стейта (аддитивно, read-only); формат — `src/prototype/computed.ts`. */
   computed: computed.optional(),
+  /**
+   * Поверхности документа (аддитивно, D1). `surfaces[0]` — **primary**: `doc.device`/
+   * `doc.startScreen` обязаны совпадать с ней (D3), чтобы непереведённые читатели
+   * деградировали осмысленно. Документ без `surfaces` ведёт себя как раньше.
+   */
+  surfaces: surfaces.optional(),
   screens,
   flows: flows.optional(),
   /** Архитектурные исключения (волна 2): аддитивно, документ без поля ведёт себя как раньше. */
@@ -217,11 +283,77 @@ const prototypeDocShape = <S extends z.ZodType, F extends z.ZodType, C extends z
 }) as const;
 
 type RefinableDoc = {
-  screens: { id: string }[];
+  screens: { id: string; surface?: string; canvas?: { width: number; height: number } }[];
   startScreen: string;
-  flows?: { id: string; parentId?: string; steps: { screenId: string }[] }[];
+  device?: DeviceKind;
+  /** Есть только во входной ветке (stored-ветка проставляет дефолт `shadcn`). */
+  designSystem?: string;
+  surfaces?: { id: string; device: DeviceKind; startScreen: string; designSystem?: string }[];
+  flows?: { id: string; parentId?: string; steps: { screenId: string; companions?: Record<string, string> }[] }[];
   /** `null` возможен только в stored-ветке (см. `storedComputedSchema`). */
   computed?: Record<string, unknown> | null;
+};
+
+/**
+ * Референциальная целостность поверхностей (D2/D4/D5) — **обе** ветки: на неё напрямую
+ * опирается код (`surfaceOf` вызывается на stored-документах из плеера и капчера).
+ * Авторские лимиты и равенства с primary (D1/D2a/D3) живут во входной ветке.
+ */
+const refineSurfaceReferences = <T extends RefinableDoc>(doc: T, context: z.RefinementCtx, screenIds: ReadonlySet<string>) => {
+  const surfaceIds = new Set<string>();
+  doc.surfaces?.forEach((surface, index) => {
+    if (surfaceIds.has(surface.id)) context.addIssue({ code: "custom", path: ["surfaces", index, "id"], message: "surface id must be unique" });
+    surfaceIds.add(surface.id);
+  });
+
+  const surfaceOfScreen = new Map<string, string>();
+  doc.screens.forEach((screen, index) => {
+    if (!doc.surfaces) {
+      if (screen.surface !== undefined) {
+        context.addIssue({ code: "custom", path: ["screens", index, "surface"], message: "screen surface requires the document to define surfaces" });
+      }
+      return;
+    }
+    if (screen.surface === undefined) {
+      context.addIssue({ code: "custom", path: ["screens", index, "surface"], message: "screen must declare a surface when the document defines surfaces" });
+      return;
+    }
+    if (!surfaceIds.has(screen.surface)) {
+      context.addIssue({ code: "custom", path: ["screens", index, "surface"], message: "screen surface must reference an existing surface" });
+      return;
+    }
+    if (!surfaceOfScreen.has(screen.id)) surfaceOfScreen.set(screen.id, screen.surface);
+  });
+
+  doc.flows?.forEach((flow, flowIndex) => {
+    flow.steps.forEach((step, stepIndex) => {
+      const companions = step.companions;
+      if (!companions) return;
+      const at = ["flows", flowIndex, "steps", stepIndex, "companions"] as const;
+      for (const [surfaceId, screenId] of Object.entries(companions)) {
+        const path = [...at, surfaceId];
+        if (!doc.surfaces) {
+          context.addIssue({ code: "custom", path, message: "step companions require the document to define surfaces" });
+          continue;
+        }
+        if (!surfaceIds.has(surfaceId)) {
+          context.addIssue({ code: "custom", path, message: "companion surface must reference an existing surface" });
+          continue;
+        }
+        if (surfaceOfScreen.get(step.screenId) === surfaceId) {
+          context.addIssue({ code: "custom", path, message: "companion surface must differ from the surface of the step screen" });
+          continue;
+        }
+        if (!screenIds.has(screenId)) {
+          context.addIssue({ code: "custom", path, message: "companion screen must reference an existing screen" });
+          continue;
+        }
+        if (surfaceOfScreen.get(screenId) !== surfaceId) {
+          context.addIssue({ code: "custom", path, message: "companion screen must belong to the companion surface" });
+        }
+      }
+    });
+  });
 };
 
 /**
@@ -236,6 +368,7 @@ const refinePrototypeDocStructure = <T extends RefinableDoc>(doc: T, context: z.
     ids.add(screen.id);
   });
   if (!ids.has(doc.startScreen)) context.addIssue({ code: "custom", path: ["startScreen"], message: "startScreen must reference an existing screen" });
+  refineSurfaceReferences(doc, context, ids);
 
   if (!doc.flows) return;
   const flowIds = new Set<string>();
@@ -292,11 +425,61 @@ const refineFlowHierarchy = (flows: NonNullable<RefinableDoc["flows"]>, context:
 };
 
 /**
+ * Авторские правила поверхностей — **только входная ветка**: инварианты совместимости с
+ * primary (D3), обязательный `canvas` у экранов desktop-поверхности (D2a) и W1-запрет
+ * per-surface ДС. Stored-парс их не исполняет: откат образа обязан читать записанное.
+ */
+const refineSurfaceAuthoring = <T extends RefinableDoc>(doc: T, context: z.RefinementCtx) => {
+  const surfaces = doc.surfaces;
+  if (!surfaces?.length) return;
+  const primary = surfaces[0]!;
+  if (doc.startScreen !== primary.startScreen) {
+    context.addIssue({ code: "custom", path: ["startScreen"], message: "startScreen must equal the startScreen of the primary surface (surfaces[0])" });
+  }
+  if (doc.device !== undefined && doc.device !== primary.device) {
+    context.addIssue({ code: "custom", path: ["device"], message: "device must equal the device of the primary surface (surfaces[0])" });
+  }
+
+  const screensBySurface = new Map<string, Set<string>>();
+  for (const screen of doc.screens) {
+    if (screen.surface === undefined) continue;
+    const set = screensBySurface.get(screen.surface) ?? new Set<string>();
+    set.add(screen.id);
+    screensBySurface.set(screen.surface, set);
+  }
+  const deviceOfSurface = new Map(surfaces.map((surface) => [surface.id, surface.device]));
+
+  surfaces.forEach((surface, index) => {
+    if (!screensBySurface.get(surface.id)?.has(surface.startScreen)) {
+      context.addIssue({ code: "custom", path: ["surfaces", index, "startScreen"], message: "surface startScreen must reference a screen of this surface" });
+    }
+    if (!SURFACE_DESIGN_SYSTEMS_SUPPORTED && surface.designSystem !== undefined && surface.designSystem !== doc.designSystem) {
+      context.addIssue({
+        code: "custom",
+        path: ["surfaces", index, "designSystem"],
+        params: { code: SURFACE_DESIGN_SYSTEM_UNSUPPORTED_CODE },
+        message: `per-surface design systems are not supported yet (${SURFACE_DESIGN_SYSTEM_UNSUPPORTED_CODE})`,
+      });
+    }
+  });
+
+  // D2a: desktop-поверхность рисуется fixed-viewport-веткой DeviceFrame только с canvas;
+  // следствие — регионы (`@eui/FlowRoot`) на таких экранах запрещены (runtimeSpec).
+  doc.screens.forEach((screen, index) => {
+    if (screen.surface === undefined || screen.canvas) return;
+    if (deviceOfSurface.get(screen.surface) === "desktop") {
+      context.addIssue({ code: "custom", path: ["screens", index, "canvas"], message: "screen of a desktop surface must declare a canvas" });
+    }
+  });
+};
+
+/**
  * Авторские правила — **только входная ветка** (план §4). Stored-парс их не исполняет,
  * чтобы откат образа на предыдущую версию читал, сохранял и восстанавливал документы
  * без потерь: правила геометрии дорожек и лимиты — вопрос авторинга, не чтения.
  */
 const refinePrototypeDocAuthoring = <T extends RefinableDoc>(doc: T, context: z.RefinementCtx) => {
+  refineSurfaceAuthoring(doc, context);
   // До early-return по flows: счётчик записей computed — авторский лимит (D5).
   if (doc.computed != null && Object.keys(doc.computed).length > COMPUTED_ENTRIES_LIMIT) {
     context.addIssue({ code: "custom", path: ["computed"], message: `computed exceeds the limit of ${COMPUTED_ENTRIES_LIMIT} entries` });
@@ -348,7 +531,7 @@ const refinePrototypeDocAuthoring = <T extends RefinableDoc>(doc: T, context: z.
 
 /** Strict schema for create/save inputs. New revisions must choose a design system explicitly. */
 export const inputPrototypeDocSchema = z.strictObject({
-  ...prototypeDocShape(z.array(authoredScreenSchema).min(1), z.array(inputFlowSchema).min(1).max(FLOWS_LIMIT), inputComputedSchema),
+  ...prototypeDocShape(z.array(authoredScreenSchema).min(1), z.array(inputFlowSchema).min(1).max(FLOWS_LIMIT), inputComputedSchema, inputSurfacesSchema),
   designSystem: slugSchema,
 }).superRefine(refinePrototypeDocStructure).superRefine(refinePrototypeDocAuthoring);
 
@@ -358,7 +541,7 @@ export const inputPrototypeDocSchema = z.strictObject({
  * а раскрытый документ (ключи `<hostKey>$<inner>`) валиден для этого парсера.
  */
 export const storedPrototypeDocSchema = z.strictObject({
-  ...prototypeDocShape(z.array(screenSchema).min(1), z.array(storedFlowSchema).min(1), storedComputedSchema),
+  ...prototypeDocShape(z.array(screenSchema).min(1), z.array(storedFlowSchema).min(1), storedComputedSchema, storedSurfacesSchema),
   designSystem: slugSchema.default("shadcn"),
 }).superRefine(refinePrototypeDocStructure);
 
@@ -373,4 +556,6 @@ export type Flow = z.output<typeof inputFlowSchema>;
 /** Публичные типы computed — из **строгой input-ветки** (прецедент `Flow`). */
 export type ComputedEntry = z.output<typeof inputComputedEntrySchema>;
 export type ComputedSpec = z.output<typeof inputComputedSchema>;
-export type FlowStep = z.output<typeof flowStepSchema>;
+export type FlowStep = z.output<typeof inputFlowStepSchema>;
+/** Поверхность документа (D1); форма одинакова в обеих ветках. */
+export type Surface = z.output<typeof surfaceSchema>;

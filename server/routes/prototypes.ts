@@ -44,9 +44,24 @@ function objectBody(value:unknown): Record<string,unknown> { const p=bodyObject.
 function integer(value:unknown,name:string):number { if(typeof value!=="number"||!Number.isInteger(value)||value<1) throw new ApiError(400,"invalid_request",`${name} must be a positive integer`); return value; }
 function baseRev(body:Record<string,unknown>):number { if(!Object.hasOwn(body,"baseRev")) throw new ApiError(400,"base_rev_required","baseRev is required"); return integer(body.baseRev,"baseRev"); }
 function message(body:Record<string,unknown>):string|undefined { if(body.message===undefined) return; if(typeof body.message!=="string") throw new ApiError(400,"invalid_request","message must be a string"); return body.message; }
+/**
+ * Kill-switch D16 (план `docs/plans/2026-08-02-multi-surface-flows.md`): запись документа с
+ * `doc.surfaces` разрешена только при `EASYUI_SURFACES=1`.
+ *
+ * **Полярность обратна `EASYUI_PUBLISH_GATES`** (там пустая переменная = ничего не блокируется):
+ * здесь пусто = фича выключена, чтобы прод не накапливал мульти-поверхностные документы до
+ * продуктовой приёмки — откат образа на версию без фичи иначе ломает чтение таких доков.
+ * Гейтится **только запись** (create/save): чтение stored-документов не гейтится никогда.
+ *
+ * Env читается по месту (прецедент `parsePublishGates`, `server/readiness.ts`), поэтому
+ * параметр `raw` существует для тестов.
+ */
+export const surfacesWriteEnabled = (raw:string|undefined=process.env.EASYUI_SURFACES):boolean => raw==="1";
+
 function parseDoc(value:unknown,pathId?:string):PrototypeDoc {
   const parsed=inputPrototypeDocSchema.safeParse(value);
   if(!parsed.success) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:parsed.error.issues});
+  if(parsed.data.surfaces&&!surfacesWriteEnabled()) throw new ApiError(422,"surfaces_disabled","Multi-surface documents are disabled on this server (EASYUI_SURFACES)",{issues:[{path:["surfaces"],message:"doc.surfaces requires EASYUI_SURFACES=1 on the server"}]});
   if(pathId!==undefined&&parsed.data.id!==pathId) throw new ApiError(422,"validation_failed","Document id must match path id",{issues:[{path:["id"],message:"must match path id"}]});
   return parsed.data;
 }

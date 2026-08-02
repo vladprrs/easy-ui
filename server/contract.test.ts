@@ -15,6 +15,7 @@ import {
   FLOW_STEPS_LIMIT,
   FLOW_TOTAL_STEPS_LIMIT,
   FLOW_DEPTH_LIMIT,
+  SURFACES_LIMIT,
   type PrototypeDoc,
 } from "../src/prototype/schema";
 import { ELEMENTS_PER_SCREEN_LIMIT, REPEAT_ELEMENT_LIMIT, REPEAT_RENDER_COST_BUDGET, TREE_DEPTH_LIMIT } from "../src/prototype/validate";
@@ -612,6 +613,7 @@ describe("route contracts", () => {
       computedEntries: COMPUTED_ENTRIES_LIMIT,
       computedFields: COMPUTED_FIELDS_LIMIT,
       computedTerms: COMPUTED_TERMS_LIMIT,
+      surfaces: SURFACES_LIMIT,
     });
     expect(value.computedOps).toEqual([...COMPUTED_OPS]);
     // The ordered contract case may have created the fixture system already; Bun can execute
@@ -646,6 +648,9 @@ describe("route contracts", () => {
       themeSpacingResolverV2: true,
       acceptancePromote: true,
       computed: true,
+      surfaces: true,
+      // Write-политика мульти-поверхностных документов — kill-switch EASYUI_SURFACES (D16).
+      surfacesWrite: process.env.EASYUI_SURFACES === "1",
     });
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
   });

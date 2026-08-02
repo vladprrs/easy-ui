@@ -52,6 +52,26 @@ describe("Overlay validation rules", () => {
     expect(errors(elements, { device: "desktop", canvas: { width: 100, height: 100 } })).toEqual([]);
   });
 
+  // План multi-surface (D10): девайс правила Overlay берётся от поверхности экрана,
+  // а не от скаляра `doc.device`.
+  it("measures the desktop rule against the surface of the screen", () => {
+    const overlay = { root: { type: "Stack", children: ["overlay"] }, overlay: { type: "Overlay", props: { placement: "bottom" } } };
+    const doc = prototypeDocSchema.parse({
+      version: 1, id: "overlay-surfaces", name: "Overlay surfaces", designSystem: "shadcn",
+      device: "desktop", startScreen: "kso", state: {},
+      surfaces: [
+        { id: "kso", name: "КСО", device: "desktop", startScreen: "kso" },
+        { id: "app", name: "App", device: "mobile", startScreen: "app" },
+      ],
+      screens: [
+        { id: "kso", name: "KSO", surface: "kso", canvas: { width: 100, height: 200 }, spec: { root: "root", elements: Object.fromEntries(Object.entries(overlay).map(([key, value]) => [key, { props: {}, ...value }])) } },
+        // Mobile-поверхность на desktop-документе: Overlay без canvas законен.
+        { id: "app", name: "App", surface: "app", spec: { root: "root", elements: Object.fromEntries(Object.entries(overlay).map(([key, value]) => [key, { props: {}, ...value }])) } },
+      ],
+    });
+    expect(validatePrototype(doc).errors.map((item) => item.message)).not.toContain("Overlay on a desktop screen requires a canvas");
+  });
+
   it("counts repeat descendants inside Overlay in the common render budget", () => {
     const rows = Array.from({ length: REPEAT_RENDER_COST_BUDGET + 1 }, () => ({ label: "A" }));
     expect(errors({ root: { type: "Stack", children: ["overlay"] }, overlay: { type: "Overlay", props: { placement: "top" }, children: ["list"] }, list: { type: "Stack", repeat: { statePath: "/rows" }, children: ["text"] }, text: { type: "Text", props: { text: "A" } } }, { device: "mobile", state: { rows } }).join("\n")).toMatch(/render cost.*exceeds the budget/);

@@ -485,6 +485,8 @@ export const checkVisualReferenceContract = registerContract({
 
 /** 422-набор head-tracking'а: publish/share/visual-baseline/bundle-export трекающего дока. */
 const headTrackingError = { status: 422, code: "prototype_head_tracking", description: "The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot." } as const;
+/** Kill-switch D16 (план 2026-08-02 multi-surface-flows): запись `doc.surfaces` требует EASYUI_SURFACES=1. */
+const surfacesDisabledError = { status: 422, code: "surfaces_disabled", description: "The document declares doc.surfaces, but multi-surface writes are disabled on this server (EASYUI_SURFACES=1 enables them). Discovery: capabilities.features.surfacesWrite." } as const;
 
 const baselineViewportSchema=z.strictObject({width:z.number().int(),height:z.number().int()});
 const baselineMemberSchema=z.strictObject({screenId:z.string(),viewport:baselineViewportSchema,deviceScaleFactor:deviceScaleSchema,theme:z.enum(["light","dark"]),referenceId:z.string()});
@@ -666,7 +668,7 @@ export const createPrototypeContract = registerContract({
   status: 201,
   requestSchema: z.object({ doc: inputPrototypeDocSchema, message: z.string().optional(), figma: figmaSchema.optional(), ...prototypeLifecycleSchema.omit({ track: true }).shape }),
   responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }],
+  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }, surfacesDisabledError],
 });
 
 const renderableSchema = z.object({ head: z.boolean(), published: z.boolean().nullable() });
@@ -704,7 +706,7 @@ export const savePrototypeContract = registerContract({
   summary: "Save a new head revision (CAS on baseRev); document id must match the path id.",
   requestSchema: z.object({ doc: inputPrototypeDocSchema, figma: figmaSchema.optional(), ...casBody }),
   responseSchema: z.looseObject({ rev: z.number(), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.validationFailed],
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.validationFailed, surfacesDisabledError],
 });
 
 export const deletePrototypeContract = registerContract({
@@ -1963,6 +1965,8 @@ export const capabilitiesResponseSchema = z.object({
     validateCacheTtlHours: z.number(), validateCacheMiB: z.number(),
     /** `doc.computed` (план 2026-08-02): записей в объекте, полей в `sumProduct`, термов в `add`. */
     computedEntries: z.number(), computedFields: z.number(), computedTerms: z.number(),
+    /** `doc.surfaces` (план 2026-08-02 multi-surface-flows, D1): число поверхностей документа (v1 — ровно две). */
+    surfaces: z.number(),
   }),
   designSystems: z.array(z.string()),
   resolvedSpaceScales: z.record(z.string(), spaceScaleSchema),
@@ -1993,6 +1997,10 @@ export const capabilitiesResponseSchema = z.object({
     acceptancePromote: z.boolean(),
     /** Top-level `doc.computed` — производные значения стейта (план 2026-08-02). */
     computed: z.boolean(),
+    /** Формат `doc.surfaces`/`screen.surface`/`step.companions` поддержан кодом (план 2026-08-02 multi-surface-flows). */
+    surfaces: z.boolean(),
+    /** Запись документов с `doc.surfaces` разрешена (kill-switch D16, `EASYUI_SURFACES=1`); иначе `422 surfaces_disabled`. */
+    surfacesWrite: z.boolean(),
   }),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`

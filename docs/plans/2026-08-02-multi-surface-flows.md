@@ -127,10 +127,10 @@ Done: доки описывают D1–D16 (включая ограничени�
 
 ## 9. Чек-лист синка перед Stage 3
 
-- [ ] agent-iteration-dx W1–W5 смержены; фактические `CaptureExpected`/`CaptureReady`/`bootstrap` сверены с D14 (протокол в рабочем дереве уже менялся)
-- [ ] computed-state T1–T6 смержены; фактическая сигнатура `prototypeDocShape` учтена в W1
-- [ ] Сверены фактические сигнатуры share-грантов и capture-allowlist (R2-m6)
-- [ ] Line-цитаты плана перепроверены по HEAD
+- [x] agent-iteration-dx W1–W5 смержены; фактические `CaptureExpected`/`CaptureReady`/`bootstrap` сверены с D14 (2026-08-02: `PrototypeReady` несёт `revision`, `*Expected` — `rev`; `bootstrap.target: Record<string,unknown>`)
+- [x] computed-state T1–T6 смержены; фактическая сигнатура `prototypeDocShape` учтена в W1 (`<S,F,C>(screens, flows, computed)`, schema.ts:203; `refinePrototypeDocStructure` 232-249, обе ветки: 353/363)
+- [x] Сверены фактические сигнатуры share-грантов (`dependencySnapshot`, share/repo.ts:126-131) и capture-allowlist (`prototypeAllowedUrls`, service.ts:348-375; enqueue 244-278)
+- [x] Line-цитаты плана перепроверены по HEAD 1e1e0cd. Поправки: `src/player/composition.ts` не существует — композиционная 422 реализуется в `server/repos/compositions.ts:672` + `server/validation.ts:91`; ключ импортёра — `${designSystem}::${type}` (importer.ts:390,453); RETIRE_BLOCKERS — designSystems.ts:133-137; deps.navigate — actionRuntime.ts:271
 
 ## 10. Вне скоупа v1 (→ v2/RFC)
 
