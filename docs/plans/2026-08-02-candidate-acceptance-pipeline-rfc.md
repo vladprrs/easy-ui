@@ -1,8 +1,8 @@
 # RFC: Candidate Acceptance Pipeline
 
-Дата: 2026-08-02. Статус: **v1 draft — Stage 1. Stage 2 (адверсариальное ревью) сознательно отложено до завершения реализации плана `2026-08-02-agent-iteration-dx.md` (v6): перед ревью RFC синхронизируется с фактически посаженным кодом по чек-листу §10.**
+Дата: 2026-08-02. Статус: **v2 — синк §10 с фактически посаженным кодом agent-iteration-dx (W1–W5, коммиты b4e2428…c7d8803) выполнен 2026-08-02; готов к Stage 2 (адверсариальному ревью).**
 
-Источники: `docs/EASYUI_PRODUCT_IMPROVEMENTS.md` (§3–5, §9.2, §16–18 — количественный baseline и предложение RFC), `docs/plans/2026-08-02-agent-iteration-dx.md` §6 (перечень отложенных в RFC слоёв), in-flight код P8 (`server/components/validate.ts`, `server/components/candidates.ts`).
+Источники: `docs/EASYUI_PRODUCT_IMPROVEMENTS.md` (§3–5, §9.2, §16–18 — количественный baseline и предложение RFC), `docs/plans/2026-08-02-agent-iteration-dx.md` §6 (перечень отложенных в RFC слоёв), посаженный код P8/P1b/P2 (`server/components/validate.ts`, `server/components/candidates.ts`, `server/screenshot/service.ts`, `src/capture/protocol.ts`).
 
 ## 1. Цель и не-цели
 
@@ -32,13 +32,15 @@ RFC строится поверх плана agent-iteration-dx v6, волны W
 
 | Примитив | Откуда | Роль в RFC |
 |---|---|---|
-| `POST /api/components/:id/validate` (только head), receipt `{sourceHash, bundleHash, hostAbiVersion, themeVersion, catalogRevision, warnings, cached}` | P8, `server/components/validate.ts` | стадия validate; receipt — вход promote |
-| Файловый candidate-кэш `<dataDir>/.candidates/<sourceHash>/{result.json,bundle.js}`, TTL 24 ч, GC, без публичного URL | P8, `server/components/candidates.ts` | build-кэш кандидата (см. §3.2: durable-слой добавляется поверх, кэш не становится контрактом) |
-| Троттлинг validate (1/пользователь, глобальный cap), шов `PublishExtraction`/`preExtracted` | P8, `pipeline.ts` | promote переиспользует extract без второй компиляции |
-| Draft-preview + geometry компонентной поверхности, `bootstrap`-доставка схемы/examples | P1b (W2) | gate'ы `render`/`geometry` acceptance-run'а |
-| `track: "head"` для служебных прототипов, резолв пинов через `bootstrap.target` | P2 (W3) | transient overlay для gate'а `regression` |
-| No-op детекция figma-PUT (`unchanged: true` + `rev`) | P5.1 | предпосылка §6 (provenance-евиденс без ревизий — следующий шаг) |
-| Readiness-профиль служебных `kind` | P9 | acceptance-run на галереях не спотыкается о flow-гейты |
+| `POST /api/components/:id/validate` (только head), receipt `ValidateReceipt = {ok: true, cached, sourceHash, bundleHash, hostAbiVersion, themeVersion (= latestMetaVersion DS, null без темы), catalogRevision, warnings: string[]}`; db-зависимые проверки (provenance, asset-refs) — вне кэша, на каждый вызов; `catalogRevision` считается свежо на ответ | P8 (факт), `server/components/validate.ts:182-229` | стадия validate; receipt — вход promote |
+| Файловый candidate-кэш `<dataDir>/.candidates/<sourceHash>/{result.json,bundle.js}`, TTL 24 ч, cap 32 MiB, GC on start + on write, **отрицательные записи кэшируются** (`entry.ok=false` с failure), без публичного URL; таблицы в БД нет (решение W2) | P8 (факт), `server/components/candidates.ts` | build-кэш кандидата (см. §3.2: durable-слой добавляется поверх, кэш не становится контрактом) |
+| Троттлинг validate: `validateUserConcurrent=1`, `validateGlobalConcurrent=2` (**делится с draft-preview**: постановка draft-джобы собирает кандидата тем же `withValidateSlot`), шов `PublishExtraction`/`preExtracted` (publish-кэш `id@rev` не заселяется validate'ом — ключ `validated@<sourceHash>`) | P8 (факт), `pipeline.ts`, `validate.ts` | promote переиспользует extract без второй компиляции |
+| Draft-preview `POST /api/components/:id/head/screenshot` (+`probe: "geometry"` на обоих вариантах), `ensureDraftCandidate` (auto-rebuild после GC под тем же троттлингом), `bootstrap` несёт `target`, `propsJsonSchema`, `examples`; geometry-результат дискриминирован `surface: "prototype"|"component"` | P1b (факт), `service.ts`, `src/capture/protocol.ts:92-116` | gate'ы `render`/`geometry` acceptance-run'а |
+| `track: "head"` — lifecycle-колонка (v22), только служебные kind + непубликован; publish/share/baseline/export → `422 prototype_head_tracking`; enqueue замораживает полные пины + manifestHash в `bootstrap.target`, ответ enqueue — `{jobId, components}`; резолв только компонентных пинов (тема — пин ревизии) | P2 (факт, W3) | transient overlay для gate'а `regression` |
+| No-op детекция figma-PUT: byte-identical `source`+`figma` → `200 {unchanged: true, rev}` | P5.1 (факт), `routes/components.ts:251` | предпосылка §6 (provenance-евиденс без ревизий — следующий шаг) |
+| Readiness-профиль `product|service` (warn служебных доков не поднимает статус, `profile` в отчёте) | P9 (факт) | acceptance-run на галереях не спотыкается о flow-гейты |
+
+Kill-switch-канон (факты): `EASYUI_VALIDATE_DISABLED=1` (гасит validate и draft-preview, `features.componentValidate|componentDraftPreview=false`), `EASYUI_THEME_RESOLVER_V2_DISABLED=1`. Discovery-факты: `capabilities.limits.{validateUserConcurrent, validateGlobalConcurrent, validateCacheTtlHours, validateCacheMiB}`; `capabilities.features.{componentValidate, componentDraftPreview, componentGeometry, prototypeHeadTracking, readinessProfile, themeDryRun, themeSparseOps, themeSpacingResolverV2}`.
 
 Существующая модель версий, которую RFC **не ломает** (`server/repos/components.ts`): immutable `component_publishes` со статусами `staging|active|deprecated|superseded|rejected|archived|failed`, ручные переходы `TRANSITIONS` с CAS по `status_rev`, `RENDERABLE_STATUS = {active, deprecated, superseded}` (пины продолжают исполняться), `latest = MAX(version) WHERE status='active'`.
 
@@ -167,7 +169,7 @@ POST /api/components/:id/promote
 ```text
 inputs_fingerprint = sha256(canonicalJson({
   sourceHash, bundleHash, hostAbiVersion,
-  themeVersion, designSystemMetaVersion,
+  themeVersion,          // = designSystemMetaVersion (факт receipt), null для DS без темы
   catalogRevision,
   policyProfileHash
 }))
@@ -230,18 +232,18 @@ component_evidence(component_id, rev, seq, figma_json, author, created_at)
 
 Телеметрия: аудит-события `candidate.created|expired|rejected`, `acceptance.run.finished` (с вердиктом и длительностями gate'ов), `component.promoted` (с fingerprints), `publish.legacy` (для advisory-режима); счётчики в `GET /api/meta` не добавляем — аудит-лог достаточен.
 
-## 10. Чек-лист синхронизации перед Stage 2 (после посадки agent-iteration-dx)
+## 10. Чек-лист синхронизации перед Stage 2 — **выполнен 2026-08-02** (v2)
 
-Обновить RFC по фактически посаженному коду и только затем диспатчить ревью:
+Все пункты сверены с посаженным кодом W1–W5 (b4e2428…c7d8803), факты внесены в §2:
 
-1. Финальная форма receipt (`ValidateReceipt`) и кодов ошибок validate — сверить §2/§4.1 (сейчас — по in-flight `server/components/validate.ts`).
-2. Кэш кандидатов: остался файловым или получил таблицу в W2 (план допускал оба) — влияет на §3.2 (durable-слой поверх файлов vs расширение таблицы).
-3. Фактический механизм job-scoped доставки draft-бандла и `bootstrap`-расширения (P1b) — §4.2 `render`/`regression`.
-4. Фактическая семантика `bootstrap.target`-резолва и track-доков (W3) — §4.2 `regression`, impact-выборка.
-5. Форма no-op ответа PUT (P5.1) — §6 (`unchanged` продолжение).
-6. Итоговые лимиты/поля `capabilities.limits|features` — §8.
-7. Строчные ссылки на код (`components.ts`, `service.ts` и т.д.) — перепроверить после мержа волн.
-8. Решения W2 «зафиксировать в PR» (файловый vs БД кэш, формы ручек) — перенести сюда как факты.
+1. ✅ Receipt: `ValidateReceipt` — форма в §2; коды ошибок validate = коды publish-префлайта (`validation_failed` с `issues[].path` и пр.), отрицательные результаты тоже кэшируются.
+2. ✅ Кэш остался **файловым**, без таблицы (W2, cap 32 MiB) — §3.2 строится как durable-слой поверх файлов.
+3. ✅ Draft-доставка: `ensureDraftCandidate` + job-scoped bundle, `bootstrap.{target, propsJsonSchema, examples}` — §4.2.
+4. ✅ `bootstrap.target`: enqueue замораживает полные пины + manifestHash; ответ enqueue `{jobId, components}`; тема остаётся пином ревизии (учтено в scope gate'а `regression`).
+5. ✅ No-op PUT: `200 {unchanged: true, rev}`.
+6. ✅ `capabilities.limits|features` — фактические имена в §2.
+7. ✅ Строчные ссылки обновлены на состояние после c7d8803.
+8. ✅ Решения W2 перенесены как факты (файловый кэш; draft-ручка `POST …/head/screenshot`; `probe: "geometry"` вместо отдельной geometry-ручки).
 
 ## 11. Порядок внедрения (после W1–W5, отдельными волнами со своим Stage 2/3)
 
@@ -252,7 +254,7 @@ component_evidence(component_id, rev, seq, figma_json, author, created_at)
 
 ## 12. Открытые вопросы (к Stage 2)
 
-1. Нужен ли `theme_version` в `inputs_fingerprint` для DS без темы (`themeVersion: null`) — или fingerprint должен включать `designSystemMetaVersion` всегда, а `themeVersion` убрать как производный.
+1. ~~Нужен ли `theme_version` в `inputs_fingerprint`~~ — **закрыт синком §10**: в посаженном receipt `themeVersion` и есть `designSystemMetaVersion` (`latestMetaVersion`, null для DS без темы) — отдельного поля нет; fingerprint (§5) включает его один раз, дубль `designSystemMetaVersion` из §5 убрать при имплементации.
 2. Гранулярность policy profiles: per-DS или per-component override (`policyProfile` в definition meta)?
 3. Evidence-хранилище: собственный каталог `.acceptance/` vs полная укладка в asset-store (сейчас — гибрид: PNG в asset-store, JSON/манифест в каталоге).
 4. `passed-with-exceptions` без VDC 2.0: достаточно ли plain-записей exceptions в evidence, или required-режим должен запрещать exceptions до посадки lifecycle (склоняюсь: в `required` — запрещать, флагом политики).
