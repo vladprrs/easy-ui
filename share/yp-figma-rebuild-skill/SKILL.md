@@ -53,7 +53,7 @@ node driver.mjs design-system yandex-pay-v2 "Yandex Pay v2" "Pixel-perfect rebui
 ```
 
 - **Имена компонентов в easy-ui глобально уникальны across дизайн-систем** — `Yp*`/`yp-*` заняты старой системой. Канон новой: id `pay-<kebab>`, имя `Pay<Pascal>` (`pay-button` / `PayButton`, `pay-box` / `PayBox`). Не отступать от префикса.
-- Probe-прототипы: `ypv2-probe-<level>` (`ypv2-probe-atoms`, `ypv2-probe-molecules`, …), эталонные экраны: `ypv2-ref-<flow>`. `doc.id` глобальны — не занимать чужие (`node driver.mjs get prototypes`).
+- Probe-прототипы: `ypv2-probe-<level>` (`ypv2-probe-molecules`, `ypv2-probe-organisms`, …; атомам probe не нужен — §4.6), эталонные экраны: `ypv2-ref-<flow>`. `doc.id` глобальны — не занимать чужие (`node driver.mjs get prototypes`).
 
 ## 3. Phase 0 — разведка и фундамент
 
@@ -88,7 +88,7 @@ EOF
 node api.mjs theme yandex-pay-v2 theme.json    # версия 1 (baseVersion подставится сам)
 ```
 
-PATCH-семантика: переданная коллекция **заменяет** предыдущую целиком, опущенная наследуется — при добавлении токена шли полный словарь. Пока на токен никто не сослался, значения можно свободно править новой версией; после — каждая правка глобально меняет уже принятые компоненты, фиксируй такие правки в `BUILD_ORDER.md`. **Ревизия прототипа пинует версию темы**: после любого PATCH темы пересохрани каждый probe/ref-прототип (`driver.mjs prototype <doc>.json`) до пере-снапа, иначе snap покажет старые токены и «фикс не сработал».
+PATCH-семантика: переданная коллекция **заменяет** предыдущую целиком, опущенная наследуется — при добавлении токена шли полный словарь. Пока на токен никто не сослался, значения можно свободно править новой версией; после — каждая правка глобально меняет уже принятые компоненты, фиксируй такие правки в `BUILD_ORDER.md`. **Ревизия прототипа пинует версию темы**: после любого PATCH темы пересохрани каждый probe/ref-прототип (`driver.mjs prototype <doc>.json`) до пере-снапа, иначе snap покажет старые токены и «фикс не сработал». `preview` атома тему не пинует — берёт всегда последнюю, пересохранений не требует (§4.6).
 
 ### 3.3 Верификация темы
 
@@ -106,7 +106,7 @@ PATCH-семантика: переданная коллекция **заменя
 
 ### 4.1 Выписка из Figma
 
-Возьми ноду компонента (и каждого варианта) и выпиши **все** значения: размеры фрейма, autolayout (направление, gap, паддинги, hug/fill), fills/strokes с привязкой к variable, радиусы, эффекты (тени с полными параметрами), типографику (семейство/вес/размер/интерлиньяж/letter-spacing), состояния (default/hover/pressed/disabled — что есть в вариантах). Экспортируй **эталонный PNG** каждого варианта: предпочтительно @2x — сверка тогда идёт против `snap --dsf 2` (субпиксельные детали виднее); если MCP отдаёт только scale 1 — сравнивай со снапом без `--dsf`. Масштабы эталона и снапа обязаны совпадать. Выписку сохрани в `notes/<pay-id>.md` — она же чек-лист сверки.
+Возьми ноду компонента (и каждого варианта) и выпиши **все** значения: размеры фрейма, autolayout (направление, gap, паддинги, hug/fill), fills/strokes с привязкой к variable, радиусы, эффекты (тени с полными параметрами), типографику (семейство/вес/размер/интерлиньяж/letter-spacing), состояния (default/hover/pressed/disabled — что есть в вариантах). Экспортируй **эталонный PNG** каждого варианта: предпочтительно @2x — сверка тогда идёт против `preview --dsf 2` для атома (или `snap --dsf 2` для probe-экрана; субпиксельные детали виднее); если MCP отдаёт только scale 1 — сравнивай со снапом без `--dsf`. Масштабы эталона и снапа обязаны совпадать. Выписку сохрани в `notes/<pay-id>.md` — она же чек-лист сверки.
 
 ### 4.2 Reuse-гейт
 
@@ -133,7 +133,7 @@ node driver.mjs catalog search yandex-pay-v2 --intent "<продуктовая �
 - Каждый `.default()` схемы → парный `?? <тот же дефолт>`; массивы → `?? []`; lookup-таблицы → fallback-ветка; арифметика — без NaN.
 - `fontWeight` — только реально существующие начертания загруженных шрифтов (иначе браузер сделает faux-bold и пиксели уедут).
 - Объявленный slot обязан рендериться.
-- `examples` в definition обязательны: минимум default-вид + по одному на существенный вариант (это и материал для стикершита, и превью в Library).
+- `examples` в definition обязательны: минимум default-вид + по одному на существенный вариант (это и варианты для `preview --example`, и материал для стикершита, и превью в Library).
 
 ### 4.5 Публикация + provenance
 
@@ -152,23 +152,48 @@ node driver.mjs component pay-button PayButton pay-button.tsx \
 
 Save проверяет синтаксис, **тип-ошибки ловит publish** (вывод tsc в ответе). Правишь опубликованный — базой правки бери актуальный active-source с сервера (`GET /components/<id>/versions/<v>`), не локальный файл, если сессия прерывалась.
 
-### 4.6 Probe-стикершит
+### 4.6 Приёмка атома: `preview`; probe — со стадии молекул
 
-Один probe-прототип на уровень (`ypv2-probe-atoms`), **по экрану на компонент**. Экран — стикершит вариантов, повторяющий раскладку Figma-эталона: `canvas` = размер экспортированного фрейма (допустимый диапазон 64–2000 × 64–4000), фон = фон фрейма, варианты разложены `pay-box`-ами с теми же координатами/gap. Шаблон — `templates/probe.json` (props в нём иллюстративные — сверяй со своей фактической схемой, незнакомый ключ = 422). Контракты host-типов (`Image`/`Hotspot`/`Overlay`/`@eui/FlowRoot`) — `reference/host-catalog.json`.
+Одиночный атом принимается **без probe-дока** — verb `preview` снимает компонент напрямую, в двух режимах: сохранённая head-ревизия без публикации (`--rev head-draft`, W2) и опубликованная head-версия (по умолчанию):
 
 ```bash
-node driver.mjs prototype ypv2-probe-atoms.json
-node driver.mjs status ypv2-probe-atoms --all-screens
-node driver.mjs geometry ypv2-probe-atoms pay-button
-node driver.mjs snap ypv2-probe-atoms ./shots --all-screens
+node driver.mjs preview pay-button --rev head-draft --example primary --dsf 2 --out shots/pay-button.png
+# preview pay-button draft rev 4 bundleHash=… designSystemMetaVersion=3 viewport=1280x800 dsf=2 theme=light
+node driver.mjs preview pay-button --example primary --dsf 2 --out shots/pay-button.png
+# preview pay-button v1 bundleHash=… designSystemMetaVersion=3 viewport=1280x800 dsf=2 theme=light
 ```
 
-**Пины: пересохранение probe обязательно после каждой публикации компонента.** Ревизия прототипа пинует конкретные версии компонентов; publish новой версии пины не двигает. Цикл итерации всегда: publish компонента → `driver.mjs prototype ypv2-probe-<level>.json` (пере-пин) → `status` → `geometry` → `snap`. Пропустишь пересохранение — будешь гоняться за «диффом», которого уже нет в исходнике.
+PNG — content-hug (воркер снимает сам элемент, не вьюпорт): размеры эталона и снапа сравниваются напрямую, без canvas-арифметики. **Цикл итерации атома (W2): правка → save ревизии без публикации → `preview --rev head-draft`; publish — один раз по итогам приёмки.** Verb `component` делает save+publish за вызов — он остаётся входом создания (reuse-гейт/discovery) и финальным publish'ем, а промежуточные сохранения идут через `api.mjs` (PUT гейт создания не проходит):
+
+```bash
+# промежуточная итерация (без публикации):
+node api.mjs get /components/pay-button                     # headRev → baseRev для CAS
+jq -n --arg src "$(cat pay-button.tsx)" --argjson figma "$(cat pay-button.figma.json)" \
+  '{source:$src, figma:$figma, baseRev:<headRev>, message:"iterate"}' > save.json
+node api.mjs send PUT /components/pay-button save.json      # → {"rev": N+1}
+node driver.mjs preview pay-button --rev head-draft --example primary --dsf 2 --out shots/pay-button.png
+# финал: PUT отвечает no-op unchanged (source+figma без изменений), драйвер публикует голову:
+node driver.mjs component pay-button PayButton pay-button.tsx \
+  --design-system yandex-pay-v2 --intent "Primary action button for payment flows" --figma pay-button.figma.json
+```
+
+Драфт-съёмка идёт через candidate-bundle префлайта validate: провал (тип-ошибки tsc, битые asset-refs) приезжает тем же 422, что отдаёт publish, — итерация ловит те же дефекты, не плодя версий; при холодном кэше постановка собирает кандидата (заметное время) под троттлингом префлайта (429 `validate_in_flight` — повтор после завершения чужого прогона; `queue_full` драйвер ретраит сам). Asset-refs драфта обязаны существовать в реестре (422 `asset_not_found` до сборки), kill-switch `EASYUI_VALIDATE_DISABLED=1` гасит драфт-превью (published-режим работает). Пересохранений ради пинов нет: ревизия драфта — head, тема — всегда последняя (фактическая — в `designSystemMetaVersion` вывода, фиксируй её в REPORT). Честные ограничения: `--theme` — только light/dark, версия темы **не пинуется**; viewport 64..2000 × 64..4000 и `width × height × dsf² ≤ 20 000 000` — при `--dsf 3` потолок вьюпорта ~2,2 Mpx, для @2x-сверки бери `--dsf 2`; очередь скриншотов сервера — concurrency 1, cap 5 → возможен `429 queue_full`, драйвер ретраит сам (счётчик `queueRetries` в `--json`).
+
+Probe-прототип остаётся **со стадии молекул** и для контекстных экранов (`ypv2-probe-molecules`, `ypv2-probe-organisms`, `ypv2-ref-*`), **по экрану на компонент**. Экран — стикершит вариантов, повторяющий раскладку Figma-эталона: `canvas` = размер экспортированного фрейма (допустимый диапазон 64–2000 × 64–4000), фон = фон фрейма, варианты разложены `pay-box`-ами с теми же координатами/gap. Шаблон — `templates/probe.json` (props в нём иллюстративные — сверяй со своей фактической схемой, незнакомый ключ = 422). Контракты host-типов (`Image`/`Hotspot`/`Overlay`/`@eui/FlowRoot`) — `reference/host-catalog.json`.
+
+```bash
+node driver.mjs prototype ypv2-probe-molecules.json
+node driver.mjs status ypv2-probe-molecules --all-screens
+node driver.mjs geometry ypv2-probe-molecules pay-payment-method-card
+node driver.mjs snap ypv2-probe-molecules ./shots --all-screens
+```
+
+**Пины probe: пересохранение обязательно после каждой публикации компонента и каждого PATCH темы.** Ревизия прототипа пинует конкретные версии компонентов и версию темы; publish новой версии пины не двигает. Цикл итерации молекулы всегда: publish компонента → `driver.mjs prototype ypv2-probe-<level>.json` (пере-пин) → `status` → `geometry` → `snap`. Пропустишь пересохранение — будешь гоняться за «диффом», которого уже нет в исходнике.
 
 ### 4.7 Сверка
 
 1. **Численно**: rect'ы из `geometry` против размеров из выписки §4.1 — допуск ±1px (иначе чинить).
-2. **Пиксельно**: `node compare.mjs figma-refs/pay-button@2x.png shots/pay-button.png diff/pay-button.png` — pixelmatch, порог чувствительности 0.1. Снап под @2x-эталон — `node driver.mjs snap … --dsf 2`. Размеры PNG обязаны совпадать; размер снапа = поверхность × dsf, поверхность определяется типом экрана: canvas-экран → его `canvas`, flow-экран → канонический вьюпорт устройства (mobile 390×844, tablet 834×1112, desktop 1280×800). Стикершиты поэтому всегда canvas-экраны с `canvas` = размеру Figma-фрейма. Бюджет: `surface × dsf² ≤ 16 Mpx` (проверяется до постановки) — очень длинный стикершит при `--dsf 2` дели на несколько экранов. Целевой mismatch ≤ 2% площади, и **весь** остаток объясним антиалиасингом текста (chromium ≠ Figma по субпиксельному рендеру — это единственная легальная разница). Любое расхождение геометрии, цвета заливки, радиуса, тени, межстрочника — дефект: чини компонент/тему и повторяй.
+2. **Пиксельно**: `node compare.mjs figma-refs/pay-button@2x.png shots/pay-button.png diff/pay-button.png` — pixelmatch, порог чувствительности 0.1. Снап атома под @2x-эталон — `node driver.mjs preview pay-button --example <вариант> --dsf 2` (content-hug: размер PNG = элемент × dsf); снап probe-экрана — `node driver.mjs snap … --dsf 2` (поверхность = `canvas` экрана). Размеры PNG обязаны совпадать. Для probe-стикершитов бюджет: `surface × dsf² ≤ 16 Mpx` (проверяется до постановки) — очень длинный стикершит при `--dsf 2` дели на несколько экранов. Целевой mismatch ≤ 2% площади, и **весь** остаток объясним антиалиасингом текста (chromium ≠ Figma по субпиксельному рендеру — это единственная легальная разница). Любое расхождение геометрии, цвета заливки, радиуса, тени, межстрочника — дефект: чини компонент/тему и повторяй.
 3. **Глазами**: открой diff.png и пару эталон/снап рядом. Кластеры диффа по краям блоков = геометрия, по буквам = шрифт (проверь, что снялся YS Text, а не fallback: ширины строк в geometry совпадают с Figma; если нет — шрифт не доехал, пере-snap или проверь fonts темы).
 
 ### 4.8 Фиксация
@@ -181,7 +206,7 @@ node driver.mjs snap ypv2-probe-atoms ./shots --all-screens
 - [ ] reuse-гейт пройден (search до создания; 409 не обходился);
 - [ ] каждый `.default()` схемы имеет парный `??` в рендере; `{}` (пустые props) рендерится дефолтным видом Figma;
 - [ ] цвета/тени — через `color()` с точным Figma-литералом в fallback; spacing — `space()`/union;
-- [ ] probe пересохранён после последней публикации компонента (пины указывают на актуальную версию — видно в выводе `driver.mjs prototype`);
+- [ ] атом принят через `preview --rev head-draft` (draft rev N, bundleHash/designSystemMetaVersion из вывода зафиксированы в REPORT), publish — один раз по итогам приёмки; для молекул и выше — probe пересохранён после последней публикации компонента и последнего PATCH темы (пины указывают на актуальные версии — видно в выводе `driver.mjs prototype`);
 - [ ] geometry: размеры ±1px от Figma; compare: mismatch ≤2%, остаток — только текстовый антиалиасинг;
 - [ ] интерактив: typed events объявлены и `emit` работает (проверь в плеере `?debug=1`);
 - [ ] definition: честный `atomicLevel`, продуктовый `description`, `examples`, при согласованной роли — `canonicalFor`;

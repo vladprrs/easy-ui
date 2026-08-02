@@ -317,6 +317,21 @@ node driver.mjs snap my-flow ./shots --dsf 2 --theme dark   # ретина-ма�
 
 Инфраструктурный шум (favicon, расширения браузера, `ERR_NETWORK_CHANGED`, `ResizeObserver loop`, посторонние origin'ы) сервер отдаёт в `infraNoise` и он **не** влияет на exit code.
 
+### Скриншот одного компонента: `preview`
+
+Взгляд на один компонент без probe-прототипа и пересохранений пинов — опубликованная head-версия (по умолчанию) или сохранённая head-ревизия без публикации (`--rev head-draft`, W2):
+
+```bash
+node driver.mjs preview rating-stars                       # props по умолчанию ({})
+node driver.mjs preview rating-stars --example full        # именованный example из definition
+node driver.mjs preview rating-stars props.json --dsf 2 --out shots/stars.png
+node driver.mjs preview rating-stars --rev head-draft      # сохранённая, но не опубликованная head-ревизия
+```
+
+`props.json` (JSON-объект props) и `--example` взаимоисключающи. PNG — content-hug: воркер снимает сам элемент, а не вьюпорт. По умолчанию файл пишется в `author-shots/<id>/<id>-v<version>[-<example|props-файл>].png` (драфт: `…-draft-r<rev>[-…].png`), `--out` задаёт путь явно. Вывод всегда сообщает, что отрендерено: `preview <id> v<N>` / `preview <id> draft rev <N> bundleHash=… designSystemMetaVersion=… viewport=… dsf=… theme=…` (в `--json` те же поля). Exit-коды — как у `snap` (0 — PNG, 2 — PNG с product-ошибками, 1 — нет PNG).
+
+Ограничения: published-режим работает **только по published-версии**; драфт-режим published-версии не требует, но идёт под троттлингом validate-префлайта (сборка candidate-bundle при холодном кэше; 429 `validate_in_flight` — повтор после завершения чужого прогона) и проверяет asset-refs драфта (422 `asset_not_found` до сборки); kill-switch `EASYUI_VALIDATE_DISABLED=1` гасит драфт-превью (published-режим работает). Цикл итерации без публикаций (W2): save ревизии через `PUT /api/components/:id` (verb `component` делает save+publish за вызов) → `preview --rev head-draft`; publish — один раз по итогам (повторный `component` с неизменными source+`--figma`: PUT отвечает no-op `unchanged`, и драйвер публикует голову). `--theme` — только light/dark, **версия темы не пинуется** (берётся последняя, фактическая — в `designSystemMetaVersion` вывода); viewport 64..2000 × 64..4000 и `width × height × dsf² ≤ 20 000 000` (при `--dsf 3` потолок ~2,2 Mpx); очередь скриншотов concurrency 1, cap 5 — при `429 queue_full` драйвер ретраит с бэкоффом (до 5 попыток, счётчик `queueRetries` в `--json`).
+
 ### Визуальная регрессия (evidence loop)
 
 Рабочий цикл: создать эталоны → внести правку → опубликовать компонент → пересохранить прототип, чтобы обновить пины → проверить кандидата.

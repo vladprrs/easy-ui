@@ -2,7 +2,7 @@
 // easy-ui authoring driver. Zero dependencies (Node 18+); `shoot` needs playwright.
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createEasyUiClient } from "../../../scripts/easyui-auth.mjs";
 
@@ -17,7 +17,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id> | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap exits 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file.png] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id> | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -120,6 +120,13 @@ export const flagSpecs = Object.freeze({
   delete: { ...jsonFlag },
   shoot: { ...jsonFlag },
   snap: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags },
+  preview: {
+    ...jsonFlag,
+    ...surfaceFlags,
+    "--example": { value: true, key: "example" },
+    "--rev": { value: true, key: "rev", enum: ["head-draft"] },
+    "--out": { value: true, key: "out" },
+  },
   status: { ...jsonFlag, ...allScreensFlag },
   readiness: { ...jsonFlag },
   publish: { ...jsonFlag, "--verify": { value: false, key: "verify" }, "--force": { value: false, key: "force" } },
@@ -158,6 +165,7 @@ const ranges = Object.freeze({
   delete: [2, 2],
   shoot: [1, 2],
   snap: [1, 2],
+  preview: [1, 2],
   status: [1, 2],
   readiness: [1, 1],
   publish: [1, 1],
@@ -230,6 +238,7 @@ export function parseArgs(argv) {
   if (commandForm === "audit" && flags.designSystem === undefined) invalid("audit requires --design-system <id>");
   if (commandForm === "audit" && positionals.length !== 0) invalid("invalid arguments for audit");
   if (command === "status" && positionals.length < 2 && !flags.allScreens) invalid("status requires <screenId> or --all-screens");
+  if (command === "preview" && positionals.length === 2 && flags.example !== undefined) invalid("preview accepts either props.json or --example, not both");
   return { cmd: command, args: positionals, flags };
 }
 
@@ -272,9 +281,47 @@ function errorCode(response) {
   return response.json?.error?.code;
 }
 
+/**
+ * Короткие человеческие формулировки поверх серверного `message` для кодов, у которых
+ * сырой текст не говорит, что делать дальше (план agent-iteration DX, P5.2).
+ */
+const ERROR_HINTS = Object.freeze({
+  already_published: (failure) => `nothing to publish: rev ${failure.currentRev ?? "?"} is already the published version — the head revision is identical to it`,
+  queue_full: () => "screenshot queue is full on the server (concurrency 1, cap 5); retry later — 'preview' retries this automatically",
+});
+
+/** Одна строка issue из конверта ошибки: pointer уже посчитан сервером (RFC 6901). */
+function issueLine(issue) {
+  const where = typeof issue?.pointer === "string" ? issue.pointer
+    : Array.isArray(issue?.path) ? `/${issue.path.join("/")}`
+    : typeof issue?.path === "string" ? issue.path
+    : "/";
+  return `  issue ${where}: ${issue?.message ?? JSON.stringify(issue)}`;
+}
+
+/**
+ * Единая точка форматирования ошибок API. Сервер отвечает конвертом
+ * `{error: {code, message, ...details}}` (server/http.ts errorResponse): печатаем
+ * человекочитаемый текст (сообщение + подсказка по коду + issues), сырой JSON —
+ * только fallback для нестандартных ответов. В `--json` код и флаг retryable
+ * сохраняются в payload на stdout, человекочитаемый текст остаётся на stderr.
+ */
 function requestFailed(step, response) {
+  const failure = response.json?.error;
   const authHint = response.status === 401 ? "\nhint: set EASYUI_USERNAME/EASYUI_PASSWORD and, during the transition, EASYUI_LEGACY_BASIC_AUTH" : "";
-  throw new CliError(`${step} failed (${response.status}): ${JSON.stringify(response.json, null, 2)}${authHint}`);
+  if (!failure || typeof failure !== "object" || typeof failure.message !== "string") {
+    throw new CliError(`${step} failed (${response.status}): ${JSON.stringify(response.json, null, 2)}${authHint}`);
+  }
+  const code = typeof failure.code === "string" ? failure.code : "unknown";
+  const lines = [`${step} failed (${response.status} ${code}): ${failure.message}`];
+  if (code === "invalid_request" && failure.message === "Component source and design system are unchanged") {
+    lines.push("nothing to save: the source is identical to the head revision");
+  }
+  const hint = ERROR_HINTS[code]?.(failure);
+  if (hint) lines.push(hint);
+  if (Array.isArray(failure.issues)) for (const issue of failure.issues.slice(0, 20)) lines.push(issueLine(issue));
+  if (jsonMode) report(null, { failed: true, step, status: response.status, code, message: failure.message, retryable: failure.retryable === true, details: failure });
+  throw new CliError(`${lines.join("\n")}${authHint}`);
 }
 
 async function requireOk(step, response, statuses = [200]) {
@@ -718,6 +765,141 @@ async function runSnap(args, flags) {
   }
   if (exitCode === EXIT.productErrors) throw new CliError("screenshots produced with product errors", { exitCode: EXIT.productErrors });
   if (exitCode === EXIT.failed) throw new CliError("one or more screenshots produced no PNG", { exitCode: EXIT.failed });
+}
+
+/** Бэкофф ретрая постановки job'а при 429 queue_full (очередь сервера: concurrency 1, cap 5). */
+export const QUEUE_RETRY_DELAYS_MS = Object.freeze([1000, 2000, 4000, 8000, 16000]);
+
+/**
+ * Единственный ретраимый ответ enqueue компонентной съёмки — переполненная очередь;
+ * всё остальное (400/422/501) терминально и уходит в requireOk как есть. Заметка о
+ * ретрае уходит на stderr в обоих режимах; факт ретрая попадает в --json payload.
+ * URL параметризован: published-съёмка — `/versions/:v/screenshot`, драфт (P1b) —
+ * `/head/screenshot`; у драфта 429 может прийти и от троттлинга validate-префлайта.
+ */
+async function enqueueComponentShot(id, urlPath, body) {
+  let queueRetries = 0;
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await call("POST", urlPath, body);
+    if (response.status !== 429 || errorCode(response) !== "queue_full" || attempt >= QUEUE_RETRY_DELAYS_MS.length) {
+      return { response, queueRetries };
+    }
+    queueRetries += 1;
+    const wait = QUEUE_RETRY_DELAYS_MS[attempt];
+    console.error(`preview ${id}: screenshot queue is full; retrying in ${wait / 1000}s (attempt ${queueRetries + 1} of ${QUEUE_RETRY_DELAYS_MS.length + 1})`);
+    await delay(wait);
+  }
+}
+
+/** Дефолтный путь PNG: author-shots/<id>/<id>-v<version>[-<example|props-стем>].png, как у snap. */
+export function previewOutputPath(id, version, variant) {
+  return `author-shots/${id}/${id}-v${version}${variant === undefined ? "" : `-${variant}`}.png`;
+}
+
+/** Дефолтный путь PNG драфт-превью (P1b): author-shots/<id>/<id>-draft-r<rev>[-<example|props-стем>].png. */
+export function previewDraftOutputPath(id, rev, variant) {
+  return `author-shots/${id}/${id}-draft-r${rev}${variant === undefined ? "" : `-${variant}`}.png`;
+}
+
+/**
+ * `preview <componentId> [props.json]` — файл обязан содержать JSON-объект; битый путь или
+ * не-JSON — ошибка аргументов (exit 1), а не сырой ENOENT посреди команды.
+ */
+async function readPropsArgument(path) {
+  let text;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    invalid(`props file cannot be read: ${path} (${error.code ?? error.message})`);
+  }
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    invalid(`props file is not valid JSON: ${path} (${error.message})`);
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) invalid(`props file must contain a JSON object: ${path}`);
+  return value;
+}
+
+/**
+ * Компонентная съёмка опубликованной head-версии (план agent-iteration DX, P1a) поверх
+ * существующего `POST /components/:id/versions/:version/screenshot`. Вывод всегда сообщает,
+ * что именно отрендерено: version / bundleHash / designSystemMetaVersion — пин темы,
+ * который зафиксирует enqueue (компонентная съёмка берёт последнюю версию темы, поэтому
+ * читаем `latestMetaVersion` до постановки job'а).
+ *
+ * `--rev head-draft` (P1b): съёмка сохранённой, но не опубликованной head-ревизии через
+ * `POST /components/:id/head/screenshot` — сервер собирает эфемерный candidate-bundle
+ * префлайтом validate, поэтому постановка может занять заметное время и ответить 429
+ * validate_in_flight/queue_full (queue_full ретраится, как у published). Published-версии
+ * для этого режима не требуется; capability `features.componentDraftPreview` проверяется
+ * до постановки, чтобы kill-switch не маскировался под странный 404.
+ */
+async function runPreview(args, flags) {
+  const [id, propsPath] = args;
+  const draft = flags.rev === "head-draft";
+  const props = propsPath === undefined ? undefined : await readPropsArgument(propsPath);
+  const meta = await getMeta("components", id);
+  if (!meta) throw new CliError(`components/${id} not found; hint: run 'driver.mjs get components'`);
+  let version;
+  if (draft) {
+    const capabilities = await requireOk("capabilities", await call("GET", "/capabilities"));
+    if (capabilities.features?.componentDraftPreview !== true) {
+      throw new CliError(`server does not support component draft preview (features.componentDraftPreview is off); drop --rev head-draft or enable the validate preflight`);
+    }
+  } else {
+    if (typeof meta.publishedVersion !== "number") {
+      throw new CliError(`component ${id} has no published version; shoot the saved draft with --rev head-draft or publish first (driver.mjs component ...)`);
+    }
+    version = meta.publishedVersion;
+  }
+  const deviceScaleFactor = flags.dsf ?? 1;
+  const viewport = flags.viewport ?? DESKTOP_VIEWPORT;
+  try { assertViewportPixelBudget(viewport, deviceScaleFactor); }
+  catch (error) { throw new CliError(error.message); }
+  const system = await requireOk("design system", await call("GET", `/design-systems/${encodeURIComponent(meta.designSystem)}`));
+  const encoded = encodeURIComponent(id);
+  const { response, queueRetries } = await enqueueComponentShot(id, draft ? `/components/${encoded}/head/screenshot` : `/components/${encoded}/versions/${version}/screenshot`, {
+    viewport,
+    ...(flags.dsf === undefined ? {} : { deviceScaleFactor: flags.dsf }),
+    ...(flags.theme === undefined ? {} : { theme: flags.theme }),
+    ...(props === undefined ? {} : { props }),
+    ...(flags.example === undefined ? {} : { exampleName: flags.example }),
+  });
+  const queued = await requireOk("preview enqueue", response, [202]);
+  const state = await pollJob(`/screenshot-jobs/${encodeURIComponent(queued.jobId)}`, { deadlineMs: 120_000 });
+  if (state.status !== "done" || state.result?.kind !== "image") {
+    throw new CliError(`preview ${state.status}: ${JSON.stringify(state.error ?? state)}`);
+  }
+  const summary = summarizeCapture(state.result);
+  const draftRev = draft ? state.result.draftRev : undefined;
+  const variant = flags.example ?? (propsPath === undefined ? undefined : propsPath.replace(/\.json$/i, "").split("/").pop());
+  const outputPath = flags.out ?? (draft ? previewDraftOutputPath(id, draftRev, variant) : previewOutputPath(id, version, variant));
+  if (summary.imageProduced) {
+    await mkdir(dirname(outputPath), { recursive: true });
+    await downloadImage(state.result.imageUrl, outputPath);
+  }
+  const exitCode = !summary.imageProduced ? EXIT.failed : summary.productErrors.length ? EXIT.productErrors : EXIT.ok;
+  const theme = flags.theme ?? "light";
+  const pins = `preview ${id} ${draft ? `draft rev ${draftRev ?? "-"}` : `v${version}`} bundleHash=${state.result.bundleHash ?? "-"} designSystemMetaVersion=${system.latestMetaVersion ?? "-"} viewport=${viewport.width}x${viewport.height} dsf=${deviceScaleFactor} theme=${theme}${flags.example === undefined ? "" : ` example=${flags.example}`}`;
+  out(pins);
+  if (summary.imageProduced) out(outputPath);
+  if (summary.productErrors.length) console.error(`preview ${id} product errors:`, JSON.stringify(summary.productErrors));
+  if (summary.infraNoise.length && !jsonMode) console.error(`preview ${id} infra noise (ignored):`, JSON.stringify(summary.infraNoise));
+  if (jsonMode) {
+    report(null, {
+      command: "preview", componentId: id,
+      ...(draft ? { rev: "head-draft", draftRev: draftRev ?? null } : { version }),
+      bundleHash: state.result.bundleHash ?? null,
+      designSystemMetaVersion: system.latestMetaVersion ?? null,
+      viewport, dsf: deviceScaleFactor, theme,
+      ...(flags.example === undefined ? {} : { example: flags.example }),
+      path: summary.imageProduced ? outputPath : null, queueRetries, exitCode, ...summary,
+    });
+  }
+  if (exitCode === EXIT.productErrors) throw new CliError("preview produced a PNG with product errors", { exitCode: EXIT.productErrors });
+  if (exitCode === EXIT.failed) throw new CliError("preview produced no PNG", { exitCode: EXIT.failed });
 }
 
 async function runStatus(args, flags) {
@@ -1338,6 +1520,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (jsonMode) report(null, { command: "shoot", prototypeId: id, outputDir, shots, errors });
     if (errors.length) throw new CliError(`browser errors:\n${errors.join("\n")}`);
   } else if (cmd === "snap") await runSnap(args, flags);
+  else if (cmd === "preview") await runPreview(args, flags);
   else if (cmd === "status") await runStatus(args, flags);
   else if (cmd === "readiness") await runReadiness(args);
   else if (cmd === "publish") await runPublish(args, flags);

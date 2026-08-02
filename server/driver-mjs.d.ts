@@ -79,6 +79,9 @@ declare module "*/author/driver.mjs" {
   }
   export function summarizeCapture(result: Record<string, unknown> | null | undefined): DriverCaptureSummary;
   export function snapExitCode(rows: readonly { imageProduced: boolean; productErrors: readonly string[] }[]): 0 | 1 | 2;
+  export const QUEUE_RETRY_DELAYS_MS: readonly number[];
+  export function previewOutputPath(id: string, version: number, variant?: string): string;
+  export function previewDraftOutputPath(id: string, rev: number, variant?: string): string;
   export interface DriverReadinessGate { id: string; status: "pass" | "warn" | "fail" | "unknown"; summary: string }
   export interface DriverReadinessReport {
     prototypeId: string;

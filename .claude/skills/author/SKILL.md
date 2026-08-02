@@ -290,6 +290,38 @@ node driver.mjs prototype examples/rating-demo.json
 
 Именованные examples становятся вариантами компонента в Library и входят в контракт каталога. Использовать их для нескольких канонических состояний одного компонента; `example` остаётся одиночным legacy-примером.
 
+### Приёмка атома: `preview` без probe-дока
+
+Взглянуть на один компонент можно без сборки probe-прототипа и без пересохранений пинов — в двух режимах:
+
+```bash
+node driver.mjs preview rating-stars                       # published head-версия, props по умолчанию ({})
+node driver.mjs preview rating-stars --example full        # именованный example из definition
+node driver.mjs preview rating-stars props.json --dsf 2 --out shots/stars.png
+node driver.mjs preview rating-stars --rev head-draft      # сохранённая, но НЕ опубликованная head-ревизия (W2)
+```
+
+`props.json` (JSON-объект props) и `--example` взаимоисключающи. PNG — content-hug: воркер снимает сам элемент, а не вьюпорт. По умолчанию файл пишется в `author-shots/<id>/<id>-v<version>[-<example|props-файл>].png` (драфт: `…-draft-r<rev>[-…].png`), `--out` задаёт путь явно. Вывод всегда сообщает, что отрендерено:
+
+```
+preview rating-stars v3 bundleHash=1f9c… designSystemMetaVersion=14 viewport=1280x800 dsf=2 theme=light
+author-shots/rating-stars/rating-stars-v3-full.png
+preview rating-stars draft rev 7 bundleHash=1f9c… designSystemMetaVersion=14 viewport=1280x800 dsf=1 theme=light
+author-shots/rating-stars/rating-stars-draft-r7.png
+```
+
+**Цикл итерации атома (W2):** правка исходника → сохранение ревизии **без публикации** → `preview --rev head-draft`; publish — один раз по итогам приёмки. Verb `component` делает save+publish за один вызов, поэтому промежуточные сохранения идут через HTTP (`PUT /api/components/:id` с `baseRev` — гейт создания на PUT не действует); финальная публикация головы — повторный `driver.mjs component` с неизменными source+`--figma` (PUT отвечает no-op `unchanged`, и драйвер публикует голову) либо `POST /api/components/:id/publish`. Драфт-режим снимает head-ревизию через эфемерный candidate-bundle префлайта validate: published-версия не требуется, а провал префлайта (тип-ошибки, битые asset-refs) приезжает тем же кодом, что отдаёт publish, — превью сломанного драфта сообщает причину, а не «нет бандла».
+
+Exit-коды — как у `snap` (0 — PNG, 2 — PNG с product-ошибками, 1 — нет PNG). Честные ограничения (план agent-iteration DX, P1a/P1b):
+
+- Published-режим работает **только по published-версии**: у компонента без неё драйвер предложит `--rev head-draft`. Драфт-режим, наоборот, не требует публикации вообще.
+- Драфт-режим идёт под троттлингом validate-префлайта: постановка собирает candidate-bundle (при холодном кэше это заметное время) и может ответить `429 validate_in_flight`, если у той же учётки уже идёт префлайт, — повторить после его завершения; `429 queue_full` ретраится общим бэкоффом (см. ниже).
+- Asset-ссылки драфта (`/api/assets/asset_…` в исходнике) обязаны существовать в реестре — иначе 422 `asset_not_found` ещё до сборки кандидата.
+- Kill-switch `EASYUI_VALIDATE_DISABLED=1` гасит и draft-preview (`features.componentDraftPreview=false` в `/api/capabilities`); published-режим продолжает работать.
+- `--theme` — только режим light/dark; **версия темы не пинуется** — рендер берёт последнюю, фактическая видна в `designSystemMetaVersion` вывода. После PATCH темы ничего пересохранять не нужно, но и воспроизвести старую тему нельзя.
+- Лимиты viewport сервера: 64..2000 × 64..4000 и `width × height × dsf² ≤ 20 000 000` — при `--dsf 3` потолок вьюпорта ~2,2 Mpx (1280×800 при dsf 3 = 9,2 Mpx — влезает, 2000×1200 — уже нет).
+- Очередь скриншотов на сервере — concurrency 1, cap 5: при занятой очереди enqueue отвечает `429 queue_full`; драйвер ретраит с бэкоффом (до 5 попыток), счётчик — `queueRetries` в `--json`.
+
 ## Посмотреть результат
 
 Ссылка `…/p/<id>` из вывода драйвера открывается в браузере под теми же кредами; экраны — `…/p/<id>/s/<screenId>`. Отладка интеракций — добавить `?debug=1`: inspector-панель показывает события с payload, экшены, диффы стейта и статусы шрифтов.
@@ -313,7 +345,7 @@ node driver.mjs shoot my-flow ./shots                # локальный playwr
 
 Инфраструктурный шум (favicon, расширения браузера, `ERR_NETWORK_CHANGED`, `ResizeObserver loop`, посторонние origin'ы) сервер отдаёт в `infraNoise` и он **не** влияет на exit code. `--json` печатает по экрану `{screenId, path, imageProduced, captureClean, productErrors, infraNoise, runtimeWarnings, attempts}`. Флаг `--json` есть у всех verb'ов; сессия кэшируется на диске между вызовами (`$XDG_STATE_HOME/easyui`, выключатель `EASYUI_SESSION_CACHE=0`, путь переопределяет `EASYUI_SESSION_FILE`), поэтому логин обычно один на серию вызовов; GET'ы и постановка job'а ретраятся на 5xx.
 
-Серверные скриншоты также доступны сырым API (`POST /prototypes/:id/screens/:sid/screenshot {viewport,...}` → 202 `{jobId}` → `GET /screenshot-jobs/:jobId`; параметры theme/deviceScaleFactor/rev/version), включая скриншот одного компонента: `POST /components/:id/versions/:v/screenshot {props? | exampleName?, viewport}`.
+Серверные скриншоты также доступны сырым API (`POST /prototypes/:id/screens/:sid/screenshot {viewport,...}` → 202 `{jobId}` → `GET /screenshot-jobs/:jobId`; параметры theme/deviceScaleFactor/rev/version), включая скриншот одного компонента: `POST /components/:id/versions/:v/screenshot {props? | exampleName?, viewport}` — обёртка над ним: `driver.mjs preview` (см. «Приёмка атома»).
 
 ### Визуальная регрессия (evidence loop)
 
@@ -396,11 +428,13 @@ Discovery: `GET /api/openapi.json` (полный OpenAPI 3.1), `GET /api/capabil
 ## Troubleshooting
 
 - `401` на login — неверны `EASYUI_USERNAME`/`EASYUI_PASSWORD` либо, при включённом внешнем барьере, `EASYUI_LEGACY_BASIC_AUTH` (формат `user:pass`). `401` после успешного login обычно означает истёкшую/отозванную cookie-сессию.
-- `save failed (422) ... "Unrecognized key: \"bogus\""` — prop отсутствует в exact definition активной custom-версии; заново получить каталог сервера.
+- `save failed (422 validation_failed): ...` + строки вида `issue /…: Unrecognized key: "bogus"` — prop отсутствует в exact definition активной custom-версии; заново получить каталог сервера.
+- `save failed (400 invalid_request): Component source and design system are unchanged` — nothing to save: исходник идентичен head-ревизии, новой ревизии не создано; правьте source или ничего не делайте.
+- `publish failed (409 already_published): ...` — nothing to publish: head-ревизия уже опубликована как есть; повторная публикация неизменённого компонента не нужна.
 - `save failed (422) ... "Unknown or unpublished component type: X"` — тип не встроенный и не опубликован как компонент; сначала `driver.mjs component ...`.
-- `publish failed (422) ... Type check failed` (компонент) — читать вывод tsc в issue; save такие ошибки не ловит.
+- `publish failed (422 validation_failed): ...` + `issue /source: Type check failed` (компонент) — читать вывод tsc в issue; save такие ошибки не ловит.
 - `publish failed (422) ... event_schema_not_serializable` — typed-схема события содержит transform/preprocess/custom-логику; упростить до чистых object/string/number/enum-схем.
 - `save failed (409)` — параллельное редактирование того же id (CAS-конфликт); повторить запуск драйвера (он перечитает `headRev`).
 - `shoot` падает с `Cannot find package 'playwright'` — использовать `snap` (серверные скриншоты, playwright не нужен) либо смотреть прототип в браузере по ссылке player.
-- `snap` вернул 501 `screenshot_unavailable` — инстанс без `SERVE_DIST`/chromium (например голый локальный `server:dev`); на проде работает.
+- `snap`/`preview` вернул 501 `screenshot_unavailable` — инстанс без `SERVE_DIST`/chromium (например голый локальный `server:dev`); на проде работает. `429 queue_full` у `preview` ретраится драйвером самостоятельно.
 - Экран «рендерится, но пусто/не так» — `node driver.mjs status <id> <screen>` (пины/бандлы/маршрут) и `?debug=1` в плеере (события, payload, диффы стейта).

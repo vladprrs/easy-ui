@@ -24,6 +24,9 @@ import {
   buildBaselineMembers,
   buildBaselinePlan,
   parseDiffArguments,
+  parseArgs,
+  previewDraftOutputPath,
+  previewOutputPath,
   resolveViewport,
   type DriverReadinessGate,
 } from "../.claude/skills/author/driver.mjs";
@@ -316,6 +319,20 @@ describe("author driver CLI", () => {
     expect(JSON.parse(updated.stdout)).toMatchObject({ command: "component", version: 2 });
     expect(JSON.parse(updated.stdout).discovery).toBeUndefined();
   });
+
+  test("re-saving an identical source prints a human 400 and keeps the code in --json", async () => {
+    const { api, directory } = await setup();
+    const source = await writeComponentSource(directory, "DriverNoopCard", "Card exercising the no-op guard", "noop");
+    const created = await run(api, ["component", "driver-noop-card", "DriverNoopCard", source, "--design-system", "yandex-pay", "--intent", "Exercise the no-op guard with a card", "--json"]);
+    expect(created.exitCode).toBe(0);
+
+    const repeat = await run(api, ["component", "driver-noop-card", "DriverNoopCard", source, "--design-system", "yandex-pay", "--json"]);
+    expect(repeat.exitCode).toBe(1);
+    expect(JSON.parse(repeat.stdout)).toMatchObject({ failed: true, status: 400, code: "invalid_request", retryable: false });
+    expect(repeat.stderr).toContain("save failed (400 invalid_request): Component source and design system are unchanged");
+    expect(repeat.stderr).toContain("nothing to save: the source is identical to the head revision");
+    expect(repeat.stderr).not.toContain('"error"');
+  }, 20_000); // одна публикация: extract+typecheck в подпроцессе
 
   test("component reuse rejection is a terminal STOP report with exit 2", async () => {
     const { api, db, directory } = await setup();
@@ -783,6 +800,105 @@ describe("author driver snap contract", () => {
   });
 });
 
+// --- Wave DX.1 verb: preview (component screenshot on the published head version) -----------
+
+describe("author driver preview verb", () => {
+  test("renders the published head version and reports what was rendered", async () => {
+    const stub = pngRunJob();
+    const { api, db, directory } = await setup(undefined, stub.runJob);
+    seedComponent(db, "stars", "Stars");
+    const out = resolve(directory, "stars.png");
+    const result = await run(api, ["preview", "stars", "--out", out, "--json"]);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      command: "preview", componentId: "stars", version: 1, bundleHash: "bh",
+      designSystemMetaVersion: null, viewport: { width: 1280, height: 800 }, dsf: 1, theme: "light",
+      path: out, queueRetries: 0, exitCode: 0, imageProduced: true, captureClean: true,
+    });
+    expect(await Bun.file(out).exists()).toBe(true);
+    expect(stub.jobs()[0]).toMatchObject({
+      viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1, colorScheme: "light",
+      bootstrap: { kind: "component", target: { kind: "component", componentId: "stars", version: 1 }, props: {} },
+    });
+  });
+
+  test("--example resolves server-side, props.json reaches the worker, and the two are mutually exclusive", async () => {
+    const stub = pngRunJob();
+    const { api, db, directory } = await setup(undefined, stub.runJob);
+    seedComponent(db, "stars", "Stars");
+    const example = await run(api, ["preview", "stars", "--example", "full", "--out", resolve(directory, "ex.png"), "--json"]);
+    expect(example.exitCode).toBe(0);
+    expect(JSON.parse(example.stdout)).toMatchObject({ example: "full" });
+    expect(stub.jobs()[0]!.bootstrap.props).toEqual({ secretDetail: "not-for-list-or-search" });
+
+    const propsPath = resolve(directory, "props.json");
+    await Bun.write(propsPath, JSON.stringify({ secretDetail: "custom" }));
+    const withProps = await run(api, ["preview", "stars", propsPath, "--out", resolve(directory, "props.png"), "--json"]);
+    expect(withProps.exitCode).toBe(0);
+    expect(stub.jobs()[1]!.bootstrap.props).toEqual({ secretDetail: "custom" });
+
+    const both = await run(api, ["preview", "stars", propsPath, "--example", "full"]);
+    expect(both.exitCode).toBe(1);
+    expect(both.stderr).toContain("either props.json or --example");
+
+    const unknownExample = await run(api, ["preview", "stars", "--example", "missing", "--json"]);
+    expect(unknownExample.exitCode).toBe(1);
+    expect(JSON.parse(unknownExample.stdout)).toMatchObject({ failed: true, status: 422, code: "unknown_example", retryable: false });
+    expect(unknownExample.stderr).toContain("preview enqueue failed (422 unknown_example): Unknown component example: missing");
+
+    await Bun.write(propsPath, JSON.stringify({ secretDetail: 42 }));
+    const badProps = await run(api, ["preview", "stars", propsPath, "--json"]);
+    expect(badProps.exitCode).toBe(1);
+    expect(JSON.parse(badProps.stdout)).toMatchObject({ failed: true, status: 422, code: "invalid_props" });
+    expect(badProps.stderr).toContain("prop secretDetail must be of type string");
+  });
+
+  test("429 queue_full is retried with backoff until the queue drains", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+    const stub = pngRunJob();
+    const gated: RunJob = async (job, deadlineMs) => { await gate; return stub.runJob(job, deadlineMs); };
+    const { api, db, directory } = await setup(undefined, gated);
+    seedComponent(db, "stars", "Stars");
+    // 1 running + 5 queued заполняют очередь сервера (concurrency 1, MAX_QUEUE 5).
+    for (let index = 0; index < 6; index += 1) {
+      const response = await fetch(`${api}/components/stars/versions/1/screenshot`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ viewport: { width: 200, height: 100 } }),
+      });
+      expect(response.status).toBe(202);
+    }
+    const pending = run(api, ["preview", "stars", "--out", resolve(directory, "retry.png"), "--json"]);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 1500)); // драйвер получает 429 и уходит в бэкофф
+    release();
+    const result = await pending;
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as { queueRetries: number; path: string };
+    expect(payload.queueRetries).toBeGreaterThanOrEqual(1);
+    expect(result.stderr).toContain("screenshot queue is full");
+    expect(await Bun.file(payload.path).exists()).toBe(true);
+  }, 15_000);
+
+  test("usage error without arguments, and clear errors when the component is missing or unpublished", async () => {
+    const { api, db } = await setup();
+    const noArgs = await run(api, ["preview"]);
+    expect(noArgs.exitCode).toBe(1);
+    expect(noArgs.stderr).toContain("invalid arguments for preview");
+    expect(noArgs.stderr).toContain("usage: driver.mjs");
+
+    const missing = await run(api, ["preview", "missing-component"]);
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain("components/missing-component not found");
+
+    db.query("INSERT INTO components (id,name,head_rev,design_system,deleted_at,owner_id,created_at,updated_at) VALUES ('draft-only','DraftOnly',1,'yandex-pay',NULL,'user_admin','now','now')").run();
+    db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('draft-only',1,'export const definition={}','yandex-pay','now')").run();
+    const unpublished = await run(api, ["preview", "draft-only"]);
+    expect(unpublished.exitCode).toBe(1);
+    expect(unpublished.stderr).toContain("has no published version");
+  });
+});
+
 // --- Wave 7.2 verbs: readiness / publish --verify / usages / audit --------------------------
 
 /** A document whose only image references an uploaded asset, so the asset gate can be broken. */
@@ -1196,5 +1312,19 @@ describe("author driver planners", () => {
     expect(parseDiffArguments(["1", "2"], 3)).toEqual({ toRev: 2, againstRev: 1 });
     expect(() => parseDiffArguments([], 1)).toThrow("revision 1");
     expect(() => parseDiffArguments(["x"], 3)).toThrow("positive integer");
+  });
+
+  test("preview default output path follows the author-shots convention", () => {
+    expect(previewOutputPath("pay-button", 3, undefined)).toBe("author-shots/pay-button/pay-button-v3.png");
+    expect(previewOutputPath("pay-button", 3, "primary")).toBe("author-shots/pay-button/pay-button-v3-primary.png");
+    // Драфт-превью (P1b): rev-адресный стем вместо published-версии.
+    expect(previewDraftOutputPath("pay-button", 5, undefined)).toBe("author-shots/pay-button/pay-button-draft-r5.png");
+    expect(previewDraftOutputPath("pay-button", 5, "wide")).toBe("author-shots/pay-button/pay-button-draft-r5-wide.png");
+  });
+
+  test("preview --rev accepts only head-draft", () => {
+    expect(parseArgs(["preview", "pay-button", "--rev", "head-draft"])).toMatchObject({ cmd: "preview", args: ["pay-button"], flags: { rev: "head-draft" } });
+    expect(() => parseArgs(["preview", "pay-button", "--rev", "3"])).toThrow("--rev must be one of: head-draft");
+    expect(() => parseArgs(["preview", "pay-button", "--rev", "draft"])).toThrow("--rev must be one of: head-draft");
   });
 });
