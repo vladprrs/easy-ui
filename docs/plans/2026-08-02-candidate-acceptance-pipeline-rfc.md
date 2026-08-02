@@ -1,8 +1,8 @@
 # RFC: Candidate Acceptance Pipeline
 
-Дата: 2026-08-02. Статус: **v3 — после раунда 1 Stage 2 (3 адверсариальных ревьюера: корректность/скоуп-API/риски). 13 blocker-находок сведены в 6 сводных блокеров, все приняты и внесены; триаж — §13. Требуется верификационный раунд 2 до Stage 3.**
+Дата: 2026-08-02. Статус: **v4 — после раунда 2 Stage 2 (верификационное ре-ревью: закрытие раунда 1 подтверждено, 3 новых R1-блокера V1–V3 и майноры V4–V15 внесены; триаж — §13-Р2). Blocking-возражений против Stage 3 (R1) после v4 нет — R1 готов к старту (дельта-верификация решений V1–V3 включена в done-критерии R1).**
 
-История: v1 — draft (Stage 2 отложен до посадки agent-iteration-dx); v2 — синк §10 с посаженным кодом W1–W5 (b4e2428…c7d8803); v3 — триаж раунда 1: исправлена identity кандидата (component-scoped), promote переписан как сага, gate-матрица приведена к честной фазе 1, evidence уведён из asset-store, волны перекроены (R1 = promote без durable-таблиц), advisory получил would-block.
+История: v1 — draft (Stage 2 отложен до посадки agent-iteration-dx); v2 — синк §10 с посаженным кодом W1–W5 (b4e2428…c7d8803); v3 — триаж раунда 1: исправлена identity кандидата (component-scoped), promote переписан как сага, gate-матрица приведена к честной фазе 1, evidence уведён из asset-store, волны перекроены (R1 = promote без durable-таблиц), advisory получил would-block; v4 — триаж раунда 2: recovery через расширенный `already_published`-чек, `pinAssets`/`recordValidation`/`host_abi_version` в фазе B, **R1 вообще без миграций** (колонки и FK — R2), advisory материализует кандидата published-ревизии и снимает published-поверхностью, `policyProfileHash` вне build_fingerprint.
 
 Источники: `docs/EASYUI_PRODUCT_IMPROVEMENTS.md` (§3–5, §9.2, §16–18 — количественный baseline и предложение RFC), `docs/plans/2026-08-02-agent-iteration-dx.md` §6 (перечень отложенных в RFC слоёв), посаженный код P8/P1b/P2 (`server/components/validate.ts`, `server/components/candidates.ts`, `server/screenshot/service.ts`, `src/capture/protocol.ts`).
 
@@ -48,7 +48,7 @@ Kill-switch-канон (факты): `EASYUI_VALIDATE_DISABLED=1` (гасит va
 
 Существующая модель версий, которую RFC **не ломает** (`server/repos/components.ts`): immutable `component_publishes` со статусами `staging|active|deprecated|superseded|rejected|archived|failed`, ручные переходы `TRANSITIONS` с CAS по `status_rev`, `RENDERABLE_STATUS = {active, deprecated, superseded}`, `latest = MAX(version) WHERE status='active'`. Publish — фактически **сага** `stage → import → activate` с компенсацией `fail()` и стартовой уборкой `failStagingPublishes` (bun:sqlite не переживает `await` внутри транзакции — канон зафиксирован в `componentFingerprints.ts:16-17`); §4.3 строится на этом же каноне.
 
-**Известная дыра, чинится в R1 (M5):** `GET /api/components/:id/draft/:sourceHash/bundle.js` сегодня неаутентифицирован — байты драфта доступны любому, знающему sourceHash. R1 добавляет owner-check (capture-принципал проходит по allowlist-механизму, как прочие capture-ресурсы).
+**Известная дыра, чинится в R1 (M5, форма уточнена V11):** `GET /api/components/:id/draft/:sourceHash/bundle.js` сегодня неаутентифицирован — байты драфта доступны любому, знающему sourceHash. R1 добавляет проверку так: `principal.kind === "capture"` пропускается по allowlist (прецедент прототипного драфт-роута), owner-check — только для user/anon-принципалов; прямое навешивание `requireResourceOwner` сломало бы съёмку (capture-воркер — не user).
 
 ## 3. Модель данных
 
@@ -88,7 +88,7 @@ component_candidates(
 )
 ```
 
-Инварианты: строка иммутабельна кроме `status/status_reason/acceptance_run_id/promoted_version`; кандидат не участвует в latest-active resolution, catalog list/search, bundle-export; bundle кандидата — только через draft-роут с owner-check (см. §2). Гигиена: свипер `expires_at` (GC-паттерн `.candidates/`), per-user cap живых кандидатов в `capabilities.limits` (триаж D3).
+Инварианты: строка иммутабельна кроме `status/status_reason/acceptance_run_id/promoted_version`; кандидат не участвует в latest-active resolution, catalog list/search, bundle-export; bundle кандидата — только через draft-роут с owner-check (см. §2). Гигиена: свипер `expires_at` (GC-паттерн `.candidates/`), **строки `status='promoted'` свипер не удаляет** (иначе `ON DELETE SET NULL` молча обнулит provenance-ссылку версии — триаж V14), per-user cap живых кандидатов в `capabilities.limits` (триаж D3).
 
 ### 3.3. Таблица `acceptance_runs` (R2, миграция)
 
@@ -98,7 +98,7 @@ acceptance_runs(
   candidate_id TEXT FK,
   component_id TEXT,           -- денормализовано: субъект авторизации — владелец компонента (триаж D1)
   idempotency_key TEXT NULL,   -- UNIQUE(candidate_id, idempotency_key)
-  status TEXT,                 -- queued|running|pass|pass_with_exceptions|fail|error|cancelled (словарь visual_runs, триаж A5)
+  status TEXT,                 -- queued|running|pass|pass_with_exceptions|fail|error|cancelled (пересечение с visual_runs — pass|fail|error, остальное новое; триажи A5/V13)
   policy_profile_hash TEXT,
   gates_json TEXT,             -- пер-gate результаты §4.2 (известное ограничение: не запрашиваемо по gate — S4; развязка в R3 при необходимости)
   evidence_manifest_hash TEXT NULL,
@@ -132,7 +132,7 @@ GET  /api/acceptance-runs/:runId/evidence  -- tar/zip (владелец комп
 POST /api/acceptance-runs/:runId/cancel    -- только пока queued; running не отменяется (в продукте нет механики отмены джоб — триаж A6)
 ```
 
-**Оркестрация (переработана триажем B1/B2/B4):** оркестратор run'а живёт **вне** screenshot-помпы — собственный фоновый цикл с инвариантом «≤1 running acceptance-run на процесс». Capture-джобы он ставит в общую очередь **по одной**, дожидаясь каждой (интерактивные джобы перемежаются — глубина вытеснения ≤1 джобы; batch-постановки и самоблокировки нет). Внутренние вызовы validate идут под системным принципалом с **отдельным слотом**, не конкурирующим с интерактивным validate/draft-preview автора (триаж B3-риски). Бюджет: `maxJobsPerRun` из политики, публикуется в `capabilities.limits`; ориентировочный wall-clock честно документируется (минуты на 1-CPU проде).
+**Оркестрация (переработана триажем B1/B2/B4, дополнена V7/V8):** оркестратор run'а живёт **вне** screenshot-помпы — собственный фоновый цикл с инвариантом «≤1 running acceptance-run на процесс». Capture-джобы он ставит в общую очередь **по одной**, дожидаясь каждой (интерактивные джобы перемежаются — глубина вытеснения ≤1 джобы), с backoff-ретраем на `429 queue_full` (потолок ретраев — в политике; триаж V7). Внутренние вызовы validate идут под системным принципалом через **пул слотов** (интерактивный cap + отдельный системный слот — правка `withValidateSlot`, работа R2; триажи B3/V7). **Recovery при рестарте** (триаж V8): стартовая уборка по прецеденту `failStagingPublishes` — все `queued|running`-раны → `error` (оркестратор in-memory, строка иначе зависает навсегда и partial-index блокирует новые раны). Бюджет: `maxJobsPerRun` из политики, публикуется в `capabilities.limits`; ориентировочный wall-clock честно документируется (минуты на 1-CPU проде).
 
 Gate-интерфейс плагинный; каждый gate возвращает `{gate, status: pass|fail|skipped|not-implemented, metrics?, artifacts?, exceptions?}`:
 
@@ -163,17 +163,17 @@ POST /api/components/:id/promote
 
 **Фаза A (async, вне транзакций)** — по канону сегодняшнего publish (`stage → import → activate` с компенсацией `fail()`):
 
-1. Предпроверки: `head_rev === baseRev` (иначе `409 revision_conflict {currentRev}` — единый канонический код, `candidate_stale` не вводим); `sha256(source(baseRev)) === sourceHash`; при переданном `acceptanceRunId` — статус `pass|pass_with_exceptions` и совпадение `policy_profile_hash`; `expectedCatalogRevision` — opt-in строгий CAS каталога.
-2. **Перепрогон каталого-временных проверок publish-пути** (уточнено триажем M2/M3): `reserveHostPrimitiveName`, `assertPublishRoleAvailable` (`canonical_role_conflict|catalog_changed`, с учётом `reuseOverride`), `assertAtomicPolicy` (`422 atomic_policy_violation`), `collectAndValidateComponentAssetRefs` (`422 asset_not_found`), `409 already_published` для уже опубликованного head-rev. Reuse-гейт (`component_reuse_required`) на publish-пути **не стоит** (он на создании компонента) — promote его не добавляет. Гарантия promote: отсутствие 422 **компиляционного** класса (покрыт receipt'ом); atomic/asset/canonical — перепрогоняются и могут отказать.
-3. Сборка артефактов: `stage` расширяется приёмом precompiled-артефактов кандидата (`compiledJs/bundleHash/hostAbiVersion` со сверкой `sourceHash`) — компиляция не повторяется (новая работа R1, триаж M1); `importPublished` (ключ `id@rev`) выполняется всегда — publish-верификация не обходится. При холодном кэше — пересборка **из `component_revisions` по `rev` кандидата** (новая функция: `ensureDraftCandidate` умеет только head — триаж C5/m3) под `withValidateSlot`.
+1. Предпроверки: `head_rev === baseRev` (иначе `409 revision_conflict {currentRev}` — единый канонический код, `candidate_stale` не вводим); `sha256(source(baseRev)) === sourceHash`; при переданном `acceptanceRunId` — статус `pass|pass_with_exceptions` и совпадение `policy_profile_hash` (R2); `expectedCatalogRevision` — opt-in строгий CAS каталога.
+2. **Перепрогон каталого-временных проверок publish-пути** (уточнено триажем M2/M3): `reserveHostPrimitiveName`, `assertPublishRoleAvailable` (`canonical_role_conflict|catalog_changed`, с учётом `reuseOverride`), `assertAtomicPolicy` (`422 atomic_policy_violation`), `collectAndValidateComponentAssetRefs` (`422 asset_not_found`), `409 already_published` для уже опубликованного head-rev — **проверка расширяется до «есть строка вне статуса `failed`»** (триаж V1: сегодня `stage` отказывает по одному факту наличия строки, что после краха саги навсегда блокирует rev; re-stage поверх `failed`-строки создаёт новый номер версии, дырки в нумерации допустимы и покрываются тестом). Reuse-гейт (`component_reuse_required`) на publish-пути **не стоит** — promote его не добавляет. Гарантия promote: отсутствие 422 **компиляционного** класса; atomic/asset/canonical — перепрогоняются и могут отказать.
+3. Сборка артефактов: **promote — вариант `publishComponent` без `typecheck+compile`** (уточнение V10/раунд 2: `repo.stage` уже принимает готовые артефакты — компилирует именно `publishComponent`): артефакты кандидата (`compiledJs/bundleHash/hostAbiVersion` со сверкой `sourceHash`) идут в `stage` напрямую; `importPublished` (ключ `id@rev`) выполняется всегда. При холодном кэше — пересборка head'а существующим `ensureDraftCandidate` под `withValidateSlot` (отдельная «пересборка по произвольному rev» не нужна: promote и так требует `head_rev === baseRev` — триаж V10).
 
-**Фаза B (одна короткая синхронная транзакция)** — триаж C2/M8:
+**Фаза B (одна короткая синхронная транзакция)** — триаж C2/M8, дополнено V2:
 
-4. `activate` новой версии + auto-supersede: выборка прочих `active` **внутри транзакции**, исключая новую версию по номеру; переходы — **через процедуру `setStatus`-инвариантов** (чтение и инкремент `status_rev`, cycle-check, `supersededBy = N`, `status_reason = "auto: promoted vN"`), не сырым UPDATE; при `supersede: "none"` — пропуск.
-5. Ссылки `candidate_id`/`acceptance_run_id` в версию (nullable-колонки `component_publishes`, FK `ON DELETE SET NULL` — триаж A2-риски), кандидат → `promoted` (R2+).
+4. `activate` новой версии (с фактическим `host_abi_version` кандидата — `stage` сегодня хардкодит `1`) + **`pinAssets(id, version, assetIds)`** (иначе версия остаётся без пинов ассетов: пустой DTO, сломанный export, потеря RESTRICT-защиты — триаж V2) + `recordValidation` + auto-supersede: выборка прочих `active` **внутри транзакции**, исключая новую версию по номеру; переходы — **через процедуру `setStatus`-инвариантов** (чтение и инкремент `status_rev`, cycle-check, `supersededBy = N`, `status_reason = "auto: promoted vN"`), не сырым UPDATE; при `supersede: "none"` — пропуск.
+5. *(шаг R2)* Ссылки `candidate_id`/`acceptance_run_id` в версию (nullable-колонки `component_publishes` — миграция R2, FK там же; триаж V3: в R1 ни колонок, ни FK — иначе FK указывал бы на несуществующие таблицы), кандидат → `promoted`.
 6. Аудит-событие promote с fingerprints.
 
-**Recovery и идемпотентность (триаж A4):** крэш в фазе A компенсируется `fail()`/`failStagingPublishes` (существующий механизм); повтор promote с тем же входом при уже `promoted`-кандидате **проверяет статус `promoted_version`**: если версия renderable — возвращает её; если `failed` (откат посреди саги) — сбрасывает кандидата в `validated` и переигрывает сагу.
+**Recovery и идемпотентность (триажи A4, V1):** крэш в фазе A компенсируется `fail()`/`failStagingPublishes` (существующий механизм); повторный promote с тем же `{baseRev, sourceHash}` после этого **проходит** благодаря расширенному `already_published`-чеку (п. 2) и создаёт версию с новым номером. В R2+ повтор при `promoted`-кандидате дополнительно проверяет статус `promoted_version`: renderable — вернуть её; `failed` — кандидат в `validated` и повторная сага (что и есть повторный promote).
 
 **Инвариант пула active (триаж M7):** после auto-supersede компонент имеет ровно одну active-версию; последующий ручной `deprecated` на неё оставит компонент без active — каталог/track-доки деградируют видимо (readiness-ошибка «no active version» добавляется в R1; авто-восстановление `superseded→active` — решение оператора, матрица переходов это разрешает).
 
@@ -182,11 +182,12 @@ POST /api/components/:id/promote
 ```text
 build_fingerprint = sha256(canonicalJson({
   sourceHash, bundleHash, hostAbiVersion,
-  themeVersion,          // = designSystemMetaVersion (факт receipt), null для DS без темы
-  policyProfileHash
+  themeVersion           // = designSystemMetaVersion (факт receipt), null для DS без темы
 }))
 candidate_id = "cand_" + sha256(canonicalJson({ componentId, designSystem, rev, buildFingerprint }))
 ```
+
+`policyProfileHash` — **вне** build_fingerprint (триаж V12: политика — вход вердикта, не сборки; тот же аргумент, что исключил `catalogRevision`); он хранится на run'е (`acceptance_runs.policy_profile_hash`) и сверяется на promote при переданном `acceptanceRunId`.
 
 - **`catalogRevision` исключён из идентичности**: это глобальный хэш всего каталога (меняется на любой чужой publish) — не свойство входа сборки. Он хранится как `observed_catalog_revision` (справка) и проверяется на promote опциональным `expectedCatalogRevision`; каталого-временные проверки promote перепрогоняет сам (§4.3.2). Это же закрывает DoS-вектор бесплатного размножения строк (триаж D3).
 - **`componentId`/`designSystem`/`rev` — в идентичности**: один `sourceHash` у нескольких компонентов — факт продукта (`candidates.ts:41`, `componentIds` — множество); без этого детерминированный PK коллидирует между компонентами (wedge + cross-owner disclosure).
@@ -214,17 +215,17 @@ component_evidence(component_id, rev, seq, figma_json, author, created_at)
 ## 7. Совместимость с текущим `publish` и режимы строгости
 
 - `POST /api/components/:id/publish` остаётся: переиспользует extraction кандидата, но **своим набором проверок** (не «validate+stage+activate»: не читает отрицательные записи, не гоняет `validateStoredFigma`, не отдаёт parity-warnings — триаж m2). Контракт ответа не меняется.
-- Режим DS: `acceptance: "off" | "advisory"` — **per-DS колонка `design_systems`** (не capabilities: `features.*` — глобальные булевы; режим отдаётся в DTO дизайн-системы — триаж M6). Default `off`.
-  - `advisory` (R2): publish работает, но **запускает acceptance-run пост-фактум** и пишет в аудит вердикт, включая `would_block: true|false` — по прецеденту shadow-фазы reuse-гейта (`would_block` в `catalog_reuse_decisions`), иначе фаза ненаблюдаема и нет критерия перехода к строгости (триаж C1).
+- Режим DS: `acceptance: "off" | "advisory"` — **per-DS колонка `design_systems`, миграция R2** (единственный читатель — advisory, триаж V15; не capabilities: `features.*` — глобальные булевы; режим отдаётся в DTO дизайн-системы — триаж M6). Default `off`.
+  - `advisory` (R2): publish работает, но **запускает acceptance-run пост-фактум**. Механика (триажи V4/V5): publish в advisory-DS материализует кандидата **по ревизии опубликованной версии** (внутренний путь: `getOrComputeCandidate` уже принимает `rev`), run привязывается к нему обычным FK; gate'ы `render`/`geometry`/`determinism` снимают **published-поверхностью** по `version` (существующий `enqueueComponent(id, version)`, examples из version-DTO) — не draft-preview, поэтому параллельный `PUT` автора не подменяет предмет вердикта. Вердикт и `would_block: true|false` — в аудит, по прецеденту shadow-фазы reuse-гейта (триаж C1).
   - `required` — **вынесен в R4+**: включается отдельным решением по накопленной advisory-статистике; политика exceptions в required — запрещены флагом. При гашении kill-switch'ем acceptance `required` автоматически деградирует до `advisory` — kill-switch не должен делать DS неопубликуемой (триаж D2).
-- Расхождение путей publish/promote — временное и наблюдаемое (аудит `publish.legacy` в advisory-DS); условие вывода legacy — решение после метрик advisory (триаж C2-скоуп).
+- Расхождение путей publish/promote — временное и наблюдаемое (аудит `publish.legacy` в advisory-DS); условие вывода legacy — решение после метрик advisory (триаж C2-скоуп). **Третий путь публикации — bundle-import** (`importer.ts` зовёт `publishComponent`): не проходит ни promote, ни advisory; помечается в аудите (`publish.import`) и исключается из KPI-знаменателя §9 (триаж V9).
 - Две правды о верификации (триаж A4-скоуп): Library-чип `Verified` строится на visual-runs active-версии — компонент с `pass` acceptance-run'ом покажет `Visual pending`; расхождение фиксируется здесь и снимается в R3 (маппинг Library учитывает acceptance-вердикт) либо в VDC 2.0.
 - CLI/драйвер: R1 — верб `promote` (баланс триажа D1: волна закрывается только с обновлённым драйвером/скиллом, канон P7); R2 — верб `accept` (candidates + run + poll + evidence). Драйвер проверяет булевы `capabilities.features.acceptance*` и деградирует читаемо.
 - Immutable pins опубликованных прототипов не затрагиваются нигде.
 
 ## 8. Миграции, откат, ресурсы
 
-- Миграции по волнам: R1 — только 2 nullable-колонки `component_publishes` (`candidate_id`, `acceptance_run_id`, FK `ON DELETE SET NULL`) + колонка `design_systems.acceptance` (R2 может забрать её себе); R2 — `component_candidates`, `acceptance_runs`; R3 — `component_evidence` (+`rejected|expired`). Все — forward-only, аддитивные; `SELECT *` по `component_publishes` в коде нет (проверено ревью) — откат образа безопасен.
+- Миграции по волнам (пересобрано триажами V3/V15): **R1 — миграций нет вообще** (promote receipt-based, ссылок на кандидата не пишет); R2 — `component_candidates`, `acceptance_runs`, nullable-колонки `component_publishes.candidate_id/acceptance_run_id` (FK `ON DELETE SET NULL` — появляются вместе с таблицами, на которые указывают), колонка `design_systems.acceptance`; R3 — `component_evidence` (+`rejected|expired`). Все — forward-only, аддитивные; `SELECT *` по `component_publishes` в коде нет (проверено ревью) — откат образа безопасен.
 - **Обязательство шаблона rebuild** (триаж A2-риски): любой будущий rebuild `component_publishes` (прецедент v14: `RENAME → CREATE → INSERT SELECT` с явным перечнем) обязан включить новые колонки и FK-детей — записать в комментарий миграции по прецеденту `migrations.ts:163`.
 - Bundle-export/import не видят новых таблиц (экспортёр читает только `MAX(version)`); provenance-история в бандл не входит до R4+ (§6).
 - Env-kill-switch на каждый роут-набор (promote / candidates+runs / provenance); гашение не создаёт аварий (§7: required→advisory).
@@ -251,8 +252,8 @@ component_evidence(component_id, rev, seq, figma_json, author, created_at)
 
 ## 11. Порядок внедрения (волны, перекроены триажем D1/S1)
 
-- **R1 — promote-сага, без durable-таблиц**: `POST /promote {baseRev, sourceHash, …}` (receipt-based), stage с precompiled-артефактами, пересборка по rev, auto-supersede в короткой транзакции + recovery, фикс auth draft-bundle-роута (M5), readiness «no active version», CLI `promote` + обновление скилла, `driver.mjs audit --versions`, аудит-события, features/kill-switch. Ценность сразу: один вызов вместо publish+ручных transitions, churn-метрика измерима.
-- **R2 — durable-слой и раны**: `component_candidates` (component-scoped id) + `acceptance_runs` + оркестратор вне помпы + gate'ы фазы 1 (contract/defaults/render/geometry/determinism/audit) + evidence-каталог + `advisory`-режим с would-block + CLI `accept` + `default-v1` константой.
+- **R1 — promote-сага, без durable-таблиц и без миграций**: `POST /promote {baseRev, sourceHash, …}` (receipt-based), promote-вариант `publishComponent` без typecheck+compile (артефакты кандидата в `stage`, фактический `host_abi_version`), расширенный `already_published`-чек (recovery, V1), фаза B с `pinAssets`+`recordValidation`+auto-supersede в короткой транзакции, фикс auth draft-bundle-роута (M5/V11), readiness «no active version», CLI `promote` + обновление скилла, `driver.mjs audit --versions`, аудит-события (`component.promoted`, `publish.import` — V9). Features: только `acceptancePromote` (V15) + kill-switch. Ценность сразу: один вызов вместо publish+ручных transitions, churn-метрика измерима.
+- **R2 — durable-слой и раны**: `component_candidates` (component-scoped id) + `acceptance_runs` (+колонки-ссылки в `component_publishes`, +`design_systems.acceptance`) + оркестратор вне помпы (пул validate-слотов, backoff на 429, стартовая уборка ранов — V7/V8) + gate'ы фазы 1 (contract/defaults/render/geometry/determinism/audit; для advisory — published-вариант render/geometry/determinism, V5) + evidence-каталог + `advisory`-режим с would-block и материализацией кандидата published-ревизии (V4) + CLI `accept` + `default-v1` константой.
 - **R3 — provenance и UI**: `component_evidence` + `PUT …/provenance` (полный перечень read-путей §6) + UI-блок Acceptance + Library-маппинг Verified + статусы `rejected|expired`.
 - **R4+** (отдельные RFC/решения): `required`-режим (по advisory-статистике), regression-overlay (candidate-пин в `PrototypeBootstrapTarget`), VDC 2.0 → gate `visual`, interaction runner → gate `interactions`, provenance в bundle-формате v3, theme impact → расширение `regression`, reuse-decision lease.
 
@@ -265,7 +266,7 @@ component_evidence(component_id, rev, seq, figma_json, author, created_at)
 3. ~~Evidence-хранилище~~ — закрыт триажем B4: собственный каталог `.acceptance/`, asset-store не используется (GC ассетов в продукте нет).
 4. ~~`passed-with-exceptions` без VDC 2.0~~ — закрыт: `allowExceptions: false` в `default-v1`; в будущем `required` exceptions запрещены флагом политики.
 5. ~~Судьба `staging|failed` в promote~~ — закрыт триажем m5/S6: существующий канон `stage → import → activate` + `failStagingPublishes` как recovery.
-6. Разрешать ли acceptance-run на **published** версии (пост-фактум evidence для legacy) — остаётся к R2 (advisory-режим фактически это и делает для новых publish; вопрос — про исторические версии).
+6. Run по published-версии для **новых** publish — решён в R2 (§7: advisory материализует кандидата published-ревизии и снимает published-поверхностью — триажи V4/V5/V6). Открытым остаётся только **бэкфилл исторических** версий (пост-фактум evidence для legacy-каталога) — к R3.
 
 ## 13. Триаж Stage 2, раунд 1 (2026-08-02)
 
@@ -286,3 +287,27 @@ Majors — приняты и внесены: RA-M1 (честность preExtrac
 Minors — приняты: RB-S3 (state machine упрощена), RB-S2 (default-v1 кодом), RB-A5 (словарь статусов visual_runs), RB-A6 (cancel только queued), RB-A7 (списочный GET убран), RB-A8 (`supersede: enum`), RB-S4 (gates_json — известное ограничение), RB-S5 (вытеснение старых pass-бандлов), RB-D2 (provenance не заперта за required — R3, required — R4+), RB-S6/RA-m5 (§12.5 закрыт), RB-S7/RC-E3 (асимметрия темы в evidence, стампида отмечена), RA-m1 (ссылки разнесены), RA-m2 (§7 переформулирован), RA-m4 (лимиты в capabilities), RA-m6 (булевы features), RC-D4 (evidence-путь выводится), RC-D5 (потолок бандла), RC-E4 (partial unique index), RC-E5 (стухшая заметка §12.1 вычищена).
 
 Отклонено: RB-C2-вариант «publish = тонкая обёртка над promote» — отложено до метрик advisory (менять семантику legacy-пути до данных преждевременно); RC-рекомендация «не начинать R2 до посадки GC ассетов» — снята сменой решения §3.3 (asset-store не используется, свой каталог с GC входит в R2).
+
+### Раунд 2 — верификационное ре-ревью (V), триаж в v4
+
+Закрытие всех блокеров раунда 1 подтверждено ревьюером (identity, catalogRevision, сага, gate-матрица, очередь, evidence, R1-ценность; точечные ссылки §2 верифицированы). Новые находки:
+
+| Находка | Вердикт | Как отражено |
+|---|---|---|
+| V1 (blocker): recovery неисполним — `stage` отказывает `already_published` по факту строки любого статуса; после `failStagingPublishes` rev заблокирован навсегда | ✅ | §4.3.2: чек расширен до «строка вне статуса `failed`», re-stage создаёт новый номер версии (тест на дырки нумерации); recovery переписан |
+| V2 (blocker): фаза B теряла `pinAssets` (единственный источник `component_publish_assets`), `recordValidation` и фактический `host_abi_version` | ✅ | §4.3.4: все три — явные шаги фазы B |
+| V3 (blocker): R1-колонки с FK на таблицы R2 (foreign_keys=ON → «no such table») | ✅ | §8/§11: **R1 без миграций вообще**; колонки+FK — R2; §4.3.5 помечен «шаг R2» |
+| V4 (major): advisory-run без кандидата при обязательном FK | ✅ | §7: advisory материализует кандидата по ревизии опубликованной версии (`getOrComputeCandidate` принимает rev) |
+| V5 (major): гейты фазы 1 определены только для draft-поверхности; advisory-вердикт мог оказаться о драфте | ✅ | §7/§11 R2: advisory снимает published-поверхностью (`enqueueComponent(id, version)`, examples из version-DTO) |
+| V6 (major): §12.6 нечестно «открыт» | ✅ | §12.6 переформулирован: открыт только бэкфилл исторических версий |
+| V7 (major): «отдельный validate-слот» — изменение кода, не записанное в объём; нет ретрая 429 | ✅ | §4.2/§11 R2: пул слотов + backoff-ретрай с потолком в политике |
+| V8 (major): нет recovery ранов при рестарте — вечный `running` + блокировка partial-index | ✅ | §4.2: стартовая уборка `queued\|running → error` по прецеденту `failStagingPublishes` |
+| V9 (major): bundle-import — неучтённый третий путь публикации, искажает KPI | ✅ | §7/§9: аудит `publish.import`, исключение из KPI-знаменателя |
+| V10 (major): «пересборка по rev» — работа без сценария (promote требует head) | ✅ | §4.3.3: `ensureDraftCandidate` (head) достаточно; пункт снят из R1; формулировка «promote — вариант `publishComponent` без typecheck+compile» |
+| V11 (major): лобовой owner-check сломал бы draft-preview (capture-принципал — не user) | ✅ | §2: точная форма фикса — capture по allowlist, owner-check для user/anon |
+| V12 (minor): `policyProfileHash` в build_fingerprint противоречит собственному аргументу §5 | ✅ | §5: вынесен на run |
+| V13 (minor): «словарь visual_runs» фактически неверен (CHECK: pass/fail/error/reference_missing) | ✅ | §3.3: «пересечение — pass\|fail\|error, остальное новое» |
+| V14 (minor): TTL-свипер + `ON DELETE SET NULL` молча обнуляет provenance promoted-версии | ✅ | §3.2: свипер не трогает `promoted` |
+| V15 (minor): волновые рассинхроны §8↔§11 (колонка acceptance, features-флаги, кандидат в R1-recovery) | ✅ | §8/§11 сведены: acceptance-колонка — R2, R1 — только `acceptancePromote`, recovery R1 — без кандидата |
+
+Вердикт ревьюера раунда 2: V1–V3 — внутри объёма R1, точечные; «после их внесения R1 можно стартовать без нового полного раунда — достаточно дельта-верификации». Дельта-верификация решений V1–V3 включена в done-критерии R1 (§11).
