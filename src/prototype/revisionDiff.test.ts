@@ -129,6 +129,29 @@ describe("diffPrototypeDocs", () => {
     expect(result.summary).toMatchObject({ docIdentical: false, identical: false });
   });
 
+  test("reports computed entries as a map diff next to state", () => {
+    const before = doc({ computed: { cartCount: { op: "count", from: "/cart" }, gone: { op: "sum", from: "/cart" } } });
+    const after = doc({ computed: { cartCount: { op: "count", from: "/items" }, cartTotal: { op: "add", terms: ["/cartCount", -500] } } });
+    const result = diffPrototypeDocs(revision(1, before), revision(2, after)) as any;
+    expect(result.computed).toEqual({
+      added: [{ key: "cartTotal", value: { value: { op: "add", terms: ["/cartCount", -500] } } }],
+      removed: ["gone"],
+      changed: [{ key: "cartCount", from: { value: { from: "/cart", op: "count" } }, to: { value: { from: "/items", op: "count" } } }],
+    });
+    expect(result.state).toBeUndefined();
+    expect(result.summary).toMatchObject({ docIdentical: false, identical: false });
+    // Документы без computed по обе стороны секцию не порождают.
+    expect((diffPrototypeDocs(revision(1, doc()), revision(2, doc({ name: "After" }))) as any).computed).toBeUndefined();
+  });
+
+  test("accounts for and omits the computed section under the leaf budget", () => {
+    const before = doc();
+    const after = doc({ computed: { cartCount: { op: "count", from: "/cart" } } });
+    const result = diffPrototypeDocs(revision(1, before), revision(2, after), { leafBudget: 0 }) as any;
+    expect(result.computed).toEqual({ omitted: true });
+    expect(result.summary).toMatchObject({ truncated: true, omittedSections: ["computed"] });
+  });
+
   test("accounts for and omits the flows section under the leaf budget", () => {
     const before = doc();
     const after = doc({

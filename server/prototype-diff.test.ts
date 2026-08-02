@@ -5,6 +5,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { openDatabase } from "./db";
 import { prototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
+import { prototypeRevisionDiffContract } from "./contracts";
+import { diffPrototypeDocs } from "../src/prototype/revisionDiff";
 
 const dirs: string[] = [];
 afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir,{recursive:true,force:true}); });
@@ -58,6 +60,33 @@ describe("prototype revision diff route", () => {
     expect(await regionDiff(2)).toEqual({from:{missing:true},to:{value:"header"}});
     expect(await regionDiff(3)).toEqual({from:{value:"header"},to:{value:"footer"}});
     expect(await regionDiff(4)).toEqual({from:{value:"footer"},to:{missing:true}});
+    db.close();
+  });
+
+  test("reports added computed entries and keeps an omitted computed section contract-valid", async () => {
+    const {db,handler}=await setup(); const first=await fixture("diff-computed");
+    expect((await handler(request("/prototypes","POST",{doc:first,message:"one"}))).status).toBe(201);
+    const second={...first,state:{...first.state,cart:[]},computed:{cartCount:{op:"count",from:"/cart"}}} as PrototypeDoc;
+    expect((await handler(request("/prototypes/diff-computed","PUT",{baseRev:1,doc:second,message:"two"}))).status).toBe(200);
+    const response=await handler(request("/prototypes/diff-computed/revisions/2/diff"));
+    expect(response.status).toBe(200);
+    const body=await response.json();
+    expect(prototypeRevisionDiffContract.responseSchema!.parse(body)).toBeTruthy();
+    expect((body as any).computed).toEqual({added:[{key:"cartCount",value:{value:{op:"count",from:"/cart"}}}]});
+    expect((body as any).summary.omittedSections).toEqual([]);
+
+    // Малый byteBudget форсирует omission секции computed: enum summary.omittedSections
+    // обязан её знать, иначе контракт отвергает ответ (route бюджеты не принимает —
+    // зовём билдер напрямую с тем же from/to, что отдаёт роут).
+    const bulky={...second,computed:Object.fromEntries(Array.from({length:20},(_,i)=>[`computedEntryWithADeliberatelyLongName${i}`,{op:"count",from:"/cart"}]))} as PrototypeDoc;
+    expect((await handler(request("/prototypes/diff-computed","PUT",{baseRev:2,doc:bulky,message:"three"}))).status).toBe(200);
+    const rawDoc=(rev:number) => JSON.parse((db.query("SELECT doc FROM prototype_revisions WHERE prototype_id='diff-computed' AND rev=?").get(rev) as {doc:string}).doc);
+    const revision=(rev:number)=>({rev,doc:rawDoc(rev),message:null,createdAt:`2026-08-02T00:00:0${rev}.000Z`,components:[],compositions:[],assets:[]});
+    const tiny=diffPrototypeDocs(revision(2),revision(3),{byteBudget:1024}) as any;
+    expect(tiny.computed).toEqual({omitted:true});
+    expect(tiny.summary.omittedSections).toContain("computed");
+    expect(tiny.summary.truncated).toBe(true);
+    expect(prototypeRevisionDiffContract.responseSchema!.parse(tiny)).toBeTruthy();
     db.close();
   });
 

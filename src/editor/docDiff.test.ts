@@ -179,6 +179,29 @@ describe("diffDocs (W2-4)", () => {
     expect(changes).toContain("changed:Экран «Корзина» › корневой элемент");
   });
 
+  it("diffs computed entries per top-level key with the localized label", () => {
+    const base = makeDoc();
+    base.computed = {
+      cartCount: { op: "count", from: "/cart" },
+      cartSubtotal: { op: "sum", from: "/cart", field: "price" },
+    };
+    const next = clone(base);
+    next.computed = {
+      cartCount: { op: "count", from: "/items" },
+      cartTotal: { op: "add", terms: ["/cartSubtotal", -500] },
+    };
+    const changes = diffDocs(base, next);
+    expect(paths(changes)).toContain("changed:Вычисляемые значения › cartCount");
+    expect(paths(changes)).toContain("removed:Вычисляемые значения › cartSubtotal");
+    expect(paths(changes)).toContain("added:Вычисляемые значения › cartTotal");
+    // Строка конфликт-диалога — русский лейбл целиком.
+    const added = changes.find((change) => change.segments[1] === "cartTotal")!;
+    expect(formatDocChange(added)).toBe("Вычисляемые значения › cartTotal — добавлено");
+    // Документ без computed по обе стороны не порождает строк.
+    const plain = makeDoc();
+    expect(paths(diffDocs(plain, clone(plain)))).toEqual([]);
+  });
+
   it("diffs document metadata with scalar details", () => {
     const base = makeDoc();
     const next = clone(base);
@@ -232,6 +255,8 @@ describe("describeDocPath", () => {
   it("decodes doc-level fields, state keys and falls back gracefully", () => {
     expect(describeDocPath(doc, "/startScreen")).toBe("Стартовый экран");
     expect(describeDocPath(doc, "/state/items")).toBe("Состояние › items");
+    expect(describeDocPath(doc, "/computed/cartTotal")).toBe("Вычисляемые значения › cartTotal");
+    expect(describeDocPath(doc, ["computed", "cartTotal", "terms", 0])).toBe("Вычисляемые значения › cartTotal › terms › 0");
     expect(describeDocPath(doc, "")).toBe("Документ");
     expect(describeDocPath(doc, "/screens/99/name")).toBe("screens[99] › Название");
     expect(describeDocPath(doc, "/unknown/thing")).toBe("unknown › thing");

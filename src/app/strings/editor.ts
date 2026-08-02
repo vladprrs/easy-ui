@@ -135,6 +135,7 @@ export const editor = {
   diffScreensLabel: "Экраны",
   diffDocLabel: "Документ",
   diffStateLabel: "Состояние",
+  diffComputedLabel: "Вычисляемые значения",
   /** Флоу документа — «Сценарий» (в отличие от записей рекордера, они «Проверки»). */
   diffFlowLabel: (name: string) => `Сценарий «${name}»`,
   diffFlowStepsLabel: "шаги",

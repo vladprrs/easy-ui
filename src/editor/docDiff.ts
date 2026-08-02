@@ -145,6 +145,8 @@ export function diffDocs(base: PrototypeDoc, next: PrototypeDoc): DocChange[] {
   }
   diffFlows(changes, base.flows, next.flows);
   diffRecord(changes, [editor.diffStateLabel], base.state, next.state);
+  // `computed` — такой же record верхнего уровня, как state (ключи bare); `null` в stored-ветке ⇒ `?? undefined`.
+  diffRecord(changes, [editor.diffComputedLabel], base.computed ?? undefined, next.computed ?? undefined);
   const nextById = new Map(next.screens.map((screen) => [screen.id, screen]));
   for (const screen of base.screens) {
     const counterpart = nextById.get(screen.id);
@@ -221,6 +223,8 @@ export function describeDocPath(doc: PrototypeDoc, path: string | (string | numb
     return describeScreenPath(screen, index, screenRest).join(" › ");
   }
   if (head === "state") return [editor.diffStateLabel, ...rest].join(" › ");
+  // Ключи computed — bare, как у state: адрес zod-issue и validate-issue совпадают посегментно.
+  if (head === "computed") return [editor.diffComputedLabel, ...rest].join(" › ");
   const docLabel = DOC_FIELD_LABELS[head as keyof typeof DOC_FIELD_LABELS];
   if (docLabel && rest.length === 0) return docLabel;
   return segments.join(" › ");
