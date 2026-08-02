@@ -1,6 +1,6 @@
 import { Link, Outlet, type RouteObject } from "react-router";
 import { CapturePrototype } from "../capture/CapturePrototype";
-import { CaptureComponent } from "../capture/CaptureComponent";
+import { CaptureComponent, CaptureComponentDraft } from "../capture/CaptureComponent";
 import { GalleryPage } from "../gallery/GalleryPage";
 import { LibraryPage } from "../library/LibraryPage";
 import { ComponentPage } from "../library/componentPage";
@@ -45,6 +45,7 @@ export const routeObjects: RouteObject[] = [{
   children: [
   { path: "login", element: <LoginPage /> },
   { path: "capture/:protoId/s/:screenId", element: <CapturePrototype /> },
+  { path: "capture/component/:id/draft", element: <CaptureComponentDraft /> },
   { path: "capture/component/:id/:version", element: <CaptureComponent /> },
   // Презентация (W1-2): вне Layout и вне PrototypeChrome — как capture.
   { path: "p/:protoId/present", element: <PresentShell />, children: presentChildren() },

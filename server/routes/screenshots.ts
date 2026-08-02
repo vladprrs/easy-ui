@@ -21,14 +21,20 @@ function unavailable(): never { throw new ApiError(501, "screenshot_unavailable"
  * Screenshot job routes. Returns `null` when the path is not a screenshot route
  * so the caller can fall through to the generic API router. When the path is a
  * screenshot route but the service is unavailable, POST returns 501 directly.
+ *
+ * `options.validateDisabled` — kill-switch P8 (`EASYUI_VALIDATE_DISABLED=1`): гасит и
+ * draft-preview (P1b), потому что постановка draft-джобы собирает candidate-bundle тем же
+ * тяжёлым префлайтом. Опубликованная съёмка кандидата не строит и продолжает работать.
  */
-export async function routeScreenshots(request: Request, db:Database, service: ScreenshotService | undefined, segments: string[], principal:Principal): Promise<Response | null> {
+export async function routeScreenshots(request: Request, db:Database, service: ScreenshotService | undefined, segments: string[], principal:Principal, options:{validateDisabled?:boolean}={}): Promise<Response | null> {
   // GET /api/screenshot-jobs/:jobId
   if (segments[0] === "screenshot-jobs" && segments.length === 2) {
     if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
     if (!service) throw new ApiError(404, "job_not_found", "Screenshot job not found");
     const job=service.peek(segments[1]!);
     if(job?.kind==="prototype"){const match=/^\/capture\/([^/]+)\//.exec(job.captureUrl);if(match)requirePrototypeRead(db,decodeURIComponent(match[1]!),principal);}
+    // Component-джобы (published и draft) перепроверяют владельца компонента, как и постановка.
+    if(job?.kind==="component"){const match=/^\/capture\/component\/([^/]+)\//.exec(job.captureUrl);if(match)requireResourceOwner(db,"components",decodeURIComponent(match[1]!),principal);}
     return json(service.get(segments[1]!), 200, noStore);
   }
   // POST /api/prototypes/:id/screens/:screenId/screenshot
@@ -54,7 +60,23 @@ export async function routeScreenshots(request: Request, db:Database, service: S
     if (Object.hasOwn(b, "props") && Object.hasOwn(b, "exampleName")) throw new ApiError(400, "invalid_request", "props and exampleName are mutually exclusive");
     if (b.props !== undefined && !isObject(b.props)) throw new ApiError(422, "invalid_props", "props must be a JSON object");
     if (b.exampleName !== undefined && typeof b.exampleName !== "string") throw new ApiError(400, "invalid_request", "exampleName must be a string");
-    const result = service.enqueueComponent(segments[1]!, versionNumber, { props: b.props as Record<string, unknown> | undefined, exampleName: b.exampleName as string | undefined, viewport: b.viewport, deviceScaleFactor: b.deviceScaleFactor, theme: typeof b.theme === "string" ? b.theme : undefined, waitForFonts: b.waitForFonts !== false });
+    if (b.probe !== undefined && b.probe !== "geometry") throw new ApiError(400, "invalid_request", "probe must be geometry");
+    const result = service.enqueueComponent(segments[1]!, versionNumber, { props: b.props as Record<string, unknown> | undefined, exampleName: b.exampleName as string | undefined, viewport: b.viewport, deviceScaleFactor: b.deviceScaleFactor, theme: typeof b.theme === "string" ? b.theme : undefined, waitForFonts: b.waitForFonts !== false, probe: b.probe as "geometry" | undefined });
+    return json(result, 202, noStore);
+  }
+  // POST /api/components/:id/head/screenshot — draft-вариант (P1b): съёмка сохранённой, но не
+  // опубликованной head-ревизии через candidate-bundle префлайта P8. Тело — как у published.
+  if (segments[0] === "components" && segments.length === 4 && segments[2] === "head" && segments[3] === "screenshot") {
+    if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+    if (!service) unavailable();
+    if (options.validateDisabled) throw new ApiError(404, "not_found", "Component draft preview is disabled");
+    const actor = requireResourceOwner(db,"components",segments[1]!,principal);
+    const b = body(await readJson(request));
+    if (Object.hasOwn(b, "props") && Object.hasOwn(b, "exampleName")) throw new ApiError(400, "invalid_request", "props and exampleName are mutually exclusive");
+    if (b.props !== undefined && !isObject(b.props)) throw new ApiError(422, "invalid_props", "props must be a JSON object");
+    if (b.exampleName !== undefined && typeof b.exampleName !== "string") throw new ApiError(400, "invalid_request", "exampleName must be a string");
+    if (b.probe !== undefined && b.probe !== "geometry") throw new ApiError(400, "invalid_request", "probe must be geometry");
+    const result = await service.enqueueComponentDraft(segments[1]!, actor.userId, { props: b.props as Record<string, unknown> | undefined, exampleName: b.exampleName as string | undefined, viewport: b.viewport, deviceScaleFactor: b.deviceScaleFactor, theme: typeof b.theme === "string" ? b.theme : undefined, waitForFonts: b.waitForFonts !== false, probe: b.probe as "geometry" | undefined });
     return json(result, 202, noStore);
   }
   return null;

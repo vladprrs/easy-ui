@@ -1027,7 +1027,16 @@
                         "catalogMigration": {
                           "type": "boolean"
                         },
+                        "componentDraftPreview": {
+                          "type": "boolean"
+                        },
+                        "componentGeometry": {
+                          "type": "boolean"
+                        },
                         "componentReuseGate": {
+                          "type": "boolean"
+                        },
+                        "componentValidate": {
                           "type": "boolean"
                         },
                         "compositionV2": {
@@ -1080,7 +1089,10 @@
                         "bundleImport",
                         "componentReuseGate",
                         "compositionV2",
-                        "catalogMigration"
+                        "catalogMigration",
+                        "componentValidate",
+                        "componentGeometry",
+                        "componentDraftPreview"
                       ],
                       "type": "object"
                     },
@@ -1132,6 +1144,18 @@
                         },
                         "sourceKiB": {
                           "type": "number"
+                        },
+                        "validateCacheMiB": {
+                          "type": "number"
+                        },
+                        "validateCacheTtlHours": {
+                          "type": "number"
+                        },
+                        "validateGlobalConcurrent": {
+                          "type": "number"
+                        },
+                        "validateUserConcurrent": {
+                          "type": "number"
                         }
                       },
                       "required": [
@@ -1148,7 +1172,11 @@
                         "flowSteps",
                         "flowTotalSteps",
                         "flowDepth",
-                        "compositionDepth"
+                        "compositionDepth",
+                        "validateUserConcurrent",
+                        "validateGlobalConcurrent",
+                        "validateCacheTtlHours",
+                        "validateCacheMiB"
                       ],
                       "type": "object"
                     },
@@ -5144,6 +5172,10 @@
                   "properties": {
                     "rev": {
                       "type": "number"
+                    },
+                    "unchanged": {
+                      "const": true,
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -5206,7 +5238,7 @@
             "description": "validation_failed"
           }
         },
-        "summary": "Save a new head revision of source and/or move the component between design systems (CAS on baseRev).",
+        "summary": "Save a new head revision of source and/or move the component between design systems (CAS on baseRev). A figma-only no-op (source and figma byte-identical to head) does not create a revision and answers {unchanged:true, rev:<head>}; a changed figma still creates a revision.",
         "x-easyui-validated": false
       }
     },
@@ -5399,6 +5431,176 @@
           }
         },
         "summary": "Export a custom component (latest active version, or head draft when unpublished) as a ZIP bundle.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/components/{id}/head/screenshot": {
+      "post": {
+        "operationId": "post_components_id_head_screenshot",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "additionalProperties": {},
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "__schema1": {
+                    "type": "string"
+                  },
+                  "__schema2": {
+                    "properties": {
+                      "height": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer"
+                      },
+                      "width": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "width",
+                      "height"
+                    ],
+                    "type": "object"
+                  },
+                  "__schema3": {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "__schema4": {
+                    "type": "string"
+                  },
+                  "__schema5": {
+                    "type": "boolean"
+                  },
+                  "__schema6": {
+                    "const": "geometry",
+                    "type": "string"
+                  }
+                },
+                "properties": {
+                  "deviceScaleFactor": {
+                    "$ref": "#/$defs/__schema3"
+                  },
+                  "exampleName": {
+                    "$ref": "#/$defs/__schema1"
+                  },
+                  "probe": {
+                    "$ref": "#/$defs/__schema6"
+                  },
+                  "props": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "theme": {
+                    "$ref": "#/$defs/__schema4"
+                  },
+                  "viewport": {
+                    "$ref": "#/$defs/__schema2"
+                  },
+                  "waitForFonts": {
+                    "$ref": "#/$defs/__schema5"
+                  }
+                },
+                "required": [
+                  "viewport"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "jobId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "jobId"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_props | unknown_example | validation_failed (the draft failed the validate preflight checks) | asset_not_found (the draft source references an unknown asset) | invalid_viewport (viewport/dsf bounds violated)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validate_in_flight (a candidate build is already in flight for this user) | queue_full (screenshot queue is full)"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "screenshot_unavailable (no SERVE_DIST or chromium)"
+          }
+        },
+        "summary": "Enqueue a draft (saved, unpublished head revision) component screenshot job rendered from the ephemeral validate candidate bundle.",
         "x-easyui-validated": false
       }
     },
@@ -5807,7 +6009,7 @@
             "description": "validation_failed | atomic_policy_violation | event_schema_not_serializable"
           }
         },
-        "summary": "Publish the head revision: typecheck, compile, import-verify and activate the next version. Canonical-role conflicts return a terminal 409 with a human-confirmed admin override template.",
+        "summary": "Publish the head revision: typecheck, compile, import-verify and activate the next version. Canonical-role conflicts return a terminal 409 with a human-confirmed admin override template. Reuses a successful validate extraction of the same source when present.",
         "x-easyui-validated": false
       }
     },
@@ -6519,6 +6721,133 @@
         },
         "summary": "Usage graph of a component: head-revision usages with exact screen/element keys, immutable usages pinned by prototype publications, versions in use and a safe-to-remove verdict. `format=tree` groups head usages as prototype → screen → element.",
         "x-easyui-validated": true
+      }
+    },
+    "/api/components/{id}/validate": {
+      "post": {
+        "operationId": "post_components_id_validate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "properties": {
+                    "bundleHash": {
+                      "type": "string"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "catalogRevision": {
+                      "type": "string"
+                    },
+                    "hostAbiVersion": {
+                      "type": "number"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "sourceHash": {
+                      "type": "string"
+                    },
+                    "themeVersion": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "warnings": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "cached",
+                    "sourceHash",
+                    "bundleHash",
+                    "hostAbiVersion",
+                    "themeVersion",
+                    "catalogRevision",
+                    "warnings"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "payload_too_large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed | asset_not_found | event_schema_not_serializable"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validate_in_flight (a validate run is already in flight for this user) | queue_full (global validate concurrency cap reached)"
+          }
+        },
+        "summary": "Preflight the head revision without creating a version or changing public state: stored figma provenance (unsupported fields fail with the field in issues), asset refs, definition extraction with smoke render, typecheck, compile and import verification, plus schema-default/render-fallback parity warnings. The receipt (sourceHash/bundleHash/themeVersion/catalogRevision) covers only this check set — canonical-role, reuse-gate and other catalog-time publish checks are NOT covered. Heavy results are cached by sourceHash (24h TTL, byte-capped, GC on start and on write); throttled to 1 concurrent run per user and a global cap. Disabled via EASYUI_VALIDATE_DISABLED=1 (404).",
+        "x-easyui-validated": false
       }
     },
     "/api/components/{id}/versions": {
@@ -7272,6 +7601,10 @@
                   },
                   "__schema5": {
                     "type": "boolean"
+                  },
+                  "__schema6": {
+                    "const": "geometry",
+                    "type": "string"
                   }
                 },
                 "properties": {
@@ -7280,6 +7613,9 @@
                   },
                   "exampleName": {
                     "$ref": "#/$defs/__schema1"
+                  },
+                  "probe": {
+                    "$ref": "#/$defs/__schema6"
                   },
                   "props": {
                     "$ref": "#/$defs/__schema0"
@@ -7374,7 +7710,7 @@
             "description": "screenshot_unavailable (no SERVE_DIST or chromium)"
           }
         },
-        "summary": "Enqueue a published-component screenshot job with optional props or a named example.",
+        "summary": "Enqueue a published-component screenshot job with optional props or a named example; probe=geometry returns a component-surface geometry result.",
         "x-easyui-validated": false
       }
     },
@@ -20541,6 +20877,174 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "2xl": {
+                          "type": "string"
+                        },
+                        "3xl": {
+                          "type": "string"
+                        },
+                        "4xl": {
+                          "type": "string"
+                        },
+                        "lg": {
+                          "type": "string"
+                        },
+                        "md": {
+                          "type": "string"
+                        },
+                        "none": {
+                          "type": "string"
+                        },
+                        "sm": {
+                          "type": "string"
+                        },
+                        "xl": {
+                          "type": "string"
+                        },
+                        "xs": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "none",
+                        "xs",
+                        "sm",
+                        "md",
+                        "lg",
+                        "xl",
+                        "2xl",
+                        "3xl",
+                        "4xl"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema1": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "height": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "width": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "width",
+                        "height"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema2": {
+                      "type": "number"
+                    },
+                    "__schema3": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "domIndex": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "height": {
+                            "type": "number"
+                          },
+                          "hidden": {
+                            "const": true,
+                            "type": "boolean"
+                          },
+                          "instance": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "key": {
+                            "type": "string"
+                          },
+                          "layoutContext": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "columnGap": {
+                                    "type": "string"
+                                  },
+                                  "display": {
+                                    "type": "string"
+                                  },
+                                  "flexDirection": {
+                                    "type": "string"
+                                  },
+                                  "flexWrap": {
+                                    "type": "string"
+                                  },
+                                  "rowGap": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "display",
+                                  "flexDirection",
+                                  "flexWrap",
+                                  "rowGap",
+                                  "columnGap"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "parentInstance": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "parentKey": {
+                            "type": "string"
+                          },
+                          "width": {
+                            "type": "number"
+                          },
+                          "x": {
+                            "type": "number"
+                          },
+                          "y": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "instance",
+                          "domIndex",
+                          "x",
+                          "y",
+                          "width",
+                          "height",
+                          "layoutContext"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "__schema4": {
+                      "type": "boolean"
+                    },
+                    "__schema5": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
                   "additionalProperties": false,
                   "properties": {
                     "error": {
@@ -20560,7 +21064,7 @@
                       "type": "object"
                     },
                     "result": {
-                      "oneOf": [
+                      "anyOf": [
                         {
                           "additionalProperties": false,
                           "properties": {
@@ -20601,6 +21105,11 @@
                                 "type": "string"
                               },
                               "type": "array"
+                            },
+                            "draftRev": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
                             },
                             "height": {
                               "type": "number"
@@ -20646,238 +21155,172 @@
                           "type": "object"
                         },
                         {
-                          "additionalProperties": false,
-                          "properties": {
-                            "componentPins": {
-                              "items": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "bundleHash": {
-                                    "type": "string"
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "componentPins": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "bundleHash": {
+                                        "type": "string"
+                                      },
+                                      "id": {
+                                        "type": "string"
+                                      },
+                                      "version": {
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991,
+                                        "type": "integer"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "version",
+                                      "bundleHash"
+                                    ],
+                                    "type": "object"
                                   },
-                                  "id": {
-                                    "type": "string"
-                                  },
-                                  "version": {
-                                    "exclusiveMinimum": 0,
-                                    "maximum": 9007199254740991,
-                                    "type": "integer"
-                                  }
+                                  "type": "array"
                                 },
-                                "required": [
-                                  "id",
-                                  "version",
-                                  "bundleHash"
-                                ],
-                                "type": "object"
-                              },
-                              "type": "array"
-                            },
-                            "designSystemMetaVersion": {
-                              "anyOf": [
-                                {
+                                "designSystemMetaVersion": {
+                                  "anyOf": [
+                                    {
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991,
+                                      "type": "integer"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "dpr": {
+                                  "$ref": "#/$defs/__schema2"
+                                },
+                                "kind": {
+                                  "const": "geometry",
+                                  "type": "string"
+                                },
+                                "prototypeInstanceId": {
+                                  "type": "string"
+                                },
+                                "rects": {
+                                  "$ref": "#/$defs/__schema3"
+                                },
+                                "resolvedRev": {
                                   "exclusiveMinimum": 0,
                                   "maximum": 9007199254740991,
                                   "type": "integer"
                                 },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "dpr": {
-                              "type": "number"
-                            },
-                            "kind": {
-                              "const": "geometry",
-                              "type": "string"
-                            },
-                            "prototypeInstanceId": {
-                              "type": "string"
-                            },
-                            "rects": {
-                              "items": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "domIndex": {
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "height": {
-                                    "type": "number"
-                                  },
-                                  "hidden": {
-                                    "const": true,
-                                    "type": "boolean"
-                                  },
-                                  "instance": {
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "key": {
-                                    "type": "string"
-                                  },
-                                  "layoutContext": {
-                                    "anyOf": [
-                                      {
-                                        "additionalProperties": false,
-                                        "properties": {
-                                          "columnGap": {
-                                            "type": "string"
-                                          },
-                                          "display": {
-                                            "type": "string"
-                                          },
-                                          "flexDirection": {
-                                            "type": "string"
-                                          },
-                                          "flexWrap": {
-                                            "type": "string"
-                                          },
-                                          "rowGap": {
-                                            "type": "string"
-                                          }
-                                        },
-                                        "required": [
-                                          "display",
-                                          "flexDirection",
-                                          "flexWrap",
-                                          "rowGap",
-                                          "columnGap"
-                                        ],
-                                        "type": "object"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "parentInstance": {
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "parentKey": {
-                                    "type": "string"
-                                  },
-                                  "width": {
-                                    "type": "number"
-                                  },
-                                  "x": {
-                                    "type": "number"
-                                  },
-                                  "y": {
-                                    "type": "number"
-                                  }
+                                "resolvedSpaceScale": {
+                                  "$ref": "#/$defs/__schema0"
                                 },
-                                "required": [
-                                  "key",
-                                  "instance",
-                                  "domIndex",
-                                  "x",
-                                  "y",
-                                  "width",
-                                  "height",
-                                  "layoutContext"
-                                ],
-                                "type": "object"
-                              },
-                              "type": "array"
-                            },
-                            "resolvedRev": {
-                              "exclusiveMinimum": 0,
-                              "maximum": 9007199254740991,
-                              "type": "integer"
-                            },
-                            "resolvedSpaceScale": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "2xl": {
+                                "surface": {
+                                  "const": "prototype",
                                   "type": "string"
                                 },
-                                "3xl": {
-                                  "type": "string"
+                                "total": {
+                                  "$ref": "#/$defs/__schema5"
                                 },
-                                "4xl": {
-                                  "type": "string"
+                                "truncated": {
+                                  "$ref": "#/$defs/__schema4"
                                 },
-                                "lg": {
-                                  "type": "string"
-                                },
-                                "md": {
-                                  "type": "string"
-                                },
-                                "none": {
-                                  "type": "string"
-                                },
-                                "sm": {
-                                  "type": "string"
-                                },
-                                "xl": {
-                                  "type": "string"
-                                },
-                                "xs": {
-                                  "type": "string"
+                                "viewport": {
+                                  "$ref": "#/$defs/__schema1"
                                 }
                               },
                               "required": [
-                                "none",
-                                "xs",
-                                "sm",
-                                "md",
-                                "lg",
-                                "xl",
-                                "2xl",
-                                "3xl",
-                                "4xl"
+                                "kind",
+                                "surface",
+                                "resolvedRev",
+                                "prototypeInstanceId",
+                                "componentPins",
+                                "designSystemMetaVersion",
+                                "resolvedSpaceScale",
+                                "viewport",
+                                "dpr",
+                                "rects",
+                                "truncated",
+                                "total"
                               ],
                               "type": "object"
                             },
-                            "total": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "truncated": {
-                              "type": "boolean"
-                            },
-                            "viewport": {
+                            {
                               "additionalProperties": false,
                               "properties": {
-                                "height": {
+                                "bundleHash": {
+                                  "type": "string"
+                                },
+                                "componentId": {
+                                  "type": "string"
+                                },
+                                "designSystemMetaVersion": {
+                                  "anyOf": [
+                                    {
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991,
+                                      "type": "integer"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "dpr": {
+                                  "$ref": "#/$defs/__schema2"
+                                },
+                                "draftRev": {
+                                  "exclusiveMinimum": 0,
                                   "maximum": 9007199254740991,
-                                  "minimum": -9007199254740991,
                                   "type": "integer"
                                 },
-                                "width": {
+                                "kind": {
+                                  "const": "geometry",
+                                  "type": "string"
+                                },
+                                "rects": {
+                                  "$ref": "#/$defs/__schema3"
+                                },
+                                "resolvedSpaceScale": {
+                                  "$ref": "#/$defs/__schema0"
+                                },
+                                "surface": {
+                                  "const": "component",
+                                  "type": "string"
+                                },
+                                "total": {
+                                  "$ref": "#/$defs/__schema5"
+                                },
+                                "truncated": {
+                                  "$ref": "#/$defs/__schema4"
+                                },
+                                "version": {
+                                  "exclusiveMinimum": 0,
                                   "maximum": 9007199254740991,
-                                  "minimum": -9007199254740991,
                                   "type": "integer"
+                                },
+                                "viewport": {
+                                  "$ref": "#/$defs/__schema1"
                                 }
                               },
                               "required": [
-                                "width",
-                                "height"
+                                "kind",
+                                "surface",
+                                "componentId",
+                                "bundleHash",
+                                "designSystemMetaVersion",
+                                "resolvedSpaceScale",
+                                "viewport",
+                                "dpr",
+                                "rects",
+                                "truncated",
+                                "total"
                               ],
                               "type": "object"
                             }
-                          },
-                          "required": [
-                            "kind",
-                            "resolvedRev",
-                            "prototypeInstanceId",
-                            "componentPins",
-                            "designSystemMetaVersion",
-                            "resolvedSpaceScale",
-                            "viewport",
-                            "dpr",
-                            "rects",
-                            "truncated",
-                            "total"
-                          ],
-                          "type": "object"
+                          ]
                         }
                       ]
                     },

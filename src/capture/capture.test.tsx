@@ -5,7 +5,7 @@ import { z } from "zod";
 import { getComponentVersion, getPrototypeDraft } from "../api/client";
 import { prototypeDocSchema } from "../prototype/schema";
 import { CapturePrototype } from "./CapturePrototype";
-import { CaptureComponent } from "./CaptureComponent";
+import { CaptureComponent, CaptureComponentDraft } from "./CaptureComponent";
 
 const doc = prototypeDocSchema.parse({
   version: 1, id: "cap", name: "Cap", device: "mobile", startScreen: "welcome", state: {},
@@ -188,5 +188,58 @@ describe("capture shell", () => {
     vi.mocked(getComponentVersion).mockResolvedValueOnce({ ...componentVersion, example: undefined });
     renderComponentCapture("?props=example");
     await waitFor(() => expect(document.querySelector("[data-capture-error]")).not.toBeNull());
+  });
+});
+
+describe("capture component draft (P1b)", () => {
+  const draftSourceHash = "a".repeat(64);
+  const draftBootstrap = (componentId = "widget") => ({
+    kind: "component-draft" as const,
+    target: {
+      kind: "component-draft", componentId, rev: 3, name: "Widget",
+      designSystem: "shadcn", bundleUrl: `/api/components/${componentId}/draft/${draftSourceHash}/bundle.js`,
+    },
+    props: { label: "draft" },
+    expected: {
+      kind: "component-draft" as const, componentId, rev: 3, sourceHash: draftSourceHash,
+      bundleHash: "bh", propsHash: "h", dsMetaVersion: null, rendererBuild: null,
+    },
+  });
+
+  function renderDraftCapture(id = "widget") {
+    const router = createMemoryRouter([{ path: "/capture/component/:id/draft", element: <CaptureComponentDraft /> }], { initialEntries: [`/capture/component/${id}/draft`] });
+    render(<RouterProvider router={router} />);
+  }
+
+  it("publishes a component-draft readiness object from the worker bootstrap", async () => {
+    window.__EUI_CAPTURE_BOOTSTRAP__ = draftBootstrap();
+    renderDraftCapture();
+    await waitFor(() => expect(window.__EUI_CAPTURE_READY__).toBeDefined());
+    const ready = window.__EUI_CAPTURE_READY__!;
+    expect(ready.status).toBe("ready");
+    if (ready.status === "ready" && ready.kind === "component-draft") {
+      expect(ready.componentId).toBe("widget");
+      expect(ready.rev).toBe(3);
+      expect(ready.sourceHash).toBe(draftSourceHash);
+      expect(ready.bundleHash).toBe("bh");
+      expect(ready.propsHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(ready.rendererBuild).toBeNull();
+    } else {
+      throw new Error(`unexpected readiness: ${JSON.stringify(ready)}`);
+    }
+    expect(screen.getByTestId("widget").textContent).toBe("draft");
+  });
+
+  it("requires the worker bootstrap — a draft has no browser fallback", async () => {
+    renderDraftCapture();
+    await waitFor(() => expect(document.querySelector("[data-capture-error]")).not.toBeNull());
+    expect(screen.queryByTestId("widget")).toBeNull();
+  });
+
+  it("rejects a bootstrap whose expected targets another component", async () => {
+    window.__EUI_CAPTURE_BOOTSTRAP__ = draftBootstrap("other-widget");
+    renderDraftCapture();
+    await waitFor(() => expect(document.querySelector("[data-capture-error]")).not.toBeNull());
+    expect(screen.queryByTestId("widget")).toBeNull();
   });
 });

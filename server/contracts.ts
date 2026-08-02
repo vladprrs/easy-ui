@@ -309,15 +309,38 @@ export const prototypeScreenshotContract = registerContract({
   errors: [{ status: 400, code: "invalid_request" }, { status: 404, code: "prototype_not_found" }, { status: 404, code: "screen_not_found" }, { status: 404, code: "version_not_found" }, { status: 404, code: "revision_not_found" }, ...screenshotErrors],
 });
 
+// P1b (план 2026-08-02): тело компонентной съёмки едино для published и draft вариантов;
+// probe=geometry переводит джобу в geometry-результат компонентной поверхности.
+const componentScreenshotRequestSchema = z.object({ props: z.record(z.string(), z.unknown()).optional(), exampleName: z.string().optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional(), probe: z.literal("geometry").optional() })
+  .refine((value) => !(value.props !== undefined && value.exampleName !== undefined), { message: "props and exampleName are mutually exclusive" });
+
 export const componentScreenshotContract = registerContract({
   method: "POST",
   path: "/api/components/{id}/versions/{version}/screenshot",
-  summary: "Enqueue a published-component screenshot job with optional props or a named example.",
+  summary: "Enqueue a published-component screenshot job with optional props or a named example; probe=geometry returns a component-surface geometry result.",
   status: 202,
-  requestSchema: z.object({ props: z.record(z.string(), z.unknown()).optional(), exampleName: z.string().optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional() })
-    .refine((value) => !(value.props !== undefined && value.exampleName !== undefined), { message: "props and exampleName are mutually exclusive" }),
+  requestSchema: componentScreenshotRequestSchema,
   responseSchema: jobAcceptedSchema,
   errors: [{ status: 400, code: "invalid_request" }, { status: 404, code: "not_found" }, { status: 422, code: "invalid_props" }, { status: 422, code: "unknown_example" }, ...screenshotErrors],
+});
+
+// P1b: draft-вариант — съёмка сохранённой, но не опубликованной head-ревизии через эфемерный
+// candidate-bundle префлайта P8 (при холодном кэше собирается под его же троттлингом).
+export const componentHeadScreenshotContract = registerContract({
+  method: "POST",
+  path: "/api/components/{id}/head/screenshot",
+  summary: "Enqueue a draft (saved, unpublished head revision) component screenshot job rendered from the ephemeral validate candidate bundle.",
+  status: 202,
+  requestSchema: componentScreenshotRequestSchema,
+  responseSchema: jobAcceptedSchema,
+  errors: [
+    { status: 400, code: "invalid_request" }, { status: 404, code: "not_found" },
+    { status: 422, code: "invalid_props" }, { status: 422, code: "unknown_example" },
+    { status: 422, code: "validation_failed", description: "the draft failed the validate preflight checks" },
+    { status: 422, code: "asset_not_found", description: "the draft source references an unknown asset" },
+    { status: 429, code: "validate_in_flight", description: "a candidate build is already in flight for this user" },
+    ...screenshotErrors,
+  ],
 });
 
 const screenshotImageResultSchema = z.object({
@@ -325,6 +348,8 @@ const screenshotImageResultSchema = z.object({
   imageUrl: z.string(), assetId: z.string(), width: z.number(), height: z.number(),
   consoleErrors: z.array(z.string()), pageErrors: z.array(z.string()),
   bundleHash: z.string().optional(),
+  // Draft-цель (P1b): отрендеренная head-ревизия — клиент печатает «draft rev N».
+  draftRev: z.number().int().positive().optional(),
   componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string() })).optional(),
   rendererBuild: z.string().nullable(), browserVersion: z.string(),
 });
@@ -337,13 +362,29 @@ const geometryRectSchema = z.object({
   domIndex: z.number().int().nonnegative(), x: z.number(), y: z.number(), width: z.number(), height: z.number(),
   hidden: z.literal(true).optional(), layoutContext: geometryLayoutContextSchema.nullable(),
 });
-const screenshotGeometryResultSchema = z.object({
-  kind: z.literal("geometry"), resolvedRev: z.number().int().positive(), prototypeInstanceId: z.string(),
+// Geometry-результат дискриминирован по поверхности (P1b добавил компонентную к прототипной).
+const geometryMeasurementFields = {
+  viewport: viewportSchema, dpr: z.number(), rects: z.array(geometryRectSchema), truncated: z.boolean(), total: z.number().int().nonnegative(),
+};
+const screenshotPrototypeGeometryResultSchema = z.object({
+  kind: z.literal("geometry"), surface: z.literal("prototype"),
+  resolvedRev: z.number().int().positive(), prototypeInstanceId: z.string(),
   componentPins: z.array(z.object({ id: z.string(), version: z.number().int().positive(), bundleHash: z.string() })),
   designSystemMetaVersion: z.number().int().positive().nullable(), resolvedSpaceScale: spaceScaleSchema,
-  viewport: viewportSchema, dpr: z.number(), rects: z.array(geometryRectSchema), truncated: z.boolean(), total: z.number().int().nonnegative(),
+  ...geometryMeasurementFields,
 });
-export const screenshotJobResultSchema = z.discriminatedUnion("kind", [screenshotImageResultSchema, screenshotGeometryResultSchema]);
+const screenshotComponentGeometryResultSchema = z.object({
+  kind: z.literal("geometry"), surface: z.literal("component"),
+  componentId: z.string(),
+  // Ровно одна из двух форм цели: опубликованная версия или draft head-ревизия (P1b).
+  version: z.number().int().positive().optional(),
+  draftRev: z.number().int().positive().optional(),
+  bundleHash: z.string(),
+  designSystemMetaVersion: z.number().int().positive().nullable(), resolvedSpaceScale: spaceScaleSchema,
+  ...geometryMeasurementFields,
+});
+const screenshotGeometryResultSchema = z.discriminatedUnion("surface", [screenshotPrototypeGeometryResultSchema, screenshotComponentGeometryResultSchema]);
+export const screenshotJobResultSchema = z.union([screenshotImageResultSchema, screenshotGeometryResultSchema]);
 
 export const screenshotJobContract = registerContract({
   method: "GET",
@@ -1005,9 +1046,9 @@ export const getComponentContract = registerContract({
 
 export const saveComponentContract = registerContract({
   method: "PUT", path: "/api/components/{id}",
-  summary: "Save a new head revision of source and/or move the component between design systems (CAS on baseRev).",
+  summary: "Save a new head revision of source and/or move the component between design systems (CAS on baseRev). A figma-only no-op (source and figma byte-identical to head) does not create a revision and answers {unchanged:true, rev:<head>}; a changed figma still creates a revision.",
   requestSchema: z.object({ source: z.string().optional(), designSystem: slugString.optional(), figma: figmaSchema.optional(), ...casBody }),
-  responseSchema: z.looseObject({ rev: z.number() }),
+  responseSchema: z.looseObject({ rev: z.number(), unchanged: z.literal(true).optional() }),
   errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.payloadTooLarge, errorCatalog.validationFailed],
 });
 
@@ -1107,12 +1148,38 @@ export const restoreComponentContract = registerContract({
 
 export const publishComponentContract = registerContract({
   method: "POST", path: "/api/components/{id}/publish",
-  summary: "Publish the head revision: typecheck, compile, import-verify and activate the next version. Canonical-role conflicts return a terminal 409 with a human-confirmed admin override template.",
+  summary: "Publish the head revision: typecheck, compile, import-verify and activate the next version. Canonical-role conflicts return a terminal 409 with a human-confirmed admin override template. Reuses a successful validate extraction of the same source when present.",
   status: 201,
   requestSchema: z.strictObject({ ...casBody, reuseOverride: componentReuseOverrideSchema.optional() }),
   responseSchema: z.looseObject({ version: z.number(), hostAbiVersion: z.number(), warnings: z.array(z.string()) }),
   errors: [errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, { status: 403, code: "admin_required", description: "reuseOverride is admin-only" }, { status: 409, code: "catalog_changed" }, { status: 409, code: "canonical_role_conflict" }, errorCatalog.validationFailed, { status: 422, code: "atomic_policy_violation" }, { status: 422, code: "event_schema_not_serializable" }],
   errorResponseSchemas: { 409: componentPublishConflictEnvelopeSchema },
+});
+
+/**
+ * P8 (план 2026-08-02): validate-префлайт head-ревизии. Гарантия «publish не упадёт на 422»
+ * ОГРАНИЧЕНА перечисленным набором проверок — canonical-role, reuse-гейт и прочие
+ * каталого-временные проверки receipt не покрывает (они остаются на publish).
+ */
+export const validateComponentContract = registerContract({
+  method: "POST", path: "/api/components/{id}/validate",
+  summary: "Preflight the head revision without creating a version or changing public state: stored figma provenance (unsupported fields fail with the field in issues), asset refs, definition extraction with smoke render, typecheck, compile and import verification, plus schema-default/render-fallback parity warnings. The receipt (sourceHash/bundleHash/themeVersion/catalogRevision) covers only this check set — canonical-role, reuse-gate and other catalog-time publish checks are NOT covered. Heavy results are cached by sourceHash (24h TTL, byte-capped, GC on start and on write); throttled to 1 concurrent run per user and a global cap. Disabled via EASYUI_VALIDATE_DISABLED=1 (404).",
+  responseSchema: z.looseObject({
+    ok: z.literal(true), cached: z.boolean(),
+    sourceHash: z.string(), bundleHash: z.string(), hostAbiVersion: z.number(),
+    themeVersion: z.number().nullable(), catalogRevision: z.string(),
+    warnings: z.array(z.string()),
+  }),
+  errors: [
+    errorCatalog.notFound,
+    errorCatalog.invalidRequest,
+    errorCatalog.payloadTooLarge,
+    errorCatalog.validationFailed,
+    { status: 422, code: "asset_not_found" },
+    { status: 422, code: "event_schema_not_serializable" },
+    { status: 429, code: "validate_in_flight", description: "a validate run is already in flight for this user" },
+    { status: 429, code: "queue_full", description: "global validate concurrency cap reached" },
+  ],
 });
 
 export const listComponentVersionsContract = registerContract({
@@ -1771,6 +1838,9 @@ export const capabilitiesResponseSchema = z.object({
     assetMiB: z.number(), repeatBudget: z.number(), repeatPerScreen: z.number(), screenshotQueue: z.number(), geometryRects: z.number(),
     flows: z.number(), flowSteps: z.number(), flowTotalSteps: z.number(), flowDepth: z.number(),
     compositionDepth: z.number(),
+    // P8: троттлинг и гигиена validate-префлайта (`POST /api/components/{id}/validate`).
+    validateUserConcurrent: z.number(), validateGlobalConcurrent: z.number(),
+    validateCacheTtlHours: z.number(), validateCacheMiB: z.number(),
   }),
   designSystems: z.array(z.string()),
   resolvedSpaceScales: z.record(z.string(), spaceScaleSchema),
@@ -1781,6 +1851,12 @@ export const capabilitiesResponseSchema = z.object({
     flows: z.boolean(), screenRegions: z.boolean(), bundleExport: z.boolean(), bundleImport: z.boolean(),
     /** Гейт переиспользования компонентов присутствует в этой сборке (план 2026-07-31 §3.5). */
     componentReuseGate: z.boolean(), compositionV2: z.boolean(), catalogMigration: z.boolean(),
+    /** Validate-префлайт head-ревизии (план 2026-08-02 P8); false при EASYUI_VALIDATE_DISABLED=1. */
+    componentValidate: z.boolean(),
+    /** Geometry-probe компонентной поверхности (план 2026-08-02 P1b): probe=geometry на component-screenshot ручках. */
+    componentGeometry: z.boolean(),
+    /** Draft-preview сохранённой head-ревизии (план 2026-08-02 P1b); false при EASYUI_VALIDATE_DISABLED=1. */
+    componentDraftPreview: z.boolean(),
   }),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`

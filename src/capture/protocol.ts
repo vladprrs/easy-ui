@@ -27,7 +27,25 @@ export interface ComponentExpected {
   rendererBuild: string | null;
 }
 
-export type CaptureExpected = PrototypeExpected | ComponentExpected;
+/**
+ * Draft variant of the component handshake (план 2026-08-02, P1b): the target
+ * is a saved but unpublished head revision rendered from the ephemeral
+ * validate candidate bundle. `rev` + `sourceHash` replace the published
+ * `version`; the bundle itself is job-scoped by the content-addressed URL
+ * the enqueue puts into the bootstrap target.
+ */
+export interface ComponentDraftExpected {
+  kind: "component-draft";
+  componentId: string;
+  rev: number;
+  sourceHash: string;
+  bundleHash: string;
+  propsHash: string;
+  dsMetaVersion: number | null;
+  rendererBuild: string | null;
+}
+
+export type CaptureExpected = PrototypeExpected | ComponentExpected | ComponentDraftExpected;
 
 export interface PrototypeReady {
   status: "ready";
@@ -51,18 +69,38 @@ export interface ComponentReady {
   rendererBuild: string | null;
 }
 
+export interface ComponentDraftReady {
+  status: "ready";
+  kind: "component-draft";
+  componentId: string;
+  rev: number;
+  sourceHash: string;
+  bundleHash: string;
+  propsHash: string;
+  dsMetaVersion: number | null;
+  rendererBuild: string | null;
+}
+
 export interface CaptureErrorReady {
   status: "error";
   error: string;
 }
 
-export type CaptureReady = PrototypeReady | ComponentReady | CaptureErrorReady;
+export type CaptureReady = PrototypeReady | ComponentReady | ComponentDraftReady | CaptureErrorReady;
 
 /** Worker-injected bootstrap. Absent in browser (Library) preview mode. */
 export interface CaptureBootstrap {
-  kind: "prototype" | "component";
+  kind: "prototype" | "component" | "component-draft";
   target: Record<string, unknown>;
   props?: Record<string, unknown>;
+  /**
+   * Draft captures only (P1b): props schema and named examples from the draft
+   * extraction. A published capture reads them from the version DTO instead —
+   * a draft has no published DTO, so the enqueue delivers them here, job-scoped
+   * by construction.
+   */
+  propsJsonSchema?: unknown;
+  examples?: Record<string, Record<string, unknown>>;
   expected: CaptureExpected;
 }
 

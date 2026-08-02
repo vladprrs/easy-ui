@@ -42,6 +42,8 @@ export function buildLaunchArgs(denyPort, capturePort) {
 
 export function readyToExpected(ready) {
   if (ready.kind === "prototype") return { kind: "prototype", prototypeInstanceId: ready.prototypeInstanceId, rev: ready.revision, componentManifestHash: ready.componentManifestHash, builtinCatalogHash: ready.builtinCatalogHash, dsMetaVersion: ready.dsMetaVersion, rendererBuild: ready.rendererBuild };
+  // Draft-вариант handshake (P1b): rev + sourceHash вместо published version.
+  if (ready.kind === "component-draft") return { kind: "component-draft", componentId: ready.componentId, rev: ready.rev, sourceHash: ready.sourceHash, bundleHash: ready.bundleHash, propsHash: ready.propsHash, dsMetaVersion: ready.dsMetaVersion, rendererBuild: ready.rendererBuild };
   return { kind: "component", componentId: ready.componentId, version: ready.version, bundleHash: ready.bundleHash, propsHash: ready.propsHash, dsMetaVersion: ready.dsMetaVersion, rendererBuild: ready.rendererBuild };
 }
 

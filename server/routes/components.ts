@@ -26,6 +26,8 @@ import {
   type ReuseGateMode,
 } from "../catalog/gate";
 import { assertAtomicPolicy } from "../atomicPolicy";
+import { getCandidateBundle, readCandidate } from "../components/candidates";
+import { validateComponentHead } from "../components/validate";
 
 const slug=/^[a-z0-9]+(?:-[a-z0-9]+)*$/, componentName=/^[A-Z][A-Za-z0-9]*$/;
 function bad(message:string,path="source"):never{throw new ApiError(422,"validation_failed","Component is invalid",{issues:[{path:[path],message}]});}
@@ -182,7 +184,18 @@ function reuseRejectionResponse(db:Database,rejection:ReuseGateRejection):Respon
   return json({error:{code:rejection.code,message:rejection.message,...rejection.payload,decisionId:audit?.decisionId??null,repeatedAttempts:audit?.repeatedAttempts??null}},409,noStore);
 }
 
-export async function routeComponents(request:Request,db:Database,segments:string[],principal:Principal,dataDir:string,reuseGateMode:ReuseGateMode=DEFAULT_REUSE_GATE_MODE):Promise<Response>{
+/**
+ * Шов P8 «validate → publish»: extraction успешного префлайта того же исходника. TTL кэша
+ * здесь намеренно не проверяется — extraction источнико-чист (сверку sha256 делает
+ * `publishComponent`), а TTL существует ради гигиены хранилища, не ради корректности.
+ */
+async function validatedExtractionForPublish(dataDir:string,sourceHash:string):Promise<PublishExtraction|undefined>{
+  const entry=await readCandidate(dataDir,sourceHash);
+  if(entry===null||!entry.ok||entry.extracted===undefined)return undefined;
+  return {sourceHash,extracted:entry.extracted};
+}
+
+export async function routeComponents(request:Request,db:Database,segments:string[],principal:Principal,dataDir:string,reuseGateMode:ReuseGateMode=DEFAULT_REUSE_GATE_MODE,validate:{disabled?:boolean}={}):Promise<Response>{
   const repo=new ComponentRepo(db);
   // `?includeDeleted=1` — единственный способ увидеть надгробия: голый GET по-прежнему
   // отдаёт 404 для мягко удалённого компонента (совместимость с driver.mjs и src/api/client.ts).
@@ -229,7 +242,13 @@ export async function routeComponents(request:Request,db:Database,segments:strin
     }
     return json({...outcome.created,...(outcome.warnings.length?{warnings:outcome.warnings}:{})},201,{...noStore,location:`/api/components/${id}`});}throw new ApiError(405,"method_not_allowed","Method not allowed");}
   const id=segments[1]!,tail=segments.slice(2);
-  if(!tail.length){if(request.method==="GET")return json(repo.meta(id,includeDeleted),200,noStore);if(request.method==="PUT"){const actor=requireResourceOwner(db,"components",id,principal);reserveHostPrimitiveName(repo.meta(id).name);const b=body(await readJson(request)),source=text(b.source,"source",false),designSystem=text(b.designSystem,"designSystem",false),baseRev=base(b);const figmaProvided=Object.hasOwn(b,"figma");const figma=figmaProvided?parseFigmaInput(db,b.figma,"figma"):null;if(source===undefined&&designSystem===undefined&&!figmaProvided)throw new ApiError(400,"invalid_request","source, designSystem or figma is required");if(designSystem!==undefined){requireActiveDesignSystem(db,designSystem,["designSystem"]);requireResourceOwner(db,"design_systems",designSystem,principal);}const current=repo.cas(id,baseRev),head=repo.source(id,current.head_rev),nextSource=source??head.source,nextSystem=designSystem??current.design_system;if(nextSource===head.source&&nextSystem===current.design_system&&!figmaProvided)throw new ApiError(400,"invalid_request","Component source and design system are unchanged");const next=current.head_rev+1,path=await materializeSource(dataDir,id,next,nextSource);await checkSource(nextSource,path);const result=repo.save(id,source,designSystem,baseRev,text(b.message,"message",false),figma);db.query("UPDATE component_revisions SET author=? WHERE component_id=? AND rev=?").run(actor.userId,id,result.rev);
+  if(!tail.length){if(request.method==="GET")return json(repo.meta(id,includeDeleted),200,noStore);if(request.method==="PUT"){const actor=requireResourceOwner(db,"components",id,principal);reserveHostPrimitiveName(repo.meta(id).name);const b=body(await readJson(request)),source=text(b.source,"source",false),designSystem=text(b.designSystem,"designSystem",false),baseRev=base(b);const figmaProvided=Object.hasOwn(b,"figma");const figma=figmaProvided?parseFigmaInput(db,b.figma,"figma"):null;if(source===undefined&&designSystem===undefined&&!figmaProvided)throw new ApiError(400,"invalid_request","source, designSystem or figma is required");if(designSystem!==undefined){requireActiveDesignSystem(db,designSystem,["designSystem"]);requireResourceOwner(db,"design_systems",designSystem,principal);}const current=repo.cas(id,baseRev),head=repo.source(id,current.head_rev),nextSource=source??head.source,nextSystem=designSystem??current.design_system;const coreUnchanged=nextSource===head.source&&nextSystem===current.design_system;if(coreUnchanged&&!figmaProvided)throw new ApiError(400,"invalid_request","Component source and design system are unchanged");
+      // P5.1 (план 2026-08-02): no-op PUT с figma-only изменением — и source, и figma
+      // byte-идентичны head (figma сравнивается каноническим JSON: обе стороны —
+      // `JSON.stringify(figmaSchema.parse(…))`). Ответ несёт `rev` головы: PUT всегда
+      // возвращал `{rev}`, старые драйверы зависят именно на нём. Изменившийся figma
+      // по-прежнему создаёт ревизию (ветка ниже).
+      if(coreUnchanged&&figmaProvided){const headFigma=(db.query("SELECT figma_json FROM component_revisions WHERE component_id=? AND rev=?").get(id,current.head_rev) as {figma_json:string|null}).figma_json;if(figma===headFigma)return json({unchanged:true as const,rev:current.head_rev},200,noStore);}const next=current.head_rev+1,path=await materializeSource(dataDir,id,next,nextSource);await checkSource(nextSource,path);const result=repo.save(id,source,designSystem,baseRev,text(b.message,"message",false),figma);db.query("UPDATE component_revisions SET author=? WHERE component_id=? AND rev=?").run(actor.userId,id,result.rev);
     // Write-through кэша шинглов и на PUT: head-драфт участвует в корпусе, поэтому «сохранил
     // дубликат в драфт → опубликовал» ловится тем же матчером (§3.6, план §3.1).
     cacheSourceShingles(db,id,result.rev,nextSource);writeAuditEvent(db,{actorId:actor.userId,action:"component.revision.saved",subjectType:"component",subjectId:id,detail:{rev:result.rev}});return json(result,200,noStore);}if(request.method==="DELETE"){const actor=requireResourceOwner(db,"components",id,principal);const b=body(await readJson(request));const baseRev=base(b);const reason=text(b.reason,"reason",false);const replacement=text(b.replacement,"replacement",false);if(b.force!==undefined&&typeof b.force!=="boolean")throw new ApiError(400,"invalid_request","force must be a boolean");
@@ -247,15 +266,34 @@ export async function routeComponents(request:Request,db:Database,segments:strin
   if(tail[0]==="usages"&&tail.length===1){if(request.method!=="GET")throw new ApiError(405,"method_not_allowed","Method not allowed");const {format}=parseQuery(componentUsagesQuerySchema,new URL(request.url).searchParams);return json(format==="tree"?componentUsageTree(db,id):componentUsages(db,id),200,noStore);}
   if(tail[0]==="source"&&tail.length===1){if(request.method!=="GET")throw new ApiError(405,"method_not_allowed","Method not allowed");return json(repo.source(id),200,noStore);}
   if(tail[0]==="draft"&&tail.length===1){if(request.method!=="GET")throw new ApiError(405,"method_not_allowed","Method not allowed");return json(repo.source(id),200,noStore);}
+  // GET /draft/:sourceHash/bundle.js — эфемерный candidate-bundle префлайта P8 для draft-preview
+  // (P1b). Путь content-addressed и попадает в capture-allowlist только enqueue'нувшей джобы;
+  // записи нет/протухла/собрана под другой компонент → 404. Каталог и bundle-export его не
+  // видят: они читают publishes. Публичного контракта у URL нет (эфемерный кэш, см. P8).
+  if(tail[0]==="draft"&&tail.length===3&&tail[2]==="bundle.js"){
+    if(request.method!=="GET")throw new ApiError(405,"method_not_allowed","Method not allowed");
+    if(!/^[0-9a-f]{64}$/.test(tail[1]!))throw new ApiError(404,"not_found","Candidate bundle not found");
+    const candidate=await getCandidateBundle(dataDir,id,tail[1]!);
+    if(!candidate)throw new ApiError(404,"not_found","Candidate bundle not found");
+    return new Response(candidate.bundleJs,{headers:{...noStore,"content-type":"text/javascript; charset=utf-8"}});
+  }
   if(tail[0]==="export"&&tail.length===1){if(request.method!=="GET")throw new ApiError(405,"method_not_allowed","Method not allowed");requireUser(principal);repo.row(id);const versionRaw=new URL(request.url).searchParams.get("version");const version=versionRaw===null?undefined:int(Number(versionRaw),"version");const closure=new BundleClosure(db,dataDir);const exported=closure.addComponent(id,version);const bytes=await closure.buildZip("component",new URL(request.url).origin);const suffix=exported.version!==null?`v${exported.version}`:`draft-r${exported.rev}`;return zipResponse(bytes,`easy-ui-component-${id}-${suffix}.zip`);}
   if(tail[0]==="revisions"){if(tail.length===1)return json(repo.revisions(id),200,noStore);if(tail.length===2)return json(repo.source(id,int(Number(tail[1]),"rev")),200,noStore);}
   if(tail[0]==="restore"&&tail.length===1){const actor=requireResourceOwner(db,"components",id,principal);const b=body(await readJson(request));const result=repo.restore(id,int(b.rev,"rev"),base(b));db.query("UPDATE component_revisions SET author=? WHERE component_id=? AND rev=?").run(actor.userId,id,result.rev);writeAuditEvent(db,{actorId:actor.userId,action:"component.revision.saved",subjectType:"component",subjectId:id,detail:{rev:result.rev,restore:true}});return json(result,200,noStore);}
+  // P8 (план 2026-08-02): validate-префлайт head-ревизии — publish-проверки без создания
+  // версии и без изменения public state. Kill-switch: EASYUI_VALIDATE_DISABLED=1 → ручки
+  // нет (404), фича гаснет и в /api/capabilities.features. Тело запроса не читается.
+  if(tail[0]==="validate"&&tail.length===1){if(validate.disabled)throw new ApiError(404,"not_found","Component validate is disabled");if(request.method!=="POST")throw new ApiError(405,"method_not_allowed","Method not allowed");const actor=requireResourceOwner(db,"components",id,principal);return json(await validateComponentHead(db,dataDir,id,actor.userId),200,noStore);}
   if(tail[0]==="publish"&&tail.length===1){if(request.method!=="POST")throw new ApiError(405,"method_not_allowed","Method not allowed");const actor=requireResourceOwner(db,"components",id,principal);const systemId=repo.row(id).design_system;requireActiveDesignSystem(db,systemId,["designSystem"]);requireResourceOwner(db,"design_systems",systemId,principal);const b=body(await readJson(request));
     for(const key of Object.keys(b))if(!["baseRev","message","reuseOverride"].includes(key))throw new ApiError(400,"invalid_request",`Unknown field: ${key}`);
     const publishOverride=b.reuseOverride===undefined?undefined:parseWith(reuseOverrideSchema,b.reuseOverride,"reuseOverride is invalid");
     if(publishOverride!==undefined&&!actor.isAdmin)throw new ApiError(403,"admin_required","Only an admin may override the reuse gate");
+    // P8: publish после validate не платит второй раз за checkSource/smoke-рендер — extraction
+    // приезжает из candidate-кэша через шов `PublishExtraction` (сверка sha256 внутри
+    // `publishComponent`: расхождение с head молча отправляет публикацию извлекать заново).
+    const headSource=repo.source(id);const preExtracted=await validatedExtractionForPublish(dataDir,sha256(headSource.source));
     let result;
-    try { result=await publishComponent(db,repo,id,base(b),dataDir,text(b.message,"message",false),{},{actor:{userId:actor.userId,isAdmin:actor.isAdmin},mode:reuseGateMode,...(publishOverride===undefined?{}:{override:publishOverride})}); }
+    try { result=await publishComponent(db,repo,id,base(b),dataDir,text(b.message,"message",false),{},{actor:{userId:actor.userId,isAdmin:actor.isAdmin},mode:reuseGateMode,...(publishOverride===undefined?{}:{override:publishOverride})},preExtracted); }
     catch(error){ if(error instanceof ReuseGateRejection) return reuseRejectionResponse(db,error); throw error; }
     writeAuditEvent(db,{actorId:actor.userId,action:"component.version.published",subjectType:"component",subjectId:id,detail:{version:result.version}});return json(result,201,{...noStore,location:`/api/components/${id}/versions/${result.version}`});}
   if(tail[0]==="versions"){

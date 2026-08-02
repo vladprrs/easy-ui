@@ -24,6 +24,11 @@ describe("screenshot worker helpers", () => {
     expect(readyToExpected({kind:"prototype",revision:2,prototypeInstanceId:"instance-2",componentManifestHash:"m",builtinCatalogHash:"b",dsMetaVersion:null,rendererBuild:null})).toEqual({kind:"prototype",rev:2,prototypeInstanceId:"instance-2",componentManifestHash:"m",builtinCatalogHash:"b",dsMetaVersion:null,rendererBuild:null});
   });
 
+  test("component-draft readiness comparison carries the content-addressed identity",()=>{
+    expect(readyToExpected({kind:"component-draft",componentId:"w",rev:3,sourceHash:"s".repeat(64),bundleHash:"b",propsHash:"p",dsMetaVersion:2,rendererBuild:null}))
+      .toEqual({kind:"component-draft",componentId:"w",rev:3,sourceHash:"s".repeat(64),bundleHash:"b",propsHash:"p",dsMetaVersion:2,rendererBuild:null});
+  });
+
   test("geometry evaluate function is self-contained and uses the shared union vector", () => {
     expect(collectGeometry.toString()).toContain("rectUnion");
     expect(unionRects([{left:1,top:4,right:5,bottom:8},{left:-2,top:6,right:3,bottom:10}])).toEqual({left:-2,top:4,right:5,bottom:10,width:7,height:6});

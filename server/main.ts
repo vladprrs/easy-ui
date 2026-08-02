@@ -32,6 +32,7 @@ import { LoginRateLimiter, routeAuth } from "./routes/auth";
 import { routeUsers } from "./routes/users";
 import { assertOwnersPresent, ensureBootstrapAdmin } from "./users";
 import { sweepStagingModules } from "./components/pipeline";
+import { gcCandidates } from "./components/candidates";
 import { DEFAULT_REUSE_GATE_MODE, resolveReuseGateMode, type ReuseGateMode } from "./catalog/gate";
 import { assertMutationAllowed } from "./maintenance";
 import { routeCatalogMigrations } from "./routes/catalogMigrations";
@@ -42,6 +43,8 @@ export type HandlerOptions = {
   dataDir?: string;
   /** Режим reuse-гейта; дефолт `enforce`. Env читается только на входе процесса (см. startServer). */
   reuseGateMode?: ReuseGateMode;
+  /** Kill-switch P8: `EASYUI_VALIDATE_DISABLED=1` гасит POST /api/components/:id/validate (404 + features.componentValidate=false). */
+  validateDisabled?: boolean;
   /** Optional reverse-proxy compatibility barrier; application auth remains cookie-based. */
   legacyBasicAuth?: string;
   /** @deprecated test/backward-compatible alias for legacyBasicAuth. */
@@ -162,13 +165,13 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         const auth=await routeAuth(request,db,segments.slice(1),{principal,publicOrigin,clientAddress,limiter}); if(auth) return finish(auth);
         assertMutationAllowed(db,request.method,decodedPath);
         const users=await routeUsers(request,db,segments.slice(1),principal); if(users) return finish(users);
-        const shot=await routeScreenshots(request,db,options.screenshots,segments.slice(1),principal); if(shot) return finish(shot);
+        const shot=await routeScreenshots(request,db,options.screenshots,segments.slice(1),principal,{validateDisabled:options.validateDisabled===true}); if(shot) return finish(shot);
         const vis=await routeVisual(request,db,options.dataDir??process.env.DATA_DIR??"data",segments.slice(1),principal,options.visual); if(vis) return finish(vis);
         const share=await routeShares(request,db,segments.slice(1),principal,{publicOrigin,serveDist:options.serveDist}); if(share) return finish(share);
         const bundles=await routeBundles(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE); if(bundles) return finish(bundles);
         const scenarios=await routeScenarios(request,db,segments.slice(1),principal); if(scenarios) return finish(scenarios);
         if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),principal,options.dataDir,options.serveDist));
-        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE));
+        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{disabled:options.validateDisabled===true}));
         if(segments[1]==="compositions") return finish(await routeCompositions(request,db,segments.slice(1),principal));
         if(segments[1]==="assets") return finish(await routeAssets(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
         if(segments[1]==="design-systems") return finish(await routeDesignSystems(request,db,segments.slice(1),principal));
@@ -184,7 +187,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         if(segments[1]==="shims"&&segments[2]!==undefined&&/^v[1-9]\d*$/.test(segments[2])) return finish(routeShims(request,segments.slice(1)));
         // Режим гейта — часть discovery: `/api/capabilities` обязан рапортовать фактическую
         // фазу процесса, иначе агент узнаёт её только сломав собственный create.
-        const meta=routeMeta(request,db,segments.slice(1),options.reuseGateMode??DEFAULT_REUSE_GATE_MODE); if(meta) return finish(meta);
+        const meta=routeMeta(request,db,segments.slice(1),options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{validateDisabled:options.validateDisabled===true}); if(meta) return finish(meta);
         throw new ApiError(404,"not_found","API route not found");
       }
       if(staticResolution) return finish(await serveResolvedStatic(request,staticResolution));
@@ -208,11 +211,13 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // Сироты staging-извлечения после SIGKILL при редеплое: `finally` их не переживает,
     // а DATA_DIR в проде — постоянный том (план 2026-07-31 §3.5).
     await sweepStagingModules(dataDir);
+    // P8: GC candidate-кэша на старте (TTL/потолок байт) и при каждой записи.
+    await gcCandidates(dataDir);
     const serveDist=options.serveDist??(process.env.SERVE_DIST||undefined);
     const captureHost=host==="0.0.0.0"||host==="::"?"127.0.0.1":host;
     const screenshots=new ScreenshotServiceImpl({db,dataDir,serveDist,captureOrigin:`http://${captureHost}:${port}`,chromiumAvailable:chromiumAvailable(),runJob:spawnWorker});
     const visual=new VisualServiceImpl({db,dataDir,screenshots});
-    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,reuseGateMode:resolveReuseGateMode(process.env.REUSE_GATE),legacyBasicAuth:resolveLegacyBasicAuthEnv(),publicOrigin,screenshots,visual})});
+    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,reuseGateMode:resolveReuseGateMode(process.env.REUSE_GATE),validateDisabled:process.env.EASYUI_VALIDATE_DISABLED==="1",legacyBasicAuth:resolveLegacyBasicAuthEnv(),publicOrigin,screenshots,visual})});
     return {server,db};
   } catch(error) { db.close(); throw error; }
 }

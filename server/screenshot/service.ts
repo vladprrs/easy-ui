@@ -9,6 +9,7 @@ import { REPEAT_RENDER_COST_BUDGET } from "../../src/prototype/validate";
 import { getDesignSystemVersion, getLatestDesignSystemContent } from "../designSystems";
 import type { ThemeContent } from "../designSystemsMeta";
 import { ApiError } from "../http";
+import { ensureDraftCandidate } from "../components/validate";
 import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
 import { PrototypeRepo } from "../repos/prototypes";
@@ -34,18 +35,14 @@ export interface ScreenshotImageResult extends CaptureQuality {
   imageUrl: string; assetId: string; width: number; height: number;
   imageProduced: boolean;
   consoleErrors: string[]; pageErrors: string[];
-  bundleHash?: string; componentPins?: { id: string; version: number; bundleHash: string }[];
+  bundleHash?: string;
+  /** Draft head-revision target (P1b): the rendered rev, so clients can report "draft rev N". */
+  draftRev?: number;
+  componentPins?: { id: string; version: number; bundleHash: string }[];
   rendererBuild: string | null; browserVersion: string;
 }
-export interface ScreenshotGeometryResult extends CaptureQuality {
-  kind: "geometry";
-  resolvedRev: number;
-  prototypeInstanceId: string;
-  componentPins: { id: string; version: number; bundleHash: string }[];
-  designSystemMetaVersion: number | null;
-  resolvedSpaceScale: Record<SpaceToken, string>;
-  viewport: Viewport;
-  dpr: number;
+/** Geometry measurements shared by both capture surfaces (additive wave-7.1 shape). */
+interface GeometryMeasurement {
   rects: GeometryRect[];
   truncated: boolean;
   total: number;
@@ -57,11 +54,39 @@ export interface ScreenshotGeometryResult extends CaptureQuality {
   viewportOwnership: GeometryCollection["viewportOwnership"];
   issues: GeometryCollection["issues"];
 }
+export interface ScreenshotPrototypeGeometryResult extends CaptureQuality, GeometryMeasurement {
+  kind: "geometry";
+  surface: "prototype";
+  resolvedRev: number;
+  prototypeInstanceId: string;
+  componentPins: { id: string; version: number; bundleHash: string }[];
+  designSystemMetaVersion: number | null;
+  resolvedSpaceScale: Record<SpaceToken, string>;
+  viewport: Viewport;
+  dpr: number;
+}
+/** Component-surface geometry probe (P1b): published version or draft head revision. */
+export interface ScreenshotComponentGeometryResult extends CaptureQuality, GeometryMeasurement {
+  kind: "geometry";
+  surface: "component";
+  componentId: string;
+  /** Published target — mutually exclusive with `draftRev`. */
+  version?: number;
+  /** Draft head-revision target — mutually exclusive with `version`. */
+  draftRev?: number;
+  bundleHash: string;
+  designSystemMetaVersion: number | null;
+  resolvedSpaceScale: Record<SpaceToken, string>;
+  viewport: Viewport;
+  dpr: number;
+}
+/** Geometry probe result, discriminated by `surface` (P1b добавил компонентную поверхность). */
+export type ScreenshotGeometryResult = ScreenshotPrototypeGeometryResult | ScreenshotComponentGeometryResult;
 export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult;
 
 export interface WorkerJob {
   captureOrigin: string; captureUrl: string; token: string;
-  bootstrap: { kind: "prototype" | "component"; target: Record<string, unknown>; props?: Record<string, unknown>; expected: CaptureExpected };
+  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; expected: CaptureExpected };
   allowedUrls: string[]; viewport: Viewport; deviceScaleFactor: number; colorScheme: "light" | "dark"; waitForFonts: boolean; expected: CaptureExpected;
   probe?: "geometry"; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
 }
@@ -77,6 +102,8 @@ interface InternalJob {
   expected: CaptureExpected; allowedUrls: string[]; props?: Record<string, unknown>;
   captureUrl: string; viewport: Viewport; dsf: number; theme: "light" | "dark"; waitForFonts: boolean;
   componentPins?: { id: string; version: number; bundleHash: string }[];
+  /** Draft-capture extras (P1b): what the bootstrap carries instead of a published DTO. */
+  draft?: { name: string; designSystem: string; bundleUrl: string; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>> };
   probe?: "geometry"; resolvedSpaceScale?: Record<SpaceToken, string>; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
   result?: ScreenshotResult; error?: { code: string; message: string }; resultExpiresAt?: number;
 }
@@ -99,7 +126,7 @@ export function geometryRoleKeysOf(doc: unknown, screenId: string): Partial<Reco
 }
 
 /** Defaults for pre-7.1 worker payloads: the geometry shape stays additive-only. */
-function emptyGeometryShape(): Pick<ScreenshotGeometryResult, "safeArea" | "roleRects" | "frame" | "content" | "scroll" | "viewportOwnership" | "issues"> {
+function emptyGeometryShape(): Pick<GeometryMeasurement, "safeArea" | "roleRects" | "frame" | "content" | "scroll" | "viewportOwnership" | "issues"> {
   const zero = { x: 0, y: 0, width: 0, height: 0 };
   return {
     safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
@@ -235,11 +262,11 @@ export class ScreenshotService {
     return {jobId,expected};
   }
 
-  enqueueComponent(id: string, version: number, opts: { props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean }): { jobId: string } {
+  enqueueComponent(id: string, version: number, opts: { props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry" }): { jobId: string } {
     const {jobId}=this.enqueueComponentFrozen(id,version,opts); return {jobId};
   }
 
-  private enqueueComponentFrozen(id: string, version: number, opts: { props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean }): FrozenEnqueue {
+  private enqueueComponentFrozen(id: string, version: number, opts: { props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry" }): FrozenEnqueue {
     this.requireAvailable();
     const { viewport, dsf } = validateViewport(opts.viewport, opts.deviceScaleFactor);
     this.guardQueue();
@@ -250,12 +277,55 @@ export class ScreenshotService {
     validatePropsAgainstSchema(props, dto.propsJsonSchema);
     const propsHash = propsHashOf(props);
     const theme = opts.theme === "dark" ? "dark" : "light";
-    const expected: CaptureExpected = { kind: "component", componentId: id, version, bundleHash: dto.bundleHash, propsHash, dsMetaVersion: getLatestDesignSystemContent(this.deps.db, dto.designSystem).latestMetaVersion, rendererBuild: this.rendererBuild };
+    const themeContent = getLatestDesignSystemContent(this.deps.db, dto.designSystem);
+    const expected: CaptureExpected = { kind: "component", componentId: id, version, bundleHash: dto.bundleHash, propsHash, dsMetaVersion: themeContent.latestMetaVersion, rendererBuild: this.rendererBuild };
     const allowedUrls = this.componentAllowedUrls(id, version, dto.assets.map((a) => a.id), dto.designSystem);
     const query = new URLSearchParams({ theme, dsf: String(dsf) });
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/${version}?${query}`;
-    const {jobId}=this.push({ kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false });
+    // Компонентная геометрия (P1b): шкала — из последней темы, ролей экрана у одиночного компонента нет.
+    const resolvedSpaceScale = opts.probe ? resolveSpacingScale(dto.designSystem, themeContent.tokens) : undefined;
+    const {jobId}=this.push({ kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}) });
     return {jobId,expected};
+  }
+
+  /**
+   * Draft-preview сохранённой, но не опубликованной head-ревизии (план 2026-08-02, P1b).
+   * Бандл — эфемерный candidate-bundle префлайта P8: при холодном кэше собирается здесь же
+   * под троттлингом validate (`ensureDraftCandidate`), поэтому метод асинхронный, в отличие
+   * от published-ветки. Allowlist пинует asset-ссылки, извлечённые из исходника драфта
+   * (пиннинга ассетов у драфта нет — он появляется только при publish).
+   */
+  async enqueueComponentDraft(id: string, userId: string, opts: { props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry" }): Promise<{ jobId: string }> {
+    this.requireAvailable();
+    const { viewport, dsf } = validateViewport(opts.viewport, opts.deviceScaleFactor);
+    this.guardQueue();
+    const draft = await ensureDraftCandidate(this.deps.db, this.deps.dataDir, id, userId);
+    // Сборка кандидата ждала своей очереди — cap мог заполниться, пока мы компилировали.
+    this.guardQueue();
+    const repo = new ComponentRepo(this.deps.db);
+    const meta = draft.entry.extracted!.meta!;
+    let props = opts.props ?? {};
+    if (opts.exampleName !== undefined) {
+      const examples = meta.examples ?? Object.create(null) as Record<string, Record<string, unknown>>;
+      if (!Object.hasOwn(examples, opts.exampleName)) throw new ApiError(422, "unknown_example", `Unknown component example: ${opts.exampleName}`);
+      props = examples[opts.exampleName]!;
+    }
+    validatePropsAgainstSchema(props, meta.propsJsonSchema);
+    const propsHash = propsHashOf(props);
+    const theme = opts.theme === "dark" ? "dark" : "light";
+    const themeContent = getLatestDesignSystemContent(this.deps.db, draft.designSystem);
+    const expected: CaptureExpected = { kind: "component-draft", componentId: id, rev: draft.rev, sourceHash: draft.sourceHash, bundleHash: draft.entry.bundleHash!, propsHash, dsMetaVersion: themeContent.latestMetaVersion, rendererBuild: this.rendererBuild };
+    const bundleUrl = `/api/components/${encodeURIComponent(id)}/draft/${draft.sourceHash}/bundle.js`;
+    const allowedUrls = this.draftComponentAllowedUrls(id, draft.sourceHash, draft.assetIds, draft.designSystem);
+    const query = new URLSearchParams({ theme, dsf: String(dsf) });
+    const captureUrl = `/capture/component/${encodeURIComponent(id)}/draft?${query}`;
+    const resolvedSpaceScale = opts.probe ? resolveSpacingScale(draft.designSystem, themeContent.tokens) : undefined;
+    const { jobId } = this.push({
+      kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false,
+      draft: { name: repo.row(id).name, designSystem: draft.designSystem, bundleUrl, ...(meta.propsJsonSchema !== undefined ? { propsJsonSchema: meta.propsJsonSchema } : {}), ...(meta.examples !== undefined ? { examples: meta.examples } : {}) },
+      ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}),
+    });
+    return { jobId };
   }
 
   private prototypeAllowedUrls(
@@ -307,6 +377,29 @@ export class ScreenshotService {
     return [...set];
   }
 
+  /**
+   * Draft-allowlist (P1b): candidate-bundle идёт точным content-addressed путём (sourceHash
+   * в path), поэтому в allowlist он попадает только у enqueue'нувшей джобы — чужие джобы
+   * (другой компонент, другой sourceHash, published-съёмка) этот URL не получают. В
+   * catalog/latest-active resolution и в bundle-export он не попадает никогда: те читают
+   * только publishes. Asset-ссылки — из исходника драфта; published-DTO (`/api/components/:id`,
+   * `/versions/:v`) драфту не нужны: meta/props-схема едут в bootstrap.
+   */
+  private draftComponentAllowedUrls(id: string, sourceHash: string, assetIds: string[], designSystem: string): string[] {
+    const set = new Set<string>();
+    set.add(`/capture/component/${id}/draft`);
+    set.add(`/api/design-systems/${designSystem}`);
+    set.add(`/api/design-systems/${designSystem}/versions/`);
+    for (const assetId of themeAssetIds(getLatestDesignSystemContent(this.deps.db, designSystem))) {
+      set.add(`/api/assets/${assetId}`);
+    }
+    set.add(`/api/components/${id}/draft/${sourceHash}/bundle.js`);
+    for (const assetId of assetIds) set.add(`/api/assets/${assetId}`);
+    set.add("/api/shims/");
+    for (const s of buildStaticAllowedUrls(this.deps.serveDist)) set.add(s);
+    return [...set];
+  }
+
   private push(job: Omit<InternalJob, "id" | "status">): { jobId: string } {
     const id = `job_${crypto.randomUUID()}`;
     this.jobs.set(id, { ...job, id, status: "queued" });
@@ -346,7 +439,15 @@ export class ScreenshotService {
     try {
       const workerJob: WorkerJob = {
         captureOrigin: this.deps.captureOrigin, captureUrl: job.captureUrl, token: session.token,
-        bootstrap: { kind: job.kind, target: this.targetOf(job), ...(job.props ? { props: job.props } : {}), expected: job.expected },
+        bootstrap: {
+          kind: job.expected.kind === "component-draft" ? "component-draft" : job.kind,
+          target: this.targetOf(job),
+          ...(job.props ? { props: job.props } : {}),
+          // Драфт: published-DTO не существует, поэтому схема/examples едут в bootstrap (P1b).
+          ...(job.draft?.propsJsonSchema !== undefined ? { propsJsonSchema: job.draft.propsJsonSchema } : {}),
+          ...(job.draft?.examples !== undefined ? { examples: job.draft.examples } : {}),
+          expected: job.expected,
+        },
         allowedUrls: job.allowedUrls, viewport: job.viewport, deviceScaleFactor: job.dsf, colorScheme: job.theme, waitForFonts: job.waitForFonts, expected: job.expected,
         ...(job.probe ? { probe: job.probe, geometryLimit: GEOMETRY_RECT_LIMIT, ...(job.geometryRoleKeys ? { geometryRoleKeys: job.geometryRoleKeys } : {}) } : {}),
       };
@@ -354,20 +455,37 @@ export class ScreenshotService {
       if (!result.ok) { job.status = "error"; job.error = { code: "capture_failed", message: result.error }; this.expire(job); return; }
       const quality = this.qualityOf(result);
       if (job.probe === "geometry") {
-        if (!("geometry" in result) || job.expected.kind !== "prototype") throw new Error("geometry worker result mismatch");
-        job.result = {
-          kind: "geometry",
-          ...quality,
-          resolvedRev: job.expected.rev,
-          prototypeInstanceId: job.expected.prototypeInstanceId,
-          componentPins: job.componentPins ?? [],
-          designSystemMetaVersion: job.expected.dsMetaVersion,
-          resolvedSpaceScale: job.resolvedSpaceScale!,
-          viewport: job.viewport,
-          dpr: job.dsf,
-          ...emptyGeometryShape(),
-          ...result.geometry,
-        };
+        if (!("geometry" in result)) throw new Error("geometry worker result mismatch");
+        const measurement = { ...emptyGeometryShape(), ...result.geometry };
+        if (job.expected.kind === "prototype") {
+          job.result = {
+            kind: "geometry",
+            surface: "prototype",
+            ...quality,
+            resolvedRev: job.expected.rev,
+            prototypeInstanceId: job.expected.prototypeInstanceId,
+            componentPins: job.componentPins ?? [],
+            designSystemMetaVersion: job.expected.dsMetaVersion,
+            resolvedSpaceScale: job.resolvedSpaceScale!,
+            viewport: job.viewport,
+            dpr: job.dsf,
+            ...measurement,
+          };
+        } else {
+          job.result = {
+            kind: "geometry",
+            surface: "component",
+            ...quality,
+            componentId: job.expected.componentId,
+            ...(job.expected.kind === "component-draft" ? { draftRev: job.expected.rev } : { version: job.expected.version }),
+            bundleHash: job.expected.bundleHash,
+            designSystemMetaVersion: job.expected.dsMetaVersion,
+            resolvedSpaceScale: job.resolvedSpaceScale!,
+            viewport: job.viewport,
+            dpr: job.dsf,
+            ...measurement,
+          };
+        }
         job.status = "done";
         this.expire(job);
         return;
@@ -382,7 +500,9 @@ export class ScreenshotService {
         imageProduced: true,
         imageUrl: `/api/assets/${ingest.asset.id}`, assetId: ingest.asset.id, width: result.width, height: result.height,
         consoleErrors: result.consoleErrors, pageErrors: result.pageErrors,
-        ...(job.expected.kind === "component" ? { bundleHash: job.expected.bundleHash } : { componentPins: job.componentPins }),
+        ...(job.expected.kind === "component" ? { bundleHash: job.expected.bundleHash }
+          : job.expected.kind === "component-draft" ? { bundleHash: job.expected.bundleHash, draftRev: job.expected.rev }
+          : { componentPins: job.componentPins }),
         rendererBuild: job.expected.rendererBuild, browserVersion: result.browserVersion,
       };
       job.status = "done";
@@ -404,9 +524,12 @@ export class ScreenshotService {
   }
 
   private targetOf(job: InternalJob): Record<string, unknown> {
-    return job.expected.kind === "prototype"
-      ? { kind: "prototype", rev: job.expected.rev }
-      : { kind: "component", componentId: job.expected.componentId, version: job.expected.version };
+    if (job.expected.kind === "prototype") return { kind: "prototype", rev: job.expected.rev };
+    if (job.expected.kind === "component-draft") {
+      // Драфт (P1b): поверхность читает name/designSystem/bundleUrl отсюда — published-DTO нет.
+      return { kind: "component-draft", componentId: job.expected.componentId, rev: job.expected.rev, ...(job.draft ? { name: job.draft.name, designSystem: job.draft.designSystem, bundleUrl: job.draft.bundleUrl } : {}) };
+    }
+    return { kind: "component", componentId: job.expected.componentId, version: job.expected.version };
   }
   private expire(job: InternalJob): void { job.resultExpiresAt = this.now() + RESULT_TTL_MS; }
 }

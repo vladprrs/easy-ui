@@ -22,6 +22,8 @@ import { ApiError, json, MAX_JSON_BODY_BYTES, noStore } from "../http";
 import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "../screenshot/service";
 import { DEFAULT_REUSE_GATE_MODE, type ReuseGateMode } from "../catalog/gate";
 import { CALIBRATED_POLICY } from "../catalog/policy";
+import { VALIDATE_GLOBAL_CONCURRENT, VALIDATE_USER_CONCURRENT } from "../components/validate";
+import { CANDIDATE_CACHE_MAX_BYTES, CANDIDATE_CACHE_TTL_MS } from "../components/candidates";
 
 // Discovery endpoints (plan §G): /api/openapi.json, /api/schemas/*, /api/capabilities.
 // The OpenAPI document is the committed artifact generated from server/contracts.ts;
@@ -51,7 +53,7 @@ export const CAPABILITY_CONDITIONS = ["$and", "$or", "$state", "$item", "$index"
  * env внутри роута сделало бы discovery и гейт двумя источниками истины, а тесты в общем
  * процессе `bun test` мутировали бы друг другу глобальный env.
  */
-export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE): JsonObject {
+export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean } = {}): JsonObject {
   const systems = listActiveDesignSystems(db);
   return {
     apiVersion: 1,
@@ -77,6 +79,12 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // Глубина дерева сценариев (`flow.parentId`); корень считается уровнем 1.
       flowDepth: FLOW_DEPTH_LIMIT,
       compositionDepth: 5,
+      // P8: троттлинг и гигиена validate-префлайта — публикуются, чтобы агент до вызова
+      // знал про 429 и про срок жизни candidate-кэша.
+      validateUserConcurrent: VALIDATE_USER_CONCURRENT,
+      validateGlobalConcurrent: VALIDATE_GLOBAL_CONCURRENT,
+      validateCacheTtlHours: CANDIDATE_CACHE_TTL_MS / (60 * 60 * 1000),
+      validateCacheMiB: CANDIDATE_CACHE_MAX_BYTES / (1024 * 1024),
     },
     designSystems: systems.map((system) => system.id),
     resolvedSpaceScales: Object.fromEntries(systems.map((system) => {
@@ -101,6 +109,13 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       componentReuseGate: true,
       compositionV2: true,
       catalogMigration: true,
+      // Kill-switch P8: env резолвится один раз на входе процесса (`startServer`), флаг
+      // приезжает сюда параметром — как и reuseGateMode, env из роута не перечитывается.
+      componentValidate: options.validateDisabled !== true,
+      // P1b: geometry-probe компонентной поверхности и draft-preview head-ревизии.
+      // Draft-preview гаснет тем же kill-switch'ем P8: постановка джобы собирает candidate-bundle.
+      componentGeometry: true,
+      componentDraftPreview: options.validateDisabled !== true,
     },
     reuseGate: {
       mode: reuseGateMode,
@@ -284,7 +299,7 @@ const jsonText = (body: string): Response =>
  * `reuseGateMode` едет от `HandlerOptions` (`server/main.ts`). Дефолт здесь существует только
  * ради вызывающих, которым фаза не важна (схемы и OpenAPI её не касаются).
  */
-export function routeMeta(request: Request, db: Database, segments: string[], reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE): Response | null {
+export function routeMeta(request: Request, db: Database, segments: string[], reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean } = {}): Response | null {
   const requireGet = () => { if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed"); };
   if (segments[0] === "openapi.json" && segments.length === 1) {
     requireGet();
@@ -293,7 +308,7 @@ export function routeMeta(request: Request, db: Database, segments: string[], re
   }
   if (segments[0] === "capabilities" && segments.length === 1) {
     requireGet();
-    return json(capabilities(db, reuseGateMode), 200, noStore);
+    return json(capabilities(db, reuseGateMode, options), 200, noStore);
   }
   if (segments[0] === "schemas" && segments.length === 2) {
     requireGet();

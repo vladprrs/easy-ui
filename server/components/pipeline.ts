@@ -22,7 +22,13 @@ try {
   });
 } catch { /* plugin already registered or unavailable */ }
 
-const imported = new Map<string, Promise<{ definition: { props: z.ZodType }; default: unknown }>>();
+type ComponentModule = { definition: { props: z.ZodType }; default: unknown };
+
+const imported = new Map<string, Promise<ComponentModule>>();
+// Отдельный кэш import-верификации validate-префлайта (план 2026-08-02 P8): ключ — `validated@<sourceHash>`,
+// а не `id@rev`. Validate НЕ имеет права заселять `imported`: иначе последующий publish тихо
+// переиспользовал бы чужую верификацию вместо своей (`importPublished` ниже).
+const validated = new Map<string, Promise<ComponentModule>>();
 
 export const sha256 = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
 
@@ -105,17 +111,40 @@ export async function materializeClientSource(dataDir:string,id:string,rev:numbe
   return materializeSource(dataDir,`${id}-client`,rev,clientSource);
 }
 
-export async function importPublished(id:string,rev:number,path:string) {
-  const key=`${id}@${rev}`;
-  let promise=imported.get(key);
-  if(!promise) {
-    promise=import(`${path}?published=${encodeURIComponent(key)}`).then(mod=>{
-      if(typeof mod.default!=="function" || !(mod.definition?.props instanceof z.ZodType)) throw new Error("Published component module contract is invalid");
-      return mod as {definition:{props:z.ZodType};default:unknown};
-    });
-    imported.set(key,promise);
+function assertModuleContract(mod: unknown): ComponentModule {
+  const candidate = mod as { default?: unknown; definition?: { props?: unknown } };
+  if (typeof candidate.default !== "function" || !(candidate.definition?.props instanceof z.ZodType)) throw new Error("Published component module contract is invalid");
+  return candidate as ComponentModule;
+}
+
+export async function importPublished(id: string, rev: number, path: string) {
+  const key = `${id}@${rev}`;
+  let promise = imported.get(key);
+  if (!promise) {
+    promise = import(`${path}?published=${encodeURIComponent(key)}`).then(assertModuleContract);
+    imported.set(key, promise);
   }
   return promise;
+}
+
+/**
+ * Import-верификация validate-префлайта. Query `?validated=` намеренно отличается от
+ * `?published=`: это **другой** specifier, поэтому publish после validate в любом случае
+ * исполняет модуль заново и не пропускает собственную верификацию.
+ */
+export async function importValidated(sourceHash: string, path: string) {
+  const key = `validated@${sourceHash}`;
+  let promise = validated.get(key);
+  if (!promise) {
+    promise = import(`${path}?validated=${encodeURIComponent(key)}`).then(assertModuleContract);
+    validated.set(key, promise);
+  }
+  return promise;
+}
+
+/** Тестовая интроспекция (P8): какие ключи реально лежат в кэшах import-верификации. */
+export function importCacheKeys(): { published: string[]; validated: string[] } {
+  return { published: [...imported.keys()], validated: [...validated.keys()] };
 }
 
 function isJsonSafe(value:unknown):boolean {

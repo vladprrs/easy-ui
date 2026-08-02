@@ -189,6 +189,7 @@ function orderedCases(): [string, Case][] {
     // Screenshots: unavailable in this environment (no service) — typed error envelope
     ["POST /api/prototypes/{id}/screens/{screenId}/screenshot", { run: () => call("POST", `/api/prototypes/contract-proto/screens/${state.screenId}/screenshot`, { viewport: { width: 320, height: 480 } }), expected: err(501, "screenshot_unavailable") }],
     ["POST /api/components/{id}/versions/{version}/screenshot", { run: () => call("POST", "/api/components/contract-stars/versions/1/screenshot", { viewport: { width: 320, height: 480 } }), expected: err(501, "screenshot_unavailable") }],
+    ["POST /api/components/{id}/head/screenshot", { run: () => call("POST", "/api/components/contract-stars/head/screenshot", { viewport: { width: 320, height: 480 } }), expected: err(501, "screenshot_unavailable") }],
     ["GET /api/screenshot-jobs/{jobId}", { run: () => call("GET", "/api/screenshot-jobs/nope"), expected: err(404, "job_not_found") }],
     // Visual references (DB-backed happy paths; check requires the capture pipeline)
     ["PUT /api/visual-references", { run: () => call("PUT", "/api/visual-references", { fingerprint: { scope: "prototype-screen", prototypeId: "contract-proto", screenId: state.screenId, refRevision: 1, viewport: { width: 320, height: 480 }, deviceScaleFactor: 1, theme: "light" }, assetId: state.assetId }), expected: ok() }],
@@ -208,6 +209,9 @@ function orderedCases(): [string, Case][] {
     ["GET /api/components/{id}/revisions/{rev}", { run: () => call("GET", "/api/components/contract-stars/revisions/1"), expected: ok() }],
     ["POST /api/components/{id}/restore", { run: () => call("POST", "/api/components/contract-stars/restore", { rev: 1, baseRev: 2 }), expected: ok() }],
     ["POST /api/components/{id}/publish", { run: () => call("POST", "/api/components/contract-stars/publish", { baseRev: 999 }), expected: err(409, "revision_conflict") }],
+    // Validate-префлайт — как и publish, тяжёлый happy path (typecheck+compile+import) покрыт
+    // в component-validate.test.ts; здесь — envelope 404.
+    ["POST /api/components/{id}/validate", { run: () => call("POST", "/api/components/contract-missing/validate"), expected: err(404, "not_found") }],
     ["GET /api/components/{id}/versions", { run: () => call("GET", "/api/components/contract-stars/versions"), expected: ok() }],
     ["GET /api/components/{id}/versions/{version}", { run: () => call("GET", "/api/components/contract-stars/versions/1"), expected: err(404, "not_found") }],
     ["GET /api/components/{id}/versions/{version}/bundle.js", { run: () => call("GET", "/api/components/contract-stars/versions/1/bundle.js"), expected: err(404, "not_found") }],
@@ -594,6 +598,10 @@ describe("route contracts", () => {
       flowTotalSteps: FLOW_TOTAL_STEPS_LIMIT,
       flowDepth: FLOW_DEPTH_LIMIT,
       compositionDepth: 5,
+      validateUserConcurrent: 1,
+      validateGlobalConcurrent: 2,
+      validateCacheTtlHours: 24,
+      validateCacheMiB: 32,
     });
     // The ordered contract case may have created the fixture system already; Bun can execute
     // this independent case before or after it, so assert the stable built-in system only.
@@ -617,6 +625,9 @@ describe("route contracts", () => {
       componentReuseGate: true,
       compositionV2: true,
       catalogMigration: true,
+      componentValidate: true,
+      componentGeometry: true,
+      componentDraftPreview: true,
     });
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
   });

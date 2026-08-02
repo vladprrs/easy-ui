@@ -11,6 +11,7 @@ import { CaptureSurface } from "./CaptureSurface";
 import { CaptureStyle, useCaptureTheme, usePublishError } from "./CaptureChrome";
 import { bootstrapRendererBuild, publishReady, readBootstrap, settleSurface } from "./readiness";
 import { propsHashBrowser } from "./propsHash";
+import type { CaptureReady, ComponentDraftExpected } from "./protocol";
 
 interface LoadedComponent {
   id: string;
@@ -62,9 +63,16 @@ async function loadComponent(id: string, version: number, selection: PropsSelect
   return { id, name: meta.name, version: versionDto, props, dsMetaVersion, theme };
 }
 
-function LoadedComponentCapture({ loaded, custom }: { loaded: LoadedComponent; custom: CustomPlayerRuntime }) {
+/**
+ * Shared single-component capture surface: renders the resolved tree, then publishes the
+ * readiness object built by `readyOf` (published version or draft rev — P1b).
+ */
+function ComponentCaptureSurface({ name, designSystem, theme, props, custom, readyOf }: {
+  name: string; designSystem: string; theme: ThemeContent | null;
+  props: Record<string, unknown>; custom: CustomPlayerRuntime;
+  readyOf: (propsHash: string) => CaptureReady;
+}) {
   const ref = useRef<HTMLDivElement | null>(null);
-  const { name, props, version } = loaded;
   const tree = useMemo(() => toRuntimeSpec(
     { root: "c", elements: { c: { type: name, props } } } as Parameters<typeof toRuntimeSpec>[0],
     { customTypes: new Set([name]) },
@@ -76,10 +84,7 @@ function LoadedComponentCapture({ loaded, custom }: { loaded: LoadedComponent; c
       try {
         const propsHash = await propsHashBrowser(props);
         await settleSurface(ref.current ?? document);
-        if (!cancelled) publishReady({
-          status: "ready", kind: "component", componentId: loaded.id, version: version.version,
-          bundleHash: version.bundleHash, propsHash, dsMetaVersion: loaded.dsMetaVersion, rendererBuild: bootstrapRendererBuild(),
-        });
+        if (!cancelled) publishReady(readyOf(propsHash));
       } catch (error) {
         if (!cancelled) publishReady({ status: "error", error: error instanceof Error ? error.message : String(error) });
       }
@@ -88,12 +93,21 @@ function LoadedComponentCapture({ loaded, custom }: { loaded: LoadedComponent; c
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return <SurfaceSpacingScope systemId={version.designSystem} themeTokens={loaded.theme?.tokens}>
+  return <SurfaceSpacingScope systemId={designSystem} themeTokens={theme?.tokens}>
     <div ref={ref} id="eui-capture-surface" className="bg-background text-foreground inline-block">
-      <ThemeStyle content={loaded.theme} />
-      <CaptureSurface designSystem={version.designSystem} custom={custom} tree={tree} initialState={{}} screenIds={new Set()} />
+      <ThemeStyle content={theme} />
+      <CaptureSurface designSystem={designSystem} custom={custom} tree={tree} initialState={{}} screenIds={new Set()} />
     </div>
   </SurfaceSpacingScope>;
+}
+
+function LoadedComponentCapture({ loaded, custom }: { loaded: LoadedComponent; custom: CustomPlayerRuntime }) {
+  const { version } = loaded;
+  return <ComponentCaptureSurface name={loaded.name} designSystem={version.designSystem} theme={loaded.theme} props={loaded.props} custom={custom}
+    readyOf={(propsHash) => ({
+      status: "ready", kind: "component", componentId: loaded.id, version: version.version,
+      bundleHash: version.bundleHash, propsHash, dsMetaVersion: loaded.dsMetaVersion, rendererBuild: bootstrapRendererBuild(),
+    })} />;
 }
 
 function WithComponent({ loaded }: { loaded: LoadedComponent }) {
@@ -133,5 +147,94 @@ export function CaptureComponent() {
       : state.status === "loading" ? <div id="eui-capture-loading" />
       : state.status === "error" ? <div data-capture-error="load" />
       : <WithComponent loaded={state.data} />}
+  </>;
+}
+
+// --- Draft head-revision capture (план 2026-08-02, P1b) ------------------------------
+// Рендер сохранённой, но не опубликованной head-ревизии из эфемерного candidate-bundle.
+// Published-DTO у драфта нет: цель (name/designSystem/bundleUrl) приезжает в bootstrap.target,
+// props-схема/examples — в расширенном bootstrap; оба job-scoped по построению.
+
+interface LoadedDraftComponent {
+  id: string;
+  name: string;
+  rev: number;
+  sourceHash: string;
+  bundleHash: string;
+  bundleUrl: string;
+  designSystem: string;
+  props: Record<string, unknown>;
+  dsMetaVersion: number | null;
+  theme: ThemeContent | null;
+}
+
+/** Reads and validates the worker bootstrap; a draft capture has no browser fallback. */
+function readDraftBootstrap(): { expected: ComponentDraftExpected; name: string; designSystem: string; bundleUrl: string; props: Record<string, unknown> } {
+  const bootstrap = readBootstrap();
+  if (bootstrap?.kind !== "component-draft" || bootstrap.expected.kind !== "component-draft") {
+    throw new Error("Draft component capture requires a component-draft capture bootstrap");
+  }
+  const target = bootstrap.target as { componentId?: unknown; rev?: unknown; name?: unknown; designSystem?: unknown; bundleUrl?: unknown };
+  if (target.componentId !== bootstrap.expected.componentId || target.rev !== bootstrap.expected.rev
+    || typeof target.name !== "string" || typeof target.designSystem !== "string" || typeof target.bundleUrl !== "string") {
+    throw new Error("Draft component capture bootstrap target is invalid");
+  }
+  return {
+    expected: bootstrap.expected,
+    name: target.name, designSystem: target.designSystem, bundleUrl: target.bundleUrl,
+    props: bootstrap.props ?? {},
+  };
+}
+
+async function loadDraftComponent(id: string, signal: AbortSignal): Promise<LoadedDraftComponent> {
+  const { expected, name, designSystem, bundleUrl, props } = readDraftBootstrap();
+  if (expected.componentId !== id) throw new Error(`Draft capture targets ${expected.componentId}, not ${id}`);
+  // Components are not theme-pinned: use the latest theme of the component's design system.
+  let dsMetaVersion: number | null = null; let theme: ThemeContent | null = null;
+  try { const ds = await getDesignSystemById(designSystem, signal); dsMetaVersion = ds.latestMetaVersion ?? null; theme = { tokens: ds.tokens ?? {}, fonts: ds.fonts ?? [], icons: ds.icons ?? [] }; } catch { /* theme is best-effort */ }
+  return {
+    id, name, rev: expected.rev, sourceHash: expected.sourceHash, bundleHash: expected.bundleHash,
+    bundleUrl, designSystem, props, dsMetaVersion, theme,
+  };
+}
+
+async function loadDraftRuntime(loaded: LoadedDraftComponent, signal: AbortSignal): Promise<CustomPlayerRuntime> {
+  const result = await loadCustomComponents([{
+    id: loaded.id, name: loaded.name, version: loaded.rev,
+    bundleUrl: loaded.bundleUrl, bundleHash: loaded.bundleHash,
+  }]);
+  if (signal.aborted) throw new DOMException("aborted", "AbortError");
+  return result;
+}
+
+function LoadedDraftCapture({ loaded, custom }: { loaded: LoadedDraftComponent; custom: CustomPlayerRuntime }) {
+  return <ComponentCaptureSurface name={loaded.name} designSystem={loaded.designSystem} theme={loaded.theme} props={loaded.props} custom={custom}
+    readyOf={(propsHash) => ({
+      status: "ready", kind: "component-draft", componentId: loaded.id, rev: loaded.rev, sourceHash: loaded.sourceHash,
+      bundleHash: loaded.bundleHash, propsHash, dsMetaVersion: loaded.dsMetaVersion, rendererBuild: bootstrapRendererBuild(),
+    })} />;
+}
+
+function WithDraftComponent({ loaded }: { loaded: LoadedDraftComponent }) {
+  const custom = useApi((signal) => loadDraftRuntime(loaded, signal), [loaded.id, loaded.bundleUrl]);
+  usePublishError(custom.status === "error" ? errorMessage(custom.error) : null);
+  if (custom.status === "loading") return <div id="eui-capture-loading" />;
+  if (custom.status === "error") return <div data-capture-error="components" />;
+  return <LoadedDraftCapture loaded={loaded} custom={custom.data} />;
+}
+
+export function CaptureComponentDraft() {
+  const { id } = useParams();
+  const [search] = useSearchParams();
+  const theme = search.get("theme") === "dark" ? "dark" : "light";
+  useCaptureTheme(theme);
+  const state = useApi((signal) => loadDraftComponent(id ?? "", signal), [id]);
+  usePublishError(state.status === "error" ? errorMessage(state.error) : null);
+
+  return <>
+    <CaptureStyle />
+    {state.status === "loading" ? <div id="eui-capture-loading" />
+      : state.status === "error" ? <div data-capture-error="load" />
+      : <WithDraftComponent loaded={state.data} />}
   </>;
 }
