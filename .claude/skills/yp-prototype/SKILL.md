@@ -90,6 +90,7 @@ node interact.mjs yp-skill-demo ./interact-shots
 - **Выбор из N карточек**: `selected: {"$cond":{"if":{"$state":"/method","eq":"card"},"then":true,"else":false}}` + `on.select → setState /method`. Селекция реально переключается в плеере.
 - **Список из стейта**: `repeat: {statePath:"/items", key:"title"}` на `YpBox`-обёртке, внутри `{"$item":"title"}` / `{"$item":"price"}`.
 - **CTA с суммой**: `ctaLabel: {"$template":"Оплатить ${/total} ₽"}`.
+- **Считать сумму, а не хранить её**: top-level `computed` (`count`/`sum`/`sumProduct`/`add`) — `"computed": {"cartSubtotal": {"op":"sumProduct","from":"/items","fields":["price","qty"]}, "total": {"op":"add","terms":["/cartSubtotal","/shipping",-500]}}`. Ключи computed — **bare**, правило «ключи стейта БЕЗ слэша» действует и здесь; читаются как обычный стейт (`{"$state":"/total"}`, `${/total}` в `$template`) и пересчитываются сами после `pushState`/`setState`. Писать в них нельзя (setState/`$bindState`/`repeat` по такому пути — ошибка), деньги — целыми числами. Грамматика и лимиты — `docs/prototype-format.md#computed-values`.
 - Переходы: `press → navigate {screenId}`; возврат в начало — `restart`.
 
 ## Сценарии (`flows`) деревом

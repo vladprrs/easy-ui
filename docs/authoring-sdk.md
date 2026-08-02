@@ -112,6 +112,11 @@ const document = doc({
 - Ключи элементов детерминированы: явные ключи резервируются первыми, остальные генерируются как
   camelCase имени типа с суффиксом `-2`, `-3` при коллизии (`$` в авторских ключах запрещён — этот
   символ зарезервирован под ключи композиций).
+- Аддитивные поля корня (`computed`, `flows`, `architecture`, `surfaces`…) проходят через `doc()`
+  как есть: билдер спредит `...input`, а тип `DocumentInput` выведен из `inputPrototypeDocSchema`,
+  поэтому `computed: { cartTotal: { op: "add", terms: ["/cartSubtotal", "/shippingFee", -500] } }`
+  типизирован и валидируется той же строгой схемой, что и на сервере (грамматика и лимиты —
+  `docs/prototype-format.md#computed-values`). Отдельного билдера для `computed` нет.
 - `doc()` подставляет `version: 1`, `state: {}` и `startScreen` = id первого экрана, затем валидирует
   документ `inputPrototypeDocSchema` и бросает `SdkValidationError` со списком zod-issue
   (`/screens/0/spec/root: …`). `validateDoc(value)` — та же проверка для готового документа.

@@ -4,7 +4,7 @@ Prototype files live in `prototypes/*.json`. A file is a self-contained flow; it
 
 ## Document and screens
 
-The root is a strict object with `version: 1`, slug `id`, human-readable `name`, optional `description`, slug `designSystem` (default `"shadcn"`), `device` (`mobile`, `tablet`, or `desktop`, default `desktop`), slug `startScreen`, `state`, a non-empty `screens` array, and the optional additive fields `flows` and `architecture` (see [Architecture warnings](#architecture-warnings)). Screen IDs are unique slugs and `startScreen` must exist. The SQLite `design_systems` registry is the single source of registered systems; an unknown system is an error. `shadcn` and `wireframe` registry entries have code-backed builtin providers. A registry entry without a provider starts with no builtin definitions and can use published custom components assigned to it. The default remains `shadcn`, so existing documents without `designSystem` retain their meaning. Version 1 evolves additively: new fields are optional, so existing v1 documents remain valid.
+The root is a strict object with `version: 1`, slug `id`, human-readable `name`, optional `description`, slug `designSystem` (default `"shadcn"`), `device` (`mobile`, `tablet`, or `desktop`, default `desktop`), slug `startScreen`, `state`, a non-empty `screens` array, and the optional additive fields `flows`, `computed` (see [Computed values](#computed-values)), and `architecture` (see [Architecture warnings](#architecture-warnings)). Screen IDs are unique slugs and `startScreen` must exist. The SQLite `design_systems` registry is the single source of registered systems; an unknown system is an error. `shadcn` and `wireframe` registry entries have code-backed builtin providers. A registry entry without a provider starts with no builtin definitions and can use published custom components assigned to it. The default remains `shadcn`, so existing documents without `designSystem` retain their meaning. Version 1 evolves additively: new fields are optional, so existing v1 documents remain valid.
 
 Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, optional non-blank `note` (at most 500 characters), optional `stateOverrides`, and `spec`. `note` is the author's caption below the screen in the CJM view. Screens appear in CJM in their `screens` array order. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, optional `on`, optional `repeat`, optional `slot`, and optional `region`. Its type and props must match the normalized definition in the document's selected design system. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
 
@@ -31,6 +31,8 @@ Atomic levels rank from smallest to largest as `atom < molecule < organism < tem
 `state` and every `stateOverrides` value are JSON-only: strings, finite JSON numbers, booleans, nulls, arrays, and objects. For a CJM tile, its effective initial state is a safe deep merge of document `state` with that screen's `stateOverrides`. Objects merge recursively; arrays replace the base array in full; scalars, `null`, and values of a different type replace the base value. An empty override object `{}` does not delete existing keys, and v1 has no deletion marker. The merge does not mutate its inputs.
 
 The keys `__proto__`, `prototype`, and `constructor` are forbidden at every override depth. `currentScreen`, `navStack`, and `_viewer` are additionally forbidden as top-level override keys. Object nesting in an override is limited to 32 levels; a deeper object subtree is rejected by validation and is not inserted by the safe merge. JSON Pointer state paths are absolute RFC 6901 paths. `/currentScreen`, `/navStack`, and `/_viewer` are reserved. A `$state` path absent from that screen's effective state produces a warning.
+
+Derived numbers are not stored in `state`: the optional top-level `computed` field declares them, and they read like ordinary state through `{ "$state": "/key" }` or `${/key}` (see [Computed values](#computed-values)). A computed key may not collide with a top-level `state` key or be re-declared by a screen's `stateOverrides`, and no action or binding may write to it.
 
 Each CJM tile gets an isolated json-render state store. This does not isolate custom components' own local state or browser side effects such as portals, global listeners, or storage access.
 
@@ -99,7 +101,7 @@ Props may be literals or exactly one of these strict directives. A directive may
 
 A condition is boolean, a truthiness check `{ "$state": "/path" }`, an item-field check `{ "$item": "field" }`, an index check `{ "$index": true }`, or one of those combined with at most one of `eq`, `neq`, `gt`, `gte`, `lt`, `lte` and optional `not: true`. Exactly one of `$state`, `$item`, `$index` is required. Operands of `eq` and `neq` are static literals; operands of `gt`, `gte`, `lt`, and `lte` must be static numbers. Recursive composition uses `{ "$and": [conditions...] }` or `{ "$or": [conditions...] }`. No other directive or operator is accepted.
 
-`watch`, `$computed`, `confirm`, `onSuccess`, and `onError` are reserved and invalid in v1. Only bound values persist while navigating within a player session. Reload or deep-link entry creates fresh state from the document.
+`watch`, `$computed`, `confirm`, `onSuccess`, and `onError` are reserved and invalid in v1. The reservation of `$computed` is about the **prop directive**: derived values are declared in the top-level `computed` field and read through `$state`/`$template`, so no `$computed` directive exists in a prop position (see [Computed values](#computed-values)). Only bound values persist while navigating within a player session. Reload or deep-link entry creates fresh state from the document.
 
 Builtin components emit payloadless events. **Custom components** may declare typed event payloads (a definition `events: Record<name, ZodSchema>` plus `capabilities.typedEvents`) that are delivered to actions through param sources (see [Events and actions](#events-and-actions)). Editable values on builtin components must still be read through `$bindState`.
 
@@ -122,6 +124,67 @@ Using `$item`, `$index`, or `$bindItem` outside a repeat subtree is a validation
 - `Hotspot` inside a repeat subtree is a validation error (canvas-anchored hotspots cannot be templated per item).
 - `repeat.statePath` must resolve to an array in the screen's effective initial state (`state` merged with `stateOverrides`); when it doesn't (missing or a non-array value), validation emits a warning — the array may be populated dynamically at runtime.
 - **Render-cost budget**: `cost(el) = 1 + Σ cost(children)`, and for a repeat element, `cost(el) = 1 + len(initialArray) × Σ cost(children)`, computed recursively from the screen's effective initial state. A screen whose root cost exceeds 2000 is a validation error. This bounds the worst-case initial DOM size regardless of nesting depth or repeat count.
+
+## Computed values
+
+The optional top-level `computed` field declares **read-only derived numbers** over the document state: a counter, a sum of a field, a sum of products, and a total assembled from earlier terms. It is additive to format v1; a document without the field keeps its exact meaning.
+
+```json
+"state": { "cart": [], "shippingFee": 300 },
+"computed": {
+  "cartCount":    { "op": "count",      "from": "/cart" },
+  "cartUnits":    { "op": "sum",        "from": "/cart", "field": "qty" },
+  "cartSubtotal": { "op": "sumProduct", "from": "/cart", "fields": ["price", "qty"] },
+  "cartTotal":    { "op": "add",        "terms": ["/cartSubtotal", "/shippingFee", -500] }
+}
+```
+
+**Keys are bare**, exactly like `state` keys: `cartTotal`, not `/cartTotal`. A key matches `^[A-Za-z][A-Za-z0-9_-]*$` — the leading letter rules out `__proto__`, `_viewer`, and pointer-escape games by construction. Values are read like any other state: `{ "$state": "/cartTotal" }`, `{ "$template": "Итого: ${/cartTotal} ₽" }`, or a condition such as `{ "$state": "/cartCount", "gt": 0 }`. A recomputation happens inside the store's write funnel, so every listener sees state and computed values in the same atomic snapshot. A worked document is `test/fixtures/cart-computed.json`.
+
+### Operations (closed set in v1)
+
+| `op` | fields | meaning |
+|---|---|---|
+| `count` | `from` | length of the array at `from` |
+| `sum` | `from`, optional `field` | sum of `field` over the items; without `field` the item itself is the addend (the mirror of `{"$item": ""}`) |
+| `sumProduct` | `from`, `fields` (2–4) | sum over items of the product of the named fields |
+| `add` | `terms` (2–8) | sum of terms; a term is an absolute JSON Pointer (into plain state **or** to an earlier computed key) or a numeric literal — a negative literal expresses a discount |
+
+`from` is an absolute RFC 6901 pointer; `field` / `fields[i]` are safe relative field paths (the same segment rules as a pointer, without the leading `/`; `__proto__`, `prototype`, and `constructor` are rejected).
+
+### Numeric semantics
+
+Deterministic and deliberately quiet — nothing throws and nothing is coerced:
+
+- a non-array value at `from` yields `0`;
+- an item field is read with the relative-path reader and counts only when it is a finite number; otherwise that item contributes `0`;
+- in `sumProduct` **any** missing or non-numeric field zeroes the whole item (it is not treated as `×1`);
+- a non-finite `add` term contributes `0`;
+- the final accumulator is `Number.isFinite(total) ? total : 0`;
+- there is **no rounding and no string coercion**.
+
+**Money must be authored in whole units** — integer minor units (kopecks) or integer roubles — because values are IEEE-754 doubles: `1999.99 × 3` is `5999.969999999999`, and that is exactly what a screenshot would show. Formatting (separators, currency signs) belongs in the surrounding text, e.g. `{ "$template": "Итого: ${/cartTotal} ₽" }`.
+
+### Order and references
+
+Entries are evaluated **in key order**. Each entry sees plain state plus the values computed before it, so an `add` term may point only at a computed key **declared earlier**; a forward reference or a self-reference is a validation error. Acyclicity therefore holds by construction — the same canon as `flow.parentId` — and there is no cycle detection. `from` may never point at or into a computed value.
+
+### Collisions and read-only rules
+
+- a computed key that equals a top-level `state` key is an error, as is a key equal to `currentScreen`, `navStack`, or `_viewer`;
+- a screen's `stateOverrides` may not use a computed key;
+- **computed values are read-only.** `setState`, `pushState`, and `removeState` (`statePath` as well as `clearStatePath`) and `$bindState` targeting a computed path are validation errors; at runtime the store rejects such a write and the player reports it once in the inspector instead of mutating state;
+- `repeat.statePath` pointing at a computed value is an error (a computed value is a number and never becomes an array); the usual "may be populated dynamically" warning is suppressed for it.
+
+A warning — not an error — is emitted when `from` does not resolve to an array in the document's initial `state`: the array may legitimately be filled at runtime.
+
+### Limits and non-goals
+
+At most **20** entries per document, **4** fields in `sumProduct`, **8** terms in `add`. The limits and the operation list are published by `GET /api/capabilities` (`limits.computedEntries|computedFields|computedTerms`, `features.computed`, `computedOps`).
+
+Authoring limits are enforced by the input schema; already stored revisions are parsed tolerantly, so a document written by a newer build keeps reading. **Importing a bundle re-parses the document with the authoring schema**, so a bundle whose document exceeds the authoring limits is rejected on import (the same class of behaviour as `flows`).
+
+**Non-goal in v1: per-row arithmetic.** `computed` produces document-level numbers only; a line such as "price × qty" inside a repeated row is not expressible — that would need arithmetic over `$item`, a different mechanism. Author per-row display strings as item fields instead.
 
 ## Named slots
 
@@ -511,6 +574,7 @@ The document root accepts an optional strict `architecture` object with one fiel
 - Semantic warnings (interactive handlers/labels, item identity, inline base64, screen connectivity, monolithic screens, local URL paths) have been reviewed.
 - Architecture warnings (`arch/*`) have been reviewed; every remaining one is either fixed or covered by a documented `architecture.exemptions` entry.
 - Element keys contain no `$`; every referenced composition is published and its required params are supplied.
+- If `computed` are authored: keys are bare and collide with nothing in `state`/`stateOverrides`, money is in whole units, every `add` pointer term references an earlier key, and nothing writes to a computed path.
 - If `flows` are authored: `flows[0]` is the root main scenario and stays at index 0, every child is declared after its parent, and nesting stays within 4 levels.
 - Directives, conditions, actions, and params use only the closed v1 grammar.
 - State paths are valid, non-reserved JSON Pointers; bound initial values are in `state` where appropriate.

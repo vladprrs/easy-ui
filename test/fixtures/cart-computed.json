@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "id": "cart-computed",
+  "name": "Корзина с производными значениями",
+  "description": "Счётчик, количество, сумма и итог чека считаются декларативно через doc.computed.",
+  "device": "mobile",
+  "startScreen": "catalog",
+  "state": {
+    "cart": [],
+    "shippingFee": 300
+  },
+  "computed": {
+    "cartCount": { "op": "count", "from": "/cart" },
+    "cartUnits": { "op": "sum", "from": "/cart", "field": "qty" },
+    "cartSubtotal": { "op": "sumProduct", "from": "/cart", "fields": ["price", "qty"] },
+    "cartTotal": { "op": "add", "terms": ["/cartSubtotal", "/shippingFee", -500] }
+  },
+  "screens": [
+    {
+      "id": "catalog",
+      "name": "Каталог",
+      "note": "Покупатель складывает товары в корзину; счётчик позиций считается из /cart.",
+      "spec": {
+        "root": "catalog-stack",
+        "elements": {
+          "catalog-stack": { "type": "Stack", "props": { "direction": "vertical", "gap": "md" }, "children": ["catalog-title", "sneakers-price", "sneakers-add", "socks-price", "socks-add", "catalog-counter", "catalog-cart-link"] },
+          "catalog-title": { "type": "Text", "props": { "text": "Каталог" } },
+          "sneakers-price": { "type": "Text", "props": { "text": "Лёгкие кроссовки — 7990 ₽" } },
+          "sneakers-add": { "type": "Button", "props": { "label": "Добавить кроссовки" }, "on": { "press": { "action": "pushState", "params": { "statePath": "/cart", "value": { "id": "sneakers", "title": "Лёгкие кроссовки", "priceLabel": "7990 ₽ × 1", "price": 7990, "qty": 1 } } } } },
+          "socks-price": { "type": "Text", "props": { "text": "Носки — 490 ₽ за пару" } },
+          "socks-add": { "type": "Button", "props": { "label": "Добавить носки" }, "on": { "press": { "action": "pushState", "params": { "statePath": "/cart", "value": { "id": "socks", "title": "Носки", "priceLabel": "490 ₽ × 2", "price": 490, "qty": 2 } } } } },
+          "catalog-counter": { "type": "Text", "props": { "text": { "$template": "Позиций в корзине: ${/cartCount}" } } },
+          "catalog-cart-link": { "type": "Button", "props": { "label": "Перейти в корзину" }, "on": { "press": { "action": "navigate", "params": { "screenId": "cart" } } } }
+        }
+      }
+    },
+    {
+      "id": "cart",
+      "name": "Корзина",
+      "note": "Чек собирается из computed: позиции, единицы, сумма товаров и итог с доставкой и скидкой.",
+      "spec": {
+        "root": "cart-stack",
+        "elements": {
+          "cart-stack": { "type": "Stack", "props": { "direction": "vertical", "gap": "md" }, "children": ["cart-title", "cart-empty", "cart-list", "cart-summary", "cart-back"] },
+          "cart-title": { "type": "Text", "props": { "text": "Корзина" } },
+          "cart-empty": { "type": "Text", "props": { "text": "Корзина пуста" }, "visible": { "$state": "/cartCount", "eq": 0 } },
+          "cart-list": { "type": "Stack", "props": { "direction": "vertical", "gap": "sm" }, "repeat": { "statePath": "/cart", "key": "id" }, "children": ["cart-row"] },
+          "cart-row": { "type": "Stack", "props": { "direction": "vertical", "gap": "xs" }, "children": ["row-title", "row-price"] },
+          "row-title": { "type": "Text", "props": { "text": { "$item": "title" } } },
+          "row-price": { "type": "Text", "props": { "text": { "$item": "priceLabel" } } },
+          "cart-summary": { "type": "Stack", "props": { "direction": "vertical", "gap": "sm" }, "visible": { "$state": "/cartCount", "gt": 0 }, "children": ["summary-count", "summary-units", "summary-subtotal", "summary-shipping", "summary-discount", "summary-total"] },
+          "summary-count": { "type": "Text", "props": { "text": { "$template": "Позиций: ${/cartCount}" } } },
+          "summary-units": { "type": "Text", "props": { "text": { "$template": "Единиц: ${/cartUnits}" } } },
+          "summary-subtotal": { "type": "Text", "props": { "text": { "$template": "Сумма товаров: ${/cartSubtotal} ₽" } } },
+          "summary-shipping": { "type": "Text", "props": { "text": { "$template": "Доставка: ${/shippingFee} ₽" } } },
+          "summary-discount": { "type": "Text", "props": { "text": "Скидка: 500 ₽" } },
+          "summary-total": { "type": "Text", "props": { "text": { "$template": "Итого: ${/cartTotal} ₽" } } },
+          "cart-back": { "type": "Button", "props": { "label": "Назад в каталог" }, "on": { "press": { "action": "navigate", "params": { "screenId": "catalog" } } } }
+        }
+      }
+    }
+  ]
+}

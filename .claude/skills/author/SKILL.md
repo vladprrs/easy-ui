@@ -54,11 +54,13 @@ node driver.mjs prototype my-flow.json
 
 Полное описание — `docs/prototype-format.md` в репо; машинная версия — `GET /api/schemas/prototype-document.json`, сводка возможностей — `GET /api/capabilities` (actions, directives, param sources, лимиты). Ниже — рабочая выжимка.
 
-Корень: `{version: 1, id, name, description?, designSystem, device?, startScreen, state?, screens[], flows?, architecture?}`. `designSystem` обязателен для новых записей и должен быть slug активной зарегистрированной системы; `id` и все ID — slugs.
+Корень: `{version: 1, id, name, description?, designSystem, device?, startScreen, state?, computed?, screens[], flows?, architecture?}`. `designSystem` обязателен для новых записей и должен быть slug активной зарегистрированной системы; `id` и все ID — slugs.
 
 Экран: `{id, name, canvas?: {width,height}, note?, stateOverrides?, spec: {root, elements}}`. Элемент: `{type, props, children?, visible?, on?, repeat?, slot?, region?}` — только эти ключи. Элементы образуют одно дерево от `root` (≤500 элементов, глубина ≤50).
 
 `state` — единственный источник начального стейта; пути — абсолютные JSON Pointer (`/path`). `/currentScreen`, `/navStack`, `/_viewer` зарезервированы; сегменты `__proto__`/`prototype`/`constructor` запрещены.
+
+**`computed` — производные числа стейта** (счётчик/сумма/итог; не хранить их в `state` вручную): `{"cartCount": {"op":"count","from":"/cart"}, "cartUnits": {"op":"sum","from":"/cart","field":"qty"}, "cartSubtotal": {"op":"sumProduct","from":"/cart","fields":["price","qty"]}, "cartTotal": {"op":"add","terms":["/cartSubtotal","/shippingFee",-500]}}`. Ключи — **bare** (как в `state`), читаются как обычный стейт: `{"$state":"/cartTotal"}`, `{"$template":"Итого: ${/cartTotal} ₽"}`. Значения read-only: `setState`/`pushState`/`removeState`/`$bindState`/`repeat` по computed-пути — ошибка валидации; терм `add`-пойнтера может ссылаться только на **ранее объявленный** ключ; деньги — целыми единицами (без округления, IEEE-754). Лимиты: 20 записей, 4 поля в `sumProduct`, 8 термов в `add` (`GET /api/capabilities` → `computedOps`, `limits.computed*`). Построчная арифметика («price × qty» в строке repeat) невыразима — кладите готовую строку полем item.
 
 **Директивы** (значение отдельного prop, не весь объект `props`):
 
