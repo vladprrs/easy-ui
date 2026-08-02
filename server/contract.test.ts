@@ -628,6 +628,8 @@ describe("route contracts", () => {
       componentValidate: true,
       componentGeometry: true,
       componentDraftPreview: true,
+      prototypeHeadTracking: true,
+      readinessProfile: true,
     });
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
   });

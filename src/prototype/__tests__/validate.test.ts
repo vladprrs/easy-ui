@@ -505,6 +505,27 @@ describe("semantic warnings", () => {
       .toEqual([{ path: "/screens/2/id", message: "screen is not reachable by navigate actions" }]);
   });
 
+  // План 2026-08-02, P9: у служебных видов оба предупреждения ложны by design —
+  // витрина не навигируется, а её кнопки никуда не ведут.
+  it("suppresses reachability and no-handler warnings for service prototype kinds", () => {
+    const def: ComponentDefinition = { description: "Button-like", props: z.strictObject({ label: z.string() }), events: ["press"], interactive: true, accessibleLabelProps: ["label"] };
+    const doc = build({}, "a", { screens: [
+      screen({ a: { type: "Widget", props: { label: "Go" } } }, "a", { id: "s", name: "A" }),
+      screen({ c: { type: "Text", props: { text: "C" } } }, "c", { id: "s3", name: "C" }),
+    ] });
+    const list = (kind?: string) => validatePrototype(doc, { definitions: { Widget: def }, kind }).warnings.map((entry) => entry.message);
+    expect(list()).toEqual(expect.arrayContaining([
+      "screen is not reachable by navigate actions",
+      "interactive Widget has no event handler and no two-way binding",
+    ]));
+    for (const kind of ["component-gallery", "evidence", "visual-reference", "composition-fixture"]) {
+      expect(list(kind)).not.toContain("screen is not reachable by navigate actions");
+      expect(list(kind)).not.toContain("interactive Widget has no event handler and no two-way binding");
+    }
+    // Продуктовый вид предупреждения сохраняет.
+    expect(list("experiment")).toContain("screen is not reachable by navigate actions");
+  });
+
   it("warns on a monolithic screen (single custom organism/page root with no children)", () => {
     const page: ComponentDefinition = { description: "Whole page", props: z.strictObject({}), atomicLevel: "page" };
     const container: ComponentDefinition = { description: "Container", props: z.strictObject({}), atomicLevel: "organism" };

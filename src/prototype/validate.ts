@@ -12,7 +12,7 @@ import { hostPrimitiveDefinitions, hostPrimitiveNames } from "../catalog/hostPri
 import { validateOverlayRules } from "./overlayRules";
 import { buildNavigationGraph, verifyEdge } from "./navigationGraph";
 import { validateRegionRules } from "./regionRules";
-import { lintPrototypeArchitecture } from "./architectureLints";
+import { isServicePrototypeDocKind, lintPrototypeArchitecture } from "./architectureLints";
 import { COMPOSITION_TYPE, SLOT_TYPE } from "../catalog/hostPrimitives/composition.definition";
 import type { CompositionDoc } from "./composition";
 
@@ -253,6 +253,11 @@ export function validatePrototype(
   // Архитектурный lint считается до обхода экранов: его результат подавляет
   // дублирующий atomic-nesting warning на тех же элементах.
   const architecture = lintPrototypeArchitecture(doc, definitions, { kind: options?.kind });
+  // P9 (план 2026-08-02): два предупреждения предполагают продуктовый поток и для служебных
+  // видов ложны by design — недостижимый экран (галерея не навигируется) и интерактивный
+  // элемент без handler'а (витринный компонент никуда не ведёт). Подавляются только они:
+  // остальные предупреждения служебные доки получают как обычно.
+  const serviceKind = isServicePrototypeDocKind(options?.kind);
   const screenIds = new Set(doc.screens.map((screen) => screen.id));
   const navigation = buildNavigationGraph(doc);
   for (const [screenIndex, screen] of doc.screens.entries()) {
@@ -387,7 +392,7 @@ export function validatePrototype(
       // --- Semantic warnings (never block validation) ---
       const sem = elementSemantics(element.type, definition, isCustomType);
       const hasHandler = Boolean(element.on) && Object.keys(element.on!).length > 0;
-      if (sem.interactive && !sem.selfDriven && !hasHandler && !hasTwoWayBinding(element.props)) {
+      if (sem.interactive && !sem.selfDriven && !hasHandler && !hasTwoWayBinding(element.props) && !serviceKind) {
         issue(warnings, ep, `interactive ${element.type} has no event handler and no two-way binding`);
       }
       if (sem.interactive && sem.accessibleLabelProps?.length) {
@@ -517,7 +522,7 @@ export function validatePrototype(
   const reachableScreens = new Set<string>();
   const visitScreen = (id: string) => { if (reachableScreens.has(id)) return; reachableScreens.add(id); navigation.edges.get(id)?.forEach(visitScreen); };
   visitScreen(doc.startScreen);
-  doc.screens.forEach((screen, index) => { if (!reachableScreens.has(screen.id)) issue(warnings, ["screens",index,"id"], "screen is not reachable by navigate actions"); });
+  if (!serviceKind) doc.screens.forEach((screen, index) => { if (!reachableScreens.has(screen.id)) issue(warnings, ["screens",index,"id"], "screen is not reachable by navigate actions"); });
   // Multiple screens with no navigate action moving between two different screens: likely
   // disconnected screens (back/restart/openUrl don't count as inter-screen navigation).
   if (doc.screens.length >= 2) {

@@ -5,6 +5,7 @@ import { classifyRevision } from "./classify";
 import { ScenarioRepo } from "./repos/scenarios";
 import { collectAssetIds, snapshotDefinitions } from "./validation";
 import { validatePrototype } from "../src/prototype/validate";
+import { isServicePrototypeDocKind } from "../src/prototype/architectureLints";
 import type { ArchitectureExemptedIssue, ValidationIssue } from "../src/prototype/types";
 import type { PrototypeDoc } from "../src/prototype/schema";
 import type { ComponentDefinition } from "../src/catalog/definitions";
@@ -55,10 +56,19 @@ export interface ReadinessGate {
   [detail: string]: unknown;
 }
 
+/**
+ * Профиль отчёта (план 2026-08-02, P9). `service` — служебный вид прототипа (галерея
+ * компонентов, evidence, визуальный эталон, фикстура композиции): у таких доков `warn`
+ * не поднимает статус до блокирующего ни при каком пороге гейта. Поле публикуется
+ * в отчёте, чтобы «зелёный» нельзя было прочитать двусмысленно.
+ */
+export type ReadinessProfile = "product" | "service";
+
 export interface ReadinessReport {
   prototypeId: string;
   rev: number;
   generatedAt: string;
+  profile: ReadinessProfile;
   gates: ReadinessGate[];
   /** Идентификаторы включённых гейтов, чей статус превысил порог. Пусто → публикация свободна. */
   blocking: ReadinessGateId[];
@@ -167,6 +177,7 @@ export async function computeReadiness(db: Database, prototypeId: string, option
   const validation = definitions
     ? validatePrototype(doc, { definitions, kind: row.kind ?? undefined })
     : null;
+  const profile: ReadinessProfile = isServicePrototypeDocKind(row.kind ?? undefined) ? "service" : "product";
 
   const gates: ReadinessGate[] = [
     architectureGate(doc, validation),
@@ -182,11 +193,13 @@ export async function computeReadiness(db: Database, prototypeId: string, option
   ];
 
   const enabledGates = options.gates ?? parsePublishGates();
+  // P9: у служебного профиля порог `warn` не применяется — предупреждения служебного дока
+  // (недостижимые экраны витрины, отсутствующий baseline, нет сценариев) не про готовность.
   const blocking = gates
-    .filter((item) => enabledGates[item.id] !== undefined && blocks(item.status, enabledGates[item.id]!))
+    .filter((item) => enabledGates[item.id] !== undefined && blocks(item.status, profile === "service" ? "fail" : enabledGates[item.id]!))
     .map((item) => item.id);
 
-  return { prototypeId, rev, generatedAt: new Date().toISOString(), gates, blocking, publishable: blocking.length === 0, enabledGates };
+  return { prototypeId, rev, generatedAt: new Date().toISOString(), profile, gates, blocking, publishable: blocking.length === 0, enabledGates };
 }
 
 // --- Гейты ------------------------------------------------------------------

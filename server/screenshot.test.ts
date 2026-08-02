@@ -86,7 +86,11 @@ describe("screenshot job API", () => {
     const service=makeService(db,dir);const handler=createTestHandler(db,{dataDir:dir,screenshots:service});
     const response=await handler(req("/prototypes/public-shape/screens/welcome/screenshot","POST",{viewport:{width:390,height:844}}));
     expect(response.status).toBe(202);const body=await response.json() as Record<string,unknown>;
-    expect(Object.keys(body)).toEqual(["jobId"]);expect(body.expected).toBeUndefined();
+    // `components` — разрешённые пины (план 2026-08-02, P2.3): публичная часть снимка. Всё
+    // остальное из frozen expected (manifest/catalog-хэши, allowedUrls, токен) наружу не едет.
+    expect(Object.keys(body).sort()).toEqual(["components","jobId"]);
+    expect(body.expected).toBeUndefined();expect(body.allowedUrls).toBeUndefined();
+    expect(body.components).toEqual([]);
   });
 
   test("done result ingests the PNG into the asset registry", async () => {

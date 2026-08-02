@@ -14,6 +14,7 @@ import { hostPrimitiveNames } from "../../src/catalog/hostPrimitives/definitions
 import type { Principal } from "../auth";
 import { prototypeAccess, requirePrototypeRead } from "../authorization";
 import { classifyRevision, type RevisionClassification } from "../classify";
+import { isServicePrototypeDocKind } from "../../src/prototype/architectureLints";
 
 // `status` — статус публикации закреплённой версии (волна 3): включает бейдж «устарел»
 // в дереве компонентов редактора. Поле аддитивное, старые клиенты его игнорируют.
@@ -22,7 +23,7 @@ export type ResolvedPin = Pin;
 export type BundleReadiness = { resolvedPins: ResolvedPin[]; bundles: boolean; bundleStatus: "ready" | "failed"; warnings: { code: string; message: string }[]; errors: { code: string; message: string }[] };
 // Statuses that still render (K adds deprecated/superseded later; tolerated ahead of that migration).
 const RENDERABLE_PIN_STATUS = new Set(["active", "deprecated", "superseded"]);
-type PrototypeRow = { id:string; name:string; description:string|null; device:string; screen_count:number; head_rev:number; design_system:string; instance_id:string; created_at:string; updated_at:string; owner_id:string; status:"private"|"published"|"archived"; kind:string; tags:string|null; derived_from:string|null };
+type PrototypeRow = { id:string; name:string; description:string|null; device:string; screen_count:number; head_rev:number; design_system:string; instance_id:string; created_at:string; updated_at:string; owner_id:string; status:"private"|"published"|"archived"; kind:string; tags:string|null; derived_from:string|null; track:string };
 type RevisionRow = { rev:number; doc:string; builtin_catalog_hash:string; design_system_meta_version:number|null; figma_json:string|null; message:string|null; created_at:string };
 
 const now = () => new Date().toISOString();
@@ -30,16 +31,37 @@ const missing = () => new ApiError(404, "prototype_not_found", "Prototype not fo
 
 // --- Lifecycle metadata (миграция v16) ---
 export const DEFAULT_PROTOTYPE_KIND = "product-flow";
-export type PrototypeLifecyclePatch = { kind?:string; tags?:string[]; derivedFrom?:string|null };
-export type PrototypeLifecycle = { kind:string; tags:string[]; derivedFrom:string|null };
+// --- Head-tracking служебных прототипов (миграция v22, план 2026-08-02 P2) ---
+// `pinned` — сегодняшняя семантика: ревизия рендерит закреплённые пины. `head` — read-пути
+// резолвят компонентные пины на последние active-публикации. Только компонентные пины:
+// `designSystemMetaVersion` (и производный `builtinCatalogHash`, и allowlist ассетов темы)
+// остаётся пином ревизии — после PATCH темы track-док по-прежнему требует пересохранения.
+export const DEFAULT_PROTOTYPE_TRACK = "pinned";
+export type PrototypeTrack = "pinned" | "head";
+export const HEAD_TRACK: PrototypeTrack = "head";
+export type PrototypeLifecyclePatch = { kind?:string; tags?:string[]; derivedFrom?:string|null; track?:PrototypeTrack };
+export type PrototypeLifecycle = { kind:string; tags:string[]; derivedFrom:string|null; track:string };
 /** Столбец `tags` хранит JSON-массив; повреждённое значение читается как «тегов нет». */
 const parseTags = (raw:string|null):string[] => {
   if(!raw) return [];
   try { const parsed=JSON.parse(raw); return Array.isArray(parsed)?parsed.filter((tag):tag is string=>typeof tag==="string"):[]; }
   catch { return []; }
 };
-const lifecycleOf = (row:{kind?:string|null;tags?:string|null;derived_from?:string|null}):PrototypeLifecycle =>
-  ({ kind: row.kind ?? DEFAULT_PROTOTYPE_KIND, tags: parseTags(row.tags ?? null), derivedFrom: row.derived_from ?? null });
+const lifecycleOf = (row:{kind?:string|null;tags?:string|null;derived_from?:string|null;track?:string|null}):PrototypeLifecycle =>
+  ({ kind: row.kind ?? DEFAULT_PROTOTYPE_KIND, tags: parseTags(row.tags ?? null), derivedFrom: row.derived_from ?? null, track: row.track ?? DEFAULT_PROTOTYPE_TRACK });
+/**
+ * Единый 422 для операций, требующих воспроизводимого снимка прототипа (P2.2):
+ * publish, share-грант, visual-baseline и bundle-export. Код стабилен; операция
+ * называется в сообщении (ErrorDetails — закрытый набор полей).
+ */
+export const HEAD_TRACKING_ERROR_CODE = "prototype_head_tracking";
+export const headTrackingError = (operation:string):ApiError =>
+  new ApiError(422,HEAD_TRACKING_ERROR_CODE,`Operation '${operation}' is not available for a head-tracking prototype (track: head)`);
+/** Гейт для роутов вне `PrototypeRepo` (share/baseline/export): читает колонку напрямую. */
+export function assertPinnedTrack(db:Database,id:string,operation:string):void {
+  const row=db.query("SELECT track FROM prototypes WHERE id=?").get(id) as {track:string|null}|null;
+  if((row?.track??DEFAULT_PROTOTYPE_TRACK)===HEAD_TRACK) throw headTrackingError(operation);
+}
 export const parseStoredPrototypeDoc = (json:string,id:string,rev:number):PrototypeDoc => {
   try { return storedPrototypeDocSchema.parse(JSON.parse(json)); }
   catch { throw new ApiError(422,"invalid_stored_revision",`Stored prototype revision is invalid: ${id} rev ${rev}`); }
@@ -57,20 +79,38 @@ export class PrototypeRepo {
     if (row.head_rev !== baseRev) throw new ApiError(409, "revision_conflict", "Prototype revision has changed", { currentRev: row.head_rev });
     return row;
   }
-  private pins(id: string, rev: number): Pin[] {
+  /** Текущий track прототипа; используется read-путями, которым строка ещё не прочитана. */
+  private trackOf(id: string): string {
+    const row = this.db.query("SELECT track FROM prototypes WHERE id=?").get(id) as { track: string | null } | null;
+    return row?.track ?? DEFAULT_PROTOTYPE_TRACK;
+  }
+  /**
+   * Резолв пина на последнюю active-публикацию компонента (track:"head", P2.3). Компонент без
+   * ни одной active-публикации остаётся на пине ревизии: «нет головы» не должно превращать
+   * трекающий док в док без компонента.
+   */
+  private headPin<T extends { id: string; version: number; bundleHash: string; status: string }>(pin: T): T {
+    const head = this.db.query("SELECT version,bundle_hash bundleHash,status FROM component_publishes WHERE component_id=? AND status='active' ORDER BY version DESC LIMIT 1")
+      .get(pin.id) as { version: number; bundleHash: string; status: string } | null;
+    return head ? { ...pin, version: head.version, bundleHash: head.bundleHash, status: head.status } : pin;
+  }
+  /**
+   * Пины ревизии. Для `track:"head"` (P2) компонентные пины резолвятся на последние
+   * active-публикации прямо на read-пути, поэтому `componentManifestHash` (он считается
+   * из этого же списка) автоматически согласован с тем, что отрендерится. Скоуп резолва —
+   * только компоненты: `designSystemMetaVersion`/`builtinCatalogHash` остаются пином ревизии.
+   */
+  private pins(id: string, rev: number, track?: string): Pin[] {
     const rows = this.db.query(`SELECT c.id, c.name, prc.component_version version, cp.bundle_hash bundleHash, cp.status
       FROM prototype_revision_components prc JOIN components c ON c.id=prc.component_id
       JOIN component_publishes cp ON cp.component_id=prc.component_id AND cp.version=prc.component_version
       WHERE prc.prototype_id=? AND prc.rev=? ORDER BY c.id`).all(id, rev) as Omit<Pin,"bundleUrl">[];
-    return rows.map(p => ({ ...p, bundleUrl: `/api/components/${encodeURIComponent(p.id)}/versions/${p.version}/bundle.js` }));
+    const resolved = (track ?? this.trackOf(id)) === HEAD_TRACK ? rows.map((row) => this.headPin(row)) : rows;
+    return resolved.map(p => ({ ...p, bundleUrl: `/api/components/${encodeURIComponent(p.id)}/versions/${p.version}/bundle.js` }));
   }
   /** Публичный вход для readiness-отчёта (волна 4): статусы пинов и их рендерабельность. */
   bundleReadiness(id: string, rev: number): BundleReadiness {
-    const rows = this.db.query(`SELECT c.id, c.name, prc.component_version version, cp.bundle_hash bundleHash, cp.status
-      FROM prototype_revision_components prc JOIN components c ON c.id=prc.component_id
-      JOIN component_publishes cp ON cp.component_id=prc.component_id AND cp.version=prc.component_version
-      WHERE prc.prototype_id=? AND prc.rev=? ORDER BY c.id`).all(id, rev) as { id: string; name: string; version: number; bundleHash: string; status: string }[];
-    const resolvedPins: ResolvedPin[] = rows.map((p) => ({ id: p.id, name: p.name, version: p.version, bundleHash: p.bundleHash, status: p.status, bundleUrl: `/api/components/${encodeURIComponent(p.id)}/versions/${p.version}/bundle.js` }));
+    const resolvedPins: ResolvedPin[] = this.pins(id, rev);
     const warnings: { code: string; message: string }[] = [];
     const errors: { code: string; message: string }[] = [];
     for (const pin of resolvedPins) {
@@ -213,6 +253,9 @@ export class PrototypeRepo {
   publish(id:string,baseRev:number,message?:string): {version:number;rev:number} {
     return this.db.transaction(() => {
       const head=this.cas(id,baseRev);
+      // Трекающая ревизия резолвит пины на read-пути и потому не иммутабельна; публиковать
+      // из неё нечего — версия обязана быть воспроизводимой (P2.2).
+      if(head.track===HEAD_TRACK) throw headTrackingError("publish");
       const doc=parseStoredPrototypeDoc((this.db.query("SELECT doc FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,head.head_rev) as {doc:string}).doc,id,head.head_rev);
       const definitions=requireActiveDesignSystem(this.db,doc.designSystem,["designSystem"]).definitions;
       const customTypes=new Set(doc.screens.flatMap(s=>Object.values(s.spec.elements).map(e=>e.type)));
@@ -284,25 +327,52 @@ export class PrototypeRepo {
     };
   }
   lifecycle(id:string):PrototypeLifecycle { return lifecycleOf(this.row(id)); }
-  /** Аддитивный патч: отсутствующее поле не меняется, `derivedFrom: null` очищает связь. */
+  /** Число опубликованных версий прототипа — точка контроля обоих гейтов P2/P9. */
+  private publishCount(id:string):number {
+    return (this.db.query("SELECT COUNT(*) n FROM prototype_publishes WHERE prototype_id=?").get(id) as {n:number}).n;
+  }
+  /**
+   * Аддитивный патч: отсутствующее поле не меняется, `derivedFrom: null` очищает связь.
+   *
+   * Гейты волны W3 (план 2026-08-02):
+   * - `track:"head"` — только служебный `kind` и только пока прототип не опубликован
+   *   (трекающая ревизия перестаёт быть иммутабельной, а версия обязана ею остаться);
+   * - переход в служебный `kind` при наличии публикаций запрещён — иначе это
+   *   самообслуживаемое снятие валидаторов и readiness-порога задним числом (P9).
+   */
   setLifecycle(id:string,patch:PrototypeLifecyclePatch):PrototypeLifecycle {
     const row=this.row(id);
     if(patch.derivedFrom===id) throw new ApiError(422,"validation_failed","Prototype lifecycle is invalid",{issues:[{path:["derivedFrom"],message:"must not reference the prototype itself"}]});
+    const nextKind=patch.kind??row.kind??DEFAULT_PROTOTYPE_KIND;
+    const nextTrack=patch.track??row.track??DEFAULT_PROTOTYPE_TRACK;
+    const wasService=isServicePrototypeDocKind(row.kind??DEFAULT_PROTOTYPE_KIND);
+    if(patch.kind!==undefined&&patch.kind!==row.kind&&isServicePrototypeDocKind(patch.kind)&&!wasService&&this.publishCount(id)>0)
+      throw new ApiError(422,"service_kind_requires_unpublished",`Cannot switch a published prototype to the service kind '${patch.kind}'`);
+    if(nextTrack===HEAD_TRACK) {
+      if(!isServicePrototypeDocKind(nextKind)) throw new ApiError(422,"track_requires_service_kind",`Head tracking requires a service prototype kind, got '${nextKind}'`);
+      if(this.publishCount(id)>0) throw new ApiError(422,"track_requires_unpublished","Head tracking is not allowed on a prototype that has published versions");
+    }
     const next:PrototypeLifecycle={
       kind:patch.kind??row.kind??DEFAULT_PROTOTYPE_KIND,
       tags:patch.tags??parseTags(row.tags),
       derivedFrom:patch.derivedFrom===undefined?row.derived_from??null:patch.derivedFrom,
+      track:patch.track??row.track??DEFAULT_PROTOTYPE_TRACK,
     };
-    this.db.query("UPDATE prototypes SET kind=?,tags=?,derived_from=?,updated_at=? WHERE id=?")
-      .run(next.kind,next.tags.length?JSON.stringify(next.tags):null,next.derivedFrom,now(),id);
+    this.db.query("UPDATE prototypes SET kind=?,tags=?,derived_from=?,track=?,updated_at=? WHERE id=?")
+      .run(next.kind,next.tags.length?JSON.stringify(next.tags):null,next.derivedFrom,next.track,now(),id);
     return next;
   }
-  draft(id:string,principal?:Principal) { const r=this.row(id); const access=principal?requirePrototypeRead(this.db,id,principal):{owner:true}; const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev); const classification=this.classifyRevision(id,r.head_rev); return {doc:parseStoredPrototypeDoc(x.doc,id,x.rev),rev:x.rev,prototypeInstanceId:r.instance_id,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,r.head_rev),assets:this.assets(id,r.head_rev),designSystemMetaVersion:x.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(access.owner?{figma:parseFigmaStored(x.figma_json)}:{})}; }
+  /**
+   * `track`/`resolvedAt` в DTO ревизии (P2.3): `resolvedAt` — момент резолва head-пинов,
+   * `null` для обычных (pinned) доков, где пины иммутабельны и «момента резолва» нет.
+   */
+  private trackFields(track:string) { return {track, resolvedAt: track===HEAD_TRACK?now():null}; }
+  draft(id:string,principal?:Principal) { const r=this.row(id); const access=principal?requirePrototypeRead(this.db,id,principal):{owner:true}; const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev,r.track); const classification=this.classifyRevision(id,r.head_rev); return {...this.trackFields(r.track),doc:parseStoredPrototypeDoc(x.doc,id,x.rev),rev:x.rev,prototypeInstanceId:r.instance_id,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,r.head_rev),assets:this.assets(id,r.head_rev),designSystemMetaVersion:x.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(access.owner?{figma:parseFigmaStored(x.figma_json)}:{})}; }
   revisions(id:string,limit:number,before?:number) { this.row(id); const sql=`SELECT rev,message,created_at FROM prototype_revisions WHERE prototype_id=? ${before!==undefined?"AND rev < ?":""} ORDER BY rev DESC LIMIT ?`; const rows=(before!==undefined?this.db.query(sql).all(id,before,limit):this.db.query(sql).all(id,limit)) as {rev:number;message:string|null;created_at:string}[]; return rows.map(r=>({rev:r.rev,message:r.message,createdAt:r.created_at})); }
   private revisionRow(id:string,rev:number): RevisionRow { const r=this.db.query("SELECT rev,doc,builtin_catalog_hash,design_system_meta_version,figma_json,message,created_at FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,rev) as RevisionRow|null; if(!r) throw new ApiError(404,"revision_not_found","Prototype revision not found"); return r; }
-  revision(id:string,rev:number,principal?:Principal) { const proto=this.row(id); const owner=!principal||prototypeAccess(this.db,id,principal).owner; const r=this.revisionRow(id,rev); const components=this.pins(id,rev); const classification=this.classifyRevision(id,rev); return {rev:r.rev,prototypeInstanceId:proto.instance_id,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,rev),assets:this.assets(id,rev),designSystemMetaVersion:r.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(owner?{figma:parseFigmaStored(r.figma_json)}:{}),message:r.message,createdAt:r.created_at}; }
+  revision(id:string,rev:number,principal?:Principal) { const proto=this.row(id); const owner=!principal||prototypeAccess(this.db,id,principal).owner; const r=this.revisionRow(id,rev); const components=this.pins(id,rev,proto.track); const classification=this.classifyRevision(id,rev); return {...this.trackFields(proto.track),rev:r.rev,prototypeInstanceId:proto.instance_id,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,rev),assets:this.assets(id,rev),designSystemMetaVersion:r.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(owner?{figma:parseFigmaStored(r.figma_json)}:{}),message:r.message,createdAt:r.created_at}; }
   versions(id:string) { this.row(id); return (this.db.query("SELECT version,rev,published_at FROM prototype_publishes WHERE prototype_id=? ORDER BY version").all(id) as {version:number;rev:number;published_at:string}[]).map(r=>{const classification=this.classifyRevision(id,r.rev);return {version:r.version,rev:r.rev,publishedAt:r.published_at,renderable:classification.renderable,renderError:classification.error};}); }
-  version(id:string,version:number,principal?:Principal) { const proto=this.row(id); const owner=!principal||requirePrototypeRead(this.db,id,principal).owner; const p=this.db.query("SELECT rev,published_at FROM prototype_publishes WHERE prototype_id=? AND version=?").get(id,version) as {rev:number;published_at:string}|null; if(!p) throw new ApiError(404,"version_not_found","Prototype version not found"); const r=this.revisionRow(id,p.rev); const components=this.pins(id,p.rev); const classification=this.classifyRevision(id,p.rev); return {version,rev:p.rev,prototypeInstanceId:proto.instance_id,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,p.rev),assets:this.assets(id,p.rev),designSystemMetaVersion:r.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(owner?{figma:parseFigmaStored(r.figma_json)}:{}),publishedAt:p.published_at}; }
+  version(id:string,version:number,principal?:Principal) { const proto=this.row(id); const owner=!principal||requirePrototypeRead(this.db,id,principal).owner; const p=this.db.query("SELECT rev,published_at FROM prototype_publishes WHERE prototype_id=? AND version=?").get(id,version) as {rev:number;published_at:string}|null; if(!p) throw new ApiError(404,"version_not_found","Prototype version not found"); const r=this.revisionRow(id,p.rev); const components=this.pins(id,p.rev,proto.track); const classification=this.classifyRevision(id,p.rev); return {...this.trackFields(proto.track),version,rev:p.rev,prototypeInstanceId:proto.instance_id,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,p.rev),assets:this.assets(id,p.rev),designSystemMetaVersion:r.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(owner?{figma:parseFigmaStored(r.figma_json)}:{}),publishedAt:p.published_at}; }
   setStatus(id:string,status:"private"|"published"|"archived") {
     const row=this.row(id); if(row.status===status) throw new ApiError(422,"invalid_transition",`Cannot transition ${row.status} → ${status}`);
     const allowed:Record<PrototypeRow["status"],PrototypeRow["status"][]>={private:["published","archived"],published:["private","archived"],archived:["private"]};

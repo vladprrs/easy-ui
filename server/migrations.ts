@@ -597,6 +597,16 @@ const migrations = [
       acquired_at TEXT NOT NULL)
     `);
   },
+  (db: Database) => {
+    // v22: head-tracking служебных прототипов (план 2026-08-02, P2). Плоский ADD COLUMN
+    // по прецеденту v16: существующие строки становятся 'pinned' (сегодняшнее поведение —
+    // пины ревизии), 'head' разрешает read-пути резолвить компонентные пины на последние
+    // active-публикации. Намеренно БЕЗ CHECK — точка контроля, как у `kind`, zod-контракт
+    // (`prototypeTrackSchema`), иначе расширение значений потребует перестройки таблицы.
+    // Формат документа не трогается (z.strictObject на stored-документе), поэтому откат
+    // образа безопасен: старый код игнорирует колонку, а 'pinned' — его собственная семантика.
+    db.run("ALTER TABLE prototypes ADD COLUMN track TEXT NOT NULL DEFAULT 'pinned'");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

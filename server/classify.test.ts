@@ -11,8 +11,8 @@ function v14():Database {
   const db=new Database(":memory:");migrate(db);
   for(const name of RETIRED_DESIGN_SYSTEM_TRIGGER_NAMES) db.run(`DROP TRIGGER ${name}`);
   db.run("ALTER TABLE design_systems DROP COLUMN retired");
-  // v16 lifecycle-колонки тоже надо снять, иначе повторный migrate() упрётся в duplicate column.
-  for(const column of ["kind","tags","derived_from"] as const) db.run(`ALTER TABLE prototypes DROP COLUMN ${column}`);
+  // v16 lifecycle-колонки тоже надо снять (и v22 track), иначе повторный migrate() упрётся в duplicate column.
+  for(const column of ["kind","tags","derived_from","track"] as const) db.run(`ALTER TABLE prototypes DROP COLUMN ${column}`);
   // То же для v17 tombstone-колонок на components.
   for(const column of ["delete_reason","replacement_component_id"] as const) db.run(`ALTER TABLE components DROP COLUMN ${column}`);
   // v18 завёл новые таблицы композиций — их надо снести, иначе повторный migrate() упрётся в "table already exists".

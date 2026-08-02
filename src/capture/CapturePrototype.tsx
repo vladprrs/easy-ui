@@ -12,8 +12,8 @@ import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 import { HostStageSurface } from "../catalog/hostPrimitives";
 import { CaptureSurface } from "./CaptureSurface";
 import { CaptureStyle, useCaptureTheme, usePublishError, usePublishOnSettle } from "./CaptureChrome";
-import { bootstrapRendererBuild } from "./readiness";
-import type { CaptureReady } from "./protocol";
+import { bootstrapRendererBuild, readBootstrap } from "./readiness";
+import type { CaptureReady, PrototypeBootstrapTarget } from "./protocol";
 import { ArchivedPrototype } from "../player/PrototypeLoader";
 
 interface LoadedPrototype {
@@ -35,6 +35,19 @@ async function loadTheme(designSystem: string, metaVersion: number | null, signa
   } catch { return null; }
 }
 
+/**
+ * Пины, замороженные постановкой джобы (план 2026-08-02, P2.3). Для track:head-дока DTO
+ * ревизии резолвит пины в момент чтения, поэтому publish компонента между enqueue и рендером
+ * увёл бы и кадр, и `componentManifestHash` от frozen expected. Bootstrap-цель — существующий
+ * канал (воркер инжектит её до навигации), и она в этом случае главнее DTO.
+ */
+function bootstrapPrototypeTarget(): PrototypeBootstrapTarget | undefined {
+  const bootstrap = readBootstrap();
+  if (bootstrap?.kind !== "prototype") return undefined;
+  const target = bootstrap.target as unknown as PrototypeBootstrapTarget | undefined;
+  return target?.kind === "prototype" && Array.isArray(target.components) ? target : undefined;
+}
+
 async function loadPrototype(id: string, rev: number | undefined, version: number | undefined, signal: AbortSignal): Promise<LoadedPrototype> {
   const base = version !== undefined ? await getPrototypeVersion(id, version, signal)
     : rev !== undefined ? await getPrototypeRevisionFull(id, rev, signal)
@@ -43,7 +56,12 @@ async function loadPrototype(id: string, rev: number | undefined, version: numbe
   const dsMetaVersion = base.designSystemMetaVersion ?? null;
   if(!base.prototypeInstanceId) throw new Error("Prototype response is missing prototypeInstanceId");
   const theme = await loadTheme(base.doc.designSystem, dsMetaVersion, signal);
-  return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId, componentManifestHash: base.componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components: base.components, dsMetaVersion, theme, renderable: true };
+  const frozen = bootstrapPrototypeTarget();
+  // `status` в загрузчик не едет: он диагностический, а его домен (ComponentStatus) шире
+  // строки из bootstrap — пины кадра описываются id/name/version/bundleUrl/bundleHash.
+  const components = frozen?.components?.map(({ id, name, version, bundleUrl, bundleHash }) => ({ id, name, version, bundleUrl, bundleHash })) ?? base.components;
+  const componentManifestHash = frozen?.componentManifestHash ?? base.componentManifestHash;
+  return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId, componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components, dsMetaVersion, theme, renderable: true };
 }
 
 function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPrototype; custom?: CustomPlayerRuntime; screenId: string }) {

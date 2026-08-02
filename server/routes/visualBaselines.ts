@@ -5,6 +5,7 @@ import { ApiError, json, noStore, readJson } from "../http";
 import { VisualBaselineRepo } from "../visual/baselines";
 import type {Principal} from "../auth";
 import {requirePrototypeOwner,requirePrototypeRead} from "../authorization";
+import {assertPinnedTrack} from "../repos/prototypes";
 
 export const baselineMemberInputSchema=z.strictObject({
   screenId:z.string().min(1),
@@ -24,6 +25,9 @@ export async function routeVisualBaselines(request:Request,db:Database,dataDir:s
   if(request.method==="GET") { requirePrototypeRead(db,id,principal); return json(repo.get(id),200,noStore); }
   if(request.method==="PUT") {
     requirePrototypeOwner(db,id,principal);
+    // Эталоны трекающего дока несравнимы: пины уезжают под ними без новой ревизии (P2.2).
+    // Гейт стоит до разбора тела — он не зависит от его содержимого.
+    assertPinnedTrack(db,id,"visual-baseline");
     const body=parseWith(putVisualBaselineSchema,await readJson(request),"Visual baseline set is invalid");
     return json(repo.commit(id,body),200,noStore);
   }

@@ -18,6 +18,8 @@ import { classifyCaptureErrors } from "./noise";
 import { CaptureSessionStore, JOB_DEADLINE_MS } from "./sessions";
 
 export interface Viewport { width: number; height: number }
+/** Пин компонента, замороженный на enqueue и отданный поверхности через `bootstrap.target`. */
+export interface CapturePin { id: string; name: string; version: number; bundleUrl: string; bundleHash: string; status: string }
 /**
  * Additive capture-quality contract (wave 7.1): `consoleErrors`/`pageErrors`
  * stay populated verbatim for backward compatibility, while `productErrors` /
@@ -102,6 +104,14 @@ interface InternalJob {
   expected: CaptureExpected; allowedUrls: string[]; props?: Record<string, unknown>;
   captureUrl: string; viewport: Viewport; dsf: number; theme: "light" | "dark"; waitForFonts: boolean;
   componentPins?: { id: string; version: number; bundleHash: string }[];
+  /**
+   * Полные пины, замороженные на enqueue, и их manifest-hash (план 2026-08-02, P2.3).
+   * Едут в `bootstrap.target`, и поверхность рендерит именно их: для track:head-дока
+   * публикация новой версии компонента между enqueue и рендером иначе увела бы DTO
+   * и уронила бы exact-match handshake.
+   */
+  capturePins?: CapturePin[];
+  captureManifestHash?: string;
   /** Draft-capture extras (P1b): what the bootstrap carries instead of a published DTO. */
   draft?: { name: string; designSystem: string; bundleUrl: string; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>> };
   probe?: "geometry"; resolvedSpaceScale?: Record<SpaceToken, string>; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
@@ -181,7 +191,7 @@ export interface ScreenshotServiceDeps {
   captureOrigin: string; chromiumAvailable: boolean; runJob: RunJob;
   sessions?: CaptureSessionStore; now?: () => number;
 }
-export type FrozenEnqueue = { jobId:string; expected:CaptureExpected };
+export type FrozenEnqueue = { jobId:string; expected:CaptureExpected; components?:CapturePin[] };
 export type FrozenTarget =
   | {kind:"prototype";id:string;screenId:string;rev?:number;version?:number}
   | {kind:"component";id:string;version:number;props?:Record<string,unknown>};
@@ -216,8 +226,13 @@ export class ScreenshotService {
     if (this.queue.length >= MAX_QUEUE) throw new ApiError(429, "queue_full", "Screenshot queue is full; retry later");
   }
 
-  enqueuePrototype(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry" }): { jobId: string } {
-    const {jobId}=this.enqueueWithExpected({kind:"prototype",id,screenId,rev:opts.rev,version:opts.version},opts); return {jobId};
+  /**
+   * Ответ enqueue отдаёт разрешённые пины (P2.3/P5.2): для track:head-дока это единственный
+   * момент, когда клиент узнаёт, какие версии компонентов реально пойдут в кадр.
+   */
+  enqueuePrototype(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry" }): { jobId: string; components: { id: string; name: string; version: number; bundleHash: string }[] } {
+    const {jobId,components}=this.enqueuePrototypeFrozen(id,screenId,opts);
+    return {jobId,components:(components??[]).map((pin)=>({id:pin.id,name:pin.name,version:pin.version,bundleHash:pin.bundleHash}))};
   }
 
   enqueueWithExpected(target:FrozenTarget,opts:{viewport:unknown;deviceScaleFactor?:unknown;theme?:string;waitForFonts?:boolean}):FrozenEnqueue {
@@ -258,8 +273,9 @@ export class ScreenshotService {
     if (opts.version !== undefined) query.set("version", String(opts.version)); else query.set("rev", String(snap.rev));
     query.set("theme", theme); query.set("dsf", String(dsf));
     const captureUrl = `/capture/${encodeURIComponent(id)}/s/${encodeURIComponent(screenId)}?${query}`;
-    const {jobId}=this.push({ kind: "prototype", expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
-    return {jobId,expected};
+    const capturePins: CapturePin[] = full.components.map((p) => ({ id: p.id, name: p.name, version: p.version, bundleUrl: p.bundleUrl, bundleHash: p.bundleHash, status: p.status }));
+    const {jobId}=this.push({ kind: "prototype", expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins, capturePins, captureManifestHash: full.componentManifestHash, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
+    return {jobId,expected,components:capturePins};
   }
 
   enqueueComponent(id: string, version: number, opts: { props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry" }): { jobId: string } {
@@ -524,7 +540,14 @@ export class ScreenshotService {
   }
 
   private targetOf(job: InternalJob): Record<string, unknown> {
-    if (job.expected.kind === "prototype") return { kind: "prototype", rev: job.expected.rev };
+    if (job.expected.kind === "prototype") {
+      // P2.3: пины и их manifest-hash заморожены на enqueue. Поверхность рендерит их вместо
+      // DTO-пинов, поэтому publish компонента между enqueue и рендером не меняет ни кадр,
+      // ни публикуемый handshake — это существующий канал, allowlist остаётся path-only.
+      return { kind: "prototype", rev: job.expected.rev,
+        ...(job.capturePins ? { components: job.capturePins } : {}),
+        ...(job.captureManifestHash !== undefined ? { componentManifestHash: job.captureManifestHash } : {}) };
+    }
     if (job.expected.kind === "component-draft") {
       // Драфт (P1b): поверхность читает name/designSystem/bundleUrl отсюда — published-DTO нет.
       return { kind: "component-draft", componentId: job.expected.componentId, rev: job.expected.rev, ...(job.draft ? { name: job.draft.name, designSystem: job.draft.designSystem, bundleUrl: job.draft.bundleUrl } : {}) };

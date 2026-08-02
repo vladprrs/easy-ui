@@ -5,7 +5,7 @@ import { designSystems } from "../../src/designSystems";
 import { inputPrototypeDocSchema, type PrototypeDoc } from "../../src/prototype/schema";
 import { validatePrototype } from "../../src/prototype/validate";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
-import { PrototypeRepo, type PrototypeLifecyclePatch } from "../repos/prototypes";
+import { assertPinnedTrack, PrototypeRepo, type PrototypeLifecyclePatch } from "../repos/prototypes";
 import { parseWith, prototypeKindSchema, prototypeLifecycleSchema } from "../contracts";
 import { collectAndValidateAssetRefs, expandPrototypeForSave, snapshotDefinitions } from "../validation";
 import { headScreenUrl, renderStatus, versionScreenUrl } from "./renderStatus";
@@ -192,6 +192,8 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
   if(tail[0]==="publish"&&tail.length===1) {
     if(request.method!=="POST") throw new ApiError(405,"method_not_allowed","Method not allowed");
     const actor=requirePrototypeOwner(db,id,principal);
+    // Гейт track:head — до дорогого readiness-прогона (P2.2).
+    assertPinnedTrack(db,id,"publish");
     const b=objectBody(await readJson(request));
     const base=baseRev(b);
     if(b.force!==undefined&&typeof b.force!=="boolean") throw new ApiError(400,"invalid_request","force must be a boolean");
@@ -214,8 +216,14 @@ export async function routePrototypes(request:Request,db:Database,segments:strin
     const patch=parseLifecycle(objectBody(await readJson(request)));
     // Пустой патч — read-back без записи и без audit-события.
     if(!Object.keys(patch).length) return json(repo.lifecycle(id),200,noStore);
+    const before=repo.lifecycle(id);
     const result=repo.setLifecycle(id,patch);
     writeAuditEvent(db,{actorId:actor.userId,action:"prototype.lifecycle.changed",subjectType:"prototype",subjectId:id,detail:result});
+    // P9(г): смена вида — отдельное аудит-событие с from/to. `kind` мутабелен и снимает
+    // архитектурные линты и readiness-порог, поэтому переход обязан быть прослеживаемым.
+    if(before.kind!==result.kind) writeAuditEvent(db,{actorId:actor.userId,action:"prototype.kind.changed",subjectType:"prototype",subjectId:id,detail:{from:before.kind,to:result.kind}});
+    // P2: включение/выключение head-tracking — тоже отдельное событие.
+    if(before.track!==result.track) writeAuditEvent(db,{actorId:actor.userId,action:"prototype.track.changed",subjectType:"prototype",subjectId:id,detail:{from:before.track,to:result.track}});
     return json(result,200,noStore);
   }
   if(tail[0]==="versions") {

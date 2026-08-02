@@ -116,6 +116,11 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // Draft-preview гаснет тем же kill-switch'ем P8: постановка джобы собирает candidate-bundle.
       componentGeometry: true,
       componentDraftPreview: options.validateDisabled !== true,
+      // P2 (план 2026-08-02): `track: "head"` в lifecycle-роуте — служебный прототип
+      // резолвит компонентные пины на последние active-публикации без пересохранения.
+      prototypeHeadTracking: true,
+      // P9: readiness-отчёт несёт `profile` (product|service).
+      readinessProfile: true,
     },
     reuseGate: {
       mode: reuseGateMode,

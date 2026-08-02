@@ -31,6 +31,14 @@ export const ARCHITECTURE_EXEMPT_KINDS: readonly string[] = [
   "composition-fixture",
 ];
 
+/**
+ * Служебный ли вид прототипа (план 2026-08-02, P9). Список тот же, что снимает
+ * архитектурные линты: галереи компонентов, evidence-экраны, визуальные эталоны и
+ * фикстуры композиций законно состоят из несвязанных экранов и «мёртвых» кнопок.
+ */
+export const isServicePrototypeDocKind = (kind: string | undefined): boolean =>
+  kind !== undefined && ARCHITECTURE_EXEMPT_KINDS.includes(kind);
+
 export type { ArchitectureExemptedIssue };
 
 export interface ArchitectureLintResult {

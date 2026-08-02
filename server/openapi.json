@@ -763,6 +763,16 @@
               }
             },
             "description": "export_too_large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_head_tracking (The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot.)"
           }
         },
         "summary": "Export every prototype and component owned by the caller as a single ZIP bundle.",
@@ -1051,6 +1061,12 @@
                         "namedSlots": {
                           "type": "boolean"
                         },
+                        "prototypeHeadTracking": {
+                          "type": "boolean"
+                        },
+                        "readinessProfile": {
+                          "type": "boolean"
+                        },
                         "renderStatus": {
                           "type": "boolean"
                         },
@@ -1092,7 +1108,9 @@
                         "catalogMigration",
                         "componentValidate",
                         "componentGeometry",
-                        "componentDraftPreview"
+                        "componentDraftPreview",
+                        "prototypeHeadTracking",
+                        "readinessProfile"
                       ],
                       "type": "object"
                     },
@@ -12860,6 +12878,13 @@
                         },
                         "type": "array"
                       },
+                      "track": {
+                        "enum": [
+                          "pinned",
+                          "head"
+                        ],
+                        "type": "string"
+                      },
                       "updatedAt": {
                         "type": "string"
                       }
@@ -12878,7 +12903,8 @@
                       "owner",
                       "kind",
                       "tags",
-                      "derivedFrom"
+                      "derivedFrom",
+                      "track"
                     ],
                     "type": "object"
                   },
@@ -13867,6 +13893,13 @@
                       },
                       "type": "array"
                     },
+                    "track": {
+                      "enum": [
+                        "pinned",
+                        "head"
+                      ],
+                      "type": "string"
+                    },
                     "updatedAt": {
                       "$ref": "#/$defs/__schema0"
                     },
@@ -13922,7 +13955,8 @@
                     "owner",
                     "kind",
                     "tags",
-                    "derivedFrom"
+                    "derivedFrom",
+                    "track"
                   ],
                   "type": "object"
                 }
@@ -15206,8 +15240,25 @@
                     "renderable": {
                       "type": "boolean"
                     },
+                    "resolvedAt": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "rev": {
                       "type": "number"
+                    },
+                    "track": {
+                      "enum": [
+                        "pinned",
+                        "head"
+                      ],
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -15302,6 +15353,16 @@
               }
             },
             "description": "export_too_large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "prototype_head_tracking (The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot.)"
           }
         },
         "summary": "Export a prototype revision (owner draft or a published version) with its full dependency closure as a ZIP bundle.",
@@ -15363,6 +15424,13 @@
                     },
                     "maxItems": 16,
                     "type": "array"
+                  },
+                  "track": {
+                    "enum": [
+                      "pinned",
+                      "head"
+                    ],
+                    "type": "string"
                   }
                 },
                 "type": "object"
@@ -15404,12 +15472,20 @@
                         "type": "string"
                       },
                       "type": "array"
+                    },
+                    "track": {
+                      "enum": [
+                        "pinned",
+                        "head"
+                      ],
+                      "type": "string"
                     }
                   },
                   "required": [
                     "kind",
                     "tags",
-                    "derivedFrom"
+                    "derivedFrom",
+                    "track"
                   ],
                   "type": "object"
                 }
@@ -15455,10 +15531,10 @@
                 }
               }
             },
-            "description": "validation_failed"
+            "description": "validation_failed | track_requires_service_kind (track:head is only allowed for service prototype kinds.) | track_requires_unpublished (track:head is not allowed on a prototype with published versions.) | service_kind_requires_unpublished (A published prototype cannot be switched to a service kind.)"
           }
         },
-        "summary": "Patch prototype lifecycle metadata (kind/tags/derivedFrom); owner or admin only.",
+        "summary": "Patch prototype lifecycle metadata (kind/tags/derivedFrom/track); owner or admin only. track:head requires a service kind on an unpublished prototype.",
         "x-easyui-validated": true
       }
     },
@@ -15583,7 +15659,7 @@
                 }
               }
             },
-            "description": "validation_failed"
+            "description": "validation_failed | prototype_head_tracking (The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot.)"
           }
         },
         "summary": "Publish the head revision as the next immutable version; returns canonical screen URLs. Blocked gates (EASYUI_PUBLISH_GATES) answer 409 publish_blocked unless force:true.",
@@ -15685,6 +15761,13 @@
                     "generatedAt": {
                       "type": "string"
                     },
+                    "profile": {
+                      "enum": [
+                        "product",
+                        "service"
+                      ],
+                      "type": "string"
+                    },
                     "prototypeId": {
                       "type": "string"
                     },
@@ -15701,6 +15784,7 @@
                     "prototypeId",
                     "rev",
                     "generatedAt",
+                    "profile",
                     "gates",
                     "blocking",
                     "publishable",
@@ -16281,6 +16365,9 @@
                       "pattern": "^asset_[0-9a-f]{64}$",
                       "type": "string"
                     },
+                    "__schema25": {
+                      "type": "string"
+                    },
                     "__schema3": {
                       "additionalProperties": {
                         "$ref": "#/$defs/__schema5"
@@ -16663,7 +16750,7 @@
                       "type": "array"
                     },
                     "createdAt": {
-                      "type": "string"
+                      "$ref": "#/$defs/__schema25"
                     },
                     "designSystemMetaVersion": {
                       "anyOf": [
@@ -16800,8 +16887,25 @@
                     "renderable": {
                       "type": "boolean"
                     },
+                    "resolvedAt": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/__schema25"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "rev": {
                       "type": "number"
+                    },
+                    "track": {
+                      "enum": [
+                        "pinned",
+                        "head"
+                      ],
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -19517,12 +19621,42 @@
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "components": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "bundleHash": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "version",
+                          "bundleHash"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "jobId": {
                       "type": "string"
                     }
                   },
                   "required": [
-                    "jobId"
+                    "jobId",
+                    "components"
                   ],
                   "type": "object"
                 }
@@ -19774,7 +19908,7 @@
                 }
               }
             },
-            "description": "validation_failed | version_not_renderable"
+            "description": "validation_failed | version_not_renderable | prototype_head_tracking (The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot.)"
           }
         },
         "summary": "Create a time-limited public share grant pinned to an immutable published version.",
@@ -20194,6 +20328,9 @@
                     },
                     "__schema24": {
                       "pattern": "^asset_[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "__schema25": {
                       "type": "string"
                     },
                     "__schema3": {
@@ -20656,7 +20793,7 @@
                       "type": "string"
                     },
                     "publishedAt": {
-                      "type": "string"
+                      "$ref": "#/$defs/__schema25"
                     },
                     "renderError": {
                       "anyOf": [
@@ -20705,8 +20842,25 @@
                     "renderable": {
                       "type": "boolean"
                     },
+                    "resolvedAt": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/__schema25"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "rev": {
                       "type": "number"
+                    },
+                    "track": {
+                      "enum": [
+                        "pinned",
+                        "head"
+                      ],
+                      "type": "string"
                     },
                     "version": {
                       "type": "number"
@@ -22078,7 +22232,7 @@
                 }
               }
             },
-            "description": "incomplete_baseline | invalid_viewport | asset_not_found | invalid_reference_asset | validation_failed"
+            "description": "incomplete_baseline | invalid_viewport | asset_not_found | invalid_reference_asset | validation_failed | prototype_head_tracking (The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot.)"
           }
         },
         "summary": "Atomically replace the complete committed visual baseline set for a prototype (generation CAS).",

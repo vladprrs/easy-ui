@@ -39,11 +39,21 @@ export function classifyRevision(db:Database,prototypeId:string,rev:number):Revi
     return failed([{path:"/doc",message:"Stored prototype document is not valid JSON"}]);
   }
 
-  const pins=db.query(`SELECT c.name,cp.status
+  const pins=db.query(`SELECT c.name,prc.component_id id,cp.status
     FROM prototype_revision_components prc
     JOIN components c ON c.id=prc.component_id
     JOIN component_publishes cp ON cp.component_id=prc.component_id AND cp.version=prc.component_version
-    WHERE prc.prototype_id=? AND prc.rev=?`).all(prototypeId,rev) as {name:string;status:string}[];
+    WHERE prc.prototype_id=? AND prc.rev=?`).all(prototypeId,rev) as {name:string;id:string;status:string}[];
+  // Head-tracking (план 2026-08-02, P2): read-путь DTO резолвит компонентные пины на последние
+  // active-публикации, поэтому и классификация обязана смотреть на них — иначе рендеримый
+  // трекающий док считался бы нерендеримым из-за архивированной старой версии.
+  const prototypeRow=db.query("SELECT * FROM prototypes WHERE id=?").get(prototypeId) as {track?:string|null}|null;
+  if((prototypeRow?.track??"pinned")==="head") {
+    for(const pin of pins) {
+      const head=db.query("SELECT status FROM component_publishes WHERE component_id=? AND status='active' ORDER BY version DESC LIMIT 1").get(pin.id) as {status:string}|null;
+      if(head) pin.status=head.status;
+    }
+  }
   const pinsByName=new Map(pins.map(pin=>[pin.name,pin]));
   // Пины композиций (волна 5) трактуются ровно как компонентные: отсутствующий пин или
   // пин на нерендеримую публикацию делает ревизию нерендеримой. Раскрытие идёт в save-пути,

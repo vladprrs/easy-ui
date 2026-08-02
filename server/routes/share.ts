@@ -5,6 +5,7 @@ import { ApiError, json, noStore, readJson } from "../http";
 import { MAX_SHARE_TTL_SECONDS, MIN_SHARE_TTL_SECONDS, SHARE_COOKIE, ShareRepo } from "../share/repo";
 import type { Principal } from "../auth";
 import { requirePrototypeOwner } from "../authorization";
+import { assertPinnedTrack } from "../repos/prototypes";
 import { writeAuditEvent } from "../audit";
 
 export const shareResponseHeaders = {
@@ -77,6 +78,8 @@ export async function routeShares(
   if (segments.length === 3) {
     if (request.method === "GET") return json({ shares: repo.list(prototypeId) }, 200, noStore);
     if (request.method === "POST") {
+      // Грант шарит конкретную ревизию/версию; у track:head ревизия не иммутабельна (P2.2).
+      assertPinnedTrack(db, prototypeId, "share");
       const input = parseWith(createShareRequestSchema, await readJson(request));
       const result=repo.create(prototypeId, input.version, input.ttlSeconds); writeAuditEvent(db,{actorId:actor.userId,action:"share.created",subjectType:"prototype",subjectId:prototypeId,detail:{grantId:result.id,version:result.version}}); return json(result, 201, noStore);
     }

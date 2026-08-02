@@ -88,6 +88,19 @@ export interface CaptureErrorReady {
 
 export type CaptureReady = PrototypeReady | ComponentReady | ComponentDraftReady | CaptureErrorReady;
 
+/**
+ * Prototype-target payload the enqueue freezes into `bootstrap.target` (план 2026-08-02, P2.3).
+ * `components`/`componentManifestHash` присутствуют, когда постановка джобы уже разрешила пины:
+ * поверхность рендерит именно их и публикует именно этот manifest-hash, поэтому публикация
+ * новой версии компонента между enqueue и рендером не ломает exact-match handshake.
+ */
+export interface PrototypeBootstrapTarget {
+  kind: "prototype";
+  rev: number;
+  componentManifestHash?: string;
+  components?: { id: string; name: string; version: number; bundleUrl: string; bundleHash: string; status?: string }[];
+}
+
 /** Worker-injected bootstrap. Absent in browser (Library) preview mode. */
 export interface CaptureBootstrap {
   kind: "prototype" | "component" | "component-draft";

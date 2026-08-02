@@ -55,13 +55,13 @@ describe("prototype lifecycle metadata", () => {
     const kindOnly = await call("alice", "POST", "/prototypes/p1/lifecycle", { kind: "experiment" });
     expect(kindOnly.status).toBe(200);
     // Отсутствующие поля патча не трогаются.
-    expect(await kindOnly.json()).toEqual({ kind: "experiment", tags: ["proof"], derivedFrom: "source" });
+    expect(await kindOnly.json()).toEqual({ kind: "experiment", tags: ["proof"], derivedFrom: "source", track: "pinned" });
 
     const cleared = await call("alice", "POST", "/prototypes/p1/lifecycle", { tags: [], derivedFrom: null });
-    expect(await cleared.json()).toEqual({ kind: "experiment", tags: [], derivedFrom: null });
+    expect(await cleared.json()).toEqual({ kind: "experiment", tags: [], derivedFrom: null, track: "pinned" });
 
     // Пустой патч — чистый read-back.
-    expect(await (await call("alice", "POST", "/prototypes/p1/lifecycle", {})).json()).toEqual({ kind: "experiment", tags: [], derivedFrom: null });
+    expect(await (await call("alice", "POST", "/prototypes/p1/lifecycle", {})).json()).toEqual({ kind: "experiment", tags: [], derivedFrom: null, track: "pinned" });
   });
 
   test("rejects unknown kinds, malformed tags and self-lineage", async () => {

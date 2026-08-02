@@ -20,7 +20,7 @@ import { ApiError } from "../http";
 import { ComponentRepo } from "../repos/components";
 import { CompositionRepo, compositionSourceHash } from "../repos/compositions";
 import type { CompositionDoc } from "../../src/prototype/composition";
-import { PrototypeRepo } from "../repos/prototypes";
+import { assertPinnedTrack, PrototypeRepo } from "../repos/prototypes";
 import { AssetRepo } from "../repos/assets";
 import { collectAssetIdsFromSource } from "../validation";
 import { themeAssetIds } from "../share/repo";
@@ -205,6 +205,10 @@ export class BundleClosure {
 
   /** Adds a prototype revision (owner draft or a published version) and its full dependency closure. */
   addPrototype(id: string, selector: PrototypeSelector): ExportedResource {
+    // Экспорт трекающего дока запрещён (план 2026-08-02, P2.2): манифест пинует версии
+    // компонентов, а у track:head они резолвятся на момент чтения — архив был бы снимком
+    // «на секунду», необратимо расходящимся с источником при импорте.
+    assertPinnedTrack(this.db, id, "bundle-export");
     let snapshot: { doc: PrototypeDoc; rev: number; components: { id: string; version: number }[]; compositions: { id: string; version: number }[]; assets: { id: string }[]; designSystemMetaVersion: number | null };
     let exported: ExportedResource;
     if (selector.version !== undefined) {

@@ -305,7 +305,9 @@ export const prototypeScreenshotContract = registerContract({
   summary: "Enqueue a prototype-screen screenshot job; resolves the target snapshot atomically.",
   status: 202,
   requestSchema: z.object({ rev: z.number().int().optional(), version: z.number().int().optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional(), probe: z.literal("geometry").optional() }),
-  responseSchema: jobAcceptedSchema,
+  // P2.3: постановка отдаёт разрешённые пины — для track:head-дока это единственный момент,
+  // когда клиент узнаёт, какие версии компонентов реально пойдут в кадр.
+  responseSchema: jobAcceptedSchema.extend({ components: z.array(z.object({ id: z.string(), name: z.string(), version: z.number().int().positive(), bundleHash: z.string() })) }),
   errors: [{ status: 400, code: "invalid_request" }, { status: 404, code: "prototype_not_found" }, { status: 404, code: "screen_not_found" }, { status: 404, code: "version_not_found" }, { status: 404, code: "revision_not_found" }, ...screenshotErrors],
 });
 
@@ -481,6 +483,9 @@ export const checkVisualReferenceContract = registerContract({
   ],
 });
 
+/** 422-набор head-tracking'а: publish/share/visual-baseline/bundle-export трекающего дока. */
+const headTrackingError = { status: 422, code: "prototype_head_tracking", description: "The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot." } as const;
+
 const baselineViewportSchema=z.strictObject({width:z.number().int(),height:z.number().int()});
 const baselineMemberSchema=z.strictObject({screenId:z.string(),viewport:baselineViewportSchema,deviceScaleFactor:deviceScaleSchema,theme:z.enum(["light","dark"]),referenceId:z.string()});
 const baselineResponseCore=z.strictObject({generation:z.number().int().positive(),rev:z.number().int().positive(),members:z.array(baselineMemberSchema)});
@@ -488,7 +493,7 @@ export const putVisualBaselineContract=registerContract({
   method:"PUT",path:"/api/visual-baselines/prototypes/{id}",summary:"Atomically replace the complete committed visual baseline set for a prototype (generation CAS).",
   requestSchema:z.strictObject({rev:z.number().int().positive(),prototypeInstanceId:z.string(),baseGeneration:z.number().int().positive().nullable(),members:z.array(z.strictObject({screenId:z.string(),viewport:baselineViewportSchema,deviceScaleFactor:deviceScaleSchema,theme:z.enum(["light","dark"]),assetId:z.string()}))}),
   responseSchema:baselineResponseCore,validated:true,
-  errors:[{status:404,code:"prototype_not_found"},{status:404,code:"revision_not_found"},{status:409,code:"instance_conflict"},{status:409,code:"generation_conflict"},{status:422,code:"incomplete_baseline"},{status:422,code:"invalid_viewport"},{status:422,code:"asset_not_found"},{status:422,code:"invalid_reference_asset"},{status:422,code:"validation_failed"}],
+  errors:[{status:404,code:"prototype_not_found"},{status:404,code:"revision_not_found"},{status:409,code:"instance_conflict"},{status:409,code:"generation_conflict"},{status:422,code:"incomplete_baseline"},{status:422,code:"invalid_viewport"},{status:422,code:"asset_not_found"},{status:422,code:"invalid_reference_asset"},{status:422,code:"validation_failed"},headTrackingError],
 });
 export const getVisualBaselineContract=registerContract({
   method:"GET",path:"/api/visual-baselines/prototypes/{id}",summary:"Read the latest committed visual baseline set for a prototype.",
@@ -556,6 +561,7 @@ const errorCatalog = {
   validationFailed: { status: 422, code: "validation_failed" },
 } as const;
 
+
 const slugString = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 const positiveInt = z.number().int().positive();
 const isoDate = z.string();
@@ -576,13 +582,21 @@ export const reuseIntentSchema = z.string().trim().min(8).max(500)
 export const prototypeKindSchema = z.enum(PROTOTYPE_KINDS);
 export const prototypeTagSchema = slugString.max(32);
 export const PROTOTYPE_TAGS_LIMIT = 16;
+/**
+ * `track` — head-tracking служебных прототипов (миграция v22, план 2026-08-02 P2):
+ * `head` резолвит компонентные пины на последние active-публикации прямо на read-пути.
+ * Ставится только lifecycle-роутом и только на служебный `kind` непубликованного дока;
+ * поэтому в теле создания прототипа его нет (см. `createPrototypeContract`).
+ */
+export const prototypeTrackSchema = z.enum(["pinned", "head"]);
 export const prototypeLifecycleSchema = z.strictObject({
   kind: prototypeKindSchema.optional(),
   tags: z.array(prototypeTagSchema).max(PROTOTYPE_TAGS_LIMIT).optional(),
   derivedFrom: z.string().min(1).max(128).nullable().optional(),
+  track: prototypeTrackSchema.optional(),
 });
 const prototypeLifecycleResponseSchema = z.strictObject({
-  kind: prototypeKindSchema, tags: z.array(z.string()), derivedFrom: z.string().nullable(),
+  kind: prototypeKindSchema, tags: z.array(z.string()), derivedFrom: z.string().nullable(), track: prototypeTrackSchema,
 });
 
 // --- Prototypes CRUD / revisions / versions / publish / restore ---
@@ -591,7 +605,7 @@ const prototypeListItemSchema = z.looseObject({
   id: z.string(), name: z.string(), designSystem: z.string(), device: z.string(),
   screenCount: z.number(), flowCount: z.number(), headRev: z.number(), latestVersion: z.number().nullable(), updatedAt: isoDate,
   status:z.enum(["private","published","archived"]),owner:z.strictObject({id:z.string(),name:z.string()}),
-  kind: prototypeKindSchema, tags: z.array(z.string()), derivedFrom: z.string().nullable(),
+  kind: prototypeKindSchema, tags: z.array(z.string()), derivedFrom: z.string().nullable(), track: prototypeTrackSchema,
 });
 
 export const listPrototypesContract = registerContract({
@@ -606,7 +620,7 @@ export const createPrototypeContract = registerContract({
   method: "POST", path: "/api/prototypes",
   summary: "Create a prototype from a document (revision 1); validates against the design-system catalog.",
   status: 201,
-  requestSchema: z.object({ doc: inputPrototypeDocSchema, message: z.string().optional(), figma: figmaSchema.optional(), ...prototypeLifecycleSchema.shape }),
+  requestSchema: z.object({ doc: inputPrototypeDocSchema, message: z.string().optional(), figma: figmaSchema.optional(), ...prototypeLifecycleSchema.omit({ track: true }).shape }),
   responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
   errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }],
 });
@@ -624,18 +638,21 @@ export const getPrototypeContract = registerContract({
     publishedVersion: z.number().nullable(), renderable: renderableSchema,
     renderErrors:z.object({head:prototypeRenderErrorSchema.nullable(),published:prototypeRenderErrorSchema.nullable()}), figma: figmaResponseSchema.optional(),
     status:z.enum(["private","published","archived"]),owner:z.strictObject({id:z.string(),name:z.string()}),
-    kind: prototypeKindSchema, tags: z.array(z.string()), derivedFrom: z.string().nullable(),
+    kind: prototypeKindSchema, tags: z.array(z.string()), derivedFrom: z.string().nullable(), track: prototypeTrackSchema,
   }),
   errors: [errorCatalog.prototypeNotFound],
 });
 
 export const setPrototypeLifecycleContract = registerContract({
   method: "POST", path: "/api/prototypes/{id}/lifecycle",
-  summary: "Patch prototype lifecycle metadata (kind/tags/derivedFrom); owner or admin only.",
+  summary: "Patch prototype lifecycle metadata (kind/tags/derivedFrom/track); owner or admin only. track:head requires a service kind on an unpublished prototype.",
   validated: true,
   requestSchema: prototypeLifecycleSchema,
   responseSchema: prototypeLifecycleResponseSchema,
-  errors: [errorCatalog.invalidRequest, { status: 403, code: "forbidden" }, errorCatalog.prototypeNotFound, errorCatalog.validationFailed],
+  errors: [errorCatalog.invalidRequest, { status: 403, code: "forbidden" }, errorCatalog.prototypeNotFound, errorCatalog.validationFailed,
+    { status: 422, code: "track_requires_service_kind", description: "track:head is only allowed for service prototype kinds." },
+    { status: 422, code: "track_requires_unpublished", description: "track:head is not allowed on a prototype with published versions." },
+    { status: 422, code: "service_kind_requires_unpublished", description: "A published prototype cannot be switched to a service kind." }],
 });
 
 export const savePrototypeContract = registerContract({
@@ -671,6 +688,8 @@ const prototypeRevisionCoreSchema = z.looseObject({
   designSystemMetaVersion: z.number().nullable(),
   figma: figmaResponseSchema.optional(),
   renderable:z.boolean(),renderError:prototypeRenderErrorSchema.nullable(),
+  // P2.3: `track` ревизии и момент резолва head-пинов (`null` у обычных, pinned-доков).
+  track: prototypeTrackSchema.optional(), resolvedAt: isoDate.nullable().optional(),
 });
 
 export const getPrototypeDraftContract = registerContract({
@@ -807,6 +826,8 @@ export const readinessReportSchema = z.strictObject({
   prototypeId: z.string(),
   rev: positiveInt,
   generatedAt: isoDate,
+  // P9: профиль отчёта; у `service` предупреждения не поднимают статус до блокирующего.
+  profile: z.enum(["product", "service"]),
   gates: z.array(readinessGateSchema),
   blocking: z.array(z.enum(READINESS_GATE_IDS)),
   publishable: z.boolean(),
@@ -890,7 +911,7 @@ export const publishPrototypeContract = registerContract({
   status: 201,
   requestSchema: z.object({ ...casBody, force: z.boolean().optional() }),
   responseSchema: z.looseObject({ version: z.number(), rev: z.number(), screens: z.array(screenUrlSchema) }),
-  errors: [errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, { status: 409, code: "publish_blocked", description: "One or more enabled readiness gates block publication; the report is in error.details.report." }, errorCatalog.validationFailed],
+  errors: [errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.alreadyPublished, { status: 409, code: "publish_blocked", description: "One or more enabled readiness gates block publication; the report is in error.details.report." }, errorCatalog.validationFailed, headTrackingError],
 });
 
 export const setPrototypeStatusContract = registerContract({
@@ -942,6 +963,7 @@ export const createPrototypeShareContract = registerContract({
     errorCatalog.versionNotFound,
     errorCatalog.validationFailed,
     { status: 422, code: "version_not_renderable" },
+    headTrackingError,
   ],
 });
 
@@ -1231,7 +1253,7 @@ export const exportPrototypeContract = registerContract({
   method: "GET", path: "/api/prototypes/{id}/export",
   summary: "Export a prototype revision (owner draft or a published version) with its full dependency closure as a ZIP bundle.",
   contentType: "application/zip",
-  errors: [exportUnauthorized, exportForbidden, errorCatalog.prototypeNotFound, errorCatalog.versionNotFound, exportTooLarge],
+  errors: [exportUnauthorized, exportForbidden, errorCatalog.prototypeNotFound, errorCatalog.versionNotFound, exportTooLarge, headTrackingError],
 });
 
 export const exportComponentContract = registerContract({
@@ -1245,7 +1267,7 @@ export const exportBundlesContract = registerContract({
   method: "GET", path: "/api/bundles/export",
   summary: "Export every prototype and component owned by the caller as a single ZIP bundle.",
   contentType: "application/zip",
-  errors: [exportUnauthorized, exportForbidden, exportTooLarge],
+  errors: [exportUnauthorized, exportForbidden, exportTooLarge, headTrackingError],
 });
 
 // --- Bundle import (ZIP) ---
@@ -1857,6 +1879,10 @@ export const capabilitiesResponseSchema = z.object({
     componentGeometry: z.boolean(),
     /** Draft-preview сохранённой head-ревизии (план 2026-08-02 P1b); false при EASYUI_VALIDATE_DISABLED=1. */
     componentDraftPreview: z.boolean(),
+    /** Head-tracking служебных прототипов (план 2026-08-02 P2): `track` в lifecycle-роуте. */
+    prototypeHeadTracking: z.boolean(),
+    /** Readiness-отчёт несёт `profile` (product|service) — план 2026-08-02 P9. */
+    readinessProfile: z.boolean(),
   }),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`
