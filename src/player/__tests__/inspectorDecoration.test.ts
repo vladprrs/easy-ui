@@ -5,11 +5,11 @@ import { InspectorLog, type InspectorEntry } from "../inspector/log";
 const ctx = (over: Partial<EmitContext> = {}): EmitContext =>
   ({ event: "press", payload: { value: 7 }, elementId: "el", correlationId: "e1", ...over });
 
-function runtimeWith(initialState: Record<string, unknown> = {}, screenIds = new Set(["home", "next"])) {
+function runtimeWith(initialState: Record<string, unknown> = {}, screenIds = new Set(["home", "next"]), computed?: Record<string, unknown>) {
   const log = new InspectorLog();
   const onError = vi.fn();
   const deps = { navigate: vi.fn(), back: vi.fn(), openUrl: vi.fn(), restart: vi.fn() };
-  const runtime = new EasyUiActionRuntime({ initialState, screenIds, deps, onError, logger: log });
+  const runtime = new EasyUiActionRuntime({ initialState, screenIds, deps, onError, logger: log, computed });
   return { runtime, log, deps, onError };
 }
 
@@ -88,6 +88,47 @@ describe("EasyUiActionRuntime inspector decoration", () => {
     const { runtime, log } = runtimeWith({ count: 0 });
     await runtime.dispatch({ action: "setState", params: { statePath: "/count", value: 1 } }, ctx());
     expect(actions(log)).toHaveLength(1);
+  });
+
+  it("decorates state entries with a computed snapshot", async () => {
+    const computed = { cartCount: { op: "count", from: "/cart" } };
+    const { runtime, log } = runtimeWith({ cart: [], draft: "x" }, undefined, computed);
+    await runtime.dispatch({ action: "pushState", params: { statePath: "/cart", value: 1, clearStatePath: "/draft" } }, ctx());
+    expect(actions(log)).toEqual([expect.objectContaining({
+      action: "pushState",
+      result: { type: "state", statePath: "/cart", previous: [], next: [1], computed: { cartCount: 1 } },
+    })]);
+  });
+
+  it("rejects computed write targets in dispatch with exactly one error and no store write", async () => {
+    const computed = { cartCount: { op: "count", from: "/cart" } };
+    for (const action of [
+      { action: "setState", params: { statePath: "/cartCount", value: 9 } },
+      { action: "pushState", params: { statePath: "/cartCount", value: 9 } },
+      { action: "removeState", params: { statePath: "/cartCount", index: 0 } },
+    ]) {
+      const { runtime, log, onError } = runtimeWith({ cart: [] }, undefined, computed);
+      await runtime.dispatch(action, ctx());
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(actions(log).filter((entry) => entry.result.type === "error")).toHaveLength(1);
+      expect(runtime.store.get("/cartCount")).toBe(0);
+    }
+  });
+
+  it("rejects a computed clearStatePath: one error, the store is untouched", async () => {
+    const computed = { cartCount: { op: "count", from: "/cart" } };
+    const { runtime, log, onError } = runtimeWith({ cart: [], draft: "x" }, undefined, computed);
+    await runtime.dispatch({ action: "pushState", params: { statePath: "/cart", value: 1, clearStatePath: "/cartCount" } }, ctx());
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(actions(log)).toEqual([expect.objectContaining({ result: { type: "error", message: "state path is a computed value and is read-only: /cartCount" } })]);
+    expect(runtime.store.get("/cart")).toEqual([]);
+    expect(runtime.store.get("/cartCount")).toBe(0);
+  });
+
+  it("omits result.computed when the document declares no computed values", async () => {
+    const { runtime, log } = runtimeWith({ list: [] });
+    await runtime.dispatch({ action: "pushState", params: { statePath: "/list", value: 1 } }, ctx());
+    expect(actions(log)[0]!.result).toEqual({ type: "state", statePath: "/list", previous: [], next: [1] });
   });
 
   it("keeps behavior identical without a logger", async () => {

@@ -8,6 +8,7 @@ import type { ComponentDefinition } from "../catalog/definitions";
 import { regionEligibility } from "../prototype/regionRules";
 import type { ValidationIssue } from "../prototype/types";
 import { jsonValueSchema, REGION_KINDS, type JsonValue, type PrototypeDoc, type RegionKind } from "../prototype/schema";
+import { applyComputed } from "../prototype/computed";
 import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "../prototype/stateOverrides";
 import type { EditorAction, EditorState } from "./editorReducer";
 import { getElementPath } from "../architecture/screenTree";
@@ -127,7 +128,7 @@ export function InspectorPanel({ state, definitions, dispatch, pins, issues, com
   const elementKey = state.selection.elementKey;
   const element = elementKey ? screen.spec.elements[elementKey] : undefined;
   const definition = element ? definitions[element.type] : undefined;
-  const effectiveState = mergeScreenState(state.doc.state, screen.stateOverrides);
+  const effectiveState = applyComputed(mergeScreenState(state.doc.state, screen.stateOverrides), state.doc.computed);
   const elementPath = ["screens", screenIndex, "spec", "elements", elementKey ?? "", "props"];
   const breadcrumbKeys = elementKey ? getElementPath(screen.spec, elementKey) : [];
   const screenNames = new Map(state.doc.screens.map((item) => [item.id, item.name]));

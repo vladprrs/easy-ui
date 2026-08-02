@@ -6,7 +6,17 @@ export const INSPECTOR_LOG_CAPACITY = 50;
 
 /** Outcome of a dispatched action, as shown in the inspector ledger. */
 export type InspectorActionResult =
-  | { type: "state"; statePath: string; previous: unknown; next: unknown }
+  | {
+    type: "state";
+    statePath: string;
+    previous: unknown;
+    next: unknown;
+    /**
+     * Снапшот `doc.computed` после мутации (план 2026-08-02-computed-state, D10).
+     * Ключ отсутствует, когда документ не объявляет computed-значений.
+     */
+    computed?: Record<string, number>;
+  }
   | { type: "nav"; target: string }
   | { type: "url"; url: string }
   | { type: "skipped" }

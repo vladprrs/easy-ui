@@ -60,6 +60,7 @@ function EntryView({ entry }: { entry: InspectorEntry }) {
           <Field label="path" value={entry.result.statePath} />
           <Field label="previous" value={fmt(entry.result.previous)} />
           <Field label="next" value={fmt(entry.result.next)} />
+          {entry.result.computed ? <Field label="computed" value={fmt(entry.result.computed)} /> : null}
         </> : null}
         {entry.result.type === "nav" ? <Field label="target" value={entry.result.target} /> : null}
         {entry.result.type === "url" ? <Field label="url" value={entry.result.url} /> : null}

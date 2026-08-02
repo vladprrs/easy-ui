@@ -5,6 +5,7 @@ import { previewNativeWidth, previewTileSizes } from "../designSystems/deviceMet
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { createPlayerRuntime } from "../catalog/runtime";
 import { loadPrototypeDraft } from "../prototype/loader";
+import { applyComputed } from "../prototype/computed";
 import { mergeScreenState } from "../prototype/stateOverrides";
 import { buildScreenRenderPlan, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
 import type { PrototypeDraft, ThemeContent } from "../api/client";
@@ -101,7 +102,7 @@ export function GalleryPreviewFrame({ draft, themeContent: suppliedThemeContent,
     return buildScreenRenderPlan(tree, { canvas: screen?.canvas });
   }, [screen?.canvas, tree]);
   const runtimeValue = useMemo<EasyUiRuntimeValue>(() => ({ metadata: specs?.metadata ?? {}, runtime: null, definitions: {} }), [specs]);
-  const initialState = useMemo(() => mergeScreenState(doc.state, screen?.stateOverrides), [doc.state, screen?.stateOverrides]);
+  const initialState = useMemo(() => applyComputed(mergeScreenState(doc.state, screen?.stateOverrides), doc.computed), [doc.computed, doc.state, screen?.stateOverrides]);
   if (!screen || !tree || !specs) return null;
 
   const nativeWidth = screen.canvas?.width ?? previewNativeWidth[doc.device];

@@ -2,6 +2,7 @@ import type { StateModel, StateStore } from "@json-render/react";
 import type { Spec } from "@json-render/core";
 import type { PlayerRuntimeDeps } from "../catalog/runtime";
 import { createHardenedStore } from "../prototype/hardenedStore";
+import { computedKeys, isComputedPath, type ComputedSpecLike } from "../prototype/computed";
 import { getAtPointer, isSafeJsonPointer } from "../prototype/pointer";
 import { computeRenderCost, REPEAT_RENDER_COST_BUDGET } from "../prototype/renderCost";
 import type { InspectorActionResult, InspectorLogger } from "./inspector/log";
@@ -81,6 +82,12 @@ export interface EasyUiActionRuntimeOptions {
   onError?: (message: string, detail?: Record<string, unknown>) => void;
   /** Optional inspector logger (plan H.1). Behavior is unchanged when omitted. */
   logger?: InspectorLogger;
+  /**
+   * `doc.computed` — производные значения стейта. Сеются и пересчитываются
+   * стором; здесь используются для пре-чека write-целей экшенов (read-only)
+   * и снапшота в инспекторе.
+   */
+  computed?: ComputedSpecLike;
 }
 
 /**
@@ -97,6 +104,8 @@ export class EasyUiActionRuntime {
   private readonly deps: PlayerRuntimeDeps;
   private readonly onError: (message: string, detail?: Record<string, unknown>) => void;
   private currentSpec: Spec | null = null;
+  /** Ключи `doc.computed` — read-only write-цели и снапшот для инспектора. */
+  private readonly computedKeyList: readonly string[];
   /** True while a dispatched state action mutates the store (suppresses the store-level log). */
   private inDispatchMutation = false;
 
@@ -109,9 +118,11 @@ export class EasyUiActionRuntime {
       this.logger?.logRuntimeError(message, detail);
       report(message, detail);
     };
+    this.computedKeyList = computedKeys(options.computed);
     const store = createHardenedStore(options.initialState, {
       guard: (next) => this.withinBudget(next),
       onError: (message) => this.onError(message),
+      computed: options.computed,
     });
     this.store = this.logger ? this.instrumentStore(store, this.logger) : store;
   }
@@ -151,6 +162,40 @@ export class EasyUiActionRuntime {
     try { fn(); } finally { this.inDispatchMutation = false; }
   }
 
+  /**
+   * Снапшот computed-значений из закоммиченного стейта — для записи инспектора
+   * (D10). Ключ `computed` **отсутствует**, когда спека пуста.
+   */
+  private computedSnapshot(): { computed?: Record<string, number> } {
+    if (this.computedKeyList.length === 0) return {};
+    const root = this.store.get("/");
+    const record = typeof root === "object" && root !== null ? (root as Record<string, unknown>) : {};
+    const snapshot: Record<string, number> = {};
+    for (const key of this.computedKeyList) {
+      const value = record[key];
+      snapshot[key] = typeof value === "number" ? value : 0;
+    }
+    return { computed: snapshot };
+  }
+
+  /**
+   * Пре-чек write-целей мутирующих экшенов: запись в computed-значение — no-op с
+   * ровно одним error-репортом (стор мутации не видит). Зеркалит паттерн
+   * removeState-out-of-range.
+   */
+  private rejectsComputedTarget(ctx: EmitContext, action: string, params: Record<string, unknown>): boolean {
+    if (this.computedKeyList.length === 0) return false;
+    for (const key of ["statePath", "clearStatePath"] as const) {
+      const target = params[key];
+      if (typeof target !== "string" || !isComputedPath(target, this.computedKeyList)) continue;
+      const message = `state path is a computed value and is read-only: ${target}`;
+      this.onError(message, { statePath: target });
+      this.logAction(ctx, action, params, { type: "error", message });
+      return true;
+    }
+    return false;
+  }
+
   private withinBudget(state: StateModel): boolean {
     if (!this.currentSpec) return true;
     return computeRenderCost(this.currentSpec, this.currentSpec.root, state) <= REPEAT_RENDER_COST_BUDGET;
@@ -170,13 +215,16 @@ export class EasyUiActionRuntime {
       return;
     }
     const params = action.params ? (resolveParamValue(action.params, ctx) as Record<string, unknown>) : {};
+    if (action.action === "setState" || action.action === "pushState" || action.action === "removeState") {
+      if (this.rejectsComputedTarget(ctx, action.action, params)) return;
+    }
     switch (action.action) {
       case "setState": {
         if (typeof params.statePath === "string") {
           const statePath = params.statePath;
           const previous = this.store.get(statePath);
           this.mutate(() => this.store.set(statePath, params.value));
-          this.logAction(ctx, "setState", params, { type: "state", statePath, previous, next: this.store.get(statePath) });
+          this.logAction(ctx, "setState", params, { type: "state", statePath, previous, next: this.store.get(statePath), ...this.computedSnapshot() });
         }
         return;
       }
@@ -190,7 +238,7 @@ export class EasyUiActionRuntime {
             this.store.set(statePath, [...base, params.value]);
             if (typeof params.clearStatePath === "string") this.store.set(params.clearStatePath, "");
           });
-          this.logAction(ctx, "pushState", params, { type: "state", statePath, previous, next: this.store.get(statePath) });
+          this.logAction(ctx, "pushState", params, { type: "state", statePath, previous, next: this.store.get(statePath), ...this.computedSnapshot() });
         }
         return;
       }
@@ -208,7 +256,7 @@ export class EasyUiActionRuntime {
         }
         const previous = arr;
         this.mutate(() => this.store.set(statePath, arr.filter((_, i) => i !== index)));
-        this.logAction(ctx, "removeState", params, { type: "state", statePath, previous, next: this.store.get(statePath) });
+        this.logAction(ctx, "removeState", params, { type: "state", statePath, previous, next: this.store.get(statePath), ...this.computedSnapshot() });
         return;
       }
       case "navigate": {

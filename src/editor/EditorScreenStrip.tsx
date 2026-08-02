@@ -6,6 +6,7 @@ import type { ComponentDefinition } from "../catalog/definitions";
 import { HostStageSurface } from "../catalog/hostPrimitives";
 import type { ThemeContent } from "../api/client";
 import type { PrototypeDoc } from "../prototype/schema";
+import { applyComputed } from "../prototype/computed";
 import { mergeScreenState } from "../prototype/stateOverrides";
 import { buildScreenRenderPlan, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
 import { TileErrorBoundary } from "../cjm/CjmScreenTile";
@@ -69,7 +70,7 @@ function ScreenTile({ doc, screen, registry, handlers, runtimeKey, stateEpoch, s
     () => ({ metadata: specs?.metadata ?? {}, runtime: null, definitions: customDefinitions ?? {} }),
     [customDefinitions, specs],
   );
-  const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
+  const initialState = useMemo(() => applyComputed(mergeScreenState(doc.state, screen.stateOverrides), doc.computed), [doc.computed, doc.state, screen.stateOverrides]);
   const key = `${runtimeKey}:${screen.id}:${stateEpoch}`;
   return <article style={{ width: editorStripTile.width }}>
     <div className="relative">

@@ -98,7 +98,7 @@ function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPr
     <div ref={setSurfaceRef} id="eui-capture-surface" className="bg-background text-foreground" style={style}>
       <ThemeStyle content={loaded.theme} />
       <HostStageSurface stageHostRef={stageHostRef}>
-        <CaptureSurface designSystem={doc.designSystem} custom={custom} tree={tree} initialState={doc.state} screenIds={screenIds} canvas={screen.canvas} hostPrimitivesAllowed={doc.device !== "desktop" || screen.canvas !== undefined} />
+        <CaptureSurface designSystem={doc.designSystem} custom={custom} tree={tree} initialState={doc.state} computed={doc.computed} screenIds={screenIds} canvas={screen.canvas} hostPrimitivesAllowed={doc.device !== "desktop" || screen.canvas !== undefined} />
       </HostStageSurface>
     </div>
   </SurfaceSpacingScope>;

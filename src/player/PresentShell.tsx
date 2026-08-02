@@ -103,6 +103,7 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
   // eslint-disable-next-line react-hooks/refs
   const actionRuntime = useMemo(() => new EasyUiActionRuntime({
     initialState: doc.state,
+    computed: doc.computed,
     screenIds: new Set(doc.screens.map((screen) => screen.id)),
     deps: {
       navigate: (target) => navigationRef.current.navigate(target),

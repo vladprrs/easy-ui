@@ -5,6 +5,7 @@ import type { ComponentDefinition } from "../catalog/definitions";
 import { HostStageSurface } from "../catalog/hostPrimitives";
 import type { ThemeContent } from "../api/client";
 import type { PrototypeDoc } from "../prototype/schema";
+import { applyComputed } from "../prototype/computed";
 import { mergeScreenState } from "../prototype/stateOverrides";
 import { parseNavigateBinding } from "../prototype/navigateBinding";
 import { buildScreenRenderPlan, stripEvents, toRuntimeSpec, type RuntimeTree } from "../prototype/runtimeSpec";
@@ -118,7 +119,7 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
     () => ({ metadata: specs?.metadata ?? {}, runtime: null, definitions: customDefinitions ?? {} }),
     [customDefinitions, specs],
   );
-  const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
+  const initialState = useMemo(() => applyComputed(mergeScreenState(doc.state, screen.stateOverrides), doc.computed), [doc.computed, doc.state, screen.stateOverrides]);
   const nativeWidth = screen.canvas?.width ?? previewNativeWidth[doc.device];
   const tileWidth = previewTileSizes[doc.device].width;
   const playerPath = buildPlayerPath(routeBase, screen.id);

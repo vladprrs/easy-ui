@@ -156,6 +156,7 @@ export class ScenarioSession {
     this.current = startScreen ?? doc.startScreen;
     this.runtime = new EasyUiActionRuntime({
       initialState: doc.state,
+      computed: doc.computed,
       screenIds: new Set(doc.screens.map((screen) => screen.id)),
       deps: {
         navigate: (screenId) => { this.history.push(this.current); this.current = screenId; return Promise.resolve(); },

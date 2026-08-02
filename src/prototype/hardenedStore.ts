@@ -1,5 +1,6 @@
 import type { StateModel, StateStore } from "@json-render/react";
 import { parseJsonPointer } from "./pointer";
+import { computedKeys, evaluateComputed, type ComputedSpecLike } from "./computed";
 
 export interface HardenedStoreOptions {
   /**
@@ -9,6 +10,14 @@ export interface HardenedStoreOptions {
   guard?: (nextState: StateModel) => boolean;
   /** Reports a rejected or invalid mutation (unsafe pointer, budget, etc.). */
   onError?: (message: string) => void;
+  /**
+   * `doc.computed` — производные значения стейта (план
+   * `docs/plans/2026-08-02-computed-state.md`). Сеются при конструировании и
+   * пересчитываются в каждой коммитящейся мутации **до** `notify()`, поэтому
+   * подписчик всегда видит согласованный снапшот. Записи в computed-ключи
+   * отклоняются (read-only).
+   */
+  computed?: ComputedSpecLike;
 }
 
 const nullProtoObject = (): Record<string, unknown> => Object.create(null) as Record<string, unknown>;
@@ -49,10 +58,25 @@ function safeSetBySegments(root: StateModel, segments: string[], value: unknown)
  * `guard` against the prospective state before committing each mutation.
  */
 export function createHardenedStore(initialState: StateModel = {}, options: HardenedStoreOptions = {}): StateStore {
-  let state: StateModel = Object.assign(nullProtoObject(), initialState) as StateModel;
   const listeners = new Set<() => void>();
   const notify = () => { for (const listener of listeners) listener(); };
-  const { guard, onError } = options;
+  const { guard, onError, computed } = options;
+  const derivedKeys = computedKeys(computed);
+
+  /**
+   * Пересчитывает computed поверх prospective-стейта. Запись — через
+   * {@link safeSetBySegments}, чтобы сохранить null-prototype-инвариант
+   * промежуточных контейнеров (спред в plain object его бы потерял).
+   */
+  const recompute = (next: StateModel): StateModel => {
+    if (derivedKeys.length === 0) return next;
+    const values = evaluateComputed(next, computed);
+    let result = next;
+    for (const key of derivedKeys) result = safeSetBySegments(result, [key], values[key]);
+    return result;
+  };
+
+  let state: StateModel = recompute(Object.assign(nullProtoObject(), initialState) as StateModel);
 
   const getByPath = (path: string): unknown => {
     if (!path || path === "/") return state;
@@ -73,6 +97,11 @@ export function createHardenedStore(initialState: StateModel = {}, options: Hard
   const applyOne = (next: StateModel, path: string, value: unknown): StateModel | null => {
     const segments = parseJsonPointer(path);
     if (segments === null) { onError?.(`unsafe state path rejected: ${path}`); return null; }
+    // computed — read-only: запись в ключ или под него отклоняется (D7-2).
+    if (segments.length > 0 && derivedKeys.includes(segments[0]!)) {
+      onError?.(`computed state path rejected: ${path}`);
+      return null;
+    }
     if (getByPath(path) === value) return next;
     return safeSetBySegments(next, segments, value);
   };
@@ -86,7 +115,7 @@ export function createHardenedStore(initialState: StateModel = {}, options: Hard
       const next = applyOne(state, path, value);
       if (next === null || next === state) return;
       if (guard && !guard(next)) { onError?.("mutation rejected: render-cost budget exceeded"); return; }
-      state = next;
+      state = recompute(next);
       notify();
     },
     update(updates) {
@@ -99,7 +128,7 @@ export function createHardenedStore(initialState: StateModel = {}, options: Hard
       }
       if (!changed) return;
       if (guard && !guard(next)) { onError?.("mutation rejected: render-cost budget exceeded"); return; }
-      state = next;
+      state = recompute(next);
       notify();
     },
   };

@@ -69,6 +69,7 @@ function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions, p
     // eslint-disable-next-line react-hooks/refs
     const actionRuntime = new EasyUiActionRuntime({
       initialState: doc.state,
+      computed: doc.computed,
       screenIds: new Set(doc.screens.map((screen) => screen.id)),
       deps: {
         navigate: (screenId) => navigationRef.current.navigate(screenId),

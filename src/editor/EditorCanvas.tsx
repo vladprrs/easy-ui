@@ -8,6 +8,7 @@ import { HostStageSurface } from "../catalog/hostPrimitives";
 import type { ThemeContent } from "../api/client";
 import type { PrototypeDoc } from "../prototype/schema";
 import { buildScreenRenderPlan, stripEvents, toRuntimeSpec } from "../prototype/runtimeSpec";
+import { applyComputed } from "../prototype/computed";
 import { mergeScreenState } from "../prototype/stateOverrides";
 import { CanvasLayers } from "../player/CanvasLayers";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
@@ -148,7 +149,7 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
     () => ({ metadata: specs?.metadata ?? {}, runtime: null, definitions: customDefinitions ?? {} }),
     [customDefinitions, specs],
   );
-  const initialState = useMemo(() => mergeScreenState(doc.state, screen.stateOverrides), [doc.state, screen.stateOverrides]);
+  const initialState = useMemo(() => applyComputed(mergeScreenState(doc.state, screen.stateOverrides), doc.computed), [doc.computed, doc.state, screen.stateOverrides]);
 
   const findMarker = useCallback((key: string) => {
     const cached = markerCacheRef.current.get(key);

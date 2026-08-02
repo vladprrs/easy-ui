@@ -5,6 +5,7 @@ import { createPlayerRuntime, type CustomPlayerRuntime, type PlayerRuntimeDeps }
 import type { ComponentDefinition } from "../catalog/definitions";
 import { EasyUiActionRuntime } from "../player/actionRuntime";
 import { ScreenSurface } from "../player/ScreenSurface";
+import type { ComputedSpecLike } from "../prototype/computed";
 import type { RuntimeTree } from "../prototype/runtimeSpec";
 
 const noop = () => undefined;
@@ -15,6 +16,8 @@ export interface CaptureSurfaceProps {
   custom?: CustomPlayerRuntime;
   tree: RuntimeTree;
   initialState: StateModel;
+  /** `doc.computed` — производные значения стейта (сеются стором до первого рендера). */
+  computed?: ComputedSpecLike;
   screenIds: ReadonlySet<string>;
   canvas?: { width: number; height: number };
   onError?: (message: string, detail?: Record<string, unknown>) => void;
@@ -29,11 +32,11 @@ export interface CaptureSurfaceProps {
  * The rendering itself is the shared {@link ScreenSurface} (W1-2) — the same
  * surface the player and presentation mode use with live navigation deps.
  */
-export function CaptureSurface({ designSystem, custom, tree, initialState, screenIds, canvas, onError, hostPrimitivesAllowed = true }: CaptureSurfaceProps) {
+export function CaptureSurface({ designSystem, custom, tree, initialState, computed, screenIds, canvas, onError, hostPrimitivesAllowed = true }: CaptureSurfaceProps) {
   const runtime = useMemo(() => createPlayerRuntime(inertDeps, custom, designSystem), [custom, designSystem]);
   const customDefinitions = useMemo<Record<string, ComponentDefinition>>(() => custom?.definitions ?? {}, [custom]);
   const report = useMemo(() => onError ?? noop, [onError]);
-  const actionRuntime = useMemo(() => new EasyUiActionRuntime({ initialState, screenIds, deps: inertDeps, onError: report }), [initialState, screenIds, report]);
+  const actionRuntime = useMemo(() => new EasyUiActionRuntime({ initialState, computed, screenIds, deps: inertDeps, onError: report }), [initialState, computed, screenIds, report]);
 
   return <JSONUIProvider registry={runtime.registry} handlers={runtime.handlers} store={actionRuntime.store}>
     <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={customDefinitions} onError={report} tree={tree} canvas={canvas} hostPrimitivesAllowed={hostPrimitivesAllowed} />

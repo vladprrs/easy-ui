@@ -113,6 +113,80 @@ describe("createHardenedStore", () => {
   });
 });
 
+describe("createHardenedStore with computed", () => {
+  const computed = {
+    cartCount: { op: "count", from: "/cart" },
+    cartSubtotal: { op: "sumProduct", from: "/cart", fields: ["price", "qty"] },
+    cartTotal: { op: "add", terms: ["/cartSubtotal", "/shippingFee"] },
+  };
+  const initial = { cart: [{ price: 100, qty: 2 }], shippingFee: 500 };
+  const storeWith = (onError = vi.fn()) => ({ store: createHardenedStore(initial, { computed, onError }), onError });
+
+  it("seeds computed values at construction", () => {
+    const { store } = storeWith();
+    expect(store.get("/cartCount")).toBe(1);
+    expect(store.get("/cartSubtotal")).toBe(200);
+    expect(store.get("/cartTotal")).toBe(700);
+  });
+
+  it("recomputes before notify: the listener sees a consistent snapshot (set/push/remove)", () => {
+    const { store } = storeWith();
+    const seen: Record<string, unknown>[] = [];
+    store.subscribe(() => {
+      const snapshot = store.getSnapshot() as Record<string, unknown>;
+      seen.push({ cart: snapshot.cart, cartCount: snapshot.cartCount, cartSubtotal: snapshot.cartSubtotal, cartTotal: snapshot.cartTotal });
+    });
+    store.set("/cart", [{ price: 100, qty: 2 }, { price: 50, qty: 1 }]); // push
+    store.set("/cart/0/qty", 3);                                        // set inside an item
+    store.set("/cart", [{ price: 50, qty: 1 }]);                        // remove
+    expect(seen.map((snapshot) => [snapshot.cartCount, snapshot.cartSubtotal, snapshot.cartTotal])).toEqual([
+      [2, 250, 750],
+      [2, 350, 850],
+      [1, 50, 550],
+    ]);
+  });
+
+  it("updates an add-chain (subtotal → total) within a single notification", () => {
+    const { store } = storeWith();
+    const notifications = vi.fn();
+    store.subscribe(notifications);
+    store.set("/cart", [{ price: 100, qty: 2 }, { price: 100, qty: 1 }]);
+    expect(notifications).toHaveBeenCalledTimes(1);
+    expect(store.get("/cartSubtotal")).toBe(300);
+    expect(store.get("/cartTotal")).toBe(800);
+  });
+
+  it("rejects a direct write to a computed path, reporting exactly one error", () => {
+    const { store, onError } = storeWith();
+    const notifications = vi.fn();
+    store.subscribe(notifications);
+    store.set("/cartTotal", 1);
+    expect(store.get("/cartTotal")).toBe(700);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(notifications).not.toHaveBeenCalled();
+    store.set("/cartTotal/nested", 1); // under a computed key — same rejection
+    expect(onError).toHaveBeenCalledTimes(2);
+  });
+
+  it("applies a batch update partially when one entry targets a computed path", () => {
+    const { store, onError } = storeWith();
+    store.update({ "/shippingFee": 300, "/cartCount": 42 });
+    expect(store.get("/shippingFee")).toBe(300);
+    expect(store.get("/cartCount")).toBe(1); // recomputed, not the rejected literal
+    expect(store.get("/cartTotal")).toBe(500);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps null-prototype containers after a recompute", () => {
+    const { store } = storeWith();
+    store.set("/a/b", 1);
+    const snapshot = store.getSnapshot() as Record<string, unknown>;
+    expect(Object.getPrototypeOf(snapshot)).toBeNull();
+    expect(Object.getPrototypeOf(snapshot.a as object)).toBeNull();
+    expect(snapshot.cartTotal).toBe(700);
+  });
+});
+
 describe("freezeJsonSafePayload", () => {
   it("accepts JSON-safe payloads and deep-freezes them", () => {
     const result = freezeJsonSafePayload({ a: 1, b: [{ c: "x" }] });
