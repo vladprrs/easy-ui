@@ -149,7 +149,58 @@ const architectureSchema = z.strictObject({
   exemptions: z.array(architectureExemptionSchema).max(ARCHITECTURE_EXEMPTIONS_LIMIT).optional(),
 });
 
-const prototypeDocShape = <S extends z.ZodType, F extends z.ZodType>(screens: S, flows: F) => ({
+/** Лимиты `doc.computed` (план `docs/plans/2026-08-02-computed-state.md`, D5/D12). */
+export const COMPUTED_ENTRIES_LIMIT = 20;
+export const COMPUTED_FIELDS_LIMIT = 4;
+export const COMPUTED_TERMS_LIMIT = 8;
+
+/**
+ * Ключ computed-значения — **bare**, как в `doc.state` (D1). Первая буква исключает
+ * `__proto__`/`_viewer` и `~`-эскейпы по построению, поэтому коллизии и запрет записи
+ * сравниваются ключ-с-ключом без спецслучаев.
+ */
+const computedKeySchema = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*$/, "computed key must match ^[A-Za-z][A-Za-z0-9_-]*$");
+/** Источник — абсолютный пойнтер в plain state (безопасность пойнтера проверяет validate.ts). */
+const computedFromSchema = z.string().startsWith("/");
+/** Поле item — относительный путь (`price`, `a/b`). */
+const computedFieldSchema = z.string().min(1);
+
+/**
+ * Закрытый набор операций v1 (D2). Только **входная** ветка: stored-запись —
+ * `z.unknown()`, её форму разбирает оборонительный `evaluateComputed`
+ * (`src/prototype/computed.ts`), иначе документ, сохранённый более новой версией,
+ * ронял бы чтение ревизии.
+ */
+const inputComputedEntrySchema = z.discriminatedUnion("op", [
+  z.strictObject({ op: z.literal("count"), from: computedFromSchema }),
+  z.strictObject({ op: z.literal("sum"), from: computedFromSchema, field: computedFieldSchema.optional() }),
+  z.strictObject({
+    op: z.literal("sumProduct"),
+    from: computedFromSchema,
+    fields: z.array(computedFieldSchema).min(2).max(COMPUTED_FIELDS_LIMIT),
+  }),
+  z.strictObject({
+    op: z.literal("add"),
+    // Терм: абсолютный пойнтер (plain state или **ранее объявленный** computed-ключ —
+    // порядок проверяет validate.ts) либо числовой литерал (отрицательный = скидка).
+    terms: z.array(z.union([z.string().startsWith("/"), z.number()])).min(2).max(COMPUTED_TERMS_LIMIT),
+  }),
+]);
+
+const inputComputedSchema = z.record(computedKeySchema, inputComputedEntrySchema)
+  .describe("Производные значения стейта: ключ → операция (count/sum/sumProduct/add). Read-only, читаются как обычный $state по bare-ключу.");
+/**
+ * Stored-ветка: без формы записи вовсе — см. комментарий к `inputComputedEntrySchema`.
+ * `.nullable()` — по той же причине: `computed: null`, записанный более новой версией,
+ * не должен ронять чтение ревизии (422 на каждом открытии прототипа).
+ */
+const storedComputedSchema = z.record(z.string(), z.unknown()).nullable()
+  .describe("Производные значения стейта (stored-ветка: форма записи не проверяется).");
+
+/** Порядок операций для `/api/capabilities.limits`/`features` (D12): импорт из места энфорса. */
+export const COMPUTED_OPS = ["count", "sum", "sumProduct", "add"] as const satisfies readonly z.output<typeof inputComputedEntrySchema>["op"][];
+
+const prototypeDocShape = <S extends z.ZodType, F extends z.ZodType, C extends z.ZodType>(screens: S, flows: F, computed: C) => ({
   version: z.literal(1),
   id: slugSchema,
   name: z.string().min(1),
@@ -157,6 +208,8 @@ const prototypeDocShape = <S extends z.ZodType, F extends z.ZodType>(screens: S,
   device: z.enum(["mobile", "tablet", "desktop"]).default("desktop"),
   startScreen: slugSchema,
   state: z.record(z.string(), jsonValueSchema),
+  /** Производные значения стейта (аддитивно, read-only); формат — `src/prototype/computed.ts`. */
+  computed: computed.optional(),
   screens,
   flows: flows.optional(),
   /** Архитектурные исключения (волна 2): аддитивно, документ без поля ведёт себя как раньше. */
@@ -167,6 +220,8 @@ type RefinableDoc = {
   screens: { id: string }[];
   startScreen: string;
   flows?: { id: string; parentId?: string; steps: { screenId: string }[] }[];
+  /** `null` возможен только в stored-ветке (см. `storedComputedSchema`). */
+  computed?: Record<string, unknown> | null;
 };
 
 /**
@@ -242,6 +297,11 @@ const refineFlowHierarchy = (flows: NonNullable<RefinableDoc["flows"]>, context:
  * без потерь: правила геометрии дорожек и лимиты — вопрос авторинга, не чтения.
  */
 const refinePrototypeDocAuthoring = <T extends RefinableDoc>(doc: T, context: z.RefinementCtx) => {
+  // До early-return по flows: счётчик записей computed — авторский лимит (D5).
+  if (doc.computed != null && Object.keys(doc.computed).length > COMPUTED_ENTRIES_LIMIT) {
+    context.addIssue({ code: "custom", path: ["computed"], message: `computed exceeds the limit of ${COMPUTED_ENTRIES_LIMIT} entries` });
+  }
+
   if (!doc.flows) return;
   refineFlowHierarchy(doc.flows, context);
   let totalSteps = 0;
@@ -288,7 +348,7 @@ const refinePrototypeDocAuthoring = <T extends RefinableDoc>(doc: T, context: z.
 
 /** Strict schema for create/save inputs. New revisions must choose a design system explicitly. */
 export const inputPrototypeDocSchema = z.strictObject({
-  ...prototypeDocShape(z.array(authoredScreenSchema).min(1), z.array(inputFlowSchema).min(1).max(FLOWS_LIMIT)),
+  ...prototypeDocShape(z.array(authoredScreenSchema).min(1), z.array(inputFlowSchema).min(1).max(FLOWS_LIMIT), inputComputedSchema),
   designSystem: slugSchema,
 }).superRefine(refinePrototypeDocStructure).superRefine(refinePrototypeDocAuthoring);
 
@@ -298,7 +358,7 @@ export const inputPrototypeDocSchema = z.strictObject({
  * а раскрытый документ (ключи `<hostKey>$<inner>`) валиден для этого парсера.
  */
 export const storedPrototypeDocSchema = z.strictObject({
-  ...prototypeDocShape(z.array(screenSchema).min(1), z.array(storedFlowSchema).min(1)),
+  ...prototypeDocShape(z.array(screenSchema).min(1), z.array(storedFlowSchema).min(1), storedComputedSchema),
   designSystem: slugSchema.default("shadcn"),
 }).superRefine(refinePrototypeDocStructure);
 
@@ -310,4 +370,7 @@ export type PrototypeDoc = z.output<typeof storedPrototypeDocSchema>;
 export type ArchitectureExemption = z.output<typeof architectureExemptionSchema>;
 /** Публичный тип флоу выводится из **строгой input-схемы** — иначе литералы флоу по репозиторию теряют excess-property-проверки. */
 export type Flow = z.output<typeof inputFlowSchema>;
+/** Публичные типы computed — из **строгой input-ветки** (прецедент `Flow`). */
+export type ComputedEntry = z.output<typeof inputComputedEntrySchema>;
+export type ComputedSpec = z.output<typeof inputComputedSchema>;
 export type FlowStep = z.output<typeof flowStepSchema>;
