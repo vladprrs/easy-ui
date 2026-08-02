@@ -249,6 +249,15 @@ describe("bundle import", () => {
     const component = itemFor(redo.report, "component", "rating-stars")!;
     expect(component.action).toBe("created");
     expect(component.version).toBe(2);
+    // RFC candidate-acceptance §7/§9 (V9): bundle-import — третий путь публикации, он не проходит
+    // ни promote, ни advisory-приёмку, поэтому каждая его версия помечена в аудите и исключается
+    // из знаменателя KPI «версий на принятый компонент».
+    // `audit_events.id` — UUID, поэтому порядок задаётся полем версии, а не первичным ключом.
+    const imports = b.db.query("SELECT detail FROM audit_events WHERE action='publish.import' AND subject_id='rating-stars'").all() as { detail: string }[];
+    expect(imports.map((row) => JSON.parse(row.detail) as { version: number; rev: number; path: string }).sort((x, y) => x.version - y.version)).toEqual([
+      { version: 1, rev: 1, path: "bundle-import" },
+      { version: 2, rev: 3, path: "bundle-import" },
+    ]);
     a.db.close(); b.db.close();
   }, 60_000);
 

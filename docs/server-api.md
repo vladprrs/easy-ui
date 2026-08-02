@@ -306,6 +306,7 @@ Meta-ответы прототипов и компонентов additively не
 | `POST /components/:id/restore` | `{rev,baseRev}` → `{rev}` |
 | `POST /components/:id/validate` | Тело не читается → 200 receipt префлайта head-ревизии; см. [Validate-префлайт](#validate-префлайт-публикации) |
 | `POST /components/:id/publish` | `{message?,baseRev,reuseOverride?}` → 201 `{version,hostAbiVersion,warnings}` и `Location`; `reuseOverride` — только для администратора (`403 admin_required`), конфликты роли — терминальные `409 catalog_changed\|canonical_role_conflict` |
+| `POST /components/:id/promote` | `{baseRev,sourceHash,expectedCatalogRevision?,supersede?,reuseOverride?,message?}` → 201 `{version,rev,hostAbiVersion,sourceHash,bundleHash,themeVersion,catalogRevision,superseded[],cached,warnings}` и `Location`; см. [Promote](#promote-приёмка-провалидированной-головы) |
 | `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,statusReason:string\|null,supersededBy:number\|null,statusRev,designSystem,publishedAt}` |
 | `GET /components/:id/versions/:version` | Метадата версии **любого статуса**: `{version,rev,status,statusReason,supersededBy,statusRev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?,scope?,allowedAsRoot?,canonicalFor?,sourceBounded?,ownership?,replacement?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; `propsJsonSchema` описывает input (до Zod defaults/transforms); immutable |
 | `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); отдаётся при статусе `active\|deprecated\|superseded`, иначе `404 bundle_unavailable`; immutable |
@@ -337,6 +338,26 @@ Meta-ответы прототипов и компонентов additively не
 **Коды ошибок.** `429 validate_in_flight` — у этой учётки уже идёт прогон; `429 queue_full` — исчерпан общий cap (оба ретраятся с бэкоффом). `422 validation_failed` — любая из проверок набора; неподдерживаемое поле provenance (исторический кейс `pageNodeId`, переживший сужение схемы или приехавший импортом бандла) приходит именно так, с полем в `issues[].path` = `["figma","pageNodeId"]`. Также `422 asset_not_found` (dangling asset-ссылка исходника или `figma.referenceScreenshots`), `422 event_schema_not_serializable`, `413 payload_too_large`, `404 not_found` для несуществующего компонента и `403 forbidden` для чужого.
 
 **Kill-switch.** `EASYUI_VALIDATE_DISABLED=1` (читается один раз на входе процесса) убирает ручку — `404 not_found` — и гасит `features.componentValidate` и `features.componentDraftPreview` в discovery.
+
+### Promote: приёмка провалидированной головы
+
+`POST /components/:id/promote` (RFC `docs/plans/2026-08-02-candidate-acceptance-pipeline-rfc.md`, волна R1) публикует головную ревизию **одним вызовом**: без повторной компиляции и без ручных status-переходов. Доступ — владелец компонента и владелец его дизайн-системы (как у publish). Никаких новых таблиц и миграций: вход опознаётся парой `{baseRev, sourceHash}` из [validate-receipt](#validate-префлайт-публикации).
+
+Это **сага**, а не одна транзакция (bun:sqlite не переживает `await` внутри транзакции):
+
+**Фаза A (вне транзакций).** Предпроверки: `head_rev === baseRev` (иначе `409 revision_conflict {currentRev}`), `sha256(source) === sourceHash` (иначе `409 source_hash_mismatch {sourceHash,currentRev}`), опциональный CAS каталога `expectedCatalogRevision` (иначе `409 catalog_changed {catalogRevision}`). Затем перепрогон каталого-временных проверок publish-пути — имя host-примитива, `canonicalFor` (тот же терминальный reuse-конверт и тот же admin-only `reuseOverride`), атомарная политика, asset-ссылки. Артефакты берутся из candidate-кэша по `sourceHash`; при холодном кэше кандидат пересобирается тем же путём, что draft-preview (под троттлингом validate, отсюда `429 validate_in_flight`/`429 queue_full`). **`typecheck` и `compile` не выполняются** — их уже оплатил validate; `stage` получает готовые `compiledJs`/`bundleHash`/**фактический** `hostAbiVersion`. Import-верификация (`id@rev`) выполняется всегда.
+
+**Фаза B (одна короткая синхронная транзакция).** `activate` новой версии → `pinAssets` (иначе версия осталась бы без пинов: пустой `assets` в DTO, сломанный export, потеря RESTRICT-защиты) → `recordValidation` → auto-supersede: прочие `active`-версии выбираются **внутри** транзакции (новая исключается по номеру) и переводятся через инварианты `setStatus` — CAS с инкрементом `status_rev`, cycle-check, `supersededBy = N`, `status_reason = "auto: promoted vN"`. `supersede: "none"` пропускает этот шаг и оставляет параллельные active-версии. Любая ошибка фазы B откатывает транзакцию целиком и компенсируется `fail()`.
+
+**Инвариант пула.** После `supersede: "auto"` у компонента ровно одна active-версия. Последующий ручной `deprecated` на неё оставляет компонент без active — это видно как warning `component_no_active_version` в readiness-гейте `pins` и как ненулевой `noActiveVersion` в `driver.mjs audit --versions`.
+
+**Recovery и идемпотентность.** Крах фазы A компенсируется `fail()`/`failStagingPublishes` — ровно как у publish. Повторный promote тех же `{baseRev, sourceHash}` после этого **проходит**: `already_published` проверяется по строкам ревизии *вне* статуса `failed`. Схема запрещает две публикации одной ревизии (`UNIQUE (component_id, rev)`), а R1 идёт без миграций, поэтому повтор переписывает `failed`-строку на месте — номер версии сохраняется, дырки в нумерации не возникает. Повтор поверх **успешной** версии остаётся терминальным `409 already_published`.
+
+**Коды ошибок.** `400 invalid_request`/`base_rev_required`; `403 admin_required` (`reuseOverride` не от админа); `404 not_found`; `409 revision_conflict|source_hash_mismatch|already_published|catalog_changed|canonical_role_conflict|candidate_unavailable`; `422 validation_failed|asset_not_found|atomic_policy_violation|event_schema_not_serializable`; `413 payload_too_large`; `429 validate_in_flight|queue_full`. `candidate_unavailable` — редкая гонка с GC кэша: повторить validate+promote. Ни один `409` не ретраится автоматически.
+
+**Publish не меняется.** `POST /components/:id/publish` остаётся полноценным путём публикации (в т.ч. когда приёмка погашена kill-switch'ем); bundle-import публикует своим путём и помечается аудит-событием `publish.import`. Успешный promote пишет `component.promoted` с fingerprints (`sourceHash`/`bundleHash`/`hostAbiVersion`/`themeVersion`/`catalogRevision`/`superseded`) — это источник KPI-метрик приёмки.
+
+**Kill-switch.** `EASYUI_ACCEPTANCE_DISABLED=1` (читается один раз на входе процесса) убирает ручку — `404 not_found` — и гасит `features.acceptancePromote` в discovery. Publish при этом продолжает работать: гашение приёмки не делает дизайн-систему неопубликуемой.
 
 ### Поиск кандидатов на переиспользование
 
@@ -985,6 +1006,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 | Флаг | Что означает | Как гаснет |
 |---|---|---|
 | `componentValidate` | доступен [`POST /components/:id/validate`](#validate-префлайт-публикации) | `EASYUI_VALIDATE_DISABLED=1` → `false` и `404` на ручке |
+| `acceptancePromote` | доступен [`POST /components/:id/promote`](#promote-приёмка-провалидированной-головы) | `EASYUI_ACCEPTANCE_DISABLED=1` → `false` и `404` на ручке; publish продолжает работать |
 | `componentDraftPreview` | доступна [съёмка head-ревизии](#draft-preview-head-ревизии-компонента) `POST /components/:id/head/screenshot` | тот же kill-switch: постановка джобы собирает candidate-bundle |
 | `componentGeometry` | `probe: "geometry"` принимают обе компонентные ручки, результат — [`surface: "component"`](#скриншоты) | — |
 | `prototypeHeadTracking` | lifecycle-роут принимает [`track: "head"`](#head-tracking-служебных-прототипов) | — |
@@ -993,7 +1015,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 | `themeSparseOps` | PATCH темы умеет `addTokens`/`addFonts`/`addIcons` | — |
 | `themeSpacingResolverV2` | новые версии темы пишутся [резолвером 2](#тема-дизайн-системы-tokensfontsicons-и-версии) | `EASYUI_THEME_RESOLVER_V2_DISABLED=1` → `false`, новые версии остаются на резолвере 1 |
 
-Оба kill-switch'а, как и `REUSE_GATE`, читаются один раз на входе процесса, поэтому discovery и поведение ручек не могут разойтись. Флаг `false` означает «выключено на этом инстансе», а отсутствие ключа — «образ старше этой волны»; клиент обязан различать эти случаи. Лимиты `validateUserConcurrent`/`validateGlobalConcurrent` описывают, когда прилетит `429 validate_in_flight`/`429 queue_full`, а `validateCacheTtlHours`/`validateCacheMiB` — срок жизни и потолок candidate-кэша (после вытеснения следующий draft-preview просто пересоберёт кандидата).
+Все kill-switch'и (`EASYUI_VALIDATE_DISABLED`, `EASYUI_ACCEPTANCE_DISABLED`, `EASYUI_THEME_RESOLVER_V2_DISABLED`), как и `REUSE_GATE`, читаются один раз на входе процесса, поэтому discovery и поведение ручек не могут разойтись. Флаг `false` означает «выключено на этом инстансе», а отсутствие ключа — «образ старше этой волны»; клиент обязан различать эти случаи. Лимиты `validateUserConcurrent`/`validateGlobalConcurrent` описывают, когда прилетит `429 validate_in_flight`/`429 queue_full`, а `validateCacheTtlHours`/`validateCacheMiB` — срок жизни и потолок candidate-кэша (после вытеснения следующий draft-preview просто пересоберёт кандидата).
 
 `features.compositionV2` — инстанс принимает документы композиций версии 2 (вложенность, `atomicLevel`); `features.catalogMigration` — доступны админские эндпоинты аудита и миграции каталога. `limits.compositionDepth` — максимальная глубина вложенности композиций, **внешняя композиция считается уровнем 1** (см. [формат](prototype-format.md#composition-document-v2)).
 

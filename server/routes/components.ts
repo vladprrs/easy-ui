@@ -28,6 +28,7 @@ import {
 import { assertAtomicPolicy } from "../atomicPolicy";
 import { getCandidateBundle, readCandidate } from "../components/candidates";
 import { validateComponentHead } from "../components/validate";
+import { promoteComponent } from "../components/promote";
 
 const slug=/^[a-z0-9]+(?:-[a-z0-9]+)*$/, componentName=/^[A-Z][A-Za-z0-9]*$/;
 function bad(message:string,path="source"):never{throw new ApiError(422,"validation_failed","Component is invalid",{issues:[{path:[path],message}]});}
@@ -35,7 +36,7 @@ function body(v:unknown){const p=z.record(z.string(),z.unknown()).safeParse(v);i
 function int(v:unknown,name:string){if(typeof v!=="number"||!Number.isInteger(v)||v<1)throw new ApiError(400,"invalid_request",`${name} must be a positive integer`);return v;}
 function base(b:Record<string,unknown>){if(!Object.hasOwn(b,"baseRev"))throw new ApiError(400,"base_rev_required","baseRev is required");return int(b.baseRev,"baseRev");}
 function text(v:unknown,name:string,required=true){if(v===undefined&&!required)return undefined;if(typeof v!=="string")throw new ApiError(400,"invalid_request",`${name} must be a string`);return v;}
-function reserveHostPrimitiveName(name:string):void{if(hostPrimitiveNames.has(name))throw new ApiError(409,"already_exists","Component name is reserved for a host primitive");}
+export function reserveHostPrimitiveName(name:string):void{if(hostPrimitiveNames.has(name))throw new ApiError(409,"already_exists","Component name is reserved for a host primitive");}
 export async function checkSource(source:string,path:string,smoke=false){
   if(new TextEncoder().encode(source).byteLength>262144)throw new ApiError(413,"payload_too_large","Component source exceeds 256 KB");
   try { new Bun.Transpiler({loader:"tsx"}).transformSync(source); } catch(error){bad(`Syntax error: ${error instanceof Error?error.message:String(error)}`);}
@@ -102,9 +103,9 @@ export async function publishComponent(db:Database,repo:ComponentRepo,id:string,
   // ни материализованного клиентского модуля.
   assertPublishRoleAvailable(db,{designSystem:revision.designSystem,id,canonicalFor:extracted.meta!.canonicalFor??[],actor:reuse.actor,mode:reuse.mode,sourceHash:sha256(revision.source),intent:extracted.meta!.description,...(reuse.override===undefined?{}:{override:reuse.override})});
   await typecheckComponent(path); let clientPath=path;if(extracted.serverOnly?.conformanceProps===true)try{clientPath=await materializeClientSource(dataDir,id,revision.rev,revision.source,true);}catch(error){bad(error instanceof Error?error.message:String(error));}const compiled=await compileComponent(clientPath,{capabilities:extracted.meta!.capabilities});
-  const staged=repo.stage(id,baseRev,{compiledJs:compiled.compiledJs,bundleHash:compiled.bundleHash,sourceHash:sha256(revision.source),meta:extracted.meta!},message);
-  // stage() persists host_abi_version=1; update to the computed ABI (max of imports/capabilities).
-  if(compiled.hostAbiVersion!==1) db.query("UPDATE component_publishes SET host_abi_version=? WHERE component_id=? AND version=?").run(compiled.hostAbiVersion,id,staged.version);
+  // Фактический ABI (max по импортам/capabilities) пишется прямо в `stage` — той же дорогой,
+  // что и у promote (RFC candidate-acceptance §4.3.4, находка V2).
+  const staged=repo.stage(id,baseRev,{compiledJs:compiled.compiledJs,bundleHash:compiled.bundleHash,sourceHash:sha256(revision.source),meta:extracted.meta!,hostAbiVersion:compiled.hostAbiVersion},message);
   await hooks.afterStage?.({id,...staged});
   try { await hooks.beforeImport?.({id,...staged}); await importPublished(id,staged.rev,path); repo.activate(id,staged.version); repo.pinAssets(id,staged.version,assetIds); }
   catch(error){repo.fail(id,staged.version);const detail=error instanceof Error?error.message:String(error);recordValidation(db,{resourceType:"component",resourceId:id,rev:staged.rev,catalogHash:compiled.bundleHash,ok:false,issues:[{path:"/source",message:detail}]});throw new ApiError(422,"validation_failed","Published component import failed",{issues:[{path:["source"],message:detail}]});}
@@ -195,7 +196,7 @@ async function validatedExtractionForPublish(dataDir:string,sourceHash:string):P
   return {sourceHash,extracted:entry.extracted};
 }
 
-export async function routeComponents(request:Request,db:Database,segments:string[],principal:Principal,dataDir:string,reuseGateMode:ReuseGateMode=DEFAULT_REUSE_GATE_MODE,validate:{disabled?:boolean}={}):Promise<Response>{
+export async function routeComponents(request:Request,db:Database,segments:string[],principal:Principal,dataDir:string,reuseGateMode:ReuseGateMode=DEFAULT_REUSE_GATE_MODE,validate:{disabled?:boolean}={},acceptance:{disabled?:boolean}={}):Promise<Response>{
   const repo=new ComponentRepo(db);
   // `?includeDeleted=1` — единственный способ увидеть надгробия: голый GET по-прежнему
   // отдаёт 404 для мягко удалённого компонента (совместимость с driver.mjs и src/api/client.ts).
@@ -272,6 +273,12 @@ export async function routeComponents(request:Request,db:Database,segments:strin
   // видят: они читают publishes. Публичного контракта у URL нет (эфемерный кэш, см. P8).
   if(tail[0]==="draft"&&tail.length===3&&tail[2]==="bundle.js"){
     if(request.method!=="GET")throw new ApiError(405,"method_not_allowed","Method not allowed");
+    // RFC candidate-acceptance §2 (M5/V11): байты непубличного драфта закрыты владельцем.
+    // `capture` пропускается по allowlist сессии (путь уже сверен в `createHandler`) — это
+    // прецедент прототипного драфт-роута; лобовой `requireResourceOwner` сломал бы съёмку,
+    // потому что capture-воркер не user. Проверка идёт ДО lookup'а, чтобы чужой sourceHash
+    // нельзя было прощупать разницей 403/404.
+    if(principal.kind!=="capture") requireResourceOwner(db,"components",id,principal);
     if(!/^[0-9a-f]{64}$/.test(tail[1]!))throw new ApiError(404,"not_found","Candidate bundle not found");
     const candidate=await getCandidateBundle(dataDir,id,tail[1]!);
     if(!candidate)throw new ApiError(404,"not_found","Candidate bundle not found");
@@ -296,6 +303,24 @@ export async function routeComponents(request:Request,db:Database,segments:strin
     try { result=await publishComponent(db,repo,id,base(b),dataDir,text(b.message,"message",false),{},{actor:{userId:actor.userId,isAdmin:actor.isAdmin},mode:reuseGateMode,...(publishOverride===undefined?{}:{override:publishOverride})},preExtracted); }
     catch(error){ if(error instanceof ReuseGateRejection) return reuseRejectionResponse(db,error); throw error; }
     writeAuditEvent(db,{actorId:actor.userId,action:"component.version.published",subjectType:"component",subjectId:id,detail:{version:result.version}});return json(result,201,{...noStore,location:`/api/components/${id}/versions/${result.version}`});}
+  // RFC candidate-acceptance-pipeline (R1): promote — приёмка провалидированной head-ревизии
+  // одной командой. Никаких durable-таблиц и миграций: идентификация кандидата — пара
+  // `{baseRev, sourceHash}` из validate-receipt. Kill-switch EASYUI_ACCEPTANCE_DISABLED=1 →
+  // ручки нет (404) и `features.acceptancePromote=false`.
+  if(tail[0]==="promote"&&tail.length===1){if(acceptance.disabled)throw new ApiError(404,"not_found","Component promote is disabled");if(request.method!=="POST")throw new ApiError(405,"method_not_allowed","Method not allowed");const actor=requireResourceOwner(db,"components",id,principal);const systemId=repo.row(id).design_system;requireActiveDesignSystem(db,systemId,["designSystem"]);requireResourceOwner(db,"design_systems",systemId,principal);const b=body(await readJson(request));
+    for(const key of Object.keys(b))if(!["baseRev","sourceHash","expectedCatalogRevision","supersede","reuseOverride","message"].includes(key))throw new ApiError(400,"invalid_request",`Unknown field: ${key}`);
+    const sourceHash=text(b.sourceHash,"sourceHash")!;
+    if(!/^[0-9a-f]{64}$/.test(sourceHash))throw new ApiError(400,"invalid_request","sourceHash must be a sha256 hex digest");
+    const expectedCatalogRevision=text(b.expectedCatalogRevision,"expectedCatalogRevision",false);
+    if(b.supersede!==undefined&&b.supersede!=="auto"&&b.supersede!=="none")throw new ApiError(400,"invalid_request","supersede must be \"auto\" or \"none\"");
+    const promoteOverride=b.reuseOverride===undefined?undefined:parseWith(reuseOverrideSchema,b.reuseOverride,"reuseOverride is invalid");
+    if(promoteOverride!==undefined&&!actor.isAdmin)throw new ApiError(403,"admin_required","Only an admin may override the reuse gate");
+    let promoted;
+    try { promoted=await promoteComponent(db,dataDir,{id,baseRev:base(b),sourceHash,supersede:(b.supersede as "auto"|"none"|undefined)??"auto",actor:{userId:actor.userId,isAdmin:actor.isAdmin},mode:reuseGateMode,...(expectedCatalogRevision===undefined?{}:{expectedCatalogRevision}),...(text(b.message,"message",false)===undefined?{}:{message:text(b.message,"message",false)!}),...(promoteOverride===undefined?{}:{override:promoteOverride})}); }
+    catch(error){ if(error instanceof ReuseGateRejection) return reuseRejectionResponse(db,error); throw error; }
+    // KPI §9: fingerprints промоушена — единственный источник измерения churn'а постфактум.
+    writeAuditEvent(db,{actorId:actor.userId,action:"component.promoted",subjectType:"component",subjectId:id,detail:{version:promoted.version,rev:promoted.rev,sourceHash:promoted.sourceHash,bundleHash:promoted.bundleHash,hostAbiVersion:promoted.hostAbiVersion,themeVersion:promoted.themeVersion,catalogRevision:promoted.catalogRevision,superseded:promoted.superseded,supersede:(b.supersede as string|undefined)??"auto",cached:promoted.cached}});
+    return json(promoted,201,{...noStore,location:`/api/components/${id}/versions/${promoted.version}`});}
   if(tail[0]==="versions"){
     // POST /versions/:version/status — manual lifecycle transition with CAS on statusRev (K.2).
     // TODO(T9): register this endpoint in server/contracts.ts (owned by T9; contract left unregistered here).

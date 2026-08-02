@@ -149,6 +149,38 @@ declare module "*/author/driver.mjs" {
   ): DriverAuditRow[];
   export function auditFindings(rows: readonly DriverAuditRow[]): { deprecatedInUse: string[]; unused: string[] };
   export function auditExitCode(findings: { deprecatedInUse: readonly string[] }): 0 | 2;
+  // --- audit --versions: KPI-срез публичных версий (RFC candidate-acceptance §9) ---
+  export interface DriverVersionAuditRow {
+    id: string;
+    designSystem: string;
+    versions: number;
+    active: number;
+    byStatus: Record<string, number>;
+    latestVersion: number | null;
+    firstPublishedAt: string | null;
+    lastPublishedAt: string | null;
+  }
+  export interface DriverVersionAuditFindings {
+    components: number;
+    published: number;
+    totalVersions: number;
+    versionsPerComponent: number;
+    firstVersionOnly: string[];
+    noActiveVersion: string[];
+    multipleActive: string[];
+    unpublished: string[];
+  }
+  export function versionAuditRows(
+    components: readonly { id: string; designSystem: string }[],
+    versionsById: Record<string, readonly { version: number; status: string; publishedAt: string }[]>,
+  ): DriverVersionAuditRow[];
+  export function versionAuditFindings(rows: readonly DriverVersionAuditRow[]): DriverVersionAuditFindings;
+  export function versionAuditExitCode(findings: { noActiveVersion: readonly string[] }): 0 | 2;
+  export function versionAuditLines(
+    scope: string,
+    rows: readonly DriverVersionAuditRow[],
+    findings: DriverVersionAuditFindings,
+  ): string[];
   export interface DriverReuseDecision {
     id: string;
     actorId: string;

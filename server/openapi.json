@@ -5634,6 +5634,490 @@
         "x-easyui-validated": false
       }
     },
+    "/api/components/{id}/promote": {
+      "post": {
+        "operationId": "post_components_id_promote",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "properties": {
+                  "baseRev": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "expectedCatalogRevision": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "reuseOverride": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "candidateKeys": {
+                        "items": {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "catalogRevision": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "reason": {
+                        "maxLength": 500,
+                        "minLength": 20,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "catalogRevision",
+                      "candidateKeys",
+                      "reason"
+                    ],
+                    "type": "object"
+                  },
+                  "sourceHash": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "supersede": {
+                    "enum": [
+                      "auto",
+                      "none"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "baseRev",
+                  "sourceHash"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "properties": {
+                    "bundleHash": {
+                      "type": "string"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "catalogRevision": {
+                      "type": "string"
+                    },
+                    "hostAbiVersion": {
+                      "type": "number"
+                    },
+                    "rev": {
+                      "type": "number"
+                    },
+                    "sourceHash": {
+                      "type": "string"
+                    },
+                    "superseded": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "type": "array"
+                    },
+                    "themeVersion": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "version": {
+                      "type": "number"
+                    },
+                    "warnings": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "rev",
+                    "hostAbiVersion",
+                    "sourceHash",
+                    "bundleHash",
+                    "themeVersion",
+                    "catalogRevision",
+                    "superseded",
+                    "cached",
+                    "warnings"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request | base_rev_required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "admin_required (reuseOverride is admin-only)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "error": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "code": {
+                              "enum": [
+                                "revision_conflict",
+                                "already_published",
+                                "source_hash_mismatch",
+                                "candidate_unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "message"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "candidates": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "atomicLevel": {
+                                    "type": "string"
+                                  },
+                                  "blocking": {
+                                    "type": "boolean"
+                                  },
+                                  "canonicalFor": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "deprecated": {
+                                    "type": "boolean"
+                                  },
+                                  "description": {
+                                    "type": "string"
+                                  },
+                                  "designSystem": {
+                                    "type": "string"
+                                  },
+                                  "draft": {
+                                    "type": "boolean"
+                                  },
+                                  "headUsageCount": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "key": {
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "const": "component",
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "propsDelta": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "added": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "type": "array"
+                                      },
+                                      "removed": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "type": "array"
+                                      },
+                                      "typeChanged": {
+                                        "items": {
+                                          "type": "string"
+                                        },
+                                        "type": "array"
+                                      }
+                                    },
+                                    "required": [
+                                      "added",
+                                      "removed",
+                                      "typeChanged"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "reasons": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "recommendable": {
+                                    "type": "boolean"
+                                  },
+                                  "replacement": {
+                                    "type": "string"
+                                  },
+                                  "scope": {
+                                    "type": "string"
+                                  },
+                                  "score": {
+                                    "type": "number"
+                                  },
+                                  "version": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "key",
+                                  "id",
+                                  "name",
+                                  "designSystem",
+                                  "version",
+                                  "draft",
+                                  "description",
+                                  "canonicalFor",
+                                  "deprecated",
+                                  "recommendable",
+                                  "headUsageCount",
+                                  "score",
+                                  "blocking",
+                                  "reasons"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "catalogRevision": {
+                              "type": "string"
+                            },
+                            "code": {
+                              "enum": [
+                                "catalog_changed",
+                                "canonical_role_conflict"
+                              ],
+                              "type": "string"
+                            },
+                            "conflictingRoles": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "decisionId": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "message": {
+                              "type": "string"
+                            },
+                            "nextSteps": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "overrideTemplate": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "candidateKeys": {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "catalogRevision": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "catalogRevision",
+                                "candidateKeys"
+                              ],
+                              "type": "object"
+                            },
+                            "policyVersion": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "repeatedAttempts": {
+                              "anyOf": [
+                                {
+                                  "maximum": 9007199254740991,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "resolution": {
+                              "enum": [
+                                "reuse",
+                                "escalate"
+                              ],
+                              "type": "string"
+                            },
+                            "retryable": {
+                              "const": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "message",
+                            "catalogRevision",
+                            "policyVersion",
+                            "candidates",
+                            "retryable",
+                            "resolution",
+                            "nextSteps",
+                            "overrideTemplate",
+                            "decisionId",
+                            "repeatedAttempts"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "revision_conflict | already_published | source_hash_mismatch (sourceHash does not describe the current head revision) | candidate_unavailable (the candidate bundle vanished between build and read; validate again) | catalog_changed | canonical_role_conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "payload_too_large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed | asset_not_found | atomic_policy_violation | event_schema_not_serializable"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validate_in_flight (a validate/promote build is already in flight for this user) | queue_full (global validate concurrency cap reached)"
+          }
+        },
+        "summary": "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404).",
+        "x-easyui-validated": false
+      }
+    },
     "/api/components/{id}/publish": {
       "post": {
         "operationId": "post_components_id_publish",

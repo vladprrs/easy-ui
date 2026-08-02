@@ -53,7 +53,7 @@ export const CAPABILITY_CONDITIONS = ["$and", "$or", "$state", "$item", "$index"
  * env внутри роута сделало бы discovery и гейт двумя источниками истины, а тесты в общем
  * процессе `bun test` мутировали бы друг другу глобальный env.
  */
-export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean; spacingResolverV2Disabled?: boolean } = {}): JsonObject {
+export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean; acceptanceDisabled?: boolean; spacingResolverV2Disabled?: boolean } = {}): JsonObject {
   const systems = listActiveDesignSystems(db);
   return {
     apiVersion: 1,
@@ -132,6 +132,10 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // + наследование выпавших `space.*`); false при EASYUI_THEME_RESOLVER_V2_DISABLED=1.
       // Существующие версии в любом случае резолвятся своим записанным резолвером.
       themeSpacingResolverV2: options.spacingResolverV2Disabled !== true,
+      // RFC candidate-acceptance R1: POST /api/components/:id/promote — приёмка
+      // провалидированной head-ревизии одной командой (auto-supersede прочих active).
+      // false при EASYUI_ACCEPTANCE_DISABLED=1; publish при этом продолжает работать.
+      acceptancePromote: options.acceptanceDisabled !== true,
     },
     reuseGate: {
       mode: reuseGateMode,
@@ -315,7 +319,7 @@ const jsonText = (body: string): Response =>
  * `reuseGateMode` едет от `HandlerOptions` (`server/main.ts`). Дефолт здесь существует только
  * ради вызывающих, которым фаза не важна (схемы и OpenAPI её не касаются).
  */
-export function routeMeta(request: Request, db: Database, segments: string[], reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean; spacingResolverV2Disabled?: boolean } = {}): Response | null {
+export function routeMeta(request: Request, db: Database, segments: string[], reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean; acceptanceDisabled?: boolean; spacingResolverV2Disabled?: boolean } = {}): Response | null {
   const requireGet = () => { if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed"); };
   if (segments[0] === "openapi.json" && segments.length === 1) {
     requireGet();

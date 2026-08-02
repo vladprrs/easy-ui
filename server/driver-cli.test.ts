@@ -15,6 +15,9 @@ import {
   auditExitCode,
   auditFindings,
   auditRows,
+  versionAuditFindings,
+  versionAuditLines,
+  versionAuditRows,
   reuseAuditLines,
   failingGates,
   readinessExitCode,
@@ -91,7 +94,7 @@ function staleCookie(marker: string) {
   return `easyui_session=${(marker + "x".repeat(43)).slice(0, 43)}`;
 }
 
-async function setup(legacyBasicAuth?: string, runJob?: RunJob) {
+async function setup(legacyBasicAuth?: string, runJob?: RunJob, handlerOptions: { acceptanceDisabled?: boolean } = {}) {
   const directory = await testDirectory();
   const db = openDatabase(":memory:");
   databases.push(db);
@@ -99,7 +102,7 @@ async function setup(legacyBasicAuth?: string, runJob?: RunJob) {
   const screenshots = runJob
     ? new ScreenshotService({ db, dataDir: directory, serveDist: "dist", captureOrigin: "http://127.0.0.1:8787", chromiumAvailable: true, runJob })
     : undefined;
-  const handler = createTestHandler(db, { dataDir: directory, legacyBasicAuth, screenshots });
+  const handler = createTestHandler(db, { dataDir: directory, legacyBasicAuth, screenshots, ...handlerOptions });
   let requests = 0;
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -1300,6 +1303,114 @@ describe("author driver usages and audit verbs", () => {
     const badAttempts = await run(api, ["audit", "reuse", "--min-attempts", "1"]);
     expect(badAttempts.exitCode).toBe(1);
     expect(badAttempts.stderr).toContain("--min-attempts must be an integer from 2 to 50");
+    // RFC candidate-acceptance R1: promote берёт ровно один компонент, `audit --versions`
+    // снимает --design-system с обязательных.
+    const noComponent = await run(api, ["promote"]);
+    expect(noComponent.exitCode).toBe(1);
+    expect(noComponent.stderr).toContain("invalid arguments for promote");
+    const badSupersede = await run(api, ["promote", "stars", "--supersede", "maybe"]);
+    expect(badSupersede.exitCode).toBe(1);
+    expect(badSupersede.stderr).toContain("--supersede must be one of: auto, none");
+    const strayPromoteFlag = await run(api, ["promote", "stars", "--tree"]);
+    expect(strayPromoteFlag.exitCode).toBe(1);
+    expect(strayPromoteFlag.stderr).toContain("unknown flag for promote: --tree");
+  });
+});
+
+/**
+ * RFC candidate-acceptance-pipeline, волна R1: верб `promote` (validate → promote одной
+ * командой) и KPI-срез `audit --versions`.
+ */
+describe("author driver promote verb", () => {
+  test("promote accepts the saved head as one public version and refuses to repeat itself", async () => {
+    const { api, directory } = await setup();
+    const source = await writeComponentSource(directory, "PromoteCli", "Promote CLI fixture", "one");
+    const created = await run(api, ["component", "promote-cli", "PromoteCli", source, "--design-system", "yandex-pay", "--intent", "Accepts a checkout confirmation press"]);
+    expect(created.exitCode).toBe(0);
+
+    // Голова уже опубликована первым вызовом — promote обязан отказать читаемо и терминально.
+    const repeated = await run(api, ["promote", "promote-cli"]);
+    expect(repeated.exitCode).toBe(2);
+    expect(repeated.stderr).toContain("already_published");
+    expect(repeated.stderr).toContain("save a new revision");
+
+    const next = await writeComponentSource(directory, "PromoteCli", "Promote CLI fixture", "two");
+    const saved = await fetch(`${api}/components/promote-cli`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: new URL(api).origin },
+      body: JSON.stringify({ source: await Bun.file(next).text(), baseRev: 1, message: "cli promote fixture" }),
+    });
+    expect(saved.status).toBe(200);
+
+    const promoted = await run(api, ["promote", "promote-cli", "--json"]);
+    expect(promoted.exitCode).toBe(0);
+    const payload = JSON.parse(promoted.stdout) as { command: string; version: number; superseded: number[]; sourceHash: string; catalogRevision: string };
+    expect(payload).toMatchObject({ command: "promote", id: "promote-cli", version: 2, superseded: [1] });
+    expect(payload.sourceHash).toMatch(/^[0-9a-f]{64}$/);
+
+    const versions = await (await fetch(`${api}/components/promote-cli/versions`)).json() as { version: number; status: string }[];
+    expect(versions.map((row) => [row.version, row.status])).toEqual([[1, "superseded"], [2, "active"]]);
+  }, 180_000);
+
+  test("promote fails readably against a server with the acceptance kill-switch on", async () => {
+    const { api, db } = await setup(undefined, undefined, { acceptanceDisabled: true });
+    seedComponent(db, "killed", "Killed");
+    const result = await run(api, ["promote", "killed"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("features.acceptancePromote is off");
+  });
+});
+
+describe("author driver audit --versions (KPI, RFC §9)", () => {
+  test("sweeps public versions per component and exits 2 when a component has no active version", async () => {
+    const { api, db } = await setup();
+    seedComponent(db, "stars", "Stars");
+    seedComponent(db, "old-card", "OldCard", { deprecated: true });
+    const altSystem = await fetch(`${api}/design-systems`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: new URL(api).origin },
+      body: JSON.stringify({ id: "driver-alt", name: "Driver Alt", description: "Second design system for the version audit" }),
+    });
+    expect(altSystem.status).toBe(201);
+    seedComponent(db, "other-ds", "OtherDs", { designSystem: "driver-alt" });
+    // Единственная active-версия уведена вручную — компонент выпал из каталога.
+    db.query("UPDATE component_publishes SET status='deprecated' WHERE component_id='stars' AND version=1").run();
+
+    const result = await run(api, ["audit", "--versions", "--design-system", "yandex-pay", "--json"]);
+    expect(result.exitCode).toBe(2);
+    const payload = JSON.parse(result.stdout) as {
+      command: string; exitCode: number;
+      components: { id: string; versions: number; active: number }[];
+      findings: { published: number; totalVersions: number; versionsPerComponent: number; noActiveVersion: string[] };
+    };
+    expect(payload.command).toBe("audit versions");
+    expect(payload.components.map((row) => row.id)).toEqual(["old-card", "stars"]);
+    expect(payload.components.find((row) => row.id === "old-card")).toMatchObject({ versions: 2, active: 1 });
+    expect(payload.findings).toMatchObject({ published: 2, totalVersions: 3, versionsPerComponent: 1.5, noActiveVersion: ["stars"] });
+
+    const human = await run(api, ["audit", "--versions"]);
+    expect(human.exitCode).toBe(2);
+    expect(human.stdout).toContain("component\tdesignSystem\tversions\tactive\tlatest\tstatuses\tfirstPublishedAt\tlastPublishedAt");
+    expect(human.stdout).toContain("no active version: stars");
+    // Без фильтра в срез попадают все дизайн-системы.
+    expect(human.stdout).toContain("other-ds");
+  });
+
+  test("formats the KPI slice without a server", () => {
+    const rows = versionAuditRows(
+      [{ id: "a", designSystem: "yp" }, { id: "b", designSystem: "yp" }, { id: "c", designSystem: "yp" }],
+      {
+        a: [{ version: 1, status: "superseded", publishedAt: "2026-01-01" }, { version: 2, status: "active", publishedAt: "2026-01-02" }],
+        b: [{ version: 1, status: "deprecated", publishedAt: "2026-01-03" }],
+        c: [],
+      },
+    );
+    expect(rows[0]).toMatchObject({ id: "a", versions: 2, active: 1, latestVersion: 2, firstPublishedAt: "2026-01-01", lastPublishedAt: "2026-01-02", byStatus: { superseded: 1, active: 1 } });
+    const findings = versionAuditFindings(rows);
+    expect(findings).toMatchObject({ components: 3, published: 2, totalVersions: 3, versionsPerComponent: 1.5, noActiveVersion: ["b"], unpublished: ["c"], firstVersionOnly: ["b"] });
+    const lines = versionAuditLines("designSystem=yp", rows, findings);
+    expect(lines[0]).toContain("2/3 components published, 3 public versions, 1.5 versions per published component");
+    expect(lines.at(-1)).toBe("no active version: b");
   });
 });
 

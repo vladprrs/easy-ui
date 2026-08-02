@@ -27,6 +27,7 @@ import { getDesignSystemVersion, getIncludingRetired, latestDesignSystemMetaVers
 import { validateThemeAssets, type ThemeContent } from "../designSystemsMeta";
 import { checkSource, publishComponent } from "../routes/components";
 import { createPrototypeFromDoc, updatePrototypeFromDoc } from "../routes/prototypes";
+import { writeAuditEvent } from "../audit";
 import {
   cacheSourceShingles, matchAndDecide, recordBlockedAttempt, ReuseGateRejection, stageAndExtract,
   DEFAULT_REUSE_GATE_MODE, type ReuseGateMode, type ReuseOverride,
@@ -299,6 +300,7 @@ async function importComponent(db: Database, dataDir: string, component: BundleC
         cacheSourceShingles(db, liveId, baseRev, source);
       }
       const result = await publishComponent(db, repo, liveId, baseRev, dataDir, undefined, {}, { actor: reuse.actor, mode: reuse.mode, ...(reuse.override === undefined ? {} : { override: reuse.override }) });
+      recordImportPublish(db, reuse.actor.userId, liveId, result.version, baseRev);
       report.push({ ...base, action: "created", version: result.version, ...(remappedTo ? { remappedTo } : {}), ...warningDetail(result.warnings) });
     } catch (error) {
       if (error instanceof ReuseGateRejection) { report.push({ ...base, action: "error", ...rejectionReport(db, error, true) }); return; }
@@ -343,11 +345,21 @@ async function importComponent(db: Database, dataDir: string, component: BundleC
   if (mode === "dry-run") { report.push({ ...base, action: "created", version: 1, ...warningDetail(outcome.warnings) }); return; }
   try {
     const result = await publishComponent(db, repo, component.id, 1, dataDir, undefined, {}, { actor: reuse.actor, mode: reuse.mode, ...(reuse.override === undefined ? {} : { override: reuse.override }) }, { sourceHash: sha256(source), extracted });
+    recordImportPublish(db, reuse.actor.userId, component.id, result.version, 1);
     report.push({ ...base, action: "created", version: result.version, ...warningDetail([...outcome.warnings, ...result.warnings]) });
   } catch (error) {
     if (error instanceof ReuseGateRejection) { report.push({ ...base, action: "error", ...rejectionReport(db, error, true) }); return; }
     report.push({ ...base, action: "error", detail: error instanceof ApiError ? error.message : String(error) });
   }
+}
+
+/**
+ * `publish.import` (RFC candidate-acceptance §7/§9, находка V9): bundle-import — третий путь
+ * публикации, он не проходит ни promote, ни advisory-приёмку. Событие делает его наблюдаемым
+ * и позволяет исключить импортные версии из знаменателя KPI «версий на принятый компонент».
+ */
+function recordImportPublish(db: Database, actorId: string, componentId: string, version: number, rev: number): void {
+  writeAuditEvent(db, { actorId, action: "publish.import", subjectType: "component", subjectId: componentId, detail: { version, rev, path: "bundle-import" } });
 }
 
 // --- Phase: compositions ----------------------------------------------------

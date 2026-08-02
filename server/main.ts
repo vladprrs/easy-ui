@@ -46,6 +46,12 @@ export type HandlerOptions = {
   /** Kill-switch P8: `EASYUI_VALIDATE_DISABLED=1` гасит POST /api/components/:id/validate (404 + features.componentValidate=false). */
   validateDisabled?: boolean;
   /**
+   * Kill-switch RFC candidate-acceptance R1: `EASYUI_ACCEPTANCE_DISABLED=1` гасит
+   * POST /api/components/:id/promote (404 + features.acceptancePromote=false).
+   * Publish-путь при этом остаётся рабочим — гашение приёмки не делает DS неопубликуемой.
+   */
+  acceptanceDisabled?: boolean;
+  /**
    * Kill-switch P6.3: `EASYUI_THEME_RESOLVER_V2_DISABLED=1` — новые версии тем пишутся с legacy-резолвером
    * spacing-шкалы (`spacing_resolver=1`) и без наследования выпавших `space.*`
    * (features.themeSpacingResolverV2=false). Существующие версии не затрагиваются в любом случае.
@@ -177,7 +183,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         const bundles=await routeBundles(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE); if(bundles) return finish(bundles);
         const scenarios=await routeScenarios(request,db,segments.slice(1),principal); if(scenarios) return finish(scenarios);
         if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),principal,options.dataDir,options.serveDist));
-        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{disabled:options.validateDisabled===true}));
+        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{disabled:options.validateDisabled===true},{disabled:options.acceptanceDisabled===true}));
         if(segments[1]==="compositions") return finish(await routeCompositions(request,db,segments.slice(1),principal));
         if(segments[1]==="assets") return finish(await routeAssets(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
         if(segments[1]==="design-systems") return finish(await routeDesignSystems(request,db,segments.slice(1),principal,{spacingResolverV2Disabled:options.spacingResolverV2Disabled===true}));
@@ -193,7 +199,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         if(segments[1]==="shims"&&segments[2]!==undefined&&/^v[1-9]\d*$/.test(segments[2])) return finish(routeShims(request,segments.slice(1)));
         // Режим гейта — часть discovery: `/api/capabilities` обязан рапортовать фактическую
         // фазу процесса, иначе агент узнаёт её только сломав собственный create.
-        const meta=routeMeta(request,db,segments.slice(1),options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{validateDisabled:options.validateDisabled===true,spacingResolverV2Disabled:options.spacingResolverV2Disabled===true}); if(meta) return finish(meta);
+        const meta=routeMeta(request,db,segments.slice(1),options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{validateDisabled:options.validateDisabled===true,acceptanceDisabled:options.acceptanceDisabled===true,spacingResolverV2Disabled:options.spacingResolverV2Disabled===true}); if(meta) return finish(meta);
         throw new ApiError(404,"not_found","API route not found");
       }
       if(staticResolution) return finish(await serveResolvedStatic(request,staticResolution));
@@ -223,7 +229,7 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     const captureHost=host==="0.0.0.0"||host==="::"?"127.0.0.1":host;
     const screenshots=new ScreenshotServiceImpl({db,dataDir,serveDist,captureOrigin:`http://${captureHost}:${port}`,chromiumAvailable:chromiumAvailable(),runJob:spawnWorker});
     const visual=new VisualServiceImpl({db,dataDir,screenshots});
-    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,reuseGateMode:resolveReuseGateMode(process.env.REUSE_GATE),validateDisabled:process.env.EASYUI_VALIDATE_DISABLED==="1",spacingResolverV2Disabled:process.env.EASYUI_THEME_RESOLVER_V2_DISABLED==="1",legacyBasicAuth:resolveLegacyBasicAuthEnv(),publicOrigin,screenshots,visual})});
+    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,reuseGateMode:resolveReuseGateMode(process.env.REUSE_GATE),validateDisabled:process.env.EASYUI_VALIDATE_DISABLED==="1",acceptanceDisabled:process.env.EASYUI_ACCEPTANCE_DISABLED==="1",spacingResolverV2Disabled:process.env.EASYUI_THEME_RESOLVER_V2_DISABLED==="1",legacyBasicAuth:resolveLegacyBasicAuthEnv(),publicOrigin,screenshots,visual})});
     return {server,db};
   } catch(error) { db.close(); throw error; }
 }

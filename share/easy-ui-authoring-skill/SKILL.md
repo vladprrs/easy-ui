@@ -345,7 +345,22 @@ node driver.mjs expect expected.json actual.json --tolerance 2 --json
 
 `expected.json` пишет автор из выписки макета: `{"tolerance":1,"elements":[{"key":"c","size":{"width":328,"height":56}},{"key":"stack","instance":0,"axis":"row","gap":8,"padding":{"left":16,"right":16},"tolerance":2}]}`. `key`/`instance` — маркер замера (у компонентной поверхности он один, ключ `c`); `size` — `{width?,height?}`; `gap` — число (все зазоры равны) или массив по порядку, меряется как наблюдаемый зазор между box'ами прямых видимых детей; `padding` — число или объект сторон, меряется как отступ между box'ом элемента и bounding box'ом детей. Ось: `axis` → computed `flexDirection` layout owner'а → вывод из rect'ов. Допуск: файловый `tolerance` (по умолчанию 1 px) < per-element `tolerance`; `--tolerance N` перекрывает файловый дефолт. Exit: 0 — сошлось, 2 — расхождения, 1 — битый файл. Верб оффлайновый.
 
-**Итоговый цикл атома:** правка → save ревизии без публикации → `preview --rev head-draft` (пиксели) → `expect` (числа) → `POST /api/components/:id/validate` (publish-набор проверок без создания версии: typecheck/compile/import, definition, asset-refs, поля provenance; receipt не покрывает canonical-role и reuse-гейт) → **publish ровно один раз**.
+**Итоговый цикл атома:** правка → save ревизии без публикации → `preview --rev head-draft` (пиксели) → `expect` (числа) → `POST /api/components/:id/validate` (publish-набор проверок без создания версии: typecheck/compile/import, definition, asset-refs, поля provenance; receipt не покрывает canonical-role и reuse-гейт) → **`promote` ровно один раз** (см. «Приёмка головы: `promote`»).
+
+### Приёмка головы: `promote`
+
+Один вызов вместо «publish + ручные status-переходы»: `promote` делает validate-префлайт, публикует голову **без повторных typecheck/compile** (артефакты берутся из кэша префлайта) и переводит прежние active-версии в `superseded` — в одной транзакции с активацией новой.
+
+```bash
+node driver.mjs promote rating-stars                    # validate → promote, auto-supersede
+node driver.mjs promote rating-stars --supersede none   # оставить прежние версии active
+node driver.mjs promote rating-stars --strict-catalog   # отказать, если каталог сдвинулся после validate
+```
+
+- Требует `features.acceptancePromote` в `/api/capabilities` (kill-switch `EASYUI_ACCEPTANCE_DISABLED=1`); на старом сервере верб падает читаемо, `publish` продолжает работать.
+- Терминальные отказы (не ретраить): `409 already_published` — голове нужна новая ревизия; `409 revision_conflict`/`source_hash_mismatch` — голова изменилась между validate и promote, повторить верб целиком; `409 canonical_role_conflict`/`catalog_changed` — обычный reuse-STOP; `422` — те же коды, что у publish.
+- Каталого-временные проверки (host-имя, каноническая роль, атомарная политика, asset-refs) promote перепрогоняет — он их не обходит.
+- KPI-срез по версиям: `node driver.mjs audit --versions [--design-system <id>]` (версии/active/статусы/даты на компонент; exit 2, если у компонента не осталось active-версии).
 
 ### Служебные прототипы: галереи, `track: head`, профиль readiness
 

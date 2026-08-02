@@ -209,6 +209,9 @@ function orderedCases(): [string, Case][] {
     ["GET /api/components/{id}/revisions/{rev}", { run: () => call("GET", "/api/components/contract-stars/revisions/1"), expected: ok() }],
     ["POST /api/components/{id}/restore", { run: () => call("POST", "/api/components/contract-stars/restore", { rev: 1, baseRev: 2 }), expected: ok() }],
     ["POST /api/components/{id}/publish", { run: () => call("POST", "/api/components/contract-stars/publish", { baseRev: 999 }), expected: err(409, "revision_conflict") }],
+    // Promote (RFC candidate-acceptance R1) — happy path саги покрыт в component-promote.test.ts
+    // (там же kill-switch и auto-supersede); здесь — CAS-конверт 409.
+    ["POST /api/components/{id}/promote", { run: () => call("POST", "/api/components/contract-stars/promote", { baseRev: 999, sourceHash: "0".repeat(64) }), expected: err(409, "revision_conflict") }],
     // Validate-префлайт — как и publish, тяжёлый happy path (typecheck+compile+import) покрыт
     // в component-validate.test.ts; здесь — envelope 404.
     ["POST /api/components/{id}/validate", { run: () => call("POST", "/api/components/contract-missing/validate"), expected: err(404, "not_found") }],

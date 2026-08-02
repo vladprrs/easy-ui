@@ -188,7 +188,7 @@ node driver.mjs preview pay-button --example primary --dsf 2 --out shots/pay-but
 # preview pay-button v1 bundleHash=… designSystemMetaVersion=3 viewport=1280x800 dsf=2 theme=light
 ```
 
-PNG — content-hug (воркер снимает сам элемент, не вьюпорт): размеры эталона и снапа сравниваются напрямую, без canvas-арифметики. `--probe geometry` вместо PNG отдаёт замер той же поверхности (вход для `expect`, §4.7). **Итоговый цикл атома: правка → save ревизии без публикации → `preview --rev head-draft` → `expect` (+`compare` с эталоном Figma) → validate-префлайт → publish ровно один раз.** Промежуточных публикаций быть не должно: всё, что раньше требовало версии, делается на сохранённой голове. Verb `component` делает save+publish за вызов — он остаётся входом создания (reuse-гейт/discovery) и финальным publish'ем, а промежуточные сохранения идут через `api.mjs` (PUT гейт создания не проходит):
+PNG — content-hug (воркер снимает сам элемент, не вьюпорт): размеры эталона и снапа сравниваются напрямую, без canvas-арифметики. `--probe geometry` вместо PNG отдаёт замер той же поверхности (вход для `expect`, §4.7). **Итоговый цикл атома: правка → save ревизии без публикации → `preview --rev head-draft` → `expect` (+`compare` с эталоном Figma) → validate-префлайт → `promote` ровно один раз (приёмка головы: validate+publish+auto-supersede одной командой, `features.acceptancePromote`).** Промежуточных публикаций быть не должно: всё, что раньше требовало версии, делается на сохранённой голове. Verb `component` делает save+publish за вызов — он остаётся входом создания (reuse-гейт/discovery) и финальным publish'ем, а промежуточные сохранения идут через `api.mjs` (PUT гейт создания не проходит):
 
 ```bash
 # промежуточная итерация (без публикации):

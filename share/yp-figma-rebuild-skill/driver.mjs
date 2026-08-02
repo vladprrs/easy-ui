@@ -17,7 +17,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | audit --design-system <id> | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -116,6 +116,13 @@ export const flagSpecs = Object.freeze({
     },
   },
   geometry: { ...jsonFlag },
+  // RFC candidate-acceptance R1: приёмка провалидированной head-ревизии одной командой.
+  promote: {
+    ...jsonFlag,
+    "--supersede": { value: true, key: "supersede", enum: ["auto", "none"] },
+    "--strict-catalog": { value: false, key: "strictCatalog" },
+    "--message": { value: true, key: "message" },
+  },
   get: { ...jsonFlag },
   delete: { ...jsonFlag },
   shoot: { ...jsonFlag },
@@ -144,7 +151,7 @@ export const flagSpecs = Object.freeze({
   readiness: { ...jsonFlag },
   publish: { ...jsonFlag, "--verify": { value: false, key: "verify" }, "--force": { value: false, key: "force" } },
   usages: { ...jsonFlag, "--tree": { value: false, key: "tree" } },
-  audit: { ...jsonFlag, "--design-system": { value: true, key: "designSystem" } },
+  audit: { ...jsonFlag, "--design-system": { value: true, key: "designSystem" }, "--versions": { value: false, key: "versions" } },
   "audit reuse": {
     ...jsonFlag,
     "--design-system": { value: true, key: "designSystem" },
@@ -184,6 +191,7 @@ const ranges = Object.freeze({
   readiness: [1, 1],
   publish: [1, 1],
   usages: [1, 1],
+  promote: [1, 1],
   // 0 — каталожный sweep `audit --design-system`, 1 — подкоманда `audit reuse`.
   audit: [0, 1],
 });
@@ -249,7 +257,9 @@ export function parseArgs(argv) {
   if (commandForm === "audit reuse" && positionals.length !== 1) invalid("invalid arguments for audit reuse");
   // `--design-system` обязателен только у каталожного sweep: аудит гейта по построению
   // сквозной, дизайн-система в нём — необязательный фильтр.
-  if (commandForm === "audit" && flags.designSystem === undefined) invalid("audit requires --design-system <id>");
+  // `audit --versions` — KPI-срез по версиям (RFC candidate-acceptance §9): дизайн-система
+  // здесь необязательный фильтр, в отличие от каталожного sweep'а.
+  if (commandForm === "audit" && !flags.versions && flags.designSystem === undefined) invalid("audit requires --design-system <id> or --versions");
   if (commandForm === "audit" && positionals.length !== 0) invalid("invalid arguments for audit");
   if (command === "status" && positionals.length < 2 && !flags.allScreens) invalid("status requires <screenId> or --all-screens");
   if (command === "preview" && positionals.length === 2 && flags.example !== undefined) invalid("preview accepts either props.json or --example, not both");
@@ -1574,6 +1584,145 @@ async function runAudit(flags) {
 }
 
 /**
+ * RFC candidate-acceptance-pipeline (R1): приёмка головной ревизии одной командой —
+ * `validate` (receipt с `sourceHash`) → `promote` (сага: stage готовыми артефактами,
+ * import-верификация, activate + pinAssets + auto-supersede прочих active в одной
+ * транзакции). Ровно одна публичная версия на принятый head вместо цепочки publish'ей
+ * и ручных status-переходов.
+ *
+ * Терминальные отказы печатаются человеку и НЕ ретраятся: `revision_conflict` (голова
+ * ушла), `source_hash_mismatch` (голова изменилась между validate и promote),
+ * `already_published` (у ревизии уже есть версия), reuse-STOP'ы гейта каноничной роли.
+ */
+async function runPromote(args, flags) {
+  const [id] = args;
+  const encoded = encodeURIComponent(id);
+  const capabilities = await requireOk("capabilities", await call("GET", "/capabilities"));
+  if (capabilities.features?.acceptancePromote !== true) {
+    throw new CliError("server does not support promote (features.acceptancePromote is off); upgrade the server or publish with 'driver.mjs component ...' instead");
+  }
+  const meta = await getMeta("components", id);
+  if (!meta) throw new CliError(`components/${id} not found; hint: run 'driver.mjs get components'`);
+  const receipt = await requireOk("validate", await call("POST", `/components/${encoded}/validate`));
+  for (const warning of receipt.warnings ?? []) out(`warning: ${warning}`);
+  const promoted = await call("POST", `/components/${encoded}/promote`, {
+    baseRev: meta.headRev,
+    sourceHash: receipt.sourceHash,
+    ...(flags.supersede === undefined ? {} : { supersede: flags.supersede }),
+    ...(flags.strictCatalog ? { expectedCatalogRevision: receipt.catalogRevision } : {}),
+    ...(flags.message === undefined ? {} : { message: flags.message }),
+  });
+  if (promoted.status !== 201) {
+    failReuseConflict("promote", "promote", promoted, id);
+    const code = errorCode(promoted);
+    if (promoted.status === 409 && code === "source_hash_mismatch") {
+      throw new CliError(`promote failed (409 source_hash_mismatch): the head revision changed between validate and promote; re-run 'driver.mjs promote ${id}'`, { exitCode: EXIT.productErrors });
+    }
+    if (promoted.status === 409 && code === "candidate_unavailable") {
+      throw new CliError(`promote failed (409 candidate_unavailable): the validated candidate was evicted from the server cache; re-run 'driver.mjs promote ${id}'`, { exitCode: EXIT.productErrors });
+    }
+    if (promoted.status === 409 && code === "already_published") {
+      throw new CliError(`promote failed (409 already_published): rev ${meta.headRev} already has a public version; save a new revision before promoting again`, { exitCode: EXIT.productErrors });
+    }
+    if (promoted.status === 409 && code === "catalog_changed" && flags.strictCatalog) {
+      throw new CliError("promote failed (409 catalog_changed): the catalog moved since validate; re-run promote to re-validate against the current catalog", { exitCode: EXIT.productErrors });
+    }
+    await failRevisionConflict("promote", promoted, "components", id);
+  }
+  const result = promoted.json;
+  report(
+    [
+      `promoted ${id} version ${result.version} (rev ${result.rev}) in ${meta.designSystem}`,
+      `fingerprints: sourceHash=${result.sourceHash} bundleHash=${result.bundleHash} hostAbi=${result.hostAbiVersion} themeVersion=${result.themeVersion ?? "-"} catalogRevision=${result.catalogRevision}`,
+      `superseded: ${result.superseded?.length ? result.superseded.map((version) => `v${version}`).join(", ") : "-"}${result.cached ? " (warm candidate: no recompile)" : ""}`,
+      ...(result.warnings ?? []).map((warning) => `warning: ${warning}`),
+    ],
+    { command: "promote", id, designSystem: meta.designSystem, ...result },
+  );
+}
+
+/**
+ * KPI-инструмент RFC §9: сколько публичных версий стоил каждый компонент. Читает
+ * `GET /api/components/:id/versions` и сводит статусы; `versionsPerComponent` — та самая
+ * метрика churn'а (baseline yandex-pay-v2: 2,4 → цель ≤1,2).
+ */
+export function versionAuditRows(components, versionsById) {
+  return components.map((component) => {
+    const versions = versionsById[component.id] ?? [];
+    const active = versions.filter((version) => version.status === "active");
+    const byStatus = {};
+    for (const version of versions) byStatus[version.status] = (byStatus[version.status] ?? 0) + 1;
+    return {
+      id: component.id,
+      designSystem: component.designSystem,
+      versions: versions.length,
+      active: active.length,
+      byStatus,
+      latestVersion: versions.length ? versions[versions.length - 1].version : null,
+      firstPublishedAt: versions.length ? versions[0].publishedAt : null,
+      lastPublishedAt: versions.length ? versions[versions.length - 1].publishedAt : null,
+    };
+  });
+}
+
+export function versionAuditFindings(rows) {
+  const published = rows.filter((row) => row.versions > 0);
+  const totalVersions = published.reduce((sum, row) => sum + row.versions, 0);
+  return {
+    components: rows.length,
+    published: published.length,
+    totalVersions,
+    // Округление до сотых: метрика сравнивается с целью 1,2 из RFC §9.
+    versionsPerComponent: published.length ? Math.round((totalVersions / published.length) * 100) / 100 : 0,
+    firstVersionOnly: published.filter((row) => row.versions === 1).map((row) => row.id),
+    noActiveVersion: published.filter((row) => row.active === 0).map((row) => row.id),
+    multipleActive: published.filter((row) => row.active > 1).map((row) => row.id),
+    unpublished: rows.filter((row) => row.versions === 0).map((row) => row.id),
+  };
+}
+
+/** Компонент без единой active-версии — сломанное состояние каталога (readiness M7). */
+export const versionAuditExitCode = (findings) => (findings.noActiveVersion.length ? EXIT.productErrors : EXIT.ok);
+
+export function versionAuditLines(scope, rows, findings) {
+  return [
+    `version audit${scope ? ` (${scope})` : ""}: ${findings.published}/${findings.components} components published, ${findings.totalVersions} public versions, ${findings.versionsPerComponent} versions per published component`,
+    `first-version-only: ${findings.firstVersionOnly.length} · no active version: ${findings.noActiveVersion.length} · multiple active: ${findings.multipleActive.length} · never published: ${findings.unpublished.length}`,
+    "component	designSystem	versions	active	latest	statuses	firstPublishedAt	lastPublishedAt",
+    ...rows.map((row) => [
+      row.id, row.designSystem, row.versions, row.active,
+      row.latestVersion === null ? "-" : `v${row.latestVersion}`,
+      Object.entries(row.byStatus).sort(([a], [b]) => a.localeCompare(b)).map(([status, count]) => `${status}=${count}`).join(",") || "-",
+      row.firstPublishedAt ?? "-", row.lastPublishedAt ?? "-",
+    ].join("\t")),
+    ...(findings.noActiveVersion.length ? [`no active version: ${findings.noActiveVersion.join(", ")}`] : []),
+    ...(findings.multipleActive.length ? [`multiple active versions: ${findings.multipleActive.join(", ")}`] : []),
+  ];
+}
+
+async function runVersionsAudit(flags) {
+  const components = (await requireOk("components", await call("GET", "/components")))
+    .filter((component) => flags.designSystem === undefined || component.designSystem === flags.designSystem)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  if (flags.designSystem !== undefined && components.length === 0) {
+    const systems = await requireOk("design systems", await call("GET", "/design-systems"));
+    if (!systems.some((system) => system.id === flags.designSystem)) {
+      throw new CliError(`design system ${flags.designSystem} not found; hint: run 'driver.mjs get design-systems'`);
+    }
+  }
+  const versionsById = {};
+  for (const component of components) {
+    versionsById[component.id] = await requireOk("versions", await call("GET", `/components/${encodeURIComponent(component.id)}/versions`));
+  }
+  const rows = versionAuditRows(components, versionsById);
+  const findings = versionAuditFindings(rows);
+  const exitCode = versionAuditExitCode(findings);
+  const scope = flags.designSystem === undefined ? "" : `designSystem=${flags.designSystem}`;
+  report(versionAuditLines(scope, rows, findings), { command: "audit versions", ...(flags.designSystem === undefined ? {} : { designSystem: flags.designSystem }), exitCode, components: rows, findings });
+  if (exitCode !== EXIT.ok) throw new CliError(`components without an active version: ${findings.noActiveVersion.join(", ")}`, { exitCode });
+}
+
+/**
  * Человекочитаемый отчёт аудита гейта переиспользования (спека §5). Чистая функция: тест
  * проверяет форматирование без сервера, а `--json` отдаёт ответ API как есть.
  */
@@ -1805,7 +1954,8 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "readiness") await runReadiness(args);
   else if (cmd === "publish") await runPublish(args, flags);
   else if (cmd === "usages") await runUsages(args, flags);
-  else if (cmd === "audit") await (args[0] === "reuse" ? runReuseAudit(flags) : runAudit(flags));
+  else if (cmd === "promote") await runPromote(args, flags);
+  else if (cmd === "audit") await (args[0] === "reuse" ? runReuseAudit(flags) : flags.versions ? runVersionsAudit(flags) : runAudit(flags));
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : null;

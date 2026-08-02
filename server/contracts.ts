@@ -1223,6 +1223,56 @@ export const publishComponentContract = registerContract({
 });
 
 /**
+ * Конверт 409 у promote: к publish-набору добавлены `source_hash_mismatch` (receipt описывает
+ * другой исходник) и `candidate_unavailable` (кэш кандидата исчез между сборкой и чтением).
+ */
+const componentPromoteConflictEnvelopeSchema = z.strictObject({
+  error: z.union([
+    z.looseObject({ code: z.enum(["revision_conflict", "already_published", "source_hash_mismatch", "candidate_unavailable"]), message: z.string() }),
+    componentPublishReuseErrorSchema,
+  ]),
+});
+
+/**
+ * RFC candidate-acceptance-pipeline §4.3 (волна R1): приёмка провалидированной head-ревизии
+ * одной командой. Receipt-based — durable-таблиц кандидатов в R1 нет, идентификация входа —
+ * пара `{baseRev, sourceHash}` из validate-receipt.
+ */
+export const promoteComponentContract = registerContract({
+  method: "POST", path: "/api/components/{id}/promote",
+  summary: "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404).",
+  status: 201,
+  requestSchema: z.strictObject({
+    ...casBody,
+    sourceHash: z.string().regex(/^[0-9a-f]{64}$/),
+    expectedCatalogRevision: z.string().optional(),
+    supersede: z.enum(["auto", "none"]).optional(),
+    reuseOverride: componentReuseOverrideSchema.optional(),
+  }),
+  responseSchema: z.looseObject({
+    version: z.number(), rev: z.number(), hostAbiVersion: z.number(),
+    sourceHash: z.string(), bundleHash: z.string(),
+    themeVersion: z.number().nullable(), catalogRevision: z.string(),
+    superseded: z.array(z.number()), cached: z.boolean(), warnings: z.array(z.string()),
+  }),
+  errors: [
+    errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound,
+    { status: 403, code: "admin_required", description: "reuseOverride is admin-only" },
+    errorCatalog.revConflict, errorCatalog.alreadyPublished,
+    { status: 409, code: "source_hash_mismatch", description: "sourceHash does not describe the current head revision" },
+    { status: 409, code: "candidate_unavailable", description: "the candidate bundle vanished between build and read; validate again" },
+    { status: 409, code: "catalog_changed" }, { status: 409, code: "canonical_role_conflict" },
+    errorCatalog.payloadTooLarge, errorCatalog.validationFailed,
+    { status: 422, code: "asset_not_found" },
+    { status: 422, code: "atomic_policy_violation" },
+    { status: 422, code: "event_schema_not_serializable" },
+    { status: 429, code: "validate_in_flight", description: "a validate/promote build is already in flight for this user" },
+    { status: 429, code: "queue_full", description: "global validate concurrency cap reached" },
+  ],
+  errorResponseSchemas: { 409: componentPromoteConflictEnvelopeSchema },
+});
+
+/**
  * P8 (план 2026-08-02): validate-префлайт head-ревизии. Гарантия «publish не упадёт на 422»
  * ОГРАНИЧЕНА перечисленным набором проверок — canonical-role, reuse-гейт и прочие
  * каталого-временные проверки receipt не покрывает (они остаются на publish).

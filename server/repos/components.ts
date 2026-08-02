@@ -43,7 +43,36 @@ export class ComponentRepo {
   private figmaJsonForRev(id:string,rev:number):string|null{return (this.db.query("SELECT figma_json FROM component_revisions WHERE component_id=? AND rev=?").get(id,rev) as {figma_json:string|null}|null)?.figma_json??null;}
   revisions(id:string){this.row(id);return (this.db.query("SELECT rev,design_system,message,created_at FROM component_revisions WHERE component_id=? ORDER BY rev DESC").all(id) as {rev:number;design_system:string;message:string|null;created_at:string}[]).map(x=>({rev:x.rev,designSystem:x.design_system,message:x.message,createdAt:x.created_at}));}
   restore(id:string,sourceRev:number,baseRev:number){const src=this.source(id,sourceRev);return this.save(id,src.source,src.designSystem,baseRev,`Restore revision ${sourceRev}`,this.figmaJsonForRev(id,sourceRev));}
-  stage(id:string,baseRev:number,artifact:{compiledJs:string;bundleHash:string;sourceHash:string;meta:DefinitionMeta},message?:string){return this.db.transaction(()=>{const r=this.cas(id,baseRev);if(this.db.query("SELECT 1 FROM component_publishes WHERE component_id=? AND rev=?").get(id,r.head_rev))throw new ApiError(409,"already_published","This revision is already published",{currentRev:r.head_rev});const max=this.db.query("SELECT MAX(version) v FROM component_publishes WHERE component_id=?").get(id) as {v:number|null};const version=(max.v??0)+1;this.db.query(`INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,message,published_at) VALUES (?,?,?,'staging',?,?,?,?,1,?,?)`).run(id,version,r.head_rev,artifact.compiledJs,JSON.stringify(artifact.meta),artifact.sourceHash,artifact.bundleHash,message??null,now());return {version,rev:r.head_rev};})();}
+  /**
+   * Ставит новую версию в `staging`.
+   *
+   * `already_published` проверяется по строкам ревизии **вне статуса `failed`** (RFC
+   * candidate-acceptance §4.3.2, находка V1): крах саги оставляет `failed`-строку
+   * (компенсация `fail()`/`failStagingPublishes`), и проверка «есть любая строка» навсегда
+   * блокировала бы ревизию — ни publish, ни promote после сбоя уже не проходили.
+   *
+   * Отступление от буквы RFC: там re-stage «берёт следующий свободный номер версии, дырки в
+   * нумерации допустимы». Схема этого не разрешает — у `component_publishes` есть
+   * `UNIQUE (component_id, rev)` (миграция v8), а R1 по решению V3 идёт **без миграций**.
+   * Поэтому повтор переписывает саму `failed`-строку: номер версии сохраняется, дырки не
+   * возникает. Публичного состояния это не трогает — `failed` не отдаётся ни каталогом, ни
+   * бандл-роутом, и FK-детей у него быть не может (пины ставятся только на active-версии;
+   * если пин всё же есть, RESTRICT поднимет ошибку, а не испортит данные молча).
+   *
+   * `hostAbiVersion` приходит от вызывающего (по умолчанию 1): promote переиспользует ABI
+   * кандидата, publish — свой compile-результат.
+   */
+  stage(id:string,baseRev:number,artifact:{compiledJs:string;bundleHash:string;sourceHash:string;meta:DefinitionMeta;hostAbiVersion?:number},message?:string){return this.db.transaction(()=>{
+    const r=this.cas(id,baseRev);
+    const existing=this.db.query("SELECT version,status FROM component_publishes WHERE component_id=? AND rev=?").get(id,r.head_rev) as {version:number;status:string}|null;
+    if(existing&&existing.status!=="failed")throw new ApiError(409,"already_published","This revision is already published",{currentRev:r.head_rev});
+    const meta=JSON.stringify(artifact.meta),at=now(),abi=artifact.hostAbiVersion??1;
+    if(existing){this.db.query("UPDATE component_publishes SET status='staging',status_reason=NULL,superseded_by=NULL,compiled_js=?,definition_meta=?,source_hash=?,bundle_hash=?,host_abi_version=?,message=?,published_at=? WHERE component_id=? AND version=?").run(artifact.compiledJs,meta,artifact.sourceHash,artifact.bundleHash,abi,message??null,at,id,existing.version);return {version:existing.version,rev:r.head_rev};}
+    const max=this.db.query("SELECT MAX(version) v FROM component_publishes WHERE component_id=?").get(id) as {v:number|null};const version=(max.v??0)+1;
+    this.db.query(`INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,message,published_at) VALUES (?,?,?,'staging',?,?,?,?,?,?,?)`).run(id,version,r.head_rev,artifact.compiledJs,meta,artifact.sourceHash,artifact.bundleHash,abi,message??null,at);
+    return {version,rev:r.head_rev};})();}
+  /** Прочие active-версии компонента (кроме `exclude`) со свежим `status_rev` — вход auto-supersede. */
+  otherActiveVersions(id:string,exclude:number){return this.db.query("SELECT version,status_rev statusRev FROM component_publishes WHERE component_id=? AND status='active' AND version<>? ORDER BY version").all(id,exclude) as {version:number;statusRev:number}[];}
   activate(id:string,version:number){this.db.transaction(()=>{const x=this.db.query("UPDATE component_publishes SET status='active' WHERE component_id=? AND version=? AND status='staging'").run(id,version);if(!x.changes)throw new Error("Staging publish disappeared");})();}
   pinAssets(id:string,version:number,assetIds:string[]){for(const assetId of assetIds){const exists=this.db.query("SELECT 1 ok FROM assets WHERE id=?").get(assetId);if(!exists)throw new ApiError(422,"asset_not_found","A referenced asset does not exist",{issues:[{path:["source"],message:`unknown asset: ${assetId}`}]});this.db.query("INSERT OR IGNORE INTO component_publish_assets (component_id,version,asset_id) VALUES (?,?,?)").run(id,version,assetId);}}
   assets(id:string,version:number){return this.db.query(`SELECT a.id,a.sha256,a.mime,a.size FROM component_publish_assets cpa JOIN assets a ON a.id=cpa.asset_id WHERE cpa.component_id=? AND cpa.version=? ORDER BY a.id`).all(id,version) as {id:string;sha256:string;mime:string;size:number}[];}

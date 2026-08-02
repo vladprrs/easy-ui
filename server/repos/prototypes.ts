@@ -117,6 +117,15 @@ export class PrototypeRepo {
       if (!RENDERABLE_PIN_STATUS.has(pin.status)) errors.push({ code: "bundle_failed", message: `Pinned component ${pin.name} v${pin.version} is not renderable (status ${pin.status})` });
       else if (pin.status === "deprecated") warnings.push({ code: "pin_deprecated", message: `Pinned component ${pin.name} v${pin.version} is deprecated` });
       else if (pin.status === "superseded") warnings.push({ code: "pin_superseded", message: `Pinned component ${pin.name} v${pin.version} is superseded` });
+      // RFC candidate-acceptance §4.3 (M7): auto-supersede оставляет ровно одну active-версию,
+      // и последующий ручной `deprecated` на неё убирает active-пул целиком. Компонент без
+      // active-версии не резолвится ни каталогом, ни `track:"head"` — деградация обязана быть
+      // видимой. Это **warning**, а не error: закреплённая версия (superseded/deprecated)
+      // продолжает рендериться, и поднятие до error перевело бы такие доки в bundleStatus
+      // "failed", то есть сломало бы render-status у прототипов, которые исправно работают.
+      if (!this.db.query("SELECT 1 ok FROM component_publishes WHERE component_id=? AND status='active' LIMIT 1").get(pin.id)) {
+        warnings.push({ code: "component_no_active_version", message: `Component ${pin.name} has no active version; the catalog and head-tracking docs cannot resolve it` });
+      }
     }
     const bundles = errors.length === 0;
     return { resolvedPins, bundles, bundleStatus: bundles ? "ready" : "failed", warnings, errors };

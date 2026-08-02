@@ -310,7 +310,7 @@ preview rating-stars draft rev 7 bundleHash=1f9c… designSystemMetaVersion=14 v
 author-shots/rating-stars/rating-stars-draft-r7.png
 ```
 
-**Итоговый цикл атома:** правка исходника → сохранение ревизии **без публикации** → `preview --rev head-draft` (пиксели) → `preview --rev head-draft --probe geometry` + `expect` (числа) → validate-префлайт (`POST /api/components/:id/validate` — publish-набор проверок без создания версии; неподдерживаемое поле provenance, тип-ошибка или битый asset-ref ловятся здесь) → **publish ровно один раз** по итогам приёмки. Verb `component` делает save+publish за один вызов, поэтому промежуточные сохранения идут через HTTP (`PUT /api/components/:id` с `baseRev` — гейт создания на PUT не действует); финальная публикация головы — повторный `driver.mjs component` с неизменными source+`--figma` (PUT отвечает no-op `unchanged`, и драйвер публикует голову) либо `POST /api/components/:id/publish`. Драфт-режим снимает head-ревизию через эфемерный candidate-bundle префлайта validate: published-версия не требуется, а провал префлайта (тип-ошибки, битые asset-refs) приезжает тем же кодом, что отдаёт publish, — превью сломанного драфта сообщает причину, а не «нет бандла».
+**Итоговый цикл атома:** правка исходника → сохранение ревизии **без публикации** → `preview --rev head-draft` (пиксели) → `preview --rev head-draft --probe geometry` + `expect` (числа) → validate-префлайт (`POST /api/components/:id/validate` — publish-набор проверок без создания версии; неподдерживаемое поле provenance, тип-ошибка или битый asset-ref ловятся здесь) → **`promote` ровно один раз** по итогам приёмки (см. «Приёмка головы: `promote`»). Verb `component` делает save+publish за один вызов, поэтому промежуточные сохранения идут через HTTP (`PUT /api/components/:id` с `baseRev` — гейт создания на PUT не действует); финальная публикация головы — повторный `driver.mjs component` с неизменными source+`--figma` (PUT отвечает no-op `unchanged`, и драйвер публикует голову) либо `POST /api/components/:id/publish`. Драфт-режим снимает head-ревизию через эфемерный candidate-bundle префлайта validate: published-версия не требуется, а провал префлайта (тип-ошибки, битые asset-refs) приезжает тем же кодом, что отдаёт publish, — превью сломанного драфта сообщает причину, а не «нет бандла».
 
 Exit-коды — как у `snap` (0 — PNG, 2 — PNG с product-ошибками, 1 — нет PNG). Честные ограничения (план agent-iteration DX, P1a/P1b):
 
@@ -354,6 +354,28 @@ node driver.mjs expect expected/rating-stars.json actual.json --tolerance 2 --js
 - Exit: 0 — сошлось, 2 — есть расхождения (каждое строкой `FAIL <key>#<instance>: <метрика> expected X, got Y`), 1 — битый файл/формат. Верб оффлайновый: сети не касается.
 
 Пиксельная сверка с эталоном макета — `compare.mjs` из пакета `share/yp-figma-rebuild-skill` (кластеры расхождений, AA-diagnostic, `--region` с бюджетом, отчёт о несовпавших размерах).
+
+### Приёмка головы: `promote`
+
+Один вызов вместо «publish + ручные status-переходы»: `promote` сам делает validate-префлайт, публикует голову **без повторных typecheck/compile** (артефакты берутся из кэша префлайта) и переводит прежние active-версии в `superseded` — в одной транзакции с активацией новой.
+
+```bash
+node driver.mjs promote rating-stars                    # validate → promote, auto-supersede
+node driver.mjs promote rating-stars --supersede none   # оставить прежние версии active
+node driver.mjs promote rating-stars --strict-catalog   # отказать, если каталог сдвинулся после validate
+node driver.mjs promote rating-stars --json
+```
+
+```
+promoted rating-stars version 4 (rev 9) in yandex-pay
+fingerprints: sourceHash=8c1f… bundleHash=1f9c… hostAbi=2 themeVersion=14 catalogRevision=cat-…
+superseded: v3 (warm candidate: no recompile)
+```
+
+- Требует `features.acceptancePromote` в `/api/capabilities` (kill-switch `EASYUI_ACCEPTANCE_DISABLED=1`); на старом сервере верб падает читаемо, `publish` продолжает работать.
+- Терминальные отказы (не ретраить автоматически): `409 already_published` — голова уже опубликована, нужна новая ревизия; `409 revision_conflict`/`409 source_hash_mismatch` — голова изменилась между validate и promote, повторить верб целиком; `409 canonical_role_conflict`/`catalog_changed` — обычный reuse-STOP, решение человека; `422` — те же коды, что у publish (кроме компиляционных: их уже отсеял validate).
+- Promote **не** обходит каталого-временные проверки: имя host-примитива, каноническая роль, атомарная политика и asset-refs перепрогоняются на публикации.
+- `publish` остаётся рабочим и не меняется — это путь для случаев, когда приёмка не нужна (или сервер её погасил).
 
 ### Служебные прототипы: галереи, `track: head`, профиль readiness
 
@@ -459,6 +481,8 @@ node driver.mjs diff my-flow 1 3 --json   # rev 3 против rev 1, полны
 ```
 
 Удаление компонента — soft: он исчезает из списка и недоступен новым сохранениям, но опубликованные bundle и пины существующих прототипов продолжают работать.
+
+Сколько публичных версий стоил каждый компонент — `node driver.mjs audit --versions [--design-system <id>]` (KPI-срез поверх `GET /api/components/:id/versions`): версии, active-счётчик, статусы и даты на компонент плюс сводка `versions per published component`. Exit 2 — если у какого-то компонента не осталось ни одной active-версии.
 
 Жизненный цикл версий компонента: у published-версии есть статус (`active` по умолчанию). Неудачную версию можно пометить, не удаляя: `POST /components/:id/versions/:v/status` c `{status: rejected|deprecated|superseded|archived, reason?, supersededBy?, baseStatusRev}` (CAS по `statusRev` из read-back версии). `rejected`/`archived` перестают исполняться (плеер покажет `bundle_failed` в render-status), `deprecated`/`superseded` продолжают работать с warning'ом. Новые пины и манифест берут только `active`.
 
