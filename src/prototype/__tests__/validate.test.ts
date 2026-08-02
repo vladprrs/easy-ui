@@ -664,3 +664,164 @@ describe("named slots", () => {
     }, { items: [{}, {}] })).toEqual([]);
   });
 });
+
+describe("computed values", () => {
+  const definitions = {
+    List: { description: "A list container", props: z.strictObject({}) },
+    Text: { description: "A text node", props: z.strictObject({ text: z.unknown().optional() }) },
+    Field: { description: "A bound field", props: z.strictObject({ value: z.unknown().optional() }) },
+    Widget: { description: "A custom widget", props: z.strictObject({}), events: ["press"] },
+  };
+  const cart = [{ price: 100, qty: 2 }];
+  const defaultComputed = { cartTotal: { op: "sum", from: "/cart", field: "price" } };
+  type Options = {
+    computed?: unknown;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    state?: Record<string, any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    elements?: Record<string, any>;
+    root?: string;
+    stateOverrides?: Record<string, unknown>;
+  };
+  const doc = (options: Options = {}) => prototypeDocSchema.parse({
+    version: 1, id: "computed", name: "Computed", designSystem: "shadcn", startScreen: "s",
+    state: options.state ?? { cart, shippingFee: 500 },
+    computed: Object.hasOwn(options, "computed") ? options.computed : defaultComputed,
+    screens: [{
+      id: "s", name: "S",
+      ...(options.stateOverrides ? { stateOverrides: options.stateOverrides } : {}),
+      spec: { root: options.root ?? "list", elements: options.elements ?? { list: { type: "List", props: {} } } },
+    }],
+  });
+  const result = (options?: Options) => validatePrototype(doc(options), { definitions });
+  const errs = (options?: Options) => result(options).errors.map((e) => `${e.path}: ${e.message}`);
+  const warns = (options?: Options) => result(options).warnings.map((e) => `${e.path}: ${e.message}`);
+  const writeErrs = (action: string, params: Record<string, unknown>) =>
+    errs({ root: "w", elements: { w: { type: "Widget", props: {}, on: { press: { action, params } } } } });
+
+  it("accepts a valid computed spec", () => {
+    expect(errs()).toEqual([]);
+    expect(warns()).toEqual([]);
+  });
+
+  it("tolerates a stored spec without entry shape", () => {
+    expect(errs({ computed: null })).toEqual([]);
+    expect(errs({ computed: { alpha: null, beta: 5, gamma: { op: "avg", from: "/cart" } } })).toEqual([]);
+  });
+
+  // --- D6: collisions ---
+
+  it("rejects a computed key that collides with a state key", () => {
+    expect(errs({ state: { cart, cartTotal: 0 } }).join("\n"))
+      .toMatch(/^\/computed\/cartTotal: computed key collides with a state key: cartTotal$/m);
+  });
+
+  it.each(["currentScreen", "navStack", "_viewer"])("rejects the reserved computed key %s", (key) => {
+    expect(errs({ computed: { [key]: { op: "count", from: "/cart" } } }).join("\n"))
+      .toMatch(new RegExp(`^/computed/${key}: computed key is reserved: ${key}$`, "m"));
+  });
+
+  it("rejects a state override that shadows a computed key", () => {
+    expect(errs({ stateOverrides: { cartTotal: 5 } }).join("\n"))
+      .toMatch(/^\/screens\/0\/stateOverrides\/cartTotal: state override key is reserved: cartTotal$/m);
+  });
+
+  // --- D4: order and references ---
+
+  it("accepts an add term referencing an earlier computed key", () => {
+    expect(errs({
+      computed: {
+        subtotal: { op: "sumProduct", from: "/cart", fields: ["price", "qty"] },
+        total: { op: "add", terms: ["/subtotal", "/shippingFee", -100] },
+      },
+    })).toEqual([]);
+  });
+
+  it("rejects forward and self references between computed keys", () => {
+    expect(errs({
+      computed: {
+        total: { op: "add", terms: ["/subtotal", 0] },
+        subtotal: { op: "count", from: "/cart" },
+      },
+    }).join("\n")).toMatch(/^\/computed\/total\/terms\/0: computed term may only reference a computed value declared earlier$/m);
+    expect(errs({ computed: { total: { op: "add", terms: ["/total", 1] } } }).join("\n"))
+      .toMatch(/computed term may only reference a computed value declared earlier/);
+  });
+
+  it("rejects a computed source pointing at another computed value", () => {
+    expect(errs({
+      computed: {
+        cartCount: { op: "count", from: "/cart" },
+        bogus: { op: "sum", from: "/cartCount" },
+      },
+    }).join("\n")).toMatch(/^\/computed\/bogus\/from: state path is a computed value and is read-only$/m);
+  });
+
+  // --- entry payloads ---
+
+  it("rejects unsafe sources, fields and terms", () => {
+    expect(errs({ computed: { t: { op: "count", from: "cart" } } }).join("\n")).toMatch(/\/computed\/t\/from: state path must be an absolute RFC 6901 JSON Pointer/);
+    expect(errs({ computed: { t: { op: "count", from: "/_viewer/cart" } } }).join("\n")).toMatch(/\/computed\/t\/from: state path uses a reserved viewer namespace/);
+    expect(errs({ computed: { t: { op: "sum", from: "/cart", field: "__proto__" } } }).join("\n")).toMatch(/^\/computed\/t\/field: computed field must be a safe relative field path$/m);
+    expect(errs({ computed: { t: { op: "sumProduct", from: "/cart", fields: ["price", "__proto__"] } } }).join("\n")).toMatch(/^\/computed\/t\/fields\/1: computed field must be a safe relative field path$/m);
+    expect(errs({ computed: { t: { op: "add", terms: ["shippingFee", 1] } } }).join("\n")).toMatch(/\/computed\/t\/terms\/0: state path must be an absolute RFC 6901 JSON Pointer/);
+    expect(errs({ computed: { t: { op: "add", terms: [Number.POSITIVE_INFINITY, 1] } } }).join("\n")).toMatch(/^\/computed\/t\/terms\/0: computed term must be a finite number$/m);
+    expect(errs({ computed: { t: { op: "add", terms: [true, 1] } } }).join("\n")).toMatch(/^\/computed\/t\/terms\/0: computed term must be a JSON Pointer string or a number$/m);
+  });
+
+  it("warns about a term missing from the initial state", () => {
+    expect(warns({ computed: { t: { op: "add", terms: ["/discount", 1] } } }).join("\n"))
+      .toMatch(/^\/computed\/t\/terms\/0: state path is not present in document state$/m);
+  });
+
+  it("warns when the computed source is not an array in the initial state", () => {
+    expect(warns({ computed: { t: { op: "count", from: "/shippingFee" } } }).join("\n"))
+      .toMatch(/^\/computed\/t\/from: computed source path is not an array in the initial state$/m);
+  });
+
+  // --- D7: computed values are read-only ---
+
+  it.each([
+    ["setState", { statePath: "/cartTotal", value: 1 }],
+    ["pushState", { statePath: "/cartTotal", value: 1 }],
+    ["removeState", { statePath: "/cartTotal", index: 0 }],
+    ["pushState", { statePath: "/cart", value: 1, clearStatePath: "/cartTotal" }],
+  ])("rejects writing to a computed value via %s (%j)", (action, params) => {
+    expect(writeErrs(action, params as Record<string, unknown>).join("\n"))
+      .toMatch(/params\/(clear)?[sS]tatePath: state path is a computed value and is read-only/);
+  });
+
+  it("rejects a $bindState binding to a computed value", () => {
+    expect(errs({ root: "f", elements: { f: { type: "Field", props: { value: { $bindState: "/cartTotal" } } } } }).join("\n"))
+      .toMatch(/^\/screens\/0\/spec\/elements\/f\/props\/value\/\$bindState: state path is a computed value and is read-only$/m);
+  });
+
+  it("allows writes and bindings to ordinary state", () => {
+    expect(writeErrs("setState", { statePath: "/shippingFee", value: 1 })).toEqual([]);
+    expect(writeErrs("pushState", { statePath: "/cart", value: 1, clearStatePath: "/shippingFee" })).toEqual([]);
+    expect(errs({ root: "f", elements: { f: { type: "Field", props: { value: { $bindState: "/shippingFee" } } } } })).toEqual([]);
+  });
+
+  // --- D8: repeat over a computed value ---
+
+  it("rejects a repeat over a computed value without the dynamic-population warning", () => {
+    const outcome = result({
+      root: "list",
+      elements: {
+        list: { type: "List", props: {}, repeat: { statePath: "/cartTotal" }, children: ["t"] },
+        t: { type: "Text", props: {} },
+      },
+    });
+    expect(outcome.errors.map((e) => `${e.path}: ${e.message}`).join("\n"))
+      .toMatch(/^\/screens\/0\/spec\/elements\/list\/repeat\/statePath: state path is a computed value and is read-only$/m);
+    expect(outcome.warnings.some((w) => /may be populated dynamically/.test(w.message))).toBe(false);
+  });
+
+  // --- reading a computed value ---
+
+  it("does not warn when a prop reads a computed value", () => {
+    const outcome = result({ root: "t", elements: { t: { type: "Text", props: { text: { $state: "/cartTotal" } } } } });
+    expect(outcome.errors).toEqual([]);
+    expect(outcome.warnings).toEqual([]);
+  });
+});

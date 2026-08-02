@@ -4,6 +4,7 @@ import { BUILTIN_SEMANTICS, isPublicRuntimePath, type BuiltinSemantics } from ".
 import { prototypeActionSchemas } from "../catalog/actions";
 import { atomicRank, type AtomicLevel } from "../designSystems/types";
 import { getAtPointer, isSafeJsonPointer, isSafeRelativeFieldPath } from "./pointer";
+import { applyComputed, computedKeys, isComputedPath } from "./computed";
 import { isAssetId, type PrototypeDoc } from "./schema";
 import { FORBIDDEN_STATE_KEYS, mergeScreenState, STATE_OVERRIDE_DEPTH_LIMIT } from "./stateOverrides";
 import { lintPrototypeLayouts } from "./layoutLints";
@@ -18,7 +19,10 @@ import type { CompositionDoc } from "./composition";
 
 type Obj = Record<string, unknown>;
 const terminals = new Set(["navigate", "back", "restart", "openUrl"]);
-const forbiddenPaths = ["/currentScreen", "/navStack", "/_viewer"];
+/** Зарезервированные корни стейта в pointer-форме. */
+const RESERVED_STATE_PATHS = ["/currentScreen", "/navStack", "/_viewer"];
+/** Те же корни в bare-форме — ключи `state`/`stateOverrides`/`computed` (D1/D6). */
+const RESERVED_STATE_KEYS = ["currentScreen", "navStack", "_viewer"];
 export const REPEAT_ELEMENT_LIMIT = 20;
 export const REPEAT_RENDER_COST_BUDGET = 2000;
 export const ELEMENTS_PER_SCREEN_LIMIT = 500;
@@ -81,10 +85,80 @@ function scanInlineBase64(value: unknown, at: (string | number)[], warnings: Val
   if (looksBase64) issue(warnings, at, `inline base64/data-URL value exceeds ${Math.round(INLINE_BASE64_WARN_BYTES / 1024)}KB; upload it as an asset instead`);
 }
 
-function checkPointer(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj, warnMissing: boolean) {
+// `/root` и всё под ним.
+const isUnderPointer = (value: string, prefixes: readonly string[]): boolean =>
+  prefixes.some((prefix) => value === prefix || value.startsWith(prefix + "/"));
+
+/**
+ * `computedPaths` — pointer-форма computed-ключей документа (`/cartTotal`); передаётся
+ * только на **пишущих** позициях (statePath/clearStatePath/$bindState/repeat.statePath, D7/D8).
+ * Read-only-ошибка идёт **до** missing-warning'а: путь в computed никогда не «отсутствует».
+ */
+function checkPointer(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj, warnMissing: boolean, computedPaths: readonly string[] = []) {
   if (!isSafeJsonPointer(value)) return issue(errors, path, "state path must be an absolute RFC 6901 JSON Pointer");
-  if (forbiddenPaths.some((reserved) => value === reserved || value.startsWith(reserved + "/"))) issue(errors, path, "state path uses a reserved viewer namespace");
+  if (isUnderPointer(value, RESERVED_STATE_PATHS)) issue(errors, path, "state path uses a reserved viewer namespace");
+  if (isUnderPointer(value, computedPaths)) return issue(errors, path, "state path is a computed value and is read-only");
   if (warnMissing && !getAtPointer(state, value).exists) issue(warnings, path, "state path is not present in document state");
+}
+
+/**
+ * Диагностика `doc.computed` — **один раз на документ** (D9), по сырому `doc.state`:
+ * коллизии ключей (D6), безопасность `from`/`field(s)`/термов и правило «ссылаться можно
+ * только на ранее объявленный computed-ключ» (D4). Оборонительна к stored-форме
+ * (`z.record(z.string(), z.unknown())`): не-объектные записи и неизвестные `op` пропускаются —
+ * их грамматику держит input-ветка схемы.
+ */
+function validateComputedSpec(
+  doc: PrototypeDoc,
+  keys: readonly string[],
+  computedPaths: readonly string[],
+  errors: ValidationIssue[],
+  warnings: ValidationIssue[],
+): void {
+  const spec = doc.computed;
+  if (!spec || keys.length === 0) return;
+  const state = doc.state as Obj;
+  keys.forEach((key, index) => {
+    const at = ["computed", key];
+    if (Object.hasOwn(state, key)) issue(errors, at, `computed key collides with a state key: ${key}`);
+    if (RESERVED_STATE_KEYS.includes(key)) issue(errors, at, `computed key is reserved: ${key}`);
+    const entry = spec[key];
+    if (!object(entry)) return;
+    const op = entry.op;
+    if (op === "count" || op === "sum" || op === "sumProduct") {
+      // Один вызов закрывает небезопасный пойнтер, зарезервированное пространство и
+      // запрет ссылаться из `from` на computed вовсе (D4).
+      checkPointer(entry.from, [...at, "from"], errors, warnings, state, false, computedPaths);
+      if (isSafeJsonPointer(entry.from) && !isComputedPath(entry.from, keys) && !Array.isArray(getAtPointer(state, entry.from).value)) {
+        issue(warnings, [...at, "from"], "computed source path is not an array in the initial state");
+      }
+    }
+    if (op === "sum" && entry.field !== undefined && !isSafeRelativeFieldPath(entry.field)) {
+      issue(errors, [...at, "field"], "computed field must be a safe relative field path");
+    }
+    if (op === "sumProduct" && Array.isArray(entry.fields)) {
+      entry.fields.forEach((field, fieldIndex) => {
+        if (!isSafeRelativeFieldPath(field)) issue(errors, [...at, "fields", fieldIndex], "computed field must be a safe relative field path");
+      });
+    }
+    if (op === "add" && Array.isArray(entry.terms)) {
+      const declaredEarlier = keys.slice(0, index);
+      entry.terms.forEach((term, termIndex) => {
+        const termPath = [...at, "terms", termIndex];
+        if (typeof term === "number") {
+          if (!Number.isFinite(term)) issue(errors, termPath, "computed term must be a finite number");
+          return;
+        }
+        if (typeof term !== "string") return issue(errors, termPath, "computed term must be a JSON Pointer string or a number");
+        if (isComputedPath(term, keys)) {
+          // Ацикличность по построению: только назад по порядку объявления (D4).
+          if (!declaredEarlier.some((earlier) => term === `/${earlier}`)) issue(errors, termPath, "computed term may only reference a computed value declared earlier");
+          return;
+        }
+        checkPointer(term, termPath, errors, warnings, state, true);
+      });
+    }
+  });
 }
 
 function checkCondition(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj, insideRepeat: boolean): void {
@@ -121,13 +195,15 @@ function checkCondition(value: unknown, path: (string | number)[], errors: Valid
   });
 }
 
-function checkDynamic(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj, insideRepeat: boolean): boolean {
+function checkDynamic(value: unknown, path: (string | number)[], errors: ValidationIssue[], warnings: ValidationIssue[], state: Obj, insideRepeat: boolean, computedPaths: readonly string[] = []): boolean {
   if (!isDynamicValue(value)) return false;
   if (!object(value)) return false;
   const keys = Object.keys(value);
   if (keys.length !== 1) { issue(errors, path, "dynamic value must contain exactly one v1 directive"); return true; }
   const key = keys[0]!;
-  if (key === "$state" || key === "$bindState") checkPointer(value[key], [...path, key], errors, warnings, state, key === "$state");
+  // `$state` — чтение (computed читается как обычный стейт); `$bindState` — запись (D7).
+  if (key === "$state") checkPointer(value[key], [...path, key], errors, warnings, state, true);
+  else if (key === "$bindState") checkPointer(value[key], [...path, key], errors, warnings, state, false, computedPaths);
   else if (key === "$item" || key === "$bindItem") {
     if (!insideRepeat) issue(errors, [...path, key], `${key} is only allowed inside a repeat subtree`);
     if (!isSafeRelativeFieldPath(value[key])) issue(errors, [...path, key], `${key} must be a safe relative field path`);
@@ -190,12 +266,19 @@ export function validateElementProps({
   state,
   path,
   insideRepeat = false,
+  computedPaths = [],
 }: {
   definition: ComponentDefinition;
   props: Obj;
   state: Obj;
   path: (string | number)[];
   insideRepeat?: boolean;
+  /**
+   * Pointer-форма computed-ключей документа. Опционально ради обратной совместимости:
+   * `server/classify.ts` вызывает без него — там потребляются только errors, а запись в
+   * computed режется на save-пути.
+   */
+  computedPaths?: readonly string[];
 }): PrototypeValidationResult {
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
   if (isDynamicValue(props)) {
@@ -213,7 +296,7 @@ export function validateElementProps({
   scanEui(props, path);
   const dynamicPaths = new Set<string>();
   const visit = (value: unknown, relative: (string | number)[]): unknown => {
-    if (checkDynamic(value, [...path, ...relative], errors, warnings, state, insideRepeat)) {
+    if (checkDynamic(value, [...path, ...relative], errors, warnings, state, insideRepeat, computedPaths)) {
       dynamicPaths.add(relative.join("/"));
       return undefined;
     }
@@ -260,10 +343,15 @@ export function validatePrototype(
   const serviceKind = isServicePrototypeDocKind(options?.kind);
   const screenIds = new Set(doc.screens.map((screen) => screen.id));
   const navigation = buildNavigationGraph(doc);
+  // Computed — per-doc: ключи в порядке объявления, pointer-форма для пишущих позиций,
+  // диагностика спеки один раз (D9), запрет перекрытия ключей через stateOverrides (D6).
+  const computedKeyList = computedKeys(doc.computed);
+  const computedPaths = computedKeyList.map((key) => `/${key}`);
+  const reservedOverrideKeys = new Set([...RESERVED_STATE_KEYS, ...computedKeyList]);
+  validateComputedSpec(doc, computedKeyList, computedPaths, errors, warnings);
   for (const [screenIndex, screen] of doc.screens.entries()) {
     const base = ["screens", screenIndex, "spec"];
     const overrideBase = ["screens", screenIndex, "stateOverrides"];
-    const reservedOverrideKeys = new Set(["currentScreen", "navStack", "_viewer"]);
     const scanOverride = (value: unknown, path: (string | number)[], depth: number): void => {
       if (Array.isArray(value)) {
         value.forEach((item, index) => scanOverride(item, [...path, index], depth + 1));
@@ -280,7 +368,8 @@ export function validatePrototype(
       for (const key of Object.keys(screen.stateOverrides)) if (reservedOverrideKeys.has(key)) issue(errors, [...overrideBase, key], `state override key is reserved: ${key}`);
       scanOverride(screen.stateOverrides, overrideBase, 0);
     }
-    const effectiveState = mergeScreenState(doc.state, screen.stateOverrides);
+    // Досев computed: значения «присутствуют» для missing-warning'а без спецкейсов.
+    const effectiveState = applyComputed(mergeScreenState(doc.state, screen.stateOverrides), doc.computed);
     const structural = validateSpec(screen.spec as Spec, { checkOrphans: true });
     structural.issues.forEach((entry) => issue(errors, base, entry.message));
     const elements = screen.spec.elements;
@@ -314,8 +403,10 @@ export function validatePrototype(
     for (const key of repeatKeys) {
       const repeat = elements[key]!.repeat!;
       const repeatPath = [...base, "elements", key, "repeat", "statePath"];
-      checkPointer(repeat.statePath, repeatPath, errors, warnings, effectiveState, false);
-      if (isSafeJsonPointer(repeat.statePath) && !Array.isArray(getAtPointer(effectiveState, repeat.statePath).value)) {
+      // D8: repeat по computed — ошибка, и «may be populated dynamically» подавляется
+      // (computed-значение числовое и динамически массивом не станет).
+      checkPointer(repeat.statePath, repeatPath, errors, warnings, effectiveState, false, computedPaths);
+      if (isSafeJsonPointer(repeat.statePath) && !isComputedPath(repeat.statePath, computedKeyList) && !Array.isArray(getAtPointer(effectiveState, repeat.statePath).value)) {
         issue(warnings, repeatPath, "repeat state path is not an array in the effective initial state; it may be populated dynamically");
       }
     }
@@ -376,7 +467,7 @@ export function validatePrototype(
       // inapplicable: named-slot custom parents may not also repeat.
       if (element.repeat && definition.capabilities?.namedSlots === true) issue(errors, [...ep, "repeat"], "repeat is not allowed on a custom component with named slots");
       const elementInsideRepeat = insideRepeat.has(key);
-      const propIssues = validateElementProps({ definition, props: element.props, state: effectiveState, path: [...ep, "props"], insideRepeat: elementInsideRepeat });
+      const propIssues = validateElementProps({ definition, props: element.props, state: effectiveState, path: [...ep, "props"], insideRepeat: elementInsideRepeat, computedPaths });
       errors.push(...propIssues.errors);
       warnings.push(...propIssues.warnings);
       if (element.visible !== undefined) checkCondition(element.visible, [...ep, "visible"], errors, warnings, effectiveState, elementInsideRepeat);
@@ -479,7 +570,12 @@ export function validatePrototype(
             issue(errors, [...ap,"params",...zIssue.path.map(String)], zIssue.message);
           });
           const statePath = action.params?.statePath;
-          if (["setState","pushState","removeState"].includes(action.action)) checkPointer(statePath, [...ap,"params","statePath"], errors, warnings, effectiveState, false);
+          if (["setState","pushState","removeState"].includes(action.action)) {
+            checkPointer(statePath, [...ap,"params","statePath"], errors, warnings, effectiveState, false, computedPaths);
+            // `clearStatePath` (pushState) — тоже пишущая цель (D7).
+            const clearStatePath = (action.params as Obj | undefined)?.clearStatePath;
+            if (clearStatePath !== undefined) checkPointer(clearStatePath, [...ap,"params","clearStatePath"], errors, warnings, effectiveState, false, computedPaths);
+          }
           if (action.action === "navigate" && typeof action.params?.screenId === "string") {
             if (!screenIds.has(action.params.screenId)) issue(errors, [...ap,"params","screenId"], "navigate target does not exist");
           }
