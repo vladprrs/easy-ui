@@ -1,16 +1,14 @@
 # План: Matrix Acceptance, Geometry/Readiness 2.0, Reference Mapping и Composition v3
 
-Дата: 2026-08-03. Статус: **draft для Stage 2 (адверсариальное ревью)**. Источник требований: `docs/EASYUI_PRODUCT_IMPROVEMENTS.md` §19 (P0.1–P0.4, P1.1–P1.4, KPI §19.10). База: `docs/plans/2026-08-02-candidate-acceptance-pipeline-rfc.md` v4 (R1 — promote-сага — в проде; R2/R3 — не начаты).
+Дата: 2026-08-03. Версия: **v2** (после Stage 2, раунд 1 — 3 адверсариальных ревьюера: корректность/код, скоуп/декомпозиция, риски/эксплуатация; триаж — §10). Источник требований: `docs/EASYUI_PRODUCT_IMPROVEMENTS.md` §19 (P0.1–P0.4, P1.1–P1.4, KPI §19.10). База: `docs/plans/2026-08-02-candidate-acceptance-pipeline-rfc.md` v4 (R1 — promote-сага — в проде; R2/R3 — не начаты).
 
-Процесс: Stage 1 (планирование) пройден; далее Stage 2 — адверсариальное ревью, триаж вносится в этот файл; реализация — волнами по отдельным командам.
-
-> Очередь исполнения: трек A (W1→W7) — поверх посаженного R1; трек B (W8→W9) идёт параллельно с W2+ (файловые множества не пересекаются, кроме `server/contracts.ts`/`openapi.json`/`driver.mjs` — протокол шаринга в §6).
+> Очередь исполнения: W0 (микро-релиз env) → трек A (W1a→W1b→W1c→W2→W3→W4→W5a→W5b→W6→W7); трек B (W8a…W8g → W9) стартует параллельно с W2. Весь трек A закрыт opt-in флагом `EASYUI_ACCEPTANCE_MATRIX` (дефолт OFF) до runtime-приёмки §7.
 
 ---
 
 ## 1. Задача и цели
 
-Сегодня приёмка семейства из 49 состояний (`pay-payment-card`) — это 100–150 клиентских операций, 2–4 самописных matrix-скрипта, ручная агрегация SHA и geometry-вердикты, которые врут («карточка шириной 175px» при layout-ширине 140px — эффектная подсветка попала в измеренные bounds). Draft-скриншот `pay-action-button` снялся до появления theme-иконки и попал в визуальную оценку. Никакая из этих проблем не лечится клиентом.
+Сегодня приёмка семейства из 49 состояний (`pay-payment-card`) — это 100–150 клиентских операций, 2–4 самописных matrix-скрипта, ручная агрегация SHA и geometry-вердикты, которые вводят в заблуждение: измеренная ширина 175px при layout-ширине корня 140×96 — потому что union `getClientRects()` включает коробки декоративных/out-of-flow потомков (сам blur в client rects не входит; «утечку» дала коробка подсветки). Draft-скриншот `pay-action-button` снялся до появления theme-иконки и попал в визуальную оценку. Никакая из этих проблем не лечится клиентом.
 
 Цель пакета — **один серверный вызов вместо семейства**: immutable кандидат + набор верификационных случаев → durable run с per-case вердиктами, честной геометрией (layout/paint/overflow), доказанной readiness, сгруппированными визуальными причинами и content-addressed evidence; повторная правка пересуёмывает только затронутые случаи. Параллельно — снять причину, по которой продуктовые блоки уходят в TSX (Composition v3).
 
@@ -18,286 +16,207 @@
 
 | KPI | Baseline | Цель | Инструмент измерения |
 |---|---:|---:|---|
-| Клиентские операции на семью 49 cases | 100–150 | 1 постановка + polls | `driver.mjs accept --case-set …` (W2), счётчик вызовов в cache-логе (W7) |
-| Ручные matrix-скрипты | 2–4 | 0 | ревью PR семейства |
-| Cases, снятые до font/asset readiness | возможны | 0 | gate `readiness` (W4), метрика `readinessFailures` в run-репорте |
-| Geometry failures без названного descendant/cause | возможны | 0 | контракт gate `geometry`: `fail` обязан нести `overflow.sources[]` (W3), тест-инвариант |
+| Клиентские операции на семью 49 cases | 100–150 | 1 постановка + polls | `driver.mjs accept --case-set …` (W2); замер на 49-кейсовой семье — done W7 |
+| Ручные matrix-скрипты | 2–4 | 0 | ревью PR первой прод-семьи после W5b (done-критерий W5b) |
+| Cases, снятые до font/asset readiness | возможны | 0 | gate `readiness` (W4), `readinessFailures` в run-репорте |
+| Geometry failures без названного descendant/cause | возможны | 0 | контракт gate `geometry` v2: `fail` обязан нести `overflow.sources[]` или названное `expectedGeometry`-расхождение (W3), тест-инвариант |
 | Product-блоки в TSX из-за ограничений composition | регулярно | <10% | analyzer-вердикт (W8g) в аудите `catalog candidates` |
-| Повторные captures неизменившихся cases | полный rerun | <10% | `run.progress.reused / total` (W1+W6) |
-| Runs с автособранным SHA evidence | 0% | 100% | наличие `evidence_manifest_hash` на каждом терминальном run'е (W1) |
-| source-ready → actionable family verdict | десятки шагов | <10 мин | замер wall-clock в done-критериях W1/W5 (§7) |
-
-Про «<10 минут» — честно: см. §4 (бюджет ёмкости). Он достижим только совокупностью «дедуп props + determinism на выборке + reuse», и первый холодный run семейства из 49 cases остаётся в диапазоне 8–15 минут на 1-CPU проде. Это записано в контракт (`eta`), а не спрятано.
+| Повторные captures неизменившихся cases (**сценарий §19.8: правка одного ассета/темы; кроме unknown impact**) | полный rerun | <10% | `run.progress.reused/total` на сценарии W6; **KPI измеряется начиная с W5b** (до этого фингерпринты мигрируют, см. D1) |
+| Runs с автособранным SHA evidence | 0% | 100% ранов, терминализованных оркестратором | `evidence_manifest_hash` (W1a); раны, убитые стартовой уборкой, вне знаменателя |
+| source-ready → actionable family verdict | десятки шагов | **<10 мин тёплый run (reuse), <15 мин холодный** | замер wall-clock + RSS в done W1b; **гейт: холодный run >15 мин ⇒ O1 (§4) становится обязательным объёмом W1b** |
 
 ---
 
 ## 2. Поправки к RFC candidate-acceptance (обязательный раздел)
 
-RFC v4 прошёл два раунда адверсариального ревью; его решения по умолчанию **сохраняются**. §19 местами предлагает конструкции, которые триаж RFC уже отклонил. Ниже — полный список: что оставлено, что изменено и почему.
+RFC v4 прошёл два раунда адверсариального ревью; его решения по умолчанию **сохраняются**. §19 местами предлагает конструкции, которые триаж RFC уже отклонил.
 
 ### 2.1. Решения RFC, которые сохраняются без изменений
 
 | Решение RFC | Почему §19 его не отменяет |
 |---|---|
-| **Identity кандидата component-scoped**: `candidate_id = "cand_"+sha256({componentId, designSystem, rev, buildFingerprint})`, `buildFingerprint = sha256({sourceHash, bundleHash, hostAbiVersion, themeVersion})` | §19.1 предлагает передавать кандидата инлайном `{rev, sourceHash, bundleHash, themeVersion}` — это ровно та модель, которую триаж RFC отклонил: один `sourceHash` принадлежит нескольким компонентам (`server/components/candidates.ts`, `componentIds` — множество), ключ без `componentId` коллидирует и даёт cross-owner disclosure. **Инлайн-кандидат не вводится.** `POST /api/acceptance-runs` принимает `candidateId`; клиент получает его из `POST /api/components/:id/candidates`. |
+| **Identity кандидата component-scoped**: `candidate_id = "cand_"+sha256({componentId, designSystem, rev, buildFingerprint})`, `buildFingerprint = sha256({sourceHash, bundleHash, hostAbiVersion, themeVersion})` | §19.1 предлагает инлайн-кандидата `{rev, sourceHash, bundleHash, themeVersion}` — модель, отклонённую триажем RFC: один `sourceHash` принадлежит нескольким компонентам (`server/components/candidates.ts`, `componentIds` — множество), ключ без `componentId` коллидирует и даёт cross-owner disclosure. **Инлайн-кандидат не вводится.** |
 | `catalogRevision` вне идентичности, `policyProfileHash` вне `buildFingerprint` | без изменений |
-| Оркестратор **вне** screenshot-помпы, ≤1 running run на процесс, capture-джобы по одной с backoff на `429 queue_full`; отдельный системный validate-слот | §19.1 просит клиентскую `concurrency` — не поддерживается; `cases.concurrency` в запросе **отвергается 422** (сервер владеет параллелизмом; на 1 CPU он равен 1) |
-| Стартовая уборка: все `queued\|running` раны → `error` | сохраняется; см. поправку A3 — это больше не теряет работу |
-| Evidence **не** в asset-store (GC ассетов нет, `component_publish_assets` FK RESTRICT) | сохраняется; см. поправку A4 о форме хранения |
-| `≤1` нетерминальный run на кандидата (partial unique index); `cancel` только из `queued` | сохраняется |
-| `409 acceptance_run_in_flight` на promote при живом run'е; `pass_with_exceptions` только при `allowExceptions` (в `default-v1` выключено) | сохраняется |
+| Оркестратор **вне** screenshot-помпы, ≤1 running run на процесс, capture-джобы по одной с backoff на `429 queue_full` | `cases.concurrency` в запросе отвергается `422 unsupported_option` |
+| Стартовая уборка: все `queued\|running` раны → `error` | сохраняется; A3 делает потерю дешёвой |
+| Evidence **не** в asset-store | сохраняется и **усиливается**: A4 вводит байтовый канал, чтобы acceptance-капчуры вообще не ингестились в asset-store |
+| `≤1` нетерминальный run на кандидата (partial unique index); `cancel` только из `queued` | сохраняется + watchdog (D2) против вечного `running` |
+| `409 acceptance_run_in_flight` на promote при живом run'е; `pass_with_exceptions` только при `allowExceptions` | сохраняется |
 | Гейты `regression`/`interactions` = `not-implemented` | сохраняется (не-цели §8) |
-| Kill-switch `EASYUI_ACCEPTANCE_DISABLED`, булевы `capabilities.features.acceptance*` | сохраняется, расширяется новыми флагами |
+| Kill-switch `EASYUI_ACCEPTANCE_DISABLED` | сохраняется для promote-пути; matrix-стек получает **свой** opt-in `EASYUI_ACCEPTANCE_MATRIX` (A7) |
 
 ### 2.2. Поправки (амендменты) к RFC
 
-**A1. Матричная семантика: per-case durable-строки.** RFC R2 описывал run как набор gate-результатов в `gates_json`. §19.1 требует матрицы. Амендмент: таблица `acceptance_cases` (строка на случай) и `acceptance_case_results` (content-addressed результат случая). `gates_json` остаётся **run-level агрегатом** (его известное ограничение «не запрашиваемо по gate» сохраняется), per-case запросы обслуживает новая таблица. Без durable-строк невозможны ни прогресс/ETA, ни reuse, ни P1.4.
+**A1. Матричная семантика: per-case durable-строки.** Таблицы `acceptance_cases` (строка на случай) и `acceptance_case_results` (content-addressed результат). `gates_json` остаётся run-level агрегатом; per-case запросы — новая таблица. Правило свёртки run-вердикта — D10.
 
-**A2. Источник cases и место manifest'а.** §19.1 предлагает `cases.manifestAssetId` — манифест как ассет. Амендмент: манифест — **сущность продукта** (`component_case_sets`, W2), а не ассет; ассет неизменяем и невалидируем, а манифест обязан валидироваться сервером (§19.5 требует ровно этого: полнота tuples, SHA references, дубли props, crop lineage). В W1 источник cases — **именованные examples кандидата** (уже приезжают в `bootstrap.examples`), что даёт ценность до появления манифеста. `manifestAssetId` не поддерживается никогда.
+**A2. Источник cases и место manifest'а.** Манифест — **сущность продукта** (`component_case_sets`, W2), не ассет: сервер обязан валидировать полноту tuples, SHA references, дубли props, crop lineage (§19.5). В W1 источник cases — именованные examples кандидата (`bootstrap.examples`). `manifestAssetId` не поддерживается никогда.
 
-**A3. Resume — не мутация упавшего run'а, а дешёвый новый run.** §19.1 требует «resumable очередь», RFC требует «при рестарте всё in-flight → error». Оба сохраняются без противоречия: **run иммутабелен**, resume = новый run по тому же `{candidateId, caseSetId}`, который **переиспользует per-case результаты по `case_fingerprint`** (content-addressed) и пересуёмывает только недостающие/принудительно обновляемые. Стоимость повторного вердикта после падения на 40-м случае из 49 — 9 захватов, а не 49. Этот же механизм — фундамент P1.4 (W6). Форсирование — `refresh: "none" | "failed" | "all" | {caseIds:[…]}` (аналог `--refresh` из §19.7), причина форса пишется в evidence.
+**A3. Resume — не мутация упавшего run'а, а дешёвый новый run.** Run иммутабелен; resume = новый run по тому же `{candidateId, caseSetId}`, переиспользующий per-case результаты по `case_fingerprint` (D1) и пересуёмывающий только недостающие. Плюс **автоматический внутрираночный retry инфраструктурных сбоев**: per-case бюджет `maxInfraRetries` (дефолт 2) на основе существующей классификации `captureClean/productErrors/infraNoise/runtimeWarnings` (`server/screenshot/noise.ts`) — «повторять только infrastructure failures» из §19.1 выполняется внутри run'а, а не новым клиентским вызовом. Форсирование — `refresh: "none"|"failed"|"all"|{caseIds:[…]}`, причина пишется в evidence.
 
-**A4. Evidence: per-run манифест + content-addressed CAS.** RFC выбрал `<dataDir>/.acceptance/<runId>/` + `SHA256SUMS`. §19.1 требует cross-run дедупликации. Амендмент: **артефакты** (PNG, geometry JSON, diff PNG) лежат в `<dataDir>/.acceptance/cas/<sha256[0:2]>/<sha256>`, а `<dataDir>/.acceptance/<runId>/manifest.json` + `SHA256SUMS` перечисляют артефакты случая **ссылками на CAS**. Путь по-прежнему выводится из `runId` после regex-валидации (нет колонки `evidence_dir`). GC: артефакт удаляется, когда на него не ссылается ни один run в пределах TTL (`refcount` считается запросом по `acceptance_cases`, не колонкой-счётчиком — счётчик рассинхронизируется при крэше). Asset-store не используется. Экспорт `GET /api/acceptance-runs/:runId/evidence` материализует tar из CAS.
+**A4. Evidence: per-run манифест + content-addressed CAS + байтовый канал мимо asset-store.** Артефакты (PNG, geometry JSON, diff PNG) лежат в `<dataDir>/.acceptance/cas/<sha256[0:2]>/<sha256>`; `<dataDir>/.acceptance/<runId>/manifest.json` + `SHA256SUMS` ссылаются на CAS. Путь выводится из `runId` после regex-валидации. **Сегодня image-джоба всегда ингестит PNG в asset-store (`assetRepo.ingest` в `ScreenshotService.execute`), где GC нет** — поэтому W1a вводит для acceptance-джоб байтовый режим: `execute` отдаёт байты вызывающему (оркестратору), который кладёт их в CAS; в asset-store acceptance-капчуры **не попадают**. GC CAS: refcount считается запросом по **объединению** `acceptance_cases` и `acceptance_case_results`; строка `acceptance_case_results` удаляется той же операцией, что и её артефакты; grace-период для артефактов моложе N минут (прецедент `gcCandidates`); **reuse обязан проверять физическое существование артефактов, иначе пересъёмка**. Экспорт evidence — **zip** через существующий `fflate`/`zipResponse` (tar-зависимости в проекте нет), стримово, с потолком `evidenceMaxBytes`; имена записей архива — только из санитизированных `caseId` (charset W2), плюс независимая санитизация при формировании архива.
 
-**A5. Минимальный визуальный гейт до VDC 2.0.** RFC: `visual` = `not-implemented`, потому что «визуальный гейт непубличной ревизии требует новой fingerprint-модели references». §19 требует `visual` в матрице. Амендмент: гейт `visual` включается в **минимальной форме** в W5 и обходит блокер RFC не построением новой fingerprint-модели, а тем, что **reference приходит из case-set** (`referenceAssetId` per case, W2) — эталон привязан к случаю манифеста, а не к опубликованной версии. Что **не** входит и остаётся за VDC 2.0: lifecycle exceptions (approve/expire/review issue), promotion baseline'ов, per-DS автоприёмка эталонов, интеграция с `visual_references`/`visual_runs` (остаются отдельной подсистемой, W5 их не мигрирует). Гейт: `pass|fail` для случаев с эталоном, `skipped` — без эталона; `default-v1` делает его **обязательным только если case-set помечен `requireVisual: true`**.
+**A5. Минимальный визуальный гейт до VDC 2.0.** Гейт `visual` в W5a: reference приходит из case-set (`referenceAssetId` per case), эталон привязан к случаю манифеста, а не к опубликованной версии — блокер RFC (fingerprint-модель references) не задевается. Вне объёма: lifecycle exceptions, promotion baseline'ов, автоприёмка эталонов, миграция `visual_references`/`visual_runs`. Гейт: `pass|fail` с эталоном, `skipped` без; обязателен только при `requireVisual: true` в case-set. Обязательная часть W5a — **нормализация размеров**: crop эталона по `cropLineage`, pad кандидата/эталона до общего холста; несводимое расхождение размеров → `indeterminate`, не `fail` (текущий `visual-diff-worker` возвращает `dimensionMismatch` без метрик — этого недостаточно).
 
-**A6. Политики: именованный реестр-константа, per-case override из манифеста; таблицы нет.** RFC: `default-v1` — константа кода до второго реального профиля. §19 просит именованные per-DS профили. Амендмент: **реестр констант** `server/acceptance/policies.ts` с `default-v1` и `pixel-strict-v1` (второй реальный профиль — pixel-perfect-приёмка Figma-семейств), per-case допуски приезжают из манифеста и хешируются в `case_policy_hash`. `policy_profiles` как таблица + CRUD — **не в этом пакете** (момент введения — профиль, который нужно менять без деплоя).
+**A6. Политики: именованный реестр-константа, per-case override из манифеста; таблицы нет.** `server/acceptance/policies.ts`: `default-v1` и `pixel-strict-v1`; per-case допуски из манифеста хешируются в `case_policy_hash`. `policy_profiles`-таблица — не в этом пакете.
 
-**A7. Ёмкость: явные лимиты вместо клиентской конкурентности.** Новые `capabilities.limits`: `acceptanceMaxCasesPerRun` (дефолт 64), `acceptanceMaxJobsPerRun` (RFC), `acceptanceCaseTtlHours`, `evidenceMaxBytes`. Дедупликация одинаковых `propsHash` — **до** постановки (одна съёмка, N ссылающихся case-строк, `aliasOfCaseId`).
+**A7. Ёмкость и включение: явные лимиты + opt-in флаг.** `capabilities.limits`: `acceptanceMaxCasesPerRun` (64), `acceptanceMaxJobsPerRun`, `acceptanceCaseTtlHours`, `evidenceMaxBytes` (ограничивает и CAS, и экспорт). Дедуп одинаковых `propsHash` до постановки (`aliasOfCaseId`); дедуп референс-ассетов по sha256 (один blob на N cases). Весь matrix-стек (candidates/runs/case-sets ручки) включается **только** при `EASYUI_ACCEPTANCE_MATRIX=1` (дефолт OFF; снятие — решение после runtime-приёмки §7). `EASYUI_ACCEPTANCE_DISABLED=1` продолжает аварийно гасить promote и дополнительно **дренирует активный run** (терминализация `error`).
 
-**A8. `POST /api/components/{id}/acceptance-runs` (§19.1) не вводится.** Канон RFC — `POST /api/acceptance-runs` (run — субъект первого класса, авторизация по денормализованному `component_id`). Два пути к одной сущности — источник расхождений.
+**A8. `POST /api/components/{id}/acceptance-runs` не вводится.** Канон — `POST /api/acceptance-runs`.
+
+**A9. Ссылки publish→run: TEXT-receipts без FK.** RFC R2 предлагал nullable FK-колонки на `component_publishes`. Инвариант v8-перестройки (`server/migrations.ts`: «any new FK-child … must be added to this list») и связка `ON DELETE SET NULL` + TTL-GC ранов (молчаливая потеря provenance) делают FK вредным. Амендмент: `component_publishes.candidate_id` / `.acceptance_run_id` — **плоские TEXT NULL колонки без FK** (денормализованные свидетельства, канон ADD COLUMN v16/v22/v23); GC ранов обязан query-проверкой не удалять терминальные раны, на которые ссылается publish.
+
+**A10. Захват запинен к кандидату.** Сегодня `ensureDraftCandidate`/`enqueueComponentDraft` всегда читают **head** — за 8–15 минут run'а head может смениться, и кадры молча снимутся с другого билда. W1a вводит enqueue по явному `{rev, sourceHash}` кандидата: перед каждым захватом CAS-проверка `head_rev === candidate.rev`, при расхождении run терминализуется с причиной `candidate_stale_head` в `failedCases`. Дополнительно кандидат-бандл **пинуется против `gcCandidates`** (TTL 24ч / 32 МБ LRU): GC не вытесняет `sourceHash`, на который ссылается нетерминальный run; `POST /api/acceptance-runs` → `409 candidate_evicted`, если бандл уже отсутствует.
 
 ---
 
 ## 3. Ключевые проектные решения
 
-- **D1. `case_fingerprint`** — ядро reuse, дедупа и P1.4:
+- **D1. `case_fingerprint`** — ядро reuse/дедупа/P1.4, **component-scoped**:
   ```
   case_fingerprint = sha256(canonicalJson({
-    buildFingerprint,              // кандидат: sourceHash+bundleHash+hostAbi+themeVersion
-    caseKey,                       // стабильный id случая (example name | manifest case id)
-    propsHash,                     // существующий propsHashOf
+    algoVersion,                   // версия схемы фингерпринта; растёт в W2/W3/W4/W5a —
+                                   // автоматически инвалидирует весь старый reuse
+    candidateId,                   // уже содержит componentId+designSystem+rev+buildFingerprint
+    caseKey, propsHash,
     surface: { viewport, dsf, theme },
-    readinessPolicyHash,           // W4 (до W4 — хеш константы v0)
-    captureEnvFingerprint,         // W4: browser/platform/dpr/fontRaster/rendererBuild
-    casePolicyHash,                // W2: per-case допуски + профиль
-    referenceAssetId | null        // W2/W5
+    readinessPolicyHash,           // W4; до W4 — константа v0
+    captureEnvFingerprint,         // W4; до W4 — константа v0
+    casePolicyHash,                // W2; до W2 — константа v0
+    referenceAssetId | null
   }))
   ```
-  Колонки для всех компонентов заводятся **в W1** (значения-заглушки до W3–W5), чтобы не было второй миграции.
-- **D2. Run иммутабелен; `acceptance_cases` — единственная мутируемая часть** (`status`, `verdict`, `result_fingerprint`, `reuse_reason`, тайминги). Терминализация run'а — одна короткая транзакция (канон bun:sqlite: без `await` внутри).
-- **D3. Геометрия: факты в capture, вердикт на сервере.** `geometry.mjs` отдаёт измерения (`layoutBounds`, `effectSources`, `clipChain`), `paintBounds` меряется по пикселям снимка, `policyVerdict` считает чистая функция (`src/capture/geometryPolicy.ts`), покрытая unit-тестами без DOM — тот же канон, что `analyzeGeometry`.
-- **D4. `paintBounds` — измеряется, а не выводится из CSS.** Формулы расширения от `filter: blur()`/`box-shadow` дают лишь консервативную верхнюю границу (blur(68px) по спеке даёт ~100px, наблюдалось 17–18px — разница в разы). Поэтому `paintBounds` = ink-bbox по PNG (альфа при прозрачном фоне, иначе разница с цветом угла; поле `paintBoundsSource: "alpha"|"background-diff"`), а CSS-разбор — **только для атрибуции** (какой descendant и какое свойство), что и требует §19.2.
-- **D5. Readiness — декларативная политика, а не задержки.** Политика версионируется и хешируется, evidence readiness'а сохраняется на случай; **capture, не прошедший readiness, не попадает ни в один визуальный вердикт** (жёсткий инвариант, тест).
-- **D6. Impact — консервативный и доказательный.** Никакого статического анализа произвольного JS. Доказуемы только два класса: (а) изменились только литералы `asset_<sha256>` в исходнике (`sourceShapeHash` совпал) → пересъёмка только случаев, чьи наблюдённые в baseline-run'е ресурсы пересекаются с изменённым множеством; (б) сменилась только версия темы → пересъёмка только случаев, чьи наблюдённые токены/иконки/шрифты пересекаются с диффом темы. Всё прочее → **полная пересъёмка** с явным `basis: "conservative"`.
-- **D7. Composition v3 — expansion-time, не runtime.** Композиции раскрываются при сохранении (`expandCompositions`/`expandPrototypeForSave`), поэтому все новые возможности v3 обязаны быть **статически разрешимы от значений параметров в точке ссылки**. `$if`/`$switch` v3 — по параметрам; ветвление по `doc.state` остаётся существующим `$cond` внутри тела и проходит через раскрытие как есть. Эта граница — главный инвариант W8, первой строкой в `docs/prototype-format.md`.
-- **D8. Формат композиций аддитивен**: `version: 3` — новая ветка discriminated union; v1/v2 документы читаются и раскрываются байт-в-байт как раньше; опубликованные прототипы неизменны.
-- **D9. Kill-switch'и с дефолтом OFF там, где прод может накопить необратимые данные**: `EASYUI_COMPOSITION_V3=1` (прецедент `EASYUI_SURFACES`). Acceptance-ручки гасятся существующим `EASYUI_ACCEPTANCE_DISABLED=1` (обратная полярность — фича включена по умолчанию, гашение аварийное).
+  `acceptance_case_results` дополнительно несёт `component_id` (денормализация), reuse проверяет владение. Reuse-KPI измеряется с W5b: границы W2/W3/W4/W5a поднимают `algoVersion` и обнуляют накопленный reuse — признанная плата за поэтапность.
+- **D2. Run иммутабелен; `acceptance_cases` — единственная мутируемая часть.** Терминализация — одна короткая транзакция (bun:sqlite: без `await` внутри). **Watchdog**: run в `running` дольше `runDeadline` (политика; дефолт 30 мин) терминализуется `error` живым процессом — иначе исключение в цикле оркестратора вечно блокирует кандидата partial-индексом. `SQLITE_CONSTRAINT` на partial unique index маппится в `409 acceptance_run_in_flight`.
+- **D3. Геометрия: факты в capture, вердикт на сервере.** `policyVerdict` считает чистая функция `src/capture/geometryPolicy.ts` (unit-тесты без DOM, канон `analyzeGeometry`).
+- **D4. Paint-контур: отдельный capture-режим, один кадр — оба измерения.** Element-screenshot клиппит чернила коробкой `#eui-capture-surface` (inline-block, непрозрачный `bg-background`) — по текущему пайплайну ink-bbox **не измерим**. W3 вводит режим `probe:"paint"`: прозрачный фон поверхности (`omitBackground`) + маргин-поле вокруг компонента (из политики, дефолт 64px) + **одна сессия браузера собирает и geometry-факты, и PNG** — `layoutBounds` и `paintBounds` гарантированно про один кадр. `paintBounds` = ink-bbox по альфе (`paintBoundsSource:"alpha"`; поле недостаточно → `indeterminate` + рекомендация увеличить маргин). Все значения нормализуются в **CSS px** (PNG-пиксели делятся на `deviceScaleFactor` — иначе ложный overflow ×2/×3). CSS-разбор (`getComputedStyle` filter/box-shadow/transform/position) — только для **атрибуции** источников overflow.
+- **D5. Readiness — декларативная политика, а не задержки.** Версионируется и хешируется; **capture, не прошедший readiness, не попадает ни в один визуальный вердикт** (инвариант; тест — в W5a, раньше гейта `visual` не существует).
+- **D6. Impact — консервативный и доказательный.** Два доказуемых класса: (а) изменились только литералы `asset_<sha256>` (`sourceShapeHash` совпал) → пересъёмка случаев, чьи наблюдённые ресурсы пересекаются с изменёнными; (б) сменилась только версия темы → пересъёмка случаев, чьи наблюдённые токены/иконки/шрифты пересекаются с диффом темы. Наблюдённые токены/иконки собираются в capture-evidence **в W4** (без этого класс (б) нереализуем). Всё прочее → полная пересъёмка, `basis:"conservative"`; неизвестный ресурс → `conservative`.
+- **D7. Composition v3 — expansion-time, не runtime.** Все возможности v3 статически разрешимы от значений параметров в точке ссылки. Ветвление по `doc.state` — существующий `$cond` внутри тела. Первая строка в `docs/prototype-format.md`.
+- **D8. Формат композиций аддитивен, включая диспетчеры.** `version:3` — новая ветка union; **обязательные правки двух точек диспетчеризации** — `isCompositionSource` (сейчас принимает только 1|2 → v3-source молча падал бы в version 1) и выбор алгоритма в `expandCompositions` (`hasV2Reference` → документ только с v3-ссылками ушёл бы в legacy v1-раскрытие). Аддитивность доказывается снапшот-тестами **на диспетчерах**, не только на телах.
+- **D9. Kill-switch'и реально доступны на проде.** W0 пробрасывает переменные в `docker-compose.yml` (**сегодня `EASYUI_ACCEPTANCE_DISABLED`/`EASYUI_VALIDATE_DISABLED` в compose отсутствуют — аварийного выключателя на проде физически нет**). `EASYUI_ACCEPTANCE_MATRIX` (OFF) — трек A; `EASYUI_COMPOSITION_V3` (OFF) — трек B; **после первой v3-записи откат образа невозможен без чистки данных** — поэтому OFF до приёмки W9.
+- **D10. Свёртка run-вердикта из per-case (контракт W1a).** `fail` — хотя бы один case `fail` по обязательному гейту; `error` — есть case `error` после исчерпания `maxInfraRetries` и нет `fail`; `pass` — все обязательные гейты всех cases `pass` (алиасы наследуют вердикт целевого case; `reused` эквивалентен свежему; `skipped` допустим только для необязательных гейтов). Инвариант-тест: `reused`/`skipped`/`alias` не могут замаскировать `fail`. Каждый failed case несёт `severity: {rank, class: "structural"|"geometry"|"aa"|"raw", score}` (§19.1 «ранжировать по severity»); `GET /cases` и run-репорт сортируют по нему.
+- **D11. Качество капчура — четыре поля на случай.** `captureClean/productErrors/runtimeWarnings/infraWarnings` (существующая классификация `noise.ts`) пишутся в `acceptance_cases` с W1a — на них опираются авто-retry (A3) и различение продуктовой ошибки от шума.
 
 ---
 
 ## 4. Бюджет ёмкости (честно)
 
-Замеры делаются в W1 (done-критерий — записать факт в план), оценка на входе:
+Замеры — done-критерий W1b (wall-clock **и пиковый RSS** через `docker stats`; прирост байт CAS на run), оценка на входе:
 
 | Стадия на 1 case | Оценка |
 |---|---|
-| capture image (запуск воркера + навигация + readiness + PNG) | 4–8 с |
-| geometry probe (отдельная джоба: geometry и image взаимоисключающи) | 3–6 с |
-| ink-bbox + diff + классификация причин (node-подпроцесс) | 0,5–1,5 с |
+| capture (запуск chromium + навигация + readiness + PNG + geometry в одной сессии с W3) | 4–8 с |
+| до W3: geometry и image — **две** джобы (98 запусков на 49 cases) | ×2 |
+| ink-bbox + diff + классификация (node-подпроцесс) | 0,5–1,5 с |
 
-49 cases холодным run'ом ⇒ **8–15 минут**. Меры, вшитые в план:
-1. дедуп по `propsHash` до постановки (в реальных семьях 49 tuple'ов дают 30–40 уникальных props);
-2. gate `determinism` — на **выборке** (`determinismSampleSize` в политике, дефолт 3 случая + все `fail`-случаи), а не на всех 49;
-3. reuse по `case_fingerprint` — повторный вердикт после правки одного ассета: <1 минуты (P1.4);
-4. `acceptanceMaxCasesPerRun = 64` — потолок, за ним `422 case_set_too_large`;
-5. `eta` в статусе: EMA длительности незареюзанных случаев × остаток, плюс `basis: "measured"|"estimate"`.
+Холодный run 49 cases: реалистично **12–20 мин до W3**, 8–15 мин после объединения сессий. Меры:
+1. дедуп по `propsHash` до постановки (оценка «49→30–40» не подтверждена — замер в W1b);
+2. `determinism` на выборке (`determinismSampleSize`, дефолт 3 + все fail-cases);
+3. reuse по `case_fingerprint` — тёплый run <1–2 мин;
+4. `acceptanceMaxCasesPerRun = 64`;
+5. `eta`: EMA × остаток, `basis:"measured"|"estimate"`; **оркестратор забирает результат джобы сразу** (`RESULT_TTL` 10 мин + reap — иначе ложный `error` кейса);
+6. **память**: `mem_limit: 1g` на контейнер (bun + SQLite + chromium + diff/ink-подпроцессы). Один системный слот на тяжёлый подпроцесс: ink-bbox/diff не запускаются одновременно с chromium-джобой. Done-тест W1b: `kill -9` воркера и симуляция OOM посреди run'а → resume досуёмывает ровно недостающие;
+7. **резервирование очереди**: оркестратор не ставит джобу, если `queue.length >= MAX_QUEUE - 2` (интерактиву гарантированы 2 слота из 5), а не только «по одной»;
+8. maintenance-lock: `POST /api/acceptance-runs` → 503 при удержанном lock'е; `acquireMaintenanceLock` отказывает при нетерминальном run'е.
 
-Опциональная оптимизация O1 (**не** в объёме, включается решением после замера W1): переиспользование прогретого browser-процесса между джобами одного run'а — экономит ~1,5 с/джоба, но ломает изоляцию `worker-runner`; вводится отдельным решением, если замер даёт >15 мин.
+Опция O1 (переиспользование прогретого браузера между джобами одного run'а): **становится обязательным объёмом W1b, если замер холодного run'а >15 мин** (гейт KPI §1).
 
 ---
 
 ## 5. Волны
 
-Порядок трека A: **W1 → W2 → W3 → W4 → W5 → W6 → W7**. Трек B (**W8a…W8g → W9**) стартует параллельно с W2.
+### W0 — Микро-релиз: kill-switch'и до кода
 
-### W1 — Durable-база и matrix-run (RFC R2 + per-case слой)
+Добавить в `docker-compose.yml` проброс `EASYUI_ACCEPTANCE_DISABLED: ${EASYUI_ACCEPTANCE_DISABLED:-}`, `EASYUI_VALIDATE_DISABLED`, `EASYUI_THEME_RESOLVER_V2_DISABLED`, `EASYUI_ACCEPTANCE_MATRIX: ${EASYUI_ACCEPTANCE_MATRIX:-}`, `EASYUI_COMPOSITION_V3: ${EASYUI_COMPOSITION_V3:-}`. Выяснить фактическое значение `EASYUI_SURFACES` в Dokploy и синхронизировать `docs/server-api.md` (compose-дефолт `:-1` противоречит докам). Done: деплой, `capabilities` подтверждает управляемость флагов. Перед W1a — **бэкап prod-volume** (канон `/deploy`).
 
-**Объём.** `component_candidates`, `acceptance_runs`, `acceptance_cases`, `acceptance_case_results`; оркестратор вне помпы; гейты фазы 1 (`contract`/`defaults`/`render`/`geometry`(v1)/`determinism`/`audit`); CAS-evidence + манифест; прогресс/ETA; дедуп props; reuse по `case_fingerprint`; источник cases — examples кандидата; advisory-режим ДС (RFC §7); CLI `accept`.
+### W1a — Durable-схема, run и гейты без capture-матрицы
 
-**Новые файлы.** `server/acceptance/{ids,policies,repo,orchestrator,runner,evidence,cases}.ts`, `server/acceptance/gates/{index,contract,defaults,render,geometry,determinism,audit}.ts`, `server/routes/acceptance.ts`, `server/acceptance/{repo,runner,evidence}.test.ts`.
-**Изменяемые.** `server/migrations.ts` (**v25**), `server/contracts.ts`, `server/openapi.json` (регенерация), `server/main.ts` (диспатч роутов), `server/components/validate.ts` (пул слотов: интерактивный cap + системный слот), `server/screenshot/service.ts` (публичный `enqueueComponentDraftFrozen` для оркестратора + backoff-контракт), `server/components/promote.ts` (опциональные `candidateId`/`acceptanceRunId`, `409 acceptance_run_in_flight`, ссылки в Phase B), `.claude/skills/author/driver.mjs` + зеркала (`scripts/sync-share-skills.mjs`), `docs/server-api.md`.
+**Объём.** Миграция **v25**: `component_candidates` (RFC §3.2), `acceptance_runs` (RFC §3.3 + `case_set_id`, `policy_profile_id`, `progress_json`, `impact_json`), `acceptance_cases` (+ поля D11, `severity_json`), `acceptance_case_results` (+ `component_id`), TEXT-колонки A9 на `component_publishes` (`DEFAULT NULL`, без FK, канон плоских ADD COLUMN), `design_systems.acceptance TEXT NOT NULL DEFAULT 'off'` (**DEFAULT обязателен** — иначе старый INSERT из `routes/designSystems.ts` падает при откате образа). Partial unique «≤1 нетерминальный run на кандидата» (первый partial index в проекте; маппинг ошибки → 409). Роуты `POST /api/components/:id/candidates`, `GET /api/component-candidates/:id`, `POST/GET /api/acceptance-runs*` (+`/cases`, `/evidence`, `/cancel`). Оркестратор вне помпы + watchdog (D2) + стартовая уборка. Гейты `contract`/`defaults`/`render`/`audit`; `geometry` — **advisory-only** (v1-семантика в вердикт не входит — она и есть исходный дефект §19.2; боевой гейт приезжает в W3); `visual`/`readiness`/`regression`/`interactions` = `not-implemented`. Байтовый канал capture→CAS (A4: acceptance-джобы не ингестят в asset-store). Пин кандидата (A10). Per-run evidence-манифест + `SHA256SUMS`. Свёртка D10. Источник cases — examples кандидата.
 
-**Схема (v25).**
-```
-component_candidates(...)             -- ровно как RFC §3.2
-acceptance_runs(...)                  -- как RFC §3.3, + case_set_id TEXT NULL, policy_profile_id TEXT,
-                                         progress_json TEXT, impact_json TEXT NULL
-acceptance_cases(
-  run_id TEXT, case_id TEXT, case_key TEXT, props_hash TEXT,
-  case_fingerprint TEXT, case_policy_hash TEXT,
-  reference_asset_id TEXT NULL, expected_geometry_json TEXT NULL,
-  status TEXT,          -- pending|running|done|error|skipped
-  verdict TEXT NULL,    -- pass|fail|skipped
-  gates_json TEXT NULL, alias_of_case_id TEXT NULL,
-  reuse_reason TEXT NULL, started_at TEXT NULL, finished_at TEXT NULL,
-  PRIMARY KEY (run_id, case_id))
-acceptance_case_results(
-  case_fingerprint TEXT PK, artifacts_json TEXT, metrics_json TEXT,
-  verdict TEXT, produced_run_id TEXT, created_at TEXT, last_used_at TEXT)
-component_publishes.candidate_id / .acceptance_run_id  (nullable + FK ON DELETE SET NULL)
-design_systems.acceptance                              (off|advisory, default off)
-```
-Индексы: `acceptance_cases(case_fingerprint)`, partial unique «≤1 нетерминальный run на кандидата», `acceptance_case_results(last_used_at)`.
+**Авторизация (контракт для всех acceptance/case-set роутов).** `requireUser` + owner компонента по денормализованному `component_id` (или admin); `share`/`capture`-принципалы — 403 всегда (инвариант `catalogCandidates.ts`); артефакты CAS отдаются **только** через `runId`-scoped роут с проверкой владельца рана (ручек «по sha» нет). Компоненты с `owner_id IS NULL`: сегодня `resourceOwner` даёт 404 даже админу — admin-путь для acceptance обязан работать, зафиксировать явно.
 
-**API.**
-```http
-POST /api/components/:id/candidates      {}                       -> candidate
-GET  /api/component-candidates/:id
-POST /api/acceptance-runs  { candidateId, idempotencyKey?, caseSetId?, cases?: [{key, props}],
-                             checks?: string[], policy?: "default-v1"|"pixel-strict-v1",
-                             refresh?: "none"|"failed"|"all"|{caseIds:[]} }
-GET  /api/acceptance-runs/:runId          -> { status, gates, progress:{total,completed,reused,failed,running},
-                                               eta:{secondsRemaining,basis}, failedCases:[{caseId,gate,cause}] }
-GET  /api/acceptance-runs/:runId/cases    -> per-case вердикты + ссылки на CAS
-GET  /api/acceptance-runs/:runId/evidence -> tar (owner|admin)
-POST /api/acceptance-runs/:runId/cancel   -> только queued
-```
-422-коды: `case_set_too_large`, `duplicate_case_props` (без `aliasOf`), `unsupported_option` (для `cases.concurrency`/`manifestAssetId`); `candidate_stale` не вводится (канон — `409 revision_conflict`).
+**Файлы.** Новые: `server/acceptance/{ids,policies,repo,orchestrator,runner,evidence,cases}.ts`, `server/acceptance/gates/*`, `server/routes/acceptance.ts`, тесты. Изменяемые: `server/migrations.ts` (v25 + дополнение комментария-инварианта v8), `server/contracts.ts`, `server/openapi.json` (реген + `npm run generate:sdk`), `server/main.ts`, `server/screenshot/service.ts` (байтовый режим, резервирование очереди §4.7, enqueue по `{rev, sourceHash}`), `server/components/candidates.ts` (пин GC), `server/maintenance.ts` (§4.8), `docs/server-api.md`.
 
-**Флаги.** `features.acceptanceCandidates`, `features.acceptanceRuns`, `features.acceptanceMatrix`; лимиты §A7. Kill-switch — существующий.
-**Done.** `npm run verify`; новые unit-тесты (fingerprint-детерминизм, reuse, стартовая уборка, дедуп props, partial-index, CAS GC не удаляет живой артефакт); e2e `e2e/dev/acceptance-run.spec.ts` (run на фикстурном компоненте с 3 examples: pass, затем повтор — `reused: 3`); прогон миграции на копии прод-БД; `driver.mjs accept <id> --json` — одна команда до вердикта; **записан замер wall-clock** на 20 и 49 cases.
-**Риски.** Голодание интерактивных джоб (митигация RFC: по одной джобе, глубина вытеснения ≤1); зависший run при крэше (стартовая уборка + reuse делает потерю дешёвой); рост CAS (потолок `evidenceMaxBytes` + GC по TTL, тест на вытеснение).
+**Done.** `npm run verify`; unit: fingerprint-детерминизм и component-scope (два компонента с одним sourceHash **не** делят результаты), стартовая уборка, watchdog, D10-свёртка (reused/skipped не маскируют fail), partial-index→409, авторизация (share/capture 403), CAS-байты не попадают в asset-store (счётчик строк `assets` до/после), пин head (смена head посреди run'а → `candidate_stale_head`); e2e `e2e/preview/acceptance-run.spec.ts` (**capture-спеки живут в `e2e/preview/` — dev-проект не поднимает `SERVE_DIST`, `ScreenshotService.available()` вернул бы 501**); миграция на копии прод-БД; `EASYUI_ACCEPTANCE_MATRIX` не задан → 404 всех новых ручек.
+
+### W1b — Reuse, CAS GC, дедуп, прогресс/ETA, замеры
+
+**Объём.** `case_fingerprint` (D1, `algoVersion:1`), reuse (владение + физическое существование артефактов), авто-retry `maxInfraRetries` (A3), дедуп props (`aliasOfCaseId`), CAS GC (union-refcount + grace-период + удаление result-строки вместе с артефактами), progress/ETA, `refresh`. Замеры: wall-clock 20/49 cases, RSS, байты CAS — результат вписывается в §4; **>15 мин ⇒ O1 в объём этой волны**.
+**Done.** unit: reuse-инварианты, GC (не удаляет живое; не оставляет result без артефактов; переживает крэш между записью артефакта и строки), retry только на infra-классе (D11); e2e: повтор run'а → `reused: N`; kill/OOM-тест §4.6.
+
+### W1c — Интеграции: promote, слоты, CLI
+
+**Объём.** `promoteComponent`: опциональные `candidateId`/`acceptanceRunId`, `409 acceptance_run_in_flight`, запись A9-ссылок в Phase B. Слоты `server/components/validate.ts`: **не** «третий системный слот» (на 1 CPU это +1 тяжёлый typecheck поверх capture), а приоритетная схема: оркестратор конкурирует за существующий `VALIDATE_GLOBAL_CONCURRENT=2` и **не занимает per-user слот пользователя** (`inFlightUsers` ключуется userId — иначе интерактивный validate владельца run'а получает 429 на 15 минут; оркестратор работает под системным principal с отдельным ключом). CLI `driver.mjs accept <id> [--case-set] [--json]` + зеркала. Правка слотов — отдельно откатываемый шаг: деплоится и наблюдается до включения matrix на проде.
+**Done.** `verify`; unit promote-саги со ссылками; тест «интерактивный validate владельца не деградирует во время run'а»; CLI-путь одной командой.
 
 ### W2 — Reference Mapping (case-sets) — P1.1
 
-**Объём.** Манифест §19.5 как сущность; валидация; coverage-отчёт; per-case политика; подключение `caseSetId` к run'у.
-
-**Новые файлы.** `server/acceptance/caseSets.ts`, `server/routes/caseSets.ts`, `src/acceptance/caseSetSchema.ts` (zod, общий с клиентом/драйвером), `server/acceptance/caseSets.test.ts`.
-**Изменяемые.** `server/migrations.ts` (**v26**: `component_case_sets`), `server/figma.ts` (переиспользование валидаторов `fileKey`/`nodeId`), `server/acceptance/{runner,policies}.ts`, contracts/openapi, `driver.mjs` (`case-set put/get/coverage`), `docs/server-api.md`.
-
-**Схема/API.**
-```
-component_case_sets(case_set_id PK, component_id, design_system, manifest_json,
-                    case_count, source_file_key, source_node_id, created_by, created_at)
-case_set_id = "cset_" + sha256(canonicalJson(manifest))   -- контентная адресация, повтор идемпотентен
-
-PUT  /api/components/:id/case-sets   { manifest }  -> { caseSetId, cases, warnings[] }
-GET  /api/case-sets/:caseSetId
-GET  /api/case-sets/:caseSetId/coverage -> { dimensions, expectedTuples, presentTuples, missingTuples[], duplicates[] }
-```
-Манифест — как §19.5 плюс: `dimensions` (для coverage), `capture: {viewport, dsf, theme}` (общий для набора — иначе эталоны несопоставимы по размеру), `requireVisual?: boolean`, `policy: {profile, perCase overrides}`.
-Валидация: существование `referenceAssetId` в реестре ассетов (`422 asset_not_found`), уникальность `case.id`, дубли `propsHash` (`422 duplicate_case_props`, если не помечены `aliasOf`), `cropLineage.rect` внутри родителя, `props` против `propsJsonSchema` head-кандидата — **warning**, не блокер (схема живёт на ревизии, манифест — на компоненте).
-
-**Done.** `verify`; e2e: манифест на 9 cases → run с эталонами → coverage 0 missing; отказы на дублях/битом ассете; драйвер публикует манифест и печатает coverage. **Риск:** дрейф `propsJsonSchema` между ревизиями — warning + coverage-отчёт на каждом run'е.
+**Объём.** Манифест §19.5 как сущность + `manifestVersion: 1` (поля геометрии/readiness расширяются в W3/W4 — forward-compatible, ранние case-set'ы не перевыпускаются); charset `^[A-Za-z0-9._-]{1,64}$` для `case.id`/`caseKey` (защита от zip-slip в evidence и клиентском кэше); дедуп reference-ассетов по sha256. Миграция **v26**: `component_case_sets`. `case_set_id = "cset_"+sha256(canonicalJson(manifest))` — контентная адресация, повтор идемпотентен. Манифест: cases (id, props, referenceAssetId, expectedGeometry, cropLineage, policy), `dimensions` (coverage + variant family), `capture:{viewport,dsf,theme}` (общий для набора), `requireVisual?`, `policy:{profile, perCase}`. Валидация: `asset_not_found`, уникальность id, `duplicate_case_props` без `aliasOf`, `cropLineage.rect` в границах родителя, props против `propsJsonSchema` head-кандидата — warning. Coverage-роут (`expected/present/missing tuples, duplicates`). `casePolicyHash` входит в `case_fingerprint` (bump `algoVersion`).
+**Файлы.** Новые: `server/acceptance/caseSets.ts`, `server/routes/caseSets.ts`, `src/acceptance/caseSetSchema.ts` (zod, общий с драйвером), тесты. Изменяемые: `server/migrations.ts` (v26), `server/figma.ts` (валидаторы fileKey/nodeId), `server/acceptance/{runner,policies}.ts`, `server/main.ts`, contracts/openapi, `driver.mjs` (`case-set put/get/coverage`), `docs/server-api.md`.
+**Done.** `verify`; e2e `e2e/preview/case-sets.spec.ts`: манифест 9 cases → run (эталоны гейтами пока не потребляются — это W5a; проверяются постановка и `reference_asset_id` в case-строках) → coverage 0 missing; отказы на дублях/битом ассете/плохом charset; драйвер публикует манифест и печатает coverage.
 
 ### W3 — Geometry Contract 2.0 — P0.2
 
-**Объём.** `layoutBounds`/`paintBounds`/`overflow.sources`/`clipChain`/`policyVerdict`; ink-bbox по PNG; gate `geometry` v2 против `expectedGeometry` из case-set.
-
-**Новые файлы.** `src/capture/geometryPolicy.ts` (+`.test.ts`), `scripts/ink-bbox-worker.mjs` (по канону `scripts/visual-diff-worker.mjs`), `server/acceptance/gates/geometry2.ts`.
-**Изменяемые.** `src/capture/geometry.mjs` (+`geometry.d.mts`, тесты), `scripts/screenshot-worker.mjs`, `server/screenshot/service.ts` (`geometryDetailKeys` в джобе, поля результата), `server/contracts.ts`/openapi, `docs/server-api.md`.
-
-**Контракт (аддитивно, `rects[]` не меняется).** Новый блок вычисляется только для ограниченного множества ключей (`geometryDetailKeys`, ≤20; по умолчанию — корневой маркер):
-```json
-{"key":"root","layoutBounds":{"x":0,"y":0,"width":140,"height":96},
- "paintBounds":{"x":-18,"y":-17,"width":175,"height":130},
- "paintBoundsSource":"alpha",
- "overflow":{"left":18,"right":17,"top":17,"bottom":17,
-   "sources":[{"elementPath":"div>span[data-eui-key=highlight]","elementKey":"highlight",
-               "cause":"filter:blur(68px)","contribution":{"left":18,"top":17}}]},
- "clipChain":[{"key":"card-skin","property":"overflow","value":"hidden","effective":true}],
- "policyVerdict":"paint-overflow-not-clipped"}
-```
-- `layoutBounds` — union border-box'ов **in-flow** потомков (`position: static|relative|sticky`, не hidden); out-of-flow (`absolute|fixed`) и трансформированные потомки исключены и попадают в атрибуцию.
-- `paintBounds` — ink-bbox из PNG (альфа/фон-разница), считается в `ink-bbox-worker.mjs`; при недоступности — `paintBoundsSource: "css-upper-bound"` с консервативной оценкой и пометкой в вердикте.
-- `overflow.sources` — ранжирование потомков, чей эффект (`filter`, `box-shadow`, `outline`, `transform`, out-of-flow позиция) пересекает соответствующую сторону overflow.
-- `policyVerdict` ∈ `clean | paint-overflow-clipped | paint-overflow-not-clipped | layout-overflow | indeterminate`; считает `geometryPolicy.ts` от фактов + per-case допусков (`allowPaintOverflow`, `expectedClip`).
-
-**Done.** unit-тесты чистой политики (включая кейс 140/175 из фидбэка и «blur внутри `overflow:hidden` → `clean`»); DOM-тест `collectGeometry` на blur-потомке; **инвариант-тест: gate `geometry` не может вернуть `fail` без непустого `overflow.sources` или названного `expectedGeometry`-расхождения**; `verify`. **Риски.** ink-bbox на непрозрачном фоне (митигируется `paintBoundsSource` + `indeterminate` вместо ложного fail); бюджет CPU (ограничение `geometryDetailKeys`).
+**Объём.** Режим `probe:"paint"` (D4): прозрачный фон + маргин, **одна сессия = geometry + PNG**; `layoutBounds` (union border-box'ов **in-flow** потомков; out-of-flow/трансформированные исключаются и уходят в атрибуцию), `paintBounds` (ink-bbox по альфе, CSS px), `overflow.sources` (`elementKey`, `cause` вида `filter:blur(68px)`, `contribution` по сторонам), `clipChain`, `policyVerdict ∈ clean|paint-overflow-clipped|paint-overflow-not-clipped|layout-overflow|indeterminate`; `geometryDetailKeys` ≤20 (дефолт — корневой маркер). Гейт `geometry` v2 становится боевым (advisory v1 выключается), per-case допуски `allowPaintOverflow`/`expectedClip`. Bump `algoVersion`.
+**Файлы.** Новые: `src/capture/geometryPolicy.ts` (+тест), `scripts/ink-bbox-worker.mjs` (канон `visual-diff-worker.mjs`), `server/acceptance/gates/geometry2.ts`. Изменяемые: `src/capture/geometry.mjs` (+`.d.mts`, тесты), `src/capture/CaptureComponent.tsx` (маргин/прозрачность в paint-режиме), `scripts/screenshot-worker.mjs` (`omitBackground`, combined-сессия), `server/screenshot/service.ts`, contracts/openapi, `docs/server-api.md`.
+**Done.** unit-тесты политики: кейс из фидбэка (**layout 140×96 честный; paint больше layout; источник — коробка/эффект потомка `highlight` с CSS-причиной**), «blur внутри `overflow:hidden` → clean»; DOM-тест `collectGeometry` (out-of-flow потомок не расширяет layoutBounds); инвариант «fail ⇒ `overflow.sources[]` непуст или названо `expectedGeometry`-расхождение»; тест нормализации dsf=2 (нет ложного overflow ×2); `verify`.
 
 ### W4 — Deterministic Capture Readiness — P0.3
 
-**Объём.** Декларативная readiness-политика, расширенный handshake, `captureEnvFingerprint`, gate `readiness`, инвариант «не-ready кадр не идёт в визуальный вердикт».
-
-**Новые файлы.** `src/capture/readinessPolicy.ts` (схема+хеш, общий клиент/сервер), `src/capture/env.ts` (env-fingerprint, font-raster probe), `server/acceptance/gates/readiness.ts`, тесты.
-**Изменяемые.** `src/capture/readiness.ts`, `src/capture/protocol.ts` (поля `readiness`/`env` в Expected/Ready), `src/capture/CaptureComponent.tsx`/`CaptureSurface.tsx`, `scripts/screenshot-worker.mjs` (network-quiet, 2 стабильных rAF, отключение анимаций), `server/screenshot/service.ts` (проброс политики, `CaptureQuality` → `+readiness`), `server/screenshot/noise.ts`, contracts/openapi, `docs/server-api.md`.
-
+**Объём.** Декларативная readiness-политика (schema+hash), расширенный handshake, `captureEnvFingerprint`, gate `readiness`; **сбор наблюдённых ресурсов** — использованные font faces, загруженные theme-иконки/изображения, применённые theme-токены — в `ready.evidence` (без этого W6-класс «theme-only» нереализуем); `colorProfile` best-effort (честная деградация до `colorSchemeOnly`). Network-quiet, 2 стабильных rAF, отключение анимаций, `timeoutMs`-потолок + список pending-запросов в evidence. Bump `algoVersion`.
 ```ts
-readinessPolicy = { version: 1, fonts: "used-faces"|"document-ready",
-  images: "decoded", network: { quietMs: 200, scope: "component-owned" },
-  frames: 2, animations: "disabled", timeoutMs: 15000 }
-readinessPolicyHash = sha256(canonicalJson(policy))
-captureEnvFingerprint = sha256({ browserVersion, platform, dpr, colorScheme,
+readinessPolicy = { version: 1, fonts: "used-faces"|"document-ready", images: "decoded",
+  network: { quietMs: 200, scope: "component-owned" }, frames: 2,
+  animations: "disabled", timeoutMs: 15000 }
+captureEnvFingerprint = sha256({ browserVersion, platform, dpr, colorScheme|colorProfile,
                                  fontRasterFingerprint, rendererBuild, readinessPolicyHash })
-ready.evidence = { fontFaces:[{family,weight,style,status}], images:{total,decoded,failed},
-                   pendingRequests:[…], framesWaited, animationsDisabled }
 ```
-**Done.** e2e-регресс на кейс `pay-action-button`: фикстура с намеренно медленной theme-иконкой — без W4 PNG без иконки, с W4 либо ready-кадр с иконкой, либо `readiness_not_met` (и `visual` не выполняется); тест «два подряд захвата дают одинаковый `captureEnvFingerprint`»; `verify` + `npm run e2e`. **Риск.** `network quiet` может вечно ждать на фоновом polling'е — потолок `timeoutMs` и явный список pending-запросов в evidence.
+**Файлы.** Новые: `src/capture/readinessPolicy.ts`, `src/capture/env.ts`, `server/acceptance/gates/readiness.ts`, тесты. Изменяемые: `src/capture/readiness.ts`, `src/capture/protocol.ts`, `src/capture/CaptureComponent.tsx`/`CaptureSurface.tsx`, `scripts/screenshot-worker.mjs`, `server/screenshot/service.ts`, `server/screenshot/noise.ts`, contracts/openapi, `docs/server-api.md`.
+**Done.** e2e `e2e/preview/capture-readiness.spec.ts`: фикстура с медленной theme-иконкой → либо ready-кадр с иконкой, либо `readiness_not_met`; стабильность `captureEnvFingerprint` на двух захватах; `verify` + `npm run e2e`. (Инвариант D5 «не-ready не идёт в visual» — тест в W5a.)
 
-### W5 — Минимальный per-case visual gate + классификация и группировка причин — P1.2
+### W5a — Per-case visual gate — P1.2 (метрики)
 
-**Объём.** Diff кандидат↔эталон на случай; метрики raw/AA/regions; таксономия §19.6; группировка ремедиаций.
+**Объём.** Гейт `visual` (A5): нормализация размеров (crop по `cropLineage`, pad до общего холста, `indeterminate` при несводимости), метрики `rawDiffPct/aaDiffPct/maxChannelDelta/regions(≤12)/bestOffset`, per-case пороги из политики/манифеста; severity-ранжирование (D10) в действии; инвариант-тест D5. Bump `algoVersion` (последний — **с этой волны reuse-KPI измеряется**).
+**Файлы.** `server/acceptance/gates/visual.ts`, `scripts/visual-diff-worker.mjs` (нормализация, маска, связные компоненты, AA-дифференциал, best-offset), `server/visual/diff-runner.ts`, `server/acceptance/runner.ts`, contracts/openapi.
+**Done.** unit на синтетических парах (включая dimension-normalization и «не-ready кадр не получает вердикта»); e2e `e2e/preview/visual-causes.spec.ts` (часть 1: пороговые вердикты); `verify`.
 
-**Новые файлы.** `server/acceptance/gates/visual.ts`, `server/visual/causes.ts` (+`.test.ts` — чистые классификаторы над масками), `server/acceptance/grouping.ts` (+`.test.ts`).
-**Изменяемые.** `scripts/visual-diff-worker.mjs` (маска, связные компоненты, AA-дифференциал, best-offset корреляция), `server/visual/diff-runner.ts` (расширенный результат), `server/acceptance/runner.ts`, contracts/openapi.
+### W5b — Таксономия причин и группировка ремедиаций
 
-**Метрики на случай.** `rawDiffPct`, `aaDiffPct`, `maxChannelDelta`, `regions:[{bbox, areaPct, meanDelta}]` (до 12), `bestOffset:{dx,dy,residualPct}`.
-**Причины** (каждая — `{code, confidence, detail}`, всегда есть фолбэк `unclassified`): `surface-tint`, `edge-radius-stroke`, `geometry-shift`, `text-raster-residual`, `missing-late-asset` (перекрёстно с readiness-evidence W4), `alpha-compositing`, `effect-overflow` (регионы между `layoutBounds` и `paintBounds` — прямое использование W3), `descendant-outside-mask` (регионы вне `paintBounds`).
-**Группировка.** `remediationKey = sha256({causeCode, квантованная относительная bbox-сигнатура, доминирующий elementKey из geometry-карты})`; run-репорт отдаёт `remediationGroups: [{key, cause, sharedElementKey, cases:[…], suggestion}]` — 20 состояний с одной сломанной иконкой дают одну группу.
-**Done.** unit-тесты классификатора на синтетических парах PNG (по одному на код таксономии, включая «одна иконка на 20 случаев → 1 группа»); e2e: case-set с эталонами, один сломанный shared-ассет → run `fail` с одной группой; `verify`. **Риски.** Ложные классификации — все причины несут `confidence`, вердикт `fail/pass` **никогда** не зависит от классификации (только от порогов diff), классификация — исключительно диагностика.
+**Объём.** 8 классификаторов §19.6 (`{code, confidence, detail}`, фолбэк `unclassified`): `surface-tint`, `edge-radius-stroke`, `geometry-shift`, `text-raster-residual`, `missing-late-asset` (от W4-evidence), `alpha-compositing`, `effect-overflow` (регионы между layout и paint bounds — от W3), `descendant-outside-mask`. Группировка: `remediationKey = sha256({causeCode, квантованная bbox-сигнатура, elementKey, variantFamily})` — семейственные измерения из W2-манифеста входят в ключ (§19.6 «группировать по variant family»); run-репорт: `remediationGroups` + сортировка по severity. Классификация **никогда** не влияет на pass/fail.
+**Файлы.** `server/visual/causes.ts` (+тест — чистые классификаторы над масками), `server/acceptance/grouping.ts` (+тест), `server/acceptance/runner.ts`, contracts/openapi.
+**Done.** unit по каждому коду («одна иконка на 20 случаев → 1 группа»); e2e: сломанный shared-ассет → `fail` с одной группой; **ревью первой прод-семьи: 0 ручных matrix-скриптов (KPI)**; `verify`.
 
 ### W6 — Impact и частичная пересъёмка — P1.4
 
-**Объём.** D6: `sourceShapeHash`, наблюдённые ресурсы случая, диффы темы, `POST …/impact` (dry-run) и `mode: "impact"` на run'е.
-
-**Новые файлы.** `server/acceptance/impact.ts` (+`.test.ts`), `server/acceptance/resources.ts` (нормализация наблюдённых ресурсов из readiness-evidence W4).
-**Изменяемые.** `server/acceptance/{runner,repo}.ts`, `server/routes/acceptance.ts`, `server/components/candidates.ts` (`sourceShapeHash` рядом с `sourceHash`), contracts/openapi, `driver.mjs` (`accept --baseline-run <id>`, `impact`).
-```http
-POST /api/components/:id/impact { candidateId, baselineRunId } ->
-  { basis: "asset-only"|"theme-only"|"conservative", changedAssets[], changedTokens[],
-    affectedCases[], unaffectedCases[], recaptureCount, reason }
-```
-**Done.** Тест сценария §19.8: 49 cases, замена одного `BalanceHidden`-ассета → `recaptureCount` = числу случаев, реально использующих ассет; «любая другая правка исходника → conservative, 49»; e2e; `verify`. **Риск.** Неполнота наблюдённых ресурсов (динамический URL) → нет молчаливого reuse: неизвестный ресурс переводит анализ в `conservative`.
+**Объём.** D6: `sourceShapeHash` (в `server/components/candidates.ts` рядом с `sourceHash`), нормализация наблюдённых ресурсов из W4-evidence (`server/acceptance/resources.ts`), диффы темы, `POST /api/components/:id/impact {candidateId, baselineRunId}` → `{basis, changedAssets[], changedTokens[], affectedCases[], unaffectedCases[], recaptureCount, reason}`; `driver.mjs accept --baseline-run <id>` / `impact`.
+**Done.** «замена одного ассета → recapture = числу реально использующих», «любая другая правка исходника → conservative, все»; e2e `e2e/preview/acceptance-impact.spec.ts`; `verify`. Риск: динамический URL → неизвестный ресурс → `conservative`, без молчаливого reuse.
 
 ### W7 — Client-side evidence cache — P1.3
 
-**Объём.** `--cache-dir` в `driver.mjs`; только клиент, серверных зависимостей нет.
-
-**Новые файлы.** `.claude/skills/author/cache.mjs` (+ зеркала через `scripts/sync-share-skills.mjs`), `test/driver-cache.test.ts`.
-**Изменяемые.** `.claude/skills/author/driver.mjs`, `.claude/skills/*/SKILL.md`, `docs/server-api.md` (раздел «клиентский кэш»).
-```
-<cache>/requests/<sha256(key)>.json   { request(без секретов), status, headers.etag, body, fetchedAt, fingerprints }
-<cache>/blobs/<sha256>                PNG/ассеты
-<cache>/receipts/<verb>/<key>.json    job-receipts + история polling'а
-<cache>/links.json                    candidate → run → cases → artifacts → report
-<cache>/SHA256SUMS
-key = sha256({ baseUrl, method, path, sortedQuery, canonicalBody, apiVersion })   // токены/куки не входят и не пишутся
-```
-Кэшируются: read-only GET'ы (catalog/get/capabilities/case-sets), **терминальные** acceptance-run'ы и их evidence, capture-результаты по `case_fingerprint`. Валидация: ETag, если есть; иначе совпадение фингерпринтов ответа (`buildFingerprint`, `catalogRevision`, `case_fingerprint`). `--refresh` форсирует промах и пишет `refreshReason`. Любой `--json`-ответ получает `cache: {status:"hit"|"miss"|"refresh", key, reason}`.
-**Done.** unit-тесты (hit/miss/refresh, отсутствие секретов — grep-тест, стабильность ключа при перестановке query); ручной прогон: повтор `accept` на неизменившемся кандидате не делает ни одного capture-запроса; `verify`. **Риск.** Устаревший hit — в ключ входит `apiVersion`, в валидацию — фингерпринты; `--refresh` документирован в скилле.
+**Объём.** `--cache-dir` в `driver.mjs` (только клиент). Схема кэша: `requests/<sha256(key)>.json`, `blobs/<sha256>`, `receipts/`, `links.json`, `SHA256SUMS`. **Ключ включает идентичность**: `key = sha256({identity: sha256(baseUrl+userId|username), method, path, sortedQuery, canonicalBody, apiVersion})` — общий `--cache-dir` не отдаёт ответы чужой учётки; токены/куки не входят и не пишутся. Каталог `mode 0700`; `SHA256SUMS` проверяется при чтении (подмена blob'а = miss); распаковка evidence-архива отвергает `..`/абсолютные имена; кэш при `LEGACY_BASIC_AUTH` выключен. Кэшируются read-only GET'ы, **терминальные** раны и их evidence, capture-результаты по `case_fingerprint`; валидация — ETag либо фингерпринты; `--refresh` пишет `refreshReason`; каждый `--json`-ответ несёт `cache:{status,key,reason}`. Явно: клиентский кэш — ускоритель, **не свидетельство**.
+**Файлы.** `.claude/skills/author/cache.mjs` (+зеркала, `scripts/sync-share-skills.mjs`), `.claude/skills/author/driver.mjs`, `.claude/skills/*/SKILL.md`, `test/driver-cache.test.ts`, `docs/server-api.md`.
+**Done.** unit (hit/miss/refresh, изоляция учёток, grep секретов, стабильность ключа при перестановке query); ручной прогон: повтор `accept` на неизменённом кандидате — 0 capture-запросов; **замер KPI №1 на 49-кейсовой семье**; `verify`.
 
 ### W8 — Composition v3 (трек B) — P0.4
 
-Подволны последовательны внутри трека; каждая — своя `verify`-зелень. Kill-switch `EASYUI_COMPOSITION_V3=1` (дефолт OFF) вводится в W8a и снимается только после приёмки W9.
+Подволны последовательны; каждая — своя `verify`-зелень. `EASYUI_COMPOSITION_V3` OFF до приёмки W9. **W8a–f — внутренние инкременты, поставка трека — W9.**
 
-- **W8a — типизированные параметры и параметрические условия.** `params[*].type += "enum"|"object"|"array"` со схемой/дефолтами/границами (`items`, `maxItems`), `$if`/`$switch` по параметрам, optional branch. Файлы: `src/prototype/composition.ts` (ветка `version: 3`), новые `src/prototype/compositionV3/{params,conditions}.ts` + тесты, `server/validation.ts`, `server/contracts.ts`.
-- **W8b — `repeat` по параметру-массиву.** Разворачивание на этапе expansion, key-expression, лимит элементов (учитывается в `EXPANDED_ELEMENTS_LIMIT`). Файлы: `src/prototype/compositionV3/repeat.ts`, expansion в `composition.ts`.
-- **W8c — слоты с метаданными.** `slots: {name: {required, allowedTypes[], cardinality:{min,max}, fallback}}` (аддитивно к «списку строк» v1/v2). Валидация в точке ссылки.
-- **W8d — event outputs.** `events: {onPick: {payload: schema}}`; внутренний типизированный event маппится в выход композиции, точка ссылки биндит выход на action/state хоста; никакого event-proxy в TSX. Файлы: `src/prototype/compositionV3/events.ts`, правки expansion (переписывание props действий).
-- **W8e — token layout.** Ограниченная схема `layout: {flow, gap, padding, align, justify, radius, clip, background}` на элементах композиции — компилируется в существующий host-примитив со spacing/layout-контрактом v1; новых рантайм-примитивов не появляется.
-- **W8f — варианты.** `variants: {name: {tuples[], defaults}}`; ссылка может передать `variant`; варианты экспортируются в case-set-измерения (стык с W2).
-- **W8g — анализатор и preview-дерево.** `POST /api/compositions/analyze {doc}` → `{verdict: "composition"|"extend-component"|"needs-ownership-component", reasons[], unsupported[]}`; `POST /api/compositions/:id/preview-tree {params, slots}` → resolved params, выбранные ветки, привязки слотов и событий, владелец раскладки, раскрытое дерево (без capture). Файлы: `src/prototype/compositionAnalyze.ts` (+тесты), `server/routes/compositions.ts`.
+- **W8a — параметры и условия.** `params[*].type += "enum"|"object"|"array"` (схемы/дефолты/`items`/`maxItems`), `$if`/`$switch` по параметрам, optional branch. **Обязательные правки диспетчеров D8** + снапшот-тесты диспетчеризации v1/v2. Файлы: `src/prototype/composition.ts` (ветка `version:3`), `src/prototype/compositionV3/{params,conditions}.ts` (+тесты), `server/validation.ts`, `server/contracts.ts`.
+- **W8b — `repeat` по параметру-массиву.** Expansion-time; **схема ключей развёрнутых элементов задаётся явно** (индексный суффикс в authored-пространстве; `$` остаётся зарезервирован за `expandedKey` — коллизии с `hostKey$innerKey` исключены тестом); лимиты до и после раскрытия (`EXPANDED_ELEMENTS_LIMIT`). Файлы: `src/prototype/compositionV3/repeat.ts`, expansion.
+- **W8c — слоты с метаданными.** `slots` как объект: **нормализация/форк `refineCompositionDoc`** (текущий код делает `new Set(doc.slots)`/`.includes` — со словарём ломается); `required`, `allowedRoles[]` (роли из `canonicalFor`-глоссария) + `allowedTypes[]` (дополнительно), `cardinality:{min,max}`, `fallback`. Валидация в точке ссылки.
+- **W8d — параметры-действия (пересмотрено, T-M6).** Заявленный §19.4.5 «typed event → composition output» **нереализуем** при expansion-time: подстановка не ходит в `element.on`, валидатор отвергает `$param` в action-параметрах, host-элемент удаляется при раскрытии — рантайм-границы композиции не существует. Вместо этого **параметр типа `action`**: точка ссылки передаёт handler-биндинг (навигация/state-мутация/типизированное событие хоста), expansion статически вписывает его в `on` целевых элементов. Декларация payload-схем событий композиции — в не-цели. Файлы: `src/prototype/compositionV3/actions.ts`, expansion.
+- **W8e — token layout.** `layout: {flow, gap, padding, align, justify, sizing (width|height|grow|basis из токенов), radius, clip, background}` — компилируется в существующие примитивы spacing/layout-контракта v1; новых рантайм-примитивов нет.
+- **W8f — варианты.** `variants: {name: {tuples[], defaults}}`; ссылка передаёт `variant`; экспорт в case-set-измерения (стык с W2).
+- **W8g — анализатор и preview-дерево.** `POST /api/compositions/analyze {doc}` → `{verdict: "composition"|"extend-component"|"needs-ownership-component", reasons[], unsupported[]}`; `POST /api/compositions/:id/preview-tree {params, slots}` → resolved params, ветки, слоты/события, layout-owner, раскрытое дерево (UI-превью — не в объёме, ограничение против §19.4.10). Файлы: `src/prototype/compositionAnalyze.ts` (+тесты), `server/routes/compositions.ts`.
 
-**Отложено осознанно.** §19.4.7 **responsive branches** — container-width брейкпоинты требуют измерения на рантайме, что несовместимо с expansion-time-моделью (D7); реализация означала бы рантайм-интерпретатор композиций — отдельный RFC. Записано как не-цель с обоснованием.
-**Done трека.** Раскрытие v1/v2 байт-в-байт не изменилось (снапшот-тесты); фикстуры «FAQ list», «Payment schedule», «Card details» собираются композицией v3 без TSX и проходят `e2e/dev/composition-v3.spec.ts`; kill-switch выключен → `422 composition_v3_disabled`; `docs/prototype-format.md` описывает границу D7; `verify`.
-**Риски.** Взрыв раскрытия (`repeat`×`$switch`) — все лимиты проверяются **до** раскрытия и на раскрытом дереве; откат образа на документе v3 (митигация — kill-switch OFF на проде до приёмки).
+**Отложено осознанно.** §19.4.7 responsive branches (несовместимо с D7; рантайм-интерпретатор — отдельный RFC); §19.4.5 event-декларации (заменены параметром-действием).
+**Done трека.** Снапшоты диспетчеров v1/v2 байт-в-байт; фикстуры «FAQ list», «Benefit list», «Payment schedule», «Card details» — композициями v3 без TSX; `e2e/preview/composition-v3.spec.ts` (+ правка `playwright.config.ts`: `EASYUI_COMPOSITION_V3=1` в `webServer`-команде, прецедент `surfacesEnv`); флаг OFF → `422 composition_v3_disabled`; `docs/prototype-format.md` описывает границу D7; `verify`.
 
 ### W9 — Workbench (трек B)
 
-**Объём.** Снять `422 unsupported_kind` для `proposed.kind === "composition"` в `server/routes/catalogCandidates.ts`; ответ даёт три исхода (§19.4: «собрать composition» / «расширить существующий component» / «нужен новый ownership component») с объяснением и dependency impact (`usages`); вердикт анализатора W8g в ответе; минимальная UI-точка — блок в Library-поиске с тремя исходами. Полноценный визуальный workbench — **не в объёме**.
-**Файлы.** `server/routes/catalogCandidates.ts`, `server/catalog/*` (матчер — только чтение), `src/library/*` (минимальный блок), `driver.mjs` (`catalog search` печатает три исхода), `docs/server-api.md`.
-**Done.** тест на композиционном кандидате; e2e-путь «поиск → вердикт → создание композиции»; `verify`.
+**Объём.** Снять `422 unsupported_kind` для композиционных кандидатов; **расширить корпус матчера композициями** (сейчас `server/catalog/corpus.ts` собирает только `kind:"component"` — без этого дубль существующей композиции не детектируется и «три исхода» слепы к композициям); три исхода («собрать composition» / «расширить component» / «нужен ownership component») с объяснением и dependency impact (`usages`); вердикт W8g в ответе; минимальный блок в Library. Печать трёх исходов в `driver.mjs catalog search` — в этой волне (замок драйвера, §6). Полноценный визуальный workbench — не в объёме.
+**Файлы.** `server/routes/catalogCandidates.ts`, `server/catalog/{corpus,matcher}.ts`, `src/library/*`, `driver.mjs` + зеркала, `docs/server-api.md`.
+**Done.** тест матчера на композиционном дубле; e2e `e2e/preview/workbench.spec.ts` «поиск → вердикт → создание композиции»; `verify`.
 
 ---
 
@@ -305,48 +224,51 @@ key = sha256({ baseUrl, method, path, sortedQuery, canonicalBody, apiVersion }) 
 
 | Файл | Волны | Правило |
 |---|---|---|
-| `server/migrations.ts` | W1 (v25), W2 (v26) | **строго серийный**; другие волны миграций не добавляют; трек B миграций не требует |
-| `server/contracts.ts`, `server/openapi.json` | W1–W6, W8a/g, W9 | правки только аддитивные; каждая волна в конце гоняет `scripts/generate-openapi.ts` и `check-openapi-drift`; конфликт мержа решается регенерацией |
-| `.claude/skills/*/driver.mjs` + зеркала | W1, W2, W6, W7, W8, W9 | «замок драйвера»: одновременно правит **одна** волна; `scripts/sync-share-skills.mjs` в конце волны |
-| `server/screenshot/service.ts`, `scripts/screenshot-worker.mjs`, `src/capture/protocol.ts` | W1 (проброс), W3, W4 | W3 и W4 **не параллелятся** между собой |
+| `server/migrations.ts` | W1a (v25), W2 (v26) | строго серийный |
+| `server/contracts.ts`, `server/openapi.json`, SDK | почти все | аддитивно; в конце волны `generate-openapi` **и `generate:sdk`** + drift-чеки; сгенерированные файлы не мержатся руками — только регенерация |
+| `server/main.ts` (диспатч роутов) | W1a, W2, W8g, W9 | append-only; конфликт решает волна с бóльшим номером |
+| `docs/server-api.md` | W1a–W7, W9 | append-only по секциям волны |
+| `.claude/skills/*/driver.mjs` + зеркала + `scripts/sync-share-skills.mjs` | W1c, W2, W6, W7, W9 | «замок драйвера»: одновременно правит одна волна; sync в конце волны |
+| `server/screenshot/service.ts`, `scripts/screenshot-worker.mjs`, `src/capture/protocol.ts`, `src/capture/CaptureComponent.tsx` | W1a, W3, W4 | серийно; W3 и W4 не параллелятся |
 | `src/capture/geometry.mjs` | W3 | эксклюзив |
-| `scripts/visual-diff-worker.mjs`, `server/visual/*` | W5 | эксклюзив; `visual_references`/`visual_runs` не трогаются |
-| `server/acceptance/**` | W1 владеет, W2/W5/W6 расширяют своими файлами | новые гейты — только новыми файлами в `gates/` |
-| `src/prototype/composition.ts`, `src/prototype/compositionV3/**` | W8a–f | эксклюзив трека B |
-| `server/routes/catalogCandidates.ts` | W9 | эксклюзив |
+| `scripts/visual-diff-worker.mjs`, `server/visual/*` | W5a/W5b | эксклюзив; `visual_references`/`visual_runs` не трогаются |
+| `server/acceptance/**` | W1a владеет; W1b/W1c/W2/W5/W6 — свои файлы | новые гейты — новыми файлами в `gates/` |
+| `server/validation.ts` (раскрытие прототипов) | W8a–f | эксклюзив трека B; **не путать** с `server/components/validate.ts` (трек A, W1c) |
+| `src/prototype/composition.ts`, `src/prototype/compositionV3/**` | W8a–f | эксклюзив |
+| `server/routes/catalogCandidates.ts`, `server/catalog/{corpus,matcher}.ts` | W9 | эксклюзив |
+| `playwright.config.ts` | W8 | эксклюзив |
+| `docker-compose.yml` | W0 | эксклюзив |
 
-Параллельные пары, разрешённые к одновременному исполнению субагентами: (W2 ‖ W8a–c), (W3 ‖ W8d–f), (W7 ‖ W9). Всё остальное — последовательно.
+Параллельные пары: (W2 ‖ W8a–c), (W3 ‖ W8d–f). Пара (W7 ‖ W9) **запрещена** (обе правят драйвер). Всё остальное — последовательно.
 
 ---
 
 ## 7. Верификация
 
-**Инженерный гейт каждой волны:** `npm run verify` + целевые e2e-спеки волны + `npm run e2e` целиком перед закрытием трека.
+**Инженерный гейт каждой волны:** `npm run verify` (включая openapi+sdk drift) + целевые e2e-спеки; `npm run e2e` целиком перед закрытием трека. Все capture-зависимые спеки — в `e2e/preview/` (dev-проект не поднимает `SERVE_DIST`); бюджет времени e2e закладывать (4 web-сервера, два с build).
 
-**Новые e2e-спеки:** `e2e/dev/acceptance-run.spec.ts` (W1), `e2e/dev/case-sets.spec.ts` (W2), `e2e/dev/capture-readiness.spec.ts` (W4), `e2e/dev/visual-causes.spec.ts` (W5), `e2e/dev/acceptance-impact.spec.ts` (W6), `e2e/dev/composition-v3.spec.ts` (W8), `e2e/dev/workbench.spec.ts` (W9).
-
-**Runtime-приёмка (по `.claude/skills/verify`), до снятия любых флагов на проде:**
-1. Фикстурный компонент семейства (≥20 cases) + case-set с эталонами; `driver.mjs accept` — одна команда до вердикта; в отчёте per-case таблица, remediationGroups, SHA-манифест.
-2. Ломается один shared-ассет → run `fail` с **одной** ремедиационной группой; правка ассета → `impact` показывает ≤ числа затронутых случаев; повторный run переиспользует остальные.
-3. Кейс `pay-action-button`: без readiness-политики кадр без иконки, с ней — `readiness_not_met`, визуальный вердикт не выдан.
-4. Кейс «карточка 140/175»: `geometry` возвращает `layoutBounds 140×96`, `paintBounds 175×130`, `sources[0].cause = "filter:blur(…)"`, вердикт по политике.
-5. Композиционные фикстуры (FAQ list / Payment schedule / Card details) собираются без TSX и рендерятся в плеере.
-6. Миграции v25/v26 прогнаны на копии прод-БД; откат образа проверен (новые таблицы не читаются старым кодом).
+**Runtime-приёмка (по `.claude/skills/verify`), до включения `EASYUI_ACCEPTANCE_MATRIX`/`EASYUI_COMPOSITION_V3` на проде:**
+1. Фикстурная семья ≥20 cases + case-set с эталонами; `driver.mjs accept` — одна команда; per-case таблица с сортировкой по severity, remediationGroups, SHA-манифест.
+2. Один сломанный shared-ассет → `fail` с одной группой; `impact` ≤ реально затронутых; повторный run reuse'ит остальные.
+3. Кейс `pay-action-button`: `readiness_not_met`, визуальный вердикт не выдан.
+4. Кейс «карточка 140/175»: `layoutBounds 140×96`, `paintBounds` больше layout, источник — конкретный потомок с CSS-причиной, вердикт по политике.
+5. Композиционные фикстуры без TSX рендерятся в плеере.
+6. Миграции v25/v26 на копии прод-БД; **бэкап volume перед W1a**; чек-лист отката: старый код не читает новые таблицы/колонки (подтверждено ревью: `SELECT *` по `component_publishes`/`design_systems` в продовом коде нет; `design_systems.acceptance` — NOT NULL DEFAULT), `.acceptance/**` при откате не растёт (оркестратора нет — но периметр диска проверить), незавершённые раны уберёт стартовая уборка следующего деплоя.
+7. Замеры: wall-clock/RSS/CAS-байты холодного и тёплого run'а вписаны в §4; KPI-таблица §1 актуализирована фактами.
 
 ---
 
 ## 8. Явные не-цели
 
-- **VDC 2.0 целиком**: lifecycle exceptions, продвижение baseline'ов, автоприёмка эталонов, миграция `visual_references`/`visual_runs` в acceptance-модель. В объёме — только минимальный per-case гейт (A5).
-- **Gate `regression`** (candidate-пин в `PrototypeBootstrapTarget`) и **gate `interactions`** — остаются `not-implemented` (RFC R4+).
-- **Режим ДС `required`** — только `off|advisory` (RFC).
-- **Таблица `policy_profiles` и CRUD профилей** (A6).
-- **Flow-level release gate**, theme impact graph, dependency workbench.
-- **Автогенерация галереи из манифеста** (§19.5) — в объёме только `coverage`.
-- **Responsive branches композиций** (§19.4.7) и любой рантайм-интерпретатор композиций (D7).
-- **Figma API-клиент/квоты** — сервер не ходит в Figma; манифест приносит клиент.
-- **GC ассет-стора**, provenance в bundle-формате v3, backfill исторических версий evidence'ом.
-- **Полноценный визуальный Composition Workbench** — W9 минимален (API + три исхода + один блок в Library).
+- VDC 2.0 целиком (exceptions lifecycle, baseline promotion, автоприёмка эталонов, миграция `visual_references`/`visual_runs`).
+- Gate `regression` и `interactions` (RFC R4+).
+- Режим ДС `required`; таблица `policy_profiles`.
+- Flow-level release gate, theme impact graph, dependency workbench.
+- Автогенерация галереи из манифеста (только `coverage`).
+- Responsive branches композиций (§19.4.7) и рантайм-интерпретатор композиций (D7); **event-декларации композиций с payload-схемой** (§19.4.5 — заменены параметром-действием, T-M6).
+- UI-превью composition workbench (§19.4.10 — только API W8g); полноценный визуальный Workbench.
+- Figma API-клиент/квоты; GC ассет-стора (acceptance его больше не наполняет — A4); provenance в bundle v3; backfill исторических версий.
+- Точный ICC color profile в env-fingerprint (best-effort, деградация до `colorSchemeOnly`).
 
 ---
 
@@ -354,18 +276,39 @@ key = sha256({ baseUrl, method, path, sortedQuery, canonicalBody, apiVersion }) 
 
 | Риск | Sev | Митигация |
 |---|---|---|
-| Wall-clock 49 cases не влезает в KPI «<10 мин» | high | §4: дедуп props, determinism на выборке, reuse, честный `eta`; опция O1 по факту замера W1 |
-| Ложные визуальные причины дезориентируют агента | med | классификация не влияет на вердикт, только диагностика; `confidence` + `unclassified` |
-| ink-bbox неприменим на непрозрачном фоне | med | `paintBoundsSource` + вердикт `indeterminate` вместо ложного fail |
-| Рост диска CAS | med | `evidenceMaxBytes`, GC по TTL и отсутствию ссылок, тест вытеснения |
-| Reuse переиспользует результат из другой среды | high | `captureEnvFingerprint` внутри `case_fingerprint` (заведён в W1, наполняется в W4) |
-| Взрыв раскрытия композиций v3 | med | лимиты до и после раскрытия, kill-switch OFF на проде |
-| Конфликты параллельных волн по `contracts.ts`/`driver.mjs` | med | §6: замок драйвера, регенерация openapi, серийные миграции |
+| Wall-clock холодного run'а не влезает в KPI | high | §4; **гейт O1 по замеру W1b**; KPI переформулирован (тёплый <10 мин) |
+| OOM контейнера (`mem_limit: 1g`) посреди run'а | high | один слот тяжёлого подпроцесса; замер RSS в W1b; resume-тест kill/OOM |
+| Диск: CAS + (исторически) asset-store | high | acceptance-капчуры не ингестятся в asset-store (A4); `evidenceMaxBytes`; GC с grace-периодом и union-refcount |
+| Cross-owner reuse/disclosure | high | `candidateId` в `case_fingerprint` (D1); `component_id` в results; артефакты только через runId-scoped роут |
+| Смена head посреди run'а / вытеснение бандла GC | high | пин A10; `candidate_stale_head`/`candidate_evicted` |
+| Reuse из другой среды/эпохи | med | `captureEnvFingerprint` + `algoVersion` (авто-инвалидация на границах волн) |
+| Голодание интерактива (очередь 5, validate-слоты) | med | резервирование 2 слотов; оркестратор не занимает per-user validate-слот; отдельный деплой W1c |
+| Ложные визуальные причины | med | классификация не влияет на вердикт; `confidence`+`unclassified` |
+| ink-bbox: непрозрачный фон/малый маргин | med | paint-режим с `omitBackground`+маргином; `indeterminate` вместо ложного fail |
+| Взрыв раскрытия v3 | med | лимиты до/после; флаг OFF; после первой v3-записи откат = чистка данных |
+| Zip-slip / небезопасные имена | med | charset `caseId` (W2) + санитизация архива (A4) + клиентская защита распаковки (W7) |
+| Конфликты волн по общим файлам | med | §6 (включая `main.ts`, `docs/server-api.md`, SDK-реген) |
 
-### Критические файлы
+---
 
-- `docs/plans/2026-08-02-candidate-acceptance-pipeline-rfc.md` — база трека A
-- `server/screenshot/service.ts`, `scripts/screenshot-worker.mjs`, `src/capture/protocol.ts` — capture-пайплайн
-- `src/capture/geometry.mjs` — геометрия
-- `src/prototype/composition.ts` — формат композиций
-- `server/migrations.ts` — v25/v26
+## 10. Триаж Stage 2 (раунд 1)
+
+Ревьюеры: R1 корректность/код, R2 скоуп/декомпозиция, R3 риски/эксплуатация. **Принято** = внесено в v2; **отклонено** = с обоснованием.
+
+**Принятые blocker'ы.**
+- R1-B1 = R2-1: `case_fingerprint` без component-scope → D1 (`candidateId` + `algoVersion`, `component_id` в results, владение на reuse).
+- R1-B2/B3: ink-bbox неизмерим (element-screenshot клиппит чернила; PNG на сервер — только через asset-store) → D4 (режим `probe:"paint"`: прозрачный фон + маргин + одна сессия) и A4 (байтовый канал в CAS); мотивировка §1 исправлена (R1-M1: blur в `getClientRects` не входит — «175» дала коробка потомка).
+- R1-B4: захват не запинен к кандидату (head мутирует) → A10 (+пин бандла против `gcCandidates`, R3).
+- R1-B5: refcount CAS не по той таблице → A4 (union-refcount, атомарное удаление result-строки, проверка существования при reuse).
+- R2-9: перегруз W1 → W1a/W1b/W1c; R2-10: W5 → W5a/W5b.
+- R3: kill-switch физически не проброшен в compose → W0; `mem_limit: 1g` → §4.6 + замер RSS; asset-store ingest капчуров без GC → A4.
+
+**Принятые major (сводно).** R1-M2 (единицы CSS/device px → D4), R1-M3 (два несопоставимых кадра → combined-сессия), R1-M4 (`dimensionMismatch` без метрик → нормализация A5/W5a), R1-M5 (диспетчеры v3 → D8/W8a), R1-M6 (event-wiring нереализуем → W8d переписан на параметр-действие; изменение §19.4.5 в не-целях), R1-M7 (вечный `running` → watchdog D2), R1-M8 (per-user validate-слот → W1c), R1-M9 (корпус матчера без композиций → W9), R2-2 (severity-ранжирование → D10), R2-3 (четыре поля качества → D11), R2-4 (авто-retry infra → A3), R2-5 (свёртка вердикта → D10), R2-6/7 (KPI-переформулировки + гейт O1 → §1/§4), R2-11 (geometry v1 → advisory в W1a), R2-12 (инвалидация фингерпринтов → `algoVersion`; reuse-KPI с W5b), R2-13 (done W2/W4 без visual → перенесено в W5a), R2-14 (наблюдённые theme-ресурсы → W4), R2-16 (пары §6: W7‖W9 запрещена; сгенерированные артефакты только регенерацией), R2-17 (§6 дополнен `main.ts`/`docs/server-api.md`/`validation.ts`/SDK), R2-18 (полярность флагов → `EASYUI_ACCEPTANCE_MATRIX` opt-in; слоты — отдельный деплой W1c), R2-19 (чек-лист отката: CAS-каталог, зависшие раны), R3 (FK на publishes → A9 TEXT без FK; NOT NULL DEFAULT 'off'; ADD COLUMN без перестройки; маппинг partial-index → 409), R3 (authz-контракт всех роутов, capture/share 403, артефакты только через runId, owner_id NULL) → W1a, R3 (zip вместо tar, zip-slip: charset + санитизация + клиент) → A4/W2/W7, R3 (identity в ключе кэша, 0700, SHA256SUMS-проверка, кэш ≠ свидетельство) → W7, R3 (e2e в `e2e/preview/`, `playwright.config.ts` в W8) → §5/§7, R3 (RESULT_TTL 10 мин → §4.5; резервирование очереди → §4.7; maintenance-lock → §4.8; бэкап volume → W0/§7.6; бюджет §4 честнее: 98 запусков до W3).
+**Принятые minor.** Sizing-токены в W8e; `allowedRoles` в W8c; фикстура «Benefit list»; дедуп references (A7); схема ключей repeat (W8b); нормализация `refineCompositionDoc` (W8c); KPI evidence «терминализованных оркестратором» (§1); «после первой v3-записи откат = чистка данных» (D9); SDK-реген (§6); colorProfile best-effort (§8); W8a–f — внутренние инкременты; замер прироста байт CAS (§4/§7.7).
+
+**Отклонено/переформулировано.**
+- R2-15 «W2 после W3/W4»: отклонено — вместо перестановки `manifestVersion: 1` с forward-совместимой схемой; ранний манифест ценен для W1-cases и coverage.
+- R2-8 «`allowedTypes` теряет роли ДС»: принято частично — добавлен `allowedRoles`, `allowedTypes` сохранён как дополнительное ограничение.
+- R2-21 «неизмеряемые KPI»: закрыто привязкой замеров к done W5b и W7; отдельный KPI-процесс не заводится.
+- R1-m2 «политика в Expected тавтологична»: принято к сведению — политика сверяется сервером по хешу в результате, в Expected не дублируется.
+- R3 «O1 планировать сразу, а не опцией»: оставлен гейтом по замеру W1b (не безусловным объёмом) — изоляция worker-runner ценна, ломать её до фактов преждевременно; гейт делает решение автоматическим.
