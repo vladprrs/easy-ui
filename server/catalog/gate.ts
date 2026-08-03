@@ -200,7 +200,10 @@ const auditCandidate = (candidate: MatchCandidate): ReuseDecisionCandidate => ({
 });
 
 const rejectionCandidate = (candidate: MatchCandidate): RejectionCandidate => ({
-  kind: candidate.kind,
+  // Гейт создания компонента ходит в корпус **без композиций** (`collectCorpus` по умолчанию,
+  // W9): композиционная семантика гейта не включена, поэтому тип здесь константа, а не
+  // `candidate.kind` — расширение корпуса не имеет права молча просочиться в 409.
+  kind: "component",
   key: candidateKey(candidate),
   id: candidate.id,
   name: candidate.name,

@@ -302,6 +302,48 @@ describe("author driver CLI", () => {
     expect(human.stdout).toContain("score");
   });
 
+  /**
+   * W9: `--kind composition` печатает три исхода workbench'а. Исход рекомендательный, поэтому
+   * exit code остаётся нулевым — драйвер ничего не запрещает.
+   */
+  test("catalog search --kind composition печатает исход, объяснение и мэтчи", async () => {
+    const { api, db, directory } = await setup();
+    const doc = {
+      version: 2, name: "OrderRow", description: "Строка заказа с иконкой и ценой", atomicLevel: "molecule",
+      params: { title: { type: "string", required: true } }, slots: [],
+      spec: {
+        root: "root",
+        elements: {
+          root: { type: "Overlay", props: { className: "row" }, children: ["icon"] },
+          icon: { type: "Image", props: { src: "a.png" } },
+        },
+      },
+    };
+    db.query("INSERT INTO compositions (id,name,head_rev,design_system,deleted_at,delete_reason,created_at,updated_at,owner_id) VALUES ('order-row','OrderRow',1,'yandex-pay',NULL,NULL,'now','now','user_admin')").run();
+    db.query("INSERT INTO composition_revisions (composition_id,rev,doc,design_system,message,author,created_at) VALUES ('order-row',1,?,'yandex-pay',NULL,NULL,'now')").run(JSON.stringify(doc));
+
+    const docPath = resolve(directory, "candidate.json");
+    await writeFile(docPath, JSON.stringify({ ...doc, name: "OrderLine", description: "Ещё одна строка заказа с иконкой и ценой" }));
+
+    const result = await run(api, ["catalog", "search", "yandex-pay", "--intent", "строка заказа с иконкой и ценой", "--kind", "composition", "--doc", docPath, "--json"]);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as { outcome: string; explanation: string; analyzerVerdict: string; matches: { kind: string; id: string }[] };
+    expect(payload.outcome).toBe("build-composition");
+    expect(payload.explanation).toContain("order-row");
+    expect(payload.analyzerVerdict).toBe("composition");
+    expect(payload.matches.some((match) => match.kind === "composition" && match.id === "order-row")).toBe(true);
+
+    const human = await run(api, ["catalog", "search", "yandex-pay", "--intent", "строка заказа с иконкой и ценой", "--kind", "composition", "--doc", docPath]);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).toContain("outcome: build-composition");
+    expect(human.stdout).toContain("match\tcomposition\torder-row");
+
+    // `--doc` без `--kind composition` — ошибка использования, а не молча проигнорированный флаг.
+    const misuse = await run(api, ["catalog", "search", "yandex-pay", "--intent", "строка заказа", "--doc", docPath]);
+    expect(misuse.exitCode).toBe(1);
+    expect(misuse.stderr).toContain("--doc requires --kind composition");
+  });
+
   test("catalog get returns exact version details for only the selected artifacts", async () => {
     const { api, db } = await setup();
     seedComponent(db, "chosen-card", "ChosenCard", {

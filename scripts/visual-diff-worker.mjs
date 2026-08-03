@@ -163,6 +163,61 @@ export function diffRegions(mask, width, height, deltas, totalPixels, limit = MA
 }
 
 /**
+ * Статистика расхождения по каналам внутри diff-маски (план §5 W5b: вход классификаторов причин).
+ *
+ * Считается **только по пикселям маски** — усреднение по всему холсту размывало бы находку до
+ * нуля на любом кадре с полем. Три вещи, которых нет в `rawDiffPct`/`maxChannelDelta` и без
+ * которых причину не назвать:
+ *
+ * - `meanMaxDelta`/`stdMaxDelta` — «равномерная заливка» (`surface-tint`) отличима от
+ *   «локального дефекта»: у тинта разброс дельты внутри маски мал;
+ * - `alphaDominantPct` — доля пикселей, где расходится именно альфа, а не цвет
+ *   (`alpha-compositing`);
+ * - `semiTransparentPct` — доля пикселей, где хотя бы одна сторона полупрозрачна (композитинг
+ *   поверх подложки, а не другой цвет).
+ */
+export function channelStatsOf(refData, candData, mask, total) {
+  let pixels = 0;
+  let sumR = 0; let sumG = 0; let sumB = 0; let sumA = 0;
+  let sumMax = 0; let sumMaxSq = 0;
+  let alphaDominant = 0; let semiTransparent = 0;
+  for (let index = 0; index < total; index += 1) {
+    if (mask[index] === 0) continue;
+    const offset = index * 4;
+    const dr = Math.abs(refData[offset] - candData[offset]);
+    const dg = Math.abs(refData[offset + 1] - candData[offset + 1]);
+    const db = Math.abs(refData[offset + 2] - candData[offset + 2]);
+    const da = Math.abs(refData[offset + 3] - candData[offset + 3]);
+    const max = Math.max(dr, dg, db, da);
+    pixels += 1;
+    sumR += dr; sumG += dg; sumB += db; sumA += da;
+    sumMax += max; sumMaxSq += max * max;
+    if (da > Math.max(dr, dg, db)) alphaDominant += 1;
+    const refAlpha = refData[offset + 3]; const candAlpha = candData[offset + 3];
+    if ((refAlpha > 0 && refAlpha < 255) || (candAlpha > 0 && candAlpha < 255)) semiTransparent += 1;
+  }
+  if (pixels === 0) {
+    return {
+      pixels: 0, meanDelta: { r: 0, g: 0, b: 0, a: 0 },
+      meanMaxDelta: 0, stdMaxDelta: 0, alphaDominantPct: 0, semiTransparentPct: 0,
+    };
+  }
+  const meanMax = sumMax / pixels;
+  const variance = Math.max(0, sumMaxSq / pixels - meanMax * meanMax);
+  return {
+    pixels,
+    meanDelta: {
+      r: round4(sumR / pixels), g: round4(sumG / pixels),
+      b: round4(sumB / pixels), a: round4(sumA / pixels),
+    },
+    meanMaxDelta: round4(meanMax),
+    stdMaxDelta: round4(Math.sqrt(variance)),
+    alphaDominantPct: round4((alphaDominant / pixels) * 100),
+    semiTransparentPct: round4((semiTransparent / pixels) * 100),
+  };
+}
+
+/**
  * Лучшее целочисленное смещение кандидата относительно эталона в окне ±`window` px.
  *
  * Знак: кандидат сэмплируется в точке `(x + dx, y + dy)` там, где эталон взят в `(x, y)`, то есть
@@ -289,6 +344,7 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
       aaDiffPixels: aaPixels,
       totalPixels: total,
       maxChannelDelta,
+      channelStats: channelStatsOf(paddedRef.data, paddedCand.data, mask, total),
       regions,
       totalRegions,
       bestOffset: bestOffsetOf(paddedRef.data, paddedCand.data, width, height, {

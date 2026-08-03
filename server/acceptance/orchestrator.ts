@@ -31,9 +31,10 @@ import type { CaseSetManifest } from "../../src/acceptance/caseSetSchema";
 import { CASE_POLICY_HASH_V0, type CaseSurface } from "./ids";
 import type { AcceptanceCaptureService, CandidateSubject, GateContext } from "./gates/types";
 import {
-  bySeverity, executeCase, fingerprintOf, foldRunVerdict, progressOf,
+  bySeverity, causesOfGates, executeCase, fingerprintOf, foldRunVerdict, progressOf,
   type CaseExecution, type CaseRunnerDeps,
 } from "./runner";
+import { groupRemediations, type RemediationGroup } from "./grouping";
 import {
   acceptancePolicy, DEFAULT_ACCEPTANCE_POLICY_ID, policyProfileHash, withRequiredVisual,
   type AcceptancePolicy,
@@ -133,6 +134,20 @@ export async function resolveCandidateSubject(db: Database, dataDir: string, row
     // активной правке автором был бы невозможен).
     headDiverged: head.rev !== row.rev,
   };
+}
+
+/**
+ * Группы ремедиаций рана (W5b): классифицированные причины случаев, схлопнутые в «одну правку»
+ * (§19.6 фидбэка). Алиасы участвуют наравне с целями — их вердикт и причины унаследованы от цели,
+ * и в отчёте автору важно видеть все затронутые состояния семьи, а не только снятые.
+ */
+export function remediationGroupsOf(executions: CaseExecution[], cases: AcceptanceCase[]): RemediationGroup[] {
+  const dimsByCaseId = new Map(cases.map((item) => [item.caseId, item.dims ?? null]));
+  return groupRemediations(executions.flatMap((execution) => {
+    const causes = causesOfGates(execution.gates);
+    if (causes.length === 0) return [];
+    return [{ caseId: execution.caseId, causes, dims: dimsByCaseId.get(execution.caseId) ?? null }];
+  }));
 }
 
 export class AcceptanceOrchestrator {
@@ -378,7 +393,10 @@ export class AcceptanceOrchestrator {
     return this.repo.terminalizeRun(run.run_id, {
       status: verdict,
       gates: this.gatesSummary(executions),
-      progress: progressOf(executions, cases.length, ema, 0),
+      // Группы ремедиаций живут в `progress_json` рядом с прогрессом: это run-level **отчёт**, а
+      // `gates_json` — сводка статусов по гейтам, и смешивать в ней счётчики с диагностикой значило
+      // бы завести в одном поле две формы. Роут поднимает их на верхний уровень ответа.
+      progress: { ...progressOf(executions, cases.length, ema, 0), remediationGroups: remediationGroupsOf(executions, cases) },
       evidenceManifestHash: manifestHash,
     });
   }

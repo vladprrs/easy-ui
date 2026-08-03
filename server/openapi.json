@@ -375,6 +375,106 @@
                   "$defs": {
                     "__schema0": {
                       "type": "string"
+                    },
+                    "__schema1": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "surface-tint",
+                            "edge-radius-stroke",
+                            "geometry-shift",
+                            "text-raster-residual",
+                            "missing-late-asset",
+                            "alpha-compositing",
+                            "effect-overflow",
+                            "descendant-outside-mask",
+                            "unclassified"
+                          ],
+                          "type": "string"
+                        },
+                        "confidence": {
+                          "type": "number"
+                        },
+                        "detail": {
+                          "type": "string"
+                        },
+                        "elementKey": {
+                          "type": "string"
+                        },
+                        "region": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "basis": {
+                              "enum": [
+                                "layoutBounds",
+                                "canvas"
+                              ],
+                              "type": "string"
+                            },
+                            "bbox": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "height": {
+                                  "type": "number"
+                                },
+                                "width": {
+                                  "type": "number"
+                                },
+                                "x": {
+                                  "type": "number"
+                                },
+                                "y": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "x",
+                                "y",
+                                "width",
+                                "height"
+                              ],
+                              "type": "object"
+                            },
+                            "norm": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "height": {
+                                  "type": "number"
+                                },
+                                "width": {
+                                  "type": "number"
+                                },
+                                "x": {
+                                  "type": "number"
+                                },
+                                "y": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "x",
+                                "y",
+                                "width",
+                                "height"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "bbox",
+                            "norm",
+                            "basis"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "confidence",
+                        "detail"
+                      ],
+                      "type": "object"
                     }
                   },
                   "additionalProperties": {},
@@ -430,10 +530,22 @@
                           "caseKey": {
                             "type": "string"
                           },
+                          "causes": {
+                            "items": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "type": "array"
+                          },
                           "failedGates": {
                             "items": {
                               "additionalProperties": {},
                               "properties": {
+                                "causes": {
+                                  "items": {
+                                    "$ref": "#/$defs/__schema1"
+                                  },
+                                  "type": "array"
+                                },
                                 "detail": {
                                   "type": "string"
                                 },
@@ -506,6 +618,7 @@
                           "status",
                           "verdict",
                           "severity",
+                          "causes",
                           "failedGates"
                         ],
                         "type": "object"
@@ -597,6 +710,121 @@
                       ],
                       "type": "object"
                     },
+                    "remediationGroups": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "bboxSignature": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "grid": {
+                                    "type": "number"
+                                  },
+                                  "height": {
+                                    "type": "number"
+                                  },
+                                  "width": {
+                                    "type": "number"
+                                  },
+                                  "x": {
+                                    "type": "number"
+                                  },
+                                  "y": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "x",
+                                  "y",
+                                  "width",
+                                  "height",
+                                  "grid"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "caseCount": {
+                            "type": "number"
+                          },
+                          "cases": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "cause": {
+                            "additionalProperties": {},
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "confidence": {
+                                "type": "number"
+                              },
+                              "detail": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "confidence",
+                              "detail"
+                            ],
+                            "type": "object"
+                          },
+                          "key": {
+                            "type": "string"
+                          },
+                          "sharedElementKey": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "suggestion": {
+                            "type": "string"
+                          },
+                          "variantFamily": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": {
+                                  "type": "string"
+                                },
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "cause",
+                          "bboxSignature",
+                          "sharedElementKey",
+                          "variantFamily",
+                          "cases",
+                          "caseCount",
+                          "suggestion"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "runId": {
                       "type": "string"
                     },
@@ -635,6 +863,7 @@
                     "eta",
                     "gates",
                     "evidenceManifestHash",
+                    "remediationGroups",
                     "createdAt",
                     "startedAt",
                     "finishedAt",
@@ -677,7 +906,7 @@
             "description": "method_not_allowed"
           }
         },
-        "summary": "Poll an acceptance run: status, per-gate roll-up, progress {total, completed, reused, failed, running}, ETA and failedCases sorted by severity. Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "summary": "Poll an acceptance run: status, per-gate roll-up, progress {total, completed, reused, failed, running}, ETA and failedCases sorted by severity. Terminal runs also carry `remediationGroups`: visual failures classified into causes (surface-tint, edge-radius-stroke, geometry-shift, text-raster-residual, missing-late-asset, alpha-compositing, effect-overflow, descendant-outside-mask, unclassified) and grouped by {cause, quantized bbox signature, element key, shared variant family} so one broken shared asset across 20 states reads as one group, sorted by case count. Classification never affects pass/fail. Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
         "x-easyui-validated": false
       }
     },
@@ -702,6 +931,106 @@
                   "$defs": {
                     "__schema0": {
                       "type": "string"
+                    },
+                    "__schema1": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "surface-tint",
+                            "edge-radius-stroke",
+                            "geometry-shift",
+                            "text-raster-residual",
+                            "missing-late-asset",
+                            "alpha-compositing",
+                            "effect-overflow",
+                            "descendant-outside-mask",
+                            "unclassified"
+                          ],
+                          "type": "string"
+                        },
+                        "confidence": {
+                          "type": "number"
+                        },
+                        "detail": {
+                          "type": "string"
+                        },
+                        "elementKey": {
+                          "type": "string"
+                        },
+                        "region": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "basis": {
+                              "enum": [
+                                "layoutBounds",
+                                "canvas"
+                              ],
+                              "type": "string"
+                            },
+                            "bbox": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "height": {
+                                  "type": "number"
+                                },
+                                "width": {
+                                  "type": "number"
+                                },
+                                "x": {
+                                  "type": "number"
+                                },
+                                "y": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "x",
+                                "y",
+                                "width",
+                                "height"
+                              ],
+                              "type": "object"
+                            },
+                            "norm": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "height": {
+                                  "type": "number"
+                                },
+                                "width": {
+                                  "type": "number"
+                                },
+                                "x": {
+                                  "type": "number"
+                                },
+                                "y": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "x",
+                                "y",
+                                "width",
+                                "height"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "bbox",
+                            "norm",
+                            "basis"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "confidence",
+                        "detail"
+                      ],
+                      "type": "object"
                     }
                   },
                   "additionalProperties": {},
@@ -757,10 +1086,22 @@
                           "caseKey": {
                             "type": "string"
                           },
+                          "causes": {
+                            "items": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "type": "array"
+                          },
                           "failedGates": {
                             "items": {
                               "additionalProperties": {},
                               "properties": {
+                                "causes": {
+                                  "items": {
+                                    "$ref": "#/$defs/__schema1"
+                                  },
+                                  "type": "array"
+                                },
                                 "detail": {
                                   "type": "string"
                                 },
@@ -833,6 +1174,7 @@
                           "status",
                           "verdict",
                           "severity",
+                          "causes",
                           "failedGates"
                         ],
                         "type": "object"
@@ -924,6 +1266,121 @@
                       ],
                       "type": "object"
                     },
+                    "remediationGroups": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "bboxSignature": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "grid": {
+                                    "type": "number"
+                                  },
+                                  "height": {
+                                    "type": "number"
+                                  },
+                                  "width": {
+                                    "type": "number"
+                                  },
+                                  "x": {
+                                    "type": "number"
+                                  },
+                                  "y": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "x",
+                                  "y",
+                                  "width",
+                                  "height",
+                                  "grid"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "caseCount": {
+                            "type": "number"
+                          },
+                          "cases": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "cause": {
+                            "additionalProperties": {},
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "confidence": {
+                                "type": "number"
+                              },
+                              "detail": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "confidence",
+                              "detail"
+                            ],
+                            "type": "object"
+                          },
+                          "key": {
+                            "type": "string"
+                          },
+                          "sharedElementKey": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "suggestion": {
+                            "type": "string"
+                          },
+                          "variantFamily": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": {
+                                  "type": "string"
+                                },
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "cause",
+                          "bboxSignature",
+                          "sharedElementKey",
+                          "variantFamily",
+                          "cases",
+                          "caseCount",
+                          "suggestion"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "runId": {
                       "type": "string"
                     },
@@ -962,6 +1419,7 @@
                     "eta",
                     "gates",
                     "evidenceManifestHash",
+                    "remediationGroups",
                     "createdAt",
                     "startedAt",
                     "finishedAt",
@@ -1039,6 +1497,106 @@
                   "$defs": {
                     "__schema0": {
                       "type": "string"
+                    },
+                    "__schema1": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "surface-tint",
+                            "edge-radius-stroke",
+                            "geometry-shift",
+                            "text-raster-residual",
+                            "missing-late-asset",
+                            "alpha-compositing",
+                            "effect-overflow",
+                            "descendant-outside-mask",
+                            "unclassified"
+                          ],
+                          "type": "string"
+                        },
+                        "confidence": {
+                          "type": "number"
+                        },
+                        "detail": {
+                          "type": "string"
+                        },
+                        "elementKey": {
+                          "type": "string"
+                        },
+                        "region": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "basis": {
+                              "enum": [
+                                "layoutBounds",
+                                "canvas"
+                              ],
+                              "type": "string"
+                            },
+                            "bbox": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "height": {
+                                  "type": "number"
+                                },
+                                "width": {
+                                  "type": "number"
+                                },
+                                "x": {
+                                  "type": "number"
+                                },
+                                "y": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "x",
+                                "y",
+                                "width",
+                                "height"
+                              ],
+                              "type": "object"
+                            },
+                            "norm": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "height": {
+                                  "type": "number"
+                                },
+                                "width": {
+                                  "type": "number"
+                                },
+                                "x": {
+                                  "type": "number"
+                                },
+                                "y": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "x",
+                                "y",
+                                "width",
+                                "height"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "bbox",
+                            "norm",
+                            "basis"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "confidence",
+                        "detail"
+                      ],
+                      "type": "object"
                     }
                   },
                   "additionalProperties": {},
@@ -1089,6 +1647,12 @@
                           "caseKey": {
                             "type": "string"
                           },
+                          "causes": {
+                            "items": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "type": "array"
+                          },
                           "finishedAt": {
                             "anyOf": [
                               {
@@ -1103,6 +1667,12 @@
                             "items": {
                               "additionalProperties": {},
                               "properties": {
+                                "causes": {
+                                  "items": {
+                                    "$ref": "#/$defs/__schema1"
+                                  },
+                                  "type": "array"
+                                },
                                 "detail": {
                                   "type": "string"
                                 },
@@ -1220,6 +1790,7 @@
                           "startedAt",
                           "finishedAt",
                           "gates",
+                          "causes",
                           "artifacts"
                         ],
                         "type": "object"
@@ -1271,7 +1842,7 @@
             "description": "method_not_allowed"
           }
         },
-        "summary": "Per-case verdicts of a run with gate results, severity, reuse reason and the evidence artifact names/digests (never bytes: artifact content is served only inside the runId-scoped evidence archive). Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "summary": "Per-case verdicts of a run with gate results, severity, classified visual `causes` (W5b diagnostics; empty for cases whose visual outcome is not fail/indeterminate), reuse reason and the evidence artifact names/digests (never bytes: artifact content is served only inside the runId-scoped evidence archive). Requires EASYUI_ACCEPTANCE_MATRIX=1.",
         "x-easyui-validated": false
       }
     },
@@ -3049,7 +3620,10 @@
                             "type": "string"
                           },
                           "kind": {
-                            "const": "component",
+                            "enum": [
+                              "component",
+                              "composition"
+                            ],
                             "type": "string"
                           },
                           "name": {
@@ -3167,7 +3741,7 @@
                 }
               }
             },
-            "description": "validation_failed | unsupported_kind (composition candidates are not supported yet)"
+            "description": "validation_failed"
           }
         },
         "summary": "Compact reuse-candidate search over the requested design system: active publications and head drafts scored by the deterministic matcher. Never returns source or props schemas. `catalogRevision` pins the catalog snapshot the scores were computed on. GET covers the frequent intent-only case without an Origin header.",
@@ -3300,6 +3874,79 @@
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "analysis": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "reasons": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "elementKey": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "message"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "schemaValid": {
+                          "type": "boolean"
+                        },
+                        "stats": {
+                          "additionalProperties": {},
+                          "properties": {},
+                          "type": "object"
+                        },
+                        "unsupported": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "elementKey": {
+                                "type": "string"
+                              },
+                              "feature": {
+                                "type": "string"
+                              },
+                              "hint": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "feature",
+                              "elementKey",
+                              "hint"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "reasons",
+                        "unsupported",
+                        "schemaValid",
+                        "stats"
+                      ],
+                      "type": "object"
+                    },
+                    "analyzerVerdict": {
+                      "enum": [
+                        "composition",
+                        "extend-component",
+                        "needs-ownership-component"
+                      ],
+                      "type": "string"
+                    },
                     "candidates": {
                       "items": {
                         "additionalProperties": false,
@@ -3344,7 +3991,10 @@
                             "type": "string"
                           },
                           "kind": {
-                            "const": "component",
+                            "enum": [
+                              "component",
+                              "composition"
+                            ],
                             "type": "string"
                           },
                           "name": {
@@ -3403,7 +4053,150 @@
                     "catalogRevision": {
                       "type": "string"
                     },
+                    "dependencyImpact": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "components": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "componentId": {
+                                "type": "string"
+                              },
+                              "headUsageCount": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "immutableUsageCount": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "safeToRemove": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "componentId",
+                              "name",
+                              "headUsageCount",
+                              "immutableUsageCount",
+                              "safeToRemove"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "compositions": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "headUsageCount": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "immutableUsageCount": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "safeToRemove": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "headUsageCount",
+                              "immutableUsageCount",
+                              "safeToRemove"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "unknownTypes": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "components",
+                        "compositions",
+                        "unknownTypes"
+                      ],
+                      "type": "object"
+                    },
                     "designSystem": {
+                      "type": "string"
+                    },
+                    "explanation": {
+                      "type": "string"
+                    },
+                    "matches": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "blocking": {
+                            "type": "boolean"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "component",
+                              "composition"
+                            ],
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "recommendable": {
+                            "type": "boolean"
+                          },
+                          "score": {
+                            "type": "number"
+                          },
+                          "version": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "why": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "id",
+                          "name",
+                          "version",
+                          "score",
+                          "blocking",
+                          "recommendable",
+                          "why"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "outcome": {
+                      "enum": [
+                        "build-composition",
+                        "extend-component",
+                        "new-ownership-component"
+                      ],
                       "type": "string"
                     },
                     "overrideTemplate": {
@@ -3511,10 +4304,10 @@
                 }
               }
             },
-            "description": "validation_failed | unsupported_kind (composition candidates are not supported yet) | event_schema_not_serializable (a typed event payload schema in proposed source cannot be serialized)"
+            "description": "validation_failed | event_schema_not_serializable (a typed event payload schema in proposed source cannot be serialized)"
           }
         },
-        "summary": "Compact reuse-candidate search over the requested design system: active publications and head drafts scored by the deterministic matcher. Never returns source or props schemas. `catalogRevision` pins the catalog snapshot the scores were computed on. POST is the full form and accepts `proposed` (including source).",
+        "summary": "Compact reuse-candidate search over the requested design system: active publications and head drafts scored by the deterministic matcher. Never returns source or props schemas. `catalogRevision` pins the catalog snapshot the scores were computed on. POST is the full form and accepts `proposed` (including source). With `proposed.kind: \"composition\"` the corpus also carries the design system's compositions and the response adds the advisory workbench outcome (`outcome`/`explanation`/`matches`/`analyzerVerdict`/`dependencyImpact`); composition matches never produce a reuse 409.",
         "x-easyui-validated": true
       }
     },

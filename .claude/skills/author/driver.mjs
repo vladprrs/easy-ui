@@ -17,7 +17,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -111,7 +111,16 @@ export const flagSpecs = Object.freeze({
   prototype: { ...jsonFlag },
   catalog: { ...jsonFlag, "--full": { value: false, key: "full" } },
   "catalog list": { ...jsonFlag },
-  "catalog search": { ...jsonFlag, "--intent": { value: true, key: "intent" }, "--limit": catalogLimitFlag },
+  // `--kind composition` (план 2026-08-03 W9): поиск кандидатов для **композиции** — тот же
+  // роут, но ответ несёт три исхода workbench'а. `--doc` даёт серверу тело кандидата: без него
+  // нет ни структурной сигнатуры (дубль не найдётся), ни вердикта анализатора.
+  "catalog search": {
+    ...jsonFlag,
+    "--intent": { value: true, key: "intent" },
+    "--limit": catalogLimitFlag,
+    "--kind": { value: true, key: "kind", enum: ["component", "composition"] },
+    "--doc": { value: true, key: "doc" },
+  },
   "catalog get": { ...jsonFlag },
   diff: { ...jsonFlag },
   baseline: { ...jsonFlag, ...surfaceFlags },
@@ -244,7 +253,7 @@ export function parseArgs(argv) {
     }
     return null;
   };
-  const catalogFirst = command === "catalog" ? firstPositional(new Set(["--intent", "--limit"])) : null;
+  const catalogFirst = command === "catalog" ? firstPositional(new Set(["--intent", "--limit", "--kind", "--doc"])) : null;
   const compositionFirst = command === "composition" ? firstPositional(new Set(["--design-system"])) : null;
   // `audit reuse` — чтение аудита гейта; у него собственный набор флагов, поэтому подкоманда
   // распознаётся до разбора флагов, как у `catalog list|search|get`.
@@ -284,6 +293,7 @@ export function parseArgs(argv) {
   if (commandForm === "catalog search") {
     if (positionals.length !== 2) invalid("invalid arguments for catalog search");
     if (flags.intent === undefined) invalid("catalog search requires --intent <text>");
+    if (flags.doc !== undefined && flags.kind !== "composition") invalid("catalog search --doc requires --kind composition");
   }
   if (commandForm === "catalog get" && positionals.length < 3) invalid("catalog get requires at least one artifact");
   if (commandForm === "catalog" && positionals.length > 2) invalid("invalid arguments for catalog");
@@ -639,11 +649,33 @@ function catalogListLines(result) {
 }
 
 function catalogSearchLines(result) {
-  return [
+  const lines = [
     `catalog search ${result.designSystem}: ${result.candidates.length} candidates at ${result.catalogRevision}`,
-    "id\tname\tversion\tscore\tblocking\tdeprecated\treasons",
-    ...result.candidates.map((candidate) => `${candidate.id}\t${candidate.name}\t${candidate.version || "draft"}\t${candidate.score}\t${candidate.blocking ? "yes" : "no"}\t${candidate.deprecated ? "yes" : "no"}\t${candidate.reasons.join("; ")}`),
+    "kind\tid\tname\tversion\tscore\tblocking\tdeprecated\treasons",
+    ...result.candidates.map((candidate) => `${candidate.kind}\t${candidate.id}\t${candidate.name}\t${candidate.version || "draft"}\t${candidate.score}\t${candidate.blocking ? "yes" : "no"}\t${candidate.deprecated ? "yes" : "no"}\t${candidate.reasons.join("; ")}`),
   ];
+  // Композиционный поиск (W9): три исхода **рекомендательные** — сервер ничего не запрещает,
+  // 409 переиспользования на композиции не выдаётся. Решение остаётся за автором.
+  if (result.outcome !== undefined) {
+    lines.push(
+      `outcome: ${result.outcome}${result.analyzerVerdict === undefined ? "" : ` (analyzer: ${result.analyzerVerdict})`}`,
+      `why: ${result.explanation}`,
+    );
+    if (result.matches?.length) {
+      lines.push("match\tkind\tid\tscore\tblocking\twhy");
+      for (const match of result.matches) {
+        lines.push(`match\t${match.kind}\t${match.id}\t${match.score}\t${match.blocking ? "yes" : "no"}\t${match.why}`);
+      }
+    }
+    const impact = result.dependencyImpact;
+    if (impact) {
+      for (const component of impact.components) lines.push(`depends on component ${component.name}: ${component.headUsageCount} head usages, ${component.immutableUsageCount} pinned`);
+      for (const composition of impact.compositions) lines.push(`depends on composition ${composition.id}: ${composition.headUsageCount} head usages, ${composition.immutableUsageCount} pinned`);
+      if (impact.unknownTypes.length) lines.push(`unknown types in the design system: ${impact.unknownTypes.join(", ")}`);
+    }
+    for (const entry of result.analysis?.unsupported ?? []) lines.push(`unsupported ${entry.feature} at ${entry.elementKey}: ${entry.hint}`);
+  }
+  return lines;
 }
 
 function catalogGetLines(designSystem, artifacts) {
@@ -1360,6 +1392,18 @@ async function runCatalog(args, flags) {
   }
   if (subcommand === "search") {
     const id = args[1];
+    if (flags.kind === "composition") {
+      // Композиционный кандидат — только POST: тело документа в query не поместится.
+      const doc = flags.doc === undefined ? undefined : await readJsonArgument(flags.doc, "--doc file");
+      const result = await requireOk("catalog search", await call("POST", "/catalog/candidates", {
+        designSystem: id,
+        intent: flags.intent,
+        ...(flags.limit === undefined ? {} : { limit: flags.limit }),
+        proposed: { kind: "composition", ...(doc === undefined ? {} : { compositionDoc: doc }) },
+      }));
+      report(catalogSearchLines(result), { command: "catalog search", ...result });
+      return;
+    }
     const query = new URLSearchParams({ designSystem: id, intent: flags.intent });
     if (flags.limit !== undefined) query.set("limit", String(flags.limit));
     const result = await requireOk("catalog search", await call("GET", `/catalog/candidates?${query}`));

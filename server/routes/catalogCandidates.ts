@@ -4,7 +4,12 @@ import { requireUser } from "../authorization";
 import { collectCorpus } from "../catalog/corpus";
 import { matchReuseProposal, stageAndExtract } from "../catalog/gate";
 import { matchCandidates, type MatchCandidate, type ProposedArtifact } from "../catalog/matcher";
-import { CALIBRATED_POLICY } from "../catalog/policy";
+import { compositionPropsJsonSchema, compositionStructure, slotNamesOf } from "../catalog/compositionSignature";
+import { CALIBRATED_POLICY, COMPOSITION_MATCH_POLICY } from "../catalog/policy";
+import { analyzeComposition, type CompositionVerdict } from "../../src/prototype/compositionAnalyze";
+import { componentCanonicalRoles, componentLayoutContracts } from "../validation";
+import { CompositionRepo } from "../repos/compositions";
+import { analyzeDependencyImpact } from "./compositions";
 import { checkSource } from "./components";
 import { catalogCandidatesQuerySchema, catalogCandidatesRequestSchema, parseQuery, parseWith, type CatalogCandidatesRequest } from "../contracts";
 import { getIncludingRetired } from "../designSystems";
@@ -45,6 +50,160 @@ function compact(candidate: MatchCandidate) {
   };
 }
 
+// ─────────────────────── композиционные кандидаты (W9) ───────────────────────
+
+/** Три исхода workbench'а (план 2026-08-03 §5 W9, спека §19.4). */
+export type CompositionOutcome = "build-composition" | "extend-component" | "new-ownership-component";
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Строка `matches`: почему этот артефакт вообще показан автору. */
+const matchRow = (candidate: MatchCandidate) => ({
+  kind: candidate.kind, id: candidate.id, name: candidate.name, version: candidate.version,
+  score: candidate.score, blocking: candidate.blocking, recommendable: candidate.recommendable,
+  why: candidate.reasons.length ? candidate.reasons.join("; ") : "ranked by intent and contract similarity",
+});
+
+/**
+ * `POST /api/catalog/candidates` с `proposed.kind: "composition"` — **рекомендательный**
+ * ответ workbench'а (план 2026-08-03 §5 W9). Гейт-семантика переиспользования
+ * (`409 component_reuse_required`) на композиции в этой волне **не распространяется**: ответ
+ * объясняет и предлагает, но ничего не запрещает. Включение enforce — отдельное решение,
+ * ему нужен замер распределения score на композиционных парах (у калибровки T0 его нет).
+ *
+ * Корпус здесь собирается с композициями (`includeCompositions`), поэтому дубль существующей
+ * композиции детектируется — ровно та дыра, которую нашло ревью (R1-M9). Пороги композиционных
+ * пар отдельные и консервативнее (`COMPOSITION_MATCH_POLICY`).
+ */
+function compositionCandidates(db: Database, input: CatalogCandidatesRequest, proposed: NonNullable<CatalogCandidatesRequest["proposed"]>): Response {
+  // Исходник — контракт компонента: у композиции тела в TSX нет, и молча его игнорировать
+  // нечестно (вызывающий думал бы, что сигнал учтён).
+  if (proposed.source !== undefined) {
+    throw new ApiError(422, "validation_failed", "Composition candidates do not accept a TSX source", {
+      issues: [{ path: ["proposed", "source"], message: "source applies to kind:\"component\" only; pass compositionDoc instead" }],
+    });
+  }
+
+  const doc = isRecord(proposed.compositionDoc) ? proposed.compositionDoc : undefined;
+  const structure = doc === undefined ? undefined : compositionStructure(doc);
+  const docText = (key: string): string | undefined => (typeof doc?.[key] === "string" ? doc[key] as string : undefined);
+  const docList = (key: string): string[] | undefined =>
+    Array.isArray(doc?.[key]) ? (doc[key] as unknown[]).filter((item): item is string => typeof item === "string") : undefined;
+
+  const name = proposed.name ?? docText("name");
+  const description = proposed.description ?? docText("description");
+  const atomicLevel = proposed.atomicLevel ?? docText("atomicLevel");
+  const scope = proposed.scope ?? docText("scope");
+  const canonicalFor = proposed.canonicalFor ?? docList("canonicalFor");
+  const slots = doc === undefined ? proposed.slots : slotNamesOf(doc.slots);
+  const propsJsonSchema = doc === undefined ? proposed.propsJsonSchema : compositionPropsJsonSchema(doc.params);
+  const artifact: ProposedArtifact = {
+    kind: "composition",
+    designSystem: input.designSystem,
+    intent: input.intent,
+    ...(proposed.id === undefined ? {} : { id: proposed.id }),
+    ...(name === undefined ? {} : { name }),
+    ...(description === undefined ? {} : { description }),
+    ...(atomicLevel === undefined ? {} : { atomicLevel }),
+    ...(scope === undefined ? {} : { scope }),
+    ...(canonicalFor === undefined ? {} : { canonicalFor }),
+    // Как и у компонента: `meta` объявляется только когда сигнал реально есть, иначе
+    // матчер посчитал бы props/slots «объявленными и пустыми».
+    ...(propsJsonSchema === undefined && slots === undefined && proposed.events === undefined
+      ? {}
+      : { meta: { propsJsonSchema, events: proposed.events ?? [], slots } }),
+    ...(structure === undefined ? {} : { structure: { shingles: structure.shingles, fingerprint: structure.fingerprint } }),
+  };
+
+  const elements = isRecord(doc?.spec) && isRecord((doc.spec as { elements?: unknown }).elements)
+    ? (doc.spec as { elements: Record<string, { type?: unknown; props?: unknown }> }).elements
+    : {};
+
+  return db.transaction(() => {
+    const corpus = collectCorpus(db, input.designSystem, { includeCompositions: true });
+    const matched = matchCandidates(corpus.candidates, artifact, CALIBRATED_POLICY, {
+      limit: input.limit ?? DEFAULT_LIMIT,
+      policyByKind: { composition: COMPOSITION_MATCH_POLICY },
+      ...(proposed.id === undefined ? {} : { exclude: { designSystem: input.designSystem, id: proposed.id } }),
+    });
+
+    // Вердикт W8g считается тем же анализатором, что и `POST /api/compositions/analyze`:
+    // два разных ответа на один вопрос «выразимо ли это композицией» недопустимы.
+    const analysis = doc === undefined ? undefined : analyzeComposition({
+      doc,
+      context: {
+        componentRoles: componentCanonicalRoles(db, input.designSystem),
+        componentLayouts: componentLayoutContracts(db, input.designSystem),
+      },
+    });
+
+    const duplicate = matched.candidates.find((candidate) => candidate.kind === "composition" && candidate.blocking && candidate.recommendable);
+    const componentMatch = matched.candidates.find((candidate) => candidate.kind === "component" && candidate.blocking && candidate.recommendable);
+    const { outcome, explanation } = decideOutcome(duplicate, componentMatch, analysis?.verdict);
+
+    return json({
+      designSystem: input.designSystem,
+      catalogRevision: corpus.catalogRevision,
+      policyVersion: matched.policyVersion,
+      candidates: matched.candidates.map(compact),
+      outcome,
+      explanation,
+      matches: matched.candidates.map(matchRow),
+      ...(analysis === undefined ? {} : {
+        analyzerVerdict: analysis.verdict,
+        analysis: { reasons: analysis.reasons, unsupported: analysis.unsupported, schemaValid: analysis.schemaValid, stats: analysis.stats },
+      }),
+      dependencyImpact: analyzeDependencyImpact(db, new CompositionRepo(db), elements, input.designSystem),
+    }, 200, noStore);
+  })();
+}
+
+/**
+ * Порядок решает, а не «первое подходящее правило»:
+ * 1. **точный дубль композиции** старше всего — если такая композиция уже есть, её надо
+ *    переиспользовать, и вопрос «выразимо ли это» уже отвечен фактом её существования;
+ * 2. **сильный мэтч компонента** — композиция была бы лишним уровнем косвенности;
+ * 3. вердикт анализатора — он говорит про выразимость, а не про каталог;
+ * 4. иначе — собирать композицию.
+ */
+function decideOutcome(
+  duplicate: MatchCandidate | undefined,
+  componentMatch: MatchCandidate | undefined,
+  verdict: CompositionVerdict | undefined,
+): { outcome: CompositionOutcome; explanation: string } {
+  if (duplicate !== undefined) {
+    return {
+      outcome: "build-composition",
+      explanation: `Reuse the existing composition "${duplicate.name}" (${duplicate.id}${duplicate.version ? `, version ${duplicate.version}` : ", unpublished head"}): ${duplicate.reasons.join("; ") || "it matches the proposal"}. Extend it with params or slots instead of authoring a second one.`,
+    };
+  }
+  if (componentMatch !== undefined) {
+    return {
+      outcome: "extend-component",
+      explanation: `The component "${componentMatch.name}" (${componentMatch.id}) already covers this contract: ${componentMatch.reasons.join("; ") || "it matches the proposal"}. Extend it rather than wrapping it in a composition.`,
+    };
+  }
+  if (verdict === "needs-ownership-component") {
+    return {
+      outcome: "new-ownership-component",
+      explanation: "The analyzer found behaviour that composition expansion cannot express (see analysis.unsupported): author an ownership component and expose its result as props.",
+    };
+  }
+  if (verdict === "extend-component") {
+    return {
+      outcome: "extend-component",
+      explanation: "The body reduces to a single component with prop variations (see analysis.reasons): extend that component instead of adding a composition layer.",
+    };
+  }
+  return {
+    outcome: "build-composition",
+    explanation: verdict === "composition"
+      ? "No catalog duplicate and the body is expressible declaratively: build the composition."
+      : "No catalog duplicate matched the proposal: build the composition (pass compositionDoc to get an expressiveness verdict as well).",
+  };
+}
+
 function readInput(request: Request, url: URL): Promise<CatalogCandidatesRequest> | CatalogCandidatesRequest {
   if (request.method === "GET") {
     const { designSystem, intent, limit } = parseQuery(catalogCandidatesQuerySchema, url.searchParams);
@@ -61,11 +220,8 @@ export async function routeCatalogCandidates(request: Request, db: Database, pri
   const system = getIncludingRetired(db, input.designSystem);
   if (!system || system.retired) throw new ApiError(404, "not_found", "Design system not found");
 
-  // Отступление D6: композиции v1 не вкладываются, их дедупликация — проект 3. Отказ типизован
-  // отдельным кодом, чтобы вызывающий отличал «пока не умеем» от «запрос невалиден».
-  if (input.proposed?.kind === "composition") {
-    throw new ApiError(422, "unsupported_kind", "Composition candidates are not supported yet");
-  }
+  // W9: композиционный кандидат — свой путь. Отказ `422 unsupported_kind` снят.
+  if (input.proposed?.kind === "composition") return compositionCandidates(db, input, input.proposed);
 
   const source = input.proposed?.source;
   const extracted = source === undefined ? undefined : await stageAndExtract(

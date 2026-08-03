@@ -107,7 +107,7 @@ function candidateView(row: CandidateRow): Record<string, unknown> {
   };
 }
 
-interface GateEntry { gate: string; status: string; detail?: string }
+interface GateEntry { gate: string; status: string; detail?: string; causes?: unknown[] }
 
 const gatesOf = (row: AcceptanceCaseRow): GateEntry[] => {
   const parsed = parseJson(row.gates_json);
@@ -119,8 +119,14 @@ const gatesOf = (row: AcceptanceCaseRow): GateEntry[] => {
       status: String(gate.status ?? ""),
       ...(typeof gate.detail === "string" ? { detail: gate.detail } : {}),
       ...(isObject(gate.metrics) ? { metrics: gate.metrics } : {}),
+      // W5b: классифицированные причины расхождения — диагностика поверх статуса гейта.
+      ...(Array.isArray(gate.causes) ? { causes: gate.causes } : {}),
     })) as GateEntry[];
 };
+
+/** Причины случая (W5b): их несёт визуальный гейт; на уровень случая они поднимаются для читателя. */
+const causesOf = (row: AcceptanceCaseRow): unknown[] =>
+  gatesOf(row).find((gate) => gate.gate === "visual")?.causes ?? [];
 
 const severityOf = (row: AcceptanceCaseRow): { rank: number; class: string; score: number } | null => {
   const parsed = parseJson(row.severity_json);
@@ -144,14 +150,20 @@ function bySeverity(left: AcceptanceCaseRow, right: AcceptanceCaseRow): number {
 }
 
 function runView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[]): Record<string, unknown> {
-  const progress = parseJson(run.progress_json);
-  const eta = isObject(progress) && isObject(progress.eta) ? progress.eta : null;
+  const stored = parseJson(run.progress_json);
+  // `remediationGroups` хранятся внутри `progress_json` (там их пишет терминализация), но в ответе
+  // это самостоятельный раздел отчёта: смешивать группы причин со счётчиками прогресса нельзя.
+  const { remediationGroups, ...progress } = isObject(stored)
+    ? stored as Record<string, unknown>
+    : {} as Record<string, unknown>;
+  const eta = isObject(progress.eta) ? progress.eta : null;
   const failed = cases.filter(isFailedCase).sort(bySeverity).map((row) => ({
     caseId: row.case_id,
     caseKey: row.case_key,
     status: row.status,
     verdict: row.verdict,
     severity: severityOf(row),
+    causes: causesOf(row),
     failedGates: gatesOf(row).filter((gate) => gate.status === "fail" || gate.status === "indeterminate"),
   }));
   return {
@@ -162,9 +174,12 @@ function runView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[]): Record<stri
     policy: { id: run.policy_profile_id, hash: run.policy_profile_hash },
     caseSetId: run.case_set_id,
     idempotencyKey: run.idempotency_key,
-    progress: isObject(progress) ? progress : {},
+    progress,
     eta,
     gates: parseJson(run.gates_json) ?? {},
+    // Сортировка задана группировкой: сначала самые массовые группы (одна правка чинит больше всего
+    // случаев). Пустой массив у ещё не терминализованного рана — не «причин нет», а «отчёт не собран».
+    remediationGroups: Array.isArray(remediationGroups) ? remediationGroups : [],
     evidenceManifestHash: run.evidence_manifest_hash,
     createdAt: run.created_at,
     startedAt: run.started_at,
@@ -334,6 +349,7 @@ function caseView(row: AcceptanceCaseRow, manifest: RunManifest | null): Record<
     startedAt: row.started_at,
     finishedAt: row.finished_at,
     gates: gatesOf(row),
+    causes: causesOf(row),
     captureQuality: parseJson(row.capture_quality_json),
     // Имена и адреса — да, байты — нет: содержимое CAS уезжает только в `runId`-scoped zip.
     artifacts: (entry?.artifacts ?? []).map((artifact) => ({ name: artifact.name, sha256: artifact.sha256, bytes: artifact.bytes })),

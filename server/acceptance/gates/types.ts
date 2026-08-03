@@ -12,6 +12,7 @@ import type { ReadinessPolicy } from "../../../src/capture/readinessPolicy";
 import type { CaptureProbe, JobOutcome, JobStatus } from "../../screenshot/service";
 import type { RunInkBbox } from "../inkBbox";
 import type { RunNormalizedDiff } from "../../visual/diff-runner";
+import type { VisualCause } from "../../visual/causes";
 import type { AcceptancePolicy, GateName } from "../policies";
 import type { CaseSurface } from "../ids";
 import type { AcceptanceCase } from "../cases";
@@ -34,6 +35,12 @@ export interface GateResult {
   warnings?: string[];
   /** Человекочитаемая причина `fail`/`indeterminate` — попадает в run-репорт и evidence. */
   detail?: string;
+  /**
+   * Классифицированные причины расхождения (W5b, §19.6). Пишет их **раннер** после гейтов случая,
+   * и только для провальных/неопределённых визуальных исходов: сам гейт вердикт уже вынес, а
+   * классификация — диагностика поверх него, которая **никогда** не влияет на pass/fail.
+   */
+  causes?: VisualCause[];
 }
 
 /** Кандидат как субъект приёмки: durable-идентичность + уже собранный candidate-кэш. */

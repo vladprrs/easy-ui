@@ -43,17 +43,22 @@ export default function VisualGateProbe({ props }: EasyUIComponentProps<{ tone: 
 }
 `;
 
+interface CauseView { code: string; confidence: number; detail: string }
+
 interface RunView {
   status: string;
   progress: { total: number; completed: number; failed: number };
-  failedCases: { caseId: string; failedGates: { gate: string; status: string; detail?: string; metrics?: Record<string, unknown> }[] }[];
+  /** W5b: группы ремедиаций терминального рана, отсортированные по числу случаев. */
+  remediationGroups: { key: string; cause: CauseView; cases: string[]; caseCount: number; suggestion: string }[];
+  failedCases: { caseId: string; causes: CauseView[]; failedGates: { gate: string; status: string; detail?: string; metrics?: Record<string, unknown> }[] }[];
 }
 
 interface CaseView {
   caseId: string;
   verdict: string;
   referenceAssetId: string | null;
-  gates: { gate: string; status: string; detail?: string; metrics?: Record<string, unknown> }[];
+  causes: CauseView[];
+  gates: { gate: string; status: string; detail?: string; metrics?: Record<string, unknown>; causes?: CauseView[] }[];
   artifacts: { name: string }[];
 }
 
@@ -162,6 +167,9 @@ test("paint-кадр как эталон: run без эталона → этал
   const matching = await runCaseSet(request, candidateId,
     await publishCaseSet(request, manifest({ referenceAssetId, requireVisual: true, onlyFirst: true })));
   expect(matching.run.status, JSON.stringify(matching.run.failedCases)).toBe("pass");
+  // W5b: прошедшему случаю объяснять нечего — ни причин, ни групп ремедиаций.
+  expect(matching.run.remediationGroups).toEqual([]);
+  expect(matching.cases[0]!.causes).toEqual([]);
   const passed = matching.cases[0]!;
   expect(passed.referenceAssetId).toBe(referenceAssetId);
   const visualPass = passed.gates.find((gate) => gate.gate === "visual")!;
@@ -191,4 +199,18 @@ test("paint-кадр как эталон: run без эталона → этал
   // Провал названного случая виден в run-репорте и отсортирован по severity.
   expect(broken.run.failedCases[0]!.caseId).toBe(CASE_ID);
   expect(broken.run.failedCases[0]!.failedGates.map((gate) => gate.gate)).toContain("visual");
+
+  // --- W5b: провал классифицирован и сгруппирован в ремедиацию (диагностика, не вердикт).
+  expect(failed.causes.length).toBeGreaterThanOrEqual(1);
+  expect(visualFail.causes?.length).toBeGreaterThanOrEqual(1);
+  expect(failed.causes[0]!.confidence).toBeGreaterThan(0);
+  expect(failed.causes[0]!.detail.length).toBeGreaterThan(0);
+  expect(broken.run.failedCases[0]!.causes.map((cause) => cause.code)).toEqual(failed.causes.map((cause) => cause.code));
+  expect(broken.run.remediationGroups.length).toBeGreaterThanOrEqual(1);
+  const group = broken.run.remediationGroups[0]!;
+  expect(group.key).toMatch(/^[0-9a-f]{64}$/);
+  expect(group.cases).toContain(CASE_ID);
+  expect(group.caseCount).toBe(group.cases.length);
+  expect(group.cause.code).toBe(failed.causes[0]!.code);
+  expect(group.suggestion.length).toBeGreaterThan(0);
 });

@@ -7,6 +7,7 @@ import { createHandler } from "./main";
 import { createTestHandler } from "./test-auth";
 import { BOOTSTRAP_ADMIN_ID, UserRepo } from "./users";
 import { collectCorpus } from "./catalog/corpus";
+import { compositionStructure } from "./catalog/compositionSignature";
 import { ComponentFingerprintRepo } from "./repos/componentFingerprints";
 import { libraryCatalog } from "./routes/libraryCatalog";
 import { routeCatalogCandidates } from "./routes/catalogCandidates";
@@ -96,6 +97,44 @@ function seedRankingCatalog(db: Database): void {
   }
 }
 
+/**
+ * Композиция v2 с телом из host-примитивов: типы элементов проверяет только роут композиций
+ * (`assertKnownTypes`), а корпус и матчер читают документ как есть.
+ */
+function compositionDoc(options: {
+  name: string;
+  description?: string;
+  params?: Record<string, { type: string; required?: boolean }>;
+  slots?: string[];
+  elements?: Record<string, { type: string; props: Record<string, unknown>; children?: string[] }>;
+  root?: string;
+  canonicalFor?: string[];
+}): Record<string, unknown> {
+  return {
+    version: 2, name: options.name, description: options.description ?? "", atomicLevel: "molecule",
+    ...(options.canonicalFor === undefined ? {} : { canonicalFor: options.canonicalFor }),
+    params: options.params ?? {}, slots: options.slots ?? [],
+    spec: {
+      root: options.root ?? "root",
+      elements: options.elements ?? {
+        root: { type: "Overlay", props: { className: "row" }, children: ["title", "action"] },
+        title: { type: "Image", props: { src: "a.png" } },
+        action: { type: "Hotspot", props: { label: "Оплатить" } },
+      },
+    },
+  };
+}
+
+function seedComposition(db: Database, id: string, name: string, doc: Record<string, unknown>, designSystem = "cand-ds", publish = false): void {
+  db.query("INSERT INTO compositions (id,name,head_rev,design_system,deleted_at,delete_reason,created_at,updated_at,owner_id) VALUES (?,?,1,?,NULL,NULL,?,?,?)")
+    .run(id, name, designSystem, at(0), at(0), BOOTSTRAP_ADMIN_ID);
+  db.query("INSERT INTO composition_revisions (composition_id,rev,doc,design_system,message,author,created_at) VALUES (?,1,?,?,NULL,NULL,?)")
+    .run(id, JSON.stringify(doc), designSystem, at(1));
+  if (!publish) return;
+  db.query("INSERT INTO composition_publishes (composition_id,version,rev,status,source_hash,message,published_at) VALUES (?,1,1,'active',?,NULL,?)")
+    .run(id, `csh-${id}`, at(2));
+}
+
 interface CandidateRow {
   kind: string; id: string; name: string; designSystem: string; version: number; draft: boolean;
   description: string; canonicalFor: string[]; deprecated: boolean; recommendable: boolean;
@@ -171,6 +210,63 @@ describe("corpus (server/catalog/corpus.ts)", () => {
 
     expect(collectCorpus(db, "cand-ds").candidates.map((candidate) => candidate.id)).toEqual(["cand-live"]);
     expect(collectCorpus(db, "cand-retired-tmp").candidates).toEqual([]);
+  });
+
+  /**
+   * W9: композиции входят в корпус **только** по явному флагу. Дефолт `false` держит гейт
+   * создания компонента (`matchReuseProposal`) на прежнем корпусе: 409 по композиции в этой
+   * волне не выдаётся вовсе, и молча просочиться в гейт расширение не имеет права.
+   */
+  test("композиции входят в корпус только с includeCompositions", () => {
+    const { db } = setup();
+    seedComponent(db, "cand-live", "CandLive", { designSystem: "cand-ds", source: sourceFor("CandLive"), description: "Живой" });
+    seedComposition(db, "cand-row", "CandRow", compositionDoc({ name: "CandRow", description: "Строка оплаты", params: { title: { type: "string", required: true } }, slots: [] }), "cand-ds", true);
+    seedComposition(db, "cand-draft-row", "CandDraftRow", compositionDoc({ name: "CandDraftRow", description: "Черновая строка" }));
+
+    expect(collectCorpus(db, "cand-ds").candidates.map((candidate) => candidate.id)).toEqual(["cand-live"]);
+    const withCompositions = collectCorpus(db, "cand-ds", { includeCompositions: true }).candidates;
+    const row = withCompositions.find((candidate) => candidate.id === "cand-row")!;
+    expect(row).toMatchObject({ kind: "composition", version: 1, draft: false, description: "Строка оплаты", headUsageCount: 0 });
+    // Head-ревизия неопубликованной композиции — тоже кандидат: дубль чаще всего ещё не опубликован.
+    expect(withCompositions.find((candidate) => candidate.id === "cand-draft-row")).toMatchObject({ kind: "composition", version: 0, draft: true });
+    // Структура тела занимает слот сигнала «тело»; шинглов TSX у композиции нет.
+    expect(row.shingles.size).toBe(0);
+    expect(row.structure?.fingerprint).toHaveLength(64);
+    expect(row.structure!.shingles.size).toBeGreaterThan(0);
+    // Параметры видны матчеру как props-схема — на этом строится кросс-типовой мэтч.
+    expect(row.meta?.propsJsonSchema).toEqual({ type: "object", properties: { title: { type: "string" } }, required: ["title"] });
+  });
+
+  test("структурная сигнатура: значения props не входят, форма дерева входит", () => {
+    const same = compositionStructure(compositionDoc({ name: "A", elements: {
+      root: { type: "Overlay", props: { className: "x" }, children: ["a"] },
+      a: { type: "Image", props: { src: "one.png" } },
+    } }));
+    const renamedValues = compositionStructure(compositionDoc({ name: "B", elements: {
+      root: { type: "Overlay", props: { className: "totally-other" }, children: ["a"] },
+      a: { type: "Image", props: { src: "two.png" } },
+    } }));
+    const otherShape = compositionStructure(compositionDoc({ name: "C", elements: {
+      root: { type: "Overlay", props: { className: "x" }, children: ["a", "b"] },
+      a: { type: "Image", props: { src: "one.png" } },
+      b: { type: "Hotspot", props: { label: "go" } },
+    } }));
+    expect(same!.fingerprint).toBe(renamedValues!.fingerprint);
+    expect(same!.fingerprint).not.toBe(otherShape!.fingerprint);
+    // Имена props — часть формы узла: другой набор props это другая структура.
+    const otherProps = compositionStructure(compositionDoc({ name: "D", elements: {
+      root: { type: "Overlay", props: { gap: 4 }, children: ["a"] },
+      a: { type: "Image", props: { src: "one.png" } },
+    } }));
+    expect(same!.fingerprint).not.toBe(otherProps!.fingerprint);
+    // Контракт тоже входит: одинаковое тело с разными параметрами — не дубль.
+    const otherParams = compositionStructure(compositionDoc({ name: "E", params: { title: { type: "string" } }, elements: {
+      root: { type: "Overlay", props: { className: "x" }, children: ["a"] },
+      a: { type: "Image", props: { src: "one.png" } },
+    } }));
+    expect(same!.fingerprint).not.toBe(otherParams!.fingerprint);
+    // Тела нет вовсе — сигнал неприменим, а не пуст.
+    expect(compositionStructure({ version: 2, params: {} })).toBeUndefined();
   });
 
   // §3.4: библиотека, кандидаты и гейт обязаны потреблять одну функцию ревизии. Тест сверяет
@@ -416,8 +512,12 @@ export default function ProposedCheckout({ label }) { return <button>{label}</bu
     expect(await code(await post(handler, { designSystem: "cand-ds", intent: "кнопка оплаты заказа", unknown: 1 }))).toEqual({ status: 422, code: "validation_failed" });
     expect(await code(await post(handler, { designSystem: "cand-missing", intent: "кнопка оплаты заказа" }))).toEqual({ status: 404, code: "not_found" });
     expect(await code(await post(handler, { designSystem: "cand-retired-tmp", intent: "кнопка оплаты заказа" }))).toEqual({ status: 404, code: "not_found" });
-    // Отступление D6: композиции — проект 3, отказ типизован отдельным кодом.
-    expect(await code(await post(handler, { designSystem: "cand-ds", intent: "кнопка оплаты заказа", proposed: { kind: "composition" } }))).toEqual({ status: 422, code: "unsupported_kind" });
+    // W9: композиционный кандидат больше не отвергается — он получает рекомендательный исход.
+    const composition = await post(handler, { designSystem: "cand-ds", intent: "кнопка оплаты заказа", proposed: { kind: "composition" } });
+    expect(composition.status).toBe(200);
+    expect(((await composition.json()) as { outcome: string }).outcome).toBe("build-composition");
+    // Исходник — контракт компонента: у композиции тела в TSX нет.
+    expect(await code(await post(handler, { designSystem: "cand-ds", intent: "кнопка оплаты заказа", proposed: { kind: "composition", source: "export default () => null;" } }))).toEqual({ status: 422, code: "validation_failed" });
     expect(await code(await get(handler, "designSystem=cand-ds&intent=" + encodeURIComponent("кнопка оплаты заказа") + "&limit=0"))).toEqual({ status: 422, code: "validation_failed" });
     expect(await code(await handler(new Request("http://test/api/catalog/candidates", { method: "DELETE", headers: { origin: "http://test" } })))).toEqual({ status: 405, code: "method_not_allowed" });
 
@@ -449,6 +549,86 @@ export default function ProposedCheckout({ label }) { return <button>{label}</bu
     }));
     expect(rejected.status).toBe(403);
     expect(((await rejected.json()) as { error: { code: string } }).error.code).toBe("origin_required");
+  });
+
+  /**
+   * W9 (находка R1-M9): без композиций в корпусе дубль существующей композиции не
+   * детектируется вовсе, и «три исхода» слепы к композициям.
+   */
+  test("дубль композиции: outcome build-composition с указанием существующей", async () => {
+    const { db, handler } = setup();
+    seedRankingCatalog(db);
+    const existing = compositionDoc({ name: "CandPayRow", description: "Строка оплаты заказа с иконкой и кнопкой", params: { title: { type: "string", required: true } } });
+    seedComposition(db, "cand-pay-row", "CandPayRow", existing, "cand-ds", true);
+
+    // Тот же скелет, другие значения props и другое имя: сигнатура структурная, значения в неё
+    // не входят — иначе переписанный литерал «чинил» бы дубль.
+    const proposedDoc = compositionDoc({
+      name: "CandPayRowTwo", description: "Ещё одна строка оплаты заказа", params: { title: { type: "string", required: true } },
+      elements: {
+        root: { type: "Overlay", props: { className: "line" }, children: ["title", "action"] },
+        title: { type: "Image", props: { src: "b.png" } },
+        action: { type: "Hotspot", props: { label: "Заплатить" } },
+      },
+    });
+    const response = await post(handler, {
+      designSystem: "cand-ds", intent: "строка оплаты заказа с иконкой и кнопкой", limit: 8,
+      proposed: { kind: "composition", id: "cand-pay-row-2", name: "CandPayRowTwo", compositionDoc: proposedDoc },
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json() as CandidatesResponse & {
+      outcome: string; explanation: string;
+      matches: { kind: string; id: string; score: number; blocking: boolean; why: string }[];
+      analyzerVerdict?: string; dependencyImpact: { components: unknown[]; unknownTypes: string[] };
+    };
+    expect(body.outcome).toBe("build-composition");
+    expect(body.explanation).toContain("cand-pay-row");
+    const duplicate = body.matches.find((match) => match.id === "cand-pay-row")!;
+    expect(duplicate).toMatchObject({ kind: "composition", blocking: true });
+    expect(duplicate.why).toContain("identical composition body signature");
+    // Вердикт анализатора едет в том же ответе (W8g), без второго запроса.
+    expect(body.analyzerVerdict).toBe("composition");
+    // Тело из одних host-примитивов: компонентов ДС в нём нет, зависимостей тоже.
+    expect(body.dependencyImpact).toMatchObject({ components: [], unknownTypes: [] });
+  });
+
+  test("кросс-типовой мэтч: сильный кандидат-компонент даёт extend-component", async () => {
+    const { db, handler } = setup();
+    seedComponent(db, "cand-pay-row-component", "CandPayRow", {
+      designSystem: "cand-ds", source: sourceFor("CandPayRow", "row"),
+      description: "Строка оплаты заказа с иконкой и кнопкой",
+      meta: { canonicalFor: ["payment-row"], atomicLevel: "molecule", propsJsonSchema: { type: "object", properties: { title: { type: "string" } }, required: ["title"] } },
+    });
+
+    const body = await (await post(handler, {
+      designSystem: "cand-ds", intent: "строка оплаты заказа с иконкой и кнопкой",
+      proposed: {
+        kind: "composition", id: "cand-pay-row", name: "CandPayRow", canonicalFor: ["payment-row"],
+        compositionDoc: compositionDoc({ name: "CandPayRow", description: "Строка оплаты заказа с иконкой и кнопкой", canonicalFor: ["payment-row"], params: { title: { type: "string", required: true } } }),
+      },
+    })).json() as { outcome: string; explanation: string; matches: { kind: string; id: string; blocking: boolean }[] };
+    expect(body.outcome).toBe("extend-component");
+    expect(body.explanation).toContain("cand-pay-row-component");
+    expect(body.matches[0]).toMatchObject({ kind: "component", id: "cand-pay-row-component", blocking: true });
+  });
+
+  test("вердикт анализатора needs-ownership даёт new-ownership-component", async () => {
+    const { db, handler } = setup();
+    seedRankingCatalog(db);
+    const doc = compositionDoc({
+      name: "CandCarousel", description: "Карусель промо-баннеров с автопрокруткой",
+      elements: {
+        root: { type: "Overlay", props: { autoplayInterval: 3000 }, children: ["slide"] },
+        slide: { type: "Image", props: { src: "promo.png" } },
+      },
+    });
+    const body = await (await post(handler, {
+      designSystem: "cand-ds", intent: "карусель промо баннеров с автопрокруткой",
+      proposed: { kind: "composition", id: "cand-carousel", name: "CandCarousel", compositionDoc: doc },
+    })).json() as { outcome: string; analyzerVerdict: string; analysis: { unsupported: { feature: string }[] } };
+    expect(body.analyzerVerdict).toBe("needs-ownership-component");
+    expect(body.outcome).toBe("new-ownership-component");
+    expect(body.analysis.unsupported.map((entry) => entry.feature)).toContain("timer");
   });
 
   /**

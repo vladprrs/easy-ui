@@ -16,6 +16,10 @@
  *    `skipped` и `reused` не могут замаскировать `fail`.
  */
 import { canonicalStringify } from "../../src/capture/canonicalJson";
+import {
+  classifyVisualCauses,
+  type CauseGeometryFacts, type CauseInput, type CauseReadinessFacts, type CauseVisualMetrics, type VisualCause,
+} from "../visual/causes";
 import type { AcceptanceCase } from "./cases";
 import { artifactPresent } from "./evidence";
 import { caseFingerprintV0, type CaseSurface } from "./ids";
@@ -182,6 +186,86 @@ interface StoredResult {
   captureQuality: CaptureQualityRecord | null;
 }
 
+// ------------------------------------------------- таксономия причин (W5b)
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const gateOf = (gates: GateResult[], name: GateName): GateResult | undefined =>
+  gates.find((gate) => gate.gate === name);
+
+/** Визуальный исход, который вообще подлежит объяснению: вердикт не выдан либо выдан провальный. */
+const isDiagnosable = (gate: GateResult | undefined): boolean =>
+  gate !== undefined && (gate.status === "fail" || gate.status === "indeterminate");
+
+/**
+ * Вход классификаторов, собранный из метрик уже посчитанных гейтов случая. Ничего не читает с
+ * диска: `visual` (W5a) кладёт полный набор метрик расхождения, `geometry` v2 (W3) — контуры и
+ * источники эффектов, `readiness` (W4) — доказательство готовности кадра. Отдельного чтения
+ * `diff.png` из CAS не требуется: статистика маски (`channelStats`) приходит из того же
+ * подпроцесса, который маску и построил.
+ */
+export function causeInputOf(gates: GateResult[], deviceScaleFactor: number): CauseInput {
+  const visualMetrics = gateOf(gates, "visual")?.metrics ?? {};
+  const geometryMetrics = gateOf(gates, "geometry")?.metrics ?? {};
+  const readinessMetrics = gateOf(gates, "readiness")?.metrics ?? {};
+
+  const visual: CauseVisualMetrics | null = typeof visualMetrics.rawDiffPct === "number"
+    ? {
+      rawDiffPct: visualMetrics.rawDiffPct,
+      aaDiffPct: typeof visualMetrics.aaDiffPct === "number" ? visualMetrics.aaDiffPct : 0,
+      maxChannelDelta: typeof visualMetrics.maxChannelDelta === "number" ? visualMetrics.maxChannelDelta : 0,
+      regions: Array.isArray(visualMetrics.regions) ? visualMetrics.regions as CauseVisualMetrics["regions"] : [],
+      totalRegions: typeof visualMetrics.totalRegions === "number" ? visualMetrics.totalRegions : 0,
+      bestOffset: isObject(visualMetrics.bestOffset)
+        ? visualMetrics.bestOffset as unknown as CauseVisualMetrics["bestOffset"]
+        : { dx: 0, dy: 0, residualPct: 0 },
+      canvas: isObject(visualMetrics.canvas) ? visualMetrics.canvas as unknown as { width: number; height: number } : null,
+      channelStats: isObject(visualMetrics.channelStats)
+        ? visualMetrics.channelStats as unknown as NonNullable<CauseVisualMetrics["channelStats"]>
+        : null,
+    }
+    : null;
+
+  const geometry: CauseGeometryFacts = {
+    layoutBounds: isObject(geometryMetrics.layoutBounds) ? geometryMetrics.layoutBounds as unknown as CauseGeometryFacts["layoutBounds"] : null,
+    paintBounds: isObject(geometryMetrics.paintBounds) ? geometryMetrics.paintBounds as unknown as CauseGeometryFacts["paintBounds"] : null,
+    effectSources: Array.isArray(geometryMetrics.effectSources)
+      ? geometryMetrics.effectSources as NonNullable<CauseGeometryFacts["effectSources"]>
+      : [],
+  };
+
+  const readiness: CauseReadinessFacts = {
+    images: isObject(readinessMetrics.images) ? readinessMetrics.images as CauseReadinessFacts["images"] : null,
+    pendingRequests: Array.isArray(readinessMetrics.pendingRequests) ? readinessMetrics.pendingRequests as string[] : [],
+  };
+
+  return {
+    visual,
+    geometry,
+    readiness,
+    deviceScaleFactor,
+    visualReason: typeof visualMetrics.reason === "string" ? visualMetrics.reason : null,
+  };
+}
+
+/**
+ * Дописывает классифицированные причины в результат визуального гейта случая (W5b).
+ *
+ * **Мутация ограничена полем `causes`**: статусы гейтов уже посчитаны, и свёртка вердикта (D10)
+ * их больше не пересматривает — классификация не может ни уронить, ни спасти случай. Вызывается
+ * только для `fail`/`indeterminate` визуального исхода: у прошедшего случая объяснять нечего.
+ */
+export function annotateCauses(gates: GateResult[], deviceScaleFactor: number): GateResult[] {
+  const visual = gateOf(gates, "visual");
+  if (!isDiagnosable(visual)) return gates;
+  visual!.causes = classifyVisualCauses(causeInputOf(gates, deviceScaleFactor));
+  return gates;
+}
+
+/** Причины случая для отчётов (run-репорт, `GET /cases`): их несёт визуальный гейт. */
+export const causesOfGates = (gates: GateResult[]): VisualCause[] => gateOf(gates, "visual")?.causes ?? [];
+
 const artifactsOf = (gates: GateResult[]): GateArtifactRef[] => gates.flatMap((gate) => gate.artifacts ?? []);
 
 /** Reuse: тот же отпечаток, тот же компонент и **физически существующие** артефакты (A4). */
@@ -301,7 +385,10 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
   }
 
   const verdict = caseVerdictOf(gates, deps.policy);
-  const captureQuality = (deps.shared.get(renderQualityKey(item.caseId)) as CaptureQualityRecord | undefined) ?? null;
+  // W5b: причины считаются **после** вердикта — и по построению, и по порядку вызова, чтобы
+  // «классификация не влияет на pass/fail» держалось кодом, а не обещанием (§2/§10 плана).
+  annotateCauses(gates, deps.surface.dsf);
+  const captureQuality =(deps.shared.get(renderQualityKey(item.caseId)) as CaptureQualityRecord | undefined) ?? null;
   const stored: StoredResult = { gates, captureQuality };
   deps.repo.putCaseResult({
     caseFingerprint: fingerprint,

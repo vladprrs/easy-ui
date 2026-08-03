@@ -44,10 +44,24 @@ export interface NormalizedDiffJob {
   };
 }
 export interface DiffRegion { bbox: { x: number; y: number; width: number; height: number }; areaPct: number; meanDelta: number }
+/**
+ * Статистика расхождения внутри diff-маски (W5b): по ней классификаторы `server/visual/causes.ts`
+ * отличают равномерную заливку от локального дефекта и цветовое расхождение от альфа-композитинга.
+ * Поле аддитивно: результаты случаев, снятых до W5b, его не несут, и классификаторы это учитывают.
+ */
+export interface DiffChannelStats {
+  pixels: number;
+  meanDelta: { r: number; g: number; b: number; a: number };
+  meanMaxDelta: number;
+  stdMaxDelta: number;
+  alphaDominantPct: number;
+  semiTransparentPct: number;
+}
 export interface NormalizedDiffMetrics {
   rawDiffPct: number; aaDiffPct: number;
   rawDiffPixels: number; aaDiffPixels: number; totalPixels: number;
   maxChannelDelta: number;
+  channelStats?: DiffChannelStats;
   regions: DiffRegion[]; totalRegions: number;
   bestOffset: { dx: number; dy: number; residualPct: number; sampledPixels: number; step: number };
   thresholds: { raw: number; aa: number };

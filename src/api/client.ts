@@ -207,6 +207,34 @@ export const publishComposition = (id: string, baseRev: number, message?: string
   request<{ version: number; rev: number }>(`${compositionPath(id)}/publish`, { method: "POST", body: { baseRev, message }, signal });
 export const deleteComposition = (id: string, baseRev: number, options: { reason?: string; force?: boolean } = {}, signal?: AbortSignal) =>
   request<void>(compositionPath(id), { method: "DELETE", body: { baseRev, ...options }, signal });
+/**
+ * Рекомендательный поиск кандидатов для композиции (план 2026-08-03 W9). Ответ ничего не
+ * запрещает: `409 component_reuse_required` на композиции сервер не выдаёт.
+ */
+export interface CompositionCandidatesResult {
+  outcome: "build-composition" | "extend-component" | "new-ownership-component";
+  explanation: string;
+  matches: { kind: "component" | "composition"; id: string; name: string; version: number; score: number; blocking: boolean; recommendable: boolean; why: string }[];
+  analyzerVerdict?: "composition" | "extend-component" | "needs-ownership-component";
+}
+export const searchCompositionCandidates = (
+  input: { designSystem: string; intent: string; id?: string; name?: string; compositionDoc?: unknown; limit?: number },
+  signal?: AbortSignal,
+) => request<CompositionCandidatesResult>("/api/catalog/candidates", {
+  method: "POST",
+  body: {
+    designSystem: input.designSystem, intent: input.intent,
+    ...(input.limit === undefined ? {} : { limit: input.limit }),
+    proposed: {
+      kind: "composition",
+      ...(input.id === undefined ? {} : { id: input.id }),
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.compositionDoc === undefined ? {} : { compositionDoc: input.compositionDoc }),
+    },
+  },
+  signal,
+});
+
 export const listCompositionRevisions = (id: string, signal?: AbortSignal) =>
   request<CompositionRevisionSummary[]>(`${compositionPath(id)}/revisions`, { signal });
 export const listCompositionVersions = (id: string, signal?: AbortSignal) =>

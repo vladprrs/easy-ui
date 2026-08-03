@@ -694,3 +694,46 @@ test("смена requireVisual инвалидирует reuse: вердикт ad
   expect(harness.repo.cases(hard.run.run_id)[0]!.reuse_reason).toBeNull();
   harness.db.close();
 });
+
+// ------------------------------------------ причины и ремедиации (W5b, §19.6)
+
+test("W5b: провальный визуальный случай получает причины, прошедший — нет", async () => {
+  const failing = await setup();
+  // Эталон сдвинут на 6px: сигнал «съехало», а не «перерисовано» — классификатор обязан это назвать.
+  const broken = await putAsset(failing, framePng({ label: "a" }, 6));
+  const hard = await runWithCaseSet(failing, caseSetOf(broken, { requireVisual: true }));
+  expect(hard.visual?.status).toBe("fail");
+  const causes = hard.visual?.causes ?? [];
+  expect(causes.length).toBeGreaterThan(0);
+  expect(causes[0]!.code).toBe("geometry-shift");
+  expect(causes[0]!.confidence).toBeGreaterThan(0.5);
+  // Вердикт посчитан гейтами и классификацией не тронут (§2/§10 плана).
+  expect(failing.repo.cases(hard.run.run_id)[0]!.verdict).toBe("fail");
+  failing.db.close();
+
+  const passing = await setup();
+  const exact = await putAsset(passing, framePng({ label: "a" }));
+  const soft = await runWithCaseSet(passing, caseSetOf(exact, { requireVisual: true }));
+  expect(soft.visual?.status).toBe("pass");
+  expect(soft.visual?.causes).toBeUndefined();
+  passing.db.close();
+});
+
+test("W5b: терминальный ран несёт remediationGroups в отчёте", async () => {
+  const harness = await setup();
+  const broken = await putAsset(harness, framePng({ label: "a" }, 6));
+  const { run } = await runWithCaseSet(harness, caseSetOf(broken, { requireVisual: true }));
+  const progress = JSON.parse(run.progress_json) as { remediationGroups: { cause: { code: string }; cases: string[]; caseCount: number; suggestion: string }[] };
+  expect(progress.remediationGroups).toHaveLength(1);
+  expect(progress.remediationGroups[0]).toMatchObject({ cause: { code: "geometry-shift" }, caseCount: 1, cases: ["alpha"] });
+  expect(progress.remediationGroups[0]!.suggestion.length).toBeGreaterThan(0);
+  harness.db.close();
+});
+
+test("W5b: прошедший ран не выдумывает групп", async () => {
+  const harness = await setup();
+  const run = await startAndRun(harness);
+  expect(run.status).toBe("pass");
+  expect((JSON.parse(run.progress_json) as { remediationGroups: unknown[] }).remediationGroups).toEqual([]);
+  harness.db.close();
+});

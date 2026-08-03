@@ -483,17 +483,36 @@ Charset `case.id` совпадает с charset имён записей evidence
 | Метод и путь | Тело / ответ |
 |---|---|
 | `GET /catalog/candidates?designSystem=&intent=&limit=` | `{designSystem,catalogRevision,policyVersion,candidates[]}`; поиск по одной формулировке задачи |
-| `POST /catalog/candidates` | `{designSystem,intent,limit?,proposed?}` → то же тело; при `proposed.source` дополнительно `overrideTemplate:{catalogRevision,candidateKeys}` |
+| `POST /catalog/candidates` | `{designSystem,intent,limit?,proposed?}` → то же тело; при `proposed.source` дополнительно `overrideTemplate:{catalogRevision,candidateKeys}`; при `proposed.kind:"composition"` — `outcome`/`explanation`/`matches`/`analyzerVerdict`/`dependencyImpact` (см. ниже) |
 
 Оба метода требуют именованного пользователя: share- и capture-принципалы получают `403 forbidden` — иначе публичная ссылка на прототип открывала бы индекс каталога. Ответ `no-store`.
 
 `GET` существует ради вызывающих без браузерного `Origin` (агент, CLI): `enforceOrigin` срабатывает только на unsafe-методах, поэтому `POST` без `Origin` даёт `403 origin_required`. Плата — отсутствие `proposed`: в query едут только `designSystem`, `intent` и `limit`.
 
-`intent` валидируется так же, как в `POST /components` (см. ниже). `limit` — 1..20, по умолчанию 8; он усекает **только выдачу** и не влияет ни на blocking-набор гейта, ни на `overrideTemplate.candidateKeys`. Неизвестная или отставленная (`retired`) система — `404 not_found`; `proposed.kind:"composition"` — `422 unsupported_kind` (дедупликация композиций отложена).
+`intent` валидируется так же, как в `POST /components` (см. ниже). `limit` — 1..20, по умолчанию 8; он усекает **только выдачу** и не влияет ни на blocking-набор гейта, ни на `overrideTemplate.candidateKeys`. Неизвестная или отставленная (`retired`) система — `404 not_found`.
 
 Строка кандидата компактная: `{kind,id,name,designSystem,version,draft,description,atomicLevel?,scope?,canonicalFor,replacement?,deprecated,recommendable,headUsageCount,score,blocking,reasons[]}`. Ни исходника, ни `propsJsonSchema`, ни примеров, ни внутренних `signals` в ней нет — за точным определением выбранного кандидата идите в `GET /components/:id/versions/:version`. `draft:true` и `version:0` означают head-драфт: он участвует в корпусе, но метаданных публикации у него ещё нет. `recommendable:false` — кандидат показан ради объяснения (deprecated с живой заменой), а не как цель переиспользования.
 
 `proposed` описывает то, что вызывающий собирается создать: `{kind:"component",id?,name?,description?,atomicLevel?,scope?,canonicalFor?,propsJsonSchema?,events?,slots?,source?}`. Если передан `source`, сервер извлекает метаданные из него сам, а присланные `propsJsonSchema`/`canonicalFor` проигрывают извлечённым: подделать сигналы через тело нельзя. Невалидный исходник отвечает теми же кодами, что и создание компонента (`422 validation_failed`, `422 event_schema_not_serializable`, `413 payload_too_large`). Артефакт с тем же `(designSystem, proposed.id)` из корпуса исключается — поиск по существующему id не возвращает его самого.
+
+#### Композиционный кандидат: три исхода workbench (W9)
+
+`POST /catalog/candidates` с `proposed.kind:"composition"` отвечает на вопрос «собирать композицию, расширять компонент или писать ownership-компонент». Прежний отказ `422 unsupported_kind` снят.
+
+Вход: `{designSystem,intent,limit?,proposed:{kind:"composition",id?,name?,description?,atomicLevel?,scope?,canonicalFor?,slots?,events?,propsJsonSchema?,compositionDoc?}}`. `proposed.source` для композиции — `422 validation_failed` (исходник — контракт компонента). `compositionDoc` **не обязан** проходить строгую схему (кандидат приходит черновиком), но без него сервер видит только имя/описание/контракт: ни структурная сигнатура тела, ни вердикт анализатора не считаются.
+
+Ответ добавляет к обычному телу:
+
+- `outcome` — `build-composition` | `extend-component` | `new-ownership-component`, и `explanation` — человеческая формулировка с именем найденного артефакта;
+- `matches[]` — `{kind,id,name,version,score,blocking,recommendable,why}` по тем же кандидатам, что и `candidates[]`;
+- `analyzerVerdict` + `analysis:{reasons,unsupported,schemaValid,stats}` — вердикт того же анализатора, что у `POST /compositions/analyze` (только если передан `compositionDoc`);
+- `dependencyImpact:{components[],compositions[],unknownTypes[]}` — `usages` компонентов тела и вложенных композиций.
+
+Порядок решения: точный структурный дубль композиции → `build-composition` с указанием существующей (её и надо переиспользовать); сильный мэтч компонента → `extend-component`; вердикт анализатора `needs-ownership-component` → `new-ownership-component`; иначе `build-composition`.
+
+**Исход рекомендательный.** Гейт переиспользования (`409 component_reuse_required`) на композиции не распространяется: сервер объясняет и предлагает, но ничего не запрещает. Включение enforce — отдельное решение, ему нужен замер распределения score на композиционных парах.
+
+Корпус матчинга для композиционного кандидата дополнительно содержит **head-ревизии живых композиций** системы (`kind:"composition"`, `version:0`/`draft:true` у неопубликованной): без этого дубль существующей композиции не детектировался бы вовсе. Сигнал «тело» у композиции — структурная сигнатура (типы элементов, форма дерева, имена props, контракт `params`/`slots`), значения props в неё не входят; между разными типами артефактов этот сигнал неприменим, и кросс-типовой мэтч опирается на имя, описание, контракт и роли. Пороги композиционных пар отдельные и консервативнее компонентных; `policyVersion` — тот же. Гейт создания компонента композиций в корпусе **не видит**.
 
 `catalogRevision` — sha256-проекция каталога, общая с `GET /catalog/library` и с гейтом: она **не** реагирует на счётчики использования, статусы визуальных прогонов, figma и preview, поэтому подготовленный override не протухает от чужой работы. `policyVersion` — версия политики матчинга (веса и пороги); score корпус-относителен, и без неё решение невоспроизводимо задним числом. Оба значения совпадают с теми, что вернутся из `GET /api/capabilities` (`reuseGate.policyVersion`) и лягут в аудит.
 
@@ -1205,6 +1224,53 @@ readiness не считает сравнивающие гейты случая (
 действует в полную силу: кадр с `readinessMet: false` до визуального гейта не доходит вовсе.
 Граница волны подняла `case_fingerprint.algoVersion` до **5** — это последний запланированный bump,
 дальше отпечатки стабильны.
+
+### Таксономия причин и группировка ремедиаций (волна W5b, план 2026-08-03 §5)
+
+Классификация — **диагностика поверх готового вердикта**: она никогда не влияет на pass/fail и
+считается только для случаев, чей визуальный исход `fail` или `indeterminate`. Прошедший случай
+причин не получает (`causes: []`).
+
+Причины лежат в `gates[].causes` визуального гейта и поднимаются на уровень случая
+(`GET /api/acceptance-runs/:runId/cases → cases[].causes`, `GET /api/acceptance-runs/:runId →
+failedCases[].causes`). Форма причины: `{code, confidence (0..1), detail, elementKey?, region?}`,
+где `region = {bbox (px холста), norm (доля layout-контура), basis}`. Список никогда не пуст:
+последний код — `unclassified`.
+
+| Код | Сигнал |
+|---|---|
+| `surface-tint` | ≥45 % холста в маске при малом разбросе дельты (`channelStats.stdMaxDelta`) — заливка/фон целиком |
+| `edge-radius-stroke` | ≥70 % областей — тонкие (≤4 CSS px) полосы вдоль периметра контура |
+| `geometry-shift` | `bestOffset` ненулевой, а остаток после него ≤35 % от `rawDiffPct` — «съехало», а не «перерисовано» |
+| `text-raster-residual` | `aaDiffPct` ≤25 % от `rawDiffPct`, ≥3 мелких области — растровый остаток текста |
+| `missing-late-asset` | доказательство readiness (W4): непустые `images.failed` или `pendingRequests` |
+| `alpha-compositing` | ≥50 % пикселей маски расходятся преимущественно в альфе либо ≥60 % полупрозрачны |
+| `effect-overflow` | ≥40 % площади расхождения — в кольце между `layoutBounds` и `paintBounds`; виновник берётся из `effectSources` |
+| `descendant-outside-mask` | ≥40 % площади расхождения — вне измеренной маски владения |
+| `unclassified` | ни один классификатор не сработал: причина не названа честно, а не подменена догадкой |
+
+Метрики визуального гейта дополнены `channelStats` (`{pixels, meanDelta:{r,g,b,a}, meanMaxDelta,
+stdMaxDelta, alphaDominantPct, semiTransparentPct}`) — статистика **внутри diff-маски**, вход
+классификаторов `surface-tint`/`alpha-compositing`. Геометрические классификаторы молчат, если
+контуры не помещаются в холст расхождения: несовпавшие системы координат — не находка.
+
+Терминальный ран несёт `remediationGroups` (`GET /api/acceptance-runs/:runId`, сортировка по числу
+случаев по убыванию):
+
+```json
+{"key":"<sha256>","cause":{"code":"missing-late-asset","confidence":0.9,"detail":"…"},
+ "bboxSignature":{"x":1,"y":0,"width":1,"height":1,"grid":8},"sharedElementKey":"icon",
+ "variantFamily":{"size":"m"},"cases":["…"],"caseCount":20,"suggestion":"…"}
+```
+
+`remediationKey = sha256(canonicalJson({causeCode, bbox, elementKey, variantFamily}))`. Случай
+попадает ровно в одну группу — по своей самой уверенной причине. Если виновник назван
+(`elementKey`), он и есть идентичность группы, а `bbox` в ключе — `null`: один и тот же элемент в
+20 состояниях занимает 20 слегка разных прямоугольников. Без виновника ключом работает сигнатура
+области — нормированный к `layoutBounds` bbox, квантованный в сетку 8×8. `variantFamily` —
+**пересечение** `cases[].dims` участников группы (что у них общего), поэтому 20 состояний с одной
+сломанной иконкой дают одну группу, а не 20 (§19.6 фидбэка). `suggestion` — шаблон следующей правки
+по коду причины.
 
 ## Visual regression
 

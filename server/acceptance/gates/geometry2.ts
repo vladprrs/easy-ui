@@ -141,6 +141,9 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
           overflow: policy.overflow,
           expectedGeometryDelta: policy.expectedGeometryDelta,
           clippedBy: policy.clippedBy,
+          // W5b: атрибуция причин работает по коробкам источников эффектов, а не только по
+          // сводке overflow — поэтому сами `effectSources` едут в метрики, а не только в артефакт.
+          effectSources: record.effectSources,
           allowPaintOverflow: tolerances.allowPaintOverflow ?? false,
           expectedClip: tolerances.expectedClip ?? false,
           retries: capture.retries,

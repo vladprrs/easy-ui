@@ -20,6 +20,12 @@ declare module "*/visual-diff-worker.mjs" {
     rawDiffPct: number; aaDiffPct: number;
     rawDiffPixels: number; aaDiffPixels: number; totalPixels: number;
     maxChannelDelta: number;
+    channelStats: {
+      pixels: number;
+      meanDelta: { r: number; g: number; b: number; a: number };
+      meanMaxDelta: number; stdMaxDelta: number;
+      alphaDominantPct: number; semiTransparentPct: number;
+    };
     regions: DiffRegion[]; totalRegions: number;
     bestOffset: { dx: number; dy: number; residualPct: number; sampledPixels: number; step: number };
     thresholds: { raw: number; aa: number };
@@ -53,6 +59,9 @@ declare module "*/visual-diff-worker.mjs" {
   export const MAX_REGIONS: number;
   export function cropPng(png: unknown, rect: number[]): unknown;
   export function padPng(png: unknown, width: number, height: number): unknown;
+  export function channelStatsOf(
+    refData: Uint8Array | Buffer, candData: Uint8Array | Buffer, mask: Uint8Array, total: number,
+  ): NormalizedMetrics["channelStats"];
   export function bestOffsetOf(
     refData: Uint8Array | Buffer, candData: Uint8Array | Buffer, width: number, height: number,
     options?: { window?: number; deltaThreshold?: number },

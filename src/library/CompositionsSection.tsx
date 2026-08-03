@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { Link } from "react-router";
-import { getComposition, getCompositionUsages, listCompositions, type CompositionSummary, type CompositionUsageReport } from "../api/client";
+import { getComposition, getCompositionUsages, listCompositions, searchCompositionCandidates, type CompositionSummary, type CompositionUsageReport } from "../api/client";
+import type { CompositionDoc } from "../prototype/composition";
 import { useApi } from "../api/hooks";
 import { chip, kicker, panel, panelPadded, transition } from "../app/chrome";
 import { gallery } from "../app/strings/gallery";
@@ -103,6 +104,7 @@ function CompositionDetail({ summary }: { summary: CompositionSummary }) {
     </section>
 
     <CompositionUsages compositionId={summary.id} />
+    <SimilarCatalogArtifacts summary={summary} doc={doc} />
 
     <section className="mt-5" aria-labelledby={`composition-versions-${summary.id}`}>
       <h4 id={`composition-versions-${summary.id}`} className={kicker}>{strings.versionsTitle}</h4>
@@ -117,6 +119,49 @@ function CompositionDetail({ summary }: { summary: CompositionSummary }) {
         : meta.status === "ready" ? <p className="mt-2 text-sm text-eui-slate-500">{strings.versionsNone}</p> : null}
     </section>
   </article>;
+}
+
+/**
+ * Минимальный блок workbench'а (план 2026-08-03 W9): чем композиция похожа на то, что уже есть
+ * в каталоге. Ответ **рекомендательный** — сервер ничего не запрещает, поэтому блок и выглядит
+ * как подсказка, а не как ошибка. Полноценный визуальный workbench в объём волны не входит.
+ *
+ * Запрос уходит только когда есть осмысленный `intent`: серверная валидация требует ≥8 символов
+ * и токен вне стоп-набора, а показывать пользователю 422 за пустое описание незачем.
+ */
+function SimilarCatalogArtifacts({ summary, doc }: { summary: CompositionSummary; doc: CompositionDoc | null }) {
+  const intent = `${summary.name} ${doc?.description ?? summary.description ?? ""}`.trim();
+  // Хуков за этой границей нет: пустой intent просто не создаёт блок и не шлёт запрос.
+  if (intent.length < 8) return null;
+  return <SimilarCatalogArtifactsList summary={summary} doc={doc} intent={intent} />;
+}
+
+function SimilarCatalogArtifactsList({ summary, doc, intent }: { summary: CompositionSummary; doc: CompositionDoc | null; intent: string }) {
+  const load = useCallback((signal?: AbortSignal) => searchCompositionCandidates({
+    designSystem: summary.designSystem, intent, id: summary.id, name: summary.name, limit: 5,
+    ...(doc === null ? {} : { compositionDoc: doc }),
+  }, signal), [doc, intent, summary.designSystem, summary.id, summary.name]);
+  const result = useApi(load, [summary.id, intent, doc === null]);
+
+  return <section className="mt-5" aria-labelledby={`composition-similar-${summary.id}`}>
+    <h4 id={`composition-similar-${summary.id}`} className={kicker}>{strings.similarTitle}</h4>
+    {result.status === "loading" ? <p className="mt-2 text-sm text-eui-slate-500" role="status">{strings.similarLoading}</p> : null}
+    {result.status === "error" ? <p className="mt-2 text-sm text-eui-slate-500" role="alert">{strings.similarUnavailable}</p> : null}
+    {result.status === "ready" ? <>
+      <p className="mt-2 text-sm">
+        <span className={kicker}>{strings.outcomeLabel}: </span>
+        <span className="font-medium">{strings.outcomeNames[result.data.outcome] ?? result.data.outcome}</span>
+      </p>
+      <p className="mt-1 text-sm text-eui-slate-500">{result.data.explanation}</p>
+      {result.data.matches.length ? <ul className="mt-2 space-y-1 text-sm" aria-label={strings.similarTitle}>
+        {result.data.matches.map((match) => <li key={`${match.kind}:${match.id}`} className="flex flex-wrap items-baseline gap-2">
+          <span className="font-medium">{match.name || match.id}</span>
+          <span className={kicker}>{strings.similarEntry(match.kind, match.score)}</span>
+          <span className="basis-full text-eui-slate-500">{match.why}</span>
+        </li>)}
+      </ul> : <p className="mt-2 text-sm text-eui-slate-500">{strings.similarNone}</p>}
+    </> : null}
+  </section>;
 }
 
 /** «Где используется»: head-ревизии прототипов + зафиксированные публикации. */

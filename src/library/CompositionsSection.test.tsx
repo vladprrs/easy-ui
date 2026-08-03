@@ -1,10 +1,10 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getComposition, getCompositionUsages, listCompositions } from "../api/client";
+import { getComposition, getCompositionUsages, listCompositions, searchCompositionCandidates } from "../api/client";
 import { CompositionsSection } from "./CompositionsSection";
 
-vi.mock("../api/client", () => ({ getComposition: vi.fn(), getCompositionUsages: vi.fn(), listCompositions: vi.fn() }));
+vi.mock("../api/client", () => ({ getComposition: vi.fn(), getCompositionUsages: vi.fn(), listCompositions: vi.fn(), searchCompositionCandidates: vi.fn() }));
 
 function renderSection() {
   const router = createMemoryRouter([{ path: "/library", element: <CompositionsSection /> }], { initialEntries: ["/library"] });
@@ -37,6 +37,19 @@ describe("CompositionsSection", () => {
       immutableUsages: [{ prototypeId: "checkout", version: 3, compositionVersion: 1 }],
       safeToRemove: false,
     });
+    vi.mocked(searchCompositionCandidates).mockResolvedValue({
+      outcome: "build-composition",
+      explanation: "No catalog duplicate matched the proposal: build the composition.",
+      matches: [],
+      analyzerVerdict: "composition",
+    });
+  });
+
+  /** W9: рекомендательный блок «похожие в каталоге» — подсказка, а не запрет. */
+  it("shows the advisory workbench outcome for the selected composition", async () => {
+    renderSection();
+    expect(await screen.findByText("собрать композицию")).toBeTruthy();
+    expect(vi.mocked(searchCompositionCandidates).mock.calls[0]![0]).toMatchObject({ designSystem: "yandex-pay", id: "promo-card" });
   });
 
   it("shows the composition list with params, slots and versions", async () => {

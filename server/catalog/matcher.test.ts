@@ -368,3 +368,78 @@ describe("matchCandidates — пороги, выдача и дельта про�
     expect(JSON.stringify(twice)).toBe(JSON.stringify(once));
   });
 });
+
+/**
+ * Композиции в корпусе (план 2026-08-03 W9, находка R1-M9). Структурная сигнатура тела
+ * приходит из `compositionSignature.ts`; матчеру важно лишь, что это множество токенов и
+ * отпечаток, поэтому здесь они задаются вручную — ядро остаётся чистым.
+ */
+describe("matchCandidates — композиции", () => {
+  const compositionCandidate = (overrides: Partial<CorpusCandidate> = {}): CorpusCandidate => ({
+    kind: "composition",
+    id: "yp-order-row",
+    name: "YpOrderRow",
+    designSystem: "yandex-pay",
+    version: 1,
+    draft: false,
+    description: "Строка заказа с иконкой и кнопкой оплаты",
+    canonicalFor: [],
+    deprecated: false,
+    headUsageCount: 2,
+    meta: { propsJsonSchema: { type: "object", properties: { title: { type: "string" } }, required: ["title"] }, events: [], slots: [] },
+    shingles: new Set<string>(),
+    structure: { shingles: new Set(["(Overlay(Image", "Overlay(Image)", "(Image)(Hotspot"]), fingerprint: "fp-order-row" },
+    ...overrides,
+  });
+
+  const proposedComposition = (fingerprint: string, shingles: string[]): ProposedArtifact => ({
+    kind: "composition",
+    designSystem: "yandex-pay",
+    id: "yp-order-line",
+    name: "YpOrderLine",
+    intent: "строка заказа с иконкой и кнопкой оплаты",
+    description: "Строка заказа с иконкой и кнопкой оплаты",
+    meta: { propsJsonSchema: { type: "object", properties: { title: { type: "string" } }, required: ["title"] }, events: [], slots: [] },
+    structure: { shingles: new Set(shingles), fingerprint },
+  });
+
+  test("равный отпечаток тела блокирует без порога — это и есть дубль композиции", () => {
+    const result = matchCandidates([compositionCandidate()], proposedComposition("fp-order-row", ["(Overlay(Image"]), policy, options);
+    const [top] = result.candidates;
+    expect(top).toMatchObject({ kind: "composition", id: "yp-order-row", blocking: true });
+    expect(top?.reasons).toContain("identical composition body signature");
+  });
+
+  test("другой отпечаток: сигнал тела считается Jaccard'ом структурных шинглов", () => {
+    const partial = matchCandidates([compositionCandidate()], proposedComposition("fp-other", ["(Overlay(Image", "Overlay(Image)"]), policy, options);
+    expect(partial.candidates[0]?.blocking).toBe(false);
+    expect(partial.candidates[0]?.signals.source).toBeCloseTo(2 / 3, 10);
+
+    const disjoint = matchCandidates([compositionCandidate()], proposedComposition("fp-other", ["(Screen(Text"]), policy, options);
+    expect(disjoint.candidates[0]?.signals.source).toBe(0);
+  });
+
+  /**
+   * Кросс-типовой мэтч. Шинглы TSX и шинглы структуры живут в разных словарях: с весом 0.75
+   * их нулевой Jaccard утопил бы любую пару «композиция ↔ компонент», поэтому сигнал тела
+   * между типами **неприменим**, а не равен нулю.
+   */
+  test("сигнал тела неприменим между компонентом и композицией", () => {
+    const component = activeCandidate({ id: "yp-order-row-component", name: "YpOrderRow", shingles: sourceShingles(PROMO_CARD_SOURCE) });
+    const [top] = matchCandidates([component], proposedComposition("fp-order-row", ["(Overlay(Image"]), policy, options).candidates;
+    expect(top?.signals.source).toBeUndefined();
+    // Отпечаток контракта между типами тоже не блокирует: совпавшая сигнатура props — это
+    // подсказка «расширь компонент», а не тождество артефактов.
+    expect(top?.blocking).toBe(false);
+  });
+
+  test("пороги задаются по типу артефакта: policyByKind не трогает компоненты", () => {
+    const corpus = [compositionCandidate({ structure: { shingles: new Set(["(Overlay(Image"]), fingerprint: "fp-other" } }), payButton];
+    const strict: MatchPolicy = { ...policy, blockingThreshold: 0.95, reviewThreshold: 0.9 };
+    const result = matchCandidates(corpus, proposedPayButtonClone, policy, { ...options, policyByKind: { composition: strict } });
+    // Компонент-дубль по-прежнему блокируется общей политикой…
+    expect(result.candidates.find((candidate) => candidate.kind === "component")?.blocking).toBe(true);
+    // …а композиция судится своими порогами и в relevant-набор не попадает.
+    expect(result.blocking.some((candidate) => candidate.kind === "composition")).toBe(false);
+  });
+});

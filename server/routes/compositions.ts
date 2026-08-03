@@ -111,7 +111,7 @@ function nestedCompositionIds(elements: Record<string, { type?: unknown; props?:
  * `CompositionRepo.usages`. Тип, которого в ДС нет, попадает в `unknownTypes`: это не
  * ошибка анализа (кандидат ещё не сохраняется), но автору её надо видеть.
  */
-function analyzeDependencyImpact(db: Database, repo: CompositionRepo, elements: Record<string, { type?: unknown; props?: unknown }>, designSystem: string) {
+export function analyzeDependencyImpact(db: Database, repo: CompositionRepo, elements: Record<string, { type?: unknown; props?: unknown }>, designSystem: string) {
   const components: { componentId: string; name: string; headUsageCount: number; immutableUsageCount: number; safeToRemove: boolean }[] = [];
   const unknownTypes: string[] = [];
   for (const type of bodyComponentTypes(elements)) {

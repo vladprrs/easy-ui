@@ -33,6 +33,7 @@ import { headUsageCounts } from "../usageGraph";
 import { sourceShingles } from "./fingerprint";
 import type { CorpusCandidate } from "./matcher";
 import { activeCompositionRevisionSources } from "./compositionRevisionSources";
+import { compositionPropsJsonSchema, compositionStructure, slotNamesOf } from "./compositionSignature";
 
 export interface CorpusSnapshot {
   /** Кандидаты **запрошенной** дизайн-системы: матчинг за её пределы не выходит (спека §3). */
@@ -100,7 +101,93 @@ function shinglesOf(cache: ComponentFingerprintRepo, id: string, rev: number, so
   return new Set(cache.getOrCompute(id, rev, sourceSha256(source), () => [...sourceShingles(source)]));
 }
 
-export function collectCorpus(db: Database, designSystem: string): CorpusSnapshot {
+/**
+ * Head-ревизии живых композиций системы (W9, R1-M9). Берётся именно head, а не активная
+ * публикация: композиция-дубль чаще всего ещё не опубликована, и корпус из одних публикаций
+ * был бы слеп ровно к тому случаю, ради которого волна делается. `version` — последняя активная
+ * публикация (0 у неопубликованной), `draft` — «активной публикации нет».
+ */
+interface CompositionRow { id: string; name: string; rev: number; doc: string; version: number | null }
+
+function compositionRows(db: Database, designSystem: string): CompositionRow[] {
+  return db.query(`SELECT c.id, c.name, r.rev, r.doc,
+      (SELECT MAX(p.version) FROM composition_publishes p WHERE p.composition_id=c.id AND p.status='active') version
+    FROM compositions c
+    JOIN composition_revisions r ON r.composition_id=c.id AND r.rev=c.head_rev
+    JOIN design_systems ds ON ds.id=c.design_system AND ds.retired=0
+    WHERE c.deleted_at IS NULL AND c.design_system=?
+    ORDER BY c.id`).all(designSystem) as CompositionRow[];
+}
+
+/** `(composition_id → число головных ревизий прототипов)`: одна агрегация вместо N запросов. */
+function compositionHeadUsage(db: Database): Map<string, number> {
+  const rows = db.query(`SELECT prc.composition_id id, COUNT(*) n
+    FROM prototype_revision_compositions prc
+    JOIN prototypes p ON p.id=prc.prototype_id AND p.head_rev=prc.rev
+    GROUP BY prc.composition_id`).all() as { id: string; n: number }[];
+  return new Map(rows.map((row) => [row.id, row.n]));
+}
+
+/** Композиции с последней публикацией в deprecated/superseded — та же семантика, что у компонентов. */
+function deprecatedCompositions(db: Database): Set<string> {
+  const rows = db.query(`SELECT composition_id id, version, status FROM composition_publishes`)
+    .all() as { id: string; version: number; status: string }[];
+  const latest = new Map<string, { version: number; status: string }>();
+  for (const row of rows) {
+    const group = latest.get(row.id);
+    if (group === undefined || row.version > group.version) latest.set(row.id, { version: row.version, status: row.status });
+  }
+  const deprecated = new Set<string>();
+  for (const [id, group] of latest) if (DEPRECATED_STATUSES.has(group.status)) deprecated.add(id);
+  return deprecated;
+}
+
+/**
+ * Композиционная часть корпуса. Документ читается **как есть** (без строгого парсинга схемы):
+ * сигнатура обязана считаться и по черновику, а исключение на одной битой ревизии не имеет
+ * права ронять поиск кандидатов по всей системе.
+ */
+export function collectCompositionCandidates(db: Database, designSystem: string): CorpusCandidate[] {
+  const usage = compositionHeadUsage(db);
+  const deprecated = deprecatedCompositions(db);
+  const candidates: CorpusCandidate[] = [];
+  for (const row of compositionRows(db, designSystem)) {
+    let doc: Record<string, unknown>;
+    try { doc = JSON.parse(row.doc) as Record<string, unknown>; } catch { continue; }
+    const structure = compositionStructure(doc);
+    const meta = doc as { description?: unknown; atomicLevel?: unknown; scope?: unknown; canonicalFor?: unknown; replacement?: unknown };
+    const canonicalFor = Array.isArray(meta.canonicalFor) ? meta.canonicalFor.filter((role): role is string => typeof role === "string") : [];
+    candidates.push({
+      kind: "composition", id: row.id, name: row.name, designSystem,
+      version: row.version ?? 0,
+      draft: row.version === null,
+      description: typeof meta.description === "string" ? meta.description : "",
+      ...(typeof meta.atomicLevel === "string" ? { atomicLevel: meta.atomicLevel } : {}),
+      ...(typeof meta.scope === "string" ? { scope: meta.scope } : {}),
+      canonicalFor,
+      ...(typeof meta.replacement === "string" ? { replacement: meta.replacement } : {}),
+      deprecated: deprecated.has(row.id),
+      headUsageCount: usage.get(row.id) ?? 0,
+      meta: { propsJsonSchema: compositionPropsJsonSchema(doc.params), events: [], slots: slotNamesOf(doc.slots) },
+      // Слот шинглов TSX у композиции пуст: её тело описывает `structure`.
+      shingles: new Set<string>(),
+      ...(structure === undefined ? {} : { structure: { shingles: structure.shingles, fingerprint: structure.fingerprint } }),
+    });
+  }
+  return candidates;
+}
+
+export interface CollectCorpusOptions {
+  /**
+   * Включать ли композиции системы (W9). **Дефолт `false` осознанно**: тот же корпус потребляет
+   * гейт создания компонента (`matchReuseProposal`), а гейт умеет выдавать 409
+   * `component_reuse_required`. Композиционная семантика гейта в W9 не включается, поэтому
+   * композиции видны только там, где ответ рекомендательный — в discovery-роуте кандидатов.
+   */
+  includeCompositions?: boolean;
+}
+
+export function collectCorpus(db: Database, designSystem: string, options: CollectCorpusOptions = {}): CorpusSnapshot {
   const rows = activeCatalogRows(db);
   const usage = headUsageCounts(db);
   const deprecated = deprecatedKeys(db);
@@ -157,6 +244,8 @@ export function collectCorpus(db: Database, designSystem: string): CorpusSnapsho
       shingles: shinglesOf(cache, row.id, row.rev, row.source),
     });
   }
+
+  if (options.includeCompositions === true) candidates.push(...collectCompositionCandidates(db, designSystem));
 
   revisionSources.push(...activeCompositionRevisionSources(db));
   return { candidates, catalogRevision: catalogRevision(revisionSources) };

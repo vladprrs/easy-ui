@@ -340,6 +340,8 @@ export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCas
       ...(manifest.policy?.perCase?.[item.id] ? { casePolicy: manifest.policy.perCase[item.id] } : {}),
       // W5a: происхождение эталона — вход нормализации размеров гейта `visual`.
       ...(item.cropLineage ? { cropLineage: item.cropLineage } : {}),
+      // W5b: координата случая в семье — вход `variantFamily` группировки ремедиаций.
+      ...(item.dims ? { dims: item.dims } : {}),
     });
   }
   if (!cases.some((item) => item.aliasOfCaseId === null)) {

@@ -1353,9 +1353,42 @@ const acceptanceProgressSchema = z.looseObject({
  * layout/paint-контуры, `readiness` — доказательство готовности, `visual` (W5a) —
  * `rawDiffPct`/`aaDiffPct`/`maxChannelDelta`/`regions`/`bestOffset` и `severityClass`.
  */
+/**
+ * Классифицированная причина визуального расхождения (W5b, фидбэк §19.6). Диагностика поверх
+ * вердикта: список **никогда не влияет** на pass/fail и всегда непуст у объяснённого случая
+ * (последний код — `unclassified`, «причина не названа»).
+ */
+const acceptanceCauseSchema = z.looseObject({
+  code: z.enum([
+    "surface-tint", "edge-radius-stroke", "geometry-shift", "text-raster-residual",
+    "missing-late-asset", "alpha-compositing", "effect-overflow", "descendant-outside-mask",
+    "unclassified",
+  ]),
+  confidence: z.number(), detail: z.string(),
+  elementKey: z.string().optional(),
+  region: z.looseObject({
+    bbox: z.looseObject({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }),
+    norm: z.looseObject({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }),
+    basis: z.enum(["layoutBounds", "canvas"]),
+  }).optional(),
+});
+
 const acceptanceGateResultSchema = z.looseObject({
   gate: z.string(), status: z.string(), detail: z.string().optional(),
   metrics: z.record(z.string(), z.unknown()).optional(),
+  causes: z.array(acceptanceCauseSchema).optional(),
+});
+
+/** Группа ремедиаций рана (W5b): «одна правка» на все случаи с той же причиной в том же месте. */
+const acceptanceRemediationGroupSchema = z.looseObject({
+  key: z.string(),
+  cause: z.looseObject({ code: z.string(), confidence: z.number(), detail: z.string() }),
+  bboxSignature: z.looseObject({
+    x: z.number(), y: z.number(), width: z.number(), height: z.number(), grid: z.number(),
+  }).nullable(),
+  sharedElementKey: z.string().nullable(),
+  variantFamily: z.record(z.string(), z.string()).nullable(),
+  cases: z.array(z.string()), caseCount: z.number(), suggestion: z.string(),
 });
 const acceptanceSeveritySchema = z.looseObject({ rank: z.number(), class: z.string(), score: z.number() }).nullable();
 
@@ -1365,10 +1398,12 @@ const acceptanceRunViewSchema = z.looseObject({
   caseSetId: z.string().nullable(), idempotencyKey: z.string().nullable(),
   progress: acceptanceProgressSchema, eta: z.looseObject({}).nullable(),
   gates: z.unknown(), evidenceManifestHash: z.string().nullable(),
+  remediationGroups: z.array(acceptanceRemediationGroupSchema),
   createdAt: isoDate, startedAt: isoDate.nullable(), finishedAt: isoDate.nullable(),
   failedCases: z.array(z.looseObject({
     caseId: z.string(), caseKey: z.string(), status: z.string(), verdict: z.string().nullable(),
-    severity: acceptanceSeveritySchema, failedGates: z.array(acceptanceGateResultSchema),
+    severity: acceptanceSeveritySchema, causes: z.array(acceptanceCauseSchema),
+    failedGates: z.array(acceptanceGateResultSchema),
   })),
 });
 
@@ -1440,14 +1475,14 @@ export const createAcceptanceRunContract = registerContract({
 
 export const getAcceptanceRunContract = registerContract({
   method: "GET", path: "/api/acceptance-runs/{runId}",
-  summary: "Poll an acceptance run: status, per-gate roll-up, progress {total, completed, reused, failed, running}, ETA and failedCases sorted by severity. Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  summary: "Poll an acceptance run: status, per-gate roll-up, progress {total, completed, reused, failed, running}, ETA and failedCases sorted by severity. Terminal runs also carry `remediationGroups`: visual failures classified into causes (surface-tint, edge-radius-stroke, geometry-shift, text-raster-residual, missing-late-asset, alpha-compositing, effect-overflow, descendant-outside-mask, unclassified) and grouped by {cause, quantized bbox signature, element key, shared variant family} so one broken shared asset across 20 states reads as one group, sorted by case count. Classification never affects pass/fail. Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
   responseSchema: acceptanceRunViewSchema,
   errors: [...acceptanceAuthErrors],
 });
 
 export const getAcceptanceRunCasesContract = registerContract({
   method: "GET", path: "/api/acceptance-runs/{runId}/cases",
-  summary: "Per-case verdicts of a run with gate results, severity, reuse reason and the evidence artifact names/digests (never bytes: artifact content is served only inside the runId-scoped evidence archive). Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  summary: "Per-case verdicts of a run with gate results, severity, classified visual `causes` (W5b diagnostics; empty for cases whose visual outcome is not fail/indeterminate), reuse reason and the evidence artifact names/digests (never bytes: artifact content is served only inside the runId-scoped evidence archive). Requires EASYUI_ACCEPTANCE_MATRIX=1.",
   responseSchema: z.looseObject({
     runId: z.string(),
     cases: z.array(z.looseObject({
@@ -1455,7 +1490,7 @@ export const getAcceptanceRunCasesContract = registerContract({
       severity: acceptanceSeveritySchema, propsHash: z.string(), caseFingerprint: z.string(),
       aliasOfCaseId: z.string().nullable(), reuseReason: z.string().nullable(), reused: z.boolean(),
       referenceAssetId: z.string().nullable(), startedAt: isoDate.nullable(), finishedAt: isoDate.nullable(),
-      gates: z.array(acceptanceGateResultSchema),
+      gates: z.array(acceptanceGateResultSchema), causes: z.array(acceptanceCauseSchema),
       artifacts: z.array(z.looseObject({ name: z.string(), sha256: z.string(), bytes: z.number() })),
     })),
   }),
@@ -2021,8 +2056,11 @@ export const catalogCandidateProposedSchema = z.strictObject({
   slots: z.array(z.string()).max(64).optional(),
   // Byte ceiling and typed 413 are authoritative in `checkSource`; JSON-body limits apply first.
   source: z.string().optional(),
-  // Спека §2 объявляет поле; сегодня оно приходит только с `kind:"composition"`, а тот
-  // отвергается кодом `unsupported_kind` (отступление D6).
+  /**
+   * Документ композиции для `kind: "composition"` (W9). Строгую схему проходить **не обязан**:
+   * кандидат приходит черновиком. Без него ответ считается по имени/описанию/контракту, но без
+   * структурной сигнатуры тела и без вердикта анализатора.
+   */
   compositionDoc: z.unknown().optional(),
 });
 
@@ -2046,7 +2084,8 @@ export const catalogCandidatesQuerySchema = z.strictObject({
 });
 
 export const catalogCandidateSchema = z.strictObject({
-  kind: z.literal("component"),
+  /** `composition` появляется только в ответе на композиционный кандидат (W9). */
+  kind: z.enum(["component", "composition"]),
   id: z.string(), name: z.string(), designSystem: z.string(),
   /** Версия активной публикации; `0` у head-драфта. */
   version: z.number().int().nonnegative(),
@@ -2071,12 +2110,54 @@ const catalogCandidatesResponseSchema = z.strictObject({
   candidates: z.array(catalogCandidateSchema),
 });
 
+/**
+ * Workbench-исходы композиционного кандидата (план 2026-08-03 W9, спека §19.4).
+ * **Рекомендательные**: гейт переиспользования (409) на композиции не распространяется.
+ */
+export const compositionOutcomeSchema = z.enum(["build-composition", "extend-component", "new-ownership-component"]);
+
+const compositionMatchSchema = z.strictObject({
+  kind: z.enum(["component", "composition"]),
+  id: z.string(), name: z.string(), version: z.number().int().nonnegative(),
+  score: z.number(), blocking: z.boolean(), recommendable: z.boolean(),
+  why: z.string(),
+});
+
+const compositionAnalysisSchema = z.strictObject({
+  reasons: z.array(z.strictObject({ code: z.string(), message: z.string(), elementKey: z.string().optional() })),
+  unsupported: z.array(z.strictObject({ feature: z.string(), elementKey: z.string(), hint: z.string() })),
+  schemaValid: z.boolean(),
+  stats: z.looseObject({}),
+});
+
+const compositionDependencyImpactSchema = z.strictObject({
+  components: z.array(z.strictObject({
+    componentId: z.string(), name: z.string(),
+    headUsageCount: z.number().int().nonnegative(), immutableUsageCount: z.number().int().nonnegative(),
+    safeToRemove: z.boolean(),
+  })),
+  compositions: z.array(z.strictObject({
+    id: z.string(), headUsageCount: z.number().int().nonnegative(),
+    immutableUsageCount: z.number().int().nonnegative(), safeToRemove: z.boolean(),
+  })),
+  unknownTypes: z.array(z.string()),
+});
+
 const catalogCandidatesPostResponseSchema = catalogCandidatesResponseSchema.extend({
   /** Present only when POST included source and the server extracted authoritative metadata. */
   overrideTemplate: z.strictObject({
     catalogRevision: z.string(),
     candidateKeys: z.array(z.string()),
   }).optional(),
+  /** Composition proposals only (W9): the recommended outcome and why. */
+  outcome: compositionOutcomeSchema.optional(),
+  explanation: z.string().optional(),
+  matches: z.array(compositionMatchSchema).optional(),
+  /** Present when the composition proposal carried `compositionDoc` (analyzer W8g). */
+  analyzerVerdict: z.enum(["composition", "extend-component", "needs-ownership-component"]).optional(),
+  analysis: compositionAnalysisSchema.optional(),
+  /** Usages of the components and nested compositions the candidate depends on. */
+  dependencyImpact: compositionDependencyImpactSchema.optional(),
 });
 
 const catalogCandidatesErrors: RouteError[] = [
@@ -2084,14 +2165,13 @@ const catalogCandidatesErrors: RouteError[] = [
   errorCatalog.notFound,
   errorCatalog.methodNotAllowed,
   errorCatalog.validationFailed,
-  { status: 422, code: "unsupported_kind", description: "composition candidates are not supported yet" },
 ];
 
 const catalogCandidatesSummary = "Compact reuse-candidate search over the requested design system: active publications and head drafts scored by the deterministic matcher. Never returns source or props schemas. `catalogRevision` pins the catalog snapshot the scores were computed on.";
 
 export const catalogCandidatesContract = registerContract({
   method: "POST", path: "/api/catalog/candidates",
-  summary: `${catalogCandidatesSummary} POST is the full form and accepts \`proposed\` (including source).`,
+  summary: `${catalogCandidatesSummary} POST is the full form and accepts \`proposed\` (including source). With \`proposed.kind: "composition"\` the corpus also carries the design system's compositions and the response adds the advisory workbench outcome (\`outcome\`/\`explanation\`/\`matches\`/\`analyzerVerdict\`/\`dependencyImpact\`); composition matches never produce a reuse 409.`,
   requestSchema: catalogCandidatesRequestSchema,
   responseSchema: catalogCandidatesPostResponseSchema,
   validated: true,

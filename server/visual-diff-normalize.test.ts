@@ -174,3 +174,24 @@ test("the spawned node worker returns the same normalized verdict over stdin/std
   });
   expect(garbage.ok).toBe(false);
 });
+
+test("channelStats describe the mask itself: uniform tint vs alpha-only divergence (W5b)", () => {
+  // Равномерный тинт: дельта одинаковая во всех пикселях маски ⇒ нулевой разброс.
+  const base = framePng(20, 20, null, [10, 10, 10, 255]);
+  const tinted = framePng(20, 20, null, [110, 110, 110, 255]);
+  const tint = normalizeAndCompare(base, tinted);
+  if (tint.indeterminate) throw new Error(tint.reason);
+  expect(tint.metrics.channelStats.pixels).toBe(400);
+  expect(tint.metrics.channelStats.stdMaxDelta).toBe(0);
+  expect(tint.metrics.channelStats.meanMaxDelta).toBe(100);
+  expect(tint.metrics.channelStats.alphaDominantPct).toBe(0);
+
+  // Расхождение только по альфе: цвет тот же, прозрачность другая.
+  const opaque = framePng(20, 20, { x: 4, y: 4, width: 8, height: 8, color: [0, 0, 255, 255] });
+  const translucent = framePng(20, 20, { x: 4, y: 4, width: 8, height: 8, color: [0, 0, 255, 128] });
+  const alpha = normalizeAndCompare(opaque, translucent);
+  if (alpha.indeterminate) throw new Error(alpha.reason);
+  expect(alpha.metrics.channelStats.alphaDominantPct).toBe(100);
+  expect(alpha.metrics.channelStats.semiTransparentPct).toBe(100);
+  expect(alpha.metrics.channelStats.meanDelta.a).toBeGreaterThan(0);
+});

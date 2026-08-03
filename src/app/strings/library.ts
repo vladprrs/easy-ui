@@ -117,6 +117,18 @@ export const compositions = {
   versionsNone: "Опубликованных версий нет.",
   versionEntry: (version: number, rev: number) => `v${version} · rev ${rev}`,
   retry: "Повторить",
+  // Блок W9: рекомендательный ответ `POST /api/catalog/candidates` для композиции.
+  similarTitle: "Похожие в каталоге",
+  similarLoading: "Ищем похожие артефакты…",
+  similarUnavailable: "Похожие артефакты недоступны.",
+  similarNone: "Похожих артефактов в каталоге нет.",
+  similarEntry: (kind: string, score: number) => `${kind === "composition" ? "композиция" : "компонент"} · score ${score}`,
+  outcomeLabel: "Рекомендация",
+  outcomeNames: {
+    "build-composition": "собрать композицию",
+    "extend-component": "расширить компонент",
+    "new-ownership-component": "нужен ownership-компонент",
+  } as Record<string, string>,
 } as const;
 
 export const figmaBadgeTitle = (fileKey: string, nodeCount: number) =>

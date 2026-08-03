@@ -155,7 +155,12 @@ const jsonOf = async <T>(response: Response): Promise<T> => (await response.json
 
 interface CandidateBody { candidateId: string; componentId: string; rev: number; status: string; cached: boolean; sourceHash: string }
 interface RunBody { runId: string; status: string; cases: number; cached: boolean; progress: { total: number; reused: number } }
-interface RunView { status: string; progress: { total: number; completed: number; reused: number }; failedCases: unknown[]; gates: Record<string, unknown> }
+interface RunView {
+  status: string; progress: { total: number; completed: number; reused: number };
+  failedCases: unknown[]; gates: Record<string, unknown>;
+  /** W5b: группы ремедиаций терминального рана (пустой массив — «нечего чинить»). */
+  remediationGroups: { key: string; cause: { code: string }; cases: string[] }[];
+}
 
 test("флаг OFF: весь набор acceptance-ручек отвечает 404", async () => {
   const { handler } = await setup({ matrix: false });
@@ -214,6 +219,10 @@ test("happy path: кандидат → ран → poll → cases → evidence-zi
   expect(view.progress).toMatchObject({ total: 2, completed: 2 });
   expect(view.failedCases).toEqual([]);
   expect(Object.keys(view.gates)).toEqual(expect.arrayContaining(["contract", "render", "determinism"]));
+  // W5b: раздел отчёта существует всегда; на прошедшем ране он честно пуст, а прогресс остаётся
+  // счётчиками — группы ремедиаций в него не подмешиваются.
+  expect(view.remediationGroups).toEqual([]);
+  expect(view.progress).not.toHaveProperty("remediationGroups");
 
   const casesResponse = await handler(req(`/acceptance-runs/${run.runId}/cases`));
   expect(casesResponse.status).toBe(200);

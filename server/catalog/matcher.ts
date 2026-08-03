@@ -27,13 +27,25 @@ export interface CandidateMeta {
   slots?: readonly string[];
 }
 
+/** Тип артефакта каталога. Композиции въехали в корпус в W9 (план 2026-08-03, R1-M9). */
+export type ArtifactKind = "component" | "composition";
+
+/**
+ * Структурная сигнатура тела композиции (`server/catalog/compositionSignature.ts`).
+ * У компонента её нет: его тело описывают шинглы TSX.
+ */
+export interface CandidateStructure {
+  shingles: ReadonlySet<string>;
+  fingerprint: string;
+}
+
 /**
  * Запись корпуса. Собирается T4 из авторитетных таблиц (активные публикации + head-драфты);
  * `shingles` приходят из content-addressed кэша `component_fingerprints` либо считаются на лету
  * — матчеру безразлично, откуда, лишь бы это была `sourceShingles(source)` того же исходника.
  */
 export interface CorpusCandidate {
-  kind: "component";
+  kind: ArtifactKind;
   id: string;
   name: string;
   designSystem: string;
@@ -55,11 +67,13 @@ export interface CorpusCandidate {
   /** Отсутствует у драфта: props/io/структурный отпечаток по нему не считаются. */
   meta?: CandidateMeta;
   shingles: ReadonlySet<string>;
+  /** Только у `kind: "composition"`: структура тела вместо шинглов TSX. */
+  structure?: CandidateStructure;
 }
 
 /** Предложение: то, что вызывающий собирается создать. */
 export interface ProposedArtifact {
-  kind: "component";
+  kind: ArtifactKind;
   id?: string;
   name?: string;
   designSystem: string;
@@ -71,6 +85,8 @@ export interface ProposedArtifact {
   canonicalFor?: readonly string[];
   meta?: CandidateMeta;
   source?: string;
+  /** Только у `kind: "composition"`: структура тела предложенного документа. */
+  structure?: CandidateStructure;
 }
 
 export interface PropsDelta { added: string[]; removed: string[]; typeChanged: string[] }
@@ -98,7 +114,7 @@ export interface ScoreBreakdown {
 }
 
 export interface MatchCandidate {
-  kind: "component";
+  kind: ArtifactKind;
   id: string;
   name: string;
   designSystem: string;
@@ -137,6 +153,12 @@ export interface MatchOptions {
   limit?: number;
   /** Исключение самого оцениваемого артефакта из корпуса (D4). */
   exclude?: { designSystem: string; id: string };
+  /**
+   * Пороги по типу артефакта (W9). Веса общие — различаются только `blockingThreshold`/
+   * `reviewThreshold`: калибровка T0 мерила пары компонентов, и переносить её пороги на
+   * композиции нечестно. Не передан — для всех типов действует `policy`.
+   */
+  policyByKind?: Partial<Record<ArtifactKind, MatchPolicy>>;
 }
 
 // ───────────────────────────────── сигналы ──────────────────────────────────
@@ -202,6 +224,7 @@ interface ProposedView {
   text: string;
   fingerprint?: string;
   canonicalFor: Set<string>;
+  structure?: CandidateStructure;
 }
 
 export function prepareProposed(proposed: ProposedArtifact): ProposedView {
@@ -210,11 +233,14 @@ export function prepareProposed(proposed: ProposedArtifact): ProposedView {
     artifact: proposed,
     props: propsSignature(meta?.propsJsonSchema),
     io: meta === undefined ? undefined : ioTokens(ioSignature(meta.events, meta.slots)),
-    shingles: proposed.source === undefined ? new Set<string>() : sourceShingles(proposed.source),
+    // Слот сигнала «тело» один: у компонента это шинглы TSX, у композиции — шинглы структуры.
+    shingles: proposed.structure !== undefined ? new Set(proposed.structure.shingles)
+      : proposed.source === undefined ? new Set<string>() : sourceShingles(proposed.source),
     name: nameTokens(proposed.name ?? proposed.id ?? ""),
     text: [proposed.description ?? "", proposed.intent ?? ""].join(" ").trim(),
     fingerprint: meta === undefined ? undefined : structuralFingerprint({ propsJsonSchema: meta.propsJsonSchema, events: meta.events, slots: meta.slots, atomicLevel: proposed.atomicLevel, scope: proposed.scope }),
     canonicalFor: new Set(proposed.canonicalFor ?? []),
+    ...(proposed.structure === undefined ? {} : { structure: proposed.structure }),
   };
 }
 
@@ -246,7 +272,12 @@ function scoreWith(candidate: CorpusCandidate, view: ProposedView, policy: Match
   // неприменимым, иначе они даром получают полный вес сигнала.
   const io = candidateIo === undefined || view.io === undefined || (candidateIo.size === 0 && view.io.size === 0) ? undefined : jaccard(candidateIo, view.io);
 
-  const source = candidate.shingles.size === 0 || view.shingles.size === 0 ? undefined : jaccard(candidate.shingles, view.shingles);
+  // Сигнал тела применим **только внутри одного типа артефакта**: шинглы TSX и шинглы
+  // структуры композиции живут в разных словарях, их Jaccard тождественно ноль, и с весом 0.75
+  // он бы утопил любой кросс-типовой мэтч (композиция ↔ компонент) вместо того, чтобы молчать.
+  const sameKind = candidate.kind === view.artifact.kind;
+  const candidateBody = candidate.structure?.shingles ?? candidate.shingles;
+  const source = !sameKind || candidateBody.size === 0 || view.shingles.size === 0 ? undefined : jaccard(candidateBody, view.shingles);
 
   const candidateName = nameTokens(candidate.name);
   const name = candidateName.size === 0 || view.name.size === 0 ? undefined : jaccard(candidateName, view.name);
@@ -265,11 +296,20 @@ function scoreWith(candidate: CorpusCandidate, view: ProposedView, policy: Match
 
   const candidateFingerprint = meta === undefined ? undefined : structuralFingerprint({ propsJsonSchema: meta.propsJsonSchema, events: meta.events, slots: meta.slots, atomicLevel: candidate.atomicLevel, scope: candidate.scope });
 
+  // Отпечаток блокирует без порога, поэтому кросс-типовое равенство контрактов им **не**
+  // считается: у композиции с параметром `title` и компонента с пропом `title` совпадёт
+  // сигнатура, но это подсказка «расширь компонент», а не тождество. Внутри одного типа
+  // работает сильнейший из доступных отпечатков: у композиции — структура тела.
+  const structuralMatch = !sameKind ? false
+    : candidate.structure !== undefined && view.structure !== undefined
+      ? candidate.structure.fingerprint === view.structure.fingerprint
+      : candidateFingerprint !== undefined && candidateFingerprint === view.fingerprint;
+
   return {
     score,
     signals: { ...parts, appliedWeight },
     canonicalOverlap: [...new Set(candidate.canonicalFor ?? [])].filter((role) => view.canonicalFor.has(role)).sort(),
-    structuralMatch: candidateFingerprint !== undefined && candidateFingerprint === view.fingerprint,
+    structuralMatch,
     propsDelta: propsDeltaOf(candidateProps, view.props),
   };
 }
@@ -289,10 +329,11 @@ const percent = (value: number): number => Math.round(value * 100);
 
 function reasonsFor(candidate: CorpusCandidate, breakdown: ScoreBreakdown, replacementActive: boolean): string[] {
   const reasons: string[] = [];
+  const composition = candidate.kind === "composition";
   for (const role of breakdown.canonicalOverlap) reasons.push(`same canonical role: ${role}`);
-  if (breakdown.structuralMatch) reasons.push("same props/events/slots signature");
+  if (breakdown.structuralMatch) reasons.push(composition ? "identical composition body signature" : "same props/events/slots signature");
   const { source, name, props, description, levelScope } = breakdown.signals;
-  if (source !== undefined && source >= REASON_FLOOR) reasons.push(`${percent(source)}% normalized source structure`);
+  if (source !== undefined && source >= REASON_FLOOR) reasons.push(`${percent(source)}% ${composition ? "composition body structure" : "normalized source structure"}`);
   if (props !== undefined && props >= REASON_FLOOR && !breakdown.structuralMatch) reasons.push(`${percent(props)}% props signature similarity`);
   if (name !== undefined && name >= REASON_FLOOR) reasons.push(`${percent(name)}% name-token similarity`);
   if (levelScope === 1 && description !== undefined && description >= REASON_FLOOR) {
@@ -328,7 +369,10 @@ export function matchCandidates(corpus: readonly CorpusCandidate[], proposed: Pr
   for (const candidate of scoped) if (!candidate.deprecated) { active.add(candidate.id); active.add(candidate.name); }
 
   const view = prepareProposed(proposed);
+  const policyOf = (kind: CorpusCandidate["kind"]): MatchPolicy => options.policyByKind?.[kind] ?? policy;
+  const relevance = new Map<MatchCandidate, boolean>();
   const scored: MatchCandidate[] = scoped.map((candidate) => {
+    const effective = policyOf(candidate.kind);
     const breakdown = scoreWith(candidate, view, policy, idf);
     const rounded = round4(breakdown.score);
     const replacementActive = candidate.replacement !== undefined && active.has(candidate.replacement);
@@ -341,8 +385,8 @@ export function matchCandidates(corpus: readonly CorpusCandidate[], proposed: Pr
     const structuralEvidence = breakdown.signals.props !== undefined || breakdown.signals.io !== undefined || breakdown.signals.source !== undefined;
     // Deprecated/replaced возвращается ради объяснения, но не как цель: blocking снимается
     // только когда активная замена реально есть в корпусе — иначе агенту некуда идти.
-    const blocking = (breakdown.canonicalOverlap.length > 0 || breakdown.structuralMatch || (rounded >= policy.blockingThreshold && structuralEvidence)) && !(candidate.deprecated && replacementActive);
-    return {
+    const blocking = (breakdown.canonicalOverlap.length > 0 || breakdown.structuralMatch || (rounded >= effective.blockingThreshold && structuralEvidence)) && !(candidate.deprecated && replacementActive);
+    const row: MatchCandidate = {
       kind: candidate.kind,
       id: candidate.id,
       name: candidate.name,
@@ -363,6 +407,8 @@ export function matchCandidates(corpus: readonly CorpusCandidate[], proposed: Pr
       ...(blocking ? { propsDelta: breakdown.propsDelta } : {}),
       signals: breakdown.signals,
     };
+    relevance.set(row, blocking || rounded >= effective.reviewThreshold);
+    return row;
   });
 
   // Округление выполнено до сортировки: иначе пары, различающиеся на 1e-12, меняли бы порядок
@@ -370,7 +416,9 @@ export function matchCandidates(corpus: readonly CorpusCandidate[], proposed: Pr
   scored.sort((left, right) => right.score - left.score || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
 
   const limit = options.limit ?? 8;
-  const isRelevant = (candidate: MatchCandidate): boolean => candidate.blocking || candidate.score >= policy.reviewThreshold;
+  // Порог релевантности — тоже по типу артефакта (`policyByKind`), поэтому он снят на месте
+  // подсчёта, а не пересчитывается здесь по одной политике.
+  const isRelevant = (candidate: MatchCandidate): boolean => relevance.get(candidate) === true;
   const relevant = scored.filter(isRelevant);
   // Спека §3: более низкие score возвращаются только чтобы добить выдачу до запрошенного размера.
   const filler = scored.filter((candidate) => !isRelevant(candidate));
