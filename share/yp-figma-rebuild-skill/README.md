@@ -9,7 +9,7 @@
 - `api.mjs` — хелпер поверх того же auth: PATCH темы, загрузка ассетов, произвольные вызовы, ретроактивный Figma-provenance (в обычном цикле — `driver.mjs component --figma`).
 - `compare.mjs` — пиксельный дифф Figma-эталон ↔ snap (нужен одноразовый `npm i pixelmatch pngjs` в этом каталоге).
 - `templates/atom.tsx`, `templates/probe.json` — шаблоны атома и probe-стикершита.
-- `reference/easy-ui-authoring.md` — полный справочник механики easy-ui (грамматика документов, директивы, версии, troubleshooting); `reference/host-catalog.json` — host-типы; `reference/canonical-roles.md` — согласованные слаги `canonicalFor`.
+- `reference/easy-ui-authoring.md` — полный справочник механики easy-ui (грамматика документов, директивы, версии, приёмка `promote`/`accept`/`case-set`, композиции v3, troubleshooting); `reference/host-catalog.json` — host-типы; `reference/canonical-roles.md` — согласованные слаги `canonicalFor`.
 - `examples/` — рабочие образцы механики (TSX-контракт, документы прототипов). Визуально они относятся к **старой** системе — использовать только как справку по механике.
 
 ## Установка и креды
@@ -24,6 +24,7 @@ Smoke: `node driver.mjs get prototypes` и `node api.mjs get /capabilities`.
 
 - Старую систему `yandex-pay` не трогать; новая площадка — `yandex-pay-v2`, имена `pay-*` / `Pay*` (глобальная уникальность имён — `Yp*` заняты).
 - Figma — единственный источник значений; каждый компонент несёт Figma-provenance + reference-скриншоты.
-- Порядок строгий: тема (tokens/fonts) → `pay-box` → атомы → молекулы/организмы → эталонные экраны; компонент закрыт только после численной (`geometry` ±1px) и пиксельной (`compare.mjs` ≤2%, остаток — только антиалиасинг текста) приёмки.
+- Порядок строгий: тема (tokens/fonts) → `pay-box` → атомы → молекулы/организмы → эталонные экраны; компонент закрыт только после численной (`expect` ±1px) и пиксельной (`compare.mjs` ≤2%, остаток — только антиалиасинг текста) приёмки.
+- Компонент с несколькими вариантами принимается **серверной матричной приёмкой**: `case-set` (Figma-матрица + эталоны-ассеты) → `accept` (гейты render/readiness/geometry/visual, причины и `remediationGroups`, evidence-архив) → `promote` со ссылкой на ран.
 - Renderer не применяет Zod-дефолты — каждый `.default()` дублируется `??` в рендере.
 - `409 component_reuse_required|canonical_role_conflict|catalog_changed` — терминальный STOP.
