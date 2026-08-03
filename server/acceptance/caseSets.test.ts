@@ -9,7 +9,7 @@ import {
 } from "./caseSets";
 import {
   CASE_FINGERPRINT_ALGO_VERSION, CASE_POLICY_HASH_V0,
-  DEFAULT_CAPTURE_ENV_FINGERPRINT, DEFAULT_READINESS_POLICY_HASH,
+  DEFAULT_RENDERER_FINGERPRINT, DEFAULT_READINESS_POLICY_HASH,
   caseFingerprint, caseFingerprintV0,
 } from "./ids";
 
@@ -309,7 +309,7 @@ test("algoVersion bump invalidates every fingerprint accumulated by earlier wave
   const base = {
     candidateId: `cand_${"0".repeat(64)}`, caseKey: "alpha", propsHash: "props-1",
     surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
-    readinessPolicyHash: DEFAULT_READINESS_POLICY_HASH, captureEnvFingerprint: DEFAULT_CAPTURE_ENV_FINGERPRINT,
+    readinessPolicyHash: DEFAULT_READINESS_POLICY_HASH, rendererFingerprint: DEFAULT_RENDERER_FINGERPRINT,
     casePolicyHash: CASE_POLICY_HASH_V0, referenceAssetId: null,
   };
   expect(caseFingerprint({ ...base, algoVersion: 5 })).not.toBe(caseFingerprint({ ...base, algoVersion: 4 }));

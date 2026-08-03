@@ -1,10 +1,16 @@
 /**
- * Отпечаток окружения капчура (план §5 W4):
+ * **Наблюдённая** проба окружения капчура (план §5 W4; переименована в R1 плана
+ * renderer-contract-2 — §3 E2):
  *
  * ```
- * captureEnvFingerprint = sha256({ browserVersion, platform, dpr, colorScheme|colorProfile,
- *                                 fontRasterFingerprint, rendererBuild, readinessPolicyHash })
+ * observedCaptureEnvFingerprint = sha256({ browserVersion, platform, dpr, colorScheme|colorProfile,
+ *                                         fontRasterFingerprint, rendererBuild, readinessPolicyHash })
  * ```
+ *
+ * Имя говорит про эпистемологию, а не про красоту: это то, что видно **изнутри страницы** уже
+ * после съёмки. Ключ reuse приёмки — другой отпечаток, объявленный сервером до капчура
+ * (`server/capture/renderer.ts#rendererFingerprint`); держать рядом два разных
+ * «captureEnvFingerprint» было бы приглашением перепутать наблюдение с объявлением.
  *
  * Зачем: два визуально одинаковых кадра, снятых в разных средах (другой chromium, другой
  * растеризатор шрифтов, другой DPR), сравнивать нельзя — и переиспользовать чужой вердикт тоже.
@@ -37,7 +43,7 @@ export interface CaptureEnv {
 }
 
 /** Чистая функция отпечатка: те же входы — тот же хэш (тест детерминизма опирается на неё). */
-export function captureEnvFingerprint(input: CaptureEnvInput): Promise<string> {
+export function observedCaptureEnvFingerprint(input: CaptureEnvInput): Promise<string> {
   return sha256Hex(canonicalStringify(input));
 }
 
@@ -112,5 +118,5 @@ export async function collectCaptureEnv(options: {
     rendererBuild: options.rendererBuild,
     readinessPolicyHash: options.readinessPolicyHash,
   };
-  return { fingerprint: await captureEnvFingerprint(input), input };
+  return { fingerprint: await observedCaptureEnvFingerprint(input), input };
 }

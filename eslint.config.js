@@ -16,7 +16,9 @@ export default tseslint.config(
       parserOptions: {
         projectService: {
           allowDefaultProject: ["scripts/*.ts", "test/fixtures/starter/*.tsx"],
-          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 16,
+          // Растёт вместе с числом одиночных скриптов вне tsconfig (последний — R1:
+          // scripts/check-renderer-pin.ts, 17-й файл при потолке 16).
+          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 24,
         },
       },
     },

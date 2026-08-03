@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { captureEnvFingerprint, collectCaptureEnv, type CaptureEnvInput } from "./env";
+import { collectCaptureEnv, observedCaptureEnvFingerprint, type CaptureEnvInput } from "./env";
 import { collectReadiness, collectThemeAssets, collectThemeTokens, usedFontFamilies } from "./readiness";
 import {
   canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, isReadinessPolicy, readinessPolicyHash,
@@ -55,9 +55,9 @@ describe("capture env fingerprint", () => {
   };
 
   it("is deterministic for the same environment and moves with every input", async () => {
-    const base = await captureEnvFingerprint(input);
+    const base = await observedCaptureEnvFingerprint(input);
     expect(base).toMatch(/^[0-9a-f]{64}$/);
-    expect(await captureEnvFingerprint({ ...input })).toBe(base);
+    expect(await observedCaptureEnvFingerprint({ ...input })).toBe(base);
     for (const changed of [
       { ...input, browserVersion: "HeadlessChrome/141" },
       { ...input, dpr: 3 },
@@ -65,7 +65,7 @@ describe("capture env fingerprint", () => {
       { ...input, fontRasterFingerprint: "fnv1a:00000000" },
       { ...input, rendererBuild: "build-2" },
       { ...input, readinessPolicyHash: "other" },
-    ]) expect(await captureEnvFingerprint(changed)).not.toBe(base);
+    ]) expect(await observedCaptureEnvFingerprint(changed)).not.toBe(base);
   });
 
   it("collects the same fingerprint twice in one environment", async () => {

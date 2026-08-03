@@ -354,6 +354,17 @@ const screenshotImageResultSchema = z.object({
   draftRev: z.number().int().positive().optional(),
   componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string() })).optional(),
   rendererBuild: z.string().nullable(), browserVersion: z.string(),
+  /**
+   * Объявленный рендерер джобы (R1): отпечаток и его входы, замороженные на постановке.
+   * Опционален — джобы, снятые до волны (или воркером без манифеста), его не несут.
+   */
+  renderer: z.object({
+    rendererVersion: z.string(), rendererSchema: z.number().int().positive(), fingerprint: z.string(),
+    browserName: z.string(), browserVersion: z.string().nullable(), browserRevision: z.string().nullable(),
+    launchedExecutable: z.string().nullable(), browserExecutableSha256: z.string().nullable(),
+    contextOptionsHash: z.string().nullable(), launchDeterminismArgsHash: z.string(),
+    colorProfile: z.literal("srgb"), source: z.enum(["manifest", "fallback"]),
+  }).optional(),
 });
 const geometryLayoutContextSchema = z.object({
   display: z.string(), flexDirection: z.string(), flexWrap: z.string(), rowGap: z.string(), columnGap: z.string(),
@@ -2346,10 +2357,39 @@ export const getShimContract = registerContract({
   errors: [{ status: 404, code: "not_found" }, errorCatalog.methodNotAllowed],
 });
 
+/**
+ * Объявленный рендерер (план 2026-08-03 renderer-contract-2 §3 E1, §5 R1) — то, чем этот образ
+ * рисует кадры: фактически запускаемый бинарь (`chrome-headless-shell`, **не** `chrome`), его
+ * sha256, шрифтовой стек образа, детерминизм-флаги запуска. `fingerprint` — под дефолтной
+ * readiness-политикой (`policyHash`): именно по ней снимаются интерактивные капчуры.
+ *
+ * `source: "fallback"` — манифест образа недоступен (рабочее дерево): дорогие поля деградируют
+ * в `null`, отпечаток остаётся стабильным внутри процесса, но сравнивать его между хостами
+ * бессмысленно. `provenance` в отпечаток **не входит**: иначе каждый коммит обнулял бы reuse.
+ */
+export const rendererReportSchema = z.object({
+  rendererSchema: z.number().int().positive(),
+  rendererVersion: z.string(),
+  fingerprint: z.string(),
+  policyHash: z.string(),
+  os: z.string(), arch: z.string(),
+  nodeVersion: z.string().nullable(), playwrightVersion: z.string().nullable(),
+  browserName: z.string(), browserVersion: z.string().nullable(), browserRevision: z.string().nullable(),
+  launchedExecutable: z.string().nullable(), browserExecutableSha256: z.string().nullable(),
+  fontStackSha256: z.string().nullable(), appFontsSha256: z.string().nullable(), systemLibsHash: z.string().nullable(),
+  launchDeterminismArgsHash: z.string(), contextOptionsHash: z.string().nullable(),
+  colorProfile: z.literal("srgb"),
+  source: z.enum(["manifest", "fallback"]),
+  provenance: z.object({
+    buildSha: z.string().nullable(), imageRef: z.string().nullable(),
+    builtAt: z.string().nullable(), bunVersion: z.string().nullable(),
+  }).nullable(),
+});
+
 export const healthContract = registerContract({
   method: "GET", path: "/api/health",
-  summary: "Liveness/readiness: 200 ready, 503 while starting. Exempt from BasicAuth.",
-  responseSchema: z.object({ status: z.enum(["ready", "starting"]) }),
+  summary: "Liveness/readiness: 200 ready, 503 while starting. Exempt from BasicAuth. Carries the declared renderer so a deploy sees a manifest/image mismatch before the first capture does.",
+  responseSchema: z.object({ status: z.enum(["ready", "starting"]), renderer: rendererReportSchema.optional() }),
   errors: [errorCatalog.methodNotAllowed],
 });
 
@@ -2469,6 +2509,8 @@ export const capabilitiesResponseSchema = z.object({
    * запрос без `intent` проходит с предупреждением, в `enforce` — падает `400 invalid_request`.
    * `policyVersion` совпадает с `/api/catalog/candidates` и с записями аудита.
    */
+  /** Объявленный рендерер этой сборки (план renderer-contract-2 §5 R1). */
+  renderer: rendererReportSchema,
   reuseGate: z.object({
     mode: z.enum(["shadow", "enforce"]),
     intentRequired: z.boolean(),

@@ -64,8 +64,8 @@ const READY_READINESS = {
     framesWaited: 2, animationsDisabled: true,
     themeResources: { tokens: ["--eui-color-bg"], icons: ["asset_icon"], images: [] },
   } as Record<string, unknown> | null,
-  captureEnvFingerprint: "env-fingerprint" as string | null,
-  captureEnv: null as Record<string, unknown> | null,
+  observedCaptureEnvFingerprint: "env-fingerprint" as string | null,
+  observedCaptureEnv: null as Record<string, unknown> | null,
 };
 
 // ------------------------------------------------------------------ заглушки
@@ -462,7 +462,7 @@ test("капчур без доказательства readiness даёт indete
   harness.service.readiness = {
     ...READY_READINESS,
     readinessMet: null, readinessReason: null, readinessPolicyHash: null, readinessEvidence: null,
-    captureEnvFingerprint: null,
+    observedCaptureEnvFingerprint: null,
   };
   const run = await startAndRun(harness);
   expect(run.status).toBe("fail");

@@ -56,8 +56,8 @@ export const readinessGate: Gate = {
       reason: observed.readinessReason,
       policyHash: observed.readinessPolicyHash,
       expectedPolicyHash,
-      captureEnvFingerprint: observed.captureEnvFingerprint,
-      captureEnv: observed.captureEnv,
+      observedCaptureEnvFingerprint: observed.observedCaptureEnvFingerprint,
+      observedCaptureEnv: observed.observedCaptureEnv,
       evidence,
     });
     const artifacts = [{ name: "readiness.json", sha256: artifact.sha256, bytes: artifact.bytes }];
@@ -67,7 +67,7 @@ export const readinessGate: Gate = {
       reason: observed.readinessReason,
       policyHash: observed.readinessPolicyHash,
       expectedPolicyHash,
-      captureEnvFingerprint: observed.captureEnvFingerprint,
+      observedCaptureEnvFingerprint: observed.observedCaptureEnvFingerprint,
       pendingRequests: (evidence as { pendingRequests?: string[] }).pendingRequests ?? [],
       fontFaces: (evidence as { fontFaces?: unknown[] }).fontFaces ?? [],
       images: (evidence as { images?: unknown }).images ?? null,

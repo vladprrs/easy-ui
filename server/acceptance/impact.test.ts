@@ -64,8 +64,8 @@ const readinessFor = (props: Record<string, unknown> | undefined) => ({
       images: typeof props?.asset === "string" ? [props.asset] : [],
     },
   } as Record<string, unknown> | null,
-  captureEnvFingerprint: "env-fingerprint" as string | null,
-  captureEnv: null as Record<string, unknown> | null,
+  observedCaptureEnvFingerprint: "env-fingerprint" as string | null,
+  observedCaptureEnv: null as Record<string, unknown> | null,
 });
 
 const PAINT_LAYOUT = { x: 64, y: 64, width: 140, height: 96 };

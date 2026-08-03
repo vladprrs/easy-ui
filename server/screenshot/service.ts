@@ -15,6 +15,7 @@ import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
 import { docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
 import { surfaceDesignSystem, surfaceOf } from "../../src/prototype/surfaces";
+import { compareBrowserVersion, policyHashOf, rendererDeclaration, rendererFingerprintOf, strictManifestEnabled } from "../capture/renderer";
 import { buildStaticAllowedUrls, rendererBuildFrom } from "./allowedUrls";
 import { classifyCaptureErrors } from "./noise";
 import { CaptureSessionStore, JOB_DEADLINE_MS } from "./sessions";
@@ -60,8 +61,33 @@ export interface CaptureReadinessOutcome {
   /** sha256 политики, по которой шелл реально ждал — сверяется с политикой джобы. */
   readinessPolicyHash: string | null;
   readinessEvidence: Record<string, unknown> | null;
-  captureEnvFingerprint: string | null;
-  captureEnv: Record<string, unknown> | null;
+  /**
+   * **Наблюдённая** in-page проба окружения (R1 плана renderer-contract-2, §3 E2): её снимает
+   * сама страница уже после рендера. Объявленный рендерер (ключ reuse приёмки) — это `renderer`
+   * ниже, и путать их нельзя, поэтому у наблюдения в имени стоит `observed`.
+   */
+  observedCaptureEnvFingerprint: string | null;
+  observedCaptureEnv: Record<string, unknown> | null;
+}
+
+/**
+ * Объявление рендерера, замороженное **на постановке** джобы (§5 R1). Едет в результат, чтобы
+ * клиент (и e2e) мог сверить: тот ли рендерер нарисовал кадр, что публикует `/api/capabilities`.
+ */
+export interface RendererOnJob {
+  rendererVersion: string;
+  rendererSchema: number;
+  fingerprint: string;
+  browserName: string;
+  /** Объявленная версия браузера; наблюдённая приезжает в `browserVersion` результата. */
+  browserVersion: string | null;
+  browserRevision: string | null;
+  launchedExecutable: string | null;
+  browserExecutableSha256: string | null;
+  contextOptionsHash: string | null;
+  launchDeterminismArgsHash: string;
+  colorProfile: "srgb";
+  source: "manifest" | "fallback";
 }
 
 /** Поле вокруг компонента в paint-режиме, CSS px (план §3 D4: «дефолт 64px»). */
@@ -94,6 +120,8 @@ export interface ScreenshotImageResult extends CaptureQuality {
   draftRev?: number;
   componentPins?: { id: string; version: number; bundleHash: string }[];
   rendererBuild: string | null; browserVersion: string;
+  /** Объявленный рендерер джобы (R1): отпечаток и его входы. */
+  renderer?: RendererOnJob;
 }
 /**
  * Байтовый исход image-джобы (амендмент A4): PNG отдаётся вызывающему (acceptance-оркестратору,
@@ -111,6 +139,7 @@ export interface ScreenshotImageBytesResult extends CaptureQuality, CaptureReadi
   draftRev?: number;
   componentPins?: { id: string; version: number; bundleHash: string }[];
   rendererBuild: string | null; browserVersion: string;
+  renderer?: RendererOnJob;
 }
 /**
  * Исход режима `probe:"paint"` (план 2026-08-03 §3 D4, §5 W3): **одна browser-сессия** отдаёт и
@@ -140,6 +169,7 @@ export interface ScreenshotPaintResult extends CaptureQuality, GeometryMeasureme
   pageErrors: string[];
   rendererBuild: string | null;
   browserVersion: string;
+  renderer?: RendererOnJob;
 }
 /** Geometry measurements shared by both capture surfaces (additive wave-7.1 shape). */
 interface GeometryMeasurement {
@@ -235,6 +265,12 @@ interface InternalJob {
    * (её приносит профиль приёмки); прочие пути остаются на дефолте, то есть ведут себя как раньше.
    */
   readinessPolicy?: ReadinessPolicy;
+  /**
+   * Объявленный рендерер, замороженный на постановке (R1). Заморожен именно здесь, а не читается
+   * в момент результата: отпечаток обязан относиться к тому же процессу и той же политике, по
+   * которой считался `case_fingerprint` при reuse-lookup'е.
+   */
+  renderer: RendererOnJob;
   result?: ScreenshotResult; error?: { code: string; message: string }; resultExpiresAt?: number;
   jobOutcome?: JobOutcome;
 }
@@ -267,6 +303,28 @@ function emptyGeometryShape(): Pick<GeometryMeasurement, "safeArea" | "roleRects
     scroll: { width: 0, height: 0 },
     viewportOwnership: { frame: null, content: null, scroll: null, scrollable: false, owners: [], unownedPct: 0 },
     issues: [],
+  };
+}
+
+/**
+ * Объявление рендерера под политику конкретной джобы (R1). Политика входит в отпечаток по той же
+ * причине, что и в `case_fingerprint`: кадр, снятый по другому правилу ожидания, — другой кадр.
+ */
+export function rendererOnJob(policy: ReadinessPolicy | undefined): RendererOnJob {
+  const declaration = rendererDeclaration();
+  return {
+    rendererVersion: declaration.rendererVersion,
+    rendererSchema: declaration.rendererSchema,
+    fingerprint: rendererFingerprintOf(declaration, policyHashOf(policy ?? DEFAULT_READINESS_POLICY)),
+    browserName: declaration.browserName,
+    browserVersion: declaration.browserVersion,
+    browserRevision: declaration.browserRevision,
+    launchedExecutable: declaration.launchedExecutable,
+    browserExecutableSha256: declaration.browserExecutableSha256,
+    contextOptionsHash: declaration.contextOptionsHash,
+    launchDeterminismArgsHash: declaration.launchDeterminismArgsHash,
+    colorProfile: declaration.colorProfile,
+    source: declaration.source,
   };
 }
 
@@ -617,9 +675,9 @@ export class ScreenshotService {
     return [...set];
   }
 
-  private push(job: Omit<InternalJob, "id" | "status">): { jobId: string } {
+  private push(job: Omit<InternalJob, "id" | "status" | "renderer">): { jobId: string } {
     const id = `job_${crypto.randomUUID()}`;
-    this.jobs.set(id, { ...job, id, status: "queued" });
+    this.jobs.set(id, { ...job, id, status: "queued", renderer: rendererOnJob(job.readinessPolicy) });
     this.queue.push(id);
     queueMicrotask(() => this.pump());
     return { jobId: id };
@@ -684,7 +742,23 @@ export class ScreenshotService {
       if (job.readinessPolicy !== undefined) workerJob.bootstrap.readiness = job.readinessPolicy;
       const result = await this.deps.runJob(workerJob, JOB_DEADLINE_MS);
       if (!result.ok) { job.status = "error"; job.error = { code: "capture_failed", message: result.error }; job.jobOutcome = classifyJobFailure(result.error); this.expire(job); return; }
+      // Сверка объявленного и фактического рендерера (§3 E2). Расхождение major.minor.build
+      // значит, что образ не соответствует манифесту: кадр нельзя ни сравнивать с эталоном, ни
+      // переиспользовать по `case_fingerprint`, поэтому это hard-fail, а не предупреждение.
+      const mismatch = this.rendererMismatch(job, result);
+      if (mismatch !== null && strictManifestEnabled()) {
+        job.status = "error";
+        job.error = { code: "renderer_mismatch", message: mismatch };
+        // Терминальный по смыслу, но по таксономии A3 — инфраструктурный: у приёмки нет исхода
+        // «рендерер не тот», а ретраи в том же процессе дадут ровно то же расхождение.
+        job.jobOutcome = "subprocess_error";
+        this.expire(job);
+        return;
+      }
       const quality = this.qualityOf(result);
+      // Kill-switch `EASYUI_RENDERER_STRICT_MANIFEST=0`: расхождение остаётся видимым, но капчур
+      // доигрывается (T-M7 — аварийная ручка на случай, если сверка валит весь прод).
+      if (mismatch !== null) quality.runtimeWarnings.push(`renderer_mismatch: ${mismatch}`);
       if (job.probe === "paint") {
         // Комбинированный исход: обе половины обязаны приехать из одной сессии, иначе вердикт
         // геометрии сравнивал бы разные кадры (триаж R1-M3) — поэтому это `throw`, не деградация.
@@ -709,6 +783,7 @@ export class ScreenshotService {
           imageProduced: true,
           consoleErrors: result.consoleErrors, pageErrors: result.pageErrors,
           rendererBuild: job.expected.rendererBuild, browserVersion: result.browserVersion,
+          renderer: job.renderer,
           ...emptyGeometryShape(),
           ...result.geometry,
         };
@@ -772,6 +847,7 @@ export class ScreenshotService {
           consoleErrors: result.consoleErrors, pageErrors: result.pageErrors,
           ...imageExtras,
           rendererBuild: job.expected.rendererBuild, browserVersion: result.browserVersion,
+          renderer: job.renderer,
         };
         job.status = "done";
         job.jobOutcome = "ok";
@@ -788,6 +864,7 @@ export class ScreenshotService {
         consoleErrors: result.consoleErrors, pageErrors: result.pageErrors,
         ...imageExtras,
         rendererBuild: job.expected.rendererBuild, browserVersion: result.browserVersion,
+        renderer: job.renderer,
       };
       job.status = "done";
       job.jobOutcome = "ok";
@@ -803,6 +880,20 @@ export class ScreenshotService {
   }
 
   /**
+   * Расхождение объявленного рендерера и фактически нарисовавшего кадр (§3 E2).
+   *
+   * Сравнение — по `major.minor.build`: patch-часть плавает между сборками одного chromium и на
+   * растр не влияет. Стенды и старые воркеры присылают синтетические версии (`"test/1"`) — такие
+   * строки не разбираются в версию chromium и дают `unknown`, то есть сверка молчит: превращать
+   * их в отказ капчура значило бы уронить всё, кроме прода.
+   */
+  private rendererMismatch(job: InternalJob, result: WorkerOk): string | null {
+    const verdict = compareBrowserVersion(job.renderer.browserVersion, result.browserVersion);
+    if (verdict !== "mismatch") return null;
+    return `declared browser ${job.renderer.browserVersion} (renderer manifest, source=${job.renderer.source}) does not match the browser that rendered this frame (${result.browserVersion})`;
+  }
+
+  /**
    * Исход readiness капчура (W4). Шелл, не приславший доказательства (старый билд, preview),
    * даёт `null` — «неизвестно», а не «готов»: гейт `readiness` отличает эти случаи.
    */
@@ -812,8 +903,8 @@ export class ScreenshotService {
       readinessReason: result.readiness?.reason ?? null,
       readinessPolicyHash: result.readiness?.policyHash ?? null,
       readinessEvidence: result.readiness?.evidence ?? null,
-      captureEnvFingerprint: result.captureEnv?.fingerprint ?? null,
-      captureEnv: result.captureEnv?.input ?? null,
+      observedCaptureEnvFingerprint: result.captureEnv?.fingerprint ?? null,
+      observedCaptureEnv: result.captureEnv?.input ?? null,
     };
   }
 

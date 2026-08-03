@@ -9,7 +9,7 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
  *
  * Две фикстуры:
  * - `e2e-readiness-ok` — обычный компонент: готовность достигается, доказательство несёт
- *   наблюдённые токены темы (вход импакт-анализа W6) и стабильный `captureEnvFingerprint`;
+ *   наблюдённые токены темы (вход импакт-анализа W6) и стабильный `observedCaptureEnvFingerprint` (наблюдённая проба; объявленный рендерер — R1);
  * - `e2e-readiness-blocked` — компонент с `img` на внешний хост: egress-граница капчура его
  *   рубит, картинка не декодируется → `readiness` fail с `pendingRequests`, а `geometry`/
  *   `determinism` не выдают вердикта.
@@ -83,7 +83,7 @@ interface ReadinessMetrics {
   reason: string | null;
   policyHash: string | null;
   expectedPolicyHash: string;
-  captureEnvFingerprint: string | null;
+  observedCaptureEnvFingerprint: string | null;
   pendingRequests: string[];
   fontFaces: { family: string; status: string }[];
   images: { total: number; decoded: number; failed: number } | null;
@@ -173,13 +173,13 @@ test("a settled capture proves its readiness and reports the same environment fi
   // `themeResources` обязательны — это вход импакт-анализа W6 (триаж R2-14).
   expect(readiness.metrics.themeResources.tokens).toContain("--eui-color-bg-default");
   expect(readiness.metrics.themeResources.tokens).toContain("--eui-color-fg-primary");
-  expect(readiness.metrics.captureEnvFingerprint).toMatch(/^[0-9a-f]{64}$/);
+  expect(readiness.metrics.observedCaptureEnvFingerprint).toMatch(/^[0-9a-f]{64}$/);
   expect(first.cases[0]!.artifacts.map((artifact) => artifact.name)).toContain("readiness.json");
 
   // Два подряд захвата в одной среде — один и тот же отпечаток окружения.
   const second = await runOnce(request, candidate.candidateId);
   expect(second.run.status).toBe("pass");
-  expect(readinessOf(second.cases[0]!).metrics.captureEnvFingerprint).toBe(readiness.metrics.captureEnvFingerprint);
+  expect(readinessOf(second.cases[0]!).metrics.observedCaptureEnvFingerprint).toBe(readiness.metrics.observedCaptureEnvFingerprint);
 });
 
 test("a frame whose asset never arrives fails readiness and gets no geometry verdict", async ({ request }) => {

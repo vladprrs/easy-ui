@@ -922,7 +922,7 @@ Production-миграция выполняется по явному manifest с
 
 | Метод и путь | Ответ |
 |---|---|
-| `GET /health` | `{status:"ready"}` после миграций, seed и ABI-проверки; до готовности 503 `starting` |
+| `GET /health` | `{status:"ready", renderer:{…}}` после миграций, seed и ABI-проверки; до готовности 503 `starting`. Секция `renderer` — объявленный рендерер образа (см. [Renderer fingerprint 2.0](#renderer-fingerprint-20-волна-r1-план-2026-08-03-renderer-contract-2)): деплой сверяет её с `renderer-manifest.json` образа, не дожидаясь первого капчура |
 | `GET /catalog/manifest?designSystem=<slug>` | `{components:[{id,name,designSystem,version,bundleUrl,bundleHash,hostAbiVersion,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?,scope?,allowedAsRoot?,canonicalFor?,sourceBounded?,ownership?,replacement?,headUsageCount,deprecated}]}` — последняя active-версия каждого неудалённого custom-компонента для каждой системы или только указанной системы; host-примитивы намеренно не входят; `headUsageCount`/`deprecated` — см. [Граф использования](#граф-использования-компонентов) |
 | `GET /catalog/usages?designSystem=<slug>` | Агрегированный индекс использования, см. [Граф использования](#граф-использования-компонентов) |
 | `GET /shims/v1/:name.js` | ESM-шим host ABI v1; immutable |
@@ -1306,6 +1306,65 @@ stdMaxDelta, alphaDominantPct, semiTransparentPct}`) — статистика **
 evidence-манифест рана (CAS + `SHA256SUMS`, `GET /api/acceptance-runs/:id/evidence`); локальные
 файлы лишь избавляют от повторного запроса, и любой отчёт агента обязан нести `cache.status`.
 
+### Renderer fingerprint 2.0 (волна R1, план 2026-08-03 renderer-contract-2)
+
+Идентичность рендерера объявляется **сервером и до съёмки** — только такой отпечаток годится
+ключом reuse (`case_fingerprint` считается до постановки джобы). До волны эту роль играли две
+вещи, и обе врали: `rendererBuild` — имя entry-файла SPA (идентичность бандла, не рендерера), а
+серверный `captureEnvFingerprint` — `sha256({platform, arch, readinessPolicyHash})`, который
+**не менялся от апгрейда chromium**, из-за чего reuse приёмки переживал смену браузера.
+
+```ts
+rendererFingerprint = sha256(canonicalJson({           // server/capture/renderer.ts
+  rendererSchema: 2, rendererVersion,                   // ручной пин репозитория
+  os, arch, nodeVersion, playwrightVersion,
+  browserName, browserVersion, browserRevision,
+  launchedExecutable, browserExecutableSha256,          // sha ФАКТИЧЕСКИ запускаемого бинаря
+  fontStackSha256, appFontsSha256, systemLibsHash,
+  launchDeterminismArgsHash, contextOptionsHash, colorProfile: "srgb",
+  readinessPolicyHash,
+}))
+```
+
+Ключевой факт: `chromium.launch({headless:true})` исполняет **`chrome-headless-shell`**, а
+`chromium.executablePath()` возвращает полный `chrome`, который кадров не рисует. Поэтому в
+отпечаток входит sha256 именно shell-бинаря плюс его имя (`launchedExecutable`). Значения
+известны внутри образа, где браузер установлен: их считает build-слой
+(`scripts/renderer-manifest.mjs` → `/app/renderer-manifest.json`, путь в переменной
+`EASYUI_RENDERER_MANIFEST`), а сервер их читает и **замораживает на старте процесса**.
+`provenance` (buildSha/imageRef/builtAt/bunVersion) едет рядом, но **в отпечаток не входит** —
+иначе каждый коммит обнулял бы весь накопленный reuse.
+
+**Dev-фолбэк.** В рабочем дереве манифеста нет: `source: "fallback"`, дорогие поля
+(`browserExecutableSha256`, `fontStackSha256`, `systemLibsHash`, `appFontsSha256`) честно `null`,
+дешёвые (os/arch/node/playwright/`browsers.json`) считаются на месте. Отпечаток остаётся
+стабильным внутри процесса, но сравнивать его между хостами в этом режиме бессмысленно.
+
+**Где виден.** `GET /api/capabilities` → `renderer` и `GET /api/health` → `renderer` (одно и то
+же объявление; `fingerprint` — под дефолтной readiness-политикой, её хэш публикуется рядом как
+`policyHash`). Результат image-джобы несёт `result.renderer` — отпечаток, замороженный **на
+постановке** этой джобы, вместе с его входами. Прод-приёмка сверяет секцию с
+`docker run <image> cat /app/renderer-manifest.json`.
+
+**Сверка на капчуре.** Наблюдённая версия браузера (`browser.version()` воркера) сравнивается с
+объявленной по `major.minor.build` — patch-часть плавает между сборками одного chromium и на
+растр не влияет. Расхождение значит «образ не соответствует манифесту»: джоба терминализуется
+`{"status":"error","error":{"code":"renderer_mismatch"}}`, кадр не создаётся. Аварийный
+kill-switch `EASYUI_RENDERER_STRICT_MANIFEST=0` деградирует отказ до предупреждения в
+`result.runtimeWarnings` (`renderer_mismatch: …`). Синтетические версии стендов, не разбирающиеся
+в версию chromium, сверку не запускают.
+
+**Наблюдённое остаётся наблюдением.** In-page проба окружения (канвас-растр, UA, gamut, DPR)
+переименована в `observedCaptureEnvFingerprint` и продолжает ехать в evidence и в метрики гейта
+`readiness` — теперь под именем, которое не путается с объявленным рендерером.
+
+**Пин и drift-чек.** `server/capture/rendererPin.json` фиксирует `rendererVersion`, точные версии
+`playwright` и `@playwright/test`, revision/версию `chromium` и `chromium-headless-shell` и digest
+базового образа. `npm run verify:renderer` (часть `npm run verify`) падает, если фактический
+`browsers.json`, package.json-пины, единственность `playwright-core` в lockfile или база
+`Dockerfile` разъехались с пином: апгрейд chromium обязан быть явным PR'ом, а не побочным
+эффектом `npm install`.
+
 ## Visual regression
 
 Встроенный визуальный gate: reference-baseline (PNG-ассет) закрепляется за **канонической поверхностью** (fingerprint), а candidate снимается тем же screenshot job-пайплайном (параметры капчера берутся **из fingerprint**) и сравнивается в отдельном node-подпроцессе (`scripts/visual-diff-worker.mjs`, `pixelmatch` + `pngjs`). UI — `/visual`.
@@ -1422,11 +1481,20 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
     "componentValidate": true, "componentGeometry": true, "componentDraftPreview": true, "prototypeHeadTracking": true, "readinessProfile": true, "themeDryRun": true, "themeSparseOps": true, "themeSpacingResolverV2": true,
     "surfaces": true, "surfacesWrite": false,
     "acceptanceMatrix": false, "acceptanceCandidates": false, "acceptanceRuns": false },
+  "renderer": { "rendererSchema": 2, "rendererVersion": "r2", "fingerprint": "<sha256>", "policyHash": "<sha256 дефолтной readiness-политики>",
+    "os": "linux", "arch": "x64", "nodeVersion": "24.x.y", "playwrightVersion": "1.61.1",
+    "browserName": "chromium", "browserVersion": "149.0.7827.55", "browserRevision": "1228",
+    "launchedExecutable": "chrome-headless-shell", "browserExecutableSha256": "<sha256>",
+    "fontStackSha256": "<sha256>", "appFontsSha256": "<sha256>", "systemLibsHash": "<sha256>",
+    "launchDeterminismArgsHash": "<sha256>", "contextOptionsHash": null, "colorProfile": "srgb",
+    "source": "manifest", "provenance": { "buildSha": "…", "imageRef": "ghcr.io/…", "builtAt": "…", "bunVersion": "1.3.14" } },
   "reuseGate": { "mode": "shadow", "intentRequired": false, "policyVersion": 1 }
 }
 ```
 
 `reuseGate` описывает фазу [reuse-гейта](#reuse-gate-при-создании-и-публикации-компонента) этого инстанса: `mode` — `shadow` либо `enforce`, `intentRequired` истинно ровно в `enforce`, `policyVersion` — версия политики матчинга, та же, что в ответах `/api/catalog/candidates` и в записях аудита. Значение приходит из `REUSE_GATE`, прочитанной один раз на входе процесса, — повторного чтения окружения на запросе нет, поэтому discovery и сам гейт не могут разойтись.
+
+`renderer` — объявленный рендерер этой сборки (см. [Renderer fingerprint 2.0](#renderer-fingerprint-20-волна-r1-план-2026-08-03-renderer-contract-2)): агент сверяет `fingerprint` с `result.renderer.fingerprint` снятой джобы, а деплой — с `renderer-manifest.json` образа. `source: "fallback"` означает рабочее дерево без манифеста: часть полей `null`, отпечаток стабилен внутри процесса, но между хостами не сравним.
 
 `designSystems` читается из живого реестра БД; `resolvedSpaceScales` резолвится для каждой системы из её последней merged-темы с canonical fallback. Значения `limits` импортируются из модулей, где они реально enforce'ятся (`src/prototype/schema.ts`, `src/prototype/validate.ts`, `server/assets/validate.ts`, `server/screenshot/service.ts`, `server/http.ts`), — двойного хардкода нет.
 

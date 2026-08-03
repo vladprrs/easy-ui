@@ -27,6 +27,7 @@ import { listActiveDesignSystems } from "../designSystems";
 import { getLatestDesignSystemContent } from "../designSystems";
 import { ApiError, json, MAX_JSON_BODY_BYTES, noStore } from "../http";
 import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "../screenshot/service";
+import { rendererReport } from "../capture/renderer";
 import { DEFAULT_REUSE_GATE_MODE, type ReuseGateMode } from "../catalog/gate";
 import { CALIBRATED_POLICY } from "../catalog/policy";
 import { VALIDATE_GLOBAL_CONCURRENT, VALIDATE_USER_CONCURRENT } from "../components/validate";
@@ -197,6 +198,10 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // kill-switch'а v3: выбор «композиция или TSX» надо делать до включения записи.
       compositionAnalyze: true,
     },
+    // План renderer-contract-2 §5 R1: чем именно эта сборка рисует кадры. Агент (и приёмка
+    // прода) обязаны иметь возможность сверить отпечаток с тем, что приехало в результате джобы,
+    // не заглядывая внутрь образа.
+    renderer: rendererReport(),
     reuseGate: {
       mode: reuseGateMode,
       // Единственное правило фазы, наблюдаемое клиентом: `intent` обязателен ровно в `enforce`

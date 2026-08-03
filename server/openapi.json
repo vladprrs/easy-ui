@@ -3380,6 +3380,231 @@
                       },
                       "type": "array"
                     },
+                    "renderer": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "appFontsSha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "arch": {
+                          "type": "string"
+                        },
+                        "browserExecutableSha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "browserName": {
+                          "type": "string"
+                        },
+                        "browserRevision": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "browserVersion": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "colorProfile": {
+                          "const": "srgb",
+                          "type": "string"
+                        },
+                        "contextOptionsHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fingerprint": {
+                          "type": "string"
+                        },
+                        "fontStackSha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "launchDeterminismArgsHash": {
+                          "type": "string"
+                        },
+                        "launchedExecutable": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "nodeVersion": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "os": {
+                          "type": "string"
+                        },
+                        "playwrightVersion": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "policyHash": {
+                          "type": "string"
+                        },
+                        "provenance": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "buildSha": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "builtAt": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "bunVersion": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "imageRef": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "buildSha",
+                                "imageRef",
+                                "builtAt",
+                                "bunVersion"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "rendererSchema": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "rendererVersion": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "manifest",
+                            "fallback"
+                          ],
+                          "type": "string"
+                        },
+                        "systemLibsHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "rendererSchema",
+                        "rendererVersion",
+                        "fingerprint",
+                        "policyHash",
+                        "os",
+                        "arch",
+                        "nodeVersion",
+                        "playwrightVersion",
+                        "browserName",
+                        "browserVersion",
+                        "browserRevision",
+                        "launchedExecutable",
+                        "browserExecutableSha256",
+                        "fontStackSha256",
+                        "appFontsSha256",
+                        "systemLibsHash",
+                        "launchDeterminismArgsHash",
+                        "contextOptionsHash",
+                        "colorProfile",
+                        "source",
+                        "provenance"
+                      ],
+                      "type": "object"
+                    },
                     "resolvedSpaceScales": {
                       "additionalProperties": {
                         "additionalProperties": false,
@@ -3471,6 +3696,7 @@
                     "resolvedSpaceScales",
                     "regions",
                     "features",
+                    "renderer",
                     "reuseGate"
                   ],
                   "type": "object"
@@ -19228,6 +19454,231 @@
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "renderer": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "appFontsSha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "arch": {
+                          "type": "string"
+                        },
+                        "browserExecutableSha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "browserName": {
+                          "type": "string"
+                        },
+                        "browserRevision": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "browserVersion": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "colorProfile": {
+                          "const": "srgb",
+                          "type": "string"
+                        },
+                        "contextOptionsHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fingerprint": {
+                          "type": "string"
+                        },
+                        "fontStackSha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "launchDeterminismArgsHash": {
+                          "type": "string"
+                        },
+                        "launchedExecutable": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "nodeVersion": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "os": {
+                          "type": "string"
+                        },
+                        "playwrightVersion": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "policyHash": {
+                          "type": "string"
+                        },
+                        "provenance": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "buildSha": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "builtAt": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "bunVersion": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "imageRef": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "buildSha",
+                                "imageRef",
+                                "builtAt",
+                                "bunVersion"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "rendererSchema": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "rendererVersion": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "manifest",
+                            "fallback"
+                          ],
+                          "type": "string"
+                        },
+                        "systemLibsHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "rendererSchema",
+                        "rendererVersion",
+                        "fingerprint",
+                        "policyHash",
+                        "os",
+                        "arch",
+                        "nodeVersion",
+                        "playwrightVersion",
+                        "browserName",
+                        "browserVersion",
+                        "browserRevision",
+                        "launchedExecutable",
+                        "browserExecutableSha256",
+                        "fontStackSha256",
+                        "appFontsSha256",
+                        "systemLibsHash",
+                        "launchDeterminismArgsHash",
+                        "contextOptionsHash",
+                        "colorProfile",
+                        "source",
+                        "provenance"
+                      ],
+                      "type": "object"
+                    },
                     "status": {
                       "enum": [
                         "ready",
@@ -19256,7 +19707,7 @@
             "description": "method_not_allowed"
           }
         },
-        "summary": "Liveness/readiness: 200 ready, 503 while starting. Exempt from BasicAuth.",
+        "summary": "Liveness/readiness: 200 ready, 503 while starting. Exempt from BasicAuth. Carries the declared renderer so a deploy sees a manifest/image mismatch before the first capture does.",
         "x-easyui-validated": false
       }
     },
@@ -30805,6 +31256,104 @@
                                 "type": "string"
                               },
                               "type": "array"
+                            },
+                            "renderer": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "browserExecutableSha256": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "browserName": {
+                                  "type": "string"
+                                },
+                                "browserRevision": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "browserVersion": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "colorProfile": {
+                                  "const": "srgb",
+                                  "type": "string"
+                                },
+                                "contextOptionsHash": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "fingerprint": {
+                                  "type": "string"
+                                },
+                                "launchDeterminismArgsHash": {
+                                  "type": "string"
+                                },
+                                "launchedExecutable": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "rendererSchema": {
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991,
+                                  "type": "integer"
+                                },
+                                "rendererVersion": {
+                                  "type": "string"
+                                },
+                                "source": {
+                                  "enum": [
+                                    "manifest",
+                                    "fallback"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "rendererVersion",
+                                "rendererSchema",
+                                "fingerprint",
+                                "browserName",
+                                "browserVersion",
+                                "browserRevision",
+                                "launchedExecutable",
+                                "browserExecutableSha256",
+                                "contextOptionsHash",
+                                "launchDeterminismArgsHash",
+                                "colorProfile",
+                                "source"
+                              ],
+                              "type": "object"
                             },
                             "rendererBuild": {
                               "anyOf": [

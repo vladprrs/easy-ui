@@ -62,8 +62,8 @@ const READY_READINESS = {
     framesWaited: 2, animationsDisabled: true,
     themeResources: { tokens: [], icons: [], images: [] },
   },
-  captureEnvFingerprint: "env-fingerprint",
-  captureEnv: null,
+  observedCaptureEnvFingerprint: "env-fingerprint",
+  observedCaptureEnv: null,
 };
 
 const imageBytes = (bytes: Uint8Array): ScreenshotResult => ({

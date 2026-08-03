@@ -1,0 +1,15 @@
+{
+  "$comment": "Renderer pin (plan 2026-08-03-renderer-contract-2 §5 R1, §2.2 N2). Bumped by hand together with RENDERER_VERSION in server/capture/renderer.ts; scripts/check-renderer-pin.ts (npm run verify:renderer) fails the build when the installed playwright drifts away from these values, so a chromium upgrade is always an explicit PR touching this file.",
+  "rendererVersion": "r2",
+  "playwright": "1.61.1",
+  "playwrightTest": "1.61.1",
+  "chromium": {
+    "revision": "1228",
+    "browserVersion": "149.0.7827.55"
+  },
+  "chromiumHeadlessShell": {
+    "revision": "1228",
+    "browserVersion": "149.0.7827.55"
+  },
+  "baseImage": "node:24-slim@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7"
+}

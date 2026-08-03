@@ -55,8 +55,8 @@ function readinessOf(result: ScreenshotResult): CaptureReadinessOutcome | undefi
       readinessReason: result.readinessReason,
       readinessPolicyHash: result.readinessPolicyHash,
       readinessEvidence: result.readinessEvidence,
-      captureEnvFingerprint: result.captureEnvFingerprint,
-      captureEnv: result.captureEnv,
+      observedCaptureEnvFingerprint: result.observedCaptureEnvFingerprint,
+      observedCaptureEnv: result.observedCaptureEnv,
     }
     : undefined;
 }

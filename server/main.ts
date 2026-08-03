@@ -17,6 +17,7 @@ import { applicationUnauthorizedResponse, isLegacyBasicAuthorized, legacyBasicUn
 import type { ScreenshotService } from "./screenshot/service";
 import { ScreenshotService as ScreenshotServiceImpl } from "./screenshot/service";
 import { chromiumAvailable, spawnWorker } from "./screenshot/worker-runner";
+import { initRenderer, rendererReport } from "./capture/renderer";
 import { routeScreenshots } from "./routes/screenshots";
 import type { VisualService } from "./visual/service";
 import { VisualService as VisualServiceImpl } from "./visual/service";
@@ -181,7 +182,9 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         if(segments[1]==="health"&&segments.length===2) {
           if(request.method!=="GET") throw new ApiError(405,"method_not_allowed","Method not allowed");
           const ready=options.ready?.()!==false;
-          return finish(json({status:ready?"ready":"starting"},ready?200:503,noStore));
+          // Секция `renderer` (план renderer-contract-2 §3 E2): расхождение образа и манифеста
+          // обязано быть видно деплою, а не первому капчуру.
+          return finish(json({status:ready?"ready":"starting",renderer:rendererReport()},ready?200:503,noStore));
         }
         const clientAddress=server?.requestIP?.(request)?.address??"direct";
         const auth=await routeAuth(request,db,segments.slice(1),{principal,publicOrigin,clientAddress,limiter}); if(auth) return finish(auth);
@@ -237,6 +240,12 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     assertOwnersPresent(db);
     failStagingPublishes(db);
     await verifyShimAbi();
+    // Self-check рендерера (план renderer-contract-2 §3 E2): манифест читается и замораживается
+    // здесь, до первой джобы, а расхождения печатаются в лог деплоя. Отказом старта это
+    // намеренно не является — недоступный манифест деградирует до dev-режима, а не роняет прод.
+    const renderer=await initRenderer();
+    for(const warning of renderer.warnings) console.warn(`[renderer] ${warning}`);
+    console.log(`[renderer] ${renderer.declaration.rendererVersion} ${renderer.declaration.browserName}@${renderer.declaration.browserVersion ?? "unknown"} (${renderer.declaration.source}) fingerprint=${renderer.fingerprint}`);
     const dataDir=process.env.DATA_DIR??"data";
     // Сироты staging-извлечения после SIGKILL при редеплое: `finally` их не переживает,
     // а DATA_DIR в проде — постоянный том (план 2026-07-31 §3.5).
