@@ -123,6 +123,13 @@ export interface CaptureBootstrap {
    */
   propsJsonSchema?: unknown;
   examples?: Record<string, Record<string, unknown>>;
+  /**
+   * Режим `probe:"paint"` (план 2026-08-03 §3 D4, W3): поверхность рендерится с **прозрачным**
+   * фоном и полем `marginPx` вокруг компонента, чтобы element-screenshot не клиппил чернила
+   * (тень/блюр) коробкой `#eui-capture-surface` и ink-bbox вообще стал измерим. Поле отсутствует
+   * во всех прочих режимах — они не меняются ни на пиксель.
+   */
+  paint?: { marginPx: number };
   expected: CaptureExpected;
 }
 

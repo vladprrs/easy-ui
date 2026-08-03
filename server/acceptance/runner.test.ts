@@ -6,7 +6,8 @@ import { migrate } from "../migrations";
 import { ApiError } from "../http";
 import { acquireMaintenanceLock, maintenanceLockHeld } from "../maintenance";
 import type { CandidateEntry } from "../components/candidates";
-import type { JobOutcome, JobStatus, ScreenshotResult } from "../screenshot/service";
+import type { CaptureProbe, JobOutcome, JobStatus, ScreenshotResult } from "../screenshot/service";
+import type { InkBboxResult } from "./inkBbox";
 import { buildCases, propsHashOf } from "./cases";
 import { artifactPresent, casPath, readRunManifest } from "./evidence";
 import type { AcceptanceCaptureService, CandidateSubject, GateResult } from "./gates/types";
@@ -37,17 +38,33 @@ const imageBytes = (bytes: Uint8Array, productError = false): ScreenshotResult =
   rendererBuild: null, browserVersion: "test/1",
 });
 
-const geometryResult = (): ScreenshotResult => ({
-  kind: "geometry", surface: "component", componentId: COMPONENT_ID, draftRev: 1, bundleHash: "bundle",
+/**
+ * Исход paint-джобы (W3): одна сессия отдаёт и layout-факты, и кадр. `layoutBounds` совпадает с
+ * `PAINT_INK` заглушки ink-bbox, поэтому вердикт политики — `clean`, и геометрия (теперь
+ * обязательный гейт) не роняет случаи, предмет которых — reuse/retry/свёртка.
+ */
+const PAINT_LAYOUT = { x: 64, y: 64, width: 140, height: 96 };
+const paintResult = (bytes: Uint8Array): ScreenshotResult => ({
+  kind: "paint", surface: "component", componentId: COMPONENT_ID, draftRev: 1, bundleHash: "bundle",
   designSystemMetaVersion: null, resolvedSpaceScale: {}, viewport: { width: 390, height: 844 }, dpr: 2,
+  paintMargin: 64, bytes, width: 536, height: 448, imageProduced: true,
   captureClean: true, productErrors: [], infraNoise: [], runtimeWarnings: [],
+  consoleErrors: [], pageErrors: [], rendererBuild: null, browserVersion: "test/1",
   rects: [], truncated: false, total: 0,
+  details: [{ key: "root", instance: 0, layoutBounds: { ...PAINT_LAYOUT }, effectSources: [], clipChain: [] }],
 } as unknown as ScreenshotResult);
 
-type Script = (call: number, opts: { probe?: "geometry"; props?: Record<string, unknown> }) => "ok" | "crash" | "product";
+/** Заглушка ink-bbox: чернила ровно по layout-контуру ⇒ `policyVerdict: "clean"`. */
+const cleanInk = (): Promise<InkBboxResult> => Promise.resolve({
+  ok: true, source: "alpha", image: { width: 536, height: 448 }, deviceScaleFactor: 2,
+  pixelBounds: { x: 128, y: 128, width: 280, height: 192 }, bounds: { ...PAINT_LAYOUT },
+  clamped: { left: false, right: false, top: false, bottom: false },
+});
+
+type Script = (call: number, opts: { probe?: CaptureProbe; props?: Record<string, unknown> }) => "ok" | "crash" | "product";
 
 class FakeCapture implements AcceptanceCaptureService {
-  calls: { probe?: "geometry"; props?: Record<string, unknown> }[] = [];
+  calls: { probe?: CaptureProbe; props?: Record<string, unknown> }[] = [];
   script: Script = () => "ok";
   /** Хук «что-то случилось снаружи, пока шла съёмка» (kill/resume-тест). */
   onEnqueue: (props: Record<string, unknown> | undefined) => void = () => {};
@@ -62,7 +79,7 @@ class FakeCapture implements AcceptanceCaptureService {
   enqueueComponentCandidate(
     _id: string,
     _candidate: { rev: number; sourceHash: string },
-    opts: { props?: Record<string, unknown>; probe?: "geometry"; deliver?: "asset" | "bytes"; background?: boolean; viewport: unknown },
+    opts: { props?: Record<string, unknown>; probe?: CaptureProbe; deliver?: "asset" | "bytes"; background?: boolean; viewport: unknown },
   ): Promise<{ jobId: string }> {
     const call = this.calls.length + 1;
     this.calls.push({ probe: opts.probe, props: opts.props });
@@ -72,8 +89,8 @@ class FakeCapture implements AcceptanceCaptureService {
     if (verdict === "crash") {
       this.statuses.set(jobId, { status: "error", error: { code: "capture_failed", message: "worker produced no result: killed" } });
       this.outcomes.set(jobId, "worker_crash");
-    } else if (opts.probe === "geometry") {
-      this.statuses.set(jobId, { status: "done", result: geometryResult() });
+    } else if (opts.probe === "paint") {
+      this.statuses.set(jobId, { status: "done", result: paintResult(this.bytesFor(opts.props)) });
       this.outcomes.set(jobId, "ok");
     } else {
       this.statuses.set(jobId, { status: "done", result: imageBytes(this.bytesFor(opts.props), verdict === "product") });
@@ -125,6 +142,7 @@ async function setup(options: { entry?: CandidateEntry } = {}) {
   });
   const orchestrator = new AcceptanceOrchestrator({
     db, dataDir: dir, service, autoDrain: false, sleep: () => Promise.resolve(),
+    inkBbox: cleanInk,
     resolveCandidate: (row) => Promise.resolve(subject(row)),
   });
   return { db, dir, repo, service, orchestrator, candidateId: candidate.candidate_id };
@@ -168,9 +186,9 @@ test("cold run captures each target once per gate, aliases inherit the verdict, 
   expect(byId.alpha!.verdict).toBe("pass");
   expect(byId.zeta!.alias_of_case_id).toBe("alpha");
   expect(byId.zeta!.reuse_reason).toBe("alias_of:alpha");
-  // Две цели × (render + geometry-probe + determinism) — алиас не снимается вовсе.
+  // Две цели × (render + paint-probe + determinism) — алиас не снимается вовсе.
   expect(harness.service.renderCalls).toBe(4);
-  expect(harness.service.calls.filter((call) => call.probe === "geometry")).toHaveLength(2);
+  expect(harness.service.calls.filter((call) => call.probe === "paint")).toHaveLength(2);
 
   const manifest = await readRunManifest(harness.dir, run.run_id);
   expect(manifest?.verdict).toBe("pass");
@@ -254,7 +272,7 @@ test('refresh:"failed" пересуёмывает только провальн�
   expect(harness.repo.cases(second.run_id).find((row) => row.case_id === "alpha")!.verdict).toBe("pass");
   const progress = JSON.parse(second.progress_json) as ReturnType<typeof progressOf>;
   expect(progress.reused).toBe(1);
-  // Одна цель × (render + geometry + determinism) = 3 капчура вместо шести на два случая.
+  // Одна цель × (render + paint + determinism) = 3 капчура вместо шести на два случая.
   expect(harness.service.calls.length - captured).toBe(3);
   harness.db.close();
 });
@@ -378,15 +396,18 @@ test("D10: reused, skipped and aliased cases never mask a fail; indeterminate of
 test("case verdict and severity follow the required-gate set of the policy", () => {
   const gates = (status: GateResult["status"]): GateResult[] => [
     { gate: "contract", status: "pass" },
-    { gate: "geometry", status: "skipped" },
+    { gate: "visual", status: "skipped" },
     { gate: "render", status },
   ];
   expect(caseVerdictOf(gates("pass"), profile)).toBe("pass");
   expect(caseVerdictOf(gates("fail"), profile)).toBe("fail");
   expect(caseVerdictOf(gates("indeterminate"), profile)).toBe("indeterminate");
-  // Advisory-геометрия не даёт вердикта ни в какую сторону.
-  expect(caseVerdictOf([{ gate: "geometry", status: "fail" }], profile)).toBe("skipped");
-  expect(severityOf([{ gate: "geometry", status: "fail" }], profile)).toBeNull();
+  // Не реализованный фазой гейт вердикта не даёт ни в какую сторону.
+  expect(caseVerdictOf([{ gate: "visual", status: "fail" }], profile)).toBe("skipped");
+  expect(severityOf([{ gate: "visual", status: "fail" }], profile)).toBeNull();
+  // W3: геометрия — обязательный гейт, её провал классифицируется отдельным классом severity.
+  expect(caseVerdictOf([{ gate: "geometry", status: "fail" }], profile)).toBe("fail");
+  expect(severityOf([{ gate: "geometry", status: "fail" }], profile)).toMatchObject({ class: "geometry" });
   expect(severityOf(gates("indeterminate"), profile)).toMatchObject({ class: "indeterminate" });
 });
 

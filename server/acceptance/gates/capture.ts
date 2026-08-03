@@ -37,6 +37,8 @@ export interface CaptureOutcome {
   quality: { captureClean: boolean; productErrors: string[]; runtimeWarnings: string[]; infraWarnings: string[] };
   image?: { bytes: Uint8Array; width: number; height: number };
   geometry?: Record<string, unknown>;
+  /** Поле paint-режима, CSS px (W3): вход диагностики «увеличить маргин». */
+  paintMargin?: number;
   browserVersion?: string;
 }
 
@@ -66,10 +68,16 @@ async function awaitJob(ctx: GateContext, jobId: string): Promise<{ result?: Scr
 }
 
 /**
- * Снимает случай. `probe:"geometry"` — измерительная джоба (PNG не отдаётся), иначе кадр приезжает
- * байтами (A4: acceptance-капчуры не ингестятся в asset-store).
+ * Снимает случай. Три режима:
+ * - без `probe` — кадр байтами (A4: acceptance-капчуры не ингестятся в asset-store);
+ * - `probe:"geometry"` — измерительная джоба (PNG не отдаётся);
+ * - `probe:"paint"` (W3) — **одна сессия** отдаёт и geometry-факты, и PNG прозрачной поверхности
+ *   с маргин-полем; иначе `layoutBounds` и `paintBounds` относились бы к разным кадрам (R1-M3).
  */
-export async function captureCase(ctx: GateContext, options: { probe?: "geometry" } = {}): Promise<CaptureOutcome> {
+export async function captureCase(
+  ctx: GateContext,
+  options: { probe?: "geometry" | "paint"; paintMargin?: number; geometryDetailKeys?: string[] } = {},
+): Promise<CaptureOutcome> {
   const budget = ctx.policy.maxInfraRetries;
   let lastOutcome: JobOutcome = "subprocess_error";
   let lastMessage = "capture did not run";
@@ -96,7 +104,15 @@ export async function captureCase(ctx: GateContext, options: { probe?: "geometry
           deviceScaleFactor: ctx.surface.dsf,
           theme: ctx.surface.theme,
           background: true,
-          ...(options.probe ? { probe: options.probe } : { deliver: "bytes" as const }),
+          // Paint-джоба тоже отдаёт байты: кадр — половина её исхода, и он уезжает в CAS.
+          ...(options.probe === undefined ? { deliver: "bytes" as const } : { probe: options.probe }),
+          ...(options.probe === "paint"
+            ? {
+              deliver: "bytes" as const,
+              ...(options.paintMargin === undefined ? {} : { paintMargin: options.paintMargin }),
+              geometryDetailKeys: options.geometryDetailKeys ?? [],
+            }
+            : {}),
         },
       );
       jobId = enqueued.jobId;
@@ -124,6 +140,17 @@ export async function captureCase(ctx: GateContext, options: { probe?: "geometry
       const geometry: Record<string, unknown> = { ...result };
       delete geometry.kind;
       return { jobId, retries: attempt, quality, geometry };
+    }
+    if (result.kind === "paint") {
+      const geometry: Record<string, unknown> = { ...result };
+      delete geometry.kind;
+      delete geometry.bytes;
+      return {
+        jobId, retries: attempt, quality, geometry,
+        image: { bytes: result.bytes, width: result.width, height: result.height },
+        paintMargin: result.paintMargin,
+        browserVersion: result.browserVersion,
+      };
     }
     if (result.kind === "image-bytes") {
       return { jobId, retries: attempt, quality, image: { bytes: result.bytes, width: result.width, height: result.height }, browserVersion: result.browserVersion };

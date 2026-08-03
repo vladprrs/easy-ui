@@ -93,11 +93,13 @@ test("identity is component-scoped: one sourceHash shared by two components neve
   db.close();
 });
 
-test("policy registry hashes both profiles distinctly and default-v1 keeps geometry advisory", () => {
+test("policy registry hashes both profiles distinctly and geometry v2 is a required gate", () => {
   expect(policyProfileHash(ACCEPTANCE_POLICIES["default-v1"]))
     .not.toBe(policyProfileHash(ACCEPTANCE_POLICIES["pixel-strict-v1"]));
-  expect(requiredGates(policy)).toEqual(["audit", "contract", "defaults", "determinism", "render"]);
-  expect(policy.gates.geometry).toBe("advisory");
+  // W3: advisory-фаза геометрии закончена — гейт входит в обязательный набор обоих профилей.
+  expect(requiredGates(policy)).toEqual(["audit", "contract", "defaults", "determinism", "geometry", "render"]);
+  expect(policy.gates.geometry).toBe("required");
+  expect(ACCEPTANCE_POLICIES["pixel-strict-v1"].gates.geometry).toBe("required");
   expect(policy.allowExceptions).toBe(false);
 });
 

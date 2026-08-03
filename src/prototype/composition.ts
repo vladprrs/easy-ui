@@ -16,6 +16,14 @@ import {
   compositionSwitchSchema, compositionWhenSchema, evaluateWhen, hiddenElementKeys,
   isSwitchDirective, resolveSwitch, type CompositionWhen,
 } from "./compositionV3/conditions";
+import {
+  checkSlotContents, compositionSlotNames, compositionSlotsV3Schema, normalizeCompositionSlots,
+  COMPOSITION_SLOTS_LIMIT, type CompositionSlotMeta, type CompositionSlotsDeclaration,
+} from "./compositionV3/slots";
+import {
+  compositionRepeatParamSchema, isIndexDirective, isItemDirective, isReservedRepeatKey,
+  materializeRepeats, subtreeKeys, type CompositionRepeatParam, type RepeatScope,
+} from "./compositionV3/repeat";
 
 /**
  * Версионированная композиция (волна 5, план 2026-07-27 §5.1).
@@ -39,7 +47,7 @@ export const COMPOSITION_PARAM_TYPES = ["string", "number", "boolean", "json", "
 export type CompositionParamType = (typeof COMPOSITION_PARAM_TYPES)[number];
 
 export const COMPOSITION_PARAMS_LIMIT = 50;
-export const COMPOSITION_SLOTS_LIMIT = 20;
+export { COMPOSITION_SLOTS_LIMIT };
 export const COMPOSITION_ELEMENTS_LIMIT = 300;
 
 /** Hard limits for the client-side expansion guard. */
@@ -100,6 +108,7 @@ const compositionDocV2Shape = {
  */
 const compositionElementV3Schema = elementSchema.extend({
   when: compositionWhenSchema.optional(),
+  repeatParam: compositionRepeatParamSchema.optional(),
 });
 
 const compositionSpecV3Schema = z.strictObject({
@@ -108,13 +117,16 @@ const compositionSpecV3Schema = z.strictObject({
 });
 
 interface RefinableCompositionDoc {
-  slots: string[];
+  slots: CompositionSlotsDeclaration;
   params: Record<string, { type: string; required?: boolean; default?: JsonValue }>;
   spec: { root: string; elements: Record<string, { type: string; props: Record<string, unknown>; children?: string[]; region?: string; slot?: string; when?: CompositionWhen }> };
 }
 
 const refineCompositionDoc = (doc: RefinableCompositionDoc, context: z.RefinementCtx, allowNested: boolean) => {
   const { elements, root } = doc.spec;
+  // W8c: `slots` — массив имён (v1/v2 и простой v3) **или** словарь с метаданными.
+  // Правила ниже работают с именами, поэтому обе формы дают одинаковую диагностику.
+  const slotNames = compositionSlotNames(doc.slots);
   const keys = Object.keys(elements);
   if (keys.length > COMPOSITION_ELEMENTS_LIMIT) {
     context.addIssue({ code: "custom", path: ["spec", "elements"], message: `composition exceeds ${COMPOSITION_ELEMENTS_LIMIT} elements` });
@@ -122,7 +134,7 @@ const refineCompositionDoc = (doc: RefinableCompositionDoc, context: z.Refinemen
   if (Object.keys(doc.params).length > COMPOSITION_PARAMS_LIMIT) {
     context.addIssue({ code: "custom", path: ["params"], message: `composition exceeds ${COMPOSITION_PARAMS_LIMIT} params` });
   }
-  if (new Set(doc.slots).size !== doc.slots.length) {
+  if (new Set(slotNames).size !== slotNames.length) {
     context.addIssue({ code: "custom", path: ["slots"], message: "slot names must be unique" });
   }
   if (!elements[root]) {
@@ -153,7 +165,7 @@ const refineCompositionDoc = (doc: RefinableCompositionDoc, context: z.Refinemen
       if (typeof name !== "string") {
         context.addIssue({ code: "custom", path: [...at, "props", "name"], message: `${SLOT_TYPE} requires a static string name` });
       } else {
-        if (!doc.slots.includes(name)) context.addIssue({ code: "custom", path: [...at, "props", "name"], message: `slot is not declared in slots: ${name}` });
+        if (!slotNames.includes(name)) context.addIssue({ code: "custom", path: [...at, "props", "name"], message: `slot is not declared in slots: ${name}` });
         if (seenSlotNames.has(name)) context.addIssue({ code: "custom", path: [...at, "props", "name"], message: `duplicate slot: ${name}` });
         seenSlotNames.add(name);
       }
@@ -162,7 +174,7 @@ const refineCompositionDoc = (doc: RefinableCompositionDoc, context: z.Refinemen
       // при раскрытии оно переезжает на маршрутизированных детей (см. expandCompositions).
     }
   }
-  for (const slot of doc.slots) {
+  for (const slot of slotNames) {
     if (!seenSlotNames.has(slot)) context.addIssue({ code: "custom", path: ["slots"], message: `declared slot has no ${SLOT_TYPE} element: ${slot}` });
   }
   for (const [key, count] of parentCount) {
@@ -179,19 +191,124 @@ const compositionDocV3Shape = {
   ...compositionDocV2Shape,
   version: z.literal(3),
   params: z.record(slugSchema, compositionParamV3Schema).default({}),
+  slots: compositionSlotsV3Schema.default([]),
   spec: compositionSpecV3Schema,
 } as const;
 
 const SWITCH_KEY = "$switch";
 
+type CompositionElementV3 = {
+  type: string;
+  props: Record<string, unknown>;
+  children?: string[];
+  slot?: string;
+  repeat?: unknown;
+  when?: CompositionWhen;
+  repeatParam?: CompositionRepeatParam;
+};
+
 /** Дополнительные статические правила v3: все ветки разрешимы от объявленных параметров. */
 function refineCompositionDocV3(doc: {
+  slots: CompositionSlotsDeclaration;
   params: Record<string, CompositionParamV3>;
-  spec: { root: string; elements: Record<string, { type: string; props: Record<string, unknown>; children?: string[]; when?: CompositionWhen }> };
+  spec: { root: string; elements: Record<string, CompositionElementV3> };
 }, context: z.RefinementCtx): void {
   const { elements, root } = doc.spec;
   const declaredOf = (name: string): CompositionParamV3 | undefined =>
     Object.hasOwn(doc.params, name) ? doc.params[name] : undefined;
+
+  // --- W8b: ключевое пространство `repeatParam` -----------------------------
+  // `<innerKey>__r<suffix>` живёт в **авторском** пространстве композиции, поэтому
+  // подстрока-разделитель зарезервирована: коллизий с авторскими ключами не бывает.
+  for (const key of Object.keys(elements)) {
+    if (!isReservedRepeatKey(key)) continue;
+    context.addIssue({ code: "custom", path: ["spec", "elements", key], message: 'element key must not contain "__r" (reserved for repeatParam expansion)' });
+  }
+
+  const parentOf = new Map<string, string>();
+  for (const [key, element] of Object.entries(elements)) {
+    for (const child of element.children ?? []) if (!parentOf.has(child)) parentOf.set(child, key);
+  }
+
+  /** Ключ поддерева → ключ его `repeatParam`-элемента (область видимости `$item`/`$index`). */
+  const repeatScope = new Map<string, string>();
+  for (const [key, element] of Object.entries(elements)) {
+    const directive = element.repeatParam;
+    if (!directive) continue;
+    const at = ["spec", "elements", key];
+    if (key === root) {
+      context.addIssue({ code: "custom", path: [...at, "repeatParam"], message: "the composition root must not declare repeatParam" });
+    }
+    if (element.type === SLOT_TYPE) {
+      context.addIssue({ code: "custom", path: [...at, "repeatParam"], message: `${SLOT_TYPE} must not declare repeatParam` });
+    }
+    if (element.repeat !== undefined) {
+      context.addIssue({ code: "custom", path: [...at, "repeatParam"], message: "repeatParam is not compatible with the state-driven repeat on the same element" });
+    }
+    const declared = declaredOf(directive.param);
+    if (!declared) {
+      context.addIssue({ code: "custom", path: [...at, "repeatParam", "param"], message: `repeatParam references an undeclared param: ${directive.param}` });
+    } else if (declared.type !== "array") {
+      context.addIssue({ code: "custom", path: [...at, "repeatParam", "param"], message: `repeatParam requires an array param, but "${directive.param}" is ${declared.type}` });
+    } else {
+      if (directive.maxItems !== undefined && directive.maxItems > declared.maxItems) {
+        context.addIssue({ code: "custom", path: [...at, "repeatParam", "maxItems"], message: `repeatParam maxItems must not exceed the ${declared.maxItems} declared by param "${directive.param}"` });
+      }
+      if (directive.key !== undefined) {
+        if (declared.items.type !== "object") {
+          context.addIssue({ code: "custom", path: [...at, "repeatParam", "key"], message: `repeatParam key requires object items, but "${directive.param}" holds ${declared.items.type} items` });
+        } else if (!Object.hasOwn(declared.items.schema, directive.key)) {
+          context.addIssue({ code: "custom", path: [...at, "repeatParam", "key"], message: `repeatParam key is not a field of "${directive.param}" items: ${directive.key}` });
+        }
+      }
+    }
+    for (const inner of subtreeKeys(elements, key)) {
+      if (inner !== key && elements[inner]?.repeatParam !== undefined) {
+        context.addIssue({ code: "custom", path: ["spec", "elements", inner, "repeatParam"], message: "repeatParam must not nest inside another repeatParam subtree" });
+      }
+      if (elements[inner]?.type === SLOT_TYPE) {
+        context.addIssue({ code: "custom", path: [...at, "repeatParam"], message: `repeatParam must not gate a subtree containing ${SLOT_TYPE}` });
+      }
+      if (!repeatScope.has(inner)) repeatScope.set(inner, key);
+    }
+  }
+
+  // --- W8c: метаданные слотов ------------------------------------------------
+  const slots = normalizeCompositionSlots(doc.slots);
+  const fallbackOwner = new Map<string, string>();
+  for (const [name, meta] of Object.entries(slots)) {
+    for (const key of meta.fallback ?? []) {
+      const at = ["slots", name, "fallback"];
+      const element = elements[key];
+      if (!element) {
+        context.addIssue({ code: "custom", path: at, message: `slot "${name}" fallback references an unknown element: ${key}` });
+        continue;
+      }
+      if (key === root) {
+        context.addIssue({ code: "custom", path: at, message: `slot "${name}" fallback must not be the composition root` });
+        continue;
+      }
+      if (parentOf.has(key)) {
+        context.addIssue({ code: "custom", path: at, message: `slot "${name}" fallback element "${key}" is already a child of "${parentOf.get(key)!}"` });
+        continue;
+      }
+      const owner = fallbackOwner.get(key);
+      if (owner !== undefined) {
+        context.addIssue({ code: "custom", path: at, message: `fallback element "${key}" is already used by slot "${owner}"` });
+        continue;
+      }
+      fallbackOwner.set(key, name);
+      for (const inner of subtreeKeys(elements, key)) {
+        if (elements[inner]?.type !== SLOT_TYPE) continue;
+        context.addIssue({ code: "custom", path: at, message: `slot "${name}" fallback must not contain ${SLOT_TYPE}` });
+      }
+    }
+  }
+  // Элемент без родителя, не являющийся ни корнем, ни fallback'ом, в дерево не попадает.
+  for (const key of Object.keys(elements)) {
+    if (key === root || parentOf.has(key) || fallbackOwner.has(key)) continue;
+    context.addIssue({ code: "custom", path: ["spec", "elements", key], message: `element "${key}" is unreachable: it has no parent and is not declared as a slot fallback` });
+  }
 
   const subtreeHasSlot = (key: string): boolean => {
     const seen = new Set<string>();
@@ -239,6 +356,41 @@ function refineCompositionDocV3(doc: {
     const walk = (value: unknown, relative: (string | number)[]): void => {
       if (Array.isArray(value)) { value.forEach((item, index) => walk(item, [...relative, index])); return; }
       if (!isObject(value)) return;
+      if (isItemDirective(value) || isIndexDirective(value)) {
+        const item = value as { $item?: unknown; $index?: unknown };
+        const directive = isItemDirective(value) ? "$item" : "$index";
+        const at2 = [...at, "props", ...relative, directive];
+        const owner = repeatScope.get(key);
+        if (owner === undefined) {
+          context.addIssue({ code: "custom", path: at2, message: `${directive} is only allowed inside a repeatParam subtree` });
+          return;
+        }
+        const declared = declaredOf(elements[owner]!.repeatParam!.param);
+        const items = declared?.type === "array" ? declared.items : undefined;
+        if (directive === "$index") {
+          if (item.$index !== true) context.addIssue({ code: "custom", path: at2, message: "$index must be true" });
+          return;
+        }
+        const field = item.$item;
+        if (field === true) {
+          if (items && items.type === "object") {
+            context.addIssue({ code: "custom", path: at2, message: `$item: true requires scalar items, but "${elements[owner]!.repeatParam!.param}" holds object items` });
+          }
+          return;
+        }
+        if (typeof field !== "string") {
+          context.addIssue({ code: "custom", path: at2, message: "$item must be true or a field name" });
+          return;
+        }
+        if (items && items.type !== "object") {
+          context.addIssue({ code: "custom", path: at2, message: `$item field access requires object items, but "${elements[owner]!.repeatParam!.param}" holds ${items.type} items` });
+          return;
+        }
+        if (items && !Object.hasOwn(items.schema, field)) {
+          context.addIssue({ code: "custom", path: at2, message: `$item references an undeclared field of "${elements[owner]!.repeatParam!.param}" items: ${field}` });
+        }
+        return;
+      }
       if (!isSwitchDirective(value)) {
         for (const [name, item] of Object.entries(value)) walk(item, [...relative, name]);
         return;
@@ -288,6 +440,14 @@ export type CompositionDocV2 = z.output<typeof compositionDocV2Schema>;
 export type CompositionDocV3 = z.output<typeof compositionDocV3Schema>;
 export type CompositionDoc = z.output<typeof compositionDocSchema>;
 export type CompositionParam = z.output<typeof compositionParamSchema>;
+
+/**
+ * Единая форма слотов для всех потребителей (`slots` может быть массивом имён
+ * или словарём с метаданными — W8c).
+ */
+export { compositionSlotNames, normalizeCompositionSlots };
+export type { CompositionSlotMeta, CompositionSlotsDeclaration };
+export type { CompositionRepeatParam };
 
 /**
  * Документы, несущие каталожные метаданные (`atomicLevel`/`scope`/`canonicalFor`/`ownership`):
@@ -344,6 +504,18 @@ export interface ExpandCompositionsOptions {
   designSystem?: string;
   /** Exact historical prototype pins may render deprecated publications unchanged. */
   allowInactivePins?: boolean;
+  /**
+   * Роли `canonicalFor` по имени типа компонента (W8c). Есть только у сервера
+   * (`definition_meta`), поэтому `allowedRoles` слота проверяется, лишь когда карта
+   * передана; клиентское раскрытие ограничивается `allowedTypes`/кардинальностью.
+   */
+  componentRoles?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * Контракт слотов (`required`/`cardinality`/`allowedTypes`/`allowedRoles`) проверяется в
+   * **точке ссылки**. Probe-раскрытие публикации композиции ссылки не имеет — детей у слотов
+   * там нет по построению, поэтому оно выключает проверку (`false`), а не выдумывает детей.
+   */
+  validateSlotContract?: boolean;
   /** Testable overrides for the same production safety limits. */
   maxCompositionDepth?: number;
   maxExpandedElements?: number;
@@ -488,7 +660,7 @@ function expandV1Compositions(
       const filled = new Map<string, string[]>();
       for (const child of host.children ?? []) {
         const slot = (screen.spec.elements[child] as { slot?: string } | undefined)?.slot ?? DEFAULT_SLOT;
-        if (!composition.slots.includes(slot)) {
+        if (!compositionSlotNames(composition.slots).includes(slot)) {
           issues.push({ path: path([...base, child, "slot"]), message: `unknown slot for composition ${compositionId}: ${slot}` });
           continue;
         }
@@ -731,7 +903,37 @@ function expandRecursiveCompositions(
       // — обычное значение props, и раскрытие обязано остаться байт-в-байт прежним (D8).
       const isV3Body = source.doc.version === 3;
 
-      const substitute = (value: unknown, innerKey: string, relative: (string | number)[]): unknown => {
+      // --- W8b: разворачивание `repeatParam` до всего остального ---------------
+      // Клоны попадают в тело до условий/подстановки/маршрутизации, поэтому дальше
+      // работает обычный конвейер, а бюджеты считают реально построенное дерево.
+      const authoredBody = source.doc.spec.elements as Record<string, CompositionElementV3>;
+      const materialized = isV3Body
+        ? materializeRepeats(
+          authoredBody,
+          (param) => values.get(param),
+          (message, code) => addIssue([...at, "props", "params"], `composition ${source.id}: ${message}`, code),
+          maxExpandedElements,
+        )
+        : { elements: authoredBody, scopes: new Map<string, RepeatScope>() };
+      const bodyElements = materialized.elements;
+      const repeatScopes = materialized.scopes;
+
+      const substitute = (value: unknown, innerKey: string, relative: (string | number)[], scope?: RepeatScope): unknown => {
+        if (isV3Body && (isItemDirective(value) || isIndexDirective(value))) {
+          const where = `${innerKey}/${relative.join("/")}`;
+          if (!scope) {
+            addIssue([...at, "props", "params"], `composition ${source.id} uses ${isItemDirective(value) ? "$item" : "$index"} outside a repeatParam subtree at ${where}`);
+            return undefined;
+          }
+          if (isIndexDirective(value)) return scope.index;
+          const field = (value as { $item: unknown }).$item;
+          if (field === true) return scope.item;
+          if (typeof field !== "string") {
+            addIssue([...at, "props", "params"], `composition ${source.id} has an invalid $item at ${where}`);
+            return undefined;
+          }
+          return isObject(scope.item) ? scope.item[field] : undefined;
+        }
         if (isParamDirective(value)) {
           const name = value.$param;
           if (!Object.hasOwn(source.doc.params, name)) {
@@ -757,12 +959,12 @@ function expandRecursiveCompositions(
             addIssue([...at, "props", "params"], `composition ${source.id}: ${resolved.message} at ${where}`, "composition/switch-unresolved");
             return undefined;
           }
-          return substitute(resolved.value, innerKey, relative);
+          return substitute(resolved.value, innerKey, relative, scope);
         }
-        if (Array.isArray(value)) return value.map((item, index) => substitute(item, innerKey, [...relative, index]));
+        if (Array.isArray(value)) return value.map((item, index) => substitute(item, innerKey, [...relative, index], scope));
         if (isObject(value)) {
           const entries = Object.entries(value)
-            .map(([key, item]) => [key, substitute(item, innerKey, [...relative, key])] as const)
+            .map(([key, item]) => [key, substitute(item, innerKey, [...relative, key], scope)] as const)
             .filter(([, item]) => item !== undefined);
           return Object.fromEntries(entries);
         }
@@ -770,11 +972,13 @@ function expandRecursiveCompositions(
       };
 
       // --- маршрутизация детей по слотам ---
+      // W8c: `slots` может быть словарём с метаданными; имена берутся из нормализованной формы.
+      const declaredSlots = normalizeCompositionSlots(source.doc.slots);
       const filled = new Map<string, string[]>();
       for (const child of host.children ?? []) {
         const childElement = elements[child];
         const slot = childElement?.slot ?? DEFAULT_SLOT;
-        if (!source.doc.slots.includes(slot)) {
+        if (!Object.hasOwn(declaredSlots, slot)) {
           addIssue([...base, child, "slot"], `unknown slot for composition ${source.id}: ${slot}`);
           continue;
         }
@@ -782,7 +986,7 @@ function expandRecursiveCompositions(
       }
 
       const slotNames = new Map<string, string>(); // innerKey -> slot name
-      for (const [innerKey, element] of Object.entries(source.doc.spec.elements)) {
+      for (const [innerKey, element] of Object.entries(bodyElements)) {
         if (element.type !== SLOT_TYPE || typeof element.props.name !== "string") continue;
         slotNames.set(innerKey, element.props.name);
         // Родителем маршрутизированных детей становится родитель `@eui/Slot`, поэтому
@@ -807,7 +1011,7 @@ function expandRecursiveCompositions(
       // Ложное условие снимает элемент **и всё его поддерево** до подсчёта раскрытых
       // элементов, поэтому лимиты после раскрытия действуют на реально построенное дерево.
       const hidden = isV3Body
-        ? hiddenElementKeys(source.doc.spec.elements as Record<string, { children?: string[]; when?: CompositionWhen }>, (when) => {
+        ? hiddenElementKeys(bodyElements as Record<string, { children?: string[]; when?: CompositionWhen }>, (when) => {
           if (!Object.hasOwn(source.doc.params, when.param)) {
             addIssue([...at, "props", "params"], `composition ${source.id} references an undeclared param "${when.param}" in when`);
             return true;
@@ -816,16 +1020,42 @@ function expandRecursiveCompositions(
         })
         : new Set<string>();
 
+      // --- W8c: контракт слотов в точке ссылки ---------------------------------
+      // Fallback материализуется **только** для пустого слота; поддеревья fallback'ов
+      // заполненных слотов снимаются тем же механизмом, что и ложный `when`.
+      const activeFallback = new Map<string, string[]>(); // slot → корни fallback'а
+      for (const [name, meta] of Object.entries(declaredSlots)) {
+        const children = filled.get(name) ?? [];
+        const fallback = meta.fallback ?? [];
+        const usesFallback = children.length === 0 && fallback.length > 0;
+        if (usesFallback) activeFallback.set(name, fallback);
+        else for (const key of fallback) for (const inner of subtreeKeys(bodyElements, key)) hidden.add(inner);
+        if (options.validateSlotContract === false) continue;
+        // Ребёнок, уже раскрытый как вложенная композиция, живёт под ключом-заменой:
+        // тип берётся с корня его раскрытия, иначе `allowedTypes` дал бы ложный вердикт.
+        const contents = children
+          .map((key) => ({ key, type: elements[resolveReplacement(key)]?.type }))
+          .filter((child): child is { key: string; type: string } => child.type !== undefined);
+        for (const issue of checkSlotContents(name, meta, contents, {
+          usesFallback,
+          roles: options.componentRoles,
+        })) {
+          addIssue([...at, "props", "composition"], `composition ${source.id}: ${issue.message}`, issue.code);
+        }
+      }
+
       const resolveChildren = (children: string[] | undefined): string[] => (children ?? []).flatMap((innerChild) => {
         if (hidden.has(innerChild)) return [];
         const slot = slotNames.get(innerChild);
-        if (slot !== undefined) return (filled.get(slot) ?? []).map(resolveReplacement);
-        return [expandedKey(hostKey, innerChild)];
+        if (slot === undefined) return [expandedKey(hostKey, innerChild)];
+        const routed = filled.get(slot) ?? [];
+        if (routed.length) return routed.map(resolveReplacement);
+        return (activeFallback.get(slot) ?? []).map((key) => expandedKey(hostKey, key));
       });
 
       const nestedHosts: Array<{ key: string; chain: ExpandedOriginLayer[] }> = [];
       const nextStack = [...context.stack, identity];
-      for (const [innerKey, element] of Object.entries(source.doc.spec.elements)) {
+      for (const [innerKey, element] of Object.entries(bodyElements)) {
         if (element.type === SLOT_TYPE) continue;
         if (hidden.has(innerKey)) continue;
         const key = expandedKey(hostKey, innerKey);
@@ -833,17 +1063,20 @@ function expandRecursiveCompositions(
           addIssue([...at], `expanded element key collides with an authored key: ${key}`);
           continue;
         }
-        const props = substitute(element.props, innerKey, []) as Record<string, unknown>;
+        const props = substitute(element.props, innerKey, [], repeatScopes.get(innerKey)) as Record<string, unknown>;
         const children = resolveChildren(element.children);
         elements[key] = {
           ...element,
           props,
           ...(children.length ? { children } : {}),
-        };
+        } as ScreenElement;
         if (!children.length) delete (elements[key] as { children?: unknown }).children;
         // `when` — авторская конструкция композиции: раскрытый элемент её не несёт
         // (спека экрана строга, и никакого рантайм-условия из v3 не возникает).
-        if (isV3Body) delete (elements[key] as { when?: unknown }).when;
+        if (isV3Body) {
+          delete (elements[key] as { when?: unknown }).when;
+          delete (elements[key] as { repeatParam?: unknown }).repeatParam;
+        }
 
         const layer: ExpandedOriginLayer = {
           compositionId: source.id,

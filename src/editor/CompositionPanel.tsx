@@ -3,7 +3,7 @@ import { inputBase, kicker } from "../app/chrome";
 import { SelectPill } from "../app/SelectPill";
 import { Toggle } from "../app/Toggle";
 import { editor } from "../app/strings/editor";
-import type { CompositionDoc } from "../prototype/composition";
+import { compositionSlotNames, normalizeCompositionSlots, type CompositionDoc } from "../prototype/composition";
 import { jsonValueSchema, type JsonValue } from "../prototype/schema";
 import type { EditorAction } from "./editorReducer";
 import type { ScreenElement, Screen } from "./compositions";
@@ -131,7 +131,9 @@ export function CompositionPanel({ screen, elementKey, element, compositionId, c
   };
 
   const children = (element.children ?? []).filter((key) => Object.hasOwn(screen.spec.elements, key));
-  const slots = composition?.slots ?? [];
+  const slots = composition ? compositionSlotNames(composition.slots) : [];
+  // W8c: у слота-словаря есть метаданные; в инспекторе показываем только обязательность.
+  const slotMeta = composition ? normalizeCompositionSlots(composition.slots) : {};
   const slotOf = (key: string) => screen.spec.elements[key]?.slot ?? DEFAULT_SLOT;
 
   return <section className="mt-4 border-t border-eui-ink/10 pt-4" aria-label={editor.sectionComposition}>
@@ -160,7 +162,7 @@ export function CompositionPanel({ screen, elementKey, element, compositionId, c
       ? <ul className="space-y-0.5 font-eui-ui text-xs">{slots.map((slot) => {
         const filled = children.filter((key) => slotOf(key) === slot);
         return <li key={slot} className="flex gap-2">
-          <span className="shrink-0 font-mono text-eui-ink">{slot}</span>
+          <span className="shrink-0 font-mono text-eui-ink">{slot}{slotMeta[slot]?.required ? <span aria-label={editor.compositionSlotRequired} title={editor.compositionSlotRequired} className="ml-1 text-pay-red">*</span> : null}</span>
           <span className="min-w-0 break-words text-eui-slate-500">{filled.length ? filled.join(", ") : editor.compositionSlotEmpty}</span>
         </li>;
       })}</ul>

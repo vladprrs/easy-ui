@@ -76,7 +76,10 @@ function manifest(referenceAssetId: string): Record<string, unknown> {
       cases.push({
         id, props: { tone: TONES[0]!, size }, dims: { tone, size },
         ...(id === target ? {} : { aliasOf: target }),
-        ...(id === "neutral-s" ? { referenceAssetId, expectedGeometry: { width: 140, height: 96 } } : {}),
+        // `expectedGeometry` здесь намеренно не объявляется: с волны W3 гейт `geometry` боевой,
+        // и придуманные габариты — честный `layout-overflow`, а не безобидное поле манифеста.
+        // Персистентность `expected_geometry_json` покрыта unit-тестом `acceptance-routes.test.ts`.
+        ...(id === "neutral-s" ? { referenceAssetId } : {}),
       });
     }
   }
@@ -99,6 +102,21 @@ async function pollRun(request: APIRequestContext, runId: string): Promise<RunVi
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   throw new Error("acceptance run did not terminalize within 180s");
+}
+
+/**
+ * Постановка кандидата троттлится тем же лимитом, что и validate (`429 validate_in_flight` /
+ * `429 queue_full`, см. `docs/server-api.md`): параллельные acceptance-спеки конкурируют за те же
+ * два глобальных слота. Ограниченный ретрай — часть контракта ручки, а не маскировка флейка.
+ */
+async function createCandidate(request: APIRequestContext, componentId: string): Promise<{ candidateId: string; status: string; rev: number }> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const response = await request.post(`/api/components/${componentId}/candidates`, { data: {} });
+    if (response.status() === 200) return await response.json() as { candidateId: string; status: string; rev: number };
+    expect([429], `${response.status()}: ${await response.text()}`).toContain(response.status());
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error("candidate creation stayed throttled for 60s");
 }
 
 test("case-set manifest → run → pass, coverage without gaps, references on the case rows", async ({ request }) => {
@@ -132,9 +150,7 @@ test("case-set manifest → run → pass, coverage without gaps, references on t
   expect(report.missingTuples).toEqual([]);
   expect(report.duplicates).toEqual([]);
 
-  const candidateResponse = await request.post(`/api/components/${COMPONENT_ID}/candidates`, { data: {} });
-  expect(candidateResponse.status(), await candidateResponse.text()).toBe(200);
-  const candidate = await candidateResponse.json() as { candidateId: string };
+  const candidate = await createCandidate(request, COMPONENT_ID);
 
   const started = await request.post("/api/acceptance-runs", { data: { candidateId: candidate.candidateId, caseSetId: caseSet.caseSetId } });
   expect(started.status(), await started.text()).toBe(202);

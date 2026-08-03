@@ -55,10 +55,30 @@ export type CompositionPin=CompositionDependencyPin;
 const COMPOSITION_EXPANSION_PASSES = 5;
 const compositionComponentPins = new WeakMap<object, Map<string, ComponentDependencyPin>>();
 
-function expandNestedCompositions(doc: PrototypeDoc, compositions: Record<string, CompositionCatalogEntry>): PrototypeDoc {
+/**
+ * Роли `canonicalFor` активных компонентов ДС по имени типа (W8c). Слоты композиции могут
+ * требовать роль (`allowedRoles`), а глоссарий и `definition_meta` живут только на сервере —
+ * поэтому карта собирается здесь и передаётся в раскрытие save-пути.
+ */
+export function componentCanonicalRoles(db: Database, designSystem: string): Record<string, string[]> {
+  const rows = db.query(`SELECT c.name name, p.definition_meta definitionMeta
+    FROM components c JOIN component_publishes p ON p.component_id=c.id AND p.status='active'
+    JOIN component_revisions r ON r.component_id=p.component_id AND r.rev=p.rev
+    WHERE r.design_system=? AND c.deleted_at IS NULL`).all(designSystem) as { name: string; definitionMeta: string }[];
+  const roles: Record<string, string[]> = {};
+  for (const row of rows) {
+    try {
+      const meta = JSON.parse(row.definitionMeta) as { canonicalFor?: unknown };
+      if (Array.isArray(meta.canonicalFor)) roles[row.name] = meta.canonicalFor.filter((value): value is string => typeof value === "string");
+    } catch { /* invalid legacy metadata is reported by its own validation path */ }
+  }
+  return roles;
+}
+
+function expandNestedCompositions(doc: PrototypeDoc, compositions: Record<string, CompositionCatalogEntry>, componentRoles?: Record<string, string[]>): PrototypeDoc {
   let current = doc;
   for (let pass = 0; pass <= COMPOSITION_EXPANSION_PASSES; pass += 1) {
-    const expanded = expandCompositions(current, { compositions, designSystem: current.designSystem });
+    const expanded = expandCompositions(current, { compositions, designSystem: current.designSystem, componentRoles });
     if (expanded.issues.length) {
       throw new ApiError(422, "validation_failed", "Prototype document is invalid", {
         issues: expanded.issues.map((issue) => ({ path: issue.path.split("/").filter(Boolean), message: issue.message })),
@@ -107,7 +127,7 @@ export function expandPrototypeForSave(db:Database,doc:PrototypeDoc):{doc:Protot
   const {docs,sources,pins,componentPins,missing}=resolveCompositionPins(db,refs.map(ref=>ref.compositionId),doc.designSystem);
   if(missing.length) throw new ApiError(422,"validation_failed","Prototype references compositions that are unavailable",
     {issues:missing.map(entry=>({path:["screens"],message:entry.reason}))});
-  const expanded=expandNestedCompositions(doc,sources);
+  const expanded=expandNestedCompositions(doc,sources,componentCanonicalRoles(db,doc.designSystem));
   if(componentPins.length) compositionComponentPins.set(expanded, new Map(componentPins.map((pin) => [pin.name, pin])));
   return {doc:expanded,pins,compositions:docs};
 }

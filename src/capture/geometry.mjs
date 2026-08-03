@@ -129,7 +129,7 @@ export function analyzeGeometry({ frame, content, scroll, roleRects } = {}) {
  * serializes this function for page.evaluate, so it must not close over module
  * bindings. The same function is imported by DOM unit tests.
  */
-export function collectGeometry({ limit = 2000, roleKeys = {} } = {}) {
+export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys } = {}) {
   const markerSelector = "[data-eui-key]";
   const surface = document.querySelector("#eui-capture-surface");
   if (!(surface instanceof Element)) throw new Error("#eui-capture-surface not found");
@@ -291,9 +291,122 @@ export function collectGeometry({ limit = 2000, roleKeys = {} } = {}) {
   };
   probe.remove();
 
+  // --- Geometry Contract 2.0 (план 2026-08-03 §5 W3): layout-факты и атрибуция ---------------
+  // `rects[]` выше остаётся байт-в-байт прежним (union `getClientRects()` всех потомков) —
+  // аддитивность обязательна: на нём стоят существующие probe-потребители. Новое измерение
+  // живёт отдельно: `layoutBounds` — union border-box'ов **in-flow** потомков (out-of-flow и
+  // трансформированные исключаются и уходят в `effectSources`), поэтому декоративная коробка
+  // подсветки больше не раздувает честные габариты (дефект «140 → 175» из §19.2 фидбэка).
+  const DETAIL_KEY_LIMIT = 20;
+  const DETAIL_SOURCE_LIMIT = 64;
+  const CLIP_EPSILON = 0.5;
+  const wantDetails = Array.isArray(detailKeys);
+  const rootMarker = markers.find((marker) => nearestMarker(marker) === null) ?? null;
+  const requestedKeys = !wantDetails ? []
+    : detailKeys.length > 0 ? detailKeys.slice(0, DETAIL_KEY_LIMIT)
+    : rootMarker ? [rootMarker.getAttribute("data-eui-key") ?? ""] : [];
+  const nodePath = (element) => {
+    const parts = [];
+    for (let current = element; current instanceof Element && current !== surface && parts.length < 8; current = current.parentElement) {
+      const tag = current.tagName.toLowerCase();
+      const className = typeof current.className === "string" ? current.className.trim() : "";
+      const suffix = current.id ? `#${current.id}` : className ? `.${className.split(/\s+/)[0]}` : "";
+      parts.unshift(`${tag}${suffix}`);
+    }
+    return parts.join(">");
+  };
+  const ownerKey = (element) => {
+    for (let current = element; current instanceof Element && current !== surface; current = current.parentElement) {
+      if (markerSet.has(current)) return current.getAttribute("data-eui-key") ?? "";
+    }
+    return "";
+  };
+  const boxOf = (rect) => ({
+    x: round(rect.left - surfaceRect.left), y: round(rect.top - surfaceRect.top),
+    width: round(rect.right - rect.left), height: round(rect.bottom - rect.top),
+  });
+  const detailOf = (marker) => {
+    const boxes = [];
+    const sources = [];
+    const push = (element, cause, rect) => {
+      if (sources.length >= DETAIL_SOURCE_LIMIT) return;
+      sources.push({ elementKey: ownerKey(element), elementPath: nodePath(element), cause, rect: boxOf(rect) });
+    };
+    const visit = (element, inFlow) => {
+      if (isHidden(element)) return;
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      const position = style.position ?? "static";
+      const outOfFlow = position === "absolute" || position === "fixed";
+      const transform = style.transform ?? "";
+      const transformed = transform !== "" && transform !== "none";
+      // Атрибуция: всё, что красит за пределами своей border-box либо выпало из потока.
+      if (outOfFlow) push(element, `position:${position}`, rect);
+      if (transformed) push(element, `transform:${transform}`, rect);
+      if (style.filter && style.filter !== "none") push(element, `filter:${style.filter}`, rect);
+      if (style.boxShadow && style.boxShadow !== "none") push(element, `box-shadow:${style.boxShadow}`, rect);
+      if (style.outlineStyle && style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth || "0") > 0) {
+        push(element, `outline:${style.outlineWidth} ${style.outlineStyle}`, rect);
+      }
+      const keeps = inFlow && !outOfFlow && !transformed;
+      if (keeps && style.display !== "contents" && (rect.right - rect.left > 0 || rect.bottom - rect.top > 0)) {
+        boxes.push({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+      }
+      for (const child of element.children) visit(child, keeps);
+    };
+    visit(marker, true);
+    const union = rectUnion(boxes);
+    const sourceBoxes = sources.map((item) => ({
+      left: item.rect.x + surfaceRect.left, top: item.rect.y + surfaceRect.top,
+      right: item.rect.x + item.rect.width + surfaceRect.left, bottom: item.rect.y + item.rect.height + surfaceRect.top,
+    }));
+    const painted = rectUnion([...boxes, ...sourceBoxes]);
+    // Цепочка клипа: предки с overflow hidden|clip либо clip-path. `effective` — не «свойство
+    // объявлено», а «оно реально режет»: иначе `blur внутри overflow:hidden` и `blur наружу`
+    // выглядели бы для политики одинаково.
+    const clipChain = [];
+    for (let current = marker.parentElement; current instanceof Element; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      // Шорткат `overflow` читается наравне с осевыми: не всякий движок разворачивает его в
+      // computed-паре, а «клип объявлен, но не замечен» — молчаливо неверный вердикт.
+      const shorthand = style.overflow ?? "";
+      const overflowX = style.overflowX || shorthand || "visible";
+      const overflowY = style.overflowY || shorthand || "visible";
+      const clipping = (value) => value.split(/\s+/).some((part) => part === "hidden" || part === "clip");
+      const clips = clipping(overflowX) || clipping(overflowY);
+      const clipPath = style.clipPath && style.clipPath !== "none" ? style.clipPath : null;
+      if (clips || clipPath) {
+        const rect = current.getBoundingClientRect();
+        const cuts = painted !== null && (painted.left < rect.left - CLIP_EPSILON || painted.top < rect.top - CLIP_EPSILON
+          || painted.right > rect.right + CLIP_EPSILON || painted.bottom > rect.bottom + CLIP_EPSILON);
+        clipChain.push({
+          key: ownerKey(current), elementPath: nodePath(current),
+          property: clipPath ? "clip-path" : "overflow",
+          value: clipPath ?? `${overflowX} ${overflowY}`,
+          effective: Boolean(cuts),
+          rect: boxOf(rect),
+        });
+      }
+      if (current === surface) break;
+    }
+    return {
+      key: marker.getAttribute("data-eui-key") ?? "",
+      instance: instanceByMarker.get(marker) ?? 0,
+      layoutBounds: union ? boxOf(union) : null,
+      effectSources: sources,
+      clipChain,
+    };
+  };
+  const details = requestedKeys.map((key) => {
+    const marker = markers.find((candidate) => (candidate.getAttribute("data-eui-key") ?? "") === key);
+    return marker ? detailOf(marker) : { key, instance: 0, layoutBounds: null, effectSources: [], clipChain: [] };
+  });
+
   const bounded = Math.max(0, Math.floor(limit));
   return {
     rects: rows.slice(0, bounded), truncated: rows.length > bounded, total: rows.length,
     safeArea, roleRects, frame, content, scroll,
+    // Отсутствует у обычного `probe:"geometry"` — контракт существующих ручек не меняется.
+    ...(wantDetails ? { details, detailKeys: requestedKeys } : {}),
   };
 }

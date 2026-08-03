@@ -1001,6 +1001,60 @@ Layout owner вычисляется только из DOM: для непосре
 
 **Остаточный риск.** По [модели доверия](#граница-доверия-и-запуск) published-код равен коду репозитория; egress-блок — defense-in-depth, а не sandbox. Точная строка `--proxy-bypass-list` закреплена unit-тестом; главный allowlist-инвариант покрыт server-side unit-тестами; полный adversarial сетевой сценарий помечен `test.fixme` в `e2e/preview/screenshot.spec.ts` (нестабилен в контейнере).
 
+### Geometry Contract 2.0 — `probe: "paint"` (волна W3, план 2026-08-03)
+
+Режим измерения **краски**, а не только коробок. Доступен только на candidate-пути матричной приёмки
+(`server/screenshot/service.ts`, `enqueueComponentCandidate({ probe: "paint" })`), который использует
+гейт `geometry`; публичные screenshot-ручки (`/screenshot`, `/head/screenshot`) принимают по-прежнему
+только `probe: "geometry"` — `probe: "paint"` на них отвечает `422 unsupported_option`. Наличие режима
+в сборке публикуется как `features.geometryPaint` в `GET /capabilities`.
+
+**Зачем.** Element-screenshot клиппит чернила коробкой `#eui-capture-surface` (она непрозрачна и
+inline-block), поэтому ink-bbox по обычному кадру не измерим в принципе. Paint-джоба рендерит
+поверхность **прозрачной** и с полем вокруг компонента (по умолчанию 64 CSS px, потолок 256), снимает
+её с `omitBackground: true` и **в той же browser-сессии** собирает geometry-факты: `layoutBounds` и
+`paintBounds` гарантированно относятся к одному кадру.
+
+Исход джобы (`kind: "paint"`) несёт и байты PNG, и обычный geometry-блок, плюс `paintMargin` и
+`details[]` — детальные измерения по `geometryDetailKeys` (≤20 ключей маркеров; пустой список
+означает корневой маркер):
+
+```json
+{
+  "key": "root", "instance": 0,
+  "layoutBounds": {"x":64,"y":64,"width":140,"height":96},
+  "effectSources": [
+    {"elementKey":"highlight","elementPath":"div>div.highlight","cause":"filter:blur(68px)","rect":{"x":46.5,"y":47,"width":175,"height":130}}
+  ],
+  "clipChain": [{"key":"card","elementPath":"div.card","property":"overflow","value":"hidden hidden","effective":true,"rect":{"x":64,"y":64,"width":140,"height":96}}]
+}
+```
+
+- `layoutBounds` — union border-box'ов **in-flow** потомков маркера. Потомки с `position:absolute|fixed`
+  и трансформированные из контура исключены: именно их коробки давали «ширину 175 при layout-ширине
+  140». Существующий `rects[]` не изменился ни на байт — измерение аддитивно.
+- `effectSources[]` — потомки, красящие за пределами своей коробки или выпавшие из потока:
+  `filter:*`, `box-shadow:*`, `outline:*`, `transform:*`, `position:absolute|fixed`.
+- `clipChain[]` — предки с `overflow:hidden|clip` или `clip-path`; `effective: true` означает, что клип
+  реально режет объединение layout-боксов и источников (а не просто объявлен).
+- `paintBounds` считает `scripts/ink-bbox-worker.mjs` (node-подпроцесс, pngjs): bbox пикселей с
+  `alpha > 0`, **нормализованный в CSS px** делением на `deviceScaleFactor` (`paintBoundsSource:"alpha"`).
+  Если чернила упираются в край поля (`clamped`), измерение обрезано холстом, а не компонентом.
+
+**Вердикт** считает чистая функция `src/capture/geometryPolicy.ts` (без DOM и без PNG):
+`policyVerdict ∈ clean | paint-overflow-clipped | paint-overflow-not-clipped | layout-overflow | indeterminate`,
+плюс `overflow: {left,right,top,bottom,sources[]}`, где каждый источник несёт `elementKey`, CSS-`cause`
+и `contribution` по сторонам (источники ранжируются по вкладу). Допуски случая приходят из
+case-set-манифеста (`policy.perCase.<id>`): `allowPaintOverflow` (ожидаемая тень/свечение),
+`expectedClip` (ожидаемая обрезка), `expectedGeometry` (ожидаемые габариты layout-контура).
+
+**Гейт `geometry`** в профилях `default-v1`/`pixel-strict-v1` стал `required` (advisory-фаза v1
+закончилась). Его инвариант: `fail` возможен **только** с непустым `overflow.sources[]` либо с названным
+расхождением `expectedGeometry`; наблюдённый overflow без объяснимого источника, чернила на краю поля и
+несобранный контур дают `indeterminate` с диагностикой («увеличить маргин»), а не обвинение компонента.
+Артефакты случая — `paint.png` и `geometry.json` (факты + вердикт) в CAS evidence. Граница волны подняла
+`case_fingerprint.algoVersion` до 3: накопленный reuse прошлых волн инвалидирован.
+
 ## Visual regression
 
 Встроенный визуальный gate: reference-baseline (PNG-ассет) закрепляется за **канонической поверхностью** (fingerprint), а candidate снимается тем же screenshot job-пайплайном (параметры капчера берутся **из fingerprint**) и сравнивается в отдельном node-подпроцессе (`scripts/visual-diff-worker.mjs`, `pixelmatch` + `pngjs`). UI — `/visual`.

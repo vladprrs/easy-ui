@@ -698,6 +698,7 @@ describe("route contracts", () => {
       catalogMigration: true,
       componentValidate: true,
       componentGeometry: true,
+      geometryPaint: true,
       componentDraftPreview: true,
       prototypeHeadTracking: true,
       readinessProfile: true,

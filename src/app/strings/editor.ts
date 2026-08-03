@@ -293,6 +293,7 @@ export const editor = {
   compositionSlotsTitle: "Слоты",
   compositionNoSlots: "У композиции нет слотов.",
   compositionSlotEmpty: "пусто",
+  compositionSlotRequired: "обязательный слот",
   compositionChildrenTitle: "Дети ссылки",
   compositionNoChildren: "У ссылки на композицию нет детей — слоты остаются пустыми.",
   compositionSlotSelectAria: (elementKey: string) => `Слот элемента ${elementKey}`,

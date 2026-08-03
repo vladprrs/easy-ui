@@ -63,9 +63,10 @@ const DEFAULT_V1: AcceptancePolicy = {
     render: "required",
     determinism: "required",
     audit: "required",
-    // v1-геометрия (union-rect) — сам по себе дефект §19.2 фидбэка; боевой гейт приезжает в W3
-    // (`probe:"paint"`). До тех пор она считается и показывается, но вердикт не роняет.
-    geometry: "advisory",
+    // W3: геометрия 2.0 (`probe:"paint"`, layout/paint/overflow) — боевой гейт. Advisory-фаза
+    // закончилась вместе с v1-семантикой union-rect: вердикт теперь опирается на честный
+    // `layoutBounds` и обязан называть виновника overflow, поэтому блокировать им можно.
+    geometry: "required",
     visual: "not-implemented",
     readiness: "not-implemented",
     regression: "not-implemented",

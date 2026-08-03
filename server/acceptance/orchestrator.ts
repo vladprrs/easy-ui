@@ -25,6 +25,7 @@ import { getCandidateForRev } from "../components/validate";
 import { buildCases, DEFAULT_CASE_SURFACE, type AcceptanceCase } from "./cases";
 import { buildCasesFromManifest, CaseSetRepo, manifestOfRow, surfaceOfManifest } from "./caseSets";
 import { writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./evidence";
+import type { RunInkBbox } from "./inkBbox";
 import { CASE_POLICY_HASH_V0, type CaseSurface } from "./ids";
 import type { AcceptanceCaptureService, CandidateSubject, GateContext } from "./gates/types";
 import {
@@ -51,6 +52,8 @@ export interface AcceptanceOrchestratorDeps {
   autoDrain?: boolean;
   /** Разрешение кандидата в субъект приёмки; по умолчанию — candidate-кэш по явной ревизии (A10). */
   resolveCandidate?: (row: CandidateRow) => Promise<CandidateSubject>;
+  /** Измеритель ink-bbox гейта `geometry` v2 (W3); по умолчанию — node-подпроцесс. */
+  inkBbox?: RunInkBbox;
 }
 
 /**
@@ -305,6 +308,7 @@ export class AcceptanceOrchestrator {
       service: this.deps.service,
       sleep: this.sleep,
       now: this.now,
+      ...(this.deps.inkBbox ? { inkBbox: this.deps.inkBbox } : {}),
     } as Omit<GateContext, "case" | "determinismSampled" | "shared" | "policy" | "runId" | "candidate" | "surface">;
     const deps: CaseRunnerDeps = { repo: this.repo, policy, runId: run.run_id, candidate: subject, surface, shared, context };
 

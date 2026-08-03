@@ -40,6 +40,18 @@ export interface CaptureQuality {
  */
 export type JobOutcome = "ok" | "worker_crash" | "timeout" | "queue_full" | "subprocess_error";
 
+/**
+ * Режим измерения джобы. `geometry` — измерительная джоба без кадра (существующие ручки);
+ * `paint` — комбинированная сессия W3 (прозрачная поверхность + маргин, geometry **и** PNG),
+ * доступная только candidate-пути приёмки: она отдаёт байты мимо asset-store (A4).
+ */
+export type CaptureProbe = "geometry" | "paint";
+
+/** Поле вокруг компонента в paint-режиме, CSS px (план §3 D4: «дефолт 64px»). */
+export const DEFAULT_PAINT_MARGIN_PX = 64;
+/** Потолок поля: 20 Мпикс-бюджет кадра тратится и на него. */
+export const MAX_PAINT_MARGIN_PX = 256;
+
 /** Классификация провала джобы по сообщению воркер-раннера/исключения execute. */
 export function classifyJobFailure(message: string): Exclude<JobOutcome, "ok" | "queue_full"> {
   if (/timed out|timeout|deadline/i.test(message)) return "timeout";
@@ -83,6 +95,35 @@ export interface ScreenshotImageBytesResult extends CaptureQuality {
   componentPins?: { id: string; version: number; bundleHash: string }[];
   rendererBuild: string | null; browserVersion: string;
 }
+/**
+ * Исход режима `probe:"paint"` (план 2026-08-03 §3 D4, §5 W3): **одна browser-сессия** отдаёт и
+ * geometry-факты, и PNG прозрачной поверхности с маргин-полем. Отдельного «geometry-кадра» и
+ * «image-кадра» больше нет — иначе `layoutBounds` и `paintBounds` относились бы к разным кадрам
+ * (триаж R1-M3). Байты не ингестятся в asset-store (A4): режим доступен только candidate-пути.
+ */
+export interface ScreenshotPaintResult extends CaptureQuality, GeometryMeasurement {
+  kind: "paint";
+  surface: "component";
+  componentId: string;
+  version?: number;
+  draftRev?: number;
+  bundleHash: string;
+  designSystemMetaVersion: number | null;
+  resolvedSpaceScale: Record<SpaceToken, string>;
+  viewport: Viewport;
+  dpr: number;
+  /** Поле вокруг компонента, CSS px: краска, упёршаяся в его край, делает вердикт `indeterminate`. */
+  paintMargin: number;
+  bytes: Uint8Array;
+  /** Размер PNG в **device** px (`bounds` ink-воркера нормализуются делением на `dpr`). */
+  width: number;
+  height: number;
+  imageProduced: boolean;
+  consoleErrors: string[];
+  pageErrors: string[];
+  rendererBuild: string | null;
+  browserVersion: string;
+}
 /** Geometry measurements shared by both capture surfaces (additive wave-7.1 shape). */
 interface GeometryMeasurement {
   rects: GeometryRect[];
@@ -95,6 +136,9 @@ interface GeometryMeasurement {
   scroll: GeometryCollection["scroll"];
   viewportOwnership: GeometryCollection["viewportOwnership"];
   issues: GeometryCollection["issues"];
+  /** Детальные измерения W3 (`layoutBounds`/`effectSources`/`clipChain`) — только у `probe:"paint"`. */
+  details?: GeometryCollection["details"];
+  detailKeys?: string[];
 }
 export interface ScreenshotPrototypeGeometryResult extends CaptureQuality, GeometryMeasurement {
   kind: "geometry";
@@ -124,17 +168,21 @@ export interface ScreenshotComponentGeometryResult extends CaptureQuality, Geome
 }
 /** Geometry probe result, discriminated by `surface` (P1b добавил компонентную поверхность). */
 export type ScreenshotGeometryResult = ScreenshotPrototypeGeometryResult | ScreenshotComponentGeometryResult;
-export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult | ScreenshotImageBytesResult;
+export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult | ScreenshotImageBytesResult | ScreenshotPaintResult;
 
 export interface WorkerJob {
   captureOrigin: string; captureUrl: string; token: string;
-  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; expected: CaptureExpected };
+  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: { marginPx: number }; expected: CaptureExpected };
   allowedUrls: string[]; viewport: Viewport; deviceScaleFactor: number; colorScheme: "light" | "dark"; waitForFonts: boolean; expected: CaptureExpected;
-  probe?: "geometry"; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
+  probe?: CaptureProbe; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
+  /** ≤20 ключей маркеров для детальных измерений; пустой массив — корневой маркер (W3). */
+  geometryDetailKeys?: string[];
 }
 export type WorkerImageOk = { ok: true; pngBase64: string; width: number; height: number; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string };
 export type WorkerGeometryOk = { ok: true; geometry: GeometryCollection; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string };
-export type WorkerOk = WorkerImageOk | WorkerGeometryOk;
+/** Paint-джоба: geometry и PNG приезжают вместе — это и есть смысл режима. */
+export type WorkerPaintOk = WorkerImageOk & { geometry: GeometryCollection };
+export type WorkerOk = WorkerImageOk | WorkerGeometryOk | WorkerPaintOk;
 export type WorkerErr = { ok: false; error: string; consoleErrors?: string[]; consoleWarnings?: string[]; pageErrors?: string[] };
 export type WorkerResult = WorkerOk | WorkerErr;
 export type RunJob = (job: WorkerJob, deadlineMs: number) => Promise<WorkerResult>;
@@ -154,7 +202,10 @@ interface InternalJob {
   captureManifestHash?: string;
   /** Draft-capture extras (P1b): what the bootstrap carries instead of a published DTO. */
   draft?: { name: string; designSystem: string; bundleUrl: string; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>> };
-  probe?: "geometry"; resolvedSpaceScale?: Record<SpaceToken, string>; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
+  probe?: CaptureProbe; resolvedSpaceScale?: Record<SpaceToken, string>; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
+  /** W3: поле paint-режима, CSS px. Присутствует ровно тогда, когда `probe === "paint"`. */
+  paintMargin?: number;
+  geometryDetailKeys?: string[];
   /** A4: куда уезжает PNG — в asset-store (по умолчанию) или байтами в результат джобы. */
   deliver?: "asset" | "bytes";
   result?: ScreenshotResult; error?: { code: string; message: string }; resultExpiresAt?: number;
@@ -374,6 +425,11 @@ export class ScreenshotService {
    */
   async enqueueComponentDraft(id: string, userId: string, opts: { props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry" }): Promise<{ jobId: string }> {
     this.requireAvailable();
+    // `probe:"paint"` — режим приёмки (W3): он отдаёт байты мимо asset-store и требует
+    // кандидата, запиненного по `{rev, sourceHash}`. Draft/published-ручки его не получают.
+    if ((opts as { probe?: string }).probe === "paint") {
+      throw new ApiError(422, "unsupported_option", "probe=paint is only available on the candidate acceptance path");
+    }
     const { viewport, dsf } = validateViewport(opts.viewport, opts.deviceScaleFactor);
     this.guardQueue();
     const draft = await ensureDraftCandidate(this.deps.db, this.deps.dataDir, id, userId);
@@ -393,7 +449,13 @@ export class ScreenshotService {
   async enqueueComponentCandidate(
     id: string,
     candidate: { rev: number; sourceHash: string },
-    opts: { props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry"; deliver?: "asset" | "bytes"; background?: boolean },
+    opts: {
+      props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown;
+      theme?: string; waitForFonts?: boolean; probe?: CaptureProbe; deliver?: "asset" | "bytes"; background?: boolean;
+      /** Поле paint-режима, CSS px; игнорируется в прочих режимах (W3). */
+      paintMargin?: number;
+      geometryDetailKeys?: string[];
+    },
   ): Promise<FrozenEnqueue> {
     this.requireAvailable();
     const { viewport, dsf } = validateViewport(opts.viewport, opts.deviceScaleFactor);
@@ -410,7 +472,10 @@ export class ScreenshotService {
     draft: DraftCandidate,
     viewport: Viewport,
     dsf: number,
-    opts: { props?: Record<string, unknown>; exampleName?: string; theme?: string; waitForFonts?: boolean; probe?: "geometry"; deliver?: "asset" | "bytes" },
+    opts: {
+      props?: Record<string, unknown>; exampleName?: string; theme?: string; waitForFonts?: boolean;
+      probe?: CaptureProbe; deliver?: "asset" | "bytes"; paintMargin?: number; geometryDetailKeys?: string[];
+    },
   ): FrozenEnqueue {
     const repo = new ComponentRepo(this.deps.db);
     const meta = draft.entry.extracted!.meta!;
@@ -430,10 +495,16 @@ export class ScreenshotService {
     const query = new URLSearchParams({ theme, dsf: String(dsf) });
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/draft?${query}`;
     const resolvedSpaceScale = opts.probe ? resolveSpacingScale(draft.designSystem, themeContent.tokens, themeContent.spacingResolver) : undefined;
+    // Поле paint-режима нормализуется здесь, а не у вызывающего: оно уезжает и в bootstrap
+    // поверхности, и в результат джобы — расхождение сделало бы `paintBounds` несопоставимым.
+    const paintMargin = opts.probe === "paint"
+      ? Math.min(Math.max(Math.round(opts.paintMargin ?? DEFAULT_PAINT_MARGIN_PX), 0), MAX_PAINT_MARGIN_PX)
+      : undefined;
     const { jobId } = this.push({
       kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false,
       draft: { name: repo.row(id).name, designSystem: draft.designSystem, bundleUrl, ...(meta.propsJsonSchema !== undefined ? { propsJsonSchema: meta.propsJsonSchema } : {}), ...(meta.examples !== undefined ? { examples: meta.examples } : {}) },
       ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}),
+      ...(paintMargin === undefined ? {} : { paintMargin, geometryDetailKeys: (opts.geometryDetailKeys ?? []).slice(0, 20) }),
       ...(opts.deliver ? { deliver: opts.deliver } : {}),
     });
     return { jobId, expected };
@@ -572,10 +643,44 @@ export class ScreenshotService {
         },
         allowedUrls: job.allowedUrls, viewport: job.viewport, deviceScaleFactor: job.dsf, colorScheme: job.theme, waitForFonts: job.waitForFonts, expected: job.expected,
         ...(job.probe ? { probe: job.probe, geometryLimit: GEOMETRY_RECT_LIMIT, ...(job.geometryRoleKeys ? { geometryRoleKeys: job.geometryRoleKeys } : {}) } : {}),
+        ...(job.probe === "paint" ? { geometryDetailKeys: job.geometryDetailKeys ?? [] } : {}),
       };
+      // Поле paint-режима едет поверхности через bootstrap: она и решает, рисовать ли фон.
+      if (job.paintMargin !== undefined) workerJob.bootstrap.paint = { marginPx: job.paintMargin };
       const result = await this.deps.runJob(workerJob, JOB_DEADLINE_MS);
       if (!result.ok) { job.status = "error"; job.error = { code: "capture_failed", message: result.error }; job.jobOutcome = classifyJobFailure(result.error); this.expire(job); return; }
       const quality = this.qualityOf(result);
+      if (job.probe === "paint") {
+        // Комбинированный исход: обе половины обязаны приехать из одной сессии, иначе вердикт
+        // геометрии сравнивал бы разные кадры (триаж R1-M3) — поэтому это `throw`, не деградация.
+        if (!("geometry" in result) || !("pngBase64" in result)) throw new Error("paint worker result mismatch");
+        if (job.expected.kind === "prototype") throw new Error("paint probe is component-only");
+        const bytes = Buffer.from(result.pngBase64, "base64");
+        job.result = {
+          kind: "paint",
+          surface: "component",
+          ...quality,
+          componentId: job.expected.componentId,
+          ...(job.expected.kind === "component-draft" ? { draftRev: job.expected.rev } : { version: job.expected.version }),
+          bundleHash: job.expected.bundleHash,
+          designSystemMetaVersion: job.expected.dsMetaVersion,
+          resolvedSpaceScale: job.resolvedSpaceScale!,
+          viewport: job.viewport,
+          dpr: job.dsf,
+          paintMargin: job.paintMargin ?? DEFAULT_PAINT_MARGIN_PX,
+          bytes: new Uint8Array(bytes),
+          width: result.width, height: result.height,
+          imageProduced: true,
+          consoleErrors: result.consoleErrors, pageErrors: result.pageErrors,
+          rendererBuild: job.expected.rendererBuild, browserVersion: result.browserVersion,
+          ...emptyGeometryShape(),
+          ...result.geometry,
+        };
+        job.status = "done";
+        job.jobOutcome = "ok";
+        this.expire(job);
+        return;
+      }
       if (job.probe === "geometry") {
         if (!("geometry" in result)) throw new Error("geometry worker result mismatch");
         const measurement = { ...emptyGeometryShape(), ...result.geometry };

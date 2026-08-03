@@ -133,6 +133,32 @@ async function run(job) {
       return { ok: true, geometry, consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version() };
     }
 
+    // Paint-режим (план 2026-08-03 §3 D4, W3): **одна сессия** отдаёт и geometry-факты, и PNG.
+    // Две джобы давали бы два несопоставимых кадра (триаж R1-M3): между ними успевают
+    // перерисоваться шрифты, темы и анимации, и `layoutBounds` относился бы к другому кадру,
+    // чем `paintBounds`. Порядок — измерение до снимка: `page.evaluate` ничего не мутирует.
+    if (job.probe === "paint") {
+      const measurements = await page.evaluate(collectGeometry, {
+        limit: job.geometryLimit,
+        roleKeys: job.geometryRoleKeys ?? {},
+        detailKeys: job.geometryDetailKeys ?? [],
+      });
+      const paintGeometry = { ...measurements, ...analyzeGeometry(measurements) };
+      const surface = await page.$("#eui-capture-surface");
+      // `omitBackground` снимает белую подложку браузера: без неё альфа за пределами компонента
+      // была бы непрозрачной и ink-bbox совпал бы с кадром целиком.
+      const png = surface
+        ? await surface.screenshot({ type: "png", omitBackground: true })
+        : await page.screenshot({ type: "png", omitBackground: true });
+      return {
+        ok: true, geometry: paintGeometry,
+        pngBase64: png.toString("base64"),
+        width: png.length >= 24 ? png.readUInt32BE(16) : job.viewport.width,
+        height: png.length >= 24 ? png.readUInt32BE(20) : job.viewport.height,
+        consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version(),
+      };
+    }
+
     const el = await page.$("#eui-capture-surface");
     const buf = el ? await el.screenshot({ type: "png" }) : await page.screenshot({ type: "png" });
     const width = buf.length >= 24 ? buf.readUInt32BE(16) : job.viewport.width;

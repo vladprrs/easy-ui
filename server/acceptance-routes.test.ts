@@ -13,7 +13,8 @@ import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
 import { routeAcceptance } from "./routes/acceptance";
 import { routeCaseSets } from "./routes/caseSets";
 import type { AcceptanceCaptureService } from "./acceptance/gates/types";
-import type { JobOutcome, JobStatus, ScreenshotResult } from "./screenshot/service";
+import type { CaptureProbe, JobOutcome, JobStatus, ScreenshotResult } from "./screenshot/service";
+import type { InkBboxResult } from "./acceptance/inkBbox";
 
 /**
  * Роуты матричной приёмки (план 2026-08-03 §5 W1a, RFC §4.1–4.2).
@@ -57,12 +58,23 @@ const imageBytes = (bytes: Uint8Array): ScreenshotResult => ({
   rendererBuild: null, browserVersion: "test/1",
 } as unknown as ScreenshotResult);
 
-const geometryResult = (): ScreenshotResult => ({
-  kind: "geometry", surface: "component", componentId: COMPONENT_ID, draftRev: 1, bundleHash: "bundle",
+/** Paint-джоба (W3): geometry-факты и кадр из одной сессии; layout совпадает с чернилами ⇒ `clean`. */
+const PAINT_LAYOUT = { x: 64, y: 64, width: 140, height: 96 };
+const paintResult = (bytes: Uint8Array): ScreenshotResult => ({
+  kind: "paint", surface: "component", componentId: COMPONENT_ID, draftRev: 1, bundleHash: "bundle",
   designSystemMetaVersion: null, resolvedSpaceScale: {}, viewport: { width: 390, height: 844 }, dpr: 2,
+  paintMargin: 64, bytes, width: 536, height: 448, imageProduced: true,
   captureClean: true, productErrors: [], infraNoise: [], runtimeWarnings: [],
+  consoleErrors: [], pageErrors: [], rendererBuild: null, browserVersion: "test/1",
   rects: [], truncated: false, total: 0,
+  details: [{ key: "root", instance: 0, layoutBounds: { ...PAINT_LAYOUT }, effectSources: [], clipChain: [] }],
 } as unknown as ScreenshotResult);
+
+const cleanInk = (): Promise<InkBboxResult> => Promise.resolve({
+  ok: true, source: "alpha", image: { width: 536, height: 448 }, deviceScaleFactor: 2,
+  pixelBounds: { x: 128, y: 128, width: 280, height: 192 }, bounds: { ...PAINT_LAYOUT },
+  clamped: { left: false, right: false, top: false, bottom: false },
+});
 
 /** Детерминированный капчур: кадр зависит только от props, поэтому `determinism` даёт `pass`. */
 class FakeCapture implements AcceptanceCaptureService {
@@ -73,13 +85,13 @@ class FakeCapture implements AcceptanceCaptureService {
   enqueueComponentCandidate(
     _id: string,
     _candidate: { rev: number; sourceHash: string },
-    opts: { props?: Record<string, unknown>; probe?: "geometry"; viewport: unknown },
+    opts: { props?: Record<string, unknown>; probe?: CaptureProbe; viewport: unknown },
   ): Promise<{ jobId: string }> {
     const jobId = `job_${++this.calls}`;
-    if (opts.probe === "geometry") {
-      this.statuses.set(jobId, { status: "done", result: geometryResult() });
+    const bytes = new Uint8Array([...PNG, ...new TextEncoder().encode(JSON.stringify(opts.props ?? {}))]);
+    if (opts.probe === "paint") {
+      this.statuses.set(jobId, { status: "done", result: paintResult(bytes) });
     } else {
-      const bytes = new Uint8Array([...PNG, ...new TextEncoder().encode(JSON.stringify(opts.props ?? {}))]);
       this.statuses.set(jobId, { status: "done", result: imageBytes(bytes) });
     }
     this.outcomes.set(jobId, "ok");
@@ -111,7 +123,7 @@ async function setup(options: { matrix?: boolean; autoDrain?: boolean } = {}) {
   const service = new FakeCapture();
   const orchestrator = options.matrix === false
     ? undefined
-    : new AcceptanceOrchestrator({ db, dataDir: dir, service, autoDrain: options.autoDrain !== false });
+    : new AcceptanceOrchestrator({ db, dataDir: dir, service, inkBbox: cleanInk, autoDrain: options.autoDrain !== false });
   const handler = createTestHandler(db, { dataDir: dir, ...(orchestrator ? { acceptance: orchestrator } : {}) }) as Handler;
   const created = await handler(req("/components", "POST", {
     designSystem: "yandex-pay", id: COMPONENT_ID, name: "AccRoutesProbe", source: SOURCE,

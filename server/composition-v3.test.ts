@@ -162,3 +162,122 @@ describe("composition v3 kill-switch", () => {
     expect((capabilities(db) as { features: Record<string, boolean> }).features.compositionV3).toBe(true);
   });
 });
+
+/**
+ * W8b/W8c: `repeatParam` и слоты с метаданными живут за тем же kill-switch'ем, что и
+ * остальной v3, и проходят полный путь save → publish → ссылка из прототипа.
+ */
+describe("composition v3 — repeatParam and slot metadata", () => {
+  const listDoc = {
+    version: 3, name: "List", atomicLevel: "organism",
+    params: {
+      rows: { type: "array", items: { type: "object", schema: { id: { type: "string", required: true }, text: { type: "string" } } }, maxItems: 10, default: [] },
+    },
+    slots: {
+      body: { required: true, allowedTypes: ["Leaf"], cardinality: { min: 1, max: 2 }, fallback: ["empty"] },
+    },
+    spec: {
+      root: "list",
+      elements: {
+        list: { type: "Leaf", props: {}, children: ["row", "body-slot"] },
+        row: { type: "Leaf", props: { text: { $item: "text" }, order: { $index: true } }, repeatParam: { param: "rows", key: "id" } },
+        "body-slot": { type: "@eui/Slot", props: { name: "body" } },
+        empty: { type: "Leaf", props: { text: "nothing" } },
+      },
+    },
+  };
+
+  test("rejects repeatParam and dictionary slots while the flag is off", async () => {
+    delete process.env.EASYUI_COMPOSITION_V3;
+    const { req } = await fixture();
+    const created = await req("/compositions", "POST", { id: "list", designSystem: "yandex-pay", doc: listDoc });
+    expect(created.status).toBe(422);
+    expect((await created.json() as { error: { code: string } }).error.code).toBe("composition_v3_disabled");
+  });
+
+  test("rejects an unknown canonical role in slot metadata", async () => {
+    process.env.EASYUI_COMPOSITION_V3 = "1";
+    const { req } = await fixture();
+    const doc = { ...listDoc, slots: { body: { allowedRoles: ["definitely-not-a-role"], fallback: ["empty"] } } };
+    const created = await req("/compositions", "POST", { id: "list", designSystem: "yandex-pay", doc });
+    expect(created.status).toBe(422);
+    const body = await created.json() as { error: { issues: { message: string }[] } };
+    expect(body.error.issues[0]!.message).toContain("unknown canonical role");
+  });
+
+  test("saves, publishes and expands repeatParam and slot fallback from a prototype", async () => {
+    process.env.EASYUI_COMPOSITION_V3 = "1";
+    const dir = await mkdtemp(resolve(process.cwd(), ".composition-v3-test-"));
+    dirs.push(dir);
+    const db = openDatabase(":memory:");
+    const handler = createTestHandler(db, { dataDir: dir });
+    const req = (url: string, method = "GET", value?: unknown) => handler(new Request(`http://test/api${url}`, {
+      method,
+      headers: value === undefined ? undefined : { "content-type": "application/json" },
+      body: value === undefined ? undefined : JSON.stringify(value),
+    }));
+    const source = await Bun.file(resolve("server/fixtures", "ctyp-accrual-badge.tsx")).text();
+    expect((await req("/components", "POST", { designSystem: "yandex-pay", id: "ctyp-accrual-badge", name: "CtypAccrualBadge", source, intent: "Renders the accrual badge inside a repeated composition row" })).status).toBe(201);
+    expect((await req("/components/ctyp-accrual-badge/publish", "POST", { baseRev: 1 })).status).toBe(201);
+
+    const doc = {
+      version: 3, name: "List", atomicLevel: "organism",
+      params: {
+        rows: { type: "array", items: { type: "object", schema: { id: { type: "string", required: true }, text: { type: "string", required: true } } }, maxItems: 10, default: [] },
+      },
+      slots: { body: { required: true, allowedTypes: ["CtypAccrualBadge"], cardinality: { min: 1, max: 2 }, fallback: ["empty"] } },
+      spec: {
+        root: "list",
+        elements: {
+          list: { type: "CtypAccrualBadge", props: { amount: "0 ₽" }, children: ["row", "body-slot"] },
+          row: { type: "CtypAccrualBadge", props: { amount: { $item: "text" } }, repeatParam: { param: "rows", key: "id" } },
+          "body-slot": { type: "@eui/Slot", props: { name: "body" } },
+          empty: { type: "CtypAccrualBadge", props: { amount: "nothing" } },
+        },
+      },
+    };
+    expect((await req("/compositions", "POST", { id: "list", designSystem: "yandex-pay", doc })).status).toBe(201);
+    // Publish-probe не имеет точки ссылки: required-слот его не роняет, fallback раскрывается.
+    expect((await req("/compositions/list/publish", "POST", { baseRev: 1 })).status).toBe(201);
+
+    const prototype = (id: string, elements: Record<string, unknown>) => ({
+      version: 1, id, name: "V3 list", designSystem: "yandex-pay", device: "mobile", startScreen: "main", state: {},
+      screens: [{ id: "main", name: "Main", spec: { root: "screen", elements } }],
+    });
+    const rows = [{ id: "a", text: "A" }, { id: "b", text: "B" }];
+
+    const saved = await req("/prototypes", "POST", {
+      doc: prototype("v3-list", {
+        screen: { type: "@eui/Composition", props: { composition: "list", params: { rows } }, children: ["kid"] },
+        kid: { type: "CtypAccrualBadge", props: { amount: "1 ₽" }, slot: "body" },
+      }),
+    });
+    expect(saved.status).toBe(201);
+    expect(db.query("SELECT composition_id id,composition_version version FROM prototype_revision_compositions WHERE prototype_id='v3-list' AND rev=1").all())
+      .toEqual([{ id: "list", version: 1 }]);
+    // Хранится авторский документ: ни `repeatParam`, ни `$item` в прототип не уезжают.
+    const stored = (db.query("SELECT doc FROM prototype_revisions WHERE prototype_id='v3-list' AND rev=1").get() as { doc: string }).doc;
+    expect(stored).not.toContain("repeatParam");
+    expect(stored).not.toContain("$item");
+
+    // Пустой обязательный слот покрыт fallback'ом.
+    expect((await req("/prototypes", "POST", {
+      doc: prototype("v3-list-fallback", {
+        screen: { type: "@eui/Composition", props: { composition: "list", params: { rows } } },
+      }),
+    })).status).toBe(201);
+
+    // Нарушенный контракт слота — 422 из save-пути (раскрытие в точке ссылки).
+    const tooMany = await req("/prototypes", "POST", {
+      doc: prototype("v3-list-too-many", {
+        screen: { type: "@eui/Composition", props: { composition: "list", params: { rows } }, children: ["a", "b", "c"] },
+        a: { type: "CtypAccrualBadge", props: { amount: "1 ₽" }, slot: "body" },
+        b: { type: "CtypAccrualBadge", props: { amount: "2 ₽" }, slot: "body" },
+        c: { type: "CtypAccrualBadge", props: { amount: "3 ₽" }, slot: "body" },
+      }),
+    });
+    expect(tooMany.status).toBe(422);
+    expect(JSON.stringify(await tooMany.json())).toContain("accepts at most 2");
+    db.close();
+  });
+});

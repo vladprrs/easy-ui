@@ -8,7 +8,8 @@
  */
 import type { Database } from "bun:sqlite";
 import type { CandidateEntry } from "../../components/candidates";
-import type { JobOutcome, JobStatus } from "../../screenshot/service";
+import type { CaptureProbe, JobOutcome, JobStatus } from "../../screenshot/service";
+import type { RunInkBbox } from "../inkBbox";
 import type { AcceptancePolicy, GateName } from "../policies";
 import type { CaseSurface } from "../ids";
 import type { AcceptanceCase } from "../cases";
@@ -58,7 +59,9 @@ export interface AcceptanceCaptureService {
     candidate: { rev: number; sourceHash: string },
     opts: {
       props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown;
-      theme?: string; waitForFonts?: boolean; probe?: "geometry"; deliver?: "asset" | "bytes"; background?: boolean;
+      theme?: string; waitForFonts?: boolean; probe?: CaptureProbe; deliver?: "asset" | "bytes"; background?: boolean;
+      /** W3 (`probe:"paint"`): поле вокруг компонента и ключи детальных измерений. */
+      paintMargin?: number; geometryDetailKeys?: string[];
     },
   ): Promise<{ jobId: string }>;
   get(jobId: string): JobStatus;
@@ -81,6 +84,11 @@ export interface GateContext {
   shared: Map<string, unknown>;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
+  /**
+   * Измеритель ink-bbox (W3). По умолчанию — node-подпроцесс `scripts/ink-bbox-worker.mjs`;
+   * шов существует, чтобы гейт `geometry` v2 тестировался без pngjs-подпроцесса и без chromium.
+   */
+  inkBbox?: RunInkBbox;
 }
 
 export interface Gate {

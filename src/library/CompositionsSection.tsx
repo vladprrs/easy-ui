@@ -6,6 +6,7 @@ import { chip, kicker, panel, panelPadded, transition } from "../app/chrome";
 import { gallery } from "../app/strings/gallery";
 import { compositions as strings } from "../app/strings/library";
 import { componentStatusBadge } from "./statusBadge";
+import { compositionSlotNames } from "../prototype/composition";
 
 /**
  * Витрина версионированных композиций (волна 5): список + read-only деталь.
@@ -59,7 +60,7 @@ function CompositionDetail({ summary }: { summary: CompositionSummary }) {
   const params: [string, { type: string; required?: boolean; default?: unknown; description?: string }][] = doc
     ? Object.entries(doc.params)
     : summary.params.map((name) => [name, { type: "" }] as [string, { type: string }]);
-  const slots = doc ? doc.slots : summary.slots;
+  const slots = doc ? compositionSlotNames(doc.slots) : summary.slots;
   const latestVersion = meta.status === "ready" ? meta.data.publishedVersion : summary.latestVersion;
 
   return <article className={`${panelPadded} max-w-2xl`}>

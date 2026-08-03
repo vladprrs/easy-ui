@@ -335,3 +335,347 @@ describe("composition v3 — nesting with v2", () => {
     expect(Object.keys(off.expandedFrom)).toEqual(["screen$host"]);
   });
 });
+
+describe("composition v3 — repeatParam (W8b)", () => {
+  const scalarList = (extra: Record<string, unknown> = {}) => parsed({
+    params: { items: { type: "array", items: { type: "string" }, maxItems: 10, default: [] } },
+    spec: {
+      root: "row",
+      elements: {
+        row: { type: "Box", props: {}, children: ["item"] },
+        item: { type: "Text", props: { text: { $item: true }, order: { $index: true } }, repeatParam: { param: "items" }, ...extra },
+      },
+    },
+  });
+
+  it("clones the element per array item and substitutes $item/$index", () => {
+    const result = expandCompositions(screen("list", { items: ["a", "b"] }), { compositions: { list: pinned(scalarList()) } });
+    expect(result.issues).toEqual([]);
+    const elements = result.doc.screens[0]!.spec.elements;
+    expect(elements["screen$row"]!.children).toEqual(["screen$item__r0", "screen$item__r1"]);
+    expect(elements["screen$item__r0"]!.props).toEqual({ text: "a", order: 0 });
+    expect(elements["screen$item__r1"]!.props).toEqual({ text: "b", order: 1 });
+    // Авторская директива не доезжает до раскрытого документа.
+    expect(elements["screen$item__r0"]).not.toHaveProperty("repeatParam");
+    expect(elements["screen$item"]).toBeUndefined();
+  });
+
+  it("expands an empty array to no elements at all", () => {
+    const result = expandCompositions(screen("list", { items: [] }), { compositions: { list: pinned(scalarList()) } });
+    expect(result.issues).toEqual([]);
+    expect(result.doc.screens[0]!.spec.elements["screen$row"]!.children).toBeUndefined();
+  });
+
+  it("clones the whole subtree and keys it by the declared item field", () => {
+    const composition = parsed({
+      params: {
+        rows: {
+          type: "array",
+          items: { type: "object", schema: { id: { type: "string", required: true }, title: { type: "string" } } },
+          maxItems: 10,
+        },
+      },
+      spec: {
+        root: "list",
+        elements: {
+          list: { type: "Box", props: {}, children: ["row"] },
+          row: { type: "Box", props: {}, children: ["title"], repeatParam: { param: "rows", key: "id" } },
+          title: { type: "Text", props: { text: { $item: "title" } } },
+        },
+      },
+    });
+    const result = expandCompositions(
+      screen("rows", { rows: [{ id: "first", title: "One" }, { id: "second/two", title: "Two" }] }),
+      { compositions: { rows: pinned(composition) } },
+    );
+    expect(result.issues).toEqual([]);
+    const elements = result.doc.screens[0]!.spec.elements;
+    expect(elements["screen$list"]!.children).toEqual(["screen$row__rfirst", "screen$row__rsecond-two"]);
+    expect(elements["screen$row__rfirst"]!.children).toEqual(["screen$title__rfirst"]);
+    expect(elements["screen$title__rfirst"]!.props).toEqual({ text: "One" });
+    expect(elements["screen$title__rsecond-two"]!.props).toEqual({ text: "Two" });
+    expect(result.expandedFrom["screen$title__rfirst"]!.innerKey).toBe("title__rfirst");
+  });
+
+  it("caps the expansion at maxItems and reports duplicate key suffixes", () => {
+    const capped = parsed({
+      params: { items: { type: "array", items: { type: "string" }, maxItems: 10 } },
+      spec: {
+        root: "row",
+        elements: {
+          row: { type: "Box", props: {}, children: ["item"] },
+          item: { type: "Text", props: { text: { $item: true } }, repeatParam: { param: "items", maxItems: 2 } },
+        },
+      },
+    });
+    const result = expandCompositions(screen("list", { items: ["a", "b", "c"] }), { compositions: { list: pinned(capped) } });
+    expect(result.issues).toEqual([expect.objectContaining({ code: "composition/repeat-max-items" })]);
+    expect(result.doc.screens[0]!.spec.elements["screen$row"]!.children).toEqual(["screen$item__r0", "screen$item__r1"]);
+
+    const keyed = parsed({
+      params: { rows: { type: "array", items: { type: "object", schema: { id: { type: "string", required: true } } }, maxItems: 10 } },
+      spec: {
+        root: "row",
+        elements: {
+          row: { type: "Box", props: {}, children: ["item"] },
+          item: { type: "Text", props: { text: { $item: "id" } }, repeatParam: { param: "rows", key: "id" } },
+        },
+      },
+    });
+    const collision = expandCompositions(screen("list", { rows: [{ id: "same" }, { id: "same" }] }), { compositions: { list: pinned(keyed) } });
+    expect(collision.issues).toEqual([expect.objectContaining({ code: "composition/repeat-key-collision" })]);
+    expect(collision.doc.screens[0]!.spec.elements["screen$row"]!.children).toEqual(["screen$item__rsame"]);
+  });
+
+  it("counts clones against the expansion budget", () => {
+    const composition = parsed({
+      params: { items: { type: "array", items: { type: "string" }, maxItems: 50 } },
+      spec: {
+        root: "row",
+        elements: {
+          row: { type: "Box", props: {}, children: ["item"] },
+          item: { type: "Text", props: { text: { $item: true } }, repeatParam: { param: "items" } },
+        },
+      },
+    });
+    const result = expandCompositions(
+      screen("list", { items: Array.from({ length: 10 }, (_, index) => `i${index}`) }),
+      { compositions: { list: pinned(composition) }, maxExpandedElements: 4 },
+    );
+    expect(result.issues.some((issue) => issue.code === "composition/expanded-elements")).toBe(true);
+  });
+
+  it("rejects the incompatible and forbidden placements at authoring time", () => {
+    const body = (elements: Record<string, unknown>, params: Record<string, unknown> = {
+      items: { type: "array", items: { type: "string" }, maxItems: 10 },
+    }) => parse({ params, slots: [], spec: { root: "row", elements } });
+
+    // repeatParam на корне.
+    expect(body({ row: { type: "Box", props: {}, repeatParam: { param: "items" } } }).success).toBe(false);
+    // repeatParam вместе со state-driven repeat.
+    expect(body({
+      row: { type: "Box", props: {}, children: ["item"] },
+      item: { type: "Text", props: {}, repeat: { statePath: "/list" }, repeatParam: { param: "items" } },
+    }).success).toBe(false);
+    // Параметр не массив / не объявлен.
+    expect(body({
+      row: { type: "Box", props: {}, children: ["item"] },
+      item: { type: "Text", props: {}, repeatParam: { param: "items" } },
+    }, { items: { type: "string" } }).success).toBe(false);
+    expect(body({
+      row: { type: "Box", props: {}, children: ["item"] },
+      item: { type: "Text", props: {}, repeatParam: { param: "missing" } },
+    }).success).toBe(false);
+    // maxItems выше объявленного параметром.
+    expect(body({
+      row: { type: "Box", props: {}, children: ["item"] },
+      item: { type: "Text", props: {}, repeatParam: { param: "items", maxItems: 11 } },
+    }).success).toBe(false);
+    // key на скалярных items.
+    expect(body({
+      row: { type: "Box", props: {}, children: ["item"] },
+      item: { type: "Text", props: {}, repeatParam: { param: "items", key: "id" } },
+    }).success).toBe(false);
+    // Вложенный repeatParam.
+    expect(body({
+      row: { type: "Box", props: {}, children: ["item"] },
+      item: { type: "Box", props: {}, children: ["inner"], repeatParam: { param: "items" } },
+      inner: { type: "Text", props: {}, repeatParam: { param: "items" } },
+    }).success).toBe(false);
+    // Зарезервированный суффикс в авторском ключе.
+    expect(body({
+      row: { type: "Box", props: {}, children: ["item__r0"] },
+      item__r0: { type: "Text", props: {} },
+    }).success).toBe(false);
+    // `@eui/Slot` внутри повторяемого поддерева.
+    expect(parse({
+      params: { items: { type: "array", items: { type: "string" }, maxItems: 10 } },
+      slots: ["body"],
+      spec: {
+        root: "row",
+        elements: {
+          row: { type: "Box", props: {}, children: ["item"] },
+          item: { type: "Box", props: {}, children: ["body-slot"], repeatParam: { param: "items" } },
+          "body-slot": { type: SLOT_TYPE, props: { name: "body" } },
+        },
+      },
+    }).success).toBe(false);
+  });
+
+  it("rejects $item/$index outside a repeatParam subtree and malformed directives", () => {
+    const params = { items: { type: "array", items: { type: "object", schema: { text: { type: "string" } } }, maxItems: 10 } };
+    // $item вне повторяемого поддерева.
+    expect(parse({
+      params,
+      spec: { root: "row", elements: { row: { type: "Box", props: { text: { $item: "text" } } } } },
+    }).success).toBe(false);
+    // Неизвестное поле item-объекта.
+    expect(parse({
+      params,
+      spec: {
+        root: "row",
+        elements: {
+          row: { type: "Box", props: {}, children: ["item"] },
+          item: { type: "Text", props: { text: { $item: "missing" } }, repeatParam: { param: "items" } },
+        },
+      },
+    }).success).toBe(false);
+    // `$item: true` на объектных items и `$index` не `true`.
+    expect(parse({
+      params,
+      spec: {
+        root: "row",
+        elements: {
+          row: { type: "Box", props: {}, children: ["item"] },
+          item: { type: "Text", props: { text: { $item: true } }, repeatParam: { param: "items" } },
+        },
+      },
+    }).success).toBe(false);
+    expect(parse({
+      params,
+      spec: {
+        root: "row",
+        elements: {
+          row: { type: "Box", props: {}, children: ["item"] },
+          item: { type: "Text", props: { order: { $index: "yes" } }, repeatParam: { param: "items" } },
+        },
+      },
+    }).success).toBe(false);
+  });
+});
+
+describe("composition v3 — slots with metadata (W8c)", () => {
+  const dictComposition = (body: Record<string, unknown>) => parsed({
+    slots: body.slots as Record<string, unknown>,
+    spec: body.spec as Record<string, unknown>,
+    params: {},
+  });
+
+  const shell = (slots: Record<string, unknown>, extra: Record<string, unknown> = {}) => parsed({
+    slots,
+    spec: {
+      root: "row",
+      elements: {
+        row: { type: "Box", props: {}, children: ["body-slot"] },
+        "body-slot": { type: SLOT_TYPE, props: { name: "body" } },
+        ...extra,
+      },
+    },
+  });
+
+  const child = (type = "Text") => ({ child: { type, props: { text: "x" }, slot: "body" } });
+
+  it("normalizes both declarations to the same expansion", () => {
+    const arrayForm = shell(["body"] as unknown as Record<string, unknown>);
+    const dictForm = shell({ body: {} });
+    const expandOne = (composition: CompositionDoc) =>
+      expandCompositions(screen("shell", {}, child()), { compositions: { shell: pinned(composition) } });
+    const fromArray = expandOne(arrayForm);
+    const fromDict = expandOne(dictForm);
+    expect(fromArray.issues).toEqual([]);
+    expect(fromDict.issues).toEqual([]);
+    expect(JSON.stringify(fromDict.doc)).toEqual(JSON.stringify(fromArray.doc));
+    expect(dictComposition({ slots: { body: {} }, spec: arrayForm.spec }).slots).toEqual({ body: {} });
+  });
+
+  it("reports an empty required slot and accepts it once filled", () => {
+    const composition = shell({ body: { required: true } });
+    const empty = expandCompositions(screen("shell"), { compositions: { shell: pinned(composition) } });
+    expect(empty.issues).toEqual([expect.objectContaining({ code: "composition/slot-required" })]);
+    const filled = expandCompositions(screen("shell", {}, child()), { compositions: { shell: pinned(composition) } });
+    expect(filled.issues).toEqual([]);
+  });
+
+  it("materializes fallback for an empty slot and drops it once the slot is filled", () => {
+    const composition = shell({ body: { required: true, fallback: ["empty"] } }, {
+      empty: { type: "Text", props: { text: "Nothing here" } },
+    });
+    const empty = expandCompositions(screen("shell"), { compositions: { shell: pinned(composition) } });
+    expect(empty.issues).toEqual([]);
+    expect(empty.doc.screens[0]!.spec.elements["screen$row"]!.children).toEqual(["screen$empty"]);
+    expect(empty.doc.screens[0]!.spec.elements["screen$empty"]!.props).toEqual({ text: "Nothing here" });
+
+    const filled = expandCompositions(screen("shell", {}, child()), { compositions: { shell: pinned(composition) } });
+    expect(filled.issues).toEqual([]);
+    expect(filled.doc.screens[0]!.spec.elements["screen$row"]!.children).toEqual(["child"]);
+    expect(filled.doc.screens[0]!.spec.elements["screen$empty"]).toBeUndefined();
+  });
+
+  it("enforces cardinality and allowedTypes at the reference point", () => {
+    const composition = shell({ body: { cardinality: { min: 2, max: 2 }, allowedTypes: ["Text"] } });
+    const one = expandCompositions(screen("shell", {}, child()), { compositions: { shell: pinned(composition) } });
+    expect(one.issues).toEqual([expect.objectContaining({ code: "composition/slot-cardinality" })]);
+
+    const wrongType = expandCompositions(
+      screen("shell", {}, { a: { type: "Text", props: {}, slot: "body" }, b: { type: "Box", props: {}, slot: "body" } }),
+      { compositions: { shell: pinned(composition) } },
+    );
+    expect(wrongType.issues).toEqual([expect.objectContaining({ code: "composition/slot-type" })]);
+
+    const ok = expandCompositions(
+      screen("shell", {}, { a: { type: "Text", props: {}, slot: "body" }, b: { type: "Text", props: {}, slot: "body" } }),
+      { compositions: { shell: pinned(composition) } },
+    );
+    expect(ok.issues).toEqual([]);
+  });
+
+  it("checks allowedRoles only when the caller supplies the canonical-role map", () => {
+    const composition = shell({ body: { allowedRoles: ["primary-action"] } });
+    const compositions = { shell: pinned(composition) };
+    const doc = screen("shell", {}, { a: { type: "Button", props: {}, slot: "body" } });
+    // Клиентское раскрытие ролей не знает — проверка молчит.
+    expect(expandCompositions(doc, { compositions }).issues).toEqual([]);
+    expect(expandCompositions(doc, { compositions, componentRoles: { Button: ["primary-action"] } }).issues).toEqual([]);
+    expect(expandCompositions(doc, { compositions, componentRoles: { Button: ["list-row"] } }).issues)
+      .toEqual([expect.objectContaining({ code: "composition/slot-role" })]);
+  });
+
+  it("rejects malformed slot metadata at authoring time", () => {
+    const spec = (extra: Record<string, unknown> = {}) => ({
+      root: "row",
+      elements: {
+        row: { type: "Box", props: {}, children: ["body-slot"] },
+        "body-slot": { type: SLOT_TYPE, props: { name: "body" } },
+        ...extra,
+      },
+    });
+    // Неизвестный fallback-ключ.
+    expect(parse({ slots: { body: { fallback: ["missing"] } }, spec: spec() }).success).toBe(false);
+    // Fallback — корень.
+    expect(parse({ slots: { body: { fallback: ["row"] } }, spec: spec() }).success).toBe(false);
+    // Fallback уже является ребёнком другого элемента.
+    expect(parse({
+      slots: { body: { fallback: ["inner"] } },
+      spec: {
+        root: "row",
+        elements: {
+          row: { type: "Box", props: {}, children: ["body-slot", "wrap"] },
+          "body-slot": { type: SLOT_TYPE, props: { name: "body" } },
+          wrap: { type: "Box", props: {}, children: ["inner"] },
+          inner: { type: "Text", props: {} },
+        },
+      },
+    }).success).toBe(false);
+    // Недостижимый элемент, не объявленный fallback'ом.
+    expect(parse({ slots: { body: {} }, spec: spec({ orphan: { type: "Text", props: {} } }) }).success).toBe(false);
+    // Fallback содержит слот.
+    expect(parse({
+      slots: { body: { fallback: ["alt"] }, extra: {} },
+      spec: {
+        root: "row",
+        elements: {
+          row: { type: "Box", props: {}, children: ["body-slot"] },
+          "body-slot": { type: SLOT_TYPE, props: { name: "body" } },
+          alt: { type: "Box", props: {}, children: ["extra-slot"] },
+          "extra-slot": { type: SLOT_TYPE, props: { name: "extra" } },
+        },
+      },
+    }).success).toBe(false);
+    // Противоречивая кардинальность и пустые списки.
+    expect(parse({ slots: { body: { cardinality: { min: 3, max: 1 } } }, spec: spec() }).success).toBe(false);
+    expect(parse({ slots: { body: { cardinality: {} } }, spec: spec() }).success).toBe(false);
+    expect(parse({ slots: { body: { allowedTypes: [] } }, spec: spec() }).success).toBe(false);
+    // Слот словаря без своего `@eui/Slot`-элемента.
+    expect(parse({ slots: { body: {}, extra: {} }, spec: spec() }).success).toBe(false);
+  });
+});

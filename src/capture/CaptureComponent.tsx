@@ -64,6 +64,15 @@ async function loadComponent(id: string, version: number, selection: PropsSelect
 }
 
 /**
+ * Поле paint-режима (план 2026-08-03 §3 D4, W3). `null` — обычный режим: поверхность остаётся
+ * непрозрачной и без поля, то есть существующие захваты не меняются ни на пиксель.
+ */
+function paintFieldMargin(): number | null {
+  const margin = readBootstrap()?.paint?.marginPx;
+  return typeof margin === "number" && Number.isFinite(margin) && margin >= 0 ? margin : null;
+}
+
+/**
  * Shared single-component capture surface: renders the resolved tree, then publishes the
  * readiness object built by `readyOf` (published version or draft rev — P1b).
  */
@@ -93,8 +102,18 @@ function ComponentCaptureSurface({ name, designSystem, theme, props, custom, rea
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Paint-режим: прозрачный фон (иначе `omitBackground` бессмыслен — краску закрывает
+  // `bg-background`) плюс поле вокруг компонента, чтобы тень/блюр попали в кадр целиком.
+  const paintMargin = paintFieldMargin();
   return <SurfaceSpacingScope systemId={designSystem} themeTokens={theme?.tokens}>
-    <div ref={ref} id="eui-capture-surface" className="bg-background text-foreground inline-block">
+    <div
+      ref={ref}
+      id="eui-capture-surface"
+      className={paintMargin === null ? "bg-background text-foreground inline-block" : "text-foreground inline-block"}
+      {...(paintMargin === null ? {} : { style: { padding: `${paintMargin}px`, background: "transparent" } })}
+    >
+      {/* Прозрачный документ: без этого `omitBackground` бессмыслен — краску закрыл бы фон body. */}
+      {paintMargin === null ? null : <style>{"html,body{background:transparent!important}"}</style>}
       <ThemeStyle content={theme} />
       <CaptureSurface designSystem={designSystem} custom={custom} tree={tree} initialState={{}} screenIds={new Set()} />
     </div>

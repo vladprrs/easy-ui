@@ -15,7 +15,7 @@ import { buildNavigationGraph, verifyEdge } from "./navigationGraph";
 import { validateRegionRules } from "./regionRules";
 import { isServicePrototypeDocKind, lintPrototypeArchitecture } from "./architectureLints";
 import { COMPOSITION_TYPE, SLOT_TYPE } from "../catalog/hostPrimitives/composition.definition";
-import type { CompositionDoc } from "./composition";
+import { compositionSlotNames, type CompositionDoc } from "./composition";
 import { docSurfaces, surfaceDesignSystem, surfaceOf } from "./surfaces";
 
 type Obj = Record<string, unknown>;
@@ -518,7 +518,7 @@ export function validatePrototype(
         if (!parent) issue(errors, [...ep, "slot"], "slot requires a parent element");
         else if (parent.type === COMPOSITION_TYPE) {
           // Композиция не разрешена (не передана в options) — имя слота проверит save-путь.
-          if (parentComposition && !parentComposition.slots.includes(childSlot)) issue(errors, [...ep, "slot"], `unknown slot for composition ${parent.props.composition as string}: ${childSlot}`);
+          if (parentComposition && !compositionSlotNames(parentComposition.slots).includes(childSlot)) issue(errors, [...ep, "slot"], `unknown slot for composition ${parent.props.composition as string}: ${childSlot}`);
         }
         else if (!parentIsCustom || parentDef?.capabilities?.namedSlots !== true) issue(errors, [...ep, "slot"], "slot is only allowed on a child of a custom component with named slots");
         else if (!(parentDef.slots ?? []).includes(childSlot)) issue(errors, [...ep, "slot"], `unknown slot for ${parent.type}: ${childSlot}`);

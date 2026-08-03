@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { CatalogRevisionSource } from "../catalogRevision";
 import { parseStoredCompositionDoc } from "../repos/compositions";
-import { isCompositionWithMetadata } from "../../src/prototype/composition";
+import { compositionSlotNames, isCompositionWithMetadata } from "../../src/prototype/composition";
 
 /** Discovery projection for the latest active composition publication of each id. */
 export function activeCompositionRevisionSources(db: Database): CatalogRevisionSource[] {
@@ -30,7 +30,7 @@ export function activeCompositionRevisionSources(db: Database): CatalogRevisionS
       meta: {
         propsJsonSchema: { type: "object", properties: Object.fromEntries(Object.entries(doc.params).map(([name, param]) => [name, { type: param.type }])) },
         events: [],
-        slots: [...doc.slots],
+        slots: compositionSlotNames(doc.slots),
       },
     } satisfies CatalogRevisionSource;
   });

@@ -59,6 +59,18 @@ export interface AcceptanceCase {
   referenceAssetId?: string | null;
   expectedGeometry?: { width: number; height: number } | null;
   casePolicyHash?: string;
+  /**
+   * Сами per-case допуски манифеста (W2), а не только их хэш: гейт `geometry` v2 (W3) читает
+   * `allowPaintOverflow`/`expectedClip` как вход вердикта. Хэш остаётся ключом инвалидации reuse,
+   * значения — входом политики; дублирования нет, это две разные роли одного объекта.
+   */
+  casePolicy?: { allowPaintOverflow?: boolean; expectedClip?: boolean; maxRawDiffPct?: number };
+  /**
+   * Ключи маркеров для детальных измерений геометрии (≤20; пусто — корневой маркер, W3).
+   * Манифест их пока не объявляет: контракт готов, поверхность в case-set появится вместе с
+   * потребителем, а не «на всякий случай».
+   */
+  geometryDetailKeys?: string[];
 }
 
 /** `caseId` из имени example: сам ключ, если он в charset, иначе стабильный хэш-суррогат. */

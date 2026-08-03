@@ -403,6 +403,47 @@ Anywhere a prop value is allowed, `{"$switch": …}` selects a value by the para
 - For other parameter types a missing case without a `default` is an expansion issue (`composition/switch-unresolved`) and the prop key is dropped.
 - The directive is v3-only: in a v1/v2 body an object with a `$switch` key stays an ordinary prop value.
 
+#### `repeatParam` — expansion over an array parameter
+
+An element of a v3 body may be cloned once per item of an `array` parameter. This is **expansion-time**: the list length comes from the value at the reference point, and nothing about it survives into the saved prototype. The state-driven `repeat` (`element.repeat`) is a separate, unchanged mechanism.
+
+```json
+{
+  "row":   { "type": "YpBox", "props": {}, "children": ["title"], "repeatParam": { "param": "rows", "key": "id", "maxItems": 8 } },
+  "title": { "type": "YpText", "props": { "text": { "$item": "title" }, "order": { "$index": true } } }
+}
+```
+
+- `param` must name a declared `array` parameter; optional `maxItems` may only lower the parameter's own `maxItems`; optional `key` names a field of the object `items` schema.
+- The **whole subtree** of the element is cloned. Clone keys live in the authored key space: `<key>__r<suffix>`, where the suffix is the item index or the sanitized (`[A-Za-z0-9-]`, ≤40 chars) value of the `key` field. Expanded keys therefore stay `<hostKey>$<innerKey>__r<suffix>` — `$` remains reserved for the expansion separator, and **`__r` is reserved in authored element keys of a v3 body** so clone keys can never collide with authored ones. A duplicate suffix from a non-unique `key` field is an expansion issue (`composition/repeat-key-collision`) and that item is skipped.
+- Inside the cloned subtree, props may use `{"$item": "fieldName"}` (a field of the current object item), `{"$item": true}` (the whole item, scalar arrays only) and `{"$index": true}`. Like `$param`, these substitute **only in props** — never in state pointers or event actions. Outside a `repeatParam` subtree they are rejected at authoring time.
+- More items than the cap is an expansion issue (`composition/repeat-max-items`) and the tail is dropped; clones count against `EXPANDED_ELEMENTS_LIMIT` and the tree-depth budget like any other element.
+- Rejected at authoring time: `repeatParam` on the composition root, on `@eui/Slot`, together with `repeat` on the same element, over a subtree containing `@eui/Slot`, and **nested inside another `repeatParam` subtree** (a nested repeat is out of scope for this wave).
+
+#### Slots with metadata
+
+`slots` stays additive: a v3 document may declare either the v1/v2 array of names or a dictionary `name → metadata`. Both forms are normalized to one shape internally, so an array declares the same slots with no constraints.
+
+```json
+{
+  "slots": {
+    "body": {
+      "required": true,
+      "allowedTypes": ["YpListRow"],
+      "allowedRoles": ["list-row"],
+      "cardinality": { "min": 1, "max": 3 },
+      "fallback": ["empty-state"]
+    }
+  }
+}
+```
+
+- `fallback` names elements **of the same body** that are materialized when the slot receives no children. A fallback element must exist, must not be the root, must not be a child of another element, must not be claimed by two slots, and its subtree must not contain `@eui/Slot`. A v3 body rejects any other unreachable element (no parent, not a fallback).
+- The contract is checked **at the reference point**, during expansion: an empty `required` slot without a fallback (`composition/slot-required`), a violated `cardinality` (`composition/slot-cardinality`) and a child whose type is outside `allowedTypes` (`composition/slot-type`) are expansion issues. A filled slot ignores its fallback; an empty slot with a fallback satisfies both `required` and `cardinality.min`.
+- `allowedRoles` names roles from the `canonicalFor` glossary (`docs/canonical-roles.md`). The glossary and component `definition_meta` live on the server, so slug validity is checked when the composition is written (`422 validation_failed`, `unknown canonical role`) and role membership of a child is checked in the prototype **save path**, where the server passes the design system's role map into expansion (`composition/slot-role`). Client-side expansion validates types and cardinality only.
+- The publish probe of a composition has no reference point — it supplies no slot children — so it skips the slot contract but still expands fallbacks.
+- `when` over a subtree containing `@eui/Slot` remains rejected: conditional slots would orphan routed children.
+
 ### v1 restrictions
 
 `compositionDocSchema` enforces all of the following for a **v1** document (v2 lifts only the nesting rule):

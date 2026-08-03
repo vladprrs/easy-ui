@@ -1,4 +1,4 @@
-import type { CompositionDoc } from "../prototype/composition";
+import { compositionSlotNames, type CompositionDoc } from "../prototype/composition";
 import type { JsonValue, PrototypeDoc, RegionKind } from "../prototype/schema";
 import { insertComposition, replaceSubtreeWithComposition } from "./compositions";
 import { patchDocMeta, patchScreen, setElementProps, setElementRegion, setElementSlot, type Screen } from "./docMutations";
@@ -114,7 +114,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         compositionId: action.compositionId,
         keptChildren: action.keptChildren,
         // Имя слота берётся из документа композиции: оставленные дети едут именно в него.
-        slotName: action.composition.slots[0],
+        slotName: compositionSlotNames(action.composition.slots)[0],
         params: action.params,
       });
       if (doc === state.doc) return state;

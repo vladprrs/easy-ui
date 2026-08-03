@@ -30,7 +30,7 @@ const hashOf = (payload: unknown): string => sha256(canonicalStringify(payload))
  * единственный механизм автоматической инвалидации накопленного reuse. Признанная плата за
  * поэтапность (план §3 D1).
  */
-export const CASE_FINGERPRINT_ALGO_VERSION = 2;
+export const CASE_FINGERPRINT_ALGO_VERSION = 3;
 
 /** Заглушка readiness-политики до W4 (`docs/plans/2026-08-03-…` §5 W4). */
 export const READINESS_POLICY_HASH_V0 = "readiness-policy-v0";

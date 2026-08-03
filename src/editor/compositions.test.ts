@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import compositionRaw from "../../test/fixtures/architecture/ctyp-payment-success.composition.json";
 import screenRaw from "../../test/fixtures/architecture/composition-screen.json";
 import { COMPOSITION_TYPE, SLOT_TYPE } from "../catalog/hostPrimitives/composition.definition";
-import { compositionDocSchema, expandedKey, type CompositionDocV2 } from "../prototype/composition";
+import { compositionDocSchema, compositionSlotNames, expandedKey, type CompositionDocV2 } from "../prototype/composition";
 import { prototypeDocSchema, type PrototypeDoc } from "../prototype/schema";
 import {
   buildCompositionFromSubtree, compositionMapFromPins, defaultParams, expandForEditor, insertComposition, replaceSubtreeWithComposition,
@@ -142,7 +142,7 @@ describe("buildCompositionFromSubtree + replaceSubtreeWithComposition", () => {
     expect(built.doc.spec.elements[slotKey]).toEqual({ type: SLOT_TYPE, props: { name: "body" } });
 
     const replaced = replaceSubtreeWithComposition(cardScreen, "home", "card", {
-      compositionId: "success-shell", keptChildren: built.keptChildren, slotName: built.doc.slots[0],
+      compositionId: "success-shell", keptChildren: built.keptChildren, slotName: compositionSlotNames(built.doc.slots)[0],
     });
     const elements = replaced.screens[0]!.spec.elements;
     expect(elements.card!.children).toEqual(["title", "body"]);

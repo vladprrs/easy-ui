@@ -286,16 +286,18 @@ test("caseSetIdOf and the stored row agree on the address", () => {
 
 // ------------------------------------------------- инвалидация reuse на границе волны (D1)
 
-test("algoVersion 2 invalidates every fingerprint accumulated by the examples path of W1", () => {
-  // Граница волны обязана обнулить накопленный reuse: `case_policy_hash` вошёл в состав входов,
-  // и старый результат относится к другой модели случая (план §3 D1).
-  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(2);
+test("algoVersion bump invalidates every fingerprint accumulated by earlier waves", () => {
+  // Граница волны обязана обнулить накопленный reuse: в W2 во входы вошёл `case_policy_hash`,
+  // в W3 — геометрия 2.0 (`probe:"paint"`, другой вердикт по тем же props), поэтому старый
+  // результат относится к другой модели случая (план §3 D1).
+  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(3);
   const base = {
     candidateId: `cand_${"0".repeat(64)}`, caseKey: "alpha", propsHash: "props-1",
     surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
     readinessPolicyHash: READINESS_POLICY_HASH_V0, captureEnvFingerprint: CAPTURE_ENV_FINGERPRINT_V0,
     casePolicyHash: CASE_POLICY_HASH_V0, referenceAssetId: null,
   };
+  expect(caseFingerprint({ ...base, algoVersion: 3 })).not.toBe(caseFingerprint({ ...base, algoVersion: 2 }));
   expect(caseFingerprint({ ...base, algoVersion: 2 })).not.toBe(caseFingerprint({ ...base, algoVersion: 1 }));
   // Случай case-set'а с собственной политикой и эталоном отличается от одноимённого examples-случая.
   expect(caseFingerprintV0({ ...base, casePolicyHash: "cset-policy" })).not.toBe(caseFingerprintV0(base));

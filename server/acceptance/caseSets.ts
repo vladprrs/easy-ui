@@ -331,6 +331,9 @@ export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCas
       referenceAssetId: item.referenceAssetId ?? null,
       expectedGeometry: item.expectedGeometry ?? null,
       casePolicyHash: casePolicyHashOf(manifest, item.id),
+      // W3: допуски геометрии (`allowPaintOverflow`/`expectedClip`) — вход вердикта гейта, а не
+      // только материал хэша; без них манифест объявлял бы намерение, которого никто не читает.
+      ...(manifest.policy?.perCase?.[item.id] ? { casePolicy: manifest.policy.perCase[item.id] } : {}),
     });
   }
   if (!cases.some((item) => item.aliasOfCaseId === null)) {

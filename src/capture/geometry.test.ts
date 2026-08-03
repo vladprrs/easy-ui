@@ -135,3 +135,58 @@ describe("geometry analysis", () => {
     expect(rectIntersection({ x:0, y:0, width:5, height:5 }, { x:10, y:10, width:5, height:5 })).toBeNull();
   });
 });
+
+// --- Geometry Contract 2.0 (план 2026-08-03 §5 W3) ------------------------------------------
+
+describe("layout bounds and attribution", () => {
+  const surface = box(0, 0, 400, 400);
+
+  it("out-of-flow и трансформированные потомки не раздувают layoutBounds, но попадают в атрибуцию", () => {
+    // Исходный дефект §19.2: декоративная подсветка шире контента, а union getClientRects
+    // засчитывал её в габариты. `rects[]` остаётся прежним, `layoutBounds` — честным.
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface"><span data-eui-key="root" style="display:contents">`
+      + `<div data-rect="body"></div>`
+      + `<div data-rect="halo" style="position:absolute;filter:blur(68px)"></div>`
+      + `<div data-rect="moved" style="transform:translateX(30px)"></div>`
+      + `</span></div>`;
+    const restore = installRects({
+      surface, body: box(64, 64, 140, 96), halo: box(46, 47, 175, 130), moved: box(94, 64, 40, 20),
+    });
+    try {
+      const result = collectGeometry({ detailKeys: [] });
+      expect(result.detailKeys).toEqual(["root"]);
+      const detail = result.details![0]!;
+      expect(detail.key).toBe("root");
+      expect(detail.layoutBounds).toEqual({ x: 64, y: 64, width: 140, height: 96 });
+      // Тот же набор коробок в старом измерении по-прежнему даёт «раздутые» 175×130.
+      expect(result.rects[0]).toMatchObject({ x: 46, y: 47, width: 175, height: 130 });
+      const causes = detail.effectSources.map((item) => item.cause);
+      expect(causes).toContain("position:absolute");
+      expect(causes.some((cause) => cause.startsWith("transform:"))).toBe(true);
+      expect(detail.effectSources.every((item) => item.elementKey === "root")).toBe(true);
+    } finally { restore(); }
+  });
+
+  it("клип-предок записывается с признаком effective, когда он реально режет краску", () => {
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface"><div data-rect="card" style="overflow:hidden">`
+      + `<span data-eui-key="root" style="display:contents"><div data-rect="body"></div>`
+      + `<div data-rect="halo" style="position:absolute"></div></span></div></div>`;
+    const restore = installRects({ surface, card: box(64, 64, 140, 96), body: box(64, 64, 140, 96), halo: box(46, 47, 175, 130) });
+    try {
+      const detail = collectGeometry({ detailKeys: ["root"] }).details![0]!;
+      expect(detail.layoutBounds).toEqual({ x: 64, y: 64, width: 140, height: 96 });
+      expect(detail.clipChain[0]).toMatchObject({ property: "overflow", effective: true });
+    } finally { restore(); }
+  });
+
+  it("детали не собираются, пока их не запросили: контракт probe=geometry не меняется", () => {
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface"><span data-eui-key="root" style="display:contents"><div data-rect="body"></div></span></div>`;
+    const restore = installRects({ surface, body: box(0, 0, 10, 10) });
+    try {
+      const plain = collectGeometry();
+      expect(plain.details).toBeUndefined();
+      expect(plain.detailKeys).toBeUndefined();
+      expect(collectGeometry({ detailKeys: [] }).details).toHaveLength(1);
+    } finally { restore(); }
+  });
+});

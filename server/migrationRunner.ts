@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { canonicalStringify } from "../src/capture/canonicalJson";
 import { inputPrototypeDocSchema, type PrototypeDoc } from "../src/prototype/schema";
-import { compositionDocSchema, collectCompositionRefs, type CompositionDoc } from "../src/prototype/composition";
+import { compositionDocSchema, collectCompositionRefs, compositionSlotNames, type CompositionDoc } from "../src/prototype/composition";
 import { COMPOSITION_TYPE } from "../src/catalog/hostPrimitives/composition.definition";
 import { hostPrimitiveNames } from "../src/catalog/hostPrimitives/definitions";
 import { docSurfaces, surfaceDesignSystem, surfaceOf } from "../src/prototype/surfaces";
@@ -103,7 +103,7 @@ function compositionMetaSource(row: { id: string; designSystem: string; version:
           properties: Object.fromEntries(Object.entries(doc.params).map(([name, parameter]) => [name, { type: parameter.type }])),
         },
         events: [],
-        slots: [...doc.slots],
+        slots: compositionSlotNames(doc.slots),
       },
     };
   } catch {

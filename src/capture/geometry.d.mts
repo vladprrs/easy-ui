@@ -37,6 +37,37 @@ export interface GeometryIssue {
   message: string;
   detail: Record<string, unknown>;
 }
+/**
+ * Атрибуция источника, красящего за пределами своей in-flow border-box (план W3): потомок с
+ * `filter`/`box-shadow`/`outline`/`transform` либо выпавший из потока (`position:absolute|fixed`).
+ */
+export interface GeometryEffectSource {
+  /** Ключ ближайшего маркера-владельца (`data-eui-key`); пустая строка — элемент вне маркеров. */
+  elementKey: string;
+  elementPath: string;
+  /** `filter:blur(68px)`, `box-shadow:…`, `position:absolute`, `transform:…`, `outline:…`. */
+  cause: string;
+  rect: GeometryBox;
+}
+/** Звено цепочки клипа: предок с `overflow:hidden|clip` или `clip-path`. */
+export interface GeometryClipLink {
+  key: string;
+  elementPath: string;
+  property: "overflow" | "clip-path";
+  value: string;
+  /** Клип реально режет объединение layout-боксов и источников эффектов. */
+  effective: boolean;
+  rect: GeometryBox;
+}
+/** Детальное измерение одного маркера: честный layout-контур + причины выхода краски за него. */
+export interface GeometryDetail {
+  key: string;
+  instance: number;
+  /** Union border-box'ов **in-flow** потомков в CSS px относительно поверхности. */
+  layoutBounds: GeometryBox | null;
+  effectSources: GeometryEffectSource[];
+  clipChain: GeometryClipLink[];
+}
 /** Raw browser-side measurements; `analyzeGeometry` derives ownership and issues from them. */
 export interface GeometryMeasurements {
   rects: GeometryRect[];
@@ -47,6 +78,9 @@ export interface GeometryMeasurements {
   frame: GeometryRoleRect;
   content: GeometryBox;
   scroll: { width: number; height: number };
+  /** Присутствует только когда запрошен `detailKeys` (режим `probe:"paint"`, W3). */
+  details?: GeometryDetail[];
+  detailKeys?: string[];
 }
 export interface GeometryCollection extends GeometryMeasurements {
   viewportOwnership: GeometryViewportOwnership;
@@ -67,4 +101,9 @@ export function analyzeGeometry(input?: {
   viewportOwnership: GeometryViewportOwnership;
   issues: GeometryIssue[];
 };
-export function collectGeometry(options?: {limit?:number; roleKeys?: Partial<Record<GeometryRole, string>>}): GeometryMeasurements;
+export function collectGeometry(options?: {
+  limit?: number;
+  roleKeys?: Partial<Record<GeometryRole, string>>;
+  /** ≤20 ключей маркеров для детального измерения; пустой массив — корневой маркер (W3). */
+  detailKeys?: string[];
+}): GeometryMeasurements;

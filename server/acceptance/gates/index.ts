@@ -10,6 +10,7 @@ import { contractGate } from "./contract";
 import { defaultsGate } from "./defaults";
 import { determinismGate } from "./determinism";
 import { geometryGate } from "./geometry";
+import { geometry2Gate } from "./geometry2";
 import { renderGate } from "./render";
 import type { Gate } from "./types";
 
@@ -21,10 +22,14 @@ export const IMPLEMENTED_GATES: Partial<Record<GateName, Gate>> = {
   defaults: defaultsGate,
   audit: auditGate,
   render: renderGate,
-  geometry: geometryGate,
+  // W3: боевой гейт геометрии (`probe:"paint"`, layout/paint/overflow). Advisory-v1
+  // (`gates/geometry.ts`) выключен — он остаётся в дереве только как исторический источник
+  // v1-метрик и в реестр больше не входит.
+  geometry: geometry2Gate,
   determinism: determinismGate,
 };
 
-export { auditGate, contractGate, defaultsGate, determinismGate, geometryGate, renderGate };
+export { auditGate, contractGate, defaultsGate, determinismGate, geometryGate, geometry2Gate, renderGate };
+export { createGeometry2Gate, geometryTolerancesOf, paintShaKey } from "./geometry2";
 export * from "./types";
 export { captureCase, CaptureInfraError } from "./capture";

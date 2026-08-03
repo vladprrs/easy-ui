@@ -2,7 +2,9 @@ import type { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import {
   compositionDocSchema,
+  compositionSlotNames,
   expandCompositions,
+  normalizeCompositionSlots,
   type CompositionDoc,
   isCompositionWithMetadata,
   type CompositionDocWithMetadata,
@@ -54,7 +56,25 @@ export function parseCompositionDocument(value: unknown): AnyCompositionDoc {
 export const isCompositionV2 = (doc: CompositionDoc | AnyCompositionDoc): doc is CompositionDocWithMetadata =>
   isCompositionWithMetadata(doc as { version?: unknown });
 
+/**
+ * `allowedRoles` слота (W8c) ссылается на тот же глоссарий `canonicalFor`, что и сам
+ * документ. Глоссарий (`server/catalog/roles.json`) есть только у сервера, поэтому
+ * известность слага проверяется здесь, а не в клиентской схеме композиции.
+ */
+function assertSlotRoles(doc: CompositionDoc): void {
+  const slots = normalizeCompositionSlots(doc.slots);
+  const unknown: { path: string[]; message: string }[] = [];
+  for (const [name, meta] of Object.entries(slots)) {
+    for (const role of meta.allowedRoles ?? []) {
+      if (canonicalRoleSlugs.has(role)) continue;
+      unknown.push({ path: ["slots", name, "allowedRoles"], message: `unknown canonical role: ${role}` });
+    }
+  }
+  if (unknown.length) throw new ApiError(422, "validation_failed", "Composition slot roles are invalid", { issues: unknown });
+}
+
 function assertCanonicalRoles(db: Database, doc: CompositionDoc, designSystem: string, excludeId?: string): void {
+  assertSlotRoles(doc);
   if (!isCompositionV2(doc)) return;
   const roles = [...new Set(doc.canonicalFor ?? [])];
   const unknown = roles.filter((role) => !canonicalRoleSlugs.has(role));
@@ -441,7 +461,10 @@ export function validatePublishedCompositionExpansion(
       },
     }],
   } as PrototypeDoc;
-  const expanded = expandCompositions(probe, { compositions, designSystem });
+  // Probe не имеет точки ссылки: детей у слотов нет по построению, поэтому контракт слотов
+  // (`required`/`cardinality`/`allowedTypes`) здесь не проверяется — он проверяется там, где
+  // композицию действительно используют (save-путь прототипа). Fallback при этом раскрывается.
+  const expanded = expandCompositions(probe, { compositions, designSystem, validateSlotContract: false });
   if (expanded.issues.length) {
     throw new ApiError(422, "validation_failed", "Published composition expands to an invalid tree", {
       issues: expanded.issues.map((issue) => ({ path: issue.path.split("/").filter(Boolean), message: issue.message })),
@@ -519,7 +542,7 @@ export class CompositionRepo {
       return {
         id: row.id, name: row.name, designSystem: row.design_system, headRev: row.head_rev,
         latestVersion: row.latest, updatedAt: row.updated_at,
-        description: doc.description, params: Object.keys(doc.params), slots: doc.slots,
+        description: doc.description, params: Object.keys(doc.params), slots: compositionSlotNames(doc.slots),
         ...(row.deleted_at === null ? {} : { deleted: true as const, deletedAt: row.deleted_at, reason: row.delete_reason }),
       };
     });

@@ -1677,6 +1677,21 @@ const compositionParamV3Schema = z.looseObject({
   maxItems: z.number().int().optional(),
   required: z.boolean().optional(), default: z.json().optional(), description: z.string().optional(),
 });
+/**
+ * Слот v3 (план 2026-08-03 W8c): имя как раньше **или** метаданные слота.
+ * Форма — discovery-проекция; строгая схема живёт в `src/prototype/compositionV3/slots.ts`.
+ */
+const compositionSlotsV3Schema = z.union([
+  z.array(z.string()),
+  z.record(z.string(), z.looseObject({
+    required: z.boolean().optional(),
+    allowedRoles: z.array(z.string()).optional(),
+    allowedTypes: z.array(z.string()).optional(),
+    cardinality: z.looseObject({ min: z.number().int().optional(), max: z.number().int().optional() }).optional(),
+    fallback: z.array(z.string()).optional(),
+    description: z.string().optional(),
+  })),
+]);
 const compositionDocumentSchema = z.discriminatedUnion("version", [
   z.looseObject({ version: z.literal(1), ...compositionDocumentCommonSchema }),
   z.looseObject({ version: z.literal(2), atomicLevel: z.enum(["molecule", "organism", "template", "page"]), ...compositionDocumentCommonSchema }),
@@ -1685,6 +1700,7 @@ const compositionDocumentSchema = z.discriminatedUnion("version", [
     atomicLevel: z.enum(["molecule", "organism", "template", "page"]),
     ...compositionDocumentCommonSchema,
     params: z.record(z.string(), compositionParamV3Schema),
+    slots: compositionSlotsV3Schema,
   }),
 ]);
 const compositionVersionSchema = z.looseObject({
@@ -2222,6 +2238,13 @@ export const capabilitiesResponseSchema = z.object({
     componentValidate: z.boolean(),
     /** Geometry-probe компонентной поверхности (план 2026-08-02 P1b): probe=geometry на component-screenshot ручках. */
     componentGeometry: z.boolean(),
+    /**
+     * Geometry Contract 2.0 (план 2026-08-03 §5 W3): режим `probe:"paint"` (прозрачная поверхность
+     * + маргин-поле, geometry и PNG из одной сессии) и боевой гейт `geometry` с
+     * `layoutBounds`/`paintBounds`/`overflow.sources`. Режим доступен только на candidate-пути
+     * приёмки — на публичных screenshot-ручках `probe` остаётся `geometry`.
+     */
+    geometryPaint: z.boolean(),
     /** Draft-preview сохранённой head-ревизии (план 2026-08-02 P1b); false при EASYUI_VALIDATE_DISABLED=1. */
     componentDraftPreview: z.boolean(),
     /** Head-tracking служебных прототипов (план 2026-08-02 P2): `track` в lifecycle-роуте. */

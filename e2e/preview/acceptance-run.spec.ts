@@ -67,13 +67,26 @@ async function pollRun(request: APIRequestContext, runId: string): Promise<RunVi
   throw new Error("acceptance run did not terminalize within 180s");
 }
 
+/**
+ * Постановка кандидата троттлится тем же лимитом, что и validate (`429 validate_in_flight` /
+ * `429 queue_full`, см. `docs/server-api.md`): параллельные acceptance-спеки конкурируют за те же
+ * два глобальных слота. Ограниченный ретрай — часть контракта ручки, а не маскировка флейка.
+ */
+async function createCandidate(request: APIRequestContext, componentId: string): Promise<{ candidateId: string; status: string; rev: number }> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const response = await request.post(`/api/components/${componentId}/candidates`, { data: {} });
+    if (response.status() === 200) return await response.json() as { candidateId: string; status: string; rev: number };
+    expect([429], `${response.status()}: ${await response.text()}`).toContain(response.status());
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error("candidate creation stayed throttled for 60s");
+}
+
 test("candidate → run → cases → evidence, and a repeat run reuses every case", async ({ request }) => {
   test.setTimeout(600_000);
   await ensureFixture(request);
 
-  const candidateResponse = await request.post(`/api/components/${COMPONENT_ID}/candidates`, { data: {} });
-  expect(candidateResponse.status(), await candidateResponse.text()).toBe(200);
-  const candidate = await candidateResponse.json() as { candidateId: string; status: string; rev: number };
+  const candidate = await createCandidate(request, COMPONENT_ID);
   expect(candidate.candidateId).toMatch(/^cand_[0-9a-f]{64}$/);
   expect(candidate.status).toBe("validated");
 

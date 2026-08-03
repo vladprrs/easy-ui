@@ -143,6 +143,9 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // P1b: geometry-probe компонентной поверхности и draft-preview head-ревизии.
       // Draft-preview гаснет тем же kill-switch'ем P8: постановка джобы собирает candidate-bundle.
       componentGeometry: true,
+      // W3: геометрия 2.0 — `probe:"paint"` на candidate-пути приёмки и боевой гейт `geometry`
+      // (layout/paint/overflow с названными источниками).
+      geometryPaint: true,
       componentDraftPreview: options.validateDisabled !== true,
       // P2 (план 2026-08-02): `track: "head"` в lifecycle-роуте — служебный прототип
       // резолвит компонентные пины на последние active-публикации без пересохранения.
