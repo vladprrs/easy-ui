@@ -28,6 +28,58 @@ export function matchAllowed(path, allowedUrls) {
   return false;
 }
 
+/**
+ * Детерминизм-флаги растеризации (план 2026-08-03-renderer-contract-2 §2.1 P1, §5 R2a).
+ *
+ * Базовый набор — явные дубли того, что playwright и так передаёт сам (`chromiumSwitches()`):
+ * смысл дубля в том, что флаг попадает в **наш** `launchDeterminismArgsHash` и перестаёт
+ * зависеть от внутренностей конкретной версии playwright.
+ *
+ * Полный набор (`enabled === true`, флаг `EASYUI_RENDERER_FLAGS=1` на стороне сервера) добавляет
+ * то, что бьёт по реальным причинам cross-host расхождения растра: SIMD-пути Skia, хинтинг
+ * FreeType, субпиксельное позиционирование глифов, LCD-текст и историю инвалидации тайлов.
+ *
+ * `--font-render-hinting=none` существует **только** в `chrome-headless-shell` (полный
+ * `chrome` этого switch'а не знает) — отсюда тест «фактически запускаемый бинарь принимает все
+ * детерминизм-флаги» в `server/screenshot-worker.test.ts` (C-m11).
+ *
+ * Список отсортирован и возвращается копией: он хешируется дословно. Решение о том, включены ли
+ * флаги, принимает **сервер** — воркер окружение не читает вовсе, args приезжают в payload
+ * джобы (T-m17: хеш и фактические args не могут разъехаться).
+ */
+export const BASE_DETERMINISM_ARGS = Object.freeze([
+  "--force-color-profile=srgb",
+  "--hide-scrollbars",
+]);
+
+/** Дополнение полного набора: флаги, реально меняющие растр (см. `BASE_DETERMINISM_ARGS`). */
+export const STRICT_DETERMINISM_ARGS = Object.freeze([
+  "--disable-font-subpixel-positioning",
+  "--disable-lcd-text",
+  "--disable-partial-raster",
+  "--disable-skia-runtime-opts",
+  "--font-render-hinting=none",
+]);
+
+/** Детерминизм-args для запуска: база, а при `enabled` — база + строгий набор, отсортированно. */
+export function buildDeterminismArgs(enabled) {
+  const args = enabled === true ? [...BASE_DETERMINISM_ARGS, ...STRICT_DETERMINISM_ARGS] : [...BASE_DETERMINISM_ARGS];
+  return args.sort();
+}
+
+/**
+ * Опции browser-контекста, одинаковые для всех джоб (E1, C-m18). Хешируются сервером в
+ * `contextOptionsHash` — контекст влияет на кадр не меньше флагов запуска, и его дрейф обязан
+ * менять отпечаток рендерера. Пер-джобные опции (viewport/dsf/colorScheme) сюда не входят: они
+ * и так параметры кадра. `serviceWorkers:"block"` — граница egress, а не растр, поэтому он
+ * остаётся при вызове `newContext` и в хеш не входит.
+ */
+export const CAPTURE_CONTEXT_OPTIONS = Object.freeze({
+  locale: "ru-RU",
+  timezoneId: "Europe/Moscow",
+  reducedMotion: "reduce",
+});
+
 /** Exact chromium launch args enforcing the egress boundary (asserted verbatim by tests). */
 export function buildLaunchArgs(denyPort, capturePort) {
   return [
@@ -69,14 +121,16 @@ async function run(job) {
   let browser;
   let context;
   try {
-    browser = await chromium.launch({ headless: true, args: buildLaunchArgs(denyPort, capturePort) });
+    // Детерминизм-args приходят в payload джобы: решение принимает сервер, который тем же
+    // списком считает `launchDeterminismArgsHash` (R2a). Воркер env не читает — иначе
+    // объявленный отпечаток и фактический запуск разъехались бы молча.
+    const determinismArgs = Array.isArray(job.determinismArgs) ? job.determinismArgs : [];
+    browser = await chromium.launch({ headless: true, args: [...buildLaunchArgs(denyPort, capturePort), ...determinismArgs] });
     context = await browser.newContext({
       viewport: job.viewport,
       deviceScaleFactor: job.deviceScaleFactor,
       colorScheme: job.colorScheme,
-      locale: "ru-RU",
-      timezoneId: "Europe/Moscow",
-      reducedMotion: "reduce",
+      ...CAPTURE_CONTEXT_OPTIONS,
       serviceWorkers: "block",
     });
 

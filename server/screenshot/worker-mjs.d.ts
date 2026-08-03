@@ -2,6 +2,10 @@
 // its pure helpers (the worker itself is a standalone .mjs run under node).
 declare module "*/screenshot-worker.mjs" {
   export function buildLaunchArgs(denyPort: number, capturePort: string | number): string[];
+  export const BASE_DETERMINISM_ARGS: readonly string[];
+  export const STRICT_DETERMINISM_ARGS: readonly string[];
+  export function buildDeterminismArgs(enabled: boolean): string[];
+  export const CAPTURE_CONTEXT_OPTIONS: Readonly<{ locale: string; timezoneId: string; reducedMotion: string }>;
   export function matchAllowed(path: string, allowedUrls: readonly string[]): boolean;
   export function canonicalStringify(value: unknown): string;
   export function readyToExpected(ready: Record<string, unknown>): Record<string, unknown>;

@@ -37,6 +37,7 @@ import { readFileSync } from "node:fs";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import { canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 import pin from "./rendererPin.json";
+import { buildDeterminismArgs as workerDeterminismArgs, CAPTURE_CONTEXT_OPTIONS } from "../../scripts/screenshot-worker.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -89,20 +90,37 @@ export interface RendererDeclaration {
 }
 
 /**
- * Детерминизм-флаги запуска (§2.1 P1). В R1 здесь только явные дубли того, что playwright уже
- * передаёт сам: смысл дубля — зафиксировать флаг в **нашем** хеше, чтобы отпечаток перестал
- * зависеть от внутренностей `chromiumSwitches()` конкретной версии playwright. Остальные флаги
- * (`--disable-skia-runtime-opts`, `--font-render-hinting=none`, …) добавляет R2a — их появление
- * меняет `launchDeterminismArgsHash` и, значит, отпечаток: это и есть заявленная точка
- * инвалидации reuse №2 (§4).
+ * Включены ли детерминизм-флаги растеризации (`EASYUI_RENDERER_FLAGS=1`, §10).
  *
- * Список отсортирован и возвращается копией: он хешируется дословно.
+ * Дефолт образа — OFF: включение меняет пиксели и потому обесценивает существующие эталоны
+ * (порядок прод-включения — §7.6). Dev/CI поднимают флаг в `playwright.config.ts` (webServer),
+ * ровно как `EASYUI_SURFACES`/`EASYUI_ACCEPTANCE_MATRIX`.
+ */
+export function rendererFlagsEnabled(): boolean {
+  return process.env.EASYUI_RENDERER_FLAGS === "1";
+}
+
+/**
+ * Детерминизм-флаги запуска (§2.1 P1, R2a). Единственный источник списка — воркер
+ * (`scripts/screenshot-worker.mjs`): тот же массив едет в payload джобы и в хеш отпечатка, так
+ * что «хеш флагов ≠ фактические args» конструктивно невозможно (§9, T-m17).
+ *
+ * При выключенном флаге остаются только явные дубли того, что playwright передаёт сам, — то
+ * есть отпечаток прода R2a не меняет. Включение флага меняет `launchDeterminismArgsHash` и,
+ * значит, отпечаток: это заявленная точка инвалидации reuse №2 (§4).
  */
 export function buildDeterminismArgs(): string[] {
-  return ["--force-color-profile=srgb", "--hide-scrollbars"];
+  return workerDeterminismArgs(rendererFlagsEnabled());
 }
 
 const determinismArgsHash = (): string => sha256(canonicalStringify(buildDeterminismArgs()));
+
+/**
+ * Хеш констант browser-контекста воркера (locale/timezone/reducedMotion, C-m18). Считается из
+ * кода, а не читается из манифеста, по той же причине, что и хеш флагов: контекст задаёт сам
+ * репозиторий, и его дрейф обязан менять отпечаток без пересборки образа.
+ */
+export const CONTEXT_OPTIONS_HASH: string = sha256(canonicalStringify(CAPTURE_CONTEXT_OPTIONS));
 
 /**
  * Отпечаток рендерера — чистая функция объявления и хэша readiness-политики.
@@ -166,7 +184,7 @@ export function declarationFromManifest(manifest: Record<string, unknown>): Rend
     appFontsSha256: asString(manifest.appFontsSha256),
     systemLibsHash: asString(manifest.systemLibsHash),
     launchDeterminismArgsHash: determinismArgsHash(),
-    contextOptionsHash: asString(manifest.contextOptionsHash),
+    contextOptionsHash: CONTEXT_OPTIONS_HASH,
     colorProfile: "srgb",
     source: "manifest",
     provenance: provenanceRaw === undefined || provenanceRaw === null ? null : {
@@ -221,7 +239,7 @@ export function fallbackDeclaration(): RendererDeclaration {
     appFontsSha256: null,
     systemLibsHash: null,
     launchDeterminismArgsHash: determinismArgsHash(),
-    contextOptionsHash: null,
+    contextOptionsHash: CONTEXT_OPTIONS_HASH,
     colorProfile: "srgb",
     source: "fallback",
     provenance: null,

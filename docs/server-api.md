@@ -1358,6 +1358,34 @@ kill-switch `EASYUI_RENDERER_STRICT_MANIFEST=0` деградирует отка�
 переименована в `observedCaptureEnvFingerprint` и продолжает ехать в evidence и в метрики гейта
 `readiness` — теперь под именем, которое не путается с объявленным рендерером.
 
+**Детерминизм-флаги запуска (волна R2a).** Список флагов растеризации живёт в одном месте —
+`scripts/screenshot-worker.mjs` (`BASE_DETERMINISM_ARGS` + `STRICT_DETERMINISM_ARGS`), и **тот же**
+массив едет двумя путями: в `launchDeterminismArgsHash` объявленного рендерера и в payload джобы
+(`WorkerJob.determinismArgs`), которым воркер запускает chromium. Воркер окружение не читает
+вовсе: так «объявленный хеш ≠ фактические args» становится невозможным по конструкции.
+
+| Состояние | Args запуска | Смысл |
+|---|---|---|
+| `EASYUI_RENDERER_FLAGS` не задан (дефолт образа, прод) | `--force-color-profile=srgb`, `--hide-scrollbars` | явные дубли того, что playwright передаёт сам: флаг попадает в наш хеш и перестаёт зависеть от версии playwright; пиксели не меняются |
+| `EASYUI_RENDERER_FLAGS=1` (dev/CI; прод — по чек-листу [деплоя](#deployment)) | те же + `--disable-font-subpixel-positioning`, `--disable-lcd-text`, `--disable-partial-raster`, `--disable-skia-runtime-opts`, `--font-render-hinting=none` | снимает зависимость растра от SIMD-путей Skia, хинтинга FreeType, субпиксельного origin глифа, LCD-текста и истории инвалидации тайлов |
+
+Включение флага **меняет пиксели** и, значит, `launchDeterminismArgsHash` → renderer fingerprint →
+`case_fingerprint`: reuse приёмки честно инвалидируется, а существующие визуальные эталоны
+становятся снятыми другим рендерером. Поэтому dev/CI держат флаг включённым (`playwright.config.ts`,
+команда `webServer` — прецедент `EASYUI_SURFACES`/`EASYUI_ACCEPTANCE_MATRIX`), а прод — выключенным
+до массового переснятия эталонов.
+
+`--font-render-hinting=none` (как и `--deterministic-mode`) существует **только** в
+`chrome-headless-shell`; полный `chrome` такой switch молча игнорирует. Поэтому
+`server/screenshot-worker.test.ts` статически проверяет, что имя каждого детерминизм-switch'а
+присутствует в фактически запускаемом бинаре: смена channel/headless обязана красить тест, а не
+тихо ронять детерминизм растра.
+
+`contextOptionsHash` считается из экспортируемой константы воркера `CAPTURE_CONTEXT_OPTIONS`
+(`locale`, `timezoneId`, `reducedMotion`) — из кода, а не из манифеста образа: контекст задаёт
+репозиторий, и его дрейф обязан менять отпечаток без пересборки. Пер-джобные `viewport`/`dsf`/
+`colorScheme` в хеш не входят — это параметры кадра, а не рендерера.
+
 **Пин и drift-чек.** `server/capture/rendererPin.json` фиксирует `rendererVersion`, точные версии
 `playwright` и `@playwright/test`, revision/версию `chromium` и `chromium-headless-shell` и digest
 базового образа. `npm run verify:renderer` (часть `npm run verify`) падает, если фактический

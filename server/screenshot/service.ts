@@ -15,7 +15,7 @@ import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
 import { docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
 import { surfaceDesignSystem, surfaceOf } from "../../src/prototype/surfaces";
-import { compareBrowserVersion, policyHashOf, rendererDeclaration, rendererFingerprintOf, strictManifestEnabled } from "../capture/renderer";
+import { buildDeterminismArgs, compareBrowserVersion, policyHashOf, rendererDeclaration, rendererFingerprintOf, strictManifestEnabled } from "../capture/renderer";
 import { buildStaticAllowedUrls, rendererBuildFrom } from "./allowedUrls";
 import { classifyCaptureErrors } from "./noise";
 import { CaptureSessionStore, JOB_DEADLINE_MS } from "./sessions";
@@ -224,6 +224,12 @@ export interface WorkerJob {
   probe?: CaptureProbe; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
   /** ≤20 ключей маркеров для детальных измерений; пустой массив — корневой маркер (W3). */
   geometryDetailKeys?: string[];
+  /**
+   * Детерминизм-args запуска chromium (R2a): их выбирает **сервер** тем же списком, которым
+   * считает `launchDeterminismArgsHash` объявленного рендерера. Воркер `EASYUI_RENDERER_FLAGS`
+   * не читает — иначе объявленный отпечаток и фактический запуск разъезжались бы молча (T-m17).
+   */
+  determinismArgs: string[];
 }
 /** Доказательство readiness и отпечаток окружения, опубликованные шеллом (W4). */
 export type WorkerReadiness = {
@@ -733,6 +739,7 @@ export class ScreenshotService {
           expected: job.expected,
         },
         allowedUrls: job.allowedUrls, viewport: job.viewport, deviceScaleFactor: job.dsf, colorScheme: job.theme, waitForFonts: job.waitForFonts, expected: job.expected,
+        determinismArgs: buildDeterminismArgs(),
         ...(job.probe ? { probe: job.probe, geometryLimit: GEOMETRY_RECT_LIMIT, ...(job.geometryRoleKeys ? { geometryRoleKeys: job.geometryRoleKeys } : {}) } : {}),
         ...(job.probe === "paint" ? { geometryDetailKeys: job.geometryDetailKeys ?? [] } : {}),
       };
