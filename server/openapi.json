@@ -7478,11 +7478,31 @@
                 "schema": {
                   "additionalProperties": {},
                   "properties": {
+                    "acceptanceRunId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "bundleHash": {
                       "type": "string"
                     },
                     "cached": {
                       "type": "boolean"
+                    },
+                    "candidateId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "catalogRevision": {
                       "type": "string"
@@ -7532,7 +7552,9 @@
                     "catalogRevision",
                     "superseded",
                     "cached",
-                    "warnings"
+                    "warnings",
+                    "candidateId",
+                    "acceptanceRunId"
                   ],
                   "type": "object"
                 }
@@ -7586,7 +7608,8 @@
                                 "revision_conflict",
                                 "already_published",
                                 "source_hash_mismatch",
-                                "candidate_unavailable"
+                                "candidate_unavailable",
+                                "acceptance_run_in_flight"
                               ],
                               "type": "string"
                             },
@@ -7831,7 +7854,7 @@
                 }
               }
             },
-            "description": "revision_conflict | already_published | source_hash_mismatch (sourceHash does not describe the current head revision) | candidate_unavailable (the candidate bundle vanished between build and read; validate again) | catalog_changed | canonical_role_conflict"
+            "description": "revision_conflict | already_published | source_hash_mismatch (sourceHash does not describe the current head revision) | candidate_unavailable (the candidate bundle vanished between build and read; validate again) | catalog_changed | canonical_role_conflict | acceptance_run_in_flight (the referenced candidate still has a queued/running acceptance run)"
           },
           "413": {
             "content": {
@@ -7851,7 +7874,7 @@
                 }
               }
             },
-            "description": "validation_failed | asset_not_found | atomic_policy_violation | event_schema_not_serializable | acceptance_matrix_disabled (candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off) | unsupported_option (candidateId/acceptanceRunId are wired into the promote saga from wave W1c)"
+            "description": "validation_failed | asset_not_found | atomic_policy_violation | event_schema_not_serializable | acceptance_matrix_disabled (candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off) | acceptance_run_mismatch (the acceptance run belongs to another candidate or ran under another policy profile) | acceptance_run_not_passed (the acceptance run is not a terminal pass/pass_with_exceptions)"
           },
           "429": {
             "content": {
@@ -7864,7 +7887,7 @@
             "description": "validate_in_flight (a validate/promote build is already in flight for this user) | queue_full (global validate concurrency cap reached)"
           }
         },
-        "summary": "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404).",
+        "summary": "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate under the same policy profile (422 acceptance_run_mismatch) with a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`.",
         "x-easyui-validated": false
       }
     },

@@ -36,14 +36,27 @@ export const VALIDATE_GLOBAL_CONCURRENT = 2;
 const inFlightUsers = new Set<string>();
 let globalInFlight = 0;
 
+/**
+ * Опции слота. `system: true` — приоритетная схема плана §5 W1c: приёмка (`routes/acceptance.ts`,
+ * оркестратор) конкурирует за **общий** cap `VALIDATE_GLOBAL_CONCURRENT`, но per-user множество
+ * не трогает. Иначе владелец компонента, запустивший 8–15-минутный acceptance-run, получал бы
+ * `429 validate_in_flight` на собственный интерактивный validate всё это время: `inFlightUsers`
+ * ключуется userId, а системный путь ходит под тем же пользователем.
+ *
+ * Третьего слота сознательно нет (на 1 CPU это +1 тяжёлый typecheck поверх capture) — системный
+ * вызов честно занимает один из двух общих.
+ */
+export type ValidateSlotOptions = { system?: boolean };
+
 /** Троттлинг префлайта. 429 `validate_in_flight` — повтор той же учётки; 429 `queue_full` — общий cap. */
-export async function withValidateSlot<T>(userId: string, run: () => Promise<T>): Promise<T> {
-  if (inFlightUsers.has(userId)) throw new ApiError(429, "validate_in_flight", "A component validate run is already in flight for this user; retry after it finishes");
+export async function withValidateSlot<T>(userId: string, run: () => Promise<T>, options: ValidateSlotOptions = {}): Promise<T> {
+  const system = options.system === true;
+  if (!system && inFlightUsers.has(userId)) throw new ApiError(429, "validate_in_flight", "A component validate run is already in flight for this user; retry after it finishes");
   if (globalInFlight >= VALIDATE_GLOBAL_CONCURRENT) throw new ApiError(429, "queue_full", "Component validate queue is full; retry later");
-  inFlightUsers.add(userId);
+  if (!system) inFlightUsers.add(userId);
   globalInFlight++;
   try { return await run(); }
-  finally { inFlightUsers.delete(userId); globalInFlight--; }
+  finally { if (!system) inFlightUsers.delete(userId); globalInFlight--; }
 }
 
 /**
@@ -195,14 +208,14 @@ export type ValidateReceipt = {
  * promote из RFC, план §5 R1-B3). Дешёвые db-зависимые проверки (provenance, asset-refs)
  * идут до кэша и на каждый вызов: их результат от состояния БД, а не от исходника.
  */
-export async function validateComponentHead(db: Database, dataDir: string, id: string, userId: string): Promise<ValidateReceipt> {
+export async function validateComponentHead(db: Database, dataDir: string, id: string, userId: string, slot: ValidateSlotOptions = {}): Promise<ValidateReceipt> {
   const repo = new ComponentRepo(db);
   const head = repo.source(id);
   const rawFigma = (db.query("SELECT figma_json FROM component_revisions WHERE component_id=? AND rev=?").get(id, head.rev) as { figma_json: string | null }).figma_json;
   validateStoredFigma(db, rawFigma);
   collectAndValidateComponentAssetRefs(db, head.source);
   const sourceHash = sha256(head.source);
-  const { entry, cached } = await withValidateSlot(userId, () => getOrComputeCandidate(dataDir, id, head.rev, head.source, sourceHash));
+  const { entry, cached } = await withValidateSlot(userId, () => getOrComputeCandidate(dataDir, id, head.rev, head.source, sourceHash), slot);
   if (!entry.ok) {
     const failure = entry.failure!;
     throw new ApiError(failure.status, failure.code, failure.message, failure.issues === undefined ? {} : { issues: failure.issues });

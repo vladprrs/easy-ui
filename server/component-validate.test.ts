@@ -186,6 +186,25 @@ export default function ParityProbe({ props }: any) { return <div>{props.size ??
     // Слоты освобождаются — повторный запуск той же учётки снова проходит.
     await expect(withValidateSlot("user-a", async () => 5)).resolves.toBe(5);
   });
+
+  /**
+   * План 2026-08-03 §5 W1c: системный слот приёмки. Оркестратор ходит под тем же userId, что и
+   * владелец компонента, поэтому per-user ключ отправлял бы его собственный интерактивный
+   * validate в 429 на все 8–15 минут рана. Глобальный cap при этом обязан остаться в силе.
+   */
+  test("системный validate приёмки не занимает per-user слот владельца, но считается в общем cap", async () => {
+    const slow = () => new Promise<number>((resolvePromise) => setTimeout(() => resolvePromise(1), 40));
+    const system = withValidateSlot("owner", slow, { system: true });
+    // Интерактивный validate того же владельца проходит: per-user множество системным вызовом не тронуто.
+    await expect(withValidateSlot("owner", async () => 2)).resolves.toBe(2);
+    // Но общий cap = 2 продолжает действовать: системный + один пользовательский заполняют его.
+    const interactive = withValidateSlot("owner", slow);
+    await expect(withValidateSlot("other", async () => 3)).rejects.toMatchObject({ status: 429, code: "queue_full" });
+    // Два системных вызова тоже упираются в общий cap, а не проходят мимо очереди.
+    await expect(withValidateSlot("owner", async () => 4, { system: true })).rejects.toMatchObject({ status: 429, code: "queue_full" });
+    await expect(Promise.all([system, interactive])).resolves.toEqual([1, 1]);
+    await expect(withValidateSlot("owner", async () => 5)).resolves.toBe(5);
+  });
 });
 
 describe("candidate cache GC (P8)", () => {

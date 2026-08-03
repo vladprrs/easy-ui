@@ -1247,7 +1247,7 @@ export const publishComponentContract = registerContract({
  */
 const componentPromoteConflictEnvelopeSchema = z.strictObject({
   error: z.union([
-    z.looseObject({ code: z.enum(["revision_conflict", "already_published", "source_hash_mismatch", "candidate_unavailable"]), message: z.string() }),
+    z.looseObject({ code: z.enum(["revision_conflict", "already_published", "source_hash_mismatch", "candidate_unavailable", "acceptance_run_in_flight"]), message: z.string() }),
     componentPublishReuseErrorSchema,
   ]),
 });
@@ -1259,7 +1259,7 @@ const componentPromoteConflictEnvelopeSchema = z.strictObject({
  */
 export const promoteComponentContract = registerContract({
   method: "POST", path: "/api/components/{id}/promote",
-  summary: "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404).",
+  summary: "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate under the same policy profile (422 acceptance_run_mismatch) with a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`.",
   status: 201,
   requestSchema: z.strictObject({
     ...casBody,
@@ -1267,7 +1267,7 @@ export const promoteComponentContract = registerContract({
     expectedCatalogRevision: z.string().optional(),
     supersede: z.enum(["auto", "none"]).optional(),
     reuseOverride: componentReuseOverrideSchema.optional(),
-    /** W1a: принимаются формой, но требуют EASYUI_ACCEPTANCE_MATRIX=1 и приезжают в сагу в W1c. */
+    /** A9 (W1c): ссылки на durable-приёмку; требуют EASYUI_ACCEPTANCE_MATRIX=1. */
     candidateId: z.string().optional(),
     acceptanceRunId: z.string().optional(),
   }),
@@ -1276,6 +1276,7 @@ export const promoteComponentContract = registerContract({
     sourceHash: z.string(), bundleHash: z.string(),
     themeVersion: z.number().nullable(), catalogRevision: z.string(),
     superseded: z.array(z.number()), cached: z.boolean(), warnings: z.array(z.string()),
+    candidateId: z.string().nullable(), acceptanceRunId: z.string().nullable(),
   }),
   errors: [
     errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound,
@@ -1288,8 +1289,10 @@ export const promoteComponentContract = registerContract({
     { status: 422, code: "asset_not_found" },
     { status: 422, code: "atomic_policy_violation" },
     { status: 422, code: "event_schema_not_serializable" },
+    { status: 409, code: "acceptance_run_in_flight", description: "the referenced candidate still has a queued/running acceptance run" },
     { status: 422, code: "acceptance_matrix_disabled", description: "candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off" },
-    { status: 422, code: "unsupported_option", description: "candidateId/acceptanceRunId are wired into the promote saga from wave W1c" },
+    { status: 422, code: "acceptance_run_mismatch", description: "the acceptance run belongs to another candidate or ran under another policy profile" },
+    { status: 422, code: "acceptance_run_not_passed", description: "the acceptance run is not a terminal pass/pass_with_exceptions" },
     { status: 429, code: "validate_in_flight", description: "a validate/promote build is already in flight for this user" },
     { status: 429, code: "queue_full", description: "global validate concurrency cap reached" },
   ],

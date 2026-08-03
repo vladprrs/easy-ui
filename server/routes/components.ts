@@ -29,6 +29,8 @@ import { assertAtomicPolicy } from "../atomicPolicy";
 import { getCandidateBundle, readCandidate } from "../components/candidates";
 import { validateComponentHead } from "../components/validate";
 import { promoteComponent } from "../components/promote";
+import type { AcceptanceRepo } from "../acceptance/repo";
+import { isCandidateId, isRunId } from "../acceptance/ids";
 
 const slug=/^[a-z0-9]+(?:-[a-z0-9]+)*$/, componentName=/^[A-Z][A-Za-z0-9]*$/;
 function bad(message:string,path="source"):never{throw new ApiError(422,"validation_failed","Component is invalid",{issues:[{path:[path],message}]});}
@@ -196,7 +198,7 @@ async function validatedExtractionForPublish(dataDir:string,sourceHash:string):P
   return {sourceHash,extracted:entry.extracted};
 }
 
-export async function routeComponents(request:Request,db:Database,segments:string[],principal:Principal,dataDir:string,reuseGateMode:ReuseGateMode=DEFAULT_REUSE_GATE_MODE,validate:{disabled?:boolean}={},acceptance:{disabled?:boolean;matrix?:boolean}={}):Promise<Response>{
+export async function routeComponents(request:Request,db:Database,segments:string[],principal:Principal,dataDir:string,reuseGateMode:ReuseGateMode=DEFAULT_REUSE_GATE_MODE,validate:{disabled?:boolean}={},acceptance:{disabled?:boolean;matrix?:boolean;repo?:AcceptanceRepo}={}):Promise<Response>{
   const repo=new ComponentRepo(db);
   // `?includeDeleted=1` — единственный способ увидеть надгробия: голый GET по-прежнему
   // отдаёт 404 для мягко удалённого компонента (совместимость с driver.mjs и src/api/client.ts).
@@ -309,12 +311,19 @@ export async function routeComponents(request:Request,db:Database,segments:strin
   // ручки нет (404) и `features.acceptancePromote=false`.
   if(tail[0]==="promote"&&tail.length===1){if(acceptance.disabled)throw new ApiError(404,"not_found","Component promote is disabled");if(request.method!=="POST")throw new ApiError(405,"method_not_allowed","Method not allowed");const actor=requireResourceOwner(db,"components",id,principal);const systemId=repo.row(id).design_system;requireActiveDesignSystem(db,systemId,["designSystem"]);requireResourceOwner(db,"design_systems",systemId,principal);const b=body(await readJson(request));
     for(const key of Object.keys(b))if(!["baseRev","sourceHash","expectedCatalogRevision","supersede","reuseOverride","message","candidateId","acceptanceRunId"].includes(key))throw new ApiError(400,"invalid_request",`Unknown field: ${key}`);
-    // A7 (план 2026-08-03 §5 W1a/W1c): ссылки на durable-кандидата и его ран принимаются формой,
-    // но не работают без матричной приёмки. Отказ типизован: агент обязан отличать «фича выключена
-    // в этой сборке» от «сервер не знает такого поля» — второе он чинил бы удалением параметра.
+    // A7/A9 (план 2026-08-03 §5 W1c): ссылки на durable-кандидата и его ран уезжают в сагу
+    // (`components/promote.ts`), где сверяются и записываются в строку версии. Без матричного
+    // стека отказ типизован (`acceptance_matrix_disabled`), а не «unknown field»: агент обязан
+    // отличать «фича выключена в этой сборке» от «сервер не знает такого поля» — второе он чинил
+    // бы удалением параметра.
+    let acceptanceRefs;
     if(b.candidateId!==undefined||b.acceptanceRunId!==undefined){
-      if(!acceptance.matrix)throw new ApiError(422,"acceptance_matrix_disabled","candidateId/acceptanceRunId require EASYUI_ACCEPTANCE_MATRIX=1");
-      throw new ApiError(422,"unsupported_option","candidateId/acceptanceRunId are accepted by promote from wave W1c");
+      if(!acceptance.matrix||!acceptance.repo)throw new ApiError(422,"acceptance_matrix_disabled","candidateId/acceptanceRunId require EASYUI_ACCEPTANCE_MATRIX=1");
+      // Форма id проверяется до lookup'а (канон `routes/acceptance.ts`): произвольная строка иначе
+      // отличала бы «нет строки» от «не тот формат» и давала бы оракул по чужой приёмке.
+      if(b.candidateId!==undefined&&(typeof b.candidateId!=="string"||!isCandidateId(b.candidateId)))throw new ApiError(400,"invalid_request","candidateId must be a candidate id");
+      if(b.acceptanceRunId!==undefined&&(typeof b.acceptanceRunId!=="string"||!isRunId(b.acceptanceRunId)))throw new ApiError(400,"invalid_request","acceptanceRunId must be an acceptance run id");
+      acceptanceRefs={repo:acceptance.repo,...(b.candidateId===undefined?{}:{candidateId:b.candidateId as string}),...(b.acceptanceRunId===undefined?{}:{acceptanceRunId:b.acceptanceRunId as string})};
     }
     const sourceHash=text(b.sourceHash,"sourceHash")!;
     if(!/^[0-9a-f]{64}$/.test(sourceHash))throw new ApiError(400,"invalid_request","sourceHash must be a sha256 hex digest");
@@ -323,10 +332,10 @@ export async function routeComponents(request:Request,db:Database,segments:strin
     const promoteOverride=b.reuseOverride===undefined?undefined:parseWith(reuseOverrideSchema,b.reuseOverride,"reuseOverride is invalid");
     if(promoteOverride!==undefined&&!actor.isAdmin)throw new ApiError(403,"admin_required","Only an admin may override the reuse gate");
     let promoted;
-    try { promoted=await promoteComponent(db,dataDir,{id,baseRev:base(b),sourceHash,supersede:(b.supersede as "auto"|"none"|undefined)??"auto",actor:{userId:actor.userId,isAdmin:actor.isAdmin},mode:reuseGateMode,...(expectedCatalogRevision===undefined?{}:{expectedCatalogRevision}),...(text(b.message,"message",false)===undefined?{}:{message:text(b.message,"message",false)!}),...(promoteOverride===undefined?{}:{override:promoteOverride})}); }
+    try { promoted=await promoteComponent(db,dataDir,{id,baseRev:base(b),sourceHash,supersede:(b.supersede as "auto"|"none"|undefined)??"auto",actor:{userId:actor.userId,isAdmin:actor.isAdmin},mode:reuseGateMode,...(expectedCatalogRevision===undefined?{}:{expectedCatalogRevision}),...(text(b.message,"message",false)===undefined?{}:{message:text(b.message,"message",false)!}),...(promoteOverride===undefined?{}:{override:promoteOverride}),...(acceptanceRefs===undefined?{}:{acceptance:acceptanceRefs})}); }
     catch(error){ if(error instanceof ReuseGateRejection) return reuseRejectionResponse(db,error); throw error; }
     // KPI §9: fingerprints промоушена — единственный источник измерения churn'а постфактум.
-    writeAuditEvent(db,{actorId:actor.userId,action:"component.promoted",subjectType:"component",subjectId:id,detail:{version:promoted.version,rev:promoted.rev,sourceHash:promoted.sourceHash,bundleHash:promoted.bundleHash,hostAbiVersion:promoted.hostAbiVersion,themeVersion:promoted.themeVersion,catalogRevision:promoted.catalogRevision,superseded:promoted.superseded,supersede:(b.supersede as string|undefined)??"auto",cached:promoted.cached}});
+    writeAuditEvent(db,{actorId:actor.userId,action:"component.promoted",subjectType:"component",subjectId:id,detail:{version:promoted.version,rev:promoted.rev,sourceHash:promoted.sourceHash,bundleHash:promoted.bundleHash,hostAbiVersion:promoted.hostAbiVersion,themeVersion:promoted.themeVersion,catalogRevision:promoted.catalogRevision,superseded:promoted.superseded,supersede:(b.supersede as string|undefined)??"auto",cached:promoted.cached,...(promoted.candidateId===null?{}:{candidateId:promoted.candidateId}),...(promoted.acceptanceRunId===null?{}:{acceptanceRunId:promoted.acceptanceRunId})}});
     return json(promoted,201,{...noStore,location:`/api/components/${id}/versions/${promoted.version}`});}
   if(tail[0]==="versions"){
     // POST /versions/:version/status — manual lifecycle transition with CAS on statusRev (K.2).

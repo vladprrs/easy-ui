@@ -1317,6 +1317,16 @@ describe("author driver usages and audit verbs", () => {
     const strayPromoteFlag = await run(api, ["promote", "stars", "--tree"]);
     expect(strayPromoteFlag.exitCode).toBe(1);
     expect(strayPromoteFlag.stderr).toContain("unknown flag for promote: --tree");
+    // W1c: `accept`/`accept-status` берут ровно один аргумент, а `--timeout-sec` ограничен.
+    const noAcceptTarget = await run(api, ["accept"]);
+    expect(noAcceptTarget.exitCode).toBe(1);
+    expect(noAcceptTarget.stderr).toContain("invalid arguments for accept");
+    const badTimeout = await run(api, ["accept", "stars", "--timeout-sec", "2"]);
+    expect(badTimeout.exitCode).toBe(1);
+    expect(badTimeout.stderr).toContain("--timeout-sec must be an integer from 10 to 7200");
+    const strayAcceptFlag = await run(api, ["accept", "stars", "--supersede", "auto"]);
+    expect(strayAcceptFlag.exitCode).toBe(1);
+    expect(strayAcceptFlag.stderr).toContain("unknown flag for accept: --supersede");
   });
 });
 
@@ -1354,6 +1364,25 @@ describe("author driver promote verb", () => {
     const versions = await (await fetch(`${api}/components/promote-cli/versions`)).json() as { version: number; status: string }[];
     expect(versions.map((row) => [row.version, row.status])).toEqual([[1, "superseded"], [2, "active"]]);
   }, 180_000);
+
+  /** W1c: `--refresh` держит форму сервера (`none|failed|all|{caseIds}`), а не булеву деградацию. */
+  test("accept parses --refresh into the server's shape", () => {
+    expect(parseArgs(["accept", "pay-card", "--refresh", "failed"])).toMatchObject({ cmd: "accept", args: ["pay-card"], flags: { refresh: "failed" } });
+    expect(parseArgs(["accept", "pay-card", "--refresh", "alpha, beta"])).toMatchObject({ flags: { refresh: { caseIds: ["alpha", "beta"] } } });
+    expect(parseArgs(["accept", "pay-card", "--policy", "pixel-strict-v1", "--json"])).toMatchObject({ flags: { policy: "pixel-strict-v1", json: true } });
+    expect(parseArgs(["accept-status", "acc_1", "--evidence", "run.zip"])).toMatchObject({ cmd: "accept-status", args: ["acc_1"], flags: { evidence: "run.zip" } });
+  });
+
+  /** Деградация без матричного стека: читаемое сообщение вместо серии 404 по ручкам. */
+  test("accept refuses readably when the server has no acceptance matrix", async () => {
+    const { api, db } = await setup();
+    seedComponent(db, "matrixless", "Matrixless");
+    for (const args of [["accept", "matrixless"], ["accept-status", "acc_00000000-0000-0000-0000-000000000000"]]) {
+      const result = await run(api, args);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("features.acceptanceMatrix is off");
+    }
+  }, 60_000);
 
   test("promote fails readably against a server with the acceptance kill-switch on", async () => {
     const { api, db } = await setup(undefined, undefined, { acceptanceDisabled: true });

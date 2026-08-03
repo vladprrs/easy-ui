@@ -196,7 +196,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         // acceptance-модуль. Без `options.acceptance` (флаг OFF) роут отвечает 404 на весь набор.
         const acceptance=await routeAcceptance(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.acceptance); if(acceptance) return finish(acceptance);
         if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),principal,options.dataDir,options.serveDist));
-        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{disabled:options.validateDisabled===true},{disabled:options.acceptanceDisabled===true,matrix:options.acceptance!==undefined}));
+        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{disabled:options.validateDisabled===true},{disabled:options.acceptanceDisabled===true,matrix:options.acceptance!==undefined,...(options.acceptance?{repo:options.acceptance.repo}:{})}));
         if(segments[1]==="compositions") return finish(await routeCompositions(request,db,segments.slice(1),principal));
         if(segments[1]==="assets") return finish(await routeAssets(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
         if(segments[1]==="design-systems") return finish(await routeDesignSystems(request,db,segments.slice(1),principal,{spacingResolverV2Disabled:options.spacingResolverV2Disabled===true}));

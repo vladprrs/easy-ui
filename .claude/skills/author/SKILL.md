@@ -424,6 +424,32 @@ superseded: v3 (warm candidate: no recompile)
 - Promote **не** обходит каталого-временные проверки: имя host-примитива, каноническая роль, атомарная политика и asset-refs перепрогоняются на публикации.
 - `publish` остаётся рабочим и не меняется — это путь для случаев, когда приёмка не нужна (или сервер её погасил).
 
+### Матричная приёмка семейства: `accept`
+
+`accept` — серверная приёмка всех состояний компонента одной командой вместо самописных matrix-скриптов: `POST /candidates` (иммутабельный кандидат по head-ревизии) → `POST /acceptance-runs` → poll до терминального вердикта. Набор случаев строит **сервер** (в этой волне — именованные `examples` определения), он же считает reuse, severity и evidence.
+
+```bash
+node driver.mjs accept pay-payment-card                       # кандидат → ран → poll → вердикт
+node driver.mjs accept pay-payment-card --refresh failed      # переснять только упавшие случаи
+node driver.mjs accept pay-payment-card --refresh alpha,beta  # переснять перечисленные case id
+node driver.mjs accept pay-payment-card --evidence run.zip    # + скачать evidence-архив
+node driver.mjs accept-status acc_…                           # вердикт уже поставленного рана
+```
+
+```
+acceptance pay-payment-card run acc_8f1c… verdict fail
+cases: 49/49 reused=41 failed=2 policy=default-v1
+failed cases (worst first):
+  disabled-dark [fail] severity=structure#1 gates: geometry=fail (paint overflow 12px, source .highlight)
+evidence: GET /api/acceptance-runs/acc_8f1c…/evidence (pass --evidence <file.zip> to download)
+```
+
+- Требует `features.acceptanceMatrix` в `/api/capabilities` (opt-in `EASYUI_ACCEPTANCE_MATRIX=1`); без него верб падает читаемо, а путь `promote` продолжает работать.
+- Прогресс (`completed/total`, `reused`, ETA) идёт в **stderr** — stdout принадлежит `--json`. Exit: 0 — `pass`/`pass_with_exceptions`, 2 — `fail`/`error`/`cancelled` и клиентский таймаут (`--timeout-sec`, дефолт 1800; ран на сервере продолжается, добирать вердикт — `accept-status <runId>`).
+- Байты evidence по умолчанию **не** качаются: печатается адрес архива; `--evidence <file.zip>` сохраняет zip (`manifest.json` + `SHA256SUMS` + артефакты).
+- `409 acceptance_run_in_flight` — у кандидата уже есть живой ран: не ставить второй, дождаться его через `accept-status`.
+- Ссылки приёмки на публикации: `promote` принимает `candidateId`/`acceptanceRunId` (тело запроса, не флаги верба) — ран обязан быть терминальным `pass`/`pass_with_exceptions` этого же кандидата, иначе `422 acceptance_run_mismatch`/`acceptance_run_not_passed`; при живом ране — `409 acceptance_run_in_flight`. Обе ссылки записываются в строку опубликованной версии как provenance.
+
 ### Служебные прототипы: галереи, `track: head`, профиль readiness
 
 Probe-прототип (стикершит компонентов) нужен только со стадии молекул — атом принимается `preview`'ом. Если он всё же нужен, объявляй его служебным сразу после создания, **lifecycle-роутом, а не полем документа** (формат документа таких полей не имеет):

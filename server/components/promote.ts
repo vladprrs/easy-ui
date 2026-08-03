@@ -10,6 +10,8 @@ import { assertPublishRoleAvailable, duplicateWarnings, type ReuseGateMode, type
 import { importPublished, materializeSource, sha256 } from "./pipeline";
 import { ensureDraftCandidate } from "./validate";
 import { getCandidateBundle } from "./candidates";
+import type { AcceptanceRepo, CandidateRow } from "../acceptance/repo";
+import { isTerminalRunStatus } from "../acceptance/repo";
 
 /**
  * Promote (RFC candidate-acceptance-pipeline §4.3, волна R1) — **сага**, не одна транзакция:
@@ -26,12 +28,29 @@ import { getCandidateBundle } from "./candidates";
  * Фаза B (одна короткая синхронная транзакция): `activate` + `pinAssets` + `recordValidation`
  * + auto-supersede прочих active-версий через инварианты `setStatus`.
  *
+ * Волна W1c (план 2026-08-03 §5, амендмент A9): необязательные ссылки `candidateId`/
+ * `acceptanceRunId` сверяются в фазе A.1 (`resolveAcceptanceRefs`) и записываются в фазе B —
+ * плоскими TEXT-receipts на строке версии плюс перевод кандидата в `promoted`.
+ *
  * Идемпотентность/recovery: крах фазы A компенсируется `fail()`/`failStagingPublishes`, а
  * расширенный `already_published`-чек (`repos/components.ts:stage`) пропускает повторный
  * promote тех же `{baseRev, sourceHash}` — он создаёт версию с новым номером.
  */
 
 export type PromoteSupersede = "auto" | "none";
+
+/**
+ * Ссылки на durable-приёмку (амендмент A9 плана 2026-08-03, RFC §4.3 шаг 5). Приезжают только при
+ * `EASYUI_ACCEPTANCE_MATRIX=1` — иначе роут отказывает `422 acceptance_matrix_disabled` ещё до саги.
+ *
+ * `repo` передаётся как зависимость, а не резолвится здесь: promote обязан работать и без
+ * матричного стека, а импорт живого оркестратора в сагу сделал бы флаг неоткатываемым.
+ */
+export type PromoteAcceptance = {
+  repo: AcceptanceRepo;
+  candidateId?: string;
+  acceptanceRunId?: string;
+};
 
 export type PromoteInput = {
   id: string;
@@ -43,6 +62,8 @@ export type PromoteInput = {
   actor: { userId: string; isAdmin: boolean };
   mode: ReuseGateMode;
   override?: ReuseOverride;
+  /** A9: ссылки на кандидата/ран приёмки; отсутствие поля — receipt-only promote (R1). */
+  acceptance?: PromoteAcceptance;
 };
 
 export type PromoteResult = {
@@ -58,7 +79,58 @@ export type PromoteResult = {
   /** true — артефакты приехали из тёплого candidate-кэша (typecheck+compile не выполнялись). */
   cached: boolean;
   warnings: string[];
+  /** A9-receipts, записанные в строку версии (null — promote без матричной приёмки). */
+  candidateId: string | null;
+  acceptanceRunId: string | null;
 };
+
+/** Терминальные вердикты, с которыми ран допускает публикацию (RFC §4.3: `pass_with_exceptions` — только через `allowExceptions` политики, решение принято при свёртке рана). */
+const PROMOTABLE_RUN_STATUSES = new Set(["pass", "pass_with_exceptions"]);
+
+/**
+ * Сверка A9-ссылок запроса с durable-строками приёмки — **до** любых записей (фаза A.1).
+ *
+ * Инварианты (RFC §4.3, план §5 W1c):
+ * - кандидат/ран чужого компонента невидимы (`404`): адрес строки не несёт владельца, и
+ *   типизованный отказ был бы оракулом по чужой приёмке;
+ * - `{rev, source_hash}` кандидата обязаны совпасть с `{baseRev, sourceHash}` запроса — иначе
+ *   promote публиковал бы билд, который приёмка не видела (`409 revision_conflict`);
+ * - живой (`queued|running`) ран кандидата запрещает публикацию (`409 acceptance_run_in_flight`):
+ *   вердикт ещё не сложен;
+ * - ран обязан принадлежать этому кандидату и разделять с ним `policy_profile_hash`
+ *   (`422 acceptance_run_mismatch`) и быть терминальным `pass|pass_with_exceptions`
+ *   (`422 acceptance_run_not_passed`).
+ */
+function resolveAcceptanceRefs(
+  acceptance: PromoteAcceptance,
+  input: { id: string; baseRev: number; sourceHash: string },
+  headRev: number,
+): { candidate: CandidateRow; runId: string | null } {
+  const { repo } = acceptance;
+  const run = acceptance.acceptanceRunId === undefined ? null : repo.requireRun(acceptance.acceptanceRunId);
+  if (run !== null && run.component_id !== input.id) throw new ApiError(404, "not_found", "Acceptance run not found");
+  // Кандидат берётся из запроса; при одиноком `acceptanceRunId` — из самого рана (ран без
+  // кандидата не существует по схеме v25).
+  const candidateId = acceptance.candidateId ?? run?.candidate_id;
+  if (candidateId === undefined) throw new ApiError(404, "not_found", "Candidate not found");
+  const candidate = repo.requireCandidate(candidateId);
+  if (candidate.component_id !== input.id) throw new ApiError(404, "not_found", "Candidate not found");
+  if (candidate.rev !== input.baseRev || candidate.source_hash !== input.sourceHash) {
+    throw new ApiError(409, "revision_conflict", "Acceptance candidate describes another revision of this component", { currentRev: headRev });
+  }
+  const inFlight = repo.inFlightRun(candidate.candidate_id);
+  if (inFlight) {
+    throw new ApiError(409, "acceptance_run_in_flight", "Candidate has a non-terminal acceptance run; wait for it to finish before promoting", { runId: inFlight.run_id });
+  }
+  if (run === null) return { candidate, runId: null };
+  if (run.candidate_id !== candidate.candidate_id || run.policy_profile_hash !== candidate.policy_profile_hash) {
+    throw new ApiError(422, "acceptance_run_mismatch", `Acceptance run does not belong to candidate ${candidate.candidate_id} or was executed under another policy profile`, { runId: run.run_id });
+  }
+  if (!isTerminalRunStatus(run.status) || !PROMOTABLE_RUN_STATUSES.has(run.status)) {
+    throw new ApiError(422, "acceptance_run_not_passed", `Acceptance run is ${run.status}; only pass or pass_with_exceptions may back a promote`, { runId: run.run_id });
+  }
+  return { candidate, runId: run.run_id };
+}
 
 /** Свежая ревизия каталога — тот же снапшот-контракт, что у validate-receipt и library. */
 const currentCatalogRevision = (db: Database): string => db.transaction(() => libraryCatalog(db).catalogRevision)();
@@ -83,6 +155,11 @@ export async function promoteComponent(db: Database, dataDir: string, input: Pro
       throw new ApiError(409, "catalog_changed", "Catalog revision changed since the receipt was issued", { catalogRevision: observed });
     }
   }
+  // A9: ссылки на приёмку сверяются здесь же, до подготовки артефактов — отказ обязан быть
+  // дешёвым и не оставлять за собой ни stage-строки, ни пересборки бандла.
+  const acceptanceRefs = input.acceptance === undefined
+    ? null
+    : resolveAcceptanceRefs(input.acceptance, input, revision.rev);
 
   // --- Фаза A.2: артефакты кандидата ------------------------------------------
   // Тёплый кэш отдаёт extraction/bundle без typecheck+compile; холодный — пересобирает
@@ -137,6 +214,16 @@ export async function promoteComponent(db: Database, dataDir: string, input: Pro
       // Без пинов версия остаётся с пустым `assets` в DTO, ломает export и теряет
       // RESTRICT-защиту ассетов (находка V2).
       repo.pinAssets(input.id, staged.version, candidate.assetIds);
+      // A9-receipts + перевод кандидата в `promoted` — в той же короткой транзакции, что и
+      // activate: версия, ссылающаяся на кандидата, и кандидат, знающий свою версию, обязаны
+      // появляться и откатываться вместе.
+      if (acceptanceRefs !== null) {
+        input.acceptance!.repo.linkPublish(input.id, staged.version, {
+          candidateId: acceptanceRefs.candidate.candidate_id,
+          acceptanceRunId: acceptanceRefs.runId,
+        });
+        input.acceptance!.repo.markPromoted(acceptanceRefs.candidate.candidate_id, staged.version, acceptanceRefs.runId);
+      }
       recordValidation(db, {
         resourceType: "component", resourceId: input.id, rev: staged.rev, catalogHash: bundleHash,
         ok: true, issues: extracted.warnings.map((message) => ({ path: "/", message })),
@@ -171,5 +258,7 @@ export async function promoteComponent(db: Database, dataDir: string, input: Pro
     themeVersion: getLatestDesignSystemContent(db, revision.designSystem).latestMetaVersion,
     catalogRevision: currentCatalogRevision(db),
     superseded, cached: candidate.cached, warnings,
+    candidateId: acceptanceRefs?.candidate.candidate_id ?? null,
+    acceptanceRunId: acceptanceRefs?.runId ?? null,
   };
 }

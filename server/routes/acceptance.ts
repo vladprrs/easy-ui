@@ -187,9 +187,11 @@ async function createCandidate(request: Request, db: Database, dataDir: string, 
       throw new ApiError(400, "invalid_request", "Candidate creation takes no fields; the body must be {}");
     }
   }
-  // Validate head'а — тот же префлайт и тот же троттлинг, что у `POST /validate`; он же
-  // материализует бандл кандидата в candidate-кэше (его потом пинует `candidatePins`).
-  const receipt = await validateComponentHead(db, dataDir, id, actor.userId);
+  // Validate head'а — тот же префлайт, что у `POST /validate`; он же материализует бандл кандидата
+  // в candidate-кэше (его потом пинует `candidatePins`). Слот — **системный** (план §5 W1c):
+  // приёмка конкурирует за общий cap `VALIDATE_GLOBAL_CONCURRENT`, но per-user слот владельца не
+  // занимает, иначе его собственный интерактивный validate получал бы 429 на всё время приёмки.
+  const receipt = await validateComponentHead(db, dataDir, id, actor.userId, { system: true });
   const head = new ComponentRepo(db).source(id);
   if (sha256(head.source) !== receipt.sourceHash) {
     // Голова уехала между префлайтом и чтением: кандидат обязан описывать один билд.

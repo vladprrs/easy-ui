@@ -9,8 +9,11 @@ import { sha256 } from "./components/pipeline";
 import { readCandidate, writeCandidate } from "./components/candidates";
 import { failStagingPublishes } from "./repos/components";
 import { PrototypeRepo } from "./repos/prototypes";
-import { ensureBootstrapAdmin, UserRepo } from "./users";
+import { BOOTSTRAP_ADMIN_ID, ensureBootstrapAdmin, UserRepo } from "./users";
 import { routeComponents } from "./routes/components";
+import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
+import { ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, policyProfileHash } from "./acceptance/policies";
+import type { AcceptanceCaptureService } from "./acceptance/gates/types";
 
 /**
  * RFC candidate-acceptance-pipeline, волна R1: promote-сага, расширенный `already_published`,
@@ -28,14 +31,33 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
 
-async function setup(options: { acceptanceDisabled?: boolean } = {}) {
+/**
+ * Капчур приёмки в этом файле не исполняется: раны создаются напрямую через `orchestrator.repo`
+ * и терминализуются нужным вердиктом. Предмет тестов — сага promote, а не съёмка (её проверяют
+ * `acceptance/runner.test.ts` и `acceptance-routes.test.ts`), поэтому заглушка обязана падать,
+ * если ран всё-таки поехал бы.
+ */
+const noCapture: AcceptanceCaptureService = {
+  enqueueComponentCandidate() { throw new Error("acceptance capture must not run in promote saga tests"); },
+  get() { throw new Error("acceptance capture must not run in promote saga tests"); },
+  outcome() { return undefined; },
+  hasBackgroundCapacity() { return true; },
+} as unknown as AcceptanceCaptureService;
+
+async function setup(options: { acceptanceDisabled?: boolean; matrix?: boolean } = {}) {
+  const { matrix, ...handlerOptions } = options;
   const dir = await mkdtemp(resolve(process.cwd(), ".promote-test-"));
   dirs.push(dir);
   const db = openDatabase(":memory:");
   databases.push(db);
-  const handler = createTestHandler(db, { dataDir: dir, ...options });
-  return { dir, db, handler };
+  // Флаг матрицы — наличие оркестратора (тот же шов, что и в `startServer`); autoDrain выключен:
+  // очередь в этих тестах двигают руками.
+  const orchestrator = matrix ? new AcceptanceOrchestrator({ db, dataDir: dir, service: noCapture, autoDrain: false }) : undefined;
+  const handler = createTestHandler(db, { dataDir: dir, ...handlerOptions, ...(orchestrator ? { acceptance: orchestrator } : {}) });
+  return { dir, db, handler, orchestrator };
 }
+
+const DEFAULT_POLICY = ACCEPTANCE_POLICIES[DEFAULT_ACCEPTANCE_POLICY_ID];
 
 const req = (url: string, method = "GET", value?: unknown) =>
   new Request(`http://test/api${url}`, {
@@ -281,6 +303,119 @@ describe("component promote saga (RFC R1)", () => {
     const caps = await (await handler(req("/capabilities"))).json() as { features: Record<string, boolean> };
     expect(caps.features.acceptancePromote).toBe(true);
   });
+});
+
+/**
+ * Волна W1c (план 2026-08-03 §5, амендмент A9): ссылки `candidateId`/`acceptanceRunId` в promote.
+ * Раны здесь создаются и терминализуются напрямую через repo — предмет проверки в том, как сага
+ * их сверяет и записывает, а не в том, как оркестратор их исполняет.
+ */
+describe("promote with acceptance references (W1c, A9)", () => {
+  const POLICY_HASH = policyProfileHash(DEFAULT_POLICY);
+
+  async function acceptanceFixture(id: string, name: string) {
+    const context = await setup({ matrix: true });
+    const source = await fixture("rating-stars.tsx");
+    await createComponent(context.handler, id, name, source);
+    const created = await context.handler(req(`/components/${id}/candidates`, "POST"));
+    expect(created.status, await created.clone().text()).toBe(200);
+    const candidate = await created.json() as { candidateId: string; sourceHash: string; rev: number };
+    return { ...context, orchestrator: context.orchestrator!, id, source, candidate };
+  }
+
+  const createRun = (orchestrator: AcceptanceOrchestrator, candidateId: string, componentId: string) =>
+    orchestrator.repo.createRun({
+      candidateId, componentId,
+      policyProfileId: DEFAULT_POLICY.id, policyProfileHash: POLICY_HASH,
+      createdBy: BOOTSTRAP_ADMIN_ID, cases: [],
+    }).run;
+
+  const publishRow = (db: Database, id: string, version: number) =>
+    db.query("SELECT candidate_id candidateId,acceptance_run_id runId FROM component_publishes WHERE component_id=? AND version=?")
+      .get(id, version) as { candidateId: string | null; runId: string | null };
+
+  test("passed run: refs land on the version row, the candidate becomes promoted, audit carries both ids", async () => {
+    const { db, handler, orchestrator, id, candidate } = await acceptanceFixture("promote-refs", "PromoteRefs");
+    const run = createRun(orchestrator, candidate.candidateId, id);
+    orchestrator.repo.terminalizeRun(run.run_id, { status: "pass" });
+
+    const promoted = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, candidateId: candidate.candidateId, acceptanceRunId: run.run_id,
+    }));
+    expect(promoted.status, await promoted.clone().text()).toBe(201);
+    expect(await promoted.json()).toMatchObject({ version: 1, candidateId: candidate.candidateId, acceptanceRunId: run.run_id });
+
+    // A9-receipts — плоские TEXT-колонки на строке версии (без FK).
+    expect(publishRow(db, id, 1)).toEqual({ candidateId: candidate.candidateId, runId: run.run_id });
+    const row = orchestrator.repo.requireCandidate(candidate.candidateId);
+    expect(row).toMatchObject({ status: "promoted", promoted_version: 1, acceptance_run_id: run.run_id });
+    const event = auditActions(db, id).find((entry) => entry.action === "component.promoted");
+    expect(JSON.parse(event!.detail!)).toMatchObject({ candidateId: candidate.candidateId, acceptanceRunId: run.run_id });
+  }, 180_000);
+
+  test("promote without references leaves the receipt columns null (R1 path is untouched)", async () => {
+    const { db, handler, id } = await acceptanceFixture("promote-norefs", "PromoteNorefs");
+    const promoted = await validateThenPromote(handler, id, 1);
+    expect(promoted.status).toBe(201);
+    expect(await promoted.json()).toMatchObject({ candidateId: null, acceptanceRunId: null });
+    expect(publishRow(db, id, 1)).toEqual({ candidateId: null, runId: null });
+  }, 180_000);
+
+  test("refusals: live run, failed run, foreign run and a candidate of another revision", async () => {
+    const { db, handler, orchestrator, id, candidate } = await acceptanceFixture("promote-refuse", "PromoteRefuse");
+    const promote = (body: Record<string, unknown>) =>
+      handler(req(`/components/${id}/promote`, "POST", { baseRev: 1, sourceHash: candidate.sourceHash, ...body }));
+    const codeOf = async (response: Response) => (await response.json() as { error: { code: string } }).error.code;
+
+    // Живой (queued) ран кандидата: вердикта ещё нет — публиковать нечего.
+    const live = createRun(orchestrator, candidate.candidateId, id);
+    const inFlight = await promote({ candidateId: candidate.candidateId });
+    expect(inFlight.status).toBe(409);
+    expect(await codeOf(inFlight)).toBe("acceptance_run_in_flight");
+    orchestrator.cancelQueuedRun(live.run_id);
+
+    // Терминальный, но провальный ран.
+    const failed = createRun(orchestrator, candidate.candidateId, id);
+    orchestrator.repo.terminalizeRun(failed.run_id, { status: "fail" });
+    const notPassed = await promote({ candidateId: candidate.candidateId, acceptanceRunId: failed.run_id });
+    expect(notPassed.status).toBe(422);
+    expect(await codeOf(notPassed)).toBe("acceptance_run_not_passed");
+
+    // Ран чужого кандидата того же компонента: `pass` не переносится между сборками.
+    const other = orchestrator.repo.createCandidate({
+      componentId: id, designSystem: "yandex-pay", rev: 99, sourceHash: "0".repeat(64), bundleHash: "1".repeat(64),
+      hostAbiVersion: 1, themeVersion: null, observedCatalogRevision: "catalog-x", policyProfileHash: POLICY_HASH,
+      createdBy: BOOTSTRAP_ADMIN_ID,
+    }).candidate;
+    const otherRun = createRun(orchestrator, other.candidate_id, id);
+    orchestrator.repo.terminalizeRun(otherRun.run_id, { status: "pass" });
+    const mismatch = await promote({ candidateId: candidate.candidateId, acceptanceRunId: otherRun.run_id });
+    expect(mismatch.status).toBe(422);
+    expect(await codeOf(mismatch)).toBe("acceptance_run_mismatch");
+
+    // Кандидат другой ревизии — и напрямую, и через ран, у которого он единственный источник.
+    const stale = await promote({ candidateId: other.candidate_id });
+    expect(stale.status).toBe(409);
+    expect(await codeOf(stale)).toBe("revision_conflict");
+    const staleByRun = await promote({ acceptanceRunId: otherRun.run_id });
+    expect(staleByRun.status).toBe(409);
+    expect(await codeOf(staleByRun)).toBe("revision_conflict");
+
+    // Ни один отказ не создал версии и не тронул кандидатов.
+    expect(versionRows(db, id)).toEqual([]);
+    expect(orchestrator.repo.requireCandidate(candidate.candidateId).status).toBe("validated");
+  }, 180_000);
+
+  test("unknown ids are 404 and malformed ids are 400 — neither leaks another owner's acceptance", async () => {
+    const { handler, id, candidate } = await acceptanceFixture("promote-badrefs", "PromoteBadrefs");
+    const promote = (body: Record<string, unknown>) =>
+      handler(req(`/components/${id}/promote`, "POST", { baseRev: 1, sourceHash: candidate.sourceHash, ...body }));
+    expect((await promote({ candidateId: `cand_${"0".repeat(64)}` })).status).toBe(404);
+    expect((await promote({ acceptanceRunId: "acc_00000000-0000-0000-0000-000000000000" })).status).toBe(404);
+    const malformed = await promote({ candidateId: "not-a-candidate" });
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toMatchObject({ error: { code: "invalid_request" } });
+  }, 180_000);
 });
 
 describe("draft candidate bundle authorization (RFC R1, M5/V11)", () => {

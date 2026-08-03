@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* global process, URL, fetch, setTimeout */
 /**
  * Замер стоимости матричной приёмки (план `docs/plans/2026-08-03-family-acceptance-and-composition-v3.md`
  * §4, гейт O1 волны W1b).

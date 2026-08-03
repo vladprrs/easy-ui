@@ -17,7 +17,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | accept <componentId> [--policy <id>] [--refresh none|failed|all|id,id2] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -82,6 +82,18 @@ const auditLimitFlag = {
   },
 };
 
+/**
+ * `--refresh` приёмки — форма сервера (`none|failed|all|{caseIds}`), а не «true/false»: режимы
+ * различаются стоимостью рана, и молча деградировать один в другой нельзя. Список id — через
+ * запятую (`--refresh alpha,beta`).
+ */
+function parseRefreshFlag(value) {
+  if (value === "none" || value === "failed" || value === "all") return value;
+  const caseIds = value.split(",").map((item) => item.trim()).filter(Boolean);
+  if (!caseIds.length) invalid("--refresh must be none|failed|all or a comma-separated list of case ids");
+  return { caseIds };
+}
+
 export const flagSpecs = Object.freeze({
   component: {
     ...jsonFlag,
@@ -123,6 +135,23 @@ export const flagSpecs = Object.freeze({
     "--strict-catalog": { value: false, key: "strictCatalog" },
     "--message": { value: true, key: "message" },
   },
+  // План 2026-08-03 §5 W1c: матричная приёмка семейства одной командой (кандидат → ран → poll).
+  accept: {
+    ...jsonFlag,
+    "--policy": { value: true, key: "policy" },
+    "--refresh": { value: true, key: "refresh", parse: parseRefreshFlag },
+    "--timeout-sec": {
+      value: true,
+      key: "timeoutSec",
+      parse(value) {
+        const number = Number(value);
+        if (!Number.isInteger(number) || number < 10 || number > 7200) invalid("--timeout-sec must be an integer from 10 to 7200");
+        return number;
+      },
+    },
+    "--evidence": { value: true, key: "evidence" },
+  },
+  "accept-status": { ...jsonFlag, "--evidence": { value: true, key: "evidence" } },
   get: { ...jsonFlag },
   delete: { ...jsonFlag },
   shoot: { ...jsonFlag },
@@ -192,6 +221,8 @@ const ranges = Object.freeze({
   publish: [1, 1],
   usages: [1, 1],
   promote: [1, 1],
+  accept: [1, 1],
+  "accept-status": [1, 1],
   // 0 — каталожный sweep `audit --design-system`, 1 — подкоманда `audit reuse`.
   audit: [0, 1],
 });
@@ -1676,6 +1707,135 @@ async function runPromote(args, flags) {
 }
 
 /**
+ * Матричная приёмка одной командой (план 2026-08-03 §5 W1c; RFC candidate-acceptance §4.1–4.2).
+ *
+ * `accept <componentId>` = `POST /components/:id/candidates` → `POST /acceptance-runs` → poll
+ * `GET /acceptance-runs/:runId` до терминала. Клиент **не** собирает матрицу сам: набор случаев
+ * строит сервер (в этой волне — именованные examples кандидата), он же считает reuse и evidence.
+ *
+ * Байты evidence по умолчанию не качаются: печатается адрес архива, а `--evidence <file.zip>`
+ * сохраняет его. Прогресс идёт в stderr — stdout принадлежит `--json`.
+ */
+const ACCEPT_POLL_INTERVAL_MS = 2000;
+const ACCEPT_DEFAULT_TIMEOUT_SEC = 1800;
+const ACCEPT_TERMINAL = new Set(["pass", "pass_with_exceptions", "fail", "error", "cancelled"]);
+/** Вердикт → exit code: приёмка без `pass` — продуктовый отказ (exit 2), как у readiness/publish. */
+const acceptExitCode = (status) => (status === "pass" || status === "pass_with_exceptions" ? EXIT.ok : EXIT.productErrors);
+
+const progress = (line) => process.stderr.write(`${line}\n`);
+
+/** Одна строка провалившегося случая: имя, вердикт, класс severity и упавшие гейты с причиной. */
+function failedCaseLines(failed) {
+  return failed.map((item) => {
+    const gates = (item.failedGates ?? [])
+      .map((gate) => `${gate.gate}=${gate.status}${gate.detail ? ` (${gate.detail})` : ""}`)
+      .join(" ") || "-";
+    const severity = item.severity ? `${item.severity.class}#${item.severity.rank}` : "-";
+    return `  ${item.caseId} [${item.verdict ?? item.status}] severity=${severity} gates: ${gates}`;
+  });
+}
+
+function acceptLines(run, { componentId, evidencePath }) {
+  const done = run.progress ?? {};
+  const lines = [
+    `acceptance ${componentId ?? run.componentId} run ${run.runId} verdict ${run.status}`,
+    `cases: ${done.completed ?? 0}/${done.total ?? 0} reused=${done.reused ?? 0} failed=${done.failed ?? 0} policy=${run.policy?.id ?? "-"}`,
+  ];
+  if (run.failedCases?.length) lines.push("failed cases (worst first):", ...failedCaseLines(run.failedCases));
+  lines.push(evidencePath
+    ? `evidence: ${evidencePath}`
+    : `evidence: GET /api/acceptance-runs/${run.runId}/evidence (pass --evidence <file.zip> to download)`);
+  return lines;
+}
+
+/** Приёмка выключена на сервере — читаемый отказ вместо серии 404 по ручкам. */
+async function requireAcceptanceMatrix() {
+  const capabilities = await requireOk("capabilities", await call("GET", "/capabilities"));
+  if (capabilities.features?.acceptanceMatrix !== true) {
+    throw new CliError("server does not support matrix acceptance (features.acceptanceMatrix is off; needs EASYUI_ACCEPTANCE_MATRIX=1); use 'driver.mjs promote <id>' for the receipt-based path");
+  }
+  return capabilities;
+}
+
+async function downloadEvidence(runId, outputPath) {
+  const response = await client.request(`/acceptance-runs/${encodeURIComponent(runId)}/evidence`);
+  if (!response.ok) throw new CliError(`evidence download failed (${response.status}) for run ${runId}`);
+  await mkdir(dirname(resolve(outputPath)), { recursive: true });
+  await writeFile(outputPath, Buffer.from(await response.arrayBuffer()));
+  return outputPath;
+}
+
+/** Poll до терминального вердикта. Таймаут — клиентский: ран на сервере продолжает идти. */
+async function pollAcceptanceRun(runId, { deadlineMs }) {
+  const deadline = Date.now() + deadlineMs;
+  let last = null;
+  for (;;) {
+    const run = await requireOk(`poll acceptance run ${runId}`, await call("GET", `/acceptance-runs/${encodeURIComponent(runId)}`));
+    if (ACCEPT_TERMINAL.has(run.status)) return run;
+    const done = run.progress ?? {};
+    const eta = run.eta?.remainingMs ?? run.eta?.etaMs;
+    const line = `run ${runId} ${run.status} ${done.completed ?? 0}/${done.total ?? 0} reused=${done.reused ?? 0}${Number.isFinite(eta) ? ` eta~${Math.round(eta / 1000)}s` : ""}`;
+    if (line !== last) { progress(line); last = line; }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new CliError(`acceptance run ${runId} did not finish within the timeout; it keeps running on the server — poll it with 'driver.mjs accept-status ${runId}'`, { exitCode: EXIT.productErrors });
+    }
+    await delay(Math.min(ACCEPT_POLL_INTERVAL_MS, remaining));
+  }
+}
+
+async function reportAcceptance(run, { command, componentId, candidateId, flags }) {
+  const evidencePath = flags.evidence === undefined ? null : await downloadEvidence(run.runId, flags.evidence);
+  const exitCode = acceptExitCode(run.status);
+  report(acceptLines(run, { componentId, evidencePath }), {
+    command, componentId: componentId ?? run.componentId, candidateId: candidateId ?? run.candidateId,
+    exitCode, ...(evidencePath ? { evidence: evidencePath } : {}), ...run,
+  });
+  if (exitCode !== EXIT.ok) {
+    throw new CliError(`acceptance run ${run.runId} finished as ${run.status}${run.failedCases?.length ? `: ${run.failedCases.map((item) => item.caseId).join(", ")}` : ""}`, { exitCode });
+  }
+}
+
+async function runAccept(args, flags) {
+  const [id] = args;
+  const encoded = encodeURIComponent(id);
+  await requireAcceptanceMatrix();
+  const meta = await getMeta("components", id);
+  if (!meta) throw new CliError(`components/${id} not found; hint: run 'driver.mjs get components'`);
+  // Кандидат — тот же validate-префлайт: его предупреждения принадлежат приёмке, а не съёмке.
+  const candidate = await requireOk("candidate", await call("POST", `/components/${encoded}/candidates`, {}));
+  for (const warning of candidate.warnings ?? []) out(`warning: ${warning}`);
+  progress(`candidate ${candidate.candidateId} rev=${candidate.rev}${candidate.cached ? " (cached)" : ""}`);
+  const started = await call("POST", "/acceptance-runs", {
+    candidateId: candidate.candidateId,
+    ...(flags.policy === undefined ? {} : { policy: flags.policy }),
+    ...(flags.refresh === undefined ? {} : { refresh: flags.refresh }),
+  });
+  if (started.status === 409 && errorCode(started) === "acceptance_run_in_flight") {
+    const runId = started.json?.error?.runId;
+    throw new CliError(`acceptance run already in flight for candidate ${candidate.candidateId}${runId ? ` (run ${runId}); poll it with 'driver.mjs accept-status ${runId}'` : ""}`, { exitCode: EXIT.productErrors });
+  }
+  const queued = await requireOk("acceptance run", started, [202]);
+  progress(`run ${queued.runId} queued with ${queued.cases} cases`);
+  const run = await pollAcceptanceRun(queued.runId, { deadlineMs: (flags.timeoutSec ?? ACCEPT_DEFAULT_TIMEOUT_SEC) * 1000 });
+  await reportAcceptance(run, { command: "accept", componentId: id, candidateId: candidate.candidateId, flags });
+}
+
+async function runAcceptStatus(args, flags) {
+  const [runId] = args;
+  await requireAcceptanceMatrix();
+  const run = await requireOk("acceptance run", await call("GET", `/acceptance-runs/${encodeURIComponent(runId)}`));
+  if (!ACCEPT_TERMINAL.has(run.status)) {
+    report(
+      [`acceptance run ${run.runId} is ${run.status} ${run.progress?.completed ?? 0}/${run.progress?.total ?? 0} reused=${run.progress?.reused ?? 0}`],
+      { command: "accept-status", exitCode: EXIT.ok, ...run },
+    );
+    return;
+  }
+  await reportAcceptance(run, { command: "accept-status", flags });
+}
+
+/**
  * KPI-инструмент RFC §9: сколько публичных версий стоил каждый компонент. Читает
  * `GET /api/components/:id/versions` и сводит статусы; `versionsPerComponent` — та самая
  * метрика churn'а (baseline yandex-pay-v2: 2,4 → цель ≤1,2).
@@ -1989,6 +2149,8 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "publish") await runPublish(args, flags);
   else if (cmd === "usages") await runUsages(args, flags);
   else if (cmd === "promote") await runPromote(args, flags);
+  else if (cmd === "accept") await runAccept(args, flags);
+  else if (cmd === "accept-status") await runAcceptStatus(args, flags);
   else if (cmd === "audit") await (args[0] === "reuse" ? runReuseAudit(flags) : flags.versions ? runVersionsAudit(flags) : runAudit(flags));
 }
 

@@ -549,6 +549,18 @@ export class AcceptanceRepo {
     return this.db.query("SELECT 1 FROM component_publishes WHERE acceptance_run_id=? LIMIT 1").get(runId) !== null;
   }
 
+  /**
+   * A9-receipts на строке версии: плоские TEXT-колонки `component_publishes.candidate_id` /
+   * `.acceptance_run_id` без FK. Пишутся **внутри** фазы B promote-саги (`components/promote.ts`),
+   * одной транзакцией с `activate`: версия без ссылок или ссылки без версии одинаково ломают
+   * provenance. `COALESCE` не используется — сага пишет обе ссылки один раз, за атомарность
+   * отвечает вызывающая транзакция.
+   */
+  linkPublish(componentId: string, version: number, refs: { candidateId?: string | null; acceptanceRunId?: string | null }): void {
+    this.db.query("UPDATE component_publishes SET candidate_id=?, acceptance_run_id=? WHERE component_id=? AND version=?")
+      .run(refs.candidateId ?? null, refs.acceptanceRunId ?? null, componentId, version);
+  }
+
   candidateIdsReferencedByPublishes(): Set<string> {
     const rows = this.db.query("SELECT DISTINCT candidate_id id FROM component_publishes WHERE candidate_id IS NOT NULL")
       .all() as { id: string }[];
