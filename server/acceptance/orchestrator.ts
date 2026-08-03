@@ -26,6 +26,8 @@ import { buildCases, DEFAULT_CASE_SURFACE, type AcceptanceCase } from "./cases";
 import { buildCasesFromManifest, CaseSetRepo, manifestOfRow, surfaceOfManifest } from "./caseSets";
 import { writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./evidence";
 import type { RunInkBbox } from "./inkBbox";
+import type { RunNormalizedDiff } from "../visual/diff-runner";
+import type { CaseSetManifest } from "../../src/acceptance/caseSetSchema";
 import { CASE_POLICY_HASH_V0, type CaseSurface } from "./ids";
 import type { AcceptanceCaptureService, CandidateSubject, GateContext } from "./gates/types";
 import {
@@ -33,7 +35,7 @@ import {
   type CaseExecution, type CaseRunnerDeps,
 } from "./runner";
 import {
-  acceptancePolicy, DEFAULT_ACCEPTANCE_POLICY_ID, policyProfileHash,
+  acceptancePolicy, DEFAULT_ACCEPTANCE_POLICY_ID, policyProfileHash, withRequiredVisual,
   type AcceptancePolicy,
 } from "./policies";
 import { AcceptanceRepo, isTerminalRunStatus, type AcceptanceRunRow, type CandidateRow } from "./repo";
@@ -54,6 +56,8 @@ export interface AcceptanceOrchestratorDeps {
   resolveCandidate?: (row: CandidateRow) => Promise<CandidateSubject>;
   /** Измеритель ink-bbox гейта `geometry` v2 (W3); по умолчанию — node-подпроцесс. */
   inkBbox?: RunInkBbox;
+  /** Нормализующий visual-diff гейта `visual` (W5a); по умолчанию — node-подпроцесс. */
+  runDiff?: RunNormalizedDiff;
 }
 
 /**
@@ -99,6 +103,16 @@ export interface StartRunResult {
   run: AcceptanceRunRow;
   cases: AcceptanceCase[];
   cached: boolean;
+}
+
+/**
+ * Политика рана с учётом намерения набора (W5a): `requireVisual: true` манифеста поднимает гейт
+ * `visual` до обязательного. Идентичность профиля (`policy_profile_id`/`policy_profile_hash` рана)
+ * при этом не меняется — она сверяется на promote, а «набор потребовал визуал» восстанавливается
+ * из `case_set_id` и входит в `case_policy_hash` каждого случая.
+ */
+export function effectivePolicy(policy: AcceptancePolicy, manifest: CaseSetManifest | null): AcceptancePolicy {
+  return manifest?.requireVisual === true ? withRequiredVisual(policy) : policy;
 }
 
 /** Кандидат → субъект приёмки: бандл берётся из candidate-кэша **по rev кандидата**, не по head. */
@@ -192,7 +206,9 @@ export class AcceptanceOrchestrator {
       caseSetId: caseSet?.case_set_id ?? null,
       createdBy: input.createdBy,
       progress: progressOf([], cases.length, null),
-      gates: policy.gates,
+      // Роли гейтов рана — по эффективной политике (W5a): `requireVisual` набора видно в
+      // `gates_json` сразу на постановке, а не только в свёртке.
+      gates: effectivePolicy(policy, manifest).gates,
       cases: cases.map((item) => ({
         caseId: item.caseId,
         caseKey: item.caseKey,
@@ -289,13 +305,14 @@ export class AcceptanceOrchestrator {
   }
 
   private async runCases(run: AcceptanceRunRow): Promise<AcceptanceRunRow> {
-    const policy = acceptancePolicy(run.policy_profile_id);
-    if (!policy) throw new Error(`Run references an unknown policy profile: ${run.policy_profile_id}`);
+    const profile = acceptancePolicy(run.policy_profile_id);
+    if (!profile) throw new Error(`Run references an unknown policy profile: ${run.policy_profile_id}`);
     const candidateRow = this.repo.requireCandidate(run.candidate_id);
     const subject = await this.resolve(candidateRow);
     // Набор восстановим и без памяти процесса, если ран стоит на case-set'е: манифест durable
     // (`component_case_sets`), поэтому props/эталоны/политики берутся из него, а не из examples.
     const storedManifest = run.case_set_id === null ? null : manifestOfRow(new CaseSetRepo(this.deps.db).require(run.case_set_id));
+    const policy = effectivePolicy(profile, storedManifest);
     const surface = this.surfaces.get(run.run_id) ?? (storedManifest ? surfaceOfManifest(storedManifest) : DEFAULT_CASE_SURFACE);
     const cases = this.caseSets.get(run.run_id)
       ?? (storedManifest ? buildCasesFromManifest(storedManifest) : buildCases(subject.entry));
@@ -309,6 +326,7 @@ export class AcceptanceOrchestrator {
       sleep: this.sleep,
       now: this.now,
       ...(this.deps.inkBbox ? { inkBbox: this.deps.inkBbox } : {}),
+      ...(this.deps.runDiff ? { runDiff: this.deps.runDiff } : {}),
     } as Omit<GateContext, "case" | "determinismSampled" | "shared" | "policy" | "runId" | "candidate" | "surface">;
     const deps: CaseRunnerDeps = { repo: this.repo, policy, runId: run.run_id, candidate: subject, surface, shared, context };
 

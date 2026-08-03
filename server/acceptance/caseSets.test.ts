@@ -264,6 +264,18 @@ test("changing one case's tolerance changes only that case's policy hash", () =>
   db.close();
 });
 
+test("requireVisual входит в case_policy_hash: обязательность визуала инвалидирует reuse (W5a)", () => {
+  const db = dbWithAsset();
+  const advisory = validateManifest(db, "yp-badge", manifest()).manifest;
+  const required = validateManifest(db, "yp-badge", manifest({ requireVisual: true } as unknown as Partial<CaseSetManifest>)).manifest;
+  // Без этого набор, переключённый на обязательный визуал, переиспользовал бы вердикты, где
+  // визуальный гейт был advisory, — матрица выглядела бы пройденной (план §3 D10).
+  for (const caseId of ["default", "accent"]) {
+    expect(casePolicyHashOf(required, caseId)).not.toBe(casePolicyHashOf(advisory, caseId));
+  }
+  db.close();
+});
+
 test("the capture block of the manifest becomes the run surface", () => {
   const db = dbWithAsset();
   const { manifest: parsed } = validateManifest(db, "yp-badge", manifest({
@@ -290,15 +302,17 @@ test("caseSetIdOf and the stored row agree on the address", () => {
 test("algoVersion bump invalidates every fingerprint accumulated by earlier waves", () => {
   // Граница волны обязана обнулить накопленный reuse: в W2 во входы вошёл `case_policy_hash`,
   // в W3 — геометрия 2.0 (`probe:"paint"`, другой вердикт по тем же props), в W4 — реальные
-  // readiness/env вместо заглушек, поэтому старый результат относится к другой модели случая
-  // (план §3 D1).
-  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(4);
+  // readiness/env вместо заглушек, в W5a — визуальный гейт (тот же случай теперь может получить
+  // пиксельный вердикт), поэтому старый результат относится к другой модели случая (план §3 D1).
+  // Версия 5 — последняя запланированная: дальше отпечатки стабильны (reuse-KPI меряется на W6).
+  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(5);
   const base = {
     candidateId: `cand_${"0".repeat(64)}`, caseKey: "alpha", propsHash: "props-1",
     surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
     readinessPolicyHash: DEFAULT_READINESS_POLICY_HASH, captureEnvFingerprint: DEFAULT_CAPTURE_ENV_FINGERPRINT,
     casePolicyHash: CASE_POLICY_HASH_V0, referenceAssetId: null,
   };
+  expect(caseFingerprint({ ...base, algoVersion: 5 })).not.toBe(caseFingerprint({ ...base, algoVersion: 4 }));
   expect(caseFingerprint({ ...base, algoVersion: 4 })).not.toBe(caseFingerprint({ ...base, algoVersion: 3 }));
   expect(caseFingerprint({ ...base, algoVersion: 3 })).not.toBe(caseFingerprint({ ...base, algoVersion: 2 }));
   expect(caseFingerprint({ ...base, algoVersion: 2 })).not.toBe(caseFingerprint({ ...base, algoVersion: 1 }));

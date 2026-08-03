@@ -33,6 +33,17 @@ export interface GeometryTolerances {
   offsetPx: number;
 }
 
+/** Пороги визуального гейта (W5a). Per-case `maxRawDiffPct` манифеста перекрывает профильный. */
+export interface VisualTolerances {
+  /** Потолок `rawDiffPct` (pixelmatch, строгий порог, AA считается), % пикселей холста. */
+  maxRawDiffPct: number;
+  /**
+   * Допуск расхождения габаритов после crop эталона, px. Больше — картинки несводимы, и гейт
+   * отдаёт `indeterminate` с диагностикой, а не выдуманный процент (триаж R1-M4).
+   */
+  maxDimensionDeltaPx: number;
+}
+
 export interface AcceptancePolicy {
   id: string;
   /** Роль каждого гейта; ключи перечислены явно — новый гейт обязан появиться во всех профилях. */
@@ -48,10 +59,13 @@ export interface AcceptancePolicy {
   /** `pass_with_exceptions` возможен только при `true`; в фазе 1 выключено везде (RFC §2.1). */
   allowExceptions: boolean;
   geometry: GeometryTolerances;
+  /** Пороги гейта `visual` (W5a). */
+  visual: VisualTolerances;
   /**
-   * Семантика будущего гейта `visual` (W5a): профиль требует reference из case-set и падает без
-   * него. До W5a поле только описывает намерение — `gates.visual` остаётся `not-implemented`,
-   * иначе профиль обещал бы проверку, которой в коде нет.
+   * Профиль требует визуальный вердикт (W5a): гейт `visual` обязателен в свёртке, а случай без
+   * эталона получает `indeterminate` («набор бессмысленен без эталона»), а не `skipped` — D10
+   * допускает `skipped` только для необязательных гейтов. Тот же смысл включает `requireVisual`
+   * case-set-манифеста для конкретного рана (см. `effectivePolicy` в оркестраторе).
    */
   requireVisual: boolean;
   /**
@@ -75,7 +89,11 @@ const DEFAULT_V1: AcceptancePolicy = {
     // закончилась вместе с v1-семантикой union-rect: вердикт теперь опирается на честный
     // `layoutBounds` и обязан называть виновника overflow, поэтому блокировать им можно.
     geometry: "required",
-    visual: "not-implemented",
+    // W5a: визуальный гейт считается всегда (эталон есть — значит, есть и вердикт), но роняет ран
+    // только там, где визуальная приёмка объявлена: профиль `pixel-strict-v1` или `requireVisual`
+    // case-set-манифеста. В `default-v1` он advisory — набор без эталонов не обязан быть
+    // пиксельно точным, а метрики всё равно попадают в evidence.
+    visual: "advisory",
     // W4: readiness — обязательный гейт обоих профилей. Кадр, снятый до готовности шрифтов и
     // ассетов, не получает визуального вердикта (инвариант D5), а не «оценивается со скидкой».
     readiness: "required",
@@ -88,21 +106,26 @@ const DEFAULT_V1: AcceptancePolicy = {
   maxInfraRetries: 2,
   allowExceptions: false,
   geometry: { overflowPx: 1, sizeDeltaPx: 2, offsetPx: 2 },
+  visual: { maxRawDiffPct: 2.0, maxDimensionDeltaPx: 8 },
   requireVisual: false,
   readiness: DEFAULT_READINESS_POLICY,
 };
 
 /**
  * Второй профиль — реальный, а не витринный: pixel-perfect-приёмка Figma-семейств. Отличается
- * нулевыми геометрическими допусками, большей выборкой determinism и требованием визуального
- * гейта (вступит в силу вместе с W5a).
+ * нулевыми геометрическими допусками, большей выборкой determinism и обязательным визуальным
+ * гейтом (W5a): случай с эталоном обязан сойтись по пикселям, случай без эталона в таком наборе —
+ * `indeterminate`, потому что пиксельная приёмка без эталона невозможна.
  */
 const PIXEL_STRICT_V1: AcceptancePolicy = {
   ...DEFAULT_V1,
   id: "pixel-strict-v1",
-  gates: { ...DEFAULT_V1.gates },
+  gates: { ...DEFAULT_V1.gates, visual: "required" },
   determinismSampleSize: 5,
   geometry: { overflowPx: 0, sizeDeltaPx: 0, offsetPx: 0 },
+  // Полпроцента холста: pixel-perfect-приёмка Figma-семейств терпит субпиксельное сглаживание
+  // рендерера, но не сдвиг элемента и не другой цвет.
+  visual: { maxRawDiffPct: 0.5, maxDimensionDeltaPx: 4 },
   requireVisual: true,
 };
 
@@ -125,6 +148,19 @@ export function acceptancePolicy(id: string): AcceptancePolicy | undefined {
 /** sha256 канонизованного профиля целиком: переименование поля меняет хэш и инвалидирует вердикты. */
 export function policyProfileHash(profile: AcceptancePolicy): string {
   return new Bun.CryptoHasher("sha256").update(canonicalStringify(profile)).digest("hex");
+}
+
+/**
+ * Профиль с обязательным визуальным гейтом (W5a): `requireVisual: true` case-set-манифеста
+ * поднимает `visual` до `required` **для этого рана**, не меняя реестр профилей.
+ *
+ * `policyProfileHash` рана остаётся хэшем базового профиля: он — идентичность политики, которую
+ * сверяет promote, а «набор потребовал визуал» восстанавливается из `case_set_id` рана и входит в
+ * `case_policy_hash` каждого случая (см. `casePolicyHashOf`), поэтому reuse инвалидируется честно.
+ */
+export function withRequiredVisual(profile: AcceptancePolicy): AcceptancePolicy {
+  if (profile.gates.visual === "required" && profile.requireVisual) return profile;
+  return { ...profile, requireVisual: true, gates: { ...profile.gates, visual: "required" } };
 }
 
 /** Обязательные гейты профиля — вход свёртки D10. */

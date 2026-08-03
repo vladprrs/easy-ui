@@ -21,21 +21,69 @@ export type DiffErr = { ok: false; error: string };
 export type DiffResult = DiffOk | DiffErr;
 export type RunDiff = (job: DiffJob) => Promise<DiffResult>;
 
+/**
+ * Режим `normalize` (план 2026-08-03 §2 A5, §5 W5a; триаж R1-M4) — **аддитивно** к контракту выше.
+ *
+ * Тот же воркер и тот же spawn: отличается только поле `mode` в задании и форма результата. Здесь
+ * два исхода вместо одного, и это принципиально: `indeterminate` («несводимые размеры») не несёт
+ * метрик вовсе, потому что выдуманный процент расхождения хуже отсутствующего.
+ */
+export interface NormalizedDiffJob {
+  mode: "normalize";
+  referencePngBase64: string;
+  candidatePngBase64: string;
+  options?: {
+    /** `cropLineage.rect` эталона: `[x, y, width, height]` в его собственных пикселях. */
+    cropRect?: number[];
+    /** Допуск расхождения габаритов после crop, px; больше — `indeterminate`. */
+    maxDimensionDeltaPx?: number;
+    rawThreshold?: number;
+    aaThreshold?: number;
+    maxRegions?: number;
+    offsetWindow?: number;
+  };
+}
+export interface DiffRegion { bbox: { x: number; y: number; width: number; height: number }; areaPct: number; meanDelta: number }
+export interface NormalizedDiffMetrics {
+  rawDiffPct: number; aaDiffPct: number;
+  rawDiffPixels: number; aaDiffPixels: number; totalPixels: number;
+  maxChannelDelta: number;
+  regions: DiffRegion[]; totalRegions: number;
+  bestOffset: { dx: number; dy: number; residualPct: number; sampledPixels: number; step: number };
+  thresholds: { raw: number; aa: number };
+}
+export interface Dims { width: number; height: number }
+export type NormalizedDiffIndeterminate = {
+  ok: true; mode: "normalize"; indeterminate: true; reason: string;
+  sourceDims: Dims; refDims: Dims; candDims: Dims; cropApplied: boolean;
+  dimensionDelta?: { width: number; height: number; tolerancePx: number };
+};
+export type NormalizedDiffMeasured = {
+  ok: true; mode: "normalize"; indeterminate: false;
+  sourceDims: Dims; refDims: Dims; candDims: Dims; cropApplied: boolean;
+  canvas: Dims; padded: { reference: boolean; candidate: boolean };
+  metrics: NormalizedDiffMetrics;
+  diffPngBase64: string;
+  normalizedCandidatePngBase64: string;
+};
+export type NormalizedDiffResult = NormalizedDiffIndeterminate | NormalizedDiffMeasured | DiffErr;
+export type RunNormalizedDiff = (job: NormalizedDiffJob) => Promise<NormalizedDiffResult>;
+
 const DIFF_DEADLINE_MS = 30_000;
 
 /** Resolves the node binary; the diff worker uses node (pngjs/pixelmatch), not bun. */
 function nodeBinary(): string { return process.execPath.includes("bun") ? "node" : process.execPath; }
 
 /**
- * Production {@link RunDiff}: spawns the node visual-diff worker in its own
- * process group, streams the job as JSON over stdin, parses the single JSON
- * result line, and kills the group on a hard deadline.
+ * Общий спавн воркера: node-подпроцесс в своей группе, задание JSON'ом через stdin, единственная
+ * JSON-строка на stdout, жёсткий дедлайн с убийством группы. Форму результата задаёт режим
+ * задания (`compare` по умолчанию, `mode:"normalize"` — W5a), поэтому спавн параметризован типом.
  */
-export const spawnDiffWorker: RunDiff = (job: DiffJob): Promise<DiffResult> => {
-  return new Promise<DiffResult>((resolvePromise) => {
+function spawnWorker<T>(job: unknown): Promise<T | DiffErr> {
+  return new Promise<T | DiffErr>((resolvePromise) => {
     const child = spawn(nodeBinary(), [WORKER_PATH], { stdio: ["pipe", "pipe", "pipe"], detached: true });
     let stdout = ""; let stderr = ""; let settled = false;
-    const finish = (result: DiffResult) => { if (settled) return; settled = true; clearTimeout(timer); resolvePromise(result); };
+    const finish = (result: T | DiffErr) => { if (settled) return; settled = true; clearTimeout(timer); resolvePromise(result); };
     const killGroup = () => { try { if (child.pid) process.kill(-child.pid, "SIGKILL"); } catch { /* already gone */ } };
     const timer = setTimeout(() => { killGroup(); finish({ ok: false, error: `visual diff timed out after ${DIFF_DEADLINE_MS}ms` }); }, DIFF_DEADLINE_MS);
 
@@ -45,7 +93,7 @@ export const spawnDiffWorker: RunDiff = (job: DiffJob): Promise<DiffResult> => {
     child.on("close", () => {
       const line = stdout.trim().split("\n").filter(Boolean).at(-1);
       if (!line) { finish({ ok: false, error: `diff worker produced no result${stderr ? `: ${stderr.slice(0, 500)}` : ""}` }); return; }
-      try { finish(JSON.parse(line) as DiffResult); }
+      try { finish(JSON.parse(line) as T); }
       catch { finish({ ok: false, error: `diff worker result was not JSON: ${line.slice(0, 300)}` }); }
     });
 
@@ -53,4 +101,15 @@ export const spawnDiffWorker: RunDiff = (job: DiffJob): Promise<DiffResult> => {
     child.stdin.write(JSON.stringify(job));
     child.stdin.end();
   });
-};
+}
+
+/** Production {@link RunDiff}: сравнение кадр-в-кадр (VDC v1). */
+export const spawnDiffWorker: RunDiff = (job: DiffJob): Promise<DiffResult> => spawnWorker<DiffOk>(job);
+
+/**
+ * Production {@link RunNormalizedDiff} (W5a): тот же воркер в режиме нормализации. Отдельная
+ * функция, а не флаг у `spawnDiffWorker`, чтобы тип результата был точным на месте вызова —
+ * приёмке нужны метрики или названная причина `indeterminate`, и промежуточных состояний нет.
+ */
+export const spawnNormalizedDiffWorker: RunNormalizedDiff = (job: NormalizedDiffJob): Promise<NormalizedDiffResult> =>
+  spawnWorker<NormalizedDiffIndeterminate | NormalizedDiffMeasured>(job);

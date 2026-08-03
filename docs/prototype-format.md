@@ -527,6 +527,13 @@ The reference point selects one with `props.variant`:
 - A parameter fixed by the variant **must not** also be passed in `params` — the two are records of the same value, and a silent winner would hide the divergence between the declared variant and the actual tree (`composition/variant-param-conflict`). Parameters outside the tuple are passed explicitly as usual.
 - `variantDimensionsOf(doc)` (`src/prototype/compositionV3/variants.ts`) is the pure projection of the declared axes for consumers outside expansion (verification matrices consume it separately).
 
+#### Is this a composition at all? (analyzer and preview tree)
+
+The boundary above is machine-checkable, so it is exposed as two read-only endpoints (details in [server-api.md](server-api.md#анализ-кандидата-и-preview-дерево-волна-w8g-план-2026-08-03); neither depends on `EASYUI_COMPOSITION_V3`):
+
+- `POST /api/compositions/analyze` answers `composition` / `extend-component` / `needs-ownership-component` for a candidate or a draft, with explicit reasons and an `unsupported[]` list. Anything that needs a clock, I/O, scroll position, DOM measurement, an action outside the runtime's closed set or business-state rewriting is **not expressible in v3** by construction — that is the same D7 boundary, stated as a verdict. The pure implementation is `src/prototype/compositionAnalyze.ts` (`analyzeComposition`).
+- `POST /api/compositions/{id}/preview-tree` shows how a revision expands for given `params`/`variant`: the branches actually taken, the `$switch` cases chosen, the `repeatParam` clone counts, the declarative slot bindings, the props each token `layout` compiled into and the expanded `{root, elements}` fragment. It is the very same `expandCompositions` run with an optional trace collector (`src/prototype/compositionV3/trace.ts`), so the preview cannot drift from the real expansion; without a collector expansion behaves exactly as before.
+
 ### v1 restrictions
 
 `compositionDocSchema` enforces all of the following for a **v1** document (v2 lifts only the nesting rule):

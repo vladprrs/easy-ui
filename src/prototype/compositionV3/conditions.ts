@@ -107,11 +107,12 @@ export function resolveSwitch(directive: CompositionSwitch, value: unknown): Swi
  */
 export function hiddenElementKeys(
   elements: Record<string, { children?: string[]; when?: CompositionWhen }>,
-  visible: (when: CompositionWhen) => boolean,
+  /** Второй аргумент (ключ элемента) добавлен для трассировки W8g; старые вызовы его игнорируют. */
+  visible: (when: CompositionWhen, key: string) => boolean,
 ): Set<string> {
   const hidden = new Set<string>();
   for (const [key, element] of Object.entries(elements)) {
-    if (element.when !== undefined && !visible(element.when)) hidden.add(key);
+    if (element.when !== undefined && !visible(element.when, key)) hidden.add(key);
   }
   const stack = [...hidden];
   while (stack.length) {

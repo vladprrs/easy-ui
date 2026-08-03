@@ -88,10 +88,15 @@ const COMPARING_GATES = new Set<GateName>(["geometry", "determinism", "visual"])
 
 const SEVERITY_RANK: Record<SeverityClass, number> = { structural: 0, geometry: 1, raw: 2, aa: 3, indeterminate: 4 };
 
-const classOfGate = (gate: GateName, status: GateResult["status"]): SeverityClass => {
-  if (status === "indeterminate") return "indeterminate";
-  if (gate === "geometry") return "geometry";
-  if (gate === "visual") return "raw";
+/**
+ * Класс провалившегося гейта. У `visual` (W5a) он вычисляется из метрик самого гейта: расхождение,
+ * объяснимое сглаживанием, — это `aa` (легче по рангу), структурное — `raw`. Метрику кладёт гейт
+ * (`severityClass`), а не раннер: только гейт знает, с каким бюджетом сравнивался случай.
+ */
+const classOfGate = (result: GateResult): SeverityClass => {
+  if (result.status === "indeterminate") return "indeterminate";
+  if (result.gate === "geometry") return "geometry";
+  if (result.gate === "visual") return result.metrics?.severityClass === "aa" ? "aa" : "raw";
   return "structural";
 };
 
@@ -106,7 +111,7 @@ export function severityOf(gates: GateResult[], policy: AcceptancePolicy): CaseS
   if (bad.length === 0) return null;
   let worst: SeverityClass = "indeterminate";
   for (const gate of bad) {
-    const candidate = classOfGate(gate.gate, gate.status);
+    const candidate = classOfGate(gate);
     if (SEVERITY_RANK[candidate] < SEVERITY_RANK[worst]) worst = candidate;
   }
   const productErrors = gates.reduce((sum, gate) => sum + ((gate.metrics?.productErrors as unknown[] | undefined)?.length ?? 0), 0);

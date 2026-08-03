@@ -13,14 +13,19 @@ import { geometryGate } from "./geometry";
 import { geometry2Gate } from "./geometry2";
 import { readinessGate } from "./readiness";
 import { renderGate } from "./render";
+import { visualGate } from "./visual";
 import type { Gate } from "./types";
 
 /**
  * Порядок исполнения гейтов внутри случая. `readiness` идёт сразу после `render`: он судит **тот
  * самый** кадр, который снял `render`, и его исход решает, имеют ли право считаться следующие
  * сравнивающие гейты (`geometry`/`determinism`/`visual` — инвариант D5, свод в `runner.ts`).
+ *
+ * `visual` идёт **после** `geometry`: кандидатом сравнения служит `paint.png`, который снял и
+ * положил в мемо рана именно гейт геометрии. Своей съёмки у визуала нет — иначе `layoutBounds`
+ * и пиксельный вердикт относились бы к разным кадрам (R1-M3).
  */
-export const GATE_ORDER: GateName[] = ["contract", "defaults", "audit", "render", "readiness", "geometry", "determinism"];
+export const GATE_ORDER: GateName[] = ["contract", "defaults", "audit", "render", "readiness", "geometry", "visual", "determinism"];
 
 export const IMPLEMENTED_GATES: Partial<Record<GateName, Gate>> = {
   contract: contractGate,
@@ -34,11 +39,16 @@ export const IMPLEMENTED_GATES: Partial<Record<GateName, Gate>> = {
   // W4: readiness — обязательный гейт; кадр, снятый до готовности, теряет право на визуальный
   // и геометрический вердикт (D5).
   readiness: readinessGate,
+  // W5a: минимальный визуальный гейт (A5). В реестре он есть всегда — обязательность решает
+  // политика рана (`advisory` в `default-v1`, `required` в `pixel-strict-v1` и при
+  // `requireVisual` case-set-манифеста), а не наличие реализации.
+  visual: visualGate,
   determinism: determinismGate,
 };
 
-export { auditGate, contractGate, defaultsGate, determinismGate, geometryGate, geometry2Gate, readinessGate, renderGate };
+export { auditGate, contractGate, defaultsGate, determinismGate, geometryGate, geometry2Gate, readinessGate, renderGate, visualGate };
 export { readinessBlocksVisual, readinessOfCase } from "./readiness";
 export { createGeometry2Gate, geometryTolerancesOf, paintShaKey } from "./geometry2";
+export { createVisualGate, maxRawDiffPctOf, visualIsRequired, visualSeverityClass } from "./visual";
 export * from "./types";
 export { captureCase, CaptureInfraError } from "./capture";

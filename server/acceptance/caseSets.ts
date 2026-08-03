@@ -58,6 +58,10 @@ export function casePolicyHashOf(manifest: CaseSetManifest, caseId: string): str
   return sha256(canonicalStringify({
     profile: manifest.policy?.profile ?? null,
     perCase: manifest.policy?.perCase?.[caseId] ?? null,
+    // W5a: `requireVisual` меняет **обязательность** визуального гейта, то есть смысл вердикта
+    // случая. Без него набор, переключённый на обязательный визуал, переиспользовал бы вердикты,
+    // посчитанные когда гейт был advisory, — и матрица выглядела бы пройденной.
+    requireVisual: manifest.requireVisual ?? false,
   }));
 }
 
@@ -334,6 +338,8 @@ export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCas
       // W3: допуски геометрии (`allowPaintOverflow`/`expectedClip`) — вход вердикта гейта, а не
       // только материал хэша; без них манифест объявлял бы намерение, которого никто не читает.
       ...(manifest.policy?.perCase?.[item.id] ? { casePolicy: manifest.policy.perCase[item.id] } : {}),
+      // W5a: происхождение эталона — вход нормализации размеров гейта `visual`.
+      ...(item.cropLineage ? { cropLineage: item.cropLineage } : {}),
     });
   }
   if (!cases.some((item) => item.aliasOfCaseId === null)) {

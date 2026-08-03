@@ -1347,7 +1347,16 @@ const acceptanceProgressSchema = z.looseObject({
   total: z.number(), completed: z.number(), reused: z.number(), failed: z.number(), running: z.number(),
   eta: z.looseObject({ secondsRemaining: z.number(), basis: z.enum(["measured", "estimate"]) }).optional(),
 });
-const acceptanceGateResultSchema = z.looseObject({ gate: z.string(), status: z.string(), detail: z.string().optional() });
+/**
+ * Результат одного гейта случая. `metrics` — свободный мешок измерений гейта (форма зависит от
+ * гейта и от волны), поэтому он `record(unknown)`, а не фиксированная схема: `geometry` кладёт
+ * layout/paint-контуры, `readiness` — доказательство готовности, `visual` (W5a) —
+ * `rawDiffPct`/`aaDiffPct`/`maxChannelDelta`/`regions`/`bestOffset` и `severityClass`.
+ */
+const acceptanceGateResultSchema = z.looseObject({
+  gate: z.string(), status: z.string(), detail: z.string().optional(),
+  metrics: z.record(z.string(), z.unknown()).optional(),
+});
 const acceptanceSeveritySchema = z.looseObject({ rank: z.number(), class: z.string(), score: z.number() }).nullable();
 
 const acceptanceRunViewSchema = z.looseObject({
@@ -1819,6 +1828,55 @@ export const setCompositionVersionStatusContract = registerContract({
   requestSchema: z.object({ status: z.enum(["active", "deprecated", "superseded", "archived"]), reason: z.string().optional(), supersededBy: positiveInt.optional(), baseStatusRev: positiveInt }),
   responseSchema: z.looseObject({ status: z.string(), statusRev: z.number() }),
   errors: [errorCatalog.invalidRequest, errorCatalog.notFound, errorCatalog.versionNotFound, { status: 409, code: "status_conflict" }, { status: 422, code: "invalid_transition" }],
+});
+
+// --- W8g: анализатор кандидата и preview-дерево (план 2026-08-03 §5) ---
+
+const compositionAnalyzeReasonSchema = z.looseObject({ code: z.string(), message: z.string(), elementKey: z.string().optional() });
+const compositionUnsupportedSchema = z.looseObject({ feature: z.string(), elementKey: z.string(), hint: z.string() });
+
+export const analyzeCompositionContract = registerContract({
+  method: "POST", path: "/api/compositions/analyze",
+  summary: "Analyze a composition candidate or draft: is the construct expressible with composition v3 (`composition`), is it one component with prop variations (`extend-component`), or does it need an ownership component (`needs-ownership-component`)? Writes nothing and works regardless of EASYUI_COMPOSITION_V3; the document need not pass the strict schema (drafts are analyzed as-is, `schemaValid` reports it). With `designSystem`, the answer also carries dependency impact (head/immutable usages of the components and nested compositions the body references) and `unknownTypes`. `analyze` is a reserved path segment: POST here never addresses a composition whose id is `analyze`.",
+  requestSchema: z.object({ doc: z.unknown(), designSystem: slugString.optional() }),
+  responseSchema: z.looseObject({
+    verdict: z.enum(["composition", "extend-component", "needs-ownership-component"]),
+    reasons: z.array(compositionAnalyzeReasonSchema),
+    unsupported: z.array(compositionUnsupportedSchema),
+    schemaValid: z.boolean(),
+    stats: z.looseObject({
+      elements: z.number(), params: z.number(), slots: z.number(), componentTypes: z.array(z.string()),
+      branches: z.number(), switches: z.number(), repeats: z.number(), actionParams: z.number(), nestedCompositions: z.number(),
+    }),
+    dependencyImpact: z.looseObject({
+      components: z.array(z.looseObject({ componentId: z.string(), name: z.string(), headUsageCount: z.number(), immutableUsageCount: z.number(), safeToRemove: z.boolean() })),
+      compositions: z.array(z.looseObject({ id: z.string(), headUsageCount: z.number(), immutableUsageCount: z.number(), safeToRemove: z.boolean() })),
+      unknownTypes: z.array(z.string()),
+    }),
+  }),
+  errors: [errorCatalog.invalidRequest, { status: 401, code: "unauthorized" }, { status: 403, code: "forbidden" }, errorCatalog.notFound, errorCatalog.methodNotAllowed],
+});
+
+export const compositionPreviewTreeContract = registerContract({
+  method: "POST", path: "/api/compositions/{id}/preview-tree",
+  summary: "Preview how a composition revision expands for the given params/variant: an instrumented run of the very same expansion the prototype save path uses. Returns resolved params (after variant and declared defaults), the `when` branches actually taken, the `$switch` cases chosen, the `repeatParam` clone counts, declarative slot bindings (a preview has no reference point, so `filled` is always false and fallbacks materialize), the props each token `layout` compiled into, the expanded `{root, elements}` fragment and expansion issues. Writes nothing and works regardless of EASYUI_COMPOSITION_V3. `rev` defaults to the head revision.",
+  requestSchema: z.object({
+    params: z.record(z.string(), z.unknown()).optional(),
+    variant: z.record(z.string(), z.string()).optional(),
+    rev: positiveInt.optional(),
+  }),
+  responseSchema: z.looseObject({
+    compositionId: z.string(), rev: z.number(), designSystem: z.string(),
+    resolvedParams: z.record(z.string(), z.unknown()),
+    chosenBranches: z.array(z.looseObject({ elementKey: z.string(), compositionId: z.string(), when: z.looseObject({ param: z.string() }), taken: z.boolean() })),
+    switches: z.array(z.looseObject({ elementKey: z.string(), prop: z.string(), param: z.string(), case: z.string() })),
+    repeatExpansions: z.array(z.looseObject({ elementKey: z.string(), param: z.string(), count: z.number() })),
+    slotBindings: z.array(z.looseObject({ slot: z.string(), compositionId: z.string(), required: z.boolean(), filled: z.boolean(), fallbackUsed: z.boolean() })),
+    layoutOwners: z.array(z.looseObject({ elementKey: z.string(), type: z.string(), props: z.record(z.string(), z.unknown()) })),
+    expandedTree: z.looseObject({ root: z.string(), elements: z.record(z.string(), z.unknown()) }),
+    issues: z.array(z.looseObject({ path: z.array(z.string()), message: z.string(), code: z.string().optional() })),
+  }),
+  errors: [errorCatalog.invalidRequest, { status: 401, code: "unauthorized" }, { status: 403, code: "forbidden" }, errorCatalog.notFound, errorCatalog.revisionNotFound, errorCatalog.methodNotAllowed],
 });
 
 export const compositionUsagesContract = registerContract({

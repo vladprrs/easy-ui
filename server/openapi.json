@@ -440,6 +440,13 @@
                                 "gate": {
                                   "type": "string"
                                 },
+                                "metrics": {
+                                  "additionalProperties": {},
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                },
                                 "status": {
                                   "type": "string"
                                 }
@@ -759,6 +766,13 @@
                                 },
                                 "gate": {
                                   "type": "string"
+                                },
+                                "metrics": {
+                                  "additionalProperties": {},
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "type": "object"
                                 },
                                 "status": {
                                   "type": "string"
@@ -1094,6 +1108,13 @@
                                 },
                                 "gate": {
                                   "type": "string"
+                                },
+                                "metrics": {
+                                  "additionalProperties": {},
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "type": "object"
                                 },
                                 "status": {
                                   "type": "string"
@@ -11390,6 +11411,284 @@
         "x-easyui-validated": false
       }
     },
+    "/api/compositions/analyze": {
+      "post": {
+        "operationId": "post_compositions_analyze",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "designSystem": {
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "type": "string"
+                  },
+                  "doc": {}
+                },
+                "required": [
+                  "doc"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "properties": {
+                    "dependencyImpact": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "components": {
+                          "items": {
+                            "additionalProperties": {},
+                            "properties": {
+                              "componentId": {
+                                "type": "string"
+                              },
+                              "headUsageCount": {
+                                "type": "number"
+                              },
+                              "immutableUsageCount": {
+                                "type": "number"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "safeToRemove": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "componentId",
+                              "name",
+                              "headUsageCount",
+                              "immutableUsageCount",
+                              "safeToRemove"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "compositions": {
+                          "items": {
+                            "additionalProperties": {},
+                            "properties": {
+                              "headUsageCount": {
+                                "type": "number"
+                              },
+                              "id": {
+                                "type": "string"
+                              },
+                              "immutableUsageCount": {
+                                "type": "number"
+                              },
+                              "safeToRemove": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "headUsageCount",
+                              "immutableUsageCount",
+                              "safeToRemove"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "unknownTypes": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "components",
+                        "compositions",
+                        "unknownTypes"
+                      ],
+                      "type": "object"
+                    },
+                    "reasons": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "elementKey": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "schemaValid": {
+                      "type": "boolean"
+                    },
+                    "stats": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "actionParams": {
+                          "type": "number"
+                        },
+                        "branches": {
+                          "type": "number"
+                        },
+                        "componentTypes": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "elements": {
+                          "type": "number"
+                        },
+                        "nestedCompositions": {
+                          "type": "number"
+                        },
+                        "params": {
+                          "type": "number"
+                        },
+                        "repeats": {
+                          "type": "number"
+                        },
+                        "slots": {
+                          "type": "number"
+                        },
+                        "switches": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "elements",
+                        "params",
+                        "slots",
+                        "componentTypes",
+                        "branches",
+                        "switches",
+                        "repeats",
+                        "actionParams",
+                        "nestedCompositions"
+                      ],
+                      "type": "object"
+                    },
+                    "unsupported": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "elementKey": {
+                            "type": "string"
+                          },
+                          "feature": {
+                            "type": "string"
+                          },
+                          "hint": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "feature",
+                          "elementKey",
+                          "hint"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "verdict": {
+                      "enum": [
+                        "composition",
+                        "extend-component",
+                        "needs-ownership-component"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "verdict",
+                    "reasons",
+                    "unsupported",
+                    "schemaValid",
+                    "stats",
+                    "dependencyImpact"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          }
+        },
+        "summary": "Analyze a composition candidate or draft: is the construct expressible with composition v3 (`composition`), is it one component with prop variations (`extend-component`), or does it need an ownership component (`needs-ownership-component`)? Writes nothing and works regardless of EASYUI_COMPOSITION_V3; the document need not pass the strict schema (drafts are analyzed as-is, `schemaValid` reports it). With `designSystem`, the answer also carries dependency impact (head/immutable usages of the components and nested compositions the body references) and `unknownTypes`. `analyze` is a reserved path segment: POST here never addresses a composition whose id is `analyze`.",
+        "x-easyui-validated": false
+      }
+    },
     "/api/compositions/{id}": {
       "delete": {
         "operationId": "delete_compositions_id",
@@ -12889,6 +13188,339 @@
           }
         },
         "summary": "Save a new head revision of the composition document (CAS on baseRev).",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/compositions/{id}/preview-tree": {
+      "post": {
+        "operationId": "post_compositions_id_preview_tree",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "params": {
+                    "additionalProperties": {},
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "rev": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "variant": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "properties": {
+                    "chosenBranches": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "compositionId": {
+                            "type": "string"
+                          },
+                          "elementKey": {
+                            "type": "string"
+                          },
+                          "taken": {
+                            "type": "boolean"
+                          },
+                          "when": {
+                            "additionalProperties": {},
+                            "properties": {
+                              "param": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "param"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "elementKey",
+                          "compositionId",
+                          "when",
+                          "taken"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "compositionId": {
+                      "type": "string"
+                    },
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "expandedTree": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "elements": {
+                          "additionalProperties": {},
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "root": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "root",
+                        "elements"
+                      ],
+                      "type": "object"
+                    },
+                    "issues": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "path",
+                          "message"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "layoutOwners": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "elementKey": {
+                            "type": "string"
+                          },
+                          "props": {
+                            "additionalProperties": {},
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "type": "object"
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "elementKey",
+                          "type",
+                          "props"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "repeatExpansions": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "count": {
+                            "type": "number"
+                          },
+                          "elementKey": {
+                            "type": "string"
+                          },
+                          "param": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "elementKey",
+                          "param",
+                          "count"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "resolvedParams": {
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "rev": {
+                      "type": "number"
+                    },
+                    "slotBindings": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "compositionId": {
+                            "type": "string"
+                          },
+                          "fallbackUsed": {
+                            "type": "boolean"
+                          },
+                          "filled": {
+                            "type": "boolean"
+                          },
+                          "required": {
+                            "type": "boolean"
+                          },
+                          "slot": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "slot",
+                          "compositionId",
+                          "required",
+                          "filled",
+                          "fallbackUsed"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "switches": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "case": {
+                            "type": "string"
+                          },
+                          "elementKey": {
+                            "type": "string"
+                          },
+                          "param": {
+                            "type": "string"
+                          },
+                          "prop": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "elementKey",
+                          "prop",
+                          "param",
+                          "case"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "compositionId",
+                    "rev",
+                    "designSystem",
+                    "resolvedParams",
+                    "chosenBranches",
+                    "switches",
+                    "repeatExpansions",
+                    "slotBindings",
+                    "layoutOwners",
+                    "expandedTree",
+                    "issues"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found | revision_not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          }
+        },
+        "summary": "Preview how a composition revision expands for the given params/variant: an instrumented run of the very same expansion the prototype save path uses. Returns resolved params (after variant and declared defaults), the `when` branches actually taken, the `$switch` cases chosen, the `repeatParam` clone counts, declarative slot bindings (a preview has no reference point, so `filled` is always false and fallbacks materialize), the props each token `layout` compiled into, the expanded `{root, elements}` fragment and expansion issues. Writes nothing and works regardless of EASYUI_COMPOSITION_V3. `rev` defaults to the head revision.",
         "x-easyui-validated": false
       }
     },

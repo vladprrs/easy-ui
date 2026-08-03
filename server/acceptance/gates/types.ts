@@ -11,6 +11,7 @@ import type { CandidateEntry } from "../../components/candidates";
 import type { ReadinessPolicy } from "../../../src/capture/readinessPolicy";
 import type { CaptureProbe, JobOutcome, JobStatus } from "../../screenshot/service";
 import type { RunInkBbox } from "../inkBbox";
+import type { RunNormalizedDiff } from "../../visual/diff-runner";
 import type { AcceptancePolicy, GateName } from "../policies";
 import type { CaseSurface } from "../ids";
 import type { AcceptanceCase } from "../cases";
@@ -92,6 +93,11 @@ export interface GateContext {
    * шов существует, чтобы гейт `geometry` v2 тестировался без pngjs-подпроцесса и без chromium.
    */
   inkBbox?: RunInkBbox;
+  /**
+   * Нормализующий visual-diff (W5a). По умолчанию — node-подпроцесс `scripts/visual-diff-worker.mjs`
+   * в режиме `normalize`; шов тот же, что у `inkBbox`: гейт `visual` проверяется без pngjs-подпроцесса.
+   */
+  runDiff?: RunNormalizedDiff;
 }
 
 export interface Gate {

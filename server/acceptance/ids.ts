@@ -30,8 +30,11 @@ const hashOf = (payload: unknown): string => sha256(canonicalStringify(payload))
  * W3 — geometry 2.0, W4 — readiness/env, W5a — визуальный гейт), **обязана** её поднять: это
  * единственный механизм автоматической инвалидации накопленного reuse. Признанная плата за
  * поэтапность (план §3 D1).
+ *
+ * **Версия 5 — последняя запланированная (W5a).** С неё отпечатки стабильны, и reuse-KPI §1
+ * замеряется на сценарии W6 уже без принудительной инвалидации.
  */
-export const CASE_FINGERPRINT_ALGO_VERSION = 4;
+export const CASE_FINGERPRINT_ALGO_VERSION = 5;
 
 /**
  * Хэш readiness-политики (W4) — тот же алгоритм, что у клиента

@@ -14,8 +14,10 @@ import {
 } from "./compositionV3/params";
 import {
   compositionSwitchSchema, compositionWhenSchema, evaluateWhen, hiddenElementKeys,
-  isSwitchDirective, resolveSwitch, type CompositionWhen,
+  isSwitchDirective, resolveSwitch, switchCaseKey, type CompositionWhen,
 } from "./compositionV3/conditions";
+import { COMPOSITION_REPEAT_SEPARATOR } from "./compositionV3/repeat";
+import type { CompositionTrace } from "./compositionV3/trace";
 import {
   checkSlotContents, compositionSlotNames, compositionSlotsV3Schema, normalizeCompositionSlots,
   COMPOSITION_SLOTS_LIMIT, type CompositionSlotMeta, type CompositionSlotsDeclaration,
@@ -551,6 +553,9 @@ export type { CompositionLayout } from "./compositionV3/layout";
 export { resolveVariant, variantDimensionsOf } from "./compositionV3/variants";
 export type { CompositionVariants } from "./compositionV3/variants";
 export { actionValueMatches, substituteHandlers } from "./compositionV3/actions";
+/** W8g: трассировка решений раскрытия (preview-tree). */
+export { createCompositionTrace } from "./compositionV3/trace";
+export type { CompositionTrace, CompositionTraceLog } from "./compositionV3/trace";
 
 /**
  * Документы, несущие каталожные метаданные (`atomicLevel`/`scope`/`canonicalFor`/`ownership`):
@@ -626,6 +631,12 @@ export interface ExpandCompositionsOptions {
    * там нет по построению, поэтому оно выключает проверку (`false`), а не выдумывает детей.
    */
   validateSlotContract?: boolean;
+  /**
+   * W8g: опциональный коллектор решений раскрытия (`when`/`$switch`/`repeatParam`/слоты/layout).
+   * Без него раскрытие ничего не собирает и работает ровно как раньше; события эмитятся
+   * только на nested-пути (legacy-путь v1 заморожен, D8).
+   */
+  trace?: CompositionTrace;
   /** Testable overrides for the same production safety limits. */
   maxCompositionDepth?: number;
   maxExpandedElements?: number;
@@ -1032,6 +1043,11 @@ function expandRecursiveCompositions(
         }
         values.set(name, raw);
       }
+      // W8g: значения после варианта, явного `params` и дефолтов — вход всех решений ниже.
+      options.trace?.params?.({
+        compositionId: source.id, version: source.version, hostKey,
+        params: Object.fromEntries(values),
+      });
 
       // v3-конструкции разрешаются **только** для тела v3: в v1/v2 объект с ключом `$switch`
       // — обычное значение props, и раскрытие обязано остаться байт-в-байт прежним (D8).
@@ -1051,6 +1067,20 @@ function expandRecursiveCompositions(
         : { elements: authoredBody, scopes: new Map<string, RepeatScope>() };
       const bodyElements = materialized.elements;
       const repeatScopes = materialized.scopes;
+      // W8g: сколько клонов реально построено — считается по телу, а не по длине параметра
+      // (после `maxItems`, бюджета элементов и коллизий ключей).
+      if (options.trace?.repeat && isV3Body) {
+        for (const [innerKey, element] of Object.entries(authoredBody)) {
+          const directive = element.repeatParam;
+          if (!directive) continue;
+          const prefix = `${innerKey}${COMPOSITION_REPEAT_SEPARATOR}`;
+          const count = Object.keys(bodyElements).filter((key) => key.startsWith(prefix)).length;
+          options.trace.repeat({
+            compositionId: source.id, version: source.version, hostKey,
+            elementKey: expandedKey(hostKey, innerKey), innerKey, param: directive.param, count,
+          });
+        }
+      }
 
       const substitute = (value: unknown, innerKey: string, relative: (string | number)[], scope?: RepeatScope): unknown => {
         if (isV3Body && (isItemDirective(value) || isIndexDirective(value))) {
@@ -1092,6 +1122,15 @@ function expandRecursiveCompositions(
           if (!resolved.ok) {
             addIssue([...at, "props", "params"], `composition ${source.id}: ${resolved.message} at ${where}`, "composition/switch-unresolved");
             return undefined;
+          }
+          if (options.trace?.switch) {
+            const caseKey = switchCaseKey(values.get(directive.param));
+            options.trace.switch({
+              compositionId: source.id, version: source.version, hostKey,
+              elementKey: expandedKey(hostKey, innerKey), innerKey,
+              prop: relative.join("/"), param: directive.param,
+              case: caseKey !== undefined && Object.hasOwn(directive.cases, caseKey) ? caseKey : "default",
+            });
           }
           return substitute(resolved.value, innerKey, relative, scope);
         }
@@ -1145,12 +1184,17 @@ function expandRecursiveCompositions(
       // Ложное условие снимает элемент **и всё его поддерево** до подсчёта раскрытых
       // элементов, поэтому лимиты после раскрытия действуют на реально построенное дерево.
       const hidden = isV3Body
-        ? hiddenElementKeys(bodyElements as Record<string, { children?: string[]; when?: CompositionWhen }>, (when) => {
+        ? hiddenElementKeys(bodyElements as Record<string, { children?: string[]; when?: CompositionWhen }>, (when, innerKey) => {
           if (!Object.hasOwn(source.doc.params, when.param)) {
             addIssue([...at, "props", "params"], `composition ${source.id} references an undeclared param "${when.param}" in when`);
             return true;
           }
-          return evaluateWhen(when, values.get(when.param));
+          const taken = evaluateWhen(when, values.get(when.param));
+          options.trace?.branch?.({
+            compositionId: source.id, version: source.version, hostKey,
+            elementKey: expandedKey(hostKey, innerKey), innerKey, when, taken,
+          });
+          return taken;
         })
         : new Set<string>();
 
@@ -1164,6 +1208,11 @@ function expandRecursiveCompositions(
         const usesFallback = children.length === 0 && fallback.length > 0;
         if (usesFallback) activeFallback.set(name, fallback);
         else for (const key of fallback) for (const inner of subtreeKeys(bodyElements, key)) hidden.add(inner);
+        options.trace?.slot?.({
+          compositionId: source.id, version: source.version, hostKey,
+          slot: name, required: meta.required === true, filled: children.length > 0,
+          fallbackUsed: usesFallback, children: [...children],
+        });
         if (options.validateSlotContract === false) continue;
         // Ребёнок, уже раскрытый как вложенная композиция, живёт под ключом-заменой:
         // тип берётся с корня его раскрытия, иначе `allowedTypes` дал бы ложный вердикт.
@@ -1222,7 +1271,12 @@ function expandRecursiveCompositions(
           const layout = element.layout;
           delete (elements[key] as { layout?: unknown }).layout;
           if (layout) {
-            (elements[key] as { props: Record<string, unknown> }).props = { ...compileLayout(layout), ...props };
+            const compiled = compileLayout(layout);
+            options.trace?.layout?.({
+              compositionId: source.id, version: source.version, hostKey,
+              elementKey: key, innerKey, type: element.type, props: compiled,
+            });
+            (elements[key] as { props: Record<string, unknown> }).props = { ...compiled, ...props };
             if (options.componentLayouts) {
               for (const issue of layoutSupportIssues(element.type, layout, options.componentLayouts[element.type])) {
                 addIssue([...base, key, "layout"], `composition ${source.id}: ${issue.message}`, issue.code);

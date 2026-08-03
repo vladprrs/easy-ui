@@ -1,9 +1,17 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
-import type { CompositionDoc } from "../../src/prototype/composition";
+import {
+  createCompositionTrace, expandCompositions,
+  type CompositionCatalogEntry, type CompositionDoc,
+} from "../../src/prototype/composition";
+import { analyzeComposition } from "../../src/prototype/compositionAnalyze";
+import { COMPOSITION_TYPE } from "../../src/catalog/hostPrimitives/composition.definition";
 import { hostPrimitiveNames } from "../../src/catalog/hostPrimitives/definitions";
+import type { PrototypeDoc } from "../../src/prototype/schema";
 import { ApiError, immutable, json, noStore, readJson } from "../http";
-import { CompositionRepo, safeParseCompositionDocument } from "../repos/compositions";
+import { CompositionRepo, resolveCompositionPins, safeParseCompositionDocument } from "../repos/compositions";
+import { componentCanonicalRoles, componentLayoutContracts } from "../validation";
+import { componentUsages } from "../usageGraph";
 import { requireActiveDesignSystem } from "../designSystems";
 import { requireResourceOwner, requireUser } from "../authorization";
 import { writeAuditEvent } from "../audit";
@@ -74,6 +82,71 @@ function assertKnownTypes(db: Database, doc: CompositionDoc, designSystem: strin
   }
 }
 
+/** Типы элементов тела, которые обязаны быть компонентами ДС (host-примитивы отсеяны). */
+function bodyComponentTypes(elements: Record<string, { type?: unknown }>): string[] {
+  const types = new Set<string>();
+  for (const element of Object.values(elements)) {
+    if (typeof element.type !== "string" || !element.type) continue;
+    if (hostPrimitiveNames.has(element.type)) continue;
+    types.add(element.type);
+  }
+  return [...types].sort();
+}
+
+/** Ссылки на вложенные композиции в теле кандидата. */
+function nestedCompositionIds(elements: Record<string, { type?: unknown; props?: unknown }>): string[] {
+  const ids = new Set<string>();
+  for (const element of Object.values(elements)) {
+    if (element.type !== COMPOSITION_TYPE) continue;
+    const props = element.props;
+    const id = props && typeof props === "object" ? (props as Record<string, unknown>).composition : undefined;
+    if (typeof id === "string" && id) ids.add(id);
+  }
+  return [...ids].sort();
+}
+
+/**
+ * Импакт зависимостей кандидата — **существующий** usages-механизм, без новых источников:
+ * компоненты тела резолвятся по имени в ДС (`componentUsages`), вложенные композиции —
+ * `CompositionRepo.usages`. Тип, которого в ДС нет, попадает в `unknownTypes`: это не
+ * ошибка анализа (кандидат ещё не сохраняется), но автору её надо видеть.
+ */
+function analyzeDependencyImpact(db: Database, repo: CompositionRepo, elements: Record<string, { type?: unknown; props?: unknown }>, designSystem: string) {
+  const components: { componentId: string; name: string; headUsageCount: number; immutableUsageCount: number; safeToRemove: boolean }[] = [];
+  const unknownTypes: string[] = [];
+  for (const type of bodyComponentTypes(elements)) {
+    const row = db.query(`SELECT c.id id FROM components c
+      JOIN component_publishes cp ON cp.component_id=c.id AND cp.status='active'
+      JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
+      WHERE c.name=? AND cr.design_system=? AND c.deleted_at IS NULL LIMIT 1`).get(type, designSystem) as { id: string } | null;
+    if (!row) { unknownTypes.push(type); continue; }
+    const report = componentUsages(db, row.id);
+    components.push({
+      componentId: report.componentId, name: report.name,
+      headUsageCount: report.currentHeadUsages.length,
+      immutableUsageCount: report.immutableUsages.length,
+      safeToRemove: report.safeToRemove,
+    });
+  }
+  const compositions: { id: string; headUsageCount: number; immutableUsageCount: number; safeToRemove: boolean }[] = [];
+  for (const id of nestedCompositionIds(elements)) {
+    try {
+      const usages = repo.usages(id);
+      compositions.push({
+        id, headUsageCount: usages.currentHeadUsages.length,
+        immutableUsageCount: usages.immutableUsages.length, safeToRemove: usages.safeToRemove,
+      });
+    } catch { unknownTypes.push(`${COMPOSITION_TYPE}:${id}`); }
+  }
+  return { components, compositions, unknownTypes: [...new Set(unknownTypes)].sort() };
+}
+
+/** Плоский вид `{root, elements}` одного экрана раскрытого probe-документа. */
+const expandedFragment = (doc: PrototypeDoc) => {
+  const screen = doc.screens[0]!;
+  return { root: screen.spec.root, elements: screen.spec.elements as Record<string, unknown> };
+};
+
 export async function routeCompositions(request: Request, db: Database, segments: string[], principal: Principal): Promise<Response> {
   const repo = new CompositionRepo(db);
   const url = new URL(request.url);
@@ -97,6 +170,40 @@ export async function routeCompositions(request: Request, db: Database, segments
       return json(result, 201, { ...noStore, location: `/api/compositions/${encodeURIComponent(id)}` });
     }
     throw new ApiError(405, "method_not_allowed", "Method not allowed");
+  }
+
+  /**
+   * W8g: анализ композиционного кандидата. Ручка **ничего не пишет**, поэтому она
+   * сознательно работает и при выключенном kill-switch `EASYUI_COMPOSITION_V3`: агент
+   * обязан уметь спросить «выразимо ли это композицией» до того, как включат запись v3 —
+   * иначе выбор «composition vs TSX» пришлось бы делать вслепую. Документ здесь не
+   * обязан проходить строгую схему (черновик анализируется как есть).
+   *
+   * `analyze` — **зарезервированный сегмент**: POST на него не адресует композицию с id
+   * `analyze` (её остальные методы и ручки продолжают работать).
+   */
+  if (segments.length === 2 && segments[1] === "analyze" && request.method === "POST") {
+    requireUser(principal);
+    const input = body(await readJson(request));
+    for (const key of Object.keys(input)) if (!["doc", "designSystem"].includes(key)) throw new ApiError(400, "invalid_request", `Unknown field: ${key}`);
+    if (!Object.hasOwn(input, "doc")) throw new ApiError(400, "invalid_request", "doc is required");
+    const designSystem = text(input.designSystem, "designSystem", false);
+    if (designSystem !== undefined) requireActiveDesignSystem(db, designSystem, ["designSystem"]);
+    const analysis = analyzeComposition({
+      doc: input.doc,
+      context: designSystem === undefined ? undefined : {
+        componentRoles: componentCanonicalRoles(db, designSystem),
+        componentLayouts: componentLayoutContracts(db, designSystem),
+      },
+    });
+    const spec = (input.doc as { spec?: { elements?: Record<string, { type?: unknown; props?: unknown }> } } | null)?.spec;
+    const elements = spec && typeof spec === "object" && spec.elements && typeof spec.elements === "object" ? spec.elements : {};
+    return json({
+      ...analysis,
+      dependencyImpact: designSystem === undefined
+        ? { components: [], compositions: [], unknownTypes: [] }
+        : analyzeDependencyImpact(db, repo, elements, designSystem),
+    }, 200, noStore);
   }
 
   const id = segments[1]!, tail = segments.slice(2);
@@ -128,6 +235,73 @@ export async function routeCompositions(request: Request, db: Database, segments
       return new Response(null, { status: 204, headers: noStore });
     }
     throw new ApiError(405, "method_not_allowed", "Method not allowed");
+  }
+
+  /**
+   * W8g: preview-дерево ревизии композиции — **инструментированный прогон того же
+   * раскрытия**, что и в save-пути прототипа (`expandCompositions` + trace-коллектор),
+   * поэтому показанные ветки/case'ы/клоны — фактические, а не пересчитанные копией логики.
+   * Слоты показываются декларативно: точки ссылки у превью нет, детей в слоты класть неоткуда
+   * (`validateSlotContract: false`), поэтому `filled` всегда false, а fallback раскрывается.
+   * Ручка ничего не пишет и работает независимо от `EASYUI_COMPOSITION_V3`.
+   */
+  if (tail[0] === "preview-tree" && tail.length === 1) {
+    if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+    requireUser(principal);
+    const input = body(await readJson(request));
+    for (const key of Object.keys(input)) if (!["params", "variant", "rev"].includes(key)) throw new ApiError(400, "invalid_request", `Unknown field: ${key}`);
+    const params = input.params === undefined ? {} : input.params;
+    if (typeof params !== "object" || params === null || Array.isArray(params)) throw new ApiError(400, "invalid_request", "params must be an object");
+    const variant = input.variant;
+    if (variant !== undefined) {
+      if (typeof variant !== "object" || variant === null || Array.isArray(variant)) throw new ApiError(400, "invalid_request", "variant must be an object");
+      for (const [axis, value] of Object.entries(variant)) if (typeof value !== "string") throw new ApiError(400, "invalid_request", `variant.${axis} must be a string`);
+    }
+    const revision = repo.revision(id, input.rev === undefined ? undefined : int(input.rev, "rev"));
+    const designSystem = revision.designSystem;
+    const nested = resolveCompositionPins(db, nestedCompositionIds(revision.doc.spec.elements), designSystem);
+    const compositions: Record<string, CompositionCatalogEntry> = {
+      ...nested.sources,
+      // Head-ревизия ещё не опубликована: служебная version 1 нужна лишь трассе/диагностике.
+      [id]: { doc: revision.doc, version: 1, designSystem, status: "active" },
+    };
+    const probe = {
+      version: 1, id: "composition-preview", name: "Composition preview", designSystem,
+      startScreen: "preview", state: {},
+      screens: [{
+        id: "preview", name: "Preview",
+        spec: {
+          root: "host",
+          elements: {
+            host: {
+              type: COMPOSITION_TYPE,
+              props: { composition: id, ...(Object.keys(params).length ? { params } : {}), ...(variant === undefined ? {} : { variant }) },
+            },
+          },
+        },
+      }],
+    } as unknown as PrototypeDoc;
+    const { trace, log } = createCompositionTrace();
+    const expanded = expandCompositions(probe, {
+      compositions, designSystem, trace, validateSlotContract: false,
+      componentRoles: componentCanonicalRoles(db, designSystem),
+      componentLayouts: componentLayoutContracts(db, designSystem),
+    });
+    const issues = [
+      ...nested.missing.map((entry) => ({ path: ["spec", "elements"], message: entry.reason })),
+      ...expanded.issues.map((issue) => ({ path: issue.path.split("/").filter(Boolean), message: issue.message, ...(issue.code ? { code: issue.code } : {}) })),
+    ];
+    return json({
+      compositionId: id, rev: revision.rev, designSystem,
+      resolvedParams: log.params.find((event) => event.compositionId === id)?.params ?? {},
+      chosenBranches: log.branches.map((event) => ({ elementKey: event.elementKey, compositionId: event.compositionId, when: event.when, taken: event.taken })),
+      switches: log.switches.map((event) => ({ elementKey: event.elementKey, prop: event.prop, param: event.param, case: event.case })),
+      repeatExpansions: log.repeats.map((event) => ({ elementKey: event.elementKey, param: event.param, count: event.count })),
+      slotBindings: log.slots.map((event) => ({ slot: event.slot, compositionId: event.compositionId, required: event.required, filled: event.filled, fallbackUsed: event.fallbackUsed })),
+      layoutOwners: log.layouts.map((event) => ({ elementKey: event.elementKey, type: event.type, props: event.props })),
+      expandedTree: expandedFragment(expanded.doc),
+      issues,
+    }, 200, noStore);
   }
 
   if (tail[0] === "usages" && tail.length === 1) {

@@ -307,6 +307,9 @@ function orderedCases(): [string, Case][] {
     ["GET /api/compositions/{id}/versions/{version}", { run: () => call("GET", "/api/compositions/contract-composition/versions/1"), expected: ok() }],
     ["POST /api/compositions/{id}/versions/{version}/status", { run: () => call("POST", "/api/compositions/contract-composition/versions/1/status", { status: "deprecated", baseStatusRev: 1 }), expected: ok() }],
     ["GET /api/compositions/{id}/usages", { run: () => call("GET", "/api/compositions/contract-composition/usages"), expected: ok() }],
+    // W8g: анализ и preview-дерево — read-only, поэтому стоят между публикацией и удалением.
+    ["POST /api/compositions/analyze", { run: () => call("POST", "/api/compositions/analyze", { doc: compositionDoc, designSystem: "contract-ds" }), expected: ok() }],
+    ["POST /api/compositions/{id}/preview-tree", { run: () => call("POST", "/api/compositions/contract-composition/preview-tree", { params: { alt: "Contract" } }), expected: ok() }],
     ["DELETE /api/compositions/{id}", { run: () => call("DELETE", "/api/compositions/contract-composition", { baseRev: 2 }), expected: ok(204) }],
     // Catalog / shims
     ["GET /api/catalog/usages", { run: () => call("GET", "/api/catalog/usages"), expected: ok() }],

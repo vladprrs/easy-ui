@@ -1,14 +1,17 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import pngjs from "pngjs";
 import { migrate } from "../migrations";
 import { ApiError } from "../http";
 import { acquireMaintenanceLock, maintenanceLockHeld } from "../maintenance";
 import type { CandidateEntry } from "../components/candidates";
 import type { CaptureProbe, JobOutcome, JobStatus, ScreenshotResult } from "../screenshot/service";
 import type { InkBboxResult } from "./inkBbox";
+import { caseSetManifestSchema, type CaseSetManifest } from "../../src/acceptance/caseSetSchema";
 import { buildCases, propsHashOf } from "./cases";
+import { CaseSetRepo } from "./caseSets";
 import { artifactPresent, casPath, readRunManifest } from "./evidence";
 import type { AcceptanceCaptureService, CandidateSubject, GateResult } from "./gates/types";
 import { AcceptanceOrchestrator, type RefreshSpec } from "./orchestrator";
@@ -24,7 +27,27 @@ afterEach(async () => { for (const dir of dirs.splice(0)) await rm(dir, { recurs
 
 const profile = ACCEPTANCE_POLICIES["default-v1"];
 const COMPONENT_ID = "acc-runner-probe";
-const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+
+const { PNG } = pngjs;
+
+/**
+ * Кадр случая — **настоящий PNG**, а не восемь байт с magic-заголовком: с W5a кадр читает не
+ * только CAS, но и визуальный гейт (pngjs-подпроцесс). Позиция прямоугольника выводится из props,
+ * поэтому два случая по-прежнему дают разные артефакты, а один и тот же случай — байт в байт
+ * одинаковые (это же свойство судит гейт `determinism`).
+ */
+function framePng(props: Record<string, unknown> | undefined, shift = 0): Uint8Array {
+  const seed = [...JSON.stringify(props ?? {})].reduce((sum, char) => (sum + char.charCodeAt(0)) % 7, 0);
+  const png = new PNG({ width: 24, height: 20 });
+  png.data.fill(0);
+  for (let y = 4; y < 14; y += 1) {
+    for (let x = 4 + seed + shift; x < 12 + seed + shift; x += 1) {
+      const offset = (y * 24 + x) * 4;
+      png.data[offset] = 0x20; png.data[offset + 1] = 0x40; png.data[offset + 2] = 0xc0; png.data[offset + 3] = 0xff;
+    }
+  }
+  return new Uint8Array(PNG.sync.write(png));
+}
 
 /**
  * Исход readiness «политика выполнена» (W4): хэш — тот же, что у политики профиля, иначе гейт
@@ -95,8 +118,7 @@ class FakeCapture implements AcceptanceCaptureService {
   /** Исход readiness кадров этого капчура (W4); тесты D5 подменяют его на `met: false`. */
   readiness: ReadinessFields = READY_READINESS;
   /** Кадр детерминирован по props: два разных случая обязаны давать разные артефакты. */
-  bytesFor: (props: Record<string, unknown> | undefined) => Uint8Array =
-    (props) => new Uint8Array([...PNG, ...new TextEncoder().encode(JSON.stringify(props ?? {}))]);
+  bytesFor: (props: Record<string, unknown> | undefined) => Uint8Array = (props) => framePng(props);
   private statuses = new Map<string, JobStatus>();
   private outcomes = new Map<string, JobOutcome>();
 
@@ -423,7 +445,7 @@ test("readiness fail роняет случай, глушит сравниваю�
   expect((readiness.metrics as { themeResources: { icons: string[] } }).themeResources.icons).toEqual(["asset_icon"]);
 
   // Инвариант D5: сравнивающие гейты вердикта не выдают вовсе.
-  for (const name of ["geometry", "determinism"]) {
+  for (const name of ["geometry", "visual", "determinism"]) {
     const gate = gates.find((item) => item.gate === name);
     if (!gate) continue;
     expect(gate.status).toBe("indeterminate");
@@ -486,9 +508,14 @@ test("case verdict and severity follow the required-gate set of the policy", () 
   expect(caseVerdictOf(gates("pass"), profile)).toBe("pass");
   expect(caseVerdictOf(gates("fail"), profile)).toBe("fail");
   expect(caseVerdictOf(gates("indeterminate"), profile)).toBe("indeterminate");
-  // Не реализованный фазой гейт вердикта не даёт ни в какую сторону.
+  // Advisory-гейт (`visual` в `default-v1`) вердикта не даёт ни в какую сторону.
   expect(caseVerdictOf([{ gate: "visual", status: "fail" }], profile)).toBe("skipped");
   expect(severityOf([{ gate: "visual", status: "fail" }], profile)).toBeNull();
+  // W5a: в профиле с обязательным визуалом тот же провал классифицируется по метрикам гейта.
+  const strict = ACCEPTANCE_POLICIES["pixel-strict-v1"];
+  expect(caseVerdictOf([{ gate: "visual", status: "fail" }], strict)).toBe("fail");
+  expect(severityOf([{ gate: "visual", status: "fail", metrics: { severityClass: "raw" } }], strict)).toMatchObject({ class: "raw", rank: 2 });
+  expect(severityOf([{ gate: "visual", status: "fail", metrics: { severityClass: "aa" } }], strict)).toMatchObject({ class: "aa", rank: 3 });
   // W3: геометрия — обязательный гейт, её провал классифицируется отдельным классом severity.
   expect(caseVerdictOf([{ gate: "geometry", status: "fail" }], profile)).toBe("fail");
   expect(severityOf([{ gate: "geometry", status: "fail" }], profile)).toMatchObject({ class: "geometry" });
@@ -538,5 +565,132 @@ test("maintenance lock and acceptance runs are mutually exclusive", async () => 
   harness.orchestrator.cancelQueuedRun(started.run.run_id);
   acquireMaintenanceLock(harness.db, "mig_1", "catalog migration");
   expect(maintenanceLockHeld(harness.db)).toBe(true);
+  harness.db.close();
+});
+
+// ------------------------------------------------------ visual / A5 (W5a)
+
+const sha256Of = (bytes: Uint8Array): string => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+
+/** Регистрирует байты в asset-store (строка `assets` + файл по sha) — так же, как ingest. */
+async function putAsset(harness: Awaited<ReturnType<typeof setup>>, bytes: Uint8Array): Promise<string> {
+  const sha = sha256Of(bytes);
+  await mkdir(resolve(harness.dir, "assets"), { recursive: true });
+  await writeFile(resolve(harness.dir, "assets", sha), bytes);
+  harness.db.run(
+    "INSERT OR IGNORE INTO assets (id,sha256,mime,size,width,height,original_name,created_at) VALUES (?,?,?,?,?,?,?,?)",
+    [`asset_${sha}`, sha, "image/png", bytes.byteLength, 24, 20, "reference.png", new Date().toISOString()],
+  );
+  return `asset_${sha}`;
+}
+
+/** Case-set на один случай с эталоном; `requireVisual` включает обязательность гейта (A5). */
+function caseSetOf(referenceAssetId: string, options: { requireVisual?: boolean } = {}): CaseSetManifest {
+  return caseSetManifestSchema.parse({
+    manifestVersion: 1,
+    componentId: COMPONENT_ID,
+    capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "light" },
+    ...(options.requireVisual ? { requireVisual: true } : {}),
+    cases: [{ id: "alpha", props: { label: "a" }, referenceAssetId }],
+  });
+}
+
+async function runWithCaseSet(harness: Awaited<ReturnType<typeof setup>>, manifest: CaseSetManifest) {
+  const { row } = new CaseSetRepo(harness.db).put({
+    componentId: COMPONENT_ID, designSystem: "yandex-pay", manifest, createdBy: "user_a",
+  });
+  const started = await harness.orchestrator.startRun({
+    candidateId: harness.candidateId, createdBy: "user_a", caseSetId: row.case_set_id,
+  });
+  const run = await harness.orchestrator.executeRun(started.run.run_id);
+  const gates = JSON.parse(harness.repo.cases(run.run_id)[0]!.gates_json!) as GateResult[];
+  return { run, gates, visual: gates.find((gate) => gate.gate === "visual") };
+}
+
+test("эталон, совпавший с paint-кадром, даёт visual pass с метриками и артефактами", async () => {
+  const harness = await setup();
+  // Эталон — тот самый кадр, который отдаст paint-джоба случая `alpha` (честный контур: сначала
+  // снимок, потом он же как reference).
+  const referenceAssetId = await putAsset(harness, framePng({ label: "a" }));
+  const { run, visual } = await runWithCaseSet(harness, caseSetOf(referenceAssetId));
+
+  expect(run.status).toBe("pass");
+  expect(visual?.status).toBe("pass");
+  expect(visual?.metrics).toMatchObject({ rawDiffPct: 0, aaDiffPct: 0, maxChannelDelta: 0, referenceAssetId, required: false });
+  expect(visual?.artifacts?.map((item) => item.name).sort()).toEqual(["diff.png", "normalized-candidate.png", "visual.json"]);
+  // Run-level агрегат видит гейт: «объявлен, посчитан» отличимо от «не считался».
+  expect(JSON.parse(run.gates_json!) as Record<string, Record<string, number>>).toMatchObject({ visual: { pass: 1 } });
+  harness.db.close();
+});
+
+test("сломанный эталон: visual fail с метриками; ран падает только при requireVisual", async () => {
+  const advisory = await setup();
+  const broken = await putAsset(advisory, framePng({ label: "a" }, 6));
+  const soft = await runWithCaseSet(advisory, caseSetOf(broken));
+  expect(soft.visual?.status).toBe("fail");
+  expect((soft.visual?.metrics as { rawDiffPct: number }).rawDiffPct).toBeGreaterThan(2);
+  // Эталон нарисован на 6px правее кандидата ⇒ кандидат «съехал» на -6px по X.
+  expect((soft.visual?.metrics as { bestOffset: { dx: number } }).bestOffset.dx).toBe(-6);
+  // `default-v1`: гейт advisory — метрики есть, но вердикт рана он не роняет.
+  expect(soft.run.status).toBe("pass");
+  advisory.db.close();
+
+  const required = await setup();
+  const brokenAgain = await putAsset(required, framePng({ label: "a" }, 6));
+  const hard = await runWithCaseSet(required, caseSetOf(brokenAgain, { requireVisual: true }));
+  expect(hard.visual?.status).toBe("fail");
+  expect(hard.run.status).toBe("fail");
+  const row = required.repo.cases(hard.run.run_id)[0]!;
+  expect(row.verdict).toBe("fail");
+  expect(JSON.parse(row.severity_json!) as { class: string }).toMatchObject({ class: "raw" });
+  required.db.close();
+});
+
+test("requireVisual без эталона — indeterminate: skipped обязательному гейту не положен (D10)", async () => {
+  const harness = await setup();
+  const manifest = caseSetManifestSchema.parse({
+    manifestVersion: 1,
+    componentId: COMPONENT_ID,
+    capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "light" },
+    requireVisual: true,
+    cases: [{ id: "alpha", props: { label: "a" } }],
+  });
+  const { run, visual } = await runWithCaseSet(harness, manifest);
+  expect(visual?.status).toBe("indeterminate");
+  expect(visual?.metrics).toMatchObject({ required: true, reason: "no_reference" });
+  expect(run.status).toBe("fail");
+  harness.db.close();
+});
+
+test("инвариант D5: кадр без readiness не доходит до визуального гейта", async () => {
+  const harness = await setup();
+  const referenceAssetId = await putAsset(harness, framePng({ label: "a" }));
+  harness.service.readiness = {
+    ...READY_READINESS,
+    readinessMet: false,
+    readinessReason: "fonts_pending",
+    readinessEvidence: { ...(READY_READINESS.readinessEvidence as Record<string, unknown>), pendingRequests: ["font:Ya Sans"] },
+  };
+  const { run, visual } = await runWithCaseSet(harness, caseSetOf(referenceAssetId, { requireVisual: true }));
+
+  expect(run.status).toBe("fail");
+  // Гейт не исполнялся: вердикт — заглушка раннера, метрик сравнения нет вовсе.
+  expect(visual?.status).toBe("indeterminate");
+  expect(visual?.metrics).toEqual({ skippedByReadiness: true });
+  expect(visual?.artifacts).toBeUndefined();
+  harness.db.close();
+});
+
+test("смена requireVisual инвалидирует reuse: вердикт advisory-гейта не наследуется обязательным", async () => {
+  const harness = await setup();
+  const broken = await putAsset(harness, framePng({ label: "a" }, 6));
+  const soft = await runWithCaseSet(harness, caseSetOf(broken));
+  expect(soft.run.status).toBe("pass");
+
+  // Тот же случай, тот же кадр, тот же эталон — но теперь визуал обязателен. Переиспользовать
+  // прошлый `pass` нельзя: он посчитан по другой обязательности.
+  const hard = await runWithCaseSet(harness, caseSetOf(broken, { requireVisual: true }));
+  expect(hard.run.status).toBe("fail");
+  expect(harness.repo.cases(hard.run.run_id)[0]!.reuse_reason).toBeNull();
   harness.db.close();
 });

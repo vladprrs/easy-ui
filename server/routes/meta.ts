@@ -191,6 +191,11 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // create/save отвечает `422 composition_v3_disabled`. Чтение и раскрытие уже
       // сохранённых v3 работают независимо от флага.
       compositionV3: compositionV3WriteEnabled(),
+      // План 2026-08-03 W8g: `POST /api/compositions/analyze` (вердикт composition |
+      // extend-component | needs-ownership-component) и `POST /api/compositions/:id/preview-tree`
+      // (инструментированный прогон раскрытия). Обе ручки ничего не пишут и **не** зависят от
+      // kill-switch'а v3: выбор «композиция или TSX» надо делать до включения записи.
+      compositionAnalyze: true,
     },
     reuseGate: {
       mode: reuseGateMode,

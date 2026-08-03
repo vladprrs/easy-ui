@@ -1,0 +1,176 @@
+import { expect, test } from "bun:test";
+import pngjs from "pngjs";
+import { normalizeAndCompare } from "../scripts/visual-diff-worker.mjs";
+import { spawnNormalizedDiffWorker } from "./visual/diff-runner";
+
+/**
+ * Нормализующий visual-diff (план 2026-08-03 §2 A5, §5 W5a; триаж R1-M4).
+ *
+ * Предмет — три свойства, ради которых режим вообще заведён:
+ * 1. **crop по `cropLineage`**: эталон-вырезка из макета приводится к кадру случая;
+ * 2. **`indeterminate` вместо выдуманного процента**: несводимые размеры не получают метрик;
+ * 3. **`bestOffset`**: «съехало на N px» отличимо от «перерисовано» — иначе автору нечего чинить.
+ */
+
+const { PNG } = pngjs;
+
+/** Синтетический кадр: холст `fill`, поверх — прямоугольник `color`. */
+function framePng(
+  width: number, height: number,
+  rect: { x: number; y: number; width: number; height: number; color: [number, number, number, number] } | null,
+  fill: [number, number, number, number] = [0, 0, 0, 0],
+): Buffer {
+  const png = new PNG({ width, height });
+  for (let index = 0; index < width * height; index += 1) {
+    const offset = index * 4;
+    png.data[offset] = fill[0]; png.data[offset + 1] = fill[1]; png.data[offset + 2] = fill[2]; png.data[offset + 3] = fill[3];
+  }
+  if (rect) {
+    for (let y = rect.y; y < rect.y + rect.height; y += 1) {
+      for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+        if (x < 0 || y < 0 || x >= width || y >= height) continue;
+        const offset = (y * width + x) * 4;
+        png.data[offset] = rect.color[0]; png.data[offset + 1] = rect.color[1];
+        png.data[offset + 2] = rect.color[2]; png.data[offset + 3] = rect.color[3];
+      }
+    }
+  }
+  return PNG.sync.write(png);
+}
+
+const INK: [number, number, number, number] = [0x20, 0x40, 0xc0, 0xff];
+const OTHER: [number, number, number, number] = [0xc0, 0x20, 0x20, 0xff];
+
+test("identical frames diff to zero and still carry the full metric set", () => {
+  const frame = framePng(40, 32, { x: 8, y: 6, width: 16, height: 12, color: INK });
+  const result = normalizeAndCompare(frame, frame);
+  expect(result.indeterminate).toBe(false);
+  if (result.indeterminate) throw new Error(result.reason);
+
+  expect(result.metrics.rawDiffPct).toBe(0);
+  expect(result.metrics.aaDiffPct).toBe(0);
+  expect(result.metrics.maxChannelDelta).toBe(0);
+  expect(result.metrics.regions).toEqual([]);
+  expect(result.metrics.totalRegions).toBe(0);
+  expect(result.metrics.bestOffset).toMatchObject({ dx: 0, dy: 0, residualPct: 0 });
+  expect(result.canvas).toEqual({ width: 40, height: 32 });
+  expect(result.padded).toEqual({ reference: false, candidate: false });
+  // Оба артефакта — байты, а не описание байтов: их кладёт в CAS гейт.
+  expect(Buffer.from(result.diffPngBase64, "base64").length).toBeGreaterThan(0);
+  expect(PNG.sync.read(Buffer.from(result.normalizedCandidatePngBase64, "base64")).width).toBe(40);
+});
+
+test("a whole-frame shift is reported as an offset, not as an opaque percentage", () => {
+  const reference = framePng(40, 32, { x: 8, y: 6, width: 16, height: 12, color: INK });
+  const shifted = framePng(40, 32, { x: 11, y: 8, width: 16, height: 12, color: INK });
+  const result = normalizeAndCompare(reference, shifted);
+  expect(result.indeterminate).toBe(false);
+  if (result.indeterminate) throw new Error(result.reason);
+
+  expect(result.metrics.rawDiffPct).toBeGreaterThan(0);
+  // Кандидат сдвинут на +3/+2, поэтому совпадение достигается сэмплом кандидата со смещением +3/+2.
+  expect(result.metrics.bestOffset).toMatchObject({ dx: 3, dy: 2 });
+  expect(result.metrics.bestOffset.residualPct).toBe(0);
+  expect(result.metrics.maxChannelDelta).toBeGreaterThan(0);
+  // Сдвиг прямоугольника даёт связные области по краям — их не больше потолка отчёта.
+  expect(result.metrics.regions.length).toBeGreaterThan(0);
+  expect(result.metrics.regions.length).toBeLessThanOrEqual(12);
+  for (const region of result.metrics.regions) {
+    expect(region.areaPct).toBeGreaterThan(0);
+    expect(region.meanDelta).toBeGreaterThan(0);
+  }
+});
+
+test("cropLineage.rect cuts the reference down to the case frame before comparing", () => {
+  // Эталон — «макет»: нужный компонент лежит вырезкой [20,10,40,32] внутри большого холста.
+  const parent = framePng(80, 60, { x: 28, y: 16, width: 16, height: 12, color: INK }, [0, 0, 0, 0]);
+  const candidate = framePng(40, 32, { x: 8, y: 6, width: 16, height: 12, color: INK });
+
+  const cropped = normalizeAndCompare(parent, candidate, { cropRect: [20, 10, 40, 32] });
+  expect(cropped.indeterminate).toBe(false);
+  if (cropped.indeterminate) throw new Error(cropped.reason);
+  expect(cropped.cropApplied).toBe(true);
+  expect(cropped.refDims).toEqual({ width: 40, height: 32 });
+  expect(cropped.sourceDims).toEqual({ width: 80, height: 60 });
+  expect(cropped.metrics.rawDiffPct).toBe(0);
+
+  // Без crop те же байты несводимы — и это `indeterminate`, а не «100% расхождения».
+  const raw = normalizeAndCompare(parent, candidate);
+  expect(raw.indeterminate).toBe(true);
+  if (!raw.indeterminate) throw new Error("expected an indeterminate verdict");
+  expect(raw.reason).toContain("beyond the");
+});
+
+test("irreconcilable sizes yield indeterminate with a named reason and no metrics", () => {
+  const reference = framePng(200, 200, { x: 10, y: 10, width: 40, height: 40, color: INK });
+  const candidate = framePng(40, 32, { x: 8, y: 6, width: 16, height: 12, color: INK });
+  const result = normalizeAndCompare(reference, candidate);
+
+  expect(result.indeterminate).toBe(true);
+  if (!result.indeterminate) throw new Error("expected an indeterminate verdict");
+  expect(result).not.toHaveProperty("metrics");
+  expect(result.dimensionDelta).toMatchObject({ width: 160, height: 168, tolerancePx: 8 });
+  expect(result.reason).toContain("200×200");
+  expect(result.reason).toContain("40×32");
+
+  // Пустая вырезка — тоже отказ, а не сравнение с нулевым холстом.
+  const empty = normalizeAndCompare(reference, candidate, { cropRect: [500, 500, 40, 32] });
+  expect(empty.indeterminate).toBe(true);
+  if (!empty.indeterminate) throw new Error("expected an indeterminate verdict");
+  expect(empty.reason).toContain("selects no pixels");
+});
+
+test("sizes inside the pad tolerance are reconciled by padding to a common canvas", () => {
+  const reference = framePng(40, 32, { x: 8, y: 6, width: 16, height: 12, color: INK });
+  const candidate = framePng(44, 34, { x: 8, y: 6, width: 16, height: 12, color: INK });
+  const result = normalizeAndCompare(reference, candidate);
+
+  expect(result.indeterminate).toBe(false);
+  if (result.indeterminate) throw new Error(result.reason);
+  expect(result.canvas).toEqual({ width: 44, height: 34 });
+  expect(result.padded).toEqual({ reference: true, candidate: false });
+  // Добивка прозрачным совпала с прозрачным полем кандидата ⇒ расхождения нет вовсе.
+  expect(result.metrics.rawDiffPct).toBe(0);
+
+  // Тот же зазор при более строгом допуске — уже несводимость.
+  const strict = normalizeAndCompare(reference, candidate, { maxDimensionDeltaPx: 1 });
+  expect(strict.indeterminate).toBe(true);
+});
+
+test("a recoloured region is a raw difference: aa-tolerant metric sees it too", () => {
+  const reference = framePng(40, 32, { x: 8, y: 6, width: 16, height: 12, color: INK });
+  const recoloured = framePng(40, 32, { x: 8, y: 6, width: 16, height: 12, color: OTHER });
+  const result = normalizeAndCompare(reference, recoloured);
+
+  expect(result.indeterminate).toBe(false);
+  if (result.indeterminate) throw new Error(result.reason);
+  const area = (16 * 12) / (40 * 32) * 100;
+  expect(result.metrics.rawDiffPct).toBeCloseTo(area, 2);
+  expect(result.metrics.aaDiffPct).toBeGreaterThan(0);
+  expect(result.metrics.regions).toHaveLength(1);
+  expect(result.metrics.regions[0]!.bbox).toEqual({ x: 8, y: 6, width: 16, height: 12 });
+  expect(result.metrics.thresholds).toEqual({ raw: 0.1, aa: 0.25 });
+});
+
+test("the spawned node worker returns the same normalized verdict over stdin/stdout", async () => {
+  const reference = framePng(24, 24, { x: 4, y: 4, width: 8, height: 8, color: INK });
+  const candidate = framePng(24, 24, { x: 4, y: 4, width: 8, height: 8, color: INK });
+  const result = await spawnNormalizedDiffWorker({
+    mode: "normalize",
+    referencePngBase64: reference.toString("base64"),
+    candidatePngBase64: candidate.toString("base64"),
+  });
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.error);
+  expect(result.indeterminate).toBe(false);
+  if (result.indeterminate) throw new Error(result.reason);
+  expect(result.metrics.rawDiffPct).toBe(0);
+  expect(result.mode).toBe("normalize");
+
+  const garbage = await spawnNormalizedDiffWorker({
+    mode: "normalize",
+    referencePngBase64: Buffer.from("not a png").toString("base64"),
+    candidatePngBase64: candidate.toString("base64"),
+  });
+  expect(garbage.ok).toBe(false);
+});

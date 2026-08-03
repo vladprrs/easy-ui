@@ -423,7 +423,7 @@ Meta-ответы прототипов и компонентов additively не
 
 **`POST /acceptance-runs`** `{candidateId, idempotencyKey?, policy?, cases?, refresh?}`. Профили — `default-v1` (по умолчанию) и `pixel-strict-v1`; неизвестный → `422 unknown_policy_profile`. Источник случаев в этой фазе — именованные `definition.examples` кандидата; `cases: [{key, props}]` задаёт набор явно. Дубликат props становится **алиасом** (одна съёмка, наследованный вердикт), пустой набор — `422 empty_case_set`, превышение `limits.acceptanceMaxCasesPerRun` — `422 case_set_too_large` (потолок считается до схлопывания алиасов). `idempotencyKey` уникален в паре с кандидатом и дедуплицирует **постановку** (ответ с `cached: true`); на синхронных ручках канон остаётся CAS по `baseRev`. У кандидата не может быть двух нетерминальных ранов — `409 acceptance_run_in_flight {runId}`; вытесненный бандл — `409 candidate_evicted`, разъехавшаяся пара `{rev, sourceHash}` — `409 candidate_stale`. Под maintenance-lock'ом каталога постановка отвечает `503 maintenance_in_progress` (обратная сторона: `acquireMaintenanceLock` отказывает при живом ране). Отклонённые конструкции — `422 unsupported_option`: `concurrency`, `cases.concurrency`, `manifestAssetId`. `caseSetId` (см. [case-set'ы](#case-set-манифесты-наборы-случаев-семьи)) задаёт набор случаев из опубликованного манифеста — он взаимоисключим с `cases` (`400 invalid_request`) и обязан принадлежать тому же компоненту, что кандидат (`422 case_set_mismatch`).
 
-**Исполнение.** Ран живёт вне screenshot-помпы: собственный цикл ставит capture-джобы по одной, оставляя интерактиву слоты очереди, ретраит только инфраструктурные исходы джобы и терминализуется watchdog'ом при превышении дедлайна профиля. Пережившие рестарт `queued|running`-раны переводятся в `error` стартовой уборкой — потеря дешёвая, потому что повтор переиспользует результаты случаев по `case_fingerprint` (в `progress.reused`). Гейты фазы 1: `contract`, `defaults`, `render`, `determinism` (повтор на выборке, побайтово), `audit` — обязательные; `geometry` — **advisory** (v1-семантика union-rect в вердикт не входит, боевой гейт приезжает в W3); `visual`/`readiness`/`regression`/`interactions` — `not-implemented` и в свёртке не участвуют. Свёртка: `fail` — любой случай `fail` **или** `indeterminate` по обязательному гейту; `error` — инфраструктурный отказ и нет ни одного `fail`; `cancelled` — по cancel; иначе `pass`. `reused`/`skipped`/алиасы не маскируют `fail`.
+**Исполнение.** Ран живёт вне screenshot-помпы: собственный цикл ставит capture-джобы по одной, оставляя интерактиву слоты очереди, ретраит только инфраструктурные исходы джобы и терминализуется watchdog'ом при превышении дедлайна профиля. Пережившие рестарт `queued|running`-раны переводятся в `error` стартовой уборкой — потеря дешёвая, потому что повтор переиспользует результаты случаев по `case_fingerprint` (в `progress.reused`). Гейты: `contract`, `defaults`, `render`, `determinism` (повтор на выборке, побайтово), `audit`, [`geometry` 2.0](#geometry-contract-20--probe-paint-волна-w3-план-2026-08-03) и [`readiness`](#deterministic-capture-readiness-волна-w4-план-2026-08-03) — обязательные; [`visual`](#минимальный-визуальный-гейт-приёмки-волна-w5a-план-2026-08-03-2-a5) — advisory в `default-v1` и `required` в `pixel-strict-v1` либо при `requireVisual` case-set-манифеста; `regression`/`interactions` — `not-implemented` и в свёртке не участвуют. Свёртка: `fail` — любой случай `fail` **или** `indeterminate` по обязательному гейту; `error` — инфраструктурный отказ и нет ни одного `fail`; `cancelled` — по cancel; иначе `pass`. `reused`/`skipped`/алиасы не маскируют `fail`.
 
 **`GET /acceptance-runs/:runId`** отдаёт `status`, `policy {id,hash}`, `progress {total, completed, reused, failed, running, eta {secondsRemaining, basis}}`, `gates` (сводка «гейт → статус → сколько случаев»), `evidenceManifestHash` и `failedCases`, отсортированные по severity (`{rank, class, score}`) с перечнем провалившихся гейтов и их `detail`. **`/cases`** добавляет `propsHash`, `caseFingerprint`, `aliasOfCaseId`, `reuseReason`, качество капчура и `artifacts: [{name, sha256, bytes}]` — имена и адреса, но не содержимое.
 
@@ -637,6 +637,40 @@ Charset `case.id` совпадает с charset имён записей evidence
 **Пины прототипа** при v2 — это всё замыкание, а не только верхнеуровневые хосты: `prototype_revision_compositions` получает транзитивный набор, а компонентные пины берутся из манифеста каждой запинованной публикации, поэтому более поздняя публикация вложенной композиции не меняет уже сохранённую ревизию прототипа. `classifyRevision` проверяет статус **каждого** пина замыкания, а не только композиций, встреченных в авторском документе.
 
 **Мягкое удаление.** `DELETE` только помечает `deleted_at`/`delete_reason`: композиция исчезает из списка и не доступна новым сохранениям, но уже закреплённые публикации продолжают читаться по версии (их защищает FK RESTRICT), а `usages` остаётся читаемым и для надгробия. Повреждённая строка ревизии при чтении даёт `422 invalid_stored_revision`.
+
+### Анализ кандидата и preview-дерево (волна W8g, план 2026-08-03)
+
+Две **read-only** ручки: они ничего не пишут и потому **не зависят от kill-switch'а `EASYUI_COMPOSITION_V3`** — выбор «композиция или TSX» агент обязан уметь сделать до того, как на сервере разрешат запись v3. Discovery — `capabilities.features.compositionAnalyze`. Авторизация — как у остального API: любой аутентифицированный пользователь; share/capture-scope → `403 forbidden`.
+
+| Endpoint | Смысл |
+|---|---|
+| `POST /compositions/analyze` | `{doc, designSystem?}` → вердикт по кандидату/черновику |
+| `POST /compositions/:id/preview-tree` | `{params?, variant?, rev?}` → как ревизия композиции раскроется на этих значениях |
+
+**`analyze`.** Ответ: `{verdict, reasons[], unsupported[], schemaValid, stats, dependencyImpact}`.
+
+- `verdict` — один из трёх (те же исходы печатает workbench):
+  - `composition` — конструкция выразима средствами v3;
+  - `extend-component` — тело сводится к **одному** компоненту с вариациями props (единственный не-слотовый элемент без объявленных слотов либо набор взаимоисключающих по `when` элементов одного типа): композиция здесь — лишний уровень косвенности;
+  - `needs-ownership-component` — в теле есть то, чего в v3 нет по построению.
+- `unsupported[]` — `{feature, elementKey, hint}`. Классы: `timer`, `async-data`, `scroll`, `dom-measurement` (эвристика по именам событий, действий и — **только у host-примитивов** — props: props кастомного компонента принадлежат его собственному контракту и невыразимости не означают), `custom-action` (действие вне закрытого набора рантайма), `business-state` (обработчик, переписывающий больше двух путей стейта разом), `dynamic-directive` (`$`-директива вне формата), `limit/elements|params|slots|expanded-elements|tree-depth|nesting-depth|repeat-items` (лимиты формата и бюджеты раскрытия).
+- `reasons[]` — `{code, message, elementKey?}`: `analyze/expressible`, `analyze/single-element-body`, `analyze/component-variations`, `analyze/host-primitive-body`, `analyze/needs-ownership`, `unsupported/<feature>`, `expansion/<code>` (диагностика probe-раскрытия) и `analyze/schema-invalid` (черновик, не прошедший строгую схему, — он всё равно анализируется, а `schemaValid: false` это фиксирует).
+- `stats` — `{elements, params, slots, componentTypes[], branches, switches, repeats, actionParams, nestedCompositions}`.
+- `dependencyImpact` (только с `designSystem`) — **существующий** usages-механизм: `components[]` (`componentUsages`: `headUsageCount`/`immutableUsageCount`/`safeToRemove`), `compositions[]` (usages вложенных ссылок) и `unknownTypes[]` — типы тела, не опубликованные в этой ДС.
+- `analyze` — **зарезервированный сегмент пути**: `POST /compositions/analyze` никогда не адресует композицию с id `analyze` (её остальные методы и ручки работают как обычно).
+- Ошибки: `400 invalid_request` (нет `doc`, лишнее поле), `422 validation_failed` (неизвестная/архивная `designSystem`), `403 forbidden`.
+
+**`preview-tree`.** Это **инструментированный прогон того же раскрытия** (`expandCompositions` + опциональный trace-коллектор), что и в save-пути прототипа, — показанные решения фактические, а не пересчитанные копией логики. Ответ: `{compositionId, rev, designSystem, resolvedParams, chosenBranches[], switches[], repeatExpansions[], slotBindings[], layoutOwners[], expandedTree, issues[]}`:
+
+- `resolvedParams` — значения после варианта, явного `params` и дефолтов объявления;
+- `chosenBranches[]` — `{elementKey, compositionId, when, taken}` (`when` — **объявленное** условие, `taken` — его значение на этих параметрах);
+- `switches[]` — `{elementKey, prop, param, case}`, где `case` — выбранный ключ или `"default"`;
+- `repeatExpansions[]` — `{elementKey, param, count}`: сколько клонов реально построено (после `maxItems`, бюджета и коллизий ключей);
+- `slotBindings[]` — `{slot, compositionId, required, filled, fallbackUsed}`; точки ссылки у превью нет, поэтому слоты **декларативны**: `filled` всегда `false`, контракт слота не проверяется (`validateSlotContract: false`), а fallback раскрывается;
+- `layoutOwners[]` — `{elementKey, type, props}`: во что скомпилировался token `layout`;
+- `expandedTree` — `{root, elements}` раскрытого фрагмента (без capture и без рендера: UI-превью в объём волны не входит);
+- `issues[]` — обычные issue раскрытия (`{path[], message, code?}`), включая `composition/layout-unsupported` и нерезолвящиеся вложенные ссылки.
+- `rev` по умолчанию — головная ревизия; неизвестная композиция → `404 not_found`, неизвестная ревизия → `404 revision_not_found`; не-объект `params`, не-строковое значение оси `variant` или лишнее поле → `400 invalid_request`; метод кроме POST → `405`.
 
 ## Атомарная политика и миграция каталога
 
@@ -1131,6 +1165,46 @@ readiness не считает сравнивающие гейты случая (
 хэш политики — общий с клиентом, серверная часть отпечатка окружения — платформа хоста плюс этот
 хэш (браузерная часть отпечатка наблюдается в кадре и живёт в evidence, потому что отпечаток
 случая считается **до** съёмки).
+
+### Минимальный визуальный гейт приёмки (волна W5a, план 2026-08-03 §2 A5)
+
+Эталон приезжает из **case-set-манифеста** (`cases[].referenceAssetId`, ассет реестра) и привязан к
+набору, а не к опубликованной версии: подсистема `visual_references`/`visual_runs` (раздел
+[Visual regression](#visual-regression) ниже) этой волной не затрагивается и не мигрируется.
+Кандидат — тот самый `paint.png`, который снял гейт `geometry`: второй съёмки нет, поэтому
+`layoutBounds`, `paintBounds` и пиксельный вердикт относятся к одной сессии.
+
+**Нормализация размеров** (обязательная часть): эталон обрезается по `cases[].cropLineage.rect`
+(прямоугольник в его собственных пикселях), затем обе картинки добиваются прозрачным до общего
+холста с выравниванием по левому-верхнему углу. Если после crop габариты расходятся больше
+`maxDimensionDeltaPx` профиля (`default-v1` — 8 px, `pixel-strict-v1` — 4 px), метрик нет вовсе:
+гейт отдаёт `indeterminate` с названной причиной, а не выдуманный процент расхождения.
+
+**Метрики случая** (в `gates[].metrics` и в CAS-артефакте `visual.json`):
+
+| Поле | Смысл |
+|---|---|
+| `rawDiffPct` | pixelmatch, порог `0.1`, сглаживание **считается** — по нему выносится вердикт |
+| `aaDiffPct` | pixelmatch, порог `0.25`, сглаживание игнорируется — остаток структурного расхождения |
+| `maxChannelDelta` | максимальная по-канальная дельта (0–255) |
+| `regions` | до 12 связных областей diff-маски: `{bbox, areaPct, meanDelta}`, по убыванию площади |
+| `bestOffset` | `{dx, dy, residualPct}` в окне ±8 px: «съехало на N px» отличимо от «перерисовано» |
+| `severityClass` | `raw` или `aa` — класс severity случая (D10) |
+
+**Порог и обязательность.** Бюджет `rawDiffPct` — per-case `policy.perCase.<id>.maxRawDiffPct`
+манифеста, иначе профильный (`default-v1` — 2.0 %, `pixel-strict-v1` — 0.5 %). Гейт `required`
+только там, где визуальная приёмка объявлена: профиль `pixel-strict-v1` либо `requireVisual: true`
+манифеста (последнее поднимает роль гейта **для рана**, не меняя `policy.hash`, и входит в
+`case_policy_hash`, поэтому переключение обязательности инвалидирует reuse ровно затронутых
+случаев). В `default-v1` без `requireVisual` гейт считается и пишет метрики в evidence, но ран не
+роняет. Случай без эталона — `skipped` у необязательного гейта и `indeterminate` у обязательного
+(D10: `skipped` положен только необязательным).
+
+Артефакты случая — `diff.png`, `normalized-candidate.png` и `visual.json` в CAS; сам эталон в CAS
+**не копируется** — он уже в asset-store, и в записи едет его `referenceAssetId`. Инвариант D5
+действует в полную силу: кадр с `readinessMet: false` до визуального гейта не доходит вовсе.
+Граница волны подняла `case_fingerprint.algoVersion` до **5** — это последний запланированный bump,
+дальше отпечатки стабильны.
 
 ## Visual regression
 
