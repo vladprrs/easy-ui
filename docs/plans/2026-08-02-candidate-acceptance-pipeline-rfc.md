@@ -1,8 +1,8 @@
 # RFC: Candidate Acceptance Pipeline
 
-Дата: 2026-08-02. Статус: **v4 — после раунда 2 Stage 2 (верификационное ре-ревью: закрытие раунда 1 подтверждено, 3 новых R1-блокера V1–V3 и майноры V4–V15 внесены; триаж — §13-Р2). Blocking-возражений против Stage 3 (R1) после v4 нет — R1 готов к старту (дельта-верификация решений V1–V3 включена в done-критерии R1).**
+Дата: 2026-08-02. Статус: **v5 — R1 реализован и в проде (9e87960, 2026-08-02); R2 амендментирован планом `docs/plans/2026-08-03-family-acceptance-and-composition-v3.md` (v3, свой Stage 2 из 2 раундов) и исполняется его волнами W0/W1a/W1b/W1c(+W2). Амендменты A1–A10 внесены в текст ниже; сводка — §14.**
 
-История: v1 — draft (Stage 2 отложен до посадки agent-iteration-dx); v2 — синк §10 с посаженным кодом W1–W5 (b4e2428…c7d8803); v3 — триаж раунда 1: исправлена identity кандидата (component-scoped), promote переписан как сага, gate-матрица приведена к честной фазе 1, evidence уведён из asset-store, волны перекроены (R1 = promote без durable-таблиц), advisory получил would-block; v4 — триаж раунда 2: recovery через расширенный `already_published`-чек, `pinAssets`/`recordValidation`/`host_abi_version` в фазе B, **R1 вообще без миграций** (колонки и FK — R2), advisory материализует кандидата published-ревизии и снимает published-поверхностью, `policyProfileHash` вне build_fingerprint.
+История: v1 — draft (Stage 2 отложен до посадки agent-iteration-dx); v2 — синк §10 с посаженным кодом W1–W5 (b4e2428…c7d8803); v3 — триаж раунда 1: исправлена identity кандидата (component-scoped), promote переписан как сага, gate-матрица приведена к честной фазе 1, evidence уведён из asset-store, волны перекроены (R1 = promote без durable-таблиц), advisory получил would-block; v4 — триаж раунда 2: recovery через расширенный `already_published`-чек, `pinAssets`/`recordValidation`/`host_abi_version` в фазе B, **R1 вообще без миграций** (колонки и FK — R2), advisory материализует кандидата published-ревизии и снимает published-поверхностью, `policyProfileHash` вне build_fingerprint; v5 — R1 посажен (отклонение: re-stage перезаписывает `failed`-строку in-place, внесено в §4.3.2 ещё в v4-примечании), R2 расширен матричной семантикой фидбэка §19 (per-case слой, CAS-evidence, reuse, пин кандидата, TEXT-ссылки вместо FK) — источник решений и триажей: план family-acceptance v3, §2/§10.
 
 Источники: `docs/EASYUI_PRODUCT_IMPROVEMENTS.md` (§3–5, §9.2, §16–18 — количественный baseline и предложение RFC), `docs/plans/2026-08-02-agent-iteration-dx.md` §6 (перечень отложенных в RFC слоёв), посаженный код P8/P1b/P2 (`server/components/validate.ts`, `server/components/candidates.ts`, `server/screenshot/service.ts`, `src/capture/protocol.ts`).
 
@@ -13,9 +13,9 @@
 ```text
 head draft revision
     → validate (есть, P8)
-    → candidate (durable, component-scoped)          [R2]
-    → acceptance run (серверный вердикт + evidence)  [R2]
-    → promote (сага: одна immutable версия, preferred active, auto-supersede)  [R1]
+    → candidate (durable, component-scoped, бандл материализован по rev)   [R2 = W1a]
+    → acceptance run (матрица per-case вердиктов + evidence в CAS)         [R2 = W1a/W1b]
+    → promote (сага: одна immutable версия, preferred active, auto-supersede)  [R1 — в проде]
 ```
 
 Baseline, который лечим (`yandex-pay-v2`): 2,4 публичные версии на принятый компонент, 11 публикаций ради 2 принятых head'ов (ButtonGroup, Timer), все промежуточные версии временно `active`, metadata-only версии ради provenance, 24 самописных verifier-скрипта и ручная evidence-сборка вне продукта.
@@ -100,17 +100,43 @@ acceptance_runs(
   idempotency_key TEXT NULL,   -- UNIQUE(candidate_id, idempotency_key)
   status TEXT,                 -- queued|running|pass|pass_with_exceptions|fail|error|cancelled (пересечение с visual_runs — pass|fail|error, остальное новое; триажи A5/V13)
   policy_profile_hash TEXT,
-  gates_json TEXT,             -- пер-gate результаты §4.2 (известное ограничение: не запрашиваемо по gate — S4; развязка в R3 при необходимости)
+  case_set_id TEXT NULL,       -- [A1/A2] ссылка на component_case_sets (W2); NULL = cases из examples кандидата
+  policy_profile_id TEXT,      -- [A6] имя профиля из реестра-константы
+  progress_json TEXT,          -- [A1] {total, completed, reused, failed, running} + eta
+  impact_json TEXT NULL,       -- [W6] basis/affected/unaffected
+  gates_json TEXT,             -- run-level агрегат §4.2 (per-case — в acceptance_cases; ограничение S4 снято таблицей ниже)
   evidence_manifest_hash TEXT NULL,
   started_at TEXT NULL, finished_at TEXT NULL, created_by TEXT, created_at TEXT
 )
 ```
 
-Плюс partial unique index «не более одного нетерминального run'а на кандидата» (триаж E4). **Evidence не хранится в asset-store** (триаж B4-риски: GC ассетов в продукте не существует, `component_publish_assets` FK RESTRICT): каталог `<dataDir>/.acceptance/<runId>/` с `SHA256SUMS`, путь **выводится** из `runId` после regex-валидации (никакой `evidence_dir`-колонки — триаж D4), потолок размера бандла по паттерну `EXPORT_RAW_LIMIT`, GC: `fail|error`-бандлы — по TTL; старые `pass`-бандлы promoted-версий вытесняются по потолку суммарных байт (метаданные run'а остаются) (триаж S5).
+**Амендмент A1 (план family-acceptance): per-case слой.** Матричная приёмка (§19.1 фидбэка) требует durable-строк на случай:
+
+```text
+acceptance_cases(
+  run_id TEXT, case_id TEXT, case_key TEXT, props_hash TEXT,
+  case_fingerprint TEXT,       -- §5-Ам (component-scoped: содержит candidateId + algoVersion)
+  case_policy_hash TEXT, reference_asset_id TEXT NULL, expected_geometry_json TEXT NULL,
+  status TEXT,                 -- pending|running|done|error|skipped
+  verdict TEXT NULL,           -- pass|fail|indeterminate|skipped (свёртка в run — D10 плана)
+  gates_json TEXT NULL, severity_json TEXT NULL,
+  capture_quality_json TEXT NULL,  -- captureClean/productErrors/runtimeWarnings/infraWarnings (D11)
+  alias_of_case_id TEXT NULL, reuse_reason TEXT NULL,
+  started_at TEXT NULL, finished_at TEXT NULL,
+  PRIMARY KEY (run_id, case_id))
+acceptance_case_results(
+  case_fingerprint TEXT PK, component_id TEXT,  -- денормализация: reuse проверяет владение
+  artifacts_json TEXT, metrics_json TEXT, verdict TEXT,
+  produced_run_id TEXT, created_at TEXT, last_used_at TEXT)
+```
+
+Плюс partial unique index «не более одного нетерминального run'а на кандидата» (триаж E4; `SQLITE_CONSTRAINT` маппится в `409 acceptance_run_in_flight`) и **watchdog**: run в `running` дольше `runDeadline` политики терминализуется `error` живым процессом (иначе исключение оркестратора вечно блокирует кандидата).
+
+**Evidence (амендмент A4).** Не в asset-store (триаж B4 сохраняется) и **не только per-run каталог**: артефакты (PNG, geometry, diff) — content-addressed в `<dataDir>/.acceptance/cas/<sha256[0:2]>/<sha256>` (cross-run дедуп для reuse/resume), а `<dataDir>/.acceptance/<runId>/manifest.json` + `SHA256SUMS` ссылаются на CAS; путь выводится из `runId` после regex-валидации (D4 сохраняется). **Байтовый канал:** сегодня image-джоба безусловно ингестит PNG в asset-store (`assetRepo.ingest` в `ScreenshotService.execute`) — для acceptance-джоб вводится режим «отдать байты вызывающему», acceptance-капчуры в asset-store не попадают. GC: refcount запросом по union `acceptance_cases` ∪ `acceptance_case_results`, строка result удаляется вместе со своими артефактами, grace-период для молодых артефактов; **reuse обязан проверять физическое существование артефактов, иначе пересъёмка**. Потолок `evidenceMaxBytes` ограничивает и CAS, и экспорт; экспорт — **zip** через существующий `fflate`/`zipResponse` (tar-зависимости в проекте нет), имена записей — санитизированные `caseId` (charset задаёт W2).
 
 ### 3.4. Policy profile (упрощено триажем S2)
 
-Фаза 1: **единственный профиль `default-v1` — константа кода** (прецедент `CALIBRATED_POLICY` + `policyVersion` reuse-гейта), `policyProfileHash = sha256(canonicalJson(константы))` — fingerprint-семантика сохраняется полностью. Профиль перечисляет обязательные gate'ы, допуски geometry, `maxJobsPerRun`, `allowExceptions: false`. Таблица `policy_profiles` + CRUD — только при появлении второго реального профиля (не раньше R3).
+Фаза 1 (амендмент A6): **реестр констант кода** `server/acceptance/policies.ts` — `default-v1` и `pixel-strict-v1` (второй реальный профиль: pixel-perfect-приёмка Figma-семейств), `policyProfileHash = sha256(canonicalJson(константы))`. Профиль перечисляет обязательные gate'ы, допуски geometry, `maxJobsPerRun`, `runDeadline`, `determinismSampleSize`, `maxInfraRetries`, `allowExceptions: false`. Per-case допуски приезжают из case-set-манифеста (W2) и хешируются в `case_policy_hash`. Таблица `policy_profiles` + CRUD — по-прежнему не вводится (до профиля, который нужно менять без деплоя).
 
 ## 4. API
 
@@ -121,18 +147,23 @@ POST /api/components/:id/candidates        { }         -- validate head + durabl
 GET  /api/component-candidates/:candidateId            -- глобальное чтение (namespace: не пересекается с /api/catalog/candidates — триаж A3)
 ```
 
-`POST` выполняет validate head'а (тот же `validateComponentHead`, тот же троттлинг) и материализует строку. Повтор при неизменном `{componentId, rev, build_fingerprint}` возвращает ту же строку (`cached: true`) — идентичность component-scoped, дрейф чужого каталога строк не плодит. Ошибки validate — коды P8. Списочный `GET /api/components/:id/candidates` не вводится (YAGNI, ≤1 живой кандидат при детерминированном id — триаж A7).
+`POST` выполняет validate head'а (тот же `validateComponentHead`, тот же троттлинг) и материализует строку **и бандл по rev кандидата** (амендмент A10: вариант `ensureDraftCandidate` с явной ревизией — не head; после этого расхождение head'а с кандидатом — не условие корректности кадра, а advisory-метка `headDiverged` в evidence). Бандл **пинуется против `gcCandidates`**: GC получает провайдер пинов (список `sourceHash` нетерминальных ранов из БД — смена сигнатуры `server/components/candidates.ts`) и не вытесняет запиненные; `POST /api/acceptance-runs` → `409 candidate_evicted`, если бандл отсутствует. Повтор при неизменном `{componentId, rev, build_fingerprint}` возвращает ту же строку (`cached: true`). Ошибки validate — коды P8. Списочный `GET` не вводится (триаж A7).
 
 ### 4.2. Acceptance runs (R2)
 
 ```http
-POST /api/acceptance-runs                  { candidateId, idempotencyKey? }
-GET  /api/acceptance-runs/:runId           -- статус + пер-gate результаты
-GET  /api/acceptance-runs/:runId/evidence  -- tar/zip (владелец компонента или админ)
-POST /api/acceptance-runs/:runId/cancel    -- только пока queued; running не отменяется (в продукте нет механики отмены джоб — триаж A6)
+POST /api/acceptance-runs   { candidateId, idempotencyKey?, caseSetId?, cases?: [{key, props}],
+                              checks?: string[], policy?: "default-v1"|"pixel-strict-v1",
+                              refresh?: "none"|"failed"|"all"|{caseIds:[]} }        -- [A1/A3]
+GET  /api/acceptance-runs/:runId           -- статус + gates + progress {total,completed,reused,failed,running} + eta + failedCases (сортировка по severity)
+GET  /api/acceptance-runs/:runId/cases     -- per-case вердикты + ссылки на CAS-артефакты (только через runId-scoped роут — ручек «по sha» нет)
+GET  /api/acceptance-runs/:runId/evidence  -- zip (владелец компонента или админ)
+POST /api/acceptance-runs/:runId/cancel    -- только пока queued; running не отменяется (триаж A6)
 ```
 
-**Оркестрация (переработана триажем B1/B2/B4, дополнена V7/V8):** оркестратор run'а живёт **вне** screenshot-помпы — собственный фоновый цикл с инвариантом «≤1 running acceptance-run на процесс». Capture-джобы он ставит в общую очередь **по одной**, дожидаясь каждой (интерактивные джобы перемежаются — глубина вытеснения ≤1 джобы), с backoff-ретраем на `429 queue_full` (потолок ретраев — в политике; триаж V7). Внутренние вызовы validate идут под системным принципалом через **пул слотов** (интерактивный cap + отдельный системный слот — правка `withValidateSlot`, работа R2; триажи B3/V7). **Recovery при рестарте** (триаж V8): стартовая уборка по прецеденту `failStagingPublishes` — все `queued|running`-раны → `error` (оркестратор in-memory, строка иначе зависает навсегда и partial-index блокирует новые раны). Бюджет: `maxJobsPerRun` из политики, публикуется в `capabilities.limits`; ориентировочный wall-clock честно документируется (минуты на 1-CPU проде).
+422-коды: `case_set_too_large` (лимит `acceptanceMaxCasesPerRun`), `duplicate_case_props` (без `aliasOf`), `empty_case_set`, `unsupported_option` (`cases.concurrency`, `manifestAssetId` — конструкции §19.1 фидбэка, отклонённые триажем). Resume (амендмент A3) — не мутация упавшего run'а: новый run по тому же `{candidateId, caseSetId}` переиспользует per-case результаты по `case_fingerprint` и пересуёмывает только недостающие; внутри run'а действует авто-retry инфраструктурных сбоев (`maxInfraRetries`, дефолт 2) по **таксономии исходов джобы** `jobOutcome: ok|worker_crash|timeout|queue_full|subprocess_error` — классификация `noise.ts` описывает качество консоли завершившегося капчура (D11 плана), а не исход джобы, и для retry не годится. Авторизация всех acceptance/case-set роутов: `requireUser` + owner по денормализованному `component_id` (или admin); `share`/`capture`-принципалы — 403 всегда.
+
+**Оркестрация (переработана триажем B1/B2/B4, дополнена V7/V8 и амендментами плана):** оркестратор run'а живёт **вне** screenshot-помпы — собственный фоновый цикл с инвариантом «≤1 running acceptance-run на процесс». Capture-джобы он ставит в общую очередь **по одной**, дожидаясь каждой, с backoff-ретраем на `429 queue_full` (потолок — в политике; триаж V7), и **не ставит джобу при `queue.length >= MAX_QUEUE - 2`** — интерактиву гарантированы 2 слота из 5. Результат джобы забирается сразу (`RESULT_TTL` 10 мин + reap — иначе ложный `error` кейса). Дедуп одинаковых `propsHash` — до постановки (`aliasOfCaseId`). Внутренние вызовы validate — под системным принципалом: **не** третий слот (на 1 CPU это +1 тяжёлый typecheck поверх capture), а конкуренция за существующий `VALIDATE_GLOBAL_CONCURRENT=2` без занятия per-user слота владельца (`inFlightUsers` ключуется userId — иначе интерактивный validate владельца получает 429 на всё время run'а; правка W1c). Тяжёлые подпроцессы (diff/ink-bbox) — один системный слот, не одновременно с chromium-джобой (`mem_limit: 1g` контейнера). Maintenance-lock: `POST /api/acceptance-runs` → 503 при удержанном lock'е, `acquireMaintenanceLock` отказывает при нетерминальном run'е. **Recovery при рестарте** (триаж V8): стартовая уборка — все `queued|running`-раны → `error`; потеря дешёвая благодаря reuse (A3). Бюджет: `maxJobsPerRun`/`acceptanceMaxCasesPerRun` из политики → `capabilities.limits`; wall-clock честно: холодный run 49 cases — минуты-десятки минут на 1-CPU проде, замер и гейт оптимизации — done W1b плана.
 
 Gate-интерфейс плагинный; каждый gate возвращает `{gate, status: pass|fail|skipped|not-implemented, metrics?, artifacts?, exceptions?}`:
 
@@ -141,14 +172,14 @@ Gate-интерфейс плагинный; каждый gate возвращае
 | `contract` | ✅ | receipt-поля + definition extraction кандидата (посчитано validate'ом) |
 | `defaults` | ✅ | parity-warnings P8, поднятые до gate-результата |
 | `render` | ✅ | draft-preview P1b по examples кандидата |
-| `geometry` | ✅ | компонентный geometry-probe P1b (отдельная джоба: geometry и image — взаимоисключающие результаты); сравнение с `expected` политики/реквеста — механика `expect` (P4) на сервере |
-| `determinism` | ✅ | повторный capture, byte-identical либо ≤ порога политики |
+| `geometry` | ✅ **advisory-only в W1a** | v1-семантика (union-rect) — исходный дефект §19.2 фидбэка, в run-вердикт не входит; боевой gate v2 (layout/paint/overflow, режим `probe:"paint"`, одна сессия = geometry+PNG) — W3 плана |
+| `determinism` | ✅ | повторный capture **на выборке** (`determinismSampleSize`, дефолт 3 + fail-cases), byte-identical либо ≤ порога политики; потребляет PNG уже в W1a |
 | `audit` | ✅ | существующий catalog audit / usages, предупреждения в evidence |
-| `visual` | ⏸ `not-implemented` | требует fingerprint-модели references для непубличных ревизий — RFC «VDC 2.0» (триаж G1) |
+| `visual` | ⏸ `not-implemented` в W1a; **минимальная форма — W5a плана** | блокер G1 обходится амендментом A5: reference приходит из case-set (`referenceAssetId` per case, W2), а не из fingerprint-модели опубликованных версий; обязательна нормализация размеров (crop по `cropLineage`, pad; несводимость → `indeterminate`); exceptions lifecycle остаётся за VDC 2.0 |
 | `regression` | ⏸ `not-implemented` | требует candidate-пина в `PrototypeBootstrapTarget` + объединения allowlist'ов + семантики manifestHash — R4+ (триаж G2/M9) |
 | `interactions` | ⏸ `not-implemented` | слот под RFC interaction runner |
 
-Вердикт: `pass` — все обязательные gate'ы прошли; `pass_with_exceptions` — только при `allowExceptions` политики (в `default-v1` — выключено; формат exception-записи `gate/owner/reason/expiresAt/reviewIssue` — в evidence, lifecycle — VDC 2.0); `fail` — иначе. Failed run не меняет public state. Идемпотентность: `UNIQUE(candidate_id, idempotency_key)`; `idempotencyKey` существует **только здесь** (дедупликация постановки фоновой джобы), на синхронных ручках канон — CAS по `baseRev` (триаж A1).
+Вердикт — **полная свёртка D10 плана**: `fail` — хотя бы один case `fail` **или `indeterminate`** по обязательному гейту (indeterminate блокирует приёмку с диагностикой, не с «визуальным дефектом»); `error` — case `error` после `maxInfraRetries` и нет `fail`; `cancelled` — по cancel; watchdog/дренаж → `error`; `pass` — все обязательные гейты всех cases `pass`; `not-implemented`-гейты вне свёртки; `pass_with_exceptions` — только при `allowExceptions` (в обоих профилях выключено; lifecycle — VDC 2.0). Алиасы наследуют вердикт цели; `reused` эквивалентен свежему; инвариант: `reused`/`skipped`/`alias` не маскируют `fail`. Каждый failed case несёт `severity {rank, class, score}`. Failed run не меняет public state. Идемпотентность: `UNIQUE(candidate_id, idempotency_key)`; `idempotencyKey` существует **только здесь** (дедупликация постановки фоновой джобы), на синхронных ручках канон — CAS по `baseRev` (триаж A1).
 
 **Гонка с promote (триаж C4):** promote при живом `queued|running`-run'е кандидата → `409 acceptance_run_in_flight` (либо явный cancel + аудит).
 
@@ -170,7 +201,7 @@ POST /api/components/:id/promote
 **Фаза B (одна короткая синхронная транзакция)** — триаж C2/M8, дополнено V2:
 
 4. `activate` новой версии (с фактическим `host_abi_version` кандидата — `stage` сегодня хардкодит `1`) + **`pinAssets(id, version, assetIds)`** (иначе версия остаётся без пинов ассетов: пустой DTO, сломанный export, потеря RESTRICT-защиты — триаж V2) + `recordValidation` + auto-supersede: выборка прочих `active` **внутри транзакции**, исключая новую версию по номеру; переходы — **через процедуру `setStatus`-инвариантов** (чтение и инкремент `status_rev`, cycle-check, `supersededBy = N`, `status_reason = "auto: promoted vN"`), не сырым UPDATE; при `supersede: "none"` — пропуск.
-5. *(шаг R2)* Ссылки `candidate_id`/`acceptance_run_id` в версию (nullable-колонки `component_publishes` — миграция R2, FK там же; триаж V3: в R1 ни колонок, ни FK — иначе FK указывал бы на несуществующие таблицы), кандидат → `promoted`.
+5. *(шаг R2)* Ссылки `candidate_id`/`acceptance_run_id` в версию — **амендмент A9: плоские TEXT NULL колонки без FK** (денормализованные свидетельства, канон ADD COLUMN v16/v22/v23). FK отменён по двум причинам: инвариант v8-перестройки (`migrations.ts:163` — каждый новый FK-ребёнок `component_publishes` расширяет контракт rebuild) и связка `ON DELETE SET NULL` + TTL-GC ранов = молчаливая потеря provenance. Взамен GC ранов обязан query-проверкой не удалять терминальные раны, на которые ссылается publish. Кандидат → `promoted`. При `EASYUI_ACCEPTANCE_MATRIX` OFF promote с `candidateId`/`acceptanceRunId` → `422 acceptance_matrix_disabled`.
 6. Аудит-событие promote с fingerprints.
 
 **Recovery и идемпотентность (триажи A4, V1):** крэш в фазе A компенсируется `fail()`/`failStagingPublishes` (существующий механизм); повторный promote с тем же `{baseRev, sourceHash}` после этого **проходит** благодаря расширенному `already_published`-чеку (п. 2) и создаёт версию с новым номером. В R2+ повтор при `promoted`-кандидате дополнительно проверяет статус `promoted_version`: renderable — вернуть её; `failed` — кандидат в `validated` и повторная сага (что и есть повторный promote).
@@ -194,6 +225,20 @@ candidate_id = "cand_" + sha256(canonicalJson({ componentId, designSystem, rev, 
 - Публикация темы двигает `themeVersion` → кандидаты DS инвалидируются разом; известный эффект (триаж E3), стампида смягчается тем, что acceptance-run'ов ≤1 глобально; `accepted`-кандидаты R3 не инвалидируются автоматически (пометка `stale-theme`).
 - Асимметрия воспроизводимости (триаж S7): компонентная съёмка не пинует версию темы (берёт последнюю) — evidence пишет фактический `dsMetaVersion` из результата джобы.
 - Канонизация — стабильная сортировка ключей (уже используется для `bundleHash`/`sourceHash`).
+
+**Амендмент D1 (план family-acceptance): `case_fingerprint`** — идентичность per-case результата для reuse/дедупа/partial-recapture:
+
+```text
+case_fingerprint = sha256(canonicalJson({
+  algoVersion,          -- версия схемы; bump в W2/W3/W4/W5a → авто-инвалидация старого reuse
+  candidateId,          -- component-scoped (наследует защиту E1/B1 — без него cross-owner reuse)
+  caseKey, propsHash,
+  surface: { viewport, dsf, theme },
+  readinessPolicyHash, captureEnvFingerprint,   -- W4; до неё — константы v0
+  casePolicyHash,                               -- W2; до неё — константа v0
+  referenceAssetId | null
+}))
+```
 
 ## 6. Provenance/evidence отдельно от runtime-версий (R3)
 
@@ -225,10 +270,10 @@ component_evidence(component_id, rev, seq, figma_json, author, created_at)
 
 ## 8. Миграции, откат, ресурсы
 
-- Миграции по волнам (пересобрано триажами V3/V15): **R1 — миграций нет вообще** (promote receipt-based, ссылок на кандидата не пишет); R2 — `component_candidates`, `acceptance_runs`, nullable-колонки `component_publishes.candidate_id/acceptance_run_id` (FK `ON DELETE SET NULL` — появляются вместе с таблицами, на которые указывают), колонка `design_systems.acceptance`; R3 — `component_evidence` (+`rejected|expired`). Все — forward-only, аддитивные; `SELECT *` по `component_publishes` в коде нет (проверено ревью) — откат образа безопасен.
+- Миграции по волнам (пересобрано триажами V3/V15, амендментировано планом): **R1 — миграций нет** (посажено так); R2 = **v25** (W1a плана): `component_candidates`, `acceptance_runs` (+ поля A1), `acceptance_cases`, `acceptance_case_results`, TEXT-колонки A9 на `component_publishes` (`DEFAULT NULL`, **без FK**), `design_systems.acceptance TEXT NOT NULL DEFAULT 'off'` (DEFAULT обязателен — иначе старый INSERT из `routes/designSystems.ts` падает при откате образа); **v26** (W2 плана): `component_case_sets`; R3 — `component_evidence` (+`rejected|expired`). Все — forward-only, аддитивные, плоский ADD COLUMN без перестройки; `SELECT *` по `component_publishes`/`design_systems` в продовом коде нет (проверено ревью) — откат образа безопасен. Перед v25 — бэкап prod-volume.
 - **Обязательство шаблона rebuild** (триаж A2-риски): любой будущий rebuild `component_publishes` (прецедент v14: `RENAME → CREATE → INSERT SELECT` с явным перечнем) обязан включить новые колонки и FK-детей — записать в комментарий миграции по прецеденту `migrations.ts:163`.
 - Bundle-export/import не видят новых таблиц (экспортёр читает только `MAX(version)`); provenance-история в бандл не входит до R4+ (§6).
-- Env-kill-switch на каждый роут-набор (promote / candidates+runs / provenance); гашение не создаёт аварий (§7: required→advisory).
+- Env-kill-switch (амендменты A7/D9): **сегодня `EASYUI_ACCEPTANCE_DISABLED` физически не проброшен в прод-compose** — до R2 обязателен микро-релиз W0 (проброс env-ключей в `docker-compose.yml`). Matrix-стек (candidates/runs/case-sets) — **opt-in `EASYUI_ACCEPTANCE_MATRIX=1`, дефолт OFF** до runtime-приёмки; `EASYUI_ACCEPTANCE_DISABLED=1` гасит promote, активные раны терминализует стартовая уборка на следующем старте (env читается один раз). Гашение не создаёт аварий (§7: required→advisory).
 - Ресурсы 1-CPU: оркестратор acceptance — вне помпы, ≤1 run глобально, джобы по одной (§4.2); evidence — свой каталог с потолком и GC (§3.3); свипер кандидатов + per-user cap (§3.2).
 - Discovery: булевы `features.acceptancePromote|acceptanceCandidates|acceptanceRuns|acceptanceProvenance`; `capabilities.limits.{acceptanceMaxJobsPerRun, candidatesPerUser, evidenceMaxBytes}`; режим DS — в DTO дизайн-системы.
 
@@ -253,7 +298,7 @@ component_evidence(component_id, rev, seq, figma_json, author, created_at)
 ## 11. Порядок внедрения (волны, перекроены триажем D1/S1)
 
 - **R1 — promote-сага, без durable-таблиц и без миграций**: `POST /promote {baseRev, sourceHash, …}` (receipt-based), promote-вариант `publishComponent` без typecheck+compile (артефакты кандидата в `stage`, фактический `host_abi_version`), расширенный `already_published`-чек (recovery, V1), фаза B с `pinAssets`+`recordValidation`+auto-supersede в короткой транзакции, фикс auth draft-bundle-роута (M5/V11), readiness «no active version», CLI `promote` + обновление скилла, `driver.mjs audit --versions`, аудит-события (`component.promoted`, `publish.import` — V9). Features: только `acceptancePromote` (V15) + kill-switch. Ценность сразу: один вызов вместо publish+ручных transitions, churn-метрика измерима.
-- **R2 — durable-слой и раны**: `component_candidates` (component-scoped id) + `acceptance_runs` (+колонки-ссылки в `component_publishes`, +`design_systems.acceptance`) + оркестратор вне помпы (пул validate-слотов, backoff на 429, стартовая уборка ранов — V7/V8) + gate'ы фазы 1 (contract/defaults/render/geometry/determinism/audit; для advisory — published-вариант render/geometry/determinism, V5) + evidence-каталог + `advisory`-режим с would-block и материализацией кандидата published-ревизии (V4) + CLI `accept` + `default-v1` константой.
+- **R2 — durable-слой и матричные раны. Исполняется волнами плана `2026-08-03-family-acceptance-and-composition-v3.md`** (детальные объёмы, файлы и done-критерии — там; RFC остаётся источником модели данных/API): **W0** — проброс kill-switch'ей в compose (без него аварийного выключателя на проде нет); **W1a** — миграция v25, per-case слой, оркестратор + watchdog, гейты contract/defaults/render/determinism/audit (geometry — advisory), байтовый канал в CAS, пин кандидата, свёртка D10, authz-контракт; **W1b** — reuse по `case_fingerprint`, CAS GC, дедуп props, авто-retry, progress/ETA, замеры wall-clock/RSS (гейт O1); **W1c** — promote-интеграция (A9-ссылки, `409 acceptance_run_in_flight`), validate-слоты без занятия per-user, CLI `accept`, advisory-режим с would-block (V4/V5). Дальше по плану: W2 case-sets (v26) → W3 geometry 2.0 → W4 readiness → W5a/W5b visual+таксономия → W6 impact → W7 клиентский кэш.
 - **R3 — provenance и UI**: `component_evidence` + `PUT …/provenance` (полный перечень read-путей §6) + UI-блок Acceptance + Library-маппинг Verified + статусы `rejected|expired`.
 - **R4+** (отдельные RFC/решения): `required`-режим (по advisory-статистике), regression-overlay (candidate-пин в `PrototypeBootstrapTarget`), VDC 2.0 → gate `visual`, interaction runner → gate `interactions`, provenance в bundle-формате v3, theme impact → расширение `regression`, reuse-decision lease.
 
@@ -311,3 +356,23 @@ Minors — приняты: RB-S3 (state machine упрощена), RB-S2 (defaul
 | V15 (minor): волновые рассинхроны §8↔§11 (колонка acceptance, features-флаги, кандидат в R1-recovery) | ✅ | §8/§11 сведены: acceptance-колонка — R2, R1 — только `acceptancePromote`, recovery R1 — без кандидата |
 
 Вердикт ревьюера раунда 2: V1–V3 — внутри объёма R1, точечные; «после их внесения R1 можно стартовать без нового полного раунда — достаточно дельта-верификации». Дельта-верификация решений V1–V3 включена в done-критерии R1 (§11).
+
+## 14. Амендменты 2026-08-03 (план family-acceptance, v5)
+
+R1 посажен и в проде (9e87960). R2 расширен матричной семантикой фидбэка `docs/EASYUI_PRODUCT_IMPROVEMENTS.md` §19 планом **`docs/plans/2026-08-03-family-acceptance-and-composition-v3.md`** (v3; собственный Stage 2: 3 адверсариальных ревьюера + верификационный раунд — триажи в §10 плана). План — исполнительный документ R2+ (волны, файлы, done-критерии); RFC остаётся источником модели данных/API. Сводка амендментов, внесённых в текст выше:
+
+| Ам. | Суть | Куда внесено |
+|---|---|---|
+| A1 | Per-case durable-слой: `acceptance_cases` + `acceptance_case_results`; run-поля progress/eta; свёртка вердикта D10 (incl. `indeterminate`); severity-ранжирование | §3.3, §4.2 |
+| A3 | Resume = дешёвый новый run с reuse по `case_fingerprint`; авто-retry по таксономии `jobOutcome` (не `noise.ts`) | §4.2 |
+| A4 | Evidence: CAS `<dataDir>/.acceptance/cas/` + per-run манифест; байтовый канал мимо asset-store (сегодня каждый капчур ингестится — исправляется); union-refcount GC; экспорт zip (fflate) | §3.3 |
+| A6 | Реестр политик-констант: `default-v1` + `pixel-strict-v1`; per-case допуски из манифеста | §3.4 |
+| A7/D9 | `EASYUI_ACCEPTANCE_MATRIX` opt-in (OFF); W0 — проброс kill-switch'ей в compose (сегодня их там нет); дренаж — на следующем старте | §8 |
+| A9 | Ссылки publish→candidate/run — TEXT без FK (инвариант v8-rebuild + защита provenance от TTL-GC); отменяет решение V3/§4.3.5 о FK | §4.3.5, §8 |
+| A10 | Бандл кандидата материализуется по rev (не head), пин против `gcCandidates`, `candidate_evicted`; расхождение head — advisory `headDiverged`, не терминализация | §4.1 |
+| D1 | `case_fingerprint` = `{algoVersion, candidateId, caseKey, propsHash, surface, readiness/env/policy-хеши, referenceAssetId}` — component-scoped | §5 |
+| A5 | Минимальный gate `visual` в W5a через reference из case-set (обход блокера G1 без VDC 2.0); нормализация размеров | §4.2 (таблица гейтов) |
+| — | `geometry` в W1a — advisory-only (v1-union-rect и есть дефект §19.2); боевой v2 — W3 (`probe:"paint"`, одна сессия) | §4.2 (таблица гейтов) |
+| — | Оркестратор: резервирование 2 слотов очереди, RESULT_TTL, системный principal без per-user слота, лимит тяжёлых подпроцессов (`mem_limit: 1g`), maintenance-lock | §4.2 |
+
+Не изменены (план подтвердил): component-scoped identity кандидата, `catalogRevision` вне идентичности, оркестратор вне помпы ≤1 run, стартовая уборка, `≤1` нетерминальный run + cancel только queued, `409 acceptance_run_in_flight`, gates `regression`/`interactions` = `not-implemented`, advisory-механика V4/V5, R3-скоуп (provenance/UI).
