@@ -501,6 +501,23 @@ node driver.mjs accept pay-payment-card --case-set cset_…   # ран по на
 - Неполные `dims` и расхождение props со схемой опубликованного компонента — **`warnings`**, а не отказ.
 - `capture` манифеста задаёт поверхность съёмки набора, `policy.perCase` входит в `case_policy_hash` случая: правка допуска одного случая инвалидирует reuse ровно его. Эталоны гейтами пока не потребляются (визуальный гейт — следующая волна), но уже записываются в строки случаев.
 
+### Клиентский кэш ответов: `--cache-dir`
+
+Глобальные флаги (работают с любым вербом): `--cache-dir <dir>` (или `EASYUI_CACHE_DIR`) включает локальный кэш read-only ответов, `--cache-refresh` (или `EASYUI_CACHE_REFRESH=1`) форсирует промах и перезапись записи с `refreshReason`.
+
+```bash
+node driver.mjs catalog list yandex-pay --cache-dir .easyui-cache            # первый вызов — miss
+node driver.mjs accept pay-payment-card --case-set cset_… --cache-dir .easyui-cache --json
+node driver.mjs catalog search yandex-pay --intent "карточка оплаты" --cache-dir .easyui-cache --cache-refresh
+```
+
+- **Кэш — ускоритель, а не свидетельство.** Приёмочное доказательство остаётся серверным (`GET /api/acceptance-runs/:id/evidence` + CAS/SHA256SUMS). В отчёт агента всегда идёт поле `cache.status` (`hit|miss|refresh|off`) — читатель обязан видеть, откуда взята цифра. В `--json` оно есть в каждом ответе, в человекочитаемом режиме печатается строкой в stderr.
+- Кэшируются только read-only GET'ы: `capabilities`, каталог (`manifest`/`candidates`/`design-systems`), версии компонентов, `component-candidates/:id`, `case-sets/:id` (+`coverage`), **терминальные** раны и их evidence-архив (blob). Нетерминальный ран, мутации и auth не кэшируются никогда — poll идущего рана всегда идёт на сервер.
+- Ключ содержит идентичность (`sha256(baseUrl + "\n" + username)`), метод, путь, отсортированный query, хэш тела и `apiVersion`. Общий каталог кэша **не** отдаёт ответы чужой учётки; токены и куки в ключ не входят и на диск не пишутся. Каталог создаётся с правами `0700`.
+- Целостность: `SHA256SUMS` проверяется при каждом чтении, подменённый blob = промах (а не тихая отдача). Раскладка: `requests/<sha256(key)>.json`, `blobs/<sha256>`, `receipts/<verb>/<key>.json`, `links.json` (candidate → run → cases → artifacts → report), `SHA256SUMS`, `meta.json`.
+- Кэш выключен при legacy-Basic (`EASYUI_LEGACY_BASIC_AUTH`): общий барьер не даёт различить учётку — `cache.status: "off"`, каталог не создаётся.
+- Скачанный evidence-архив распаковывать только с проверкой имён записей: абсолютные пути и `..` внутри zip отвергать (zip-slip).
+
 ### Служебные прототипы: галереи, `track: head`, профиль readiness
 
 Probe-прототип (стикершит компонентов) нужен только со стадии молекул — атом принимается `preview`'ом. Если он всё же нужен, объявляй его служебным сразу после создания, **lifecycle-роутом, а не полем документа** (формат документа таких полей не имеет):

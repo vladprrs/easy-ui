@@ -18,6 +18,9 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CANONICAL_DRIVER = ".claude/skills/author/driver.mjs";
+// Клиентский кэш (план 2026-08-03 W7) — сосед драйвера: и в каноне, и в зеркале импорт один и
+// тот же (`./cache.mjs`), поэтому файл зеркалится побайтово, без подмены строк.
+const CANONICAL_CACHE = ".claude/skills/author/cache.mjs";
 const CANONICAL_AUTH = "share/yp-figma-rebuild-skill/easyui-auth.mjs";
 const AUTH_COPIES = ["scripts/easyui-auth.mjs", "share/easy-ui-authoring-skill/easyui-auth.mjs"];
 const PACKAGES = ["easy-ui-authoring-skill", "yp-figma-rebuild-skill"];
@@ -94,6 +97,10 @@ if (canonical.split(CANON_IMPORT).length - 1 !== 1) {
 }
 const mirrorDriver = canonical.replace(CANON_IMPORT, MIRROR_IMPORT);
 for (const pkg of PACKAGES) syncFile(resolve(root, "share", pkg, "driver.mjs"), mirrorDriver, "import line rewritten to ./easyui-auth.mjs");
+
+// 1b. cache.mjs: побайтовое зеркало канона в оба пакета.
+const canonicalCache = readFileSync(resolve(root, CANONICAL_CACHE), "utf8");
+for (const pkg of PACKAGES) syncFile(resolve(root, "share", pkg, "cache.mjs"), canonicalCache, `canonical is ${CANONICAL_CACHE}`);
 
 // 2. easyui-auth.mjs: копии идентичны канону из yp-пакета.
 const canonicalAuth = readFileSync(resolve(root, CANONICAL_AUTH), "utf8");

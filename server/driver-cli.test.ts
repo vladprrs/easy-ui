@@ -45,6 +45,8 @@ import {
   type DriverReadinessGate,
 } from "../.claude/skills/author/driver.mjs";
 
+// W7: `--json`-отчёт всегда несёт статус клиентского кэша; без `--cache-dir` он выключен.
+const CACHE_OFF = { status: "off", reason: "no --cache-dir" };
 const driver = resolve(".claude/skills/author/driver.mjs");
 const servers: Bun.Server<unknown>[] = [];
 const directories: string[] = [];
@@ -538,15 +540,15 @@ export default function MoveRoleOwner() { return <div>move role owner</div>; }
 
     const created = await run(api, ["composition", "reusable-image", firstPath, "--design-system", "yandex-pay", "--json"]);
     expect(created.exitCode).toBe(0);
-    expect(JSON.parse(created.stdout)).toEqual({ command: "composition", id: "reusable-image", created: true, rev: 1, designSystem: "yandex-pay" });
+    expect(JSON.parse(created.stdout)).toEqual({ command: "composition", id: "reusable-image", created: true, rev: 1, designSystem: "yandex-pay", cache: CACHE_OFF });
 
     const updated = await run(api, ["composition", "reusable-image", secondPath, "--design-system", "yandex-pay", "--json"]);
     expect(updated.exitCode).toBe(0);
-    expect(JSON.parse(updated.stdout)).toEqual({ command: "composition", id: "reusable-image", created: false, rev: 2, designSystem: "yandex-pay" });
+    expect(JSON.parse(updated.stdout)).toEqual({ command: "composition", id: "reusable-image", created: false, rev: 2, designSystem: "yandex-pay", cache: CACHE_OFF });
 
     const published = await run(api, ["composition", "publish", "reusable-image", "--json"]);
     expect(published.exitCode).toBe(0);
-    expect(JSON.parse(published.stdout)).toEqual({ command: "composition publish", id: "reusable-image", version: 1, rev: 2 });
+    expect(JSON.parse(published.stdout)).toEqual({ command: "composition publish", id: "reusable-image", version: 1, rev: 2, cache: CACHE_OFF });
     const meta = await (await fetch(`${api}/compositions/reusable-image`)).json() as { headRev: number; publishedVersion: number; doc: { name: string } };
     expect(meta).toMatchObject({ headRev: 2, publishedVersion: 1, doc: { name: "Updated reusable image" } });
   });
@@ -590,7 +592,7 @@ export default function MoveRoleOwner() { return <div>move role owner</div>; }
     // и CLI врал «component/<id> not found» про существующий компонент.
     const component = await run(api, ["delete", "component", "retire-me", "--json"]);
     expect(component.exitCode).toBe(0);
-    expect(JSON.parse(component.stdout)).toEqual({ command: "delete", kind: "components", id: "retire-me", deleted: true });
+    expect(JSON.parse(component.stdout)).toEqual({ command: "delete", kind: "components", id: "retire-me", deleted: true, cache: CACHE_OFF });
     expect(db.query("SELECT deleted_at IS NOT NULL gone FROM components WHERE id='retire-me'").get()).toEqual({ gone: 1 });
 
     const system = await run(api, ["delete", "design-system", "yandex-pay"]);

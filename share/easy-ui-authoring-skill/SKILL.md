@@ -362,6 +362,18 @@ node driver.mjs promote rating-stars --strict-catalog   # отказать, ес
 - Каталого-временные проверки (host-имя, каноническая роль, атомарная политика, asset-refs) promote перепрогоняет — он их не обходит.
 - KPI-срез по версиям: `node driver.mjs audit --versions [--design-system <id>]` (версии/active/статусы/даты на компонент; exit 2, если у компонента не осталось active-версии).
 
+### Клиентский кэш ответов: `--cache-dir`
+
+Глобальные флаги любого верба: `--cache-dir <dir>` (или `EASYUI_CACHE_DIR`) включает локальный кэш read-only ответов, `--cache-refresh` (или `EASYUI_CACHE_REFRESH=1`) форсирует промах.
+
+```bash
+node driver.mjs catalog list yandex-pay --cache-dir .easyui-cache --json
+```
+
+- **Кэш — ускоритель, а не свидетельство**: доказательство остаётся серверным, а в отчёт всегда идёт `cache.status` (`hit|miss|refresh|off`; в `--json` — поле, иначе строка в stderr).
+- Кэшируются только read-only GET'ы (capabilities, каталог, версии компонентов, кандидаты, case-set'ы, **терминальные** раны приёмки и их evidence). Мутации, auth и нетерминальные раны — никогда.
+- Ключ включает идентичность (`sha256(baseUrl + "\n" + username)`): общий каталог не отдаёт ответы чужой учётки. Токены и куки в кэш не пишутся, каталог создаётся с правами `0700`, blob'ы сверяются с `SHA256SUMS` (подмена = промах). При `EASYUI_LEGACY_BASIC_AUTH` кэш выключен.
+
 ### Служебные прототипы: галереи, `track: head`, профиль readiness
 
 Probe-прототип нужен только со стадии молекул. Служебность объявляется **lifecycle-роутом, а не полем документа**: `POST /api/prototypes/:id/lifecycle {"kind":"component-gallery","track":"head"}`. `track: "head"` (`features.prototypeHeadTracking`) резолвит компонентные пины дока на последние active-публикации прямо на чтении — пересохранять галерею после каждой публикации компонента не нужно; разрешён только для служебных `kind` непубликованного дока (`422 track_requires_service_kind`/`track_requires_unpublished`), а publish/share/visual-baseline/bundle-export такого дока → `422 prototype_head_tracking`. Версия темы остаётся пином ревизии: после PATCH темы пересохранить (список — в `stalePins` ответа PATCH). Постановка снапа возвращает разрешённые пины в `components[]`. Warnings служебной галереи — **не блокер**: readiness служебных `kind` считается с `profile: "service"`, предупреждения не поднимают статус; технические `Hotspot`'ы и `on`-биндинги ради нулевого счётчика не нужны. Тема правится sparse-операциями `addTokens`/`addFonts`/`addIcons` поверх `baseVersion` с `dryRun: true` (append-only, конфликт значения → `409 theme_append_conflict`; патч без изменений → `noop: true` без новой версии).

@@ -16,7 +16,7 @@
 
 | KPI | Baseline | Цель | Инструмент измерения |
 |---|---:|---:|---|
-| Клиентские операции на семью 49 cases | 100–150 | 1 постановка + polls | `driver.mjs accept --case-set …` (W2); замер на 49-кейсовой семье — done W7 |
+| Клиентские операции на семью 49 cases | 100–150 | 1 постановка + polls | `driver.mjs accept --case-set …` (W2); замер на 49-кейсовой семье — done W7. **Замер W7 (`node scripts/measure-driver-cache.mjs --cases 49`, счётный прокси перед сервером, 8 CPU):** холодный ран — **69 HTTP-запросов клиента** (1 login + 1 `GET /capabilities` + 1 `GET /components/:id` + 1 `POST /candidates` + 1 `POST /acceptance-runs` + **64 polls**, wall 128 с, 49/49 pass); тёплый ран того же кандидата — **5 запросов** (login из кэша сессии, capabilities из клиентского кэша `hit`, 1 `POST /candidates` + 1 `POST /acceptance-runs` + 2 polls, wall 2,2 с, reused 49/49). Цель «1 постановка + polls» достигнута: неполловых запросов 5 холодных / 3 тёплых, всё остальное — poll'ы с интервалом 2 с. Клиентский кэш снимает `capabilities` и повторные чтения каталога/case-set'ов/**терминальных** ранов; идущий ран не кэшируется by design, поэтому число polls определяется длительностью рана, а не кэшем. |
 | Ручные matrix-скрипты | 2–4 | 0 | ревью PR первой прод-семьи после W5b (done-критерий W5b) |
 | Cases, снятые до font/asset readiness | возможны | 0 | gate `readiness` (W4), `readinessFailures` в run-репорте |
 | Geometry failures без названного descendant/cause | возможны | 0 | контракт gate `geometry` v2: `fail` обязан нести `overflow.sources[]` или названное `expectedGeometry`-расхождение (W3), тест-инвариант |

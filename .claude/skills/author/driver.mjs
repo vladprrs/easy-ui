@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createEasyUiClient } from "../../../scripts/easyui-auth.mjs";
+import { nullCache, openCache, TERMINAL_RUN_STATUSES } from "./cache.mjs";
 
 const API = (process.env.EASYUI_API ?? "https://easy-ui.pay-offline.ru/api").replace(/\/$/, "");
 const client = createEasyUiClient({ apiBase: API });
@@ -17,7 +18,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -31,12 +32,26 @@ class CliError extends Error {
 }
 
 let jsonMode = false;
+/**
+ * Клиентский кэш ответов (план 2026-08-03 §5 W7). До разбора флагов — no-op: команда без
+ * `--cache-dir`/`EASYUI_CACHE_DIR` работает ровно как раньше.
+ */
+let cache = nullCache("not configured");
 /** Human line printed only outside --json; JSON mode owns stdout entirely. */
 const out = (line) => { if (!jsonMode) console.log(line); };
-/** Terminal output of a verb: a JSON document in --json mode, human lines otherwise. */
+/**
+ * Terminal output of a verb: a JSON document in --json mode, human lines otherwise.
+ *
+ * Статус кэша едет в **каждом** отчёте: клиентский кэш — ускоритель, а не свидетельство, и
+ * читатель обязан видеть, пришла цифра с сервера или с диска. В человекочитаемом режиме — та же
+ * строка в stderr (stdout принадлежит отчёту).
+ */
 function report(lines, payload) {
-  if (jsonMode) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  else for (const line of [lines].flat()) console.log(line);
+  if (jsonMode) process.stdout.write(`${JSON.stringify({ ...payload, cache: cache.summary() }, null, 2)}\n`);
+  else {
+    for (const line of [lines].flat()) console.log(line);
+    if (cache.enabled) process.stderr.write(`${cache.line()}\n`);
+  }
 }
 
 function invalid(message) {
@@ -60,6 +75,18 @@ const surfaceFlags = {
 };
 
 const jsonFlag = { "--json": { value: false, key: "json" } };
+/**
+ * Глобальные флаги клиентского кэша (план 2026-08-03 §5 W7). Разбираются для **любой** команды,
+ * поэтому не входят в `flagSpecs` (там — контракт конкретного глагола), а домешиваются в
+ * `parseArgs`. `--cache-refresh`, а не `--refresh`: у `accept` `--refresh` уже занят серверной
+ * политикой пересъёмки (`none|failed|all|ids`), и переиспользование имени сделало бы два разных
+ * решения одним флагом.
+ */
+export const CACHE_FLAGS = Object.freeze({
+  "--cache-dir": { value: true, key: "cacheDir" },
+  "--cache-refresh": { value: false, key: "cacheRefresh" },
+});
+const CACHE_VALUE_FLAGS = Object.keys(CACHE_FLAGS).filter((flag) => CACHE_FLAGS[flag].value);
 const allScreensFlag = { "--all-screens": { value: false, key: "allScreens" } };
 const catalogLimitFlag = {
   value: true,
@@ -254,7 +281,9 @@ export function parseArgs(argv) {
   const [command, ...tokens] = argv;
   const range = ranges[command];
   if (!range) invalid(command ? `unknown command: ${command}` : "command is required");
-  const firstPositional = (valueFlags) => {
+  // Значение глобального `--cache-dir` не должно быть принято за подкоманду (`catalog <тут>`).
+  const firstPositional = (names) => {
+    const valueFlags = new Set([...names, ...CACHE_VALUE_FLAGS]);
     for (let index = 0; index < tokens.length; index++) {
       const token = tokens[index];
       if (!token.startsWith("--")) return token;
@@ -262,11 +291,11 @@ export function parseArgs(argv) {
     }
     return null;
   };
-  const catalogFirst = command === "catalog" ? firstPositional(new Set(["--intent", "--limit", "--kind", "--doc"])) : null;
-  const compositionFirst = command === "composition" ? firstPositional(new Set(["--design-system"])) : null;
+  const catalogFirst = command === "catalog" ? firstPositional(["--intent", "--limit", "--kind", "--doc"]) : null;
+  const compositionFirst = command === "composition" ? firstPositional(["--design-system"]) : null;
   // `audit reuse` — чтение аудита гейта; у него собственный набор флагов, поэтому подкоманда
   // распознаётся до разбора флагов, как у `catalog list|search|get`.
-  const auditFirst = command === "audit" ? firstPositional(new Set(["--design-system", "--actor", "--since", "--limit", "--min-attempts"])) : null;
+  const auditFirst = command === "audit" ? firstPositional(["--design-system", "--actor", "--since", "--limit", "--min-attempts"]) : null;
   const catalogSubcommand = ["list", "search", "get"].includes(catalogFirst) ? catalogFirst : null;
   const compositionSubcommand = compositionFirst === "publish" ? "publish" : null;
   const auditSubcommand = auditFirst === "reuse" ? "reuse" : null;
@@ -274,7 +303,7 @@ export function parseArgs(argv) {
     : compositionSubcommand ? "composition publish"
     : auditSubcommand ? "audit reuse"
     : command;
-  const specs = flagSpecs[commandForm] ?? {};
+  const specs = { ...CACHE_FLAGS, ...(flagSpecs[commandForm] ?? {}) };
   const positionals = [];
   const flags = {};
   const seen = new Set();
@@ -340,7 +369,16 @@ const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, mil
 export const RETRY_BACKOFF_MS = [500, 1500];
 const isTransient = (status) => status >= 500;
 
+/**
+ * Единственная точка HTTP драйвера — и единственная точка клиентского кэша (W7).
+ *
+ * Кэшируются только read-only GET'ы из allowlist'а `classify` (`cache.mjs`): каталог,
+ * capabilities, case-set'ы, кандидаты, **терминальные** раны. Мутации, auth и нетерминальные
+ * раны не кэшируются никогда, поэтому poll идущего рана по-прежнему ходит на сервер.
+ */
 async function call(method, path, body, options = {}) {
+  const hit = await cache.read(method, path, body);
+  if (hit) return { status: hit.status, json: hit.json ?? null };
   // Reads are retried by default; writes only when the caller opts in (snap enqueue).
   const retries = options.retries ?? (method === "GET" ? RETRY_BACKOFF_MS.length : 0);
   let lastError;
@@ -360,10 +398,15 @@ async function call(method, path, body, options = {}) {
       if (attempt === retries) throw error;
       continue;
     }
+    const etag = response.headers.get("etag") ?? undefined;
     const text = await response.text();
     let json;
     try { json = text ? JSON.parse(text) : null; } catch { json = text; }
     if (isTransient(response.status) && attempt < retries) continue;
+    // `apiVersion` входит в ключ кэша: capabilities — единственный источник, откуда клиент
+    // его узнаёт, и версия запоминается на идентичность (см. cache.mjs meta.json).
+    if (path === "/capabilities" && response.status === 200) await cache.learn(json);
+    await cache.write(method, path, body, { status: response.status, json, etag });
     return { status: response.status, json };
   }
   throw lastError;
@@ -1789,7 +1832,8 @@ async function runPromote(args, flags) {
  */
 const ACCEPT_POLL_INTERVAL_MS = 2000;
 const ACCEPT_DEFAULT_TIMEOUT_SEC = 1800;
-const ACCEPT_TERMINAL = new Set(["pass", "pass_with_exceptions", "fail", "error", "cancelled"]);
+/** Канон терминальных статусов один на драйвер и кэш: кэшируются только терминальные раны. */
+const ACCEPT_TERMINAL = TERMINAL_RUN_STATUSES;
 /** Вердикт → exit code: приёмка без `pass` — продуктовый отказ (exit 2), как у readiness/publish. */
 const acceptExitCode = (status) => (status === "pass" || status === "pass_with_exceptions" ? EXIT.ok : EXIT.productErrors);
 
@@ -1828,11 +1872,28 @@ async function requireAcceptanceMatrix() {
   return capabilities;
 }
 
+/**
+ * Evidence-архив терминального рана — content-addressed по своей природе, поэтому кэшируется
+ * blob'ом (`<cache>/blobs/<sha256>`) с обязательной сверкой SHA256SUMS при чтении. Файл на диске
+ * агента — копия, а не свидетельство: доказательная запись остаётся серверной.
+ */
 async function downloadEvidence(runId, outputPath) {
-  const response = await client.request(`/acceptance-runs/${encodeURIComponent(runId)}/evidence`);
-  if (!response.ok) throw new CliError(`evidence download failed (${response.status}) for run ${runId}`);
+  const path = `/acceptance-runs/${encodeURIComponent(runId)}/evidence`;
+  const hit = await cache.read("GET", path);
+  let bytes;
+  if (hit) bytes = hit.bytes;
+  else {
+    const response = await client.request(path);
+    if (!response.ok) throw new CliError(`evidence download failed (${response.status}) for run ${runId}`);
+    bytes = Buffer.from(await response.arrayBuffer());
+    await cache.write("GET", path, undefined, {
+      status: response.status, bytes,
+      contentType: response.headers.get("content-type") ?? "application/zip",
+      etag: response.headers.get("etag") ?? undefined,
+    });
+  }
   await mkdir(dirname(resolve(outputPath)), { recursive: true });
-  await writeFile(outputPath, Buffer.from(await response.arrayBuffer()));
+  await writeFile(outputPath, bytes);
   return outputPath;
 }
 
@@ -1858,6 +1919,19 @@ async function pollAcceptanceRun(runId, { deadlineMs }) {
 async function reportAcceptance(run, { command, componentId, candidateId, flags }) {
   const evidencePath = flags.evidence === undefined ? null : await downloadEvidence(run.runId, flags.evidence);
   const exitCode = acceptExitCode(run.status);
+  // Квитанция и связи (W7): candidate → run → cases → artifacts → report. Кэш хранит навигацию
+  // по уже полученному, а не доказательства: вердикт остаётся серверным.
+  await cache.link({
+    componentId: componentId ?? run.componentId, candidateId: candidateId ?? run.candidateId,
+    runId: run.runId, caseSetId: run.caseSetId ?? null, status: run.status,
+    cases: (run.failedCases ?? []).map((item) => ({ caseId: item.caseId, verdict: item.verdict ?? item.status, caseFingerprint: item.caseFingerprint ?? null })),
+    evidence: evidencePath, report: `receipts/${command}/${run.runId}.json`,
+  });
+  await cache.receipt(command, run.runId, {
+    componentId: componentId ?? run.componentId, candidateId: candidateId ?? run.candidateId,
+    runId: run.runId, status: run.status, exitCode,
+    progress: run.progress ?? null, evidence: evidencePath,
+  });
   report(acceptLines(run, { componentId, evidencePath }), {
     command, componentId: componentId ?? run.componentId, candidateId: candidateId ?? run.candidateId,
     exitCode, ...(evidencePath ? { evidence: evidencePath } : {}), ...run,
@@ -1893,6 +1967,7 @@ async function runCaseSet(args, flags) {
     const [, componentId, manifestPath] = args;
     const manifest = await readJsonArgument(manifestPath, "case-set manifest");
     const result = await requireOk("case-set put", await call("PUT", `/components/${encodeURIComponent(componentId)}/case-sets`, { manifest }));
+    await cache.receipt("case-set", result.caseSetId, { componentId: result.componentId, caseSetId: result.caseSetId, cases: result.cases, cached: result.cached === true });
     report([
       `case-set ${result.caseSetId} for ${result.componentId} (${result.designSystem}): ${result.cases} cases${result.cached ? " (cached: identical manifest already published)" : ""}`,
       ...coverageLines(result.coverage ?? {}, { caseSetId: result.caseSetId }),
@@ -1973,6 +2048,10 @@ async function runImpact(args, flags) {
     candidateId: flags.candidate,
     baselineRunId: flags.baselineRun,
   }));
+  await cache.receipt("impact", `${id}-${flags.baselineRun}`, {
+    componentId: id, candidateId: flags.candidate, baselineRunId: flags.baselineRun,
+    basis: impact.basis, recaptureCount: impact.recaptureCount,
+  });
   report(impactLines(impact, id), { command: "impact", componentId: id, ...impact });
 }
 
@@ -2158,9 +2237,29 @@ async function runComposition(args, flags) {
   );
 }
 
+/**
+ * Клиентский кэш конфигурируется до первого запроса (план 2026-08-03 §5 W7).
+ *
+ * Идентичность ключа — `sha256(baseUrl + "\n" + username)`: общий каталог кэша двух учёток
+ * не отдаёт ответы чужой. При legacy-Basic кэш выключен: барьер общий на всех, различить
+ * учётку по нему нельзя, а значит и изолировать записи нечем.
+ */
+async function configureCache(flags) {
+  const dir = flags.cacheDir ?? process.env.EASYUI_CACHE_DIR;
+  const legacy = Boolean(client.legacyAuthorization);
+  cache = await openCache({
+    dir, baseUrl: API, user: process.env.EASYUI_USERNAME ?? "",
+    refresh: flags.cacheRefresh === true || process.env.EASYUI_CACHE_REFRESH === "1",
+    refreshReason: flags.cacheRefresh === true ? "flag:--cache-refresh" : "env:EASYUI_CACHE_REFRESH",
+    disabled: legacy || !dir,
+    disabledReason: legacy ? "LEGACY_BASIC_AUTH" : "no --cache-dir",
+  });
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const { cmd, args, flags } = parseArgs(argv);
   jsonMode = flags.json === true;
+  await configureCache(flags);
   if (cmd === "component") {
     const [id, name, sourcePath] = args;
     const selectedSystem = flags.designSystem ?? process.env.EASYUI_DESIGN_SYSTEM;
