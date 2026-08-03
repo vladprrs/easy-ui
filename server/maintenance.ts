@@ -13,9 +13,24 @@ export function currentMaintenanceLock(db: Database): MaintenanceLock | null {
   return row;
 }
 
+/**
+ * Держится ли lock прямо сейчас. Постановка acceptance-рана обязана отказать 503 при удержанном
+ * lock'е (план §4, мера 8) — сам отказ живёт в роуте, а знание о lock'е остаётся здесь.
+ */
+export function maintenanceLockHeld(db: Database): boolean {
+  return currentMaintenanceLock(db) !== null;
+}
+
 export function acquireMaintenanceLock(db: Database, runId: string, reason: string): MaintenanceLock {
   const normalizedReason = reason.trim() || "catalog migration";
   return db.transaction(() => {
+    // Обратная сторона той же меры (§4.8): миграция каталога не начинается поверх живого
+    // acceptance-рана — иначе она переписывала бы каталог под уже снятыми кадрами.
+    const activeRun = db.query("SELECT run_id runId FROM acceptance_runs WHERE status IN ('queued','running') LIMIT 1")
+      .get() as { runId: string } | null;
+    if (activeRun) {
+      throw new ApiError(503, "acceptance_run_in_flight", "An acceptance run is in flight; retry the migration after it finishes", { runId: activeRun.runId, retryAfterSeconds: 30 });
+    }
     const current = currentMaintenanceLock(db);
     if (current) {
       // A lock is an ownership token, not a lease that may be refreshed by a

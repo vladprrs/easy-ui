@@ -460,6 +460,55 @@ export class AcceptanceRepo {
     return row && row.component_id === componentId ? row : undefined;
   }
 
+  /** Удаление строки кэша — вместе с её артефактами это делает `gcEvidence` (A4). */
+  deleteCaseResult(caseFingerprint: string): boolean {
+    return this.db.query("DELETE FROM acceptance_case_results WHERE case_fingerprint=?").run(caseFingerprint).changes > 0;
+  }
+
+  allCaseResults(): AcceptanceCaseResultRow[] {
+    return this.db.query("SELECT * FROM acceptance_case_results").all() as AcceptanceCaseResultRow[];
+  }
+
+  /** JSON-поля случаев, в которых живут ссылки на CAS — вход union-refcount'а GC. */
+  allCaseGates(): { gates_json: string | null; capture_quality_json: string | null }[] {
+    return this.db.query("SELECT gates_json,capture_quality_json FROM acceptance_cases")
+      .all() as { gates_json: string | null; capture_quality_json: string | null }[];
+  }
+
+  /**
+   * Кандидаты на вытеснение по потолку `evidenceMaxBytes`: результаты **терминальных fail/error**
+   * ранов, давно не использованные. Доказательства прошедшей приёмки (`pass`) не вытесняются —
+   * их пересъёмка не восстановит provenance.
+   */
+  evictableCaseResults(limit = 500): AcceptanceCaseResultRow[] {
+    return this.db.query(`SELECT r.* FROM acceptance_case_results r
+      JOIN acceptance_runs u ON u.run_id = r.produced_run_id
+      WHERE u.status IN ('fail','error') ORDER BY r.last_used_at LIMIT ?`).all(limit) as AcceptanceCaseResultRow[];
+  }
+
+  /** Жив ли адрес артефакта хоть по одной ссылке (union `acceptance_case_results` ∪ `acceptance_cases`). */
+  artifactStillReferenced(sha: string): boolean {
+    const inResults = this.db.query("SELECT 1 FROM acceptance_case_results WHERE artifacts_json LIKE '%' || ? || '%' LIMIT 1").get(sha);
+    if (inResults !== null) return true;
+    return this.db.query("SELECT 1 FROM acceptance_cases WHERE COALESCE(gates_json,'') || COALESCE(capture_quality_json,'') LIKE '%' || ? || '%' LIMIT 1").get(sha) !== null;
+  }
+
+  /** Очередь оркестратора: раны, поставленные и ещё не начатые, в порядке постановки. */
+  queuedRuns(limit = 20): AcceptanceRunRow[] {
+    return this.db.query("SELECT * FROM acceptance_runs WHERE status='queued' ORDER BY created_at, run_id LIMIT ?").all(limit) as AcceptanceRunRow[];
+  }
+
+  /**
+   * Провайдер пинов для `gcCandidates` (A10): `source_hash` кандидатов всех нетерминальных ранов.
+   * Бандл такого кандидата вытеснять нельзя — пересборки по произвольному rev нет.
+   */
+  pinnedSourceHashes(): Set<string> {
+    const rows = this.db.query(`SELECT DISTINCT c.source_hash hash FROM acceptance_runs r
+      JOIN component_candidates c ON c.candidate_id = r.candidate_id
+      WHERE r.status IN ('queued','running')`).all() as { hash: string }[];
+    return new Set(rows.map((row) => row.hash));
+  }
+
   touchCaseResult(caseFingerprint: string, at = now()): void {
     this.db.query("UPDATE acceptance_case_results SET last_used_at=? WHERE case_fingerprint=?").run(at, caseFingerprint);
   }

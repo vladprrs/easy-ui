@@ -1,0 +1,346 @@
+/**
+ * Оркестратор приёмки (RFC §4.2 «Оркестрация», план §3 D2/D10, §5 W1a).
+ *
+ * Живёт **вне** screenshot-помпы: собственный цикл, который ставит capture-джобы по одной и
+ * держит инварианты, которых у помпы нет:
+ *
+ * - **≤1 running acceptance-run на процесс** (in-memory флаг). Durable-инвариант «≤1
+ *   нетерминальный ран на кандидата» держит partial unique index (миграция v25) — это разные
+ *   вещи: индекс защищает кандидата, флаг — 1-CPU прод.
+ * - **Стартовая уборка** (триаж V8): переживший рестарт `queued|running` ран некому двигать, он
+ *   вечно держал бы кандидата индексом. Все такие раны → `error` при создании оркестратора;
+ *   потеря дешёвая благодаря reuse (A3).
+ * - **Watchdog** (D2): `running` дольше `runDeadlineMs` политики терминализуется `error` живым
+ *   процессом — иначе исключение в цикле блокирует кандидата навсегда.
+ * - **Пин кандидатов** (A10): провайдер `sourceHash` нетерминальных ранов для `gcCandidates`.
+ *
+ * Props случаев живут в памяти процесса (в `acceptance_cases` durable только `props_hash`).
+ * Это осознанно: пережившие рестарт раны всё равно убивает стартовая уборка, а для набора из
+ * examples кандидата props восстанавливаются детерминированно (`buildCases`).
+ */
+import type { Database } from "bun:sqlite";
+import { ApiError } from "../http";
+import { ComponentRepo } from "../repos/components";
+import { getCandidateForRev } from "../components/validate";
+import { buildCases, DEFAULT_CASE_SURFACE, type AcceptanceCase } from "./cases";
+import { writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./evidence";
+import { CASE_POLICY_HASH_V0, type CaseSurface } from "./ids";
+import type { AcceptanceCaptureService, CandidateSubject, GateContext } from "./gates/types";
+import {
+  bySeverity, executeCase, fingerprintOf, foldRunVerdict, progressOf,
+  type CaseExecution, type CaseRunnerDeps,
+} from "./runner";
+import {
+  acceptancePolicy, DEFAULT_ACCEPTANCE_POLICY_ID, policyProfileHash,
+  type AcceptancePolicy,
+} from "./policies";
+import { AcceptanceRepo, isTerminalRunStatus, type AcceptanceRunRow, type CandidateRow } from "./repo";
+
+const sleepDefault = (ms: number): Promise<void> => Bun.sleep(ms);
+
+export interface AcceptanceOrchestratorDeps {
+  db: Database;
+  dataDir: string;
+  service: AcceptanceCaptureService;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  /** Стартовая уборка нетерминальных ранов; выключается только в тестах самой уборки. */
+  sweepOnStart?: boolean;
+  /** Автозапуск цикла после постановки; в тестах удобно гонять `executeRun` вручную. */
+  autoDrain?: boolean;
+  /** Разрешение кандидата в субъект приёмки; по умолчанию — candidate-кэш по явной ревизии (A10). */
+  resolveCandidate?: (row: CandidateRow) => Promise<CandidateSubject>;
+}
+
+export interface StartRunInput {
+  candidateId: string;
+  createdBy: string;
+  policyId?: string;
+  idempotencyKey?: string | null;
+  surface?: CaseSurface;
+  /** Явный набор случаев; по умолчанию — examples кандидата (A2). */
+  cases?: { key: string; props: Record<string, unknown> }[];
+  /** Пересъёмка вместо reuse (A3, `refresh:"all"`). */
+  refresh?: boolean;
+}
+
+export interface StartRunResult {
+  run: AcceptanceRunRow;
+  cases: AcceptanceCase[];
+  cached: boolean;
+}
+
+/** Кандидат → субъект приёмки: бандл берётся из candidate-кэша **по rev кандидата**, не по head. */
+export async function resolveCandidateSubject(db: Database, dataDir: string, row: CandidateRow): Promise<CandidateSubject> {
+  const draft = await getCandidateForRev(db, dataDir, row.component_id, row.rev, row.source_hash);
+  const head = new ComponentRepo(db).source(row.component_id);
+  return {
+    candidateId: row.candidate_id,
+    componentId: row.component_id,
+    designSystem: row.design_system,
+    rev: row.rev,
+    sourceHash: row.source_hash,
+    bundleHash: row.bundle_hash,
+    hostAbiVersion: row.host_abi_version,
+    themeVersion: row.theme_version,
+    entry: draft.entry,
+    // N1: расхождение с head — advisory-метка evidence, а не причина отказа (иначе resume при
+    // активной правке автором был бы невозможен).
+    headDiverged: head.rev !== row.rev,
+  };
+}
+
+export class AcceptanceOrchestrator {
+  readonly repo: AcceptanceRepo;
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly autoDrain: boolean;
+  private readonly resolve: (row: CandidateRow) => Promise<CandidateSubject>;
+  private readonly caseSets = new Map<string, AcceptanceCase[]>();
+  private readonly surfaces = new Map<string, CaseSurface>();
+  private readonly refreshes = new Set<string>();
+  private active: string | null = null;
+  private draining: Promise<void> | null = null;
+
+  constructor(private readonly deps: AcceptanceOrchestratorDeps) {
+    this.repo = new AcceptanceRepo(deps.db);
+    this.now = deps.now ?? Date.now;
+    this.sleep = deps.sleep ?? sleepDefault;
+    this.autoDrain = deps.autoDrain !== false;
+    this.resolve = deps.resolveCandidate ?? ((row) => resolveCandidateSubject(deps.db, deps.dataDir, row));
+    if (deps.sweepOnStart !== false) this.repo.sweepNonTerminalRuns();
+  }
+
+  /** Идёт ли ран прямо сейчас в этом процессе (инвариант «≤1 running run»). */
+  activeRunId(): string | null { return this.active; }
+
+  /** Провайдер пинов для `gcCandidates` (A10). */
+  candidatePins = (): Set<string> => this.repo.pinnedSourceHashes();
+
+  /**
+   * Постановка рана: набор случаев строится **до** записи (пустой/переполненный набор — 422 ещё
+   * до создания строки), случаи вставляются в одной транзакции с раном.
+   */
+  async startRun(input: StartRunInput): Promise<StartRunResult> {
+    const candidateRow = this.repo.requireCandidate(input.candidateId);
+    const policy = acceptancePolicy(input.policyId ?? DEFAULT_ACCEPTANCE_POLICY_ID);
+    if (!policy) throw new ApiError(422, "unknown_policy_profile", `Unknown acceptance policy profile: ${input.policyId}`);
+    const subject = await this.resolve(candidateRow);
+    const surface = input.surface ?? DEFAULT_CASE_SURFACE;
+    const cases = buildCases(subject.entry, input.cases ? { cases: input.cases } : {});
+    const created = this.repo.createRun({
+      candidateId: candidateRow.candidate_id,
+      componentId: candidateRow.component_id,
+      policyProfileId: policy.id,
+      policyProfileHash: policyProfileHash(policy),
+      idempotencyKey: input.idempotencyKey ?? null,
+      createdBy: input.createdBy,
+      progress: progressOf([], cases.length, null),
+      gates: policy.gates,
+      cases: cases.map((item) => ({
+        caseId: item.caseId,
+        caseKey: item.caseKey,
+        propsHash: item.propsHash,
+        caseFingerprint: fingerprintOf({ candidate: subject, surface }, item),
+        casePolicyHash: CASE_POLICY_HASH_V0,
+        aliasOfCaseId: item.aliasOfCaseId,
+      })),
+    });
+    if (!created.cached) {
+      this.caseSets.set(created.run.run_id, cases);
+      this.surfaces.set(created.run.run_id, surface);
+      if (input.refresh === true) this.refreshes.add(created.run.run_id);
+      if (this.autoDrain) void this.drain();
+    }
+    return { run: created.run, cases, cached: created.cached };
+  }
+
+  /** Cancel допустим только из `queued` (триаж A6): бегущий ран не отменяется. */
+  cancelQueuedRun(runId: string): AcceptanceRunRow {
+    const row = this.repo.requireRun(runId);
+    if (row.status !== "queued") {
+      throw new ApiError(409, "run_not_cancellable", `Acceptance run is ${row.status}; only queued runs can be cancelled`);
+    }
+    this.caseSets.delete(runId);
+    return this.repo.terminalizeRun(runId, { status: "cancelled" });
+  }
+
+  /**
+   * Watchdog (D2): раны, висящие в `running` дольше дедлайна своей политики, терминализуются
+   * `error`. Дедлайн берётся из профиля рана, а не из глобальной константы.
+   */
+  sweepStaleRuns(): number {
+    let closed = 0;
+    // Максимальный дедлайн среди профилей — грубый фильтр запросом; точный порог проверяется ниже.
+    const rows = this.repo.runningRunsOlderThan(0, this.now());
+    for (const row of rows) {
+      const policy = acceptancePolicy(row.policy_profile_id);
+      const deadline = policy?.runDeadlineMs ?? 30 * 60_000;
+      const startedAt = Date.parse(row.started_at ?? row.created_at);
+      if (Number.isNaN(startedAt) || this.now() - startedAt < deadline) continue;
+      this.repo.terminalizeRun(row.run_id, { status: "error" });
+      this.caseSets.delete(row.run_id);
+      closed += 1;
+    }
+    return closed;
+  }
+
+  /** Цикл: пока есть `queued` раны — исполнять по одному. Повторный вызов присоединяется к текущему. */
+  drain(): Promise<void> {
+    if (this.draining) return this.draining;
+    const loop = (async () => {
+      try {
+        for (;;) {
+          this.sweepStaleRuns();
+          const next = this.repo.queuedRuns(1)[0];
+          if (!next) return;
+          await this.executeRun(next.run_id);
+        }
+      } finally { this.draining = null; }
+    })();
+    this.draining = loop;
+    return loop;
+  }
+
+  /** Ждать завершения текущего цикла (тестовый шов и graceful shutdown). */
+  settled(): Promise<void> { return this.draining ?? Promise.resolve(); }
+
+  /**
+   * Исполнение одного рана. Возвращает терминальную строку (или текущую, если ран уже ушёл в
+   * терминал — cancel/watchdog выиграли гонку).
+   */
+  async executeRun(runId: string): Promise<AcceptanceRunRow> {
+    if (this.active !== null && this.active !== runId) {
+      throw new ApiError(409, "acceptance_run_in_flight", "Another acceptance run is already executing in this process", { runId: this.active });
+    }
+    const row = this.repo.requireRun(runId);
+    if (isTerminalRunStatus(row.status)) return row;
+    if (!this.repo.startRun(runId)) return this.repo.requireRun(runId);
+    this.active = runId;
+    try {
+      return await this.runCases(this.repo.requireRun(runId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return this.repo.terminalizeRun(runId, { status: "error", gates: { error: message } });
+    } finally {
+      this.active = null;
+      this.caseSets.delete(runId);
+      this.surfaces.delete(runId);
+      this.refreshes.delete(runId);
+    }
+  }
+
+  private async runCases(run: AcceptanceRunRow): Promise<AcceptanceRunRow> {
+    const policy = acceptancePolicy(run.policy_profile_id);
+    if (!policy) throw new Error(`Run references an unknown policy profile: ${run.policy_profile_id}`);
+    const candidateRow = this.repo.requireCandidate(run.candidate_id);
+    const subject = await this.resolve(candidateRow);
+    const surface = this.surfaces.get(run.run_id) ?? DEFAULT_CASE_SURFACE;
+    const cases = this.caseSets.get(run.run_id) ?? buildCases(subject.entry);
+    const refresh = this.refreshes.has(run.run_id);
+
+    const shared = new Map<string, unknown>();
+    const context: CaseRunnerDeps["context"] = {
+      db: this.deps.db,
+      dataDir: this.deps.dataDir,
+      service: this.deps.service,
+      sleep: this.sleep,
+      now: this.now,
+    } as Omit<GateContext, "case" | "determinismSampled" | "shared" | "policy" | "runId" | "candidate" | "surface">;
+    const deps: CaseRunnerDeps = { repo: this.repo, policy, runId: run.run_id, candidate: subject, surface, shared, context };
+
+    const targets = cases.filter((item) => item.aliasOfCaseId === null);
+    const aliases = cases.filter((item) => item.aliasOfCaseId !== null);
+    // Выборка determinism: первые N целевых случаев (плюс fail-случаи — они добираются ниже).
+    const sampled = new Set(targets.slice(0, policy.determinismSampleSize).map((item) => item.caseId));
+
+    const executions: CaseExecution[] = [];
+    const byCaseId = new Map<string, CaseExecution>();
+    let ema: number | null = null;
+
+    for (const item of targets) {
+      // Cancel/watchdog могли терминализовать ран, пока шла съёмка предыдущего случая.
+      const current = this.repo.run(run.run_id);
+      if (!current || isTerminalRunStatus(current.status)) return this.repo.requireRun(run.run_id);
+      this.repo.updateCase(run.run_id, item.caseId, { status: "running", startedAt: new Date(this.now()).toISOString() });
+      const execution = await executeCase(deps, item, { determinismSampled: sampled.has(item.caseId), refresh });
+      this.persistCase(run.run_id, execution);
+      executions.push(execution);
+      byCaseId.set(item.caseId, execution);
+      if (!execution.reused) ema = ema === null ? execution.durationMs : Math.round(ema * 0.7 + execution.durationMs * 0.3);
+      this.repo.updateRunProgress(run.run_id, progressOf(executions, cases.length, ema));
+    }
+
+    for (const item of aliases) {
+      // Алиас наследует вердикт цели (D10): своей съёмки у него нет по построению набора.
+      const target = byCaseId.get(item.aliasOfCaseId!);
+      const execution: CaseExecution = target
+        ? { ...target, caseId: item.caseId, caseKey: item.caseKey, caseFingerprint: fingerprintOf(deps, item), aliasOfCaseId: item.aliasOfCaseId, reused: false, reuseReason: `alias_of:${item.aliasOfCaseId}`, durationMs: 0 }
+        : { caseId: item.caseId, caseKey: item.caseKey, caseFingerprint: fingerprintOf(deps, item), status: "error", verdict: null, gates: [], severity: null, captureQuality: null, artifacts: [], aliasOfCaseId: item.aliasOfCaseId, reused: false, reuseReason: null, durationMs: 0, error: { outcome: "subprocess_error", message: "alias target was not executed" } };
+      this.persistCase(run.run_id, execution);
+      executions.push(execution);
+      this.repo.updateRunProgress(run.run_id, progressOf(executions, cases.length, ema));
+    }
+
+    const verdict = foldRunVerdict(executions, policy);
+    const manifest = this.manifestOf(run, subject, verdict, executions);
+    const { manifestHash } = await writeRunManifest(this.deps.dataDir, run.run_id, manifest);
+    return this.repo.terminalizeRun(run.run_id, {
+      status: verdict,
+      gates: this.gatesSummary(executions),
+      progress: progressOf(executions, cases.length, ema, 0),
+      evidenceManifestHash: manifestHash,
+    });
+  }
+
+  private persistCase(runId: string, execution: CaseExecution): void {
+    this.repo.updateCase(runId, execution.caseId, {
+      status: execution.status,
+      verdict: execution.verdict,
+      gates: execution.gates,
+      severity: execution.severity,
+      captureQuality: execution.captureQuality,
+      reuseReason: execution.reuseReason,
+      finishedAt: new Date(this.now()).toISOString(),
+    });
+  }
+
+  /** Run-level агрегат `gates_json`: по каждому гейту — сколько случаев в каком статусе. */
+  private gatesSummary(executions: CaseExecution[]): Record<string, Record<string, number>> {
+    const summary: Record<string, Record<string, number>> = {};
+    for (const execution of executions) {
+      for (const gate of execution.gates) {
+        const bucket = summary[gate.gate] ?? (summary[gate.gate] = {});
+        bucket[gate.status] = (bucket[gate.status] ?? 0) + 1;
+      }
+    }
+    return summary;
+  }
+
+  private manifestOf(run: AcceptanceRunRow, subject: CandidateSubject, verdict: string, executions: CaseExecution[]): RunManifest {
+    const cases: EvidenceCaseEntry[] = [...executions].sort(bySeverity).map((execution) => ({
+      caseId: execution.caseId,
+      caseKey: execution.caseKey,
+      verdict: execution.verdict,
+      status: execution.status,
+      reused: execution.reused,
+      aliasOfCaseId: execution.aliasOfCaseId,
+      artifacts: execution.artifacts.map((artifact) => ({ name: artifact.name, sha256: artifact.sha256, bytes: artifact.bytes })),
+    }));
+    return {
+      version: 1,
+      runId: run.run_id,
+      candidateId: run.candidate_id,
+      componentId: run.component_id,
+      policyProfileId: run.policy_profile_id,
+      policyProfileHash: run.policy_profile_hash,
+      verdict,
+      createdAt: run.created_at,
+      finishedAt: new Date(this.now()).toISOString(),
+      ...(subject.headDiverged ? { headDiverged: true } : {}),
+      cases,
+    };
+  }
+}
+
+export type { AcceptancePolicy, AcceptanceCaptureService };
