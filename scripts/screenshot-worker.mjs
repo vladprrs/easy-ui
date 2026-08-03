@@ -3,7 +3,7 @@
 // a controlled deny-proxy socket, port-scoped proxy-bypass, host-resolver rules,
 // disabled QUIC/WebRTC, blocked service workers, closed websockets, and a
 // context.route allowlist keyed on the exact capture origin + allowed paths.
-/* global process, Buffer, URL, window */
+/* global process, Buffer, URL, window, setTimeout, clearTimeout */
 import net from "node:net";
 import { analyzeGeometry, collectGeometry } from "../src/capture/geometry.mjs";
 
@@ -233,10 +233,24 @@ async function run(job) {
   }
 }
 
+/**
+ * Единственный выход воркера. `process.exit()` **обрывает** незаписанные байты stdout-пайпа
+ * (на Linux в буфер помещается 64 КиБ, остальное libuv дописывает асинхронно), а результат
+ * капчура — это base64 PNG, который на DPR 3 давно больше 64 КиБ. Отсюда наблюдавшийся
+ * гоночный `capture_failed: worker result was not JSON: {"ok":true,"pngBase64":"…` на крупных
+ * кадрах (найдено корпусом рендерера, план 2026-08-03-renderer-contract-2 §5 R2b). Выходим
+ * только после подтверждённой записи; таймер держит event loop и страхует от зависшего дренажа.
+ */
+function emitResult(result, code) {
+  const exit = () => process.exit(code);
+  const guard = setTimeout(exit, 10_000);
+  process.stdout.write(`${JSON.stringify(result)}\n`, () => { clearTimeout(guard); exit(); });
+}
+
 const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
   readStdin()
     .then(run)
-    .then((result) => { process.stdout.write(JSON.stringify(result) + "\n"); process.exit(0); })
-    .catch((error) => { process.stdout.write(JSON.stringify({ ok: false, error: error?.message ?? String(error) }) + "\n"); process.exit(1); });
+    .then((result) => emitResult(result, 0))
+    .catch((error) => emitResult({ ok: false, error: error?.message ?? String(error) }, 1));
 }
