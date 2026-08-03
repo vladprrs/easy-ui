@@ -1,6 +1,6 @@
 # План: Renderer Contract 2.0 — детерминированный capture, receipt, cross-renderer guard, пул и кэш
 
-Дата: 2026-08-03. Версия: **v2** (Stage 2, раунд 1 пройден: 3 адверсариальных ревьюера — корректность/код, скоуп/декомпозиция, риски/эксплуатация; триаж — §11; поправка пользователя по ресурсам прода — §2.2 N9/R0).
+Дата: 2026-08-03. Версия: **v3** (Stage 2 пройден: раунд 1 — 3 адверсариальных ревьюера [корректность/код, скоуп/декомпозиция, риски/эксплуатация], раунд 2 — верификационный; триажи — §11; поправка пользователя по ресурсам прода — §2.2 N9/R0).
 Источник требований: `docs/EASYUI_RENDERING_IMPROVEMENTS.md` (P0.1–P0.5, P1.1–P1.5, P2.1–P2.3, «Метрики успеха»).
 База: план `docs/plans/2026-08-03-family-acceptance-and-composition-v3.md` **полностью закрыт** (W0–W9), RFC `2026-08-02-candidate-acceptance-pipeline-rfc.md` v5 (R1 в проде, R2 исполнен волнами family-плана).
 
@@ -31,7 +31,7 @@
 | № | Метрика документа | Baseline (факт) | Цель | Инструмент измерения | Волна |
 |---|---|---:|---:|---|---|
 | K1 | Повторные capture одного входа дают `exact-rgba = 0` | не измерялось | **0 расхождений на 240** (12×20) в CI + 0 на ночном прогоне ≥3000; честная оговорка: 240 капчуров статистически подтверждают ~1% при 95% CI, «99,9%» доказывает только ночной объём | `scripts/renderer-corpus.mjs` | R2b/R2c (гейт), R9a (перепроверка с пулом) |
-| K2 | Локальный и server capture в одном image совпадают полностью | недостижимо: `shoot` = отдельный локальный chromium | `exact-rgba = 0`; **фолбэк-порог зафиксирован до старта: ≤50 ppm и только внутри edge-маски**; решение принимает done R2c, не «отдельное решение» | корпус: `docker run <image> … corpus:verify` локально и в CI, артефакт CI (`upload-artifact`), сверка `expected.json` | R2c + R8b |
+| K2 | Локальный и server capture в одном image совпадают полностью | недостижимо: `shoot` = отдельный локальный chromium | **две части (V-N11)**: cross-host детерминизм — `exact-rgba = 0`, фолбэк-порог **≤50 ppm суммарно** (вердикт — done R2c; edge-квалификация остатка — после R7a, когда маска существует); local-vs-server в одном image — done R8b | корпус: `docker run <image> … corpus:verify` локально и в CI, артефакт CI (`upload-artifact`), сверка `expected.json` | R2c (cross-host) + R8b (local-vs-server) |
 | K3 | Ни один strict capture не проходит с fallback-шрифтом/битой картинкой | проходит | 0 — для captures с темой, объявляющей шрифты; для ДС без темы (`fonts: []`) строгость вырождается в v1-семантику — **честно записано** | unit на `collectReadiness` + e2e-фикстуры → `font_face_missing`/`image_load_failed` | R4 |
 | K4 | Причина неуспеха определяется без ручного просмотра PNG | только `capture_failed` + строка | 9 типизированных кодов на всех путях | контракт `captureFailureCode`, тест «каждый код достижим фикстурой» | R3 + R4 + R6 |
 | K5 | Медианное число итераций component → verified screenshot | **замер «до» — в R0** (журнал `driver.mjs` на текущей семье; «10+» документа — риторика, не факт) | дельта «до/после» на ≥3 семьях при включённых флагах | журнал capture-запросов до зелёного вердикта | R0 (baseline), R7b (после) |
@@ -125,7 +125,14 @@
 
 **N10 (minor). Строгость включается политикой, а не env-флагом.** `pixel-strict-v1` получает `STRICT_READINESS_POLICY` (v2) в R4; `default-v1` переключается отдельным откатываемым шагом. Интерактивные пути остаются на `DEFAULT_READINESS_POLICY` v1.
 
-**N11 (новое, T-B1). Переходная семантика guard'а при включении флагов.** Порядок «guard (R6) раньше флагов» сам по себе не защищает **существующие** эталоны: они `unknown` (advisory) — включение флагов дало бы не «mismatch с ремедиацией», а массовый ложный fail по проценту (и падение `driver.mjs runCheck` во всех скиллах). Решение: включение `EASYUI_RENDERER_FLAGS=1` на проде допускается **только вместе с** `EASYUI_RENDERER_EPOCH=<rendererVersion>`; ран с эталоном `unknown` или с fingerprint другой эпохи терминализуется `status='error'`, `outcome_code='stale_renderer'` (без процента, с ремедиацией «переснять») — ложных процентных fail'ов нет. Предпосылка включения — инвентаризация и массовое переснятие эталонов инструментом `scripts/rebaseline-all.mjs` (R6) в maintenance-окно, **разнесённое** с холодной пересъёмкой приёмки после R1 (§4).
+**N11 (новое, T-B1; доопределено V-N5). Переходная семантика guard'а при включении флагов.** Порядок «guard (R6) раньше флагов» сам по себе не защищает **существующие** эталоны: они `unknown` (advisory) — включение флагов дало бы не «mismatch с ремедиацией», а массовый ложный fail по проценту (и падение `driver.mjs runCheck` во всех скиллах). Решение: понятие **эпохи рендерера**. Полная семантика:
+- эпоха по умолчанию = `manifest.rendererVersion` (env `EASYUI_RENDERER_EPOCH` — только **override** для нештатных случаев; забытый bump env не может уронить прод — V-N5d); self-check на старте + поле в `/api/health`;
+- при `EASYUI_RENDERER_FLAGS=1`: ран с эталоном `unknown` или другой эпохи ⇒ `status='error'`, `outcome_code='stale_renderer'` (без процента, ремедиация «переснять»); при выключенных флагах `unknown` остаётся advisory;
+- `EASYUI_RENDERER_EPOCH` без `EASYUI_RENDERER_FLAGS` — **игнорируется** (эпоха осмыслена только при новых пикселях), self-check пишет warning;
+- приоритет кодов: расходятся и fingerprint, и эпоха ⇒ `renderer_mismatch` (более специфичный);
+- in-flight раны: guard читает **снапшот флагов, взятый на `beginCheck`** — ран, стартовавший до флипа, доигрывается по старой семантике;
+- dev/CI: включение эпохи на R6 делает stale все dev/e2e-эталоны, созданные до неё — их пересъёмка входит в done R6 (по аналогии с инвентаризацией R2a).
+Предпосылка прод-включения — инвентаризация и массовое переснятие эталонов инструментом `scripts/rebaseline-all.mjs` (R6) в maintenance-окно, **разнесённое** с холодной пересъёмкой приёмки после R1 (§4).
 
 **N12 (новое, T-B3). Ручки receipt «по sha» нет.** `server/routes/acceptance.ts:26` фиксирует инвариант: «артефакты CAS отдаются только внутри runId-scoped zip'а; ручка по sha — cross-owner-канал» (у content-addressed артефакта нет владельца: дедуп даёт один sha двум владельцам). Receipt отдаётся **job-scoped**: `GET /api/screenshot-jobs/:id/receipt` (авторизация выводится из владения джобой, как у `captureUrl`), run-scoped — внутри `bundle.zip` (R7b), acceptance — внутри evidence-zip.
 
@@ -198,11 +205,12 @@
 1. R1 — bump `algoVersion` 4→5 (смена схемы);
 2. R2a — включение флагов в dev/CI (`launchDeterminismArgsHash` меняется);
 3. R4 — переключение профиля на `STRICT_READINESS_POLICY` (`readinessPolicyHash`);
-4. прод-включение `EASYUI_RENDERER_FLAGS` (§7).
+4. прод-включение `EASYUI_RENDERER_FLAGS` (§7);
+5. (условная) снятие `--disable-skia-runtime-opts` по порогу «>50%» — снова меняет `launchDeterminismArgsHash` (V-N9).
 
-Итого **до четырёх** холодных пересъёмок за пакет — признанная плата за поэтапность (аналог `algoVersion`-миграций family-плана). Смягчение: точки 2–4 совмещаются с плановыми волнами, между ними reuse работает; прод-точка 4 разносится по времени с массовым переснятием эталонов (R6) — обе операции идут через один `ScreenshotService` (конкуренция capture сегодня 1; поднятие — измеряемая опция R9a при подтверждённых ресурсах, N9).
+Итого **до пяти** холодных пересъёмок за пакет — признанная плата за поэтапность (аналог `algoVersion`-миграций family-плана). Смягчение: точки 2–4 совмещаются с плановыми волнами, между ними reuse работает; прод-точка 4 разносится по времени с массовым переснятием эталонов (R6) — обе операции идут через один `ScreenshotService` (конкуренция capture сегодня 1; поднятие — измеряемая опция R9a при подтверждённых ресурсах, N9).
 
-**Диск (общий периметр volume `easy-ui-data`).** Существующие: `assets/` — **GC нет вообще** (orphan-PNG копятся; массовое переснятие эталонов добавит сотни PNG — риск §9), `.acceptance/cas` — 256 МБ (`evidenceMaxBytes`), `.candidates` — 32 МБ. Новые: `.receipts/` — 64 МБ + TTL 7 суток + пины, `.capture-cache/` — **256 МБ** + LRU. Приёмка §7.8 меряет `du` по **всем шести** каталогам, включая `assets/`.
+**Диск (общий периметр volume `easy-ui-data`).** Существующие: `assets/` — **GC нет вообще** (orphan-PNG копятся; массовое переснятие эталонов добавит сотни PNG — риск §9), `.acceptance/cas` — 256 МБ (`evidenceMaxBytes`), `.candidates` — 32 МБ. Новые: `.receipts/` — 64 МБ + TTL 7 суток + пины, `.capture-cache/` — **256 МБ** + LRU. Приёмка §7.8 меряет `du` по всем пяти каталогам + SQLite/WAL, включая `assets/`.
 
 **CI.** Полный корпус 12×20=240 капчуров ≈ 8–15 мин на GH-раннере — **только в main-workflow** (гейт деплоя, N13) и nightly; в PR-CI — усечённая матрица 12×3. Процедура карантина фикстуры (флаки → фикстура помечается `quarantined` в `expected.json`, main не красится, заводится факт в план) описывается в R2c.
 
@@ -213,10 +221,10 @@
 ### R0 — Микро-релиз: env, ревизия ресурсов, пин базового образа, renderer manifest, замер K5-baseline
 
 **Объём.** До кода, читающего флаги (канон W0 family-плана).
-- **Ревизия ресурсов прода (N9)**: снять факт хоста (`nproc`, `free -m`, соседние сервисы Dokploy — канон `/deploy`); поднять `mem_limit` (и при подтверждении `cpus`) в `docker-compose.yml` отдельно откатываемой правкой; факты — в §4.
+- **Ревизия ресурсов прода (N9)**: снять факт хоста (`nproc`, `free -m`, соседние сервисы Dokploy — канон `/deploy`); поднять `mem_limit` (и при подтверждении — ключ `cpus`; сегодня в compose его нет вовсе, V-N15) в `docker-compose.yml` отдельно откатываемой правкой; факты — в §4.
 - `docker-compose.yml`: проброс `EASYUI_RENDERER_FLAGS`, `EASYUI_RENDERER_EPOCH`, `EASYUI_RENDERER_GUARD_DISABLED`, `EASYUI_RENDERER_STRICT_MANIFEST`, `EASYUI_CAPTURE_RECEIPTS_DISABLED`, `EASYUI_VISUAL_SIGNALS_V2`, `EASYUI_RENDERER_POOL`, `EASYUI_CAPTURE_CACHE` (все `${…:-}`). `EASYUI_IMAGE_REF`/прокидка digest в Dokploy — **исключена** (advisory-поле, требует нового write-доступа CI к Dokploy env и способно триггерить redeploy-петлю; `provenance.imageRef` собирается из build-args — триаж S-m3/T-m15).
 - `Dockerfile`: пин `FROM node:24-slim@sha256:…` (T-M5); `ARG EASYUI_BUILD_SHA` объявляется **непосредственно перед** `RUN node scripts/renderer-manifest.mjs > /app/renderer-manifest.json` (не раньше — иначе инвалидация npm/playwright-слоёв кэша на каждый коммит, C-M9); `ENV EASYUI_RENDERER_MANIFEST=/app/renderer-manifest.json`.
-- `scripts/renderer-manifest.mjs` (новый, node): поля §2.2 N1 — `browsers.json` через `require.resolve("playwright-core/package.json")`, `browserVersion` пробой `chromium.launch()` в build-слое, sha256 **headless-shell** бинаря, обход `/usr/share/fonts` собственным кодом (fc-list в slim нет), `dpkg-query` мягко → null, `dist/fonts`.
+- `scripts/renderer-manifest.mjs` (новый, node): поля §2.2 N1 — `browsers.json` через `require.resolve("playwright-core/package.json")`; локация shell-бинаря — `registry.findExecutable("chromium-headless-shell")` (обе директории `chromium-<rev>` и `chromium_headless_shell-<rev>` существуют в кэше playwright); `browserVersion` — пробой `chromium.launch()` в build-слое **с явными args для root-окружения BuildKit** (`--no-sandbox --disable-dev-shm-usage`) и фолбэком `chrome-headless-shell --version` при отказе launch (V-N6); sha256 headless-shell бинаря; обход `/usr/share/fonts` собственным кодом (fc-list в slim нет); `dpkg-query` мягко → null; `dist/fonts`.
 - **Замер K5-baseline**: число capture-итераций до зелёного вердикта на текущей семье (журнал `driver.mjs`) — до любых изменений; факт в §1.
 
 **Файлы.** Новые: `scripts/renderer-manifest.mjs`. Изменяемые: `Dockerfile`, `docker-compose.yml`, `.github/workflows/build-image.yml` (только build-args), `docs/server-api.md`.
@@ -251,7 +259,7 @@
 
 ### R2c — CI: build→corpus→deploy + soft cross-host гейт + замеры
 
-**Объём.** Перестройка `.github/workflows/build-image.yml` (N13): job `build` пушит **только SHA-тег** → job `renderer-corpus` (`docker run` SHA-тега, полная матрица 12×20) → job `deploy` (`buildx imagetools create` тега `latest` + Dokploy). PR-CI — усечённая матрица 12×3. Soft cross-host гейт: результат — CI-артефакт (`upload-artifact`), сравнение с локальным `docker run`; **порог решения K2 — ≤50 ppm и только внутри edge-маски** (зафиксирован §1); процедура карантина фикстур (§4). Замер стоимости флагов (ms/case до/после) — факты в §4.
+**Объём.** Перестройка `.github/workflows/build-image.yml` (N13): job `build` пушит **только SHA-тег** → job `renderer-corpus` (`docker run` SHA-тега **с `EASYUI_RENDERER_FLAGS=1` явно** — прод-дефолт образа OFF, без этого гейт мерил бы не ту конфигурацию, V-N2; полная матрица 12×20) → job `deploy` (`buildx imagetools create` тега `latest` + Dokploy). PR-CI — усечённая матрица 12×3. Soft cross-host гейт: результат — CI-артефакт (`upload-artifact`), сравнение с локальным `docker run`; **порог решения K2 (cross-host) — ≤50 ppm суммарно** (edge-квалификация остатка — после R7a: маски в R2c ещё не существует, V-N1); процедура карантина фикстур (§4). Замер стоимости флагов (ms/case до/после) — факты в §4.
 **Файлы.** `.github/workflows/build-image.yml`, `scripts/renderer-corpus.mjs` (режимы `--verify`/`--truncated`/`--report`), `docs/server-api.md`.
 **Done.** красный корпус блокирует деплой (проверка на намеренно сломанном ожидании); soft-гейт: факт замера опубликован в §4, вердикт по K2 принят (0 ppm ⇒ гейт; >0 ⇒ ppm-допуск ≤50 внутри edge-маски, зафиксировано); замер флагов вписан в §4 с решением по порогу 50%; `verify`.
 
@@ -299,9 +307,9 @@
   timings       { navigateMs, fontsMs, imagesMs, networkMs, framesMs, stabilizeMs, screenshotMs, totalMs }
   verdict       { captureClean, codes: CaptureCode[], readinessMet, readinessPolicyHash }
   ```
-- `server/capture/receiptStore.ts`: `.receipts/<sha[0:2]>/<sha>`, `putReceipt`/`readReceipt`, **индекс `assetId → receiptSha256`** (для asset-доставок; нужен R6 для резолва renderer'а эталона — T-B2), свипер (TTL 7 суток, потолок 64 МБ, LRU, GC on start/on write, **пин-провайдер** — подключается в R6).
+- `server/capture/receiptStore.ts`: `.receipts/<sha[0:2]>/<sha>`, `putReceipt`/`readReceipt`, **два индекса**: `assetId → receiptSha256` (asset-доставки; нужен R6 для резолва renderer'а эталона — T-B2; **пишется после `assetRepo.ingest`** — assetId раньше не существует, V-N7) и `jobId → {receiptSha256, ownerKey}` с TTL стора (7 суток) — receipt переживает `RESULT_TTL_MS` 10 мин и `reapExpired()`, авторизация по сохранённому `ownerKey` не зависит от живой джобы (V-N4). Свипер: TTL 7 суток, потолок 64 МБ, LRU, GC on start/on write, **пин-провайдер** — подключается в R6.
 - Сборка в `ScreenshotService.execute` после `runJob`, до ветвления по kind; `receiptSha256` во всех результатах.
-- Доступ (N12): **`GET /api/screenshot-jobs/:id/receipt`** — job-scoped; ручки «по sha» **нет** (инвариант W1a `acceptance.ts:26`); acceptance-гейты кладут `receipt.json` в CAS и в per-run манифест.
+- Доступ (N12): **`GET /api/screenshot-jobs/:id/receipt`** — job-scoped; после смерти джобы резолвится через `jobId`-индекс стора (тот же роут, тот же ownerKey-чек); ручки «по sha» **нет** (инвариант W1a `acceptance.ts:26`); acceptance-гейты кладут `receipt.json` в CAS и в per-run манифест.
 
 **Файлы.** Новые: `src/capture/receipt.ts`, `server/capture/receiptStore.ts` (+тесты). Изменяемые: `scripts/screenshot-worker.mjs` (тайминги, `surfaceRect`, `pngSha256`), `server/screenshot/service.ts`, `server/routes/screenshots.ts`, `server/acceptance/gates/{render,capture}.ts`, `server/acceptance/evidence.ts`, contracts/openapi/sdk, `docs/server-api.md`.
 **Done.** unit: receipt детерминирован кроме `timings`/`provenance.builtAt`; свипер не удаляет receipt, на который ссылается живой job-результат/CAS-манифест; тест «share/capture-принципал получает 403 на чужой job-receipt»; e2e: интерактивный `snap` (asset-путь) возвращает `receiptSha256`, `GET /api/screenshot-jobs/:id/receipt` отдаёт документ с `renderer` и `fontFaces` — закрытие дыры §1.6; замер прироста диска на 200 капчурах; `verify`.
@@ -311,14 +319,14 @@
 
 **Объём.**
 - **Миграция v27** (единственная, только `ADD COLUMN`, без FK): `visual_references` += `renderer_fingerprint TEXT NULL`, `renderer_json TEXT NULL`, `font_manifest_hash TEXT NULL`, `receipt_sha256 TEXT NULL`, `renderer_recorded_at TEXT NULL`; `visual_runs` += `renderer_guard TEXT NULL`, `outcome_code TEXT NULL`, `candidate_receipt_sha256 TEXT NULL`, `reference_receipt_sha256 TEXT NULL`.
-- Запись рендерера на эталон: `PUT /api/visual-baselines/prototypes/:id` (фактический роут) и `upsertReferencePrivileged` резолвят renderer-блок **по `assetId → receiptSha` индексу R5** (T-B2); NULL — только для PNG, залитых извне, или при истёкшем индексе (best-effort честно). Авторитетный носитель renderer-блока — инлайновый `renderer_json` (переживает TTL receipt-стора); `receipt_sha256` — evidence-ссылка, поддержанная **пином**: receipt'ы, на которые ссылается `visual_references`, не вытесняются свипером (канон `candidatePins`, T-M12).
+- Запись рендерера на эталон: `upsertReferencePrivileged` (общая точка обоих путей — `baselines.ts:73` и generic `PUT /api/visual-references`, V-N3) резолвит renderer-блок **по `assetId → receiptSha` индексу R5** (T-B2); NULL — только для PNG, залитых извне, или при истёкшем индексе (best-effort честно). Авторитетный носитель renderer-блока — инлайновый `renderer_json` (переживает TTL receipt-стора); `receipt_sha256` — evidence-ссылка, поддержанная **пином**: receipt'ы, на которые ссылается `visual_references`, не вытесняются свипером (канон `candidatePins`, T-M12). Расширение сигнатур `finalizeCaptured`/`terminalRow`/`runReport` под `outcome_code`/`renderer_guard` — явный объём (V-N13).
 - Guard в `VisualService.drive()` (E5, C-B2) между кадром кандидата и `runDiff`: `matched | mismatch | unknown`; `mismatch` ⇒ `status='error'`, `outcome_code='renderer_mismatch'`, `differing[]`, без процента; `unknown` ⇒ advisory `warnings:["renderer_unknown"]` — **до** включения флагов; при `EASYUI_RENDERER_FLAGS=1` + `EASYUI_RENDERER_EPOCH` (N11) `unknown`/чужая эпоха ⇒ `error/stale_renderer` без процента.
-- **`scripts/rebaseline-all.mjs`** (T-M10-риски): инвентаризация эталонов прода (число — в план до включения флагов), массовое переснятие per-prototype через существующий `runBaseline`-путь с rate-limit (уважение `BACKGROUND_QUEUE_RESERVE`) и идемпотентностью по поколениям `visual_baseline_sets`.
+- **`scripts/rebaseline-all.mjs`** (T-M10-риски): инвентаризация эталонов прода **обоих scope** (число — в план до включения флагов); переснятие prototype-scope через существующий `runBaseline`-путь и **component-scope через generic `PUT /api/visual-references`** (V-N3 — иначе после эпохи они stale без инструмента); rate-limit (уважение `BACKGROUND_QUEUE_RESERVE`), идемпотентность по поколениям `visual_baseline_sets`. **`renderer_json` при массовом переснятии пишется инлайном из результата джобы** (`receiptSha` берётся прямо из `JobStatus.result`), без зависимости от TTL/LRU-стора — сотни капчуров подряд иначе вытеснят ранние receipt'ы до commit'а (V-N8).
 - Приёмка: при reuse `acceptance_case_results` сверяется `receipt.renderer.rendererFingerprint` артефакта; расхождение **или отсутствие артефакта** (вытеснен `gcEvidence`) ⇒ пересъёмка, не ошибка рана (T-m20).
 - Rollback-политика (T-M8): точка невозврата — первая запись эталона с `renderer_fingerprint` при включённых флагах; откат образа/флага после неё — только с восстановлением бэкапа (канон surfaces); бэкап prod-volume — pre-flight этой волны; абзац в `docs/server-api.md#deployment`.
 
-**Файлы.** Изменяемые: `server/migrations.ts` (v27 + комментарий-инвариант), `server/visual/{repo.ts,service.ts,baselines.ts}`, `server/routes/visualBaselines.ts`, `server/capture/receiptStore.ts` (пин-провайдер), `server/acceptance/runner.ts`, `server/main.ts`. Новые: `scripts/rebaseline-all.mjs`. Contracts/openapi/sdk, `docs/server-api.md`.
-**Done.** unit: legacy-эталон (NULL) при выключенных флагах → `unknown`-advisory, вердикт по метрикам как раньше (нулевой регресс); при `EASYUI_RENDERER_FLAGS=1` → `error/stale_renderer` без процента; эталон ≠ кандидат → `error/renderer_mismatch` с `differing[]`; baseline через `runBaseline`-путь получает непустой `renderer_json` (T-B2 закрыт); миграция v27 на копии прод-БД; **корректный** чек-лист совместимости: потребители `SELECT *` по `visual_references`/`visual_runs` существуют (4 места в `repo.ts`), но ни один не сериализует row наружу — тест-инвариант + «старый образ на БД v27 стартует и отдаёт эталоны» (T-M9-риски: формулировка v1 была фактически ложной); e2e `e2e/preview/renderer-guard.spec.ts`; `verify`.
+**Файлы.** Изменяемые: `server/migrations.ts` (v27 + комментарий-инвариант), `server/visual/{repo.ts,service.ts,baselines.ts}`, `server/routes/{visual,visualBaselines}.ts` (generic-PUT — точка T-B2, V-N10), `server/capture/receiptStore.ts` (пин-провайдер), `server/acceptance/runner.ts`, `server/main.ts`. Новые: `scripts/rebaseline-all.mjs`. Contracts/openapi/sdk, `docs/server-api.md`.
+**Done.** unit: legacy-эталон (NULL) при выключенных флагах → `unknown`-advisory, вердикт по метрикам как раньше (нулевой регресс); при `EASYUI_RENDERER_FLAGS=1` → `error/stale_renderer` без процента; эталон ≠ кандидат → `error/renderer_mismatch` с `differing[]`; baseline через `runBaseline`-путь **и через generic-PUT** получает непустой `renderer_json` (T-B2 закрыт для обоих scope); dev/e2e-эталоны, созданные до эпохи, переснимаются в этой волне (V-N5); миграция v27 на копии прод-БД; **корректный** чек-лист совместимости: потребители `SELECT *` по `visual_references`/`visual_runs` существуют (4 места в `repo.ts`), но ни один не сериализует row наружу — тест-инвариант + «старый образ на БД v27 стартует и отдаёт эталоны» (T-M9-риски: формулировка v1 была фактически ложной); e2e `e2e/preview/renderer-guard.spec.ts`; `verify`.
 **Флаг.** `EASYUI_RENDERER_GUARD_DISABLED=1` (аварийный). Прод-включение `EASYUI_RENDERER_FLAGS` — только после этой волны и по чек-листу §7.
 
 ### R7a — Разделение метрик (сигналы + edge-маска)
@@ -397,6 +405,9 @@
 | `playwright.config.ts` | R2a | эксклюзив |
 | `e2e/fixtures/renderer-corpus/pixel/**` | R2b | `expected.json` (sha-часть) меняется только с bump'ом `RENDERER_VERSION` |
 | `e2e/fixtures/renderer-corpus/outcome/**` | R2b (создание), R4 (ожидания) | typed-коды; владение переходит R4 (T-M2) |
+| `scripts/renderer-manifest.mjs` | R0 | эксклюзив |
+| `scripts/check-renderer-pin.ts` | R1 | эксклюзив |
+| `scripts/{renderer-corpus,measure-capture,rebaseline-all}.mjs` | R2b/R2c, R9a, R6 | эксклюзив волны-создателя |
 
 **Параллельные пары:** (R8a ‖ R5), (R8a ‖ R6), (R8a ‖ R7a/b). R8b — строго после R5. R2a/R2b/R2c/R3/R4 не параллелятся между собой. Всё остальное — последовательно.
 
@@ -431,6 +442,7 @@
 - Автопереснятие эталонов по расписанию, lifecycle exceptions, promotion baseline'ов, VDC 2.0 целиком; гейты `regression`/`interactions`.
 - Golden-PNG в git; фиксация js-seed; `--deterministic-mode` без нужды по K1.
 - GC ассет-стора (`assets/`) — признанный долг, **вне пакета** (рост от rebaseline фиксируется числом в приёмке).
+- `.claude/skills/yp-prototype/interact.mjs` — третий `chromium.launch()` в репозитории, **осознанно вне R8a**: это interaction-прогон живого плеера, не capture; его кадры не участвуют ни в эталонах, ни в приёмке (V-N12).
 - Кэширование acceptance-путей; geometry-сигнал для prototype-screen (N8).
 
 ---
@@ -465,7 +477,7 @@
 | Флаг | Волна | Дефолт dev/CI | Дефолт прод | Снятие |
 |---|---|---|---|---|
 | `EASYUI_RENDERER_FLAGS` | R2a | ON | OFF → ON по чек-листу §7.6 | после переснятия эталонов |
-| `EASYUI_RENDERER_EPOCH` | R6 | = `rendererVersion` | задаётся вместе с флагом выше | — |
+| `EASYUI_RENDERER_EPOCH` | R6 | не задан (эпоха = `manifest.rendererVersion`) | не задан; env — только override (N11/V-N5) | — |
 | `EASYUI_RENDERER_STRICT_MANIFEST` | R1 | не задан (strict) | не задан (strict) | аварийный (=0 → warning) |
 | `EASYUI_CAPTURE_RECEIPTS_DISABLED` | R5 | не задан | не задан (включено) | kill-switch |
 | `EASYUI_RENDERER_GUARD_DISABLED` | R6 | не задан | не задан (включён) | kill-switch |
@@ -502,3 +514,15 @@
 - S-m8 «K8 не KPI»: **принято к сведению** — K8 помечен инженерным инвариантом в §1.
 - T-m15/S-m3 `EASYUI_IMAGE_REF`: **принято, исключён** (R0).
 - S-m5 «точка отсчёта preview»: снят вместе с откладыванием публичного `mode` (S-S1).
+
+### Раунд 2 (верификационный)
+
+Все 8 blocker'ов раунда 1 подтверждены закрытыми (C-B2, T-B4, S-B1 — чисто; остальные — с оговорками, закрытыми ниже). Внесено в v3:
+- **V-N1 (major, принято)**: порог K2 «≤50 ppm внутри edge-маски» был неисполним в R2c (маска появляется в R7a) → K2 разведён: R2c = cross-host ≤50 ppm **суммарно**, edge-квалификация — после R7a, local-vs-server — R8b (заодно V-N11).
+- **V-N2 (major, принято)**: corpus-job гонял бы образ с выключенными флагами (прод-дефолт OFF) → `EASYUI_RENDERER_FLAGS=1` явно в job.
+- **V-N3 (major, принято)**: `rebaseline-all.mjs` не покрывал component-scope эталоны (generic `PUT /api/visual-references`) → покрывает оба scope.
+- **V-N4 (major, принято)**: receipt умирал вместе с джобой (`RESULT_TTL` 10 мин + `reapExpired`) → индекс `jobId → {receiptSha, ownerKey}` с TTL стора; тот же job-scoped роут, авторизация по сохранённому ownerKey; инвариант «нет ручки по sha» не тронут.
+- **V-N5 (medium, принято)**: эпоха доопределена (N11): дефолт из `manifest.rendererVersion`, env — override; EPOCH без FLAGS игнорируется; снапшот флагов на `beginCheck` для in-flight; `renderer_mismatch` приоритетнее `stale_renderer`; пересъёмка dev/e2e-эталонов — done R6.
+- **V-N6 (medium, принято)**: пробой `chromium.launch()` в root-окружении BuildKit → явные args (`--no-sandbox --disable-dev-shm-usage`) + фолбэк `--version`; локация shell — `registry.findExecutable`.
+- **V-N7/V-N8 (medium, принято)**: порядок записи `assetId`-индекса — после `ingest`; rebaseline пишет `renderer_json` инлайном из результата джобы, не через LRU-стор.
+- **V-N9–N16 (minor, принято)**: пятая точка инвалидации (§4); «пяти каталогам + SQLite/WAL»; `server/routes/visual.ts` в файлы R6; `interact.mjs` — обоснованная не-цель §8; сигнатуры `finalizeCaptured`/`terminalRow`/`runReport` — явный объём R6; строки §6 для новых скриптов; ключ `cpus` в compose (R0).
