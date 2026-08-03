@@ -1,8 +1,8 @@
 # RFC: Candidate Acceptance Pipeline
 
-Дата: 2026-08-02. Статус: **v5 — R1 реализован и в проде (9e87960, 2026-08-02); R2 амендментирован планом `docs/plans/2026-08-03-family-acceptance-and-composition-v3.md` (v3, свой Stage 2 из 2 раундов) и исполняется его волнами W0/W1a/W1b/W1c(+W2). Амендменты A1–A10 внесены в текст ниже; сводка — §14.**
+Дата: 2026-08-02. Статус: **v6 — R1 реализован и в проде (9e87960, 2026-08-02); R2 исполнен волнами W0–W9 плана `docs/plans/2026-08-03-family-acceptance-and-composition-v3.md` (миграции v25/v26); R3 прошёл Stage 2 (2 ревьюера, 2026-08-03) и амендментирован ниже — декомпозиция R3a/R3b/R3c в §11. Сводка триажа R3 — §15.**
 
-История: v1 — draft (Stage 2 отложен до посадки agent-iteration-dx); v2 — синк §10 с посаженным кодом W1–W5 (b4e2428…c7d8803); v3 — триаж раунда 1: исправлена identity кандидата (component-scoped), promote переписан как сага, gate-матрица приведена к честной фазе 1, evidence уведён из asset-store, волны перекроены (R1 = promote без durable-таблиц), advisory получил would-block; v4 — триаж раунда 2: recovery через расширенный `already_published`-чек, `pinAssets`/`recordValidation`/`host_abi_version` в фазе B, **R1 вообще без миграций** (колонки и FK — R2), advisory материализует кандидата published-ревизии и снимает published-поверхностью, `policyProfileHash` вне build_fingerprint; v5 — R1 посажен (отклонение: re-stage перезаписывает `failed`-строку in-place, внесено в §4.3.2 ещё в v4-примечании), R2 расширен матричной семантикой фидбэка §19 (per-case слой, CAS-evidence, reuse, пин кандидата, TEXT-ссылки вместо FK) — источник решений и триажей: план family-acceptance v3, §2/§10.
+История: v1 — draft (Stage 2 отложен до посадки agent-iteration-dx); v2 — синк §10 с посаженным кодом W1–W5 (b4e2428…c7d8803); v3 — триаж раунда 1: исправлена identity кандидата (component-scoped), promote переписан как сага, gate-матрица приведена к честной фазе 1, evidence уведён из asset-store, волны перекроены (R1 = promote без durable-таблиц), advisory получил would-block; v4 — триаж раунда 2: recovery через расширенный `already_published`-чек, `pinAssets`/`recordValidation`/`host_abi_version` в фазе B, **R1 вообще без миграций** (колонки и FK — R2), advisory материализует кандидата published-ревизии и снимает published-поверхностью, `policyProfileHash` вне build_fingerprint; v5 — R1 посажен (отклонение: re-stage перезаписывает `failed`-строку in-place, внесено в §4.3.2 ещё в v4-примечании), R2 расширен матричной семантикой фидбэка §19 (per-case слой, CAS-evidence, reuse, пин кандидата, TEXT-ссылки вместо FK) — источник решений и триажей: план family-acceptance v3, §2/§10; v6 — триаж Stage 2 волны R3 против посаженного кода W0–W9: таблица переименована в `component_provenance`, резолвер стал cross-revision, `expired` убран, `rejected` вынесен в append-only `candidate_decisions` (без перестройки `component_candidates`), прототипы выведены из скоупа R3, Library получает **новый** независимый признак `accepted` (visual-`verified` не трогаем), R3 разложен на R3a/R3b/R3c — §15.
 
 Источники: `docs/EASYUI_PRODUCT_IMPROVEMENTS.md` (§3–5, §9.2, §16–18 — количественный baseline и предложение RFC), `docs/plans/2026-08-02-agent-iteration-dx.md` §6 (перечень отложенных в RFC слоёв), посаженный код P8/P1b/P2 (`server/components/validate.ts`, `server/components/candidates.ts`, `server/screenshot/service.ts`, `src/capture/protocol.ts`).
 
@@ -64,7 +64,8 @@ head revision
 ```
 
 - `stale` — **вычисляемое** свойство (head-ревизия компонента ушла от `rev` кандидата, или `build_fingerprint` больше не совпадает), не хранимый статус.
-- `rejected` (человеком) и `expired` (TTL) вводятся в R3 вместе с UI, который их показывает и назначает.
+- `rejected` (человеком) — **вычисляемый** статус R3: кандидат считается отклонённым, если для него есть строка в append-only `candidate_decisions` (§3.2а). Хранимый enum `component_candidates.status` (CHECK) **не расширяется**, перестройки таблицы нет.
+- `expired` **из RFC убран** (триаж R3-B3): посаженный контракт — свипер физически удаляет просроченных кандидатов, отдельного терминального статуса нет. «Истёк» показывается вычислимо по `expires_at` до момента удаления; хранить его негде и незачем.
 - Версии после promote живут по существующей матрице `TRANSITIONS`; RFC добавляет только автоматический переход `active → superseded` прежних версий внутри финальной транзакции promote (§4.3). Ручные переходы остаются.
 
 ### 3.2. Таблица `component_candidates` (R2, миграция)
@@ -81,7 +82,7 @@ component_candidates(
   build_fingerprint TEXT,      -- §5; НЕ уникален (индекс, не constraint)
   observed_catalog_revision TEXT,  -- справочное поле, НЕ входит в идентичность (триаж E2/B2)
   policy_profile_hash TEXT,
-  status TEXT,                 -- validated|promoted (R3 добавит rejected|expired)
+  status TEXT,                 -- validated|promoted (enum НЕ расширяется в R3 — см. §3.1/§3.2а)
   status_reason TEXT NULL,
   acceptance_run_id TEXT NULL, promoted_version INTEGER NULL,
   created_by TEXT, created_at TEXT, expires_at TEXT
@@ -89,6 +90,24 @@ component_candidates(
 ```
 
 Инварианты: строка иммутабельна кроме `status/status_reason/acceptance_run_id/promoted_version`; кандидат не участвует в latest-active resolution, catalog list/search, bundle-export; bundle кандидата — только через draft-роут с owner-check (см. §2). Гигиена: свипер `expires_at` (GC-паттерн `.candidates/`), **строки `status='promoted'` свипер не удаляет** (иначе `ON DELETE SET NULL` молча обнулит provenance-ссылку версии — триаж V14), per-user cap живых кандидатов в `capabilities.limits` (триаж D3).
+
+### 3.2а. Таблица `candidate_decisions` (R3a, миграция)
+
+Ревьюер показал, что расширение CHECK-enum'а `component_candidates.status` до `rejected|expired` в SQLite означает перестройку таблицы (`RENAME → CREATE → INSERT SELECT`) — то, что §8 обещает не делать. Решение: enum не трогаем, отклонение хранится отдельной append-only таблицей.
+
+```text
+candidate_decisions(
+  candidate_id TEXT,
+  decision TEXT CHECK(decision IN ('rejected')),   -- закрытый список, расширяется ADD-VALUE-миграцией отдельной волны
+  reason TEXT,
+  actor TEXT,
+  created_at TEXT
+)
+```
+
+- Append-only: строки не обновляются и не удаляются (кроме каскадной уборки вместе с кандидатом свипером).
+- `rejected` — **вычисляемый** статус: `EXISTS(SELECT 1 FROM candidate_decisions WHERE candidate_id = ?)`. DTO кандидата отдаёт `rejected: boolean` + `decision {reason, actor, createdAt}`.
+- Аддитивная миграция (CREATE TABLE + индекс по `candidate_id`), без перестройки — §8 остаётся честным.
 
 ### 3.3. Таблица `acceptance_runs` (R2, миграция)
 
@@ -145,7 +164,16 @@ acceptance_case_results(
 ```http
 POST /api/components/:id/candidates        { }         -- validate head + durable-строка
 GET  /api/component-candidates/:candidateId            -- глобальное чтение (namespace: не пересекается с /api/catalog/candidates — триаж A3)
+POST /api/component-candidates/:candidateId/reject  { reason }   -- [R3b] отклонение человеком
 ```
+
+**`reject` (R3b, триаж R3-M2).** Без ручки статус `rejected` (§3.1) назначать нечем — «вводится вместе с UI, который его показывает и назначает» было декларацией. Контракт:
+
+- авторизация — `requireResourceOwner` по владельцу компонента либо админ; `share`/`capture`-принципалы — 403 (канон §4.2);
+- `reason` обязателен (непустая строка); пишет строку в `candidate_decisions` (§3.2а);
+- CAS — по **отсутствию** decision-строки: повторный reject уже отклонённого кандидата → `409 candidate_already_rejected`;
+- аудит-событие `candidate.rejected {candidateId, componentId, reason, actor}`;
+- отклонение не мутирует `component_candidates` и не трогает раны — это надгробие для UI и для promote-предиката (§4.3.1).
 
 `POST` выполняет validate head'а (тот же `validateComponentHead`, тот же троттлинг) и материализует строку **и бандл по rev кандидата** (амендмент A10: вариант `ensureDraftCandidate` с явной ревизией — не head; после этого расхождение head'а с кандидатом — не условие корректности кадра, а advisory-метка `headDiverged` в evidence). Бандл **пинуется против `gcCandidates`**: GC получает провайдер пинов (список `sourceHash` нетерминальных ранов из БД — смена сигнатуры `server/components/candidates.ts`) и не вытесняет запиненные; `POST /api/acceptance-runs` → `409 candidate_evicted`, если бандл отсутствует. Повтор при неизменном `{componentId, rev, build_fingerprint}` возвращает ту же строку (`cached: true`). Ошибки validate — коды P8. Списочный `GET` не вводится (триаж A7).
 
@@ -194,7 +222,7 @@ POST /api/components/:id/promote
 
 **Фаза A (async, вне транзакций)** — по канону сегодняшнего publish (`stage → import → activate` с компенсацией `fail()`):
 
-1. Предпроверки: `head_rev === baseRev` (иначе `409 revision_conflict {currentRev}` — единый канонический код, `candidate_stale` не вводим); `sha256(source(baseRev)) === sourceHash`; при переданном `acceptanceRunId` — статус `pass|pass_with_exceptions` и совпадение `policy_profile_hash` (R2); `expectedCatalogRevision` — opt-in строгий CAS каталога.
+1. Предпроверки: `head_rev === baseRev` (иначе `409 revision_conflict {currentRev}` — единый канонический код, `candidate_stale` не вводим); `sha256(source(baseRev)) === sourceHash`; при переданном `acceptanceRunId` — статус `pass|pass_with_exceptions` и совпадение `policy_profile_hash` (R2); **при переданном `candidateId` — предикат «нет строки в `candidate_decisions`», иначе `409 candidate_rejected` (R3b)**; `expectedCatalogRevision` — opt-in строгий CAS каталога.
 2. **Перепрогон каталого-временных проверок publish-пути** (уточнено триажем M2/M3): `reserveHostPrimitiveName`, `assertPublishRoleAvailable` (`canonical_role_conflict|catalog_changed`, с учётом `reuseOverride`), `assertAtomicPolicy` (`422 atomic_policy_violation`), `collectAndValidateComponentAssetRefs` (`422 asset_not_found`), `409 already_published` для уже опубликованного head-rev — **проверка расширяется до «есть строка вне статуса `failed`»** (триаж V1). *Уточнение по факту реализации R1:* схема имеет `UNIQUE (component_id, rev)` (миграция v8), а R1 — без миграций, поэтому re-stage **перезаписывает `failed`-строку in-place с сохранением номера версии** (дырок в нумерации не возникает; `failed`-версию ничто не отдаёт и на неё нет FK-детей — пины ссылаются только на active); вариант «новый номер» из v4 нереализуем без миграции. Reuse-гейт (`component_reuse_required`) на publish-пути **не стоит** — promote его не добавляет. Гарантия promote: отсутствие 422 **компиляционного** класса; atomic/asset/canonical — перепрогоняются и могут отказать.
 3. Сборка артефактов: **promote — вариант `publishComponent` без `typecheck+compile`** (уточнение V10/раунд 2: `repo.stage` уже принимает готовые артефакты — компилирует именно `publishComponent`): артефакты кандидата (`compiledJs/bundleHash/hostAbiVersion` со сверкой `sourceHash`) идут в `stage` напрямую; `importPublished` (ключ `id@rev`) выполняется всегда. При холодном кэше — пересборка head'а существующим `ensureDraftCandidate` под `withValidateSlot` (отдельная «пересборка по произвольному rev» не нужна: promote и так требует `head_rev === baseRev` — триаж V10).
 
@@ -222,7 +250,7 @@ candidate_id = "cand_" + sha256(canonicalJson({ componentId, designSystem, rev, 
 
 - **`catalogRevision` исключён из идентичности**: это глобальный хэш всего каталога (меняется на любой чужой publish) — не свойство входа сборки. Он хранится как `observed_catalog_revision` (справка) и проверяется на promote опциональным `expectedCatalogRevision`; каталого-временные проверки promote перепрогоняет сам (§4.3.2). Это же закрывает DoS-вектор бесплатного размножения строк (триаж D3).
 - **`componentId`/`designSystem`/`rev` — в идентичности**: один `sourceHash` у нескольких компонентов — факт продукта (`candidates.ts:41`, `componentIds` — множество); без этого детерминированный PK коллидирует между компонентами (wedge + cross-owner disclosure).
-- Публикация темы двигает `themeVersion` → кандидаты DS инвалидируются разом; известный эффект (триаж E3), стампида смягчается тем, что acceptance-run'ов ≤1 глобально; `accepted`-кандидаты R3 не инвалидируются автоматически (пометка `stale-theme`).
+- Публикация темы двигает `themeVersion` → кандидаты DS инвалидируются разом; известный эффект (триаж E3), стампида смягчается тем, что acceptance-run'ов ≤1 глобально; кандидаты с pass-раном не инвалидируются автоматически (пометка `stale-theme`). *(Терминология: слово `accepted` зарезервировано за Library-признаком §7 и здесь не употребляется.)*
 - Асимметрия воспроизводимости (триаж S7): компонентная съёмка не пинует версию темы (берёт последнюю) — evidence пишет фактический `dsMetaVersion` из результата джобы.
 - Канонизация — стабильная сортировка ключей (уже используется для `bundleHash`/`sourceHash`).
 
@@ -240,22 +268,67 @@ case_fingerprint = sha256(canonicalJson({
 }))
 ```
 
-## 6. Provenance/evidence отдельно от runtime-версий (R3)
+## 6. Provenance отдельно от runtime-версий (R3a)
 
 Проблема (improvements §3.5): ButtonGroup v2↔v3, Timer v2↔v3 — одинаковый bundle hash, версии ради правки provenance.
 
 Решение — append-only таблица, резолв при чтении:
 
 ```text
-component_evidence(component_id, rev, seq, figma_json, author, created_at)
+component_provenance(component_id, rev, seq, figma_json, author, created_at)
   PK (component_id, rev, seq)
 ```
 
-- `PUT /api/components/:id/provenance` `{ rev?, figma }` — добавляет `seq`-запись к указанной (по умолчанию head) ревизии; не создаёт ни ревизию, ни версию. Byte-identical `figma` → `unchanged: true` (продолжение P5.1); `figma: null` — явная очистка; отсутствие поля — inherit.
-- **Полный перечень read-путей, переходящих на резолвер «последний seq, иначе `figma_json` ревизии»** (триаж M10 — их пять плюс два скрытых): `repo.meta`/`figmaJsonForRev`, `repo.source`, `repo.version` (JOIN), прототипные DTO (`repos/prototypes.ts:327,371-376`), **`validateStoredFigma`** (сейчас читает сырую колонку — обязан валидировать действующий provenance, включая существование `referenceScreenshots`-ассетов), **`repo.restore`** (копирует `figma_json` — должен переносить резолвнутый provenance, иначе история теряется).
-- Существующие данные работают без backfill; metadata-only версии в проде остаются как есть.
-- **Экспорт/импорт**: сегодня бандл компонентов figma не содержит вовсе (`exporter.ts:105-142`) — «экспорт истории seq» это net-new функциональность формата (закрытый union formatVersion 1|2, старый сервер отвергнет v3) → вынесено в R4+ с отдельным решением по формату (триаж A5-риски/M10).
-- Компонентный PUT с `figma` продолжает работать (совместимость); после посадки — драйвер/скилл переводятся на `PUT …/provenance`.
+Имя таблицы — `component_provenance`, а не `component_evidence` (триаж R3-m1): слово *evidence* в кодовой базе уже занято acceptance-CAS (`.acceptance/cas`, `acceptance_case_results`, `evidence_manifest_hash`), омоним в схеме читается как часть acceptance-слоя.
+
+**Ручка.** `PUT /api/components/:id/provenance` `{ rev?, figma }` — добавляет `seq`-запись к указанной (по умолчанию head) ревизии; не создаёт ни ревизию, ни версию.
+
+- `figma: null` — явная очистка: пишется seq-строка с `figma_json = NULL` (**tombstone**), а не удаление строк; иначе очистку невозможно отличить от «записей нет» и резолвер провалился бы обратно на колонку ревизии.
+- Отсутствие поля `figma` — inherit (ничего не пишем).
+- `unchanged: true` — продолжение семантики P5.1, но сравнение идёт **с резолвнутым** значением в канонической форме (см. ниже), а не с сырой колонкой.
+- Авторизация (триаж R3-M3): `requireResourceOwner` по владельцу компонента либо админ; `share`/`capture`-принципалы — **403 всегда**. Аудит-событие `component.provenance.updated {componentId, rev, seq, actor}`.
+
+**Резолвер (cross-revision, триаж R3-B1).** Per-revision-резолв ломает наследование: сегодня `save` копирует `figma_json` из предыдущей ревизии, и агент, отправив provenance на rev N, после обычного source-PUT (rev N+1) потерял бы её. Write-путь `save` при этом **ничего не копирует из `component_provenance`** (иначе append-only-история дублируется в снапшоты и «последняя правда» раздваивается). Резолв:
+
+```text
+resolveProvenance(componentId, rev):
+  row = SELECT figma_json FROM component_provenance
+        WHERE component_id = ? AND rev <= ?
+        ORDER BY rev DESC, seq DESC LIMIT 1
+  if row exists:  return parseFigmaStored(row.figma_json)   // tombstone (NULL) → null, НЕ падение на колонку
+  else:           return parseFigmaStored(revision.figma_json)
+```
+
+То есть: последняя по `(rev, seq)` запись среди ревизий `rev' ≤ rev` того же компонента; если записей нет — `figma_json` самой ревизии `rev` (существующие данные работают **без backfill**). Обязательный тест: «PUT provenance на rev N → source-PUT (создаёт rev N+1) → provenance головы резолвится в seq-запись rev N».
+
+**Полный перечень путей, переходящих на резолвер** (переписан по фактическим именам, триаж R3-M1 — номера строк намеренно не фиксируем):
+
+| Путь | Файл | Что меняется |
+|---|---|---|
+| `repo.meta` (через `figmaJsonForRev`) | `server/repos/components.ts` | `parseFigmaStored(figmaJsonForRev(...))` → резолвер |
+| `repo.source` | `server/repos/components.ts` | то же для произвольного `rev` |
+| `repo.restore` / `figmaJsonForRev` | `server/repos/components.ts` | restore переносит **резолвнутый** provenance в новую ревизию, иначе история теряется |
+| `repo.version` (JOIN на `component_revisions`) | `server/repos/components.ts` | DTO версии отдаёт резолвнутый provenance по `p.rev` |
+| `validateStoredFigma` | `server/components/validate.ts` | меняется **только источник данных** (резолвнутый provenance вместо сырой колонки); проверка существования `referenceScreenshots`-ассетов там уже реализована — требование «добавить проверку» из v5 снято как ложное |
+| Чип Figma в Library (`figmaByComponent`) | `server/routes/libraryCatalog.ts` | резолвер; **текущая семантика группировки сохраняется** |
+| Write-путь: no-op-детекция figma-PUT | `server/routes/components.ts` | см. ниже |
+| `currentDataFingerprint` | `server/migrationRunner.ts` | добавить срез `component_provenance` в fingerprint (дёшево, детерминированный ORDER BY) |
+
+**No-op-детекция (триаж R3-B2).** Сегодняшний byte-identical-чек компонентного PUT сравнивает присланный figma с сырой колонкой ревизии — после посадки резолвера он сравнивал бы с устаревшим снапшотом и возвращал `unchanged: true` на изменившийся provenance (либо новую ревизию на неизменившийся). Перевод: сравнение идёт с **резолвнутым** provenance в **канонической форме** — `JSON.stringify(figmaSchema.parse(x))` с обеих сторон (снимает и byte-хрупкость к порядку ключей). Тест: «PUT provenance → идентичный component-PUT → `{unchanged: true}`».
+
+**Регресс-гард.** В `npm run verify` добавляется grep-гейт «новый читатель `figma_json` компонентных ревизий обязан ходить через резолвер» (прецедент такого гейта — `catalogRevision.ts`): иначе следующий читатель тихо вернётся к сырой колонке.
+
+**Provenance вне идентичности (триаж R3-m3).** seq-запись **сознательно не инвалидирует** `sourceHash`, `build_fingerprint`, `ValidateReceipt` и `acceptance_case_results`: provenance — метаданные происхождения, не вход сборки и не предмет рендера. `validateStoredFigma` и так вне кэша (db-зависимые проверки гоняются на каждый вызов, §2), поэтому битую provenance-запись validate поймает без bump'а хэшей. `publish` provenance не проверяет — асимметрия promote/publish (§7) сохраняется и после R3 осознанно.
+
+**Мутабельность provenance опубликованной версии.** `PUT …/provenance` с `rev` опубликованной версии меняет то, что отдаёт `GET /versions/:v`. Это заявленная семантика: **provenance опубликованной версии сознательно мутабельна; иммутабельна только байтовая часть версии — `compiled_js`, `bundle_hash`, `definition_meta`.** Ровно ради этого RFC и затевался (§3.5 improvements: metadata-only версии ради правки provenance). Тест на `GET /api/components/:id/versions/:v` фиксирует оба свойства сразу.
+
+**AssetUsage.** В отчёт использования ассетов (`server/repos/assets.ts`) добавляется секция `provenance` — иначе ассеты, на которые ссылается только seq-запись, выглядят неиспользуемыми и теряют RESTRICT-защиту.
+
+**Вне скоупа R3.**
+
+- **Прототипы исключены** (триаж R3-B4): provenance прототипов остаётся **per-revision**, как сегодня. У прототипов свои write-пути и своя семантика ревизий; тянуть их в ту же таблицу — отдельная работа. Кандидат в **R4+** как `prototype_evidence` (имя и модель — отдельным решением).
+- **Экспорт/импорт**: сегодня бандл компонентов figma не содержит вовсе (`exporter.ts:105-142`) — «экспорт истории seq» это net-new функциональность формата (закрытый union formatVersion 1|2, старый сервер отвергнет v3) → R4+ с отдельным решением по формату (триаж A5-риски/M10).
+- Компонентный PUT с `figma` продолжает работать (совместимость). Драйвер/скилл перестают слать `--figma` в верб `component` **только после посадки резолвера** (R3a), и переходят на `driver.mjs provenance` / `PUT …/provenance`.
 
 ## 7. Совместимость с текущим `publish` и режимы строгости
 
@@ -264,13 +337,17 @@ component_evidence(component_id, rev, seq, figma_json, author, created_at)
   - `advisory` (R2): publish работает, но **запускает acceptance-run пост-фактум**. Механика (триажи V4/V5): publish в advisory-DS материализует кандидата **по ревизии опубликованной версии** (внутренний путь: `getOrComputeCandidate` уже принимает `rev`), run привязывается к нему обычным FK; gate'ы `render`/`geometry`/`determinism` снимают **published-поверхностью** по `version` (существующий `enqueueComponent(id, version)`, examples из version-DTO) — не draft-preview, поэтому параллельный `PUT` автора не подменяет предмет вердикта. Вердикт и `would_block: true|false` — в аудит, по прецеденту shadow-фазы reuse-гейта (триаж C1).
   - `required` — **вынесен в R4+**: включается отдельным решением по накопленной advisory-статистике; политика exceptions в required — запрещены флагом. При гашении kill-switch'ем acceptance `required` автоматически деградирует до `advisory` — kill-switch не должен делать DS неопубликуемой (триаж D2).
 - Расхождение путей publish/promote — временное и наблюдаемое (аудит `publish.legacy` в advisory-DS); условие вывода legacy — решение после метрик advisory (триаж C2-скоуп). **Третий путь публикации — bundle-import** (`importer.ts` зовёт `publishComponent`): не проходит ни promote, ни advisory; помечается в аудите (`publish.import`) и исключается из KPI-знаменателя §9 (триаж V9).
-- Две правды о верификации (триаж A4-скоуп): Library-чип `Verified` строится на visual-runs active-версии — компонент с `pass` acceptance-run'ом покажет `Visual pending`; расхождение фиксируется здесь и снимается в R3 (маппинг Library учитывает acceptance-вердикт) либо в VDC 2.0.
-- CLI/драйвер: R1 — верб `promote` (баланс триажа D1: волна закрывается только с обновлённым драйвером/скиллом, канон P7); R2 — верб `accept` (candidates + run + poll + evidence). Драйвер проверяет булевы `capabilities.features.acceptance*` и деградирует читаемо.
+- **Две правды о верификации (переработано триажем R3-M4).** Формулировка v5 «маппинг Library учитывает acceptance-вердикт» означала бы переопределение существующего visual-`verified` — а он подпирает визуальные baseline'ы и их регресс-семантику. Решение: **смысл существующего visual-`verified` не меняется**; вводится **новый независимый признак `accepted`** — «у активной версии компонента непустой `acceptance_run_id`». Аддитивно, в двух местах сразу:
+  - сервер — `server/routes/libraryCatalog.ts` (`verifiedKeys` / вычисление `status`): рядом с visual-признаком появляется `accepted`;
+  - клиентский легаси — `src/library/libraryModel.ts` (`componentLibraryStatus`): тот же признак, чтобы клиентская и серверная проекции не разъезжались.
+
+  В объём входят фильтры, тиры, бейдж и 4 теста, плюс перф-гейт `npm run perf:library` (признак читается на списочной ручке). **Инвариант: `accepted` НЕ входит в проекцию `catalogRevision`** — иначе любой acceptance-run глобально сдвигал бы хэш каталога и инвалидировал чужие кандидаты (§5). Терминологической коллизии с publish-статусом `rejected` нет: candidate-`rejected` (§3.2а) в Library-чипы не выносится.
+- CLI/драйвер: R1 — верб `promote` (баланс триажа D1: волна закрывается только с обновлённым драйвером/скиллом, канон P7); R2 — верб `accept` (candidates + run + poll + evidence); R3 — верб `provenance` (§11-R3a) и колонка acceptance-evidence в `driver.mjs audit --versions` (§12.6). Драйвер проверяет булевы `capabilities.features.acceptance*` и деградирует читаемо.
 - Immutable pins опубликованных прототипов не затрагиваются нигде.
 
 ## 8. Миграции, откат, ресурсы
 
-- Миграции по волнам (пересобрано триажами V3/V15, амендментировано планом): **R1 — миграций нет** (посажено так); R2 = **v25** (W1a плана): `component_candidates`, `acceptance_runs` (+ поля A1), `acceptance_cases`, `acceptance_case_results`, TEXT-колонки A9 на `component_publishes` (`DEFAULT NULL`, **без FK**), `design_systems.acceptance TEXT NOT NULL DEFAULT 'off'` (DEFAULT обязателен — иначе старый INSERT из `routes/designSystems.ts` падает при откате образа); **v26** (W2 плана): `component_case_sets`; R3 — `component_evidence` (+`rejected|expired`). Все — forward-only, аддитивные, плоский ADD COLUMN без перестройки; `SELECT *` по `component_publishes`/`design_systems` в продовом коде нет (проверено ревью) — откат образа безопасен. Перед v25 — бэкап prod-volume.
+- Миграции по волнам (пересобрано триажами V3/V15, амендментировано планом): **R1 — миграций нет** (посажено так); R2 = **v25** (W1a плана): `component_candidates`, `acceptance_runs` (+ поля A1), `acceptance_cases`, `acceptance_case_results`, TEXT-колонки A9 на `component_publishes` (`DEFAULT NULL`, **без FK**), `design_systems.acceptance TEXT NOT NULL DEFAULT 'off'` (DEFAULT обязателен — иначе старый INSERT из `routes/designSystems.ts` падает при откате образа); **v26** (W2 плана): `component_case_sets`; **R3a — `component_provenance` + `candidate_decisions` + срез `component_provenance` в `currentDataFingerprint`** (обе — CREATE TABLE с индексами; **enum `component_candidates.status` не расширяется, перестройки таблицы нет** — `rejected` вычисляется по `candidate_decisions`, `expired` из RFC убран, §3.1/§3.2а). Все — forward-only, аддитивные, плоский ADD COLUMN / CREATE TABLE без перестройки; `SELECT *` по `component_publishes`/`design_systems` в продовом коде нет (проверено ревью) — откат образа безопасен. Перед v25 — бэкап prod-volume.
 - **Обязательство шаблона rebuild** (триаж A2-риски): любой будущий rebuild `component_publishes` (прецедент v14: `RENAME → CREATE → INSERT SELECT` с явным перечнем) обязан включить новые колонки и FK-детей — записать в комментарий миграции по прецеденту `migrations.ts:163`.
 - Bundle-export/import не видят новых таблиц (экспортёр читает только `MAX(version)`); provenance-история в бандл не входит до R4+ (§6).
 - Env-kill-switch (амендменты A7/D9): **сегодня `EASYUI_ACCEPTANCE_DISABLED` физически не проброшен в прод-compose** — до R2 обязателен микро-релиз W0 (проброс env-ключей в `docker-compose.yml`). Matrix-стек (candidates/runs/case-sets) — **opt-in `EASYUI_ACCEPTANCE_MATRIX=1`, дефолт OFF** до runtime-приёмки; `EASYUI_ACCEPTANCE_DISABLED=1` гасит promote, активные раны терминализует стартовая уборка на следующем старте (env читается один раз). Гашение не создаёт аварий (§7: required→advisory).
@@ -299,8 +376,20 @@ component_evidence(component_id, rev, seq, figma_json, author, created_at)
 
 - **R1 — promote-сага, без durable-таблиц и без миграций**: `POST /promote {baseRev, sourceHash, …}` (receipt-based), promote-вариант `publishComponent` без typecheck+compile (артефакты кандидата в `stage`, фактический `host_abi_version`), расширенный `already_published`-чек (recovery, V1), фаза B с `pinAssets`+`recordValidation`+auto-supersede в короткой транзакции, фикс auth draft-bundle-роута (M5/V11), readiness «no active version», CLI `promote` + обновление скилла, `driver.mjs audit --versions`, аудит-события (`component.promoted`, `publish.import` — V9). Features: только `acceptancePromote` (V15) + kill-switch. Ценность сразу: один вызов вместо publish+ручных transitions, churn-метрика измерима.
 - **R2 — durable-слой и матричные раны. Исполняется волнами плана `2026-08-03-family-acceptance-and-composition-v3.md`** (детальные объёмы, файлы и done-критерии — там; RFC остаётся источником модели данных/API): **W0** — проброс kill-switch'ей в compose (без него аварийного выключателя на проде нет); **W1a** — миграция v25, per-case слой, оркестратор + watchdog, гейты contract/defaults/render/determinism/audit (geometry — advisory), байтовый канал в CAS, пин кандидата, свёртка D10, authz-контракт; **W1b** — reuse по `case_fingerprint`, CAS GC, дедуп props, авто-retry, progress/ETA, замеры wall-clock/RSS (гейт O1); **W1c** — promote-интеграция (A9-ссылки, `409 acceptance_run_in_flight`), validate-слоты без занятия per-user, CLI `accept`, advisory-режим с would-block (V4/V5). Дальше по плану: W2 case-sets (v26) → W3 geometry 2.0 → W4 readiness → W5a/W5b visual+таксономия → W6 impact → W7 клиентский кэш.
-- **R3 — provenance и UI**: `component_evidence` + `PUT …/provenance` (полный перечень read-путей §6) + UI-блок Acceptance + Library-маппинг Verified + статусы `rejected|expired`.
-- **R4+** (отдельные RFC/решения): `required`-режим (по advisory-статистике), regression-overlay (candidate-пин в `PrototypeBootstrapTarget`), VDC 2.0 → gate `visual`, interaction runner → gate `interactions`, provenance в bundle-формате v3, theme impact → расширение `regression`, reuse-decision lease.
+- **R3 — provenance и UI. Разложена триажем R3-M5 на три волны с явным file ownership** (в v5 это был один пункт-абзац на три несвязанных подсистемы):
+
+  - **R3a — provenance-слой.** Миграция (`component_provenance`, `candidate_decisions`, срез provenance в `currentDataFingerprint`), cross-revision резолвер (§6), `PUT /api/components/:id/provenance` с authz+аудитом, перевод no-op-детекции на резолвнутое каноническое сравнение, `validateStoredFigma` на резолвер (только источник данных), секция `provenance` в AssetUsage, contracts/openapi/sdk, верб `driver.mjs provenance <componentId> <figma.json> [--rev N]`.
+    *Файлы:* `server/migrations.ts`, `server/repos/components.ts`, `server/components/validate.ts`, `server/routes/components.ts`, `server/routes/libraryCatalog.ts` (только `figmaByComponent`), `server/figma.ts`, `server/repos/assets.ts`, `server/migrationRunner.ts`, contracts/openapi/sdk, `driver.mjs` + `.claude/skills/author/SKILL.md` (+ зеркала через `sync-share-skills`).
+    *Done дополнительно:* grep-гейт резолвера в `npm run verify`; тесты наследования и no-op из §6; e2e-сценарий «provenance-PUT не создаёт ни новой ревизии, ни новой версии»; драйвер/скилл перестают слать `--figma` в верб `component` **только в этой волне** (не раньше).
+
+  - **R3b — reject.** `POST /api/component-candidates/:candidateId/reject` (§4.1), предикат `409 candidate_rejected` в promote (§4.3.1), аудит `candidate.rejected`.
+    *Файлы:* `server/routes/acceptance.ts` (candidates-роуты), `server/acceptance/repo.ts`, `server/components/promote.ts`, contracts.
+
+  - **R3c — Library `accepted` + UI.** Признак `accepted` на сервере и в клиентском легаси (§7), фильтры, тиры, бейдж, 4 теста, перф-гейт `npm run perf:library`; UI-блок Acceptance на странице компонента.
+    *Файлы:* `server/routes/libraryCatalog.ts`, `src/library/**` (в т.ч. `libraryModel.ts`, `libraryTiers.ts`, `statusBadge.ts`, `componentPage/**`).
+
+  **Порядок:** R3a → R3b **серийно** (общие `server/migrations.ts` и contracts); R3c — после R3b (contracts); внутри R3c UI-часть параллелится с серверной. В done каждой волны: канон P7 (драйвер/скилл), `npm run verify`, e2e (`e2e/library-component-integration.shared.ts`; для R3c дополнительно `e2e/component-page.shared.ts`).
+- **R4+** (отдельные RFC/решения): `required`-режим (по advisory-статистике), regression-overlay (candidate-пин в `PrototypeBootstrapTarget`), VDC 2.0 → gate `visual`, interaction runner → gate `interactions`, provenance в bundle-формате v3, **provenance прототипов (`prototype_evidence`) — выведена из R3 триажем R3-B4**, **acceptance-бэкфилл legacy-версий** (§12.6), theme impact → расширение `regression`, reuse-decision lease.
 
 Каждая волна — свой Stage 2/3, обновлённый драйвер/скилл в done-критериях (канон P7), строка «миграции/kill-switch» в PR.
 
@@ -311,7 +400,7 @@ component_evidence(component_id, rev, seq, figma_json, author, created_at)
 3. ~~Evidence-хранилище~~ — закрыт триажем B4: собственный каталог `.acceptance/`, asset-store не используется (GC ассетов в продукте нет).
 4. ~~`passed-with-exceptions` без VDC 2.0~~ — закрыт: `allowExceptions: false` в `default-v1`; в будущем `required` exceptions запрещены флагом политики.
 5. ~~Судьба `staging|failed` в promote~~ — закрыт триажем m5/S6: существующий канон `stage → import → activate` + `failStagingPublishes` как recovery.
-6. Run по published-версии для **новых** publish — решён в R2 (§7: advisory материализует кандидата published-ревизии и снимает published-поверхностью — триажи V4/V5/V6). Открытым остаётся только **бэкфилл исторических** версий (пост-фактум evidence для legacy-каталога) — к R3.
+6. ~~Бэкфилл~~ — **закрыт триажем R3-M6**. Разложен на три ответа: (а) **provenance-бэкфилл не нужен** — резолвер §6 падает на `figma_json` ревизии, существующие данные работают без миграции данных (пункт снят); (б) **acceptance-бэкфилл legacy-версий** (пост-фактум evidence для исторического каталога) — **R4+**: это прогон ранов по опубликованным версиям, объём отдельной волны, а не пункт R3; (в) в R3 — только **read-only отчёт**: `driver.mjs audit --versions` получает колонку «есть/нет acceptance evidence» (версии с `acceptance_run_id IS NULL`), чтобы масштаб (б) был измерим до решения.
 
 ## 13. Триаж Stage 2, раунд 1 (2026-08-02)
 
@@ -375,4 +464,40 @@ R1 посажен и в проде (9e87960). R2 расширен матричн
 | — | `geometry` в W1a — advisory-only (v1-union-rect и есть дефект §19.2); боевой v2 — W3 (`probe:"paint"`, одна сессия) | §4.2 (таблица гейтов) |
 | — | Оркестратор: резервирование 2 слотов очереди, RESULT_TTL, системный principal без per-user слота, лимит тяжёлых подпроцессов (`mem_limit: 1g`), maintenance-lock | §4.2 |
 
-Не изменены (план подтвердил): component-scoped identity кандидата, `catalogRevision` вне идентичности, оркестратор вне помпы ≤1 run, стартовая уборка, `≤1` нетерминальный run + cancel только queued, `409 acceptance_run_in_flight`, gates `regression`/`interactions` = `not-implemented`, advisory-механика V4/V5, R3-скоуп (provenance/UI).
+Не изменены (план подтвердил): component-scoped identity кандидата, `catalogRevision` вне идентичности, оркестратор вне помпы ≤1 run, стартовая уборка, `≤1` нетерминальный run + cancel только queued, `409 acceptance_run_in_flight`, gates `regression`/`interactions` = `not-implemented`, advisory-механика V4/V5, R3-скоуп (provenance/UI — уточнён и разложен в v6, §15).
+
+## 15. Триаж Stage 2 волны R3 (2026-08-03, v6)
+
+Ревьюеры: 2 адверсариальных read-only субагента против **посаженного кода W0–W9** (миграции v25/v26) — линзы «корректность против кода» и «скоуп/декомпозиция/миграции». Предмет ревью: §6, §11-R3, §12.6 в редакции v5. **Все находки приняты**; решения внесены в текст выше.
+
+### Блокеры
+
+| # | Находка | Решение (внесено) |
+|---|---|---|
+| B1 | Per-revision резолвер ломает наследование provenance: `save` копирует `figma_json` из предыдущей ревизии, поэтому после обычного source-PUT provenance, записанная в seq-таблицу на rev N, исчезала бы с головы | §6: резолвер расширен до cross-revision — «последний seq среди ревизий `rev' ≤ rev` того же компонента, иначе `figma_json` ревизии `rev`». Write-путь `save` **ничего не копирует** из `component_provenance`. Драйвер/скилл перестают слать `--figma` в верб `component` только после посадки резолвера. Обязательный тест наследования (PUT на rev N → source-PUT → голова резолвится в seq-запись rev N) |
+| B2 | No-op-детекция figma-PUT сравнивает с сырой колонкой ревизии — после посадки резолвера возвращала бы `unchanged` на изменившуюся provenance (и наоборот) | §6: сравнение переведено на **резолвнутый** provenance в канонической форме (`JSON.stringify(figmaSchema.parse(...))` с обеих сторон); write-путь (`server/routes/components.ts`) включён в перечень путей §6; тест «PUT provenance → идентичный component-PUT → `{unchanged: true}`» |
+| B3 | Статусы `rejected\|expired` требуют расширения CHECK-enum'а в SQLite = перестройка `component_candidates`, что противоречит обещанию §8 «без перестройки» | §3.1/§3.2а/§8: enum **не расширяется**. `rejected` — вычисляемый статус поверх append-only `candidate_decisions(candidate_id, decision CHECK IN ('rejected'), reason, actor, created_at)`. **`expired` из RFC убран**: посаженный контракт — свипер удаляет просроченных; «истёк» показывается вычислимо по `expires_at` до удаления |
+| B4 | Прототипы затянуты в R3 одной строкой (`repos/prototypes.ts:327,371-376`), хотя у них свои write-пути и своя семантика ревизий — скрытая вторая подсистема внутри волны | §6: прототипы **исключены из R3**, provenance прототипов остаётся per-revision; кандидат в R4+ (`prototype_evidence` — отдельным решением). Ссылки на `repos/prototypes.ts` из перечня путей убраны |
+
+### Мажоры
+
+| # | Находка | Решение (внесено) |
+|---|---|---|
+| M1 | Перечень read-путей §6 неполон и привязан к номерам строк; в нём есть ложное требование («добавить проверку ассетов в `validateStoredFigma`» — она уже реализована), и не хватает читателей | §6: перечень переписан таблицей по **именам методов** — `repo.meta`, `repo.source`, `repo.restore`/`figmaJsonForRev`, `repo.version` (JOIN), `validateStoredFigma` (только источник данных), `figmaByComponent` (`routes/libraryCatalog.ts`, чип Figma — семантика группировки сохраняется), write-путь no-op (`routes/components.ts`), `currentDataFingerprint` (`server/migrationRunner.ts` — добавить срез `component_provenance`). Плюс grep-гейт в `npm run verify`: новый читатель `figma_json` обязан ходить через резолвер (прецедент `catalogRevision.ts`) |
+| M2 | Статус `rejected` назначать нечем — ручки нет, «вводится вместе с UI» | §4.1: `POST /api/component-candidates/:candidateId/reject {reason}` — owner/admin, CAS по отсутствию decision (`409 candidate_already_rejected`), аудит `candidate.rejected`; §4.3.1: promote получает предикат → `409 candidate_rejected` |
+| M3 | Authz/аудит provenance-PUT не заданы; не сказано, что ручка меняет DTO **опубликованной** версии | §6: `requireResourceOwner` либо админ, `share`/`capture` — 403; аудит `component.provenance.updated {rev, seq, actor}`; явный тезис «provenance опубликованной версии сознательно мутабельна; иммутабельна только байтовая часть версии (`compiled_js`/`bundle_hash`/`definition_meta`)» + тест на `GET /versions/:v` |
+| M4 | «Library-маппинг Verified учитывает acceptance» переопределяет существующий visual-`verified`, под которым висят baseline'ы; и это две подсистемы (сервер + клиентский легаси), а названа одна | §7: смысл visual-`verified` **не меняется**; вводится **новый независимый** признак `accepted` (непустой `acceptance_run_id` активной версии) — аддитивно в `server/routes/libraryCatalog.ts` (`verifiedKeys`/`status`) **и** `src/library/libraryModel.ts` (`componentLibraryStatus`); фильтры/тиры/бейдж/4 теста + перф-гейт `npm run perf:library` — в done. Инвариант: `accepted` не входит в проекцию `catalogRevision`. Коллизии с publish-статусом `rejected` нет — candidate-`rejected` в Library-чипы не выносится |
+| M5 | R3 — один пункт на три несвязанных подсистемы без file ownership; параллелить нельзя, оценить нельзя | §11: декомпозиция на **R3a** (миграция + резолвер + PUT + no-op + validateStoredFigma + AssetUsage + contracts + верб `provenance`), **R3b** (reject + предикат promote + аудит), **R3c** (Library `accepted` + UI-блок Acceptance) с перечнем файлов; R3a → R3b серийно (`migrations.ts`, contracts), R3c после R3b (contracts), внутри R3c UI параллелится; в done каждой — канон P7, e2e, `npm run verify` |
+| M6 | §12.6 «бэкфилл — к R3» смешивает три разные работы и не закрыт | §12.6: provenance-бэкфилл **не нужен** (резолвер падает на колонку ревизии); acceptance-бэкфилл legacy-версий — **R4+**; в R3 — только read-only отчёт: колонка «есть/нет acceptance evidence» в `driver.mjs audit --versions` |
+
+### Миноры
+
+| # | Находка | Решение (внесено) |
+|---|---|---|
+| m1 | Имя `component_evidence` конфликтует с acceptance-CAS, где *evidence* уже занято | §6/§8/§11: таблица переименована в **`component_provenance`**, по всему тексту RFC |
+| m2 | Псевдокод резолвера отсутствовал; неясны tombstone и предмет сравнения `unchanged` | §6: явный псевдокод (`WHERE component_id=? AND rev<=? ORDER BY rev DESC, seq DESC LIMIT 1`; строка есть → `parseFigmaStored(row.figma_json)`, tombstone NULL возвращает `null` и **не** падает обратно на колонку; строки нет → `parseFigmaStored(revision.figma_json)`). Очистка `figma: null` — seq-строка с `figma_json = NULL`. `unchanged` сравнивается с резолвнутым значением в канонической форме |
+| m3 | Не сказано, инвалидирует ли seq-запись хэши и кэши | §6, абзац «Provenance вне идентичности»: seq-запись **сознательно не** инвалидирует `sourceHash`/`build_fingerprint`/receipt/`acceptance_case_results`; `validateStoredFigma` и так вне кэша; `publish` provenance не проверяет — асимметрия promote/publish сохраняется и после R3 (записано явно) |
+| m4 | Ассеты, на которые ссылается только seq-запись, выглядят неиспользуемыми | §6: секция `provenance` в AssetUsage (`server/repos/assets.ts`), объём R3a |
+| m5 | В §11-R3 не было строк про драйвер, скилл и e2e | §11-R3a: верб `driver.mjs provenance <componentId> <figma.json> [--rev N]`, обновление `.claude/skills/author/SKILL.md` + зеркала (`sync-share-skills`), e2e-сценарий «provenance-PUT без новой версии/ревизии» |
+
+Отклонённых находок нет.
