@@ -39,6 +39,7 @@ data/
 # local prod data snapshots
 .backups/
 .w0-data/
+.measure-data/
 .w6-data/
 work/
 

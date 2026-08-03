@@ -67,6 +67,11 @@
           "content": {
             "application/json": {
               "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "type": "string"
+                  }
+                },
                 "additionalProperties": false,
                 "properties": {
                   "candidateId": {
@@ -108,11 +113,33 @@
                     "type": "string"
                   },
                   "refresh": {
-                    "enum": [
-                      "none",
-                      "all"
-                    ],
-                    "type": "string"
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "none",
+                          "failed",
+                          "all"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "caseIds": {
+                            "items": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "maxItems": 64,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "caseIds"
+                        ],
+                        "type": "object"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -307,7 +334,7 @@
                 }
               }
             },
-            "description": "empty_case_set | case_set_too_large | duplicate_case_id | unknown_policy_profile | unsupported_option (cases.concurrency / manifestAssetId / caseSetId / partial refresh are not supported in this phase)"
+            "description": "empty_case_set | case_set_too_large | duplicate_case_id | unknown_policy_profile | unknown_case_id (refresh.caseIds names a case that is not part of this run's case set) | unsupported_option (cases.concurrency / manifestAssetId / caseSetId are not supported in this phase)"
           },
           "503": {
             "content": {
@@ -320,7 +347,7 @@
             "description": "maintenance_in_progress (a catalog migration holds the maintenance lock)"
           }
         },
-        "summary": "Queue a matrix acceptance run over the candidate's cases (wave W1a source: the candidate's named examples). The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh: \"all\"` recaptures instead of reusing cached case results. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "summary": "Queue a matrix acceptance run over the candidate's cases (wave W1a source: the candidate's named examples). The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh` controls reuse: `\"none\"` (default) reuses every cached case result, `\"failed\"` recaptures only the cases whose previous result for the same fingerprint was fail/indeterminate, `\"all\"` recaptures everything, and `{caseIds:[…]}` recaptures the listed cases (unknown id → 422 unknown_case_id; a listed alias forces its target). The forcing reason is recorded per case in `reuseReason` (`refresh:<mode>`) and in the evidence manifest. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
         "x-easyui-validated": false
       }
     },

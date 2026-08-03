@@ -107,6 +107,8 @@ export interface EvidenceCaseEntry {
   verdict: string | null;
   status: string;
   reused: boolean;
+  /** Почему случай снят заново вопреки кэшу (`refresh:all|failed|cases`), если это было форсом. */
+  refreshReason?: string;
   aliasOfCaseId: string | null;
   artifacts: EvidenceEntry[];
 }

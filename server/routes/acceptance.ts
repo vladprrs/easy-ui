@@ -38,11 +38,11 @@ import { ApiError, json, noStore, readJson } from "../http";
 import { maintenanceLockHeld } from "../maintenance";
 import { ComponentRepo } from "../repos/components";
 import { zipResponse } from "./bundles";
-import type { AcceptanceOrchestrator } from "../acceptance/orchestrator";
+import type { AcceptanceOrchestrator, RefreshSpec } from "../acceptance/orchestrator";
 import type { AcceptanceCaseRow, AcceptanceRunRow, CandidateRow } from "../acceptance/repo";
 import { isCandidateId } from "../acceptance/ids";
 import {
-  ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, acceptancePolicy, evidenceMaxBytes, policyProfileHash,
+  ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, acceptanceMaxCasesPerRun, acceptancePolicy, evidenceMaxBytes, policyProfileHash,
 } from "../acceptance/policies";
 import { readArtifact, readRunManifest, sanitizeEvidenceName, sha256Sums, type RunManifest } from "../acceptance/evidence";
 
@@ -58,6 +58,30 @@ const parseJson = (raw: string | null): unknown => {
   if (raw === null) return null;
   try { return JSON.parse(raw); } catch { return null; }
 };
+
+/**
+ * `refresh` запроса → `RefreshSpec` оркестратора (план §5 W1b). Здесь только форма: принадлежность
+ * `caseIds` набору случаев знает `startRun` (набор строится там же), он и отдаёт `422 unknown_case_id`.
+ */
+function parseRefresh(value: unknown): RefreshSpec {
+  if (value === undefined) return "none";
+  if (value === "none" || value === "failed" || value === "all") return value;
+  if (isObject(value) && Array.isArray(value.caseIds)) {
+    for (const key of Object.keys(value)) {
+      if (key !== "caseIds") throw new ApiError(400, "invalid_request", `refresh has an unknown field: ${key}`);
+    }
+    const caseIds = value.caseIds;
+    if (caseIds.length === 0) throw new ApiError(400, "invalid_request", "refresh.caseIds must not be empty");
+    if (caseIds.length > acceptanceMaxCasesPerRun) {
+      throw new ApiError(400, "invalid_request", `refresh.caseIds exceeds the per-run case limit of ${acceptanceMaxCasesPerRun}`);
+    }
+    if (!caseIds.every((item) => typeof item === "string" && item.length > 0)) {
+      throw new ApiError(400, "invalid_request", "refresh.caseIds must be an array of case ids");
+    }
+    return { caseIds: caseIds as string[] };
+  }
+  throw new ApiError(400, "invalid_request", 'refresh must be "none", "failed", "all" or {caseIds: string[]}');
+}
 
 /** Публичное представление кандидата: durable-идентичность без внутренних полей строки. */
 function candidateView(row: CandidateRow): Record<string, unknown> {
@@ -233,14 +257,9 @@ async function startRun(request: Request, db: Database, principal: Principal, or
     throw new ApiError(400, "invalid_request", "idempotencyKey must be a non-empty string of at most 200 characters");
   }
 
-  // `refresh` фазы 1 — только `none|all`: частичная пересъёмка (`failed`, `{caseIds}`) приезжает
-  // вместе с reuse'ом (W1b), и молча деградировать до «всё» нельзя — это меняет стоимость рана.
-  const refresh = body.refresh;
-  let refreshAll = false;
-  if (refresh !== undefined) {
-    if (refresh === "all") refreshAll = true;
-    else if (refresh !== "none") throw new ApiError(422, "unsupported_option", 'refresh supports only "none" and "all" in this phase');
-  }
+  // `refresh` (W1b): `none|failed|all|{caseIds}`. Молча деградировать один режим в другой нельзя —
+  // это меняет стоимость рана; неизвестный `caseId` отвергает `startRun` (422 unknown_case_id).
+  const refresh = parseRefresh(body.refresh);
 
   let cases: { key: string; props: Record<string, unknown> }[] | undefined;
   if (body.cases !== undefined) {
@@ -262,7 +281,7 @@ async function startRun(request: Request, db: Database, principal: Principal, or
     policyId,
     ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
     ...(cases === undefined ? {} : { cases }),
-    ...(refreshAll ? { refresh: true } : {}),
+    ...(refresh === "none" ? {} : { refresh }),
   });
   return json({
     runId: started.run.run_id,

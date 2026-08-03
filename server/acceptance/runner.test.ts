@@ -10,7 +10,7 @@ import type { JobOutcome, JobStatus, ScreenshotResult } from "../screenshot/serv
 import { buildCases, propsHashOf } from "./cases";
 import { artifactPresent, casPath, readRunManifest } from "./evidence";
 import type { AcceptanceCaptureService, CandidateSubject, GateResult } from "./gates/types";
-import { AcceptanceOrchestrator } from "./orchestrator";
+import { AcceptanceOrchestrator, type RefreshSpec } from "./orchestrator";
 import { ACCEPTANCE_POLICIES, policyProfileHash } from "./policies";
 import { AcceptanceRepo, type CandidateRow } from "./repo";
 import { caseVerdictOf, foldRunVerdict, progressOf, severityOf, type CaseExecution } from "./runner";
@@ -44,11 +44,13 @@ const geometryResult = (): ScreenshotResult => ({
   rects: [], truncated: false, total: 0,
 } as unknown as ScreenshotResult);
 
-type Script = (call: number, opts: { probe?: "geometry" }) => "ok" | "crash" | "product";
+type Script = (call: number, opts: { probe?: "geometry"; props?: Record<string, unknown> }) => "ok" | "crash" | "product";
 
 class FakeCapture implements AcceptanceCaptureService {
   calls: { probe?: "geometry"; props?: Record<string, unknown> }[] = [];
   script: Script = () => "ok";
+  /** Хук «что-то случилось снаружи, пока шла съёмка» (kill/resume-тест). */
+  onEnqueue: (props: Record<string, unknown> | undefined) => void = () => {};
   /** Кадр детерминирован по props: два разных случая обязаны давать разные артефакты. */
   bytesFor: (props: Record<string, unknown> | undefined) => Uint8Array =
     (props) => new Uint8Array([...PNG, ...new TextEncoder().encode(JSON.stringify(props ?? {}))]);
@@ -64,8 +66,9 @@ class FakeCapture implements AcceptanceCaptureService {
   ): Promise<{ jobId: string }> {
     const call = this.calls.length + 1;
     this.calls.push({ probe: opts.probe, props: opts.props });
+    this.onEnqueue(opts.props);
     const jobId = `job_${call}`;
-    const verdict = this.script(call, { probe: opts.probe });
+    const verdict = this.script(call, { probe: opts.probe, props: opts.props });
     if (verdict === "crash") {
       this.statuses.set(jobId, { status: "error", error: { code: "capture_failed", message: "worker produced no result: killed" } });
       this.outcomes.set(jobId, "worker_crash");
@@ -127,10 +130,19 @@ async function setup(options: { entry?: CandidateEntry } = {}) {
   return { db, dir, repo, service, orchestrator, candidateId: candidate.candidate_id };
 }
 
-const startAndRun = async (harness: Awaited<ReturnType<typeof setup>>, refresh = false) => {
-  const started = await harness.orchestrator.startRun({ candidateId: harness.candidateId, createdBy: "user_a", refresh });
+const startAndRun = async (
+  harness: Awaited<ReturnType<typeof setup>>,
+  refresh: RefreshSpec = "none",
+  cases?: { key: string; props: Record<string, unknown> }[],
+) => {
+  const started = await harness.orchestrator.startRun({
+    candidateId: harness.candidateId, createdBy: "user_a", refresh, ...(cases ? { cases } : {}),
+  });
   return harness.orchestrator.executeRun(started.run.run_id);
 };
+
+const reuseReasons = (harness: Awaited<ReturnType<typeof setup>>, runId: string): Record<string, string | null> =>
+  Object.fromEntries(harness.repo.cases(runId).map((row) => [row.case_id, row.reuse_reason]));
 
 // ------------------------------------------------------------------- случаи
 
@@ -203,6 +215,99 @@ test("reuse is refused when the CAS artifact is gone: the case is captured again
   expect(second.status).toBe("pass");
   expect(harness.service.calls.length).toBeGreaterThan(captured);
   expect(harness.repo.cases(second.run_id).filter((row) => row.reuse_reason === "case_fingerprint")).toHaveLength(0);
+  harness.db.close();
+});
+
+// ------------------------------------------------------- refresh (W1b, A3)
+
+test('refresh:"all" пересуёмывает всё и пишет причину в reuse_reason', async () => {
+  const harness = await setup();
+  await startAndRun(harness);
+  const captured = harness.service.calls.length;
+
+  const forced = await startAndRun(harness, "all");
+  expect(forced.status).toBe("pass");
+  expect(harness.service.calls.length).toBeGreaterThan(captured);
+  expect(reuseReasons(harness, forced.run_id)).toEqual({ alpha: "refresh:all", beta: "refresh:all", zeta: "alias_of:alpha" });
+  const progress = JSON.parse(forced.progress_json) as ReturnType<typeof progressOf>;
+  expect(progress.reused).toBe(0);
+
+  const manifest = await readRunManifest(harness.dir, forced.run_id);
+  expect(manifest!.cases.find((item) => item.caseId === "alpha")!.refreshReason).toBe("refresh:all");
+  harness.db.close();
+});
+
+test('refresh:"failed" пересуёмывает только провальные случаи, остальные приезжают из кэша', async () => {
+  const harness = await setup();
+  // Продуктовая ошибка только у props alpha (её же наследует алиас zeta).
+  harness.service.script = (_call, opts) => (opts.props?.label === "a" && opts.probe === undefined ? "product" : "ok");
+  const first = await startAndRun(harness);
+  expect(first.status).toBe("fail");
+  expect(harness.repo.cases(first.run_id).find((row) => row.case_id === "alpha")!.verdict).toBe("fail");
+
+  harness.service.script = () => "ok";
+  const captured = harness.service.calls.length;
+  const second = await startAndRun(harness, "failed");
+  expect(second.status).toBe("pass");
+  // Снят заново ровно один случай: beta прошёл и переиспользован.
+  expect(reuseReasons(harness, second.run_id)).toEqual({ alpha: "refresh:failed", beta: "case_fingerprint", zeta: "alias_of:alpha" });
+  expect(harness.repo.cases(second.run_id).find((row) => row.case_id === "alpha")!.verdict).toBe("pass");
+  const progress = JSON.parse(second.progress_json) as ReturnType<typeof progressOf>;
+  expect(progress.reused).toBe(1);
+  // Одна цель × (render + geometry + determinism) = 3 капчура вместо шести на два случая.
+  expect(harness.service.calls.length - captured).toBe(3);
+  harness.db.close();
+});
+
+test("refresh:{caseIds} пересуёмывает только перечисленные случаи; алиас форсит свою цель", async () => {
+  const harness = await setup();
+  await startAndRun(harness);
+  const captured = harness.service.calls.length;
+
+  const partial = await startAndRun(harness, { caseIds: ["beta"] });
+  expect(partial.status).toBe("pass");
+  expect(reuseReasons(harness, partial.run_id)).toEqual({ alpha: "case_fingerprint", beta: "refresh:cases", zeta: "alias_of:alpha" });
+  expect(harness.service.calls.length - captured).toBe(3);
+
+  // Алиас своей съёмки не имеет — форс уезжает на цель alpha.
+  const viaAlias = await startAndRun(harness, { caseIds: ["zeta"] });
+  expect(reuseReasons(harness, viaAlias.run_id)).toEqual({ alpha: "refresh:cases", beta: "case_fingerprint", zeta: "alias_of:alpha" });
+
+  await expect(harness.orchestrator.startRun({ candidateId: harness.candidateId, createdBy: "user_a", refresh: { caseIds: ["nope"] } }))
+    .rejects.toMatchObject({ status: 422, code: "unknown_case_id" });
+  harness.db.close();
+});
+
+// ------------------------------------------------------- kill/resume (§4.6)
+
+test("kill/resume: ран, умерший посередине, досуёмывается — завершённые случаи переиспользуются", async () => {
+  const harness = await setup();
+  const cases = [1, 2, 3, 4].map((index) => ({ key: `c${index}`, props: { label: `l${index}` } }));
+
+  // «Смерть процесса» на третьем случае: ран терминализуется извне тем же sweep'ом, что делает
+  // стартовая уборка после рестарта, а сам третий случай не доживает до записи результата.
+  harness.service.onEnqueue = (props) => {
+    if (props?.label === "l3") harness.repo.sweepNonTerminalRuns();
+  };
+  harness.service.script = (_call, opts) => (opts.props?.label === "l3" ? "crash" : "ok");
+  const killed = await startAndRun(harness, "none", cases);
+  expect(killed.status).toBe("error");
+  const doneBefore = harness.repo.cases(killed.run_id).filter((row) => row.status === "done" && row.verdict !== null);
+  expect(doneBefore.map((row) => row.case_id)).toEqual(["c1", "c2"]);
+
+  harness.service.onEnqueue = () => {};
+  harness.service.script = () => "ok";
+  const captured = harness.service.calls.length;
+  const resumed = await startAndRun(harness, "none", cases);
+  expect(resumed.status).toBe("pass");
+  const reasons = reuseReasons(harness, resumed.run_id);
+  // Точный ассерт §4.6: переиспользовано ровно то, что успело завершиться, снято — остаток.
+  expect(Object.entries(reasons).filter(([, reason]) => reason === "case_fingerprint").map(([caseId]) => caseId)).toEqual(["c1", "c2"]);
+  expect(Object.entries(reasons).filter(([, reason]) => reason === null).map(([caseId]) => caseId)).toEqual(["c3", "c4"]);
+  const progress = JSON.parse(resumed.progress_json) as ReturnType<typeof progressOf>;
+  expect(progress).toMatchObject({ total: 4, completed: 4, reused: 2, failed: 0 });
+  // Две недостающие цели × (render + geometry + determinism-сампл там, где он есть).
+  expect(harness.service.calls.length - captured).toBeGreaterThanOrEqual(4);
   harness.db.close();
 });
 

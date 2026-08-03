@@ -1389,14 +1389,17 @@ export const getComponentCandidateContract = registerContract({
 
 export const createAcceptanceRunContract = registerContract({
   method: "POST", path: "/api/acceptance-runs",
-  summary: "Queue a matrix acceptance run over the candidate's cases (wave W1a source: the candidate's named examples). The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh: \"all\"` recaptures instead of reusing cached case results. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  summary: "Queue a matrix acceptance run over the candidate's cases (wave W1a source: the candidate's named examples). The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh` controls reuse: `\"none\"` (default) reuses every cached case result, `\"failed\"` recaptures only the cases whose previous result for the same fingerprint was fail/indeterminate, `\"all\"` recaptures everything, and `{caseIds:[…]}` recaptures the listed cases (unknown id → 422 unknown_case_id; a listed alias forces its target). The forcing reason is recorded per case in `reuseReason` (`refresh:<mode>`) and in the evidence manifest. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
   status: 202,
   requestSchema: z.strictObject({
     candidateId: z.string(),
     idempotencyKey: z.string().min(1).max(200).optional(),
     policy: z.enum(["default-v1", "pixel-strict-v1"]).optional(),
     cases: z.array(z.strictObject({ key: z.string(), props: z.record(z.string(), z.unknown()) })).optional(),
-    refresh: z.enum(["none", "all"]).optional(),
+    refresh: z.union([
+      z.enum(["none", "failed", "all"]),
+      z.strictObject({ caseIds: z.array(z.string()).min(1).max(64) }),
+    ]).optional(),
   }),
   responseSchema: z.looseObject({
     runId: z.string(), status: acceptanceRunStatusSchema, candidateId: z.string(), componentId: z.string(),
@@ -1413,7 +1416,8 @@ export const createAcceptanceRunContract = registerContract({
     { status: 422, code: "case_set_too_large" },
     { status: 422, code: "duplicate_case_id" },
     { status: 422, code: "unknown_policy_profile" },
-    { status: 422, code: "unsupported_option", description: "cases.concurrency / manifestAssetId / caseSetId / partial refresh are not supported in this phase" },
+    { status: 422, code: "unknown_case_id", description: "refresh.caseIds names a case that is not part of this run's case set" },
+    { status: 422, code: "unsupported_option", description: "cases.concurrency / manifestAssetId / caseSetId are not supported in this phase" },
     { status: 503, code: "maintenance_in_progress", description: "a catalog migration holds the maintenance lock" },
   ],
 });

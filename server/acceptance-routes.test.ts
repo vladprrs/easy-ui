@@ -250,7 +250,6 @@ test("постановка рана: unsupported_option, unknown_policy_profile 
     { candidateId: candidate.candidateId, manifestAssetId: "asset_x" },
     { candidateId: candidate.candidateId, concurrency: 4 },
     { candidateId: candidate.candidateId, cases: { concurrency: 4 } },
-    { candidateId: candidate.candidateId, refresh: "failed" },
   ]) {
     const response = await handler(req("/acceptance-runs", "POST", body));
     expect({ body, status: response.status }).toEqual({ body, status: 422 });
@@ -266,6 +265,25 @@ test("постановка рана: unsupported_option, unknown_policy_profile 
   const locked = await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId }));
   expect(locked.status).toBe(503);
   releaseMaintenanceLock(db, lock.runId, lock.acquiredAt);
+}, 120_000);
+
+test("refresh: failed/{caseIds} принимаются, кривая форма — 400, чужой caseId — 422 unknown_case_id", async () => {
+  // Без автопрокрутки ран остаётся queued: предмет теста — разбор `refresh` на постановке.
+  const { handler } = await setup({ autoDrain: false });
+  const candidate = await jsonOf<CandidateBody>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
+
+  const unknown = await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId, refresh: { caseIds: ["alpha", "nope"] } }));
+  expect(unknown.status).toBe(422);
+  expect(await jsonOf<{ error: { code: string } }>(unknown)).toMatchObject({ error: { code: "unknown_case_id" } });
+
+  for (const refresh of ["sometimes", 1, { caseIds: [] }, { caseIds: ["alpha"], mode: "all" }]) {
+    const response = await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId, refresh }));
+    expect({ refresh, status: response.status }).toEqual({ refresh, status: 400 });
+  }
+
+  const partial = await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId, refresh: { caseIds: ["alpha"] } }));
+  expect(partial.status, await partial.clone().text()).toBe(202);
+  expect((await jsonOf<RunBody>(partial)).status).toBe("queued");
 }, 120_000);
 
 test("cancel: queued отменяется, второй нетерминальный ран того же кандидата — 409", async () => {

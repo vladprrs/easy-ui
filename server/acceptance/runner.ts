@@ -7,7 +7,9 @@
  * 1. **Reuse (A3/D1).** Перед съёмкой считается `case_fingerprint`; если в `acceptance_case_results`
  *    есть строка с этим отпечатком, **тем же `component_id`** и физически существующими
  *    артефактами — вердикт переиспользуется. Проверка физического существования обязательна
- *    (триаж R1-B5): CAS мог быть вычищен, и «reuse» указывал бы в пустоту.
+ *    (триаж R1-B5): CAS мог быть вычищен, и «reuse» указывал бы в пустоту. Форс (`refresh`,
+ *    режимы `all|failed|{caseIds}` — решение принимает оркестратор) снимает случай заново и
+ *    записывает причину в `reuse_reason` (`refresh:<mode>`).
  * 2. **Гейты по политике.** Обязательные и advisory гейты профиля; `not-implemented` не считается.
  * 3. **Свёртка D10.** `fail` при `fail`/`indeterminate` обязательного гейта; `error` — только если
  *    нет ни одного `fail`; алиасы наследуют вердикт цели; `reused` эквивалентен свежему;
@@ -187,6 +189,11 @@ export interface ExecuteCaseOptions {
   determinismSampled?: boolean;
   /** `refresh` (A3): пересъёмка даже при годном кэше. */
   refresh?: boolean;
+  /**
+   * Причина форса (`refresh:all|failed|cases`, A3): пишется в `reuse_reason` случая и в evidence —
+   * иначе «снят заново» неотличим от «кэша не было», и стоимость рана нечем объяснить.
+   */
+  refreshReason?: string | null;
 }
 
 /**
@@ -201,6 +208,8 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
     caseId: item.caseId, caseKey: item.caseKey, caseFingerprint: fingerprint,
     aliasOfCaseId: item.aliasOfCaseId,
   };
+
+  const refreshReason = options.refresh === true ? options.refreshReason ?? "refresh" : null;
 
   if (options.refresh !== true) {
     const reused = await reusableResult(deps, fingerprint);
@@ -251,7 +260,7 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
           captureQuality: (deps.shared.get(renderQualityKey(item.caseId)) as CaptureQualityRecord | undefined) ?? null,
           artifacts: artifactsOf(gates),
           reused: false,
-          reuseReason: null,
+          reuseReason: refreshReason,
           durationMs: ctx.now() - startedAt,
           error: { outcome: error.outcome, message: error.message },
         };
@@ -281,7 +290,7 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
     captureQuality,
     artifacts: artifactsOf(gates),
     reused: false,
-    reuseReason: null,
+    reuseReason: refreshReason,
     durationMs: ctx.now() - startedAt,
   };
 }

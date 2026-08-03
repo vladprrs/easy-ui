@@ -52,6 +52,22 @@ export interface AcceptanceOrchestratorDeps {
   resolveCandidate?: (row: CandidateRow) => Promise<CandidateSubject>;
 }
 
+/**
+ * Форс пересъёмки (A3, план §5 W1b). Четыре режима, и все они — про **стоимость рана**, поэтому
+ * молча деградировать один в другой нельзя:
+ *
+ * - `"none"` (дефолт) — reuse по `case_fingerprint` везде, где кэш годен;
+ * - `"failed"` — форс только там, где прошлый результат по тому же отпечатку был провальным
+ *   (`fail`/`indeterminate`); всё остальное переиспользуется. `error`-случаи результата не пишут
+ *   вовсе, поэтому и без форса снимаются заново;
+ * - `"all"` — форс всех целевых случаев;
+ * - `{caseIds}` — форс перечисленных; неизвестный id — `422 unknown_case_id` (а не тихий no-op:
+ *   иначе опечатка в id выглядела бы как успешная пересъёмка).
+ *
+ * Алиасы своей съёмки не имеют (D10): указанный в `caseIds` алиас форсит свою цель.
+ */
+export type RefreshSpec = "none" | "failed" | "all" | { caseIds: string[] };
+
 export interface StartRunInput {
   candidateId: string;
   createdBy: string;
@@ -60,9 +76,15 @@ export interface StartRunInput {
   surface?: CaseSurface;
   /** Явный набор случаев; по умолчанию — examples кандидата (A2). */
   cases?: { key: string; props: Record<string, unknown> }[];
-  /** Пересъёмка вместо reuse (A3, `refresh:"all"`). */
-  refresh?: boolean;
+  /** Пересъёмка вместо reuse (A3); `true` — синоним `"all"` (совместимость W1a). */
+  refresh?: RefreshSpec | boolean;
 }
+
+const normalizeRefresh = (refresh: StartRunInput["refresh"]): RefreshSpec => {
+  if (refresh === undefined || refresh === false) return "none";
+  if (refresh === true) return "all";
+  return refresh;
+};
 
 export interface StartRunResult {
   run: AcceptanceRunRow;
@@ -98,7 +120,7 @@ export class AcceptanceOrchestrator {
   private readonly resolve: (row: CandidateRow) => Promise<CandidateSubject>;
   private readonly caseSets = new Map<string, AcceptanceCase[]>();
   private readonly surfaces = new Map<string, CaseSurface>();
-  private readonly refreshes = new Set<string>();
+  private readonly refreshes = new Map<string, RefreshSpec>();
   private active: string | null = null;
   private draining: Promise<void> | null = null;
 
@@ -128,6 +150,17 @@ export class AcceptanceOrchestrator {
     const subject = await this.resolve(candidateRow);
     const surface = input.surface ?? DEFAULT_CASE_SURFACE;
     const cases = buildCases(subject.entry, input.cases ? { cases: input.cases } : {});
+    const refresh = normalizeRefresh(input.refresh);
+    // Валидация `{caseIds}` — до создания строки рана: неизвестный id обязан отказать постановке,
+    // а не тихо снять «ничего».
+    if (typeof refresh === "object") {
+      const known = new Set(cases.map((item) => item.caseId));
+      for (const caseId of refresh.caseIds) {
+        if (!known.has(caseId)) {
+          throw new ApiError(422, "unknown_case_id", `Case is not part of this run's case set: ${caseId}`);
+        }
+      }
+    }
     const created = this.repo.createRun({
       candidateId: candidateRow.candidate_id,
       componentId: candidateRow.component_id,
@@ -149,7 +182,7 @@ export class AcceptanceOrchestrator {
     if (!created.cached) {
       this.caseSets.set(created.run.run_id, cases);
       this.surfaces.set(created.run.run_id, surface);
-      if (input.refresh === true) this.refreshes.add(created.run.run_id);
+      if (refresh !== "none") this.refreshes.set(created.run.run_id, refresh);
       if (this.autoDrain) void this.drain();
     }
     return { run: created.run, cases, cached: created.cached };
@@ -237,7 +270,7 @@ export class AcceptanceOrchestrator {
     const subject = await this.resolve(candidateRow);
     const surface = this.surfaces.get(run.run_id) ?? DEFAULT_CASE_SURFACE;
     const cases = this.caseSets.get(run.run_id) ?? buildCases(subject.entry);
-    const refresh = this.refreshes.has(run.run_id);
+    const refresh = this.refreshes.get(run.run_id) ?? "none";
 
     const shared = new Map<string, unknown>();
     const context: CaseRunnerDeps["context"] = {
@@ -250,6 +283,10 @@ export class AcceptanceOrchestrator {
     const deps: CaseRunnerDeps = { repo: this.repo, policy, runId: run.run_id, candidate: subject, surface, shared, context };
 
     const targets = cases.filter((item) => item.aliasOfCaseId === null);
+    // `{caseIds}`: алиас не снимается — форс уезжает на его цель (D10).
+    const forced = typeof refresh === "object"
+      ? new Set(refresh.caseIds.map((caseId) => cases.find((item) => item.caseId === caseId)?.aliasOfCaseId ?? caseId))
+      : null;
     const aliases = cases.filter((item) => item.aliasOfCaseId !== null);
     // Выборка determinism: первые N целевых случаев (плюс fail-случаи — они добираются ниже).
     const sampled = new Set(targets.slice(0, policy.determinismSampleSize).map((item) => item.caseId));
@@ -263,7 +300,12 @@ export class AcceptanceOrchestrator {
       const current = this.repo.run(run.run_id);
       if (!current || isTerminalRunStatus(current.status)) return this.repo.requireRun(run.run_id);
       this.repo.updateCase(run.run_id, item.caseId, { status: "running", startedAt: new Date(this.now()).toISOString() });
-      const execution = await executeCase(deps, item, { determinismSampled: sampled.has(item.caseId), refresh });
+      const force = this.forceOf(refresh, forced, item.caseId, fingerprintOf(deps, item), subject.componentId);
+      const execution = await executeCase(deps, item, {
+        determinismSampled: sampled.has(item.caseId),
+        refresh: force !== null,
+        ...(force === null ? {} : { refreshReason: force }),
+      });
       this.persistCase(run.run_id, execution);
       executions.push(execution);
       byCaseId.set(item.caseId, execution);
@@ -291,6 +333,28 @@ export class AcceptanceOrchestrator {
       progress: progressOf(executions, cases.length, ema, 0),
       evidenceManifestHash: manifestHash,
     });
+  }
+
+  /**
+   * Решение по одному целевому случаю: форсить съёмку или дать раннеру попробовать reuse.
+   * Возвращает причину форса (`refresh:<mode>` — она уедет в `reuse_reason` и в evidence) либо
+   * `null`. `"failed"` смотрит **тот же кэш результатов**, что и reuse: провальный прошлый
+   * вердикт по этому же отпечатку — единственный признак «этот случай надо переснять».
+   */
+  private forceOf(
+    refresh: RefreshSpec,
+    forced: Set<string> | null,
+    caseId: string,
+    fingerprint: string,
+    componentId: string,
+  ): string | null {
+    if (refresh === "none") return null;
+    if (refresh === "all") return "refresh:all";
+    if (refresh === "failed") {
+      const row = this.repo.caseResultForComponent(fingerprint, componentId);
+      return row && (row.verdict === "fail" || row.verdict === "indeterminate") ? "refresh:failed" : null;
+    }
+    return forced?.has(caseId) ? "refresh:cases" : null;
   }
 
   private persistCase(runId: string, execution: CaseExecution): void {
@@ -324,6 +388,7 @@ export class AcceptanceOrchestrator {
       verdict: execution.verdict,
       status: execution.status,
       reused: execution.reused,
+      ...(execution.reuseReason?.startsWith("refresh:") ? { refreshReason: execution.reuseReason } : {}),
       aliasOfCaseId: execution.aliasOfCaseId,
       artifacts: execution.artifacts.map((artifact) => ({ name: artifact.name, sha256: artifact.sha256, bytes: artifact.bytes })),
     }));
