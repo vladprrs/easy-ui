@@ -173,6 +173,7 @@ test("флаг OFF: весь набор acceptance-ручек отвечает 4
     [`/acceptance-runs/${runId}/cases`, "GET"],
     [`/acceptance-runs/${runId}/evidence`, "GET"],
     [`/acceptance-runs/${runId}/cancel`, "POST", {}],
+    [`/components/${COMPONENT_ID}/impact`, "POST", { candidateId: `cand_${"0".repeat(64)}`, baselineRunId: runId }],
   ];
   for (const [path, method, body] of calls) {
     const response = await handler(req(path, method, body));
@@ -506,4 +507,74 @@ test("ран по case-set'у: строки случаев несут этало
   const mismatch = await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId, caseSetId: `cset_${"e".repeat(64)}` }));
   expect(mismatch.status).toBe(422);
   expect(await jsonOf<{ error: { code: string } }>(mismatch)).toMatchObject({ error: { code: "case_set_mismatch" } });
+}, 180_000);
+
+// ------------------------------------------------------------------ импакт (W6)
+
+interface ImpactBody {
+  basis: string; candidateId: string; baselineRunId: string; baselineCandidateId: string;
+  changedAssets: string[]; changedTokens: string[];
+  affectedCases: string[]; unaffectedCases: string[]; recaptureCount: number; reason: string;
+}
+
+test("impact: dry-run отдаёт базис и план, кривая форма — 400, чужой baseline — 422", async () => {
+  const { db, dir, handler, orchestrator } = await setup();
+  const candidate = await jsonOf<CandidateBody>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
+  const run = await jsonOf<RunBody>(await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId })));
+  await orchestrator!.settled();
+
+  // Кандидат против собственного рана: билд не менялся — узкий базис с пустым планом.
+  const impact = await handler(req(`/components/${COMPONENT_ID}/impact`, "POST", {
+    candidateId: candidate.candidateId, baselineRunId: run.runId,
+  }));
+  expect(impact.status, await impact.clone().text()).toBe(200);
+  const report = await jsonOf<ImpactBody>(impact);
+  expect(report).toMatchObject({
+    basis: "asset-only", candidateId: candidate.candidateId, baselineRunId: run.runId,
+    affectedCases: [], recaptureCount: 0,
+  });
+  expect(report.unaffectedCases.sort()).toEqual(["alpha", "beta"]);
+
+  // `impact` рана, поставленного без baseline, честно `null` — а не пустой отчёт.
+  const view = await jsonOf<{ impact: unknown }>(await handler(req(`/acceptance-runs/${run.runId}`)));
+  expect(view.impact).toBeNull();
+
+  for (const body of [
+    {}, { candidateId: candidate.candidateId }, { candidateId: "nope", baselineRunId: run.runId },
+    { candidateId: candidate.candidateId, baselineRunId: "nope" },
+    { candidateId: candidate.candidateId, baselineRunId: run.runId, extra: 1 },
+  ]) {
+    const response = await handler(req(`/components/${COMPONENT_ID}/impact`, "POST", body));
+    expect({ body, status: response.status }).toEqual({ body, status: 400 });
+  }
+  const wrongMethod = await handler(req(`/components/${COMPONENT_ID}/impact`, "GET"));
+  expect(wrongMethod.status).toBe(405);
+
+  // Чужой компонент в пути — 422 baseline_run_mismatch (ран принадлежит другому компоненту).
+  db.run("INSERT INTO components (id,name,head_rev,created_at,updated_at,design_system,owner_id) VALUES ('acc-other','AccOther',1,'now','now','yandex-pay',?)", [BOOTSTRAP_ADMIN_ID]);
+  const foreign = await handler(req("/components/acc-other/impact", "POST", {
+    candidateId: candidate.candidateId, baselineRunId: run.runId,
+  }));
+  expect(foreign.status).toBe(404);
+
+  // Частичный ран: постановка с `baselineRunId` возвращает отчёт сразу, а ран несёт `impact_json`.
+  const partial = await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId, baselineRunId: run.runId }));
+  expect(partial.status, await partial.clone().text()).toBe(202);
+  const partialRun = await jsonOf<RunBody & { impact: ImpactBody }>(partial);
+  expect(partialRun.impact.basis).toBe("asset-only");
+  await orchestrator!.settled();
+  const partialView = await jsonOf<{ impact: ImpactBody | null; progress: { reused: number } }>(await handler(req(`/acceptance-runs/${partialRun.runId}`)));
+  expect(partialView.impact?.basis).toBe("asset-only");
+
+  // Авторизация — общая для acceptance-ручек: чужой пользователь и share/capture получают 403.
+  const stranger = await new UserRepo(db).create({ name: "ImpactStranger", password: "stranger-password-1", actorId: BOOTSTRAP_ADMIN_ID });
+  const path = `/components/${COMPONENT_ID}/impact`;
+  for (const principal of [
+    { kind: "user", userId: stranger.id, name: stranger.name, isAdmin: false } as Principal,
+    { kind: "share", scope: { grantId: "g", prototypeId: "p", version: 1, allowedUrls: [] } } as Principal,
+    { kind: "capture", scope: { token: "t", allowedUrls: [] } } as Principal,
+  ]) {
+    await expect(routeAcceptance(req(path, "POST", { candidateId: candidate.candidateId, baselineRunId: run.runId }), db, path.slice(1).split("/"), principal, dir, orchestrator))
+      .rejects.toMatchObject({ status: 403, code: "forbidden" });
+  }
 }, 180_000);

@@ -412,6 +412,71 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
   };
 }
 
+/**
+ * Перенос вердикта baseline-случая в частичный ран (W6, D6).
+ *
+ * Почему не обычный reuse: `case_fingerprint` содержит `candidateId` (D1), а у нового кандидата он
+ * другой — строка кэша по новому отпечатку попросту не существует, и `reusableResult` честно
+ * промахивается. Импакт даёт **другое** доказательство: «этот случай не мог измениться», — и оно
+ * позволяет записать вердикт baseline под новым отпечатком.
+ *
+ * Три условия, без которых перенос не делается (возвращается `null`, случай снимается как обычно):
+ * 1. baseline-случай завершён с вердиктом (не `error`, не `pending`);
+ * 2. его гейты читаются;
+ * 3. **все** его артефакты физически есть в CAS — ровно та же проверка, что у обычного reuse
+ *    (R1-B5): иначе evidence нового рана указывал бы в пустоту.
+ *
+ * Побочный эффект намеренный: результат upsert'ится в `acceptance_case_results` под **новым**
+ * отпечатком, поэтому следующий ран того же кандидата переиспользует его уже обычным путём, без
+ * импакта. Артефакты при этом не осиротеют — union-refcount GC (`artifactStillReferenced`) видит
+ * и строки `acceptance_cases` нового рана, и строку кэша.
+ */
+export async function carryBaselineCase(
+  deps: CaseRunnerDeps,
+  item: AcceptanceCase,
+  baseline: { verdict: AcceptanceCaseVerdict | null; status: AcceptanceCaseStatus; gates_json: string | null; capture_quality_json: string | null },
+  basis: string,
+): Promise<CaseExecution | null> {
+  if (baseline.verdict === null || baseline.status !== "done") return null;
+  let gates: GateResult[];
+  try { gates = JSON.parse(baseline.gates_json ?? "null") as GateResult[]; }
+  catch { return null; }
+  if (!Array.isArray(gates)) return null;
+  const artifacts = artifactsOf(gates);
+  for (const artifact of artifacts) {
+    if (!(await artifactPresent(deps.context.dataDir, artifact.sha256))) return null;
+  }
+  let captureQuality: CaptureQualityRecord | null = null;
+  try { captureQuality = JSON.parse(baseline.capture_quality_json ?? "null") as CaptureQualityRecord | null; }
+  catch { captureQuality = null; }
+
+  const fingerprint = fingerprintOf(deps, item);
+  const stored: StoredResult = { gates, captureQuality };
+  deps.repo.putCaseResult({
+    caseFingerprint: fingerprint,
+    componentId: deps.candidate.componentId,
+    artifacts,
+    metrics: JSON.parse(canonicalStringify(stored)) as StoredResult,
+    verdict: baseline.verdict,
+    producedRunId: deps.runId,
+  });
+  return {
+    caseId: item.caseId,
+    caseKey: item.caseKey,
+    caseFingerprint: fingerprint,
+    aliasOfCaseId: item.aliasOfCaseId,
+    status: "done",
+    verdict: baseline.verdict,
+    gates,
+    severity: severityOf(gates, deps.policy),
+    captureQuality,
+    artifacts,
+    reused: true,
+    reuseReason: `impact:${basis}`,
+    durationMs: 0,
+  };
+}
+
 /** Сортировка случаев для репорта: сначала самые тяжёлые провалы (D10). */
 export function bySeverity(left: CaseExecution, right: CaseExecution): number {
   const leftRank = left.severity?.rank ?? Number.MAX_SAFE_INTEGER;

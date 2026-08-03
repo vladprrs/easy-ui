@@ -17,7 +17,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -152,6 +152,8 @@ export const flagSpecs = Object.freeze({
     "--case-set": { value: true, key: "caseSet" },
     "--policy": { value: true, key: "policy" },
     "--refresh": { value: true, key: "refresh", parse: parseRefreshFlag },
+    // План 2026-08-03 §5 W6: частичная пересъёмка относительно терминального рана.
+    "--baseline-run": { value: true, key: "baselineRun" },
     "--timeout-sec": {
       value: true,
       key: "timeoutSec",
@@ -164,6 +166,12 @@ export const flagSpecs = Object.freeze({
     "--evidence": { value: true, key: "evidence" },
   },
   "accept-status": { ...jsonFlag, "--evidence": { value: true, key: "evidence" } },
+  // План 2026-08-03 §5 W6: dry-run импакта кандидата к baseline-рану (ничего не снимает).
+  impact: {
+    ...jsonFlag,
+    "--candidate": { value: true, key: "candidate" },
+    "--baseline-run": { value: true, key: "baselineRun" },
+  },
   get: { ...jsonFlag },
   delete: { ...jsonFlag },
   shoot: { ...jsonFlag },
@@ -235,6 +243,7 @@ const ranges = Object.freeze({
   promote: [1, 1],
   accept: [1, 1],
   "accept-status": [1, 1],
+  impact: [1, 1],
   // `case-set put <componentId> <manifest.json>` (3) | `case-set get|coverage <caseSetId>` (2).
   "case-set": [2, 3],
   // 0 — каталожный sweep `audit --design-system`, 1 — подкоманда `audit reuse`.
@@ -314,6 +323,11 @@ export function parseArgs(argv) {
     if (!["put", "get", "coverage"].includes(subcommand)) invalid("case-set requires a subcommand: put | get | coverage");
     if (subcommand === "put" && positionals.length !== 3) invalid("usage: case-set put <componentId> <manifest.json>");
     if (subcommand !== "put" && positionals.length !== 2) invalid(`usage: case-set ${subcommand} <caseSetId>`);
+  }
+  // `impact` — dry-run отчёт (W6): обе стороны сравнения обязаны быть названы явно, иначе
+  // «импакт компонента» ничего не значит.
+  if (command === "impact" && (flags.candidate === undefined || flags.baselineRun === undefined)) {
+    invalid("usage: impact <componentId> --candidate <candidateId> --baseline-run <runId>");
   }
   if (command === "status" && positionals.length < 2 && !flags.allScreens) invalid("status requires <screenId> or --all-screens");
   if (command === "preview" && positionals.length === 2 && flags.example !== undefined) invalid("preview accepts either props.json or --example, not both");
@@ -1917,6 +1931,9 @@ async function runAccept(args, flags) {
     ...(flags.caseSet === undefined ? {} : { caseSetId: flags.caseSet }),
     ...(flags.policy === undefined ? {} : { policy: flags.policy }),
     ...(flags.refresh === undefined ? {} : { refresh: flags.refresh }),
+    // `--baseline-run` (W6): частичная пересъёмка. Сервер сам считает импакт и снимает только
+    // затронутые случаи; недоказуемый импакт означает полный ран, а не тихую экономию.
+    ...(flags.baselineRun === undefined ? {} : { baselineRunId: flags.baselineRun }),
   });
   if (started.status === 409 && errorCode(started) === "acceptance_run_in_flight") {
     const runId = started.json?.error?.runId;
@@ -1924,8 +1941,39 @@ async function runAccept(args, flags) {
   }
   const queued = await requireOk("acceptance run", started, [202]);
   progress(`run ${queued.runId} queued with ${queued.cases} cases`);
+  if (queued.impact) progress(impactLines(queued.impact, id)[0]);
   const run = await pollAcceptanceRun(queued.runId, { deadlineMs: (flags.timeoutSec ?? ACCEPT_DEFAULT_TIMEOUT_SEC) * 1000 });
   await reportAcceptance(run, { command: "accept", componentId: id, candidateId: candidate.candidateId, flags });
+}
+
+/**
+ * Импакт-анализ (план 2026-08-03 §5 W6) — **dry-run**: ничего не снимает и ничего не пишет.
+ *
+ * Печатает базис (`asset-only` / `theme-only` / `conservative`), что именно изменилось и сколько
+ * случаев придётся снять заново. `conservative` — не ошибка, а честный ответ «сузить пересъёмку
+ * нечем»; молчаливого reuse не бывает, поэтому случай без доказательств всегда затронут.
+ */
+function impactLines(impact, componentId) {
+  const lines = [
+    `impact ${componentId ?? ""} basis=${impact.basis} recapture ${impact.recaptureCount} of ${impact.affectedCases.length + impact.unaffectedCases.length} case(s)`.replace(/ {2,}/g, " "),
+    `reason: ${impact.reason}`,
+  ];
+  if (impact.changedAssets?.length) lines.push(`changed assets: ${impact.changedAssets.join(", ")}`);
+  if (impact.changedTokens?.length) lines.push(`changed tokens: ${impact.changedTokens.join(", ")}`);
+  lines.push(`affected: ${impact.affectedCases.length ? impact.affectedCases.join(", ") : "-"}`);
+  lines.push(`unaffected: ${impact.unaffectedCases.length ? impact.unaffectedCases.join(", ") : "-"}`);
+  lines.push(`rerun with: driver.mjs accept ${componentId ?? ""} --baseline-run ${impact.baselineRunId}`.replace(/ {2,}/g, " "));
+  return lines;
+}
+
+async function runImpact(args, flags) {
+  const [id] = args;
+  await requireAcceptanceMatrix();
+  const impact = await requireOk("impact", await call("POST", `/components/${encodeURIComponent(id)}/impact`, {
+    candidateId: flags.candidate,
+    baselineRunId: flags.baselineRun,
+  }));
+  report(impactLines(impact, id), { command: "impact", componentId: id, ...impact });
 }
 
 async function runAcceptStatus(args, flags) {
@@ -2258,6 +2306,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "promote") await runPromote(args, flags);
   else if (cmd === "accept") await runAccept(args, flags);
   else if (cmd === "accept-status") await runAcceptStatus(args, flags);
+  else if (cmd === "impact") await runImpact(args, flags);
   else if (cmd === "case-set") await runCaseSet(args, flags);
   else if (cmd === "audit") await (args[0] === "reuse" ? runReuseAudit(flags) : flags.versions ? runVersionsAudit(flags) : runAudit(flags));
 }

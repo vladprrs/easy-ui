@@ -109,6 +109,12 @@ export interface EvidenceCaseEntry {
   reused: boolean;
   /** Почему случай снят заново вопреки кэшу (`refresh:all|failed|cases`), если это было форсом. */
   refreshReason?: string;
+  /**
+   * Почему случай **не** снимался (W6): `impact:<basis>` — вердикт перенесён с baseline-рана,
+   * `case_fingerprint` — обычный reuse, `alias_of:<caseId>` — наследование цели. Читатель
+   * evidence обязан видеть основание пропуска съёмки, иначе «дешёвый ран» неотличим от неполного.
+   */
+  reuseReason?: string;
   aliasOfCaseId: string | null;
   artifacts: EvidenceEntry[];
 }

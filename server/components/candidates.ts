@@ -35,9 +35,51 @@ export type CandidateFailure = {
   issues?: { path: (string | number)[]; message: string }[];
 };
 
+/**
+ * Литерал ассета в исходнике компонента: `asset_<sha256>` (тот же формат, что у `ASSET_ID_RE`
+ * реестра тем и у `ASSET_URL_PATTERN` валидации). Литерал встречается и «голым», и внутри
+ * `/api/assets/<id>` — обе формы описывает одна и та же подстрока, поэтому достаточно одного
+ * шаблона.
+ */
+const ASSET_LITERAL = /asset_[0-9a-f]{64}/g;
+
+/**
+ * Плейсхолдер, которым `sourceShapeHash` затирает **все** литералы ассетов. Значение входит в
+ * хэш, поэтому менять его нельзя без осознанной инвалидации накопленных доказательств формы
+ * (старые записи станут несравнимыми → impact честно деградирует в `conservative`).
+ */
+export const ASSET_SHAPE_PLACEHOLDER = "asset_<shape>";
+
+const sha256hex = (value: string): string => new Bun.CryptoHasher("sha256").update(value).digest("hex");
+
+/** Множество asset-id, литерально упомянутых в исходнике (порядок и кратность значения не имеют). */
+export function assetRefsOf(source: string): Set<string> {
+  return new Set(source.match(ASSET_LITERAL) ?? []);
+}
+
+/**
+ * Хэш **формы** исходника (план §3 D6, §5 W6): sha256 текста, в котором каждый литерал
+ * `asset_<sha256>` заменён плейсхолдером. Совпадение `sourceShapeHash` при расхождении
+ * `sourceHash` — единственное доказательство класса «изменились только ссылки на ассеты»:
+ * структура кода, пропсы, разметка и стили побайтово те же.
+ *
+ * Отрицательное направление тоже строгое: расхождение формы ничего не доказывает и обязано
+ * уводить импакт в `conservative` — хэш не умеет «почти совпадать».
+ */
+export function sourceShapeHashOf(source: string): string {
+  return sha256hex(source.replace(ASSET_LITERAL, ASSET_SHAPE_PLACEHOLDER));
+}
+
 export type CandidateEntry = {
   version: 1;
   sourceHash: string;
+  /**
+   * Хэш формы исходника (W6) — вход импакт-анализа. **Аддитивно**: записи, собранные до W6,
+   * поля не имеют, и импакт по ним честно деградирует в `conservative` (доказательства нет).
+   */
+  sourceShapeHash?: string;
+  /** Литералы ассетов исходника (W6): изменённые ассеты — симметрическая разность этих множеств. */
+  assetRefs?: string[];
   /** Компоненты, чей head-исходник дал этот хэш (один исходник бывает у нескольких драфтов). */
   componentIds: string[];
   createdAt: string;

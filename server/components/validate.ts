@@ -9,9 +9,11 @@ import { architectureWarnings, checkSource } from "../routes/components";
 import { compileComponent, typecheckComponent } from "./compile";
 import { importValidated, materializeClientSource, materializeSource, sha256 } from "./pipeline";
 import {
+  assetRefsOf,
   candidateExpired,
   getCandidateBundle,
   readCandidate,
+  sourceShapeHashOf,
   writeCandidate,
   type CandidateEntry,
 } from "./candidates";
@@ -131,7 +133,17 @@ type ComputedCandidate = CandidateEntry & { bundleJs?: string };
  * неожиданные ошибки (500) не кэшируются вовсе.
  */
 async function computeCandidate(dataDir: string, id: string, rev: number, source: string, sourceHash: string): Promise<ComputedCandidate> {
-  const base = { version: 1 as const, sourceHash, componentIds: [id], createdAt: new Date().toISOString() };
+  // `sourceShapeHash`/`assetRefs` (W6) кладутся в **обе** ветви (ok и failure): они источнико-чисты
+  // и считаются до тяжёлого префлайта, поэтому провал extraction не должен лишать импакт-анализ
+  // доказательства формы.
+  const base = {
+    version: 1 as const,
+    sourceHash,
+    sourceShapeHash: sourceShapeHashOf(source),
+    assetRefs: [...assetRefsOf(source)].sort(),
+    componentIds: [id],
+    createdAt: new Date().toISOString(),
+  };
   try {
     const path = await materializeSource(dataDir, id, rev, source);
     const extracted = await checkSource(source, path, true);
@@ -183,8 +195,16 @@ async function computeCandidate(dataDir: string, id: string, rev: number, source
 async function getOrComputeCandidate(dataDir: string, id: string, rev: number, source: string, sourceHash: string): Promise<{ entry: CandidateEntry; cached: boolean }> {
   const existing = await readCandidate(dataDir, sourceHash);
   if (existing !== null && !candidateExpired(existing)) {
-    if (!existing.componentIds.includes(id)) await writeCandidate(dataDir, { ...existing, componentIds: [...existing.componentIds, id] });
-    return { entry: { ...existing, componentIds: [...new Set([...existing.componentIds, id])].sort() }, cached: true };
+    // Бэкфил доказательств формы (W6) на записи, собранные до волны: они источнико-чисты, а
+    // исходник у нас на руках — иначе первый ран после апгрейда навсегда остался бы без базиса.
+    const shape = existing.sourceShapeHash === undefined || existing.assetRefs === undefined
+      ? { sourceShapeHash: sourceShapeHashOf(source), assetRefs: [...assetRefsOf(source)].sort() }
+      : {};
+    const componentIds = existing.componentIds.includes(id) ? existing.componentIds : [...existing.componentIds, id];
+    if (!existing.componentIds.includes(id) || Object.keys(shape).length > 0) {
+      await writeCandidate(dataDir, { ...existing, ...shape, componentIds });
+    }
+    return { entry: { ...existing, ...shape, componentIds: [...new Set(componentIds)].sort() }, cached: true };
   }
   const computed = await computeCandidate(dataDir, id, rev, source, sourceHash);
   const { bundleJs, ...entry } = computed;

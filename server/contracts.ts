@@ -1392,12 +1392,26 @@ const acceptanceRemediationGroupSchema = z.looseObject({
 });
 const acceptanceSeveritySchema = z.looseObject({ rank: z.number(), class: z.string(), score: z.number() }).nullable();
 
+/**
+ * Отчёт импакт-анализа (план §3 D6, §5 W6). Три базиса и ни одного «может быть»: узкий базис
+ * доказан совпадением хэшей, всё остальное — `conservative` с честной причиной.
+ */
+const acceptanceImpactSchema = z.looseObject({
+  basis: z.enum(["asset-only", "theme-only", "conservative"]),
+  candidateId: z.string(), baselineRunId: z.string(), baselineCandidateId: z.string(),
+  changedAssets: z.array(z.string()), changedTokens: z.array(z.string()),
+  affectedCases: z.array(z.string()), unaffectedCases: z.array(z.string()),
+  recaptureCount: z.number(), reason: z.string(),
+});
+
 const acceptanceRunViewSchema = z.looseObject({
   runId: z.string(), candidateId: z.string(), componentId: z.string(), status: acceptanceRunStatusSchema,
   policy: z.looseObject({ id: z.string(), hash: z.string() }),
   caseSetId: z.string().nullable(), idempotencyKey: z.string().nullable(),
   progress: acceptanceProgressSchema, eta: z.looseObject({}).nullable(),
   gates: z.unknown(), evidenceManifestHash: z.string().nullable(),
+  /** W6: план частичной пересъёмки, применённый к рану; `null` — импакт не считался. */
+  impact: acceptanceImpactSchema.nullable(),
   remediationGroups: z.array(acceptanceRemediationGroupSchema),
   createdAt: isoDate, startedAt: isoDate.nullable(), finishedAt: isoDate.nullable(),
   failedCases: z.array(z.looseObject({
@@ -1429,6 +1443,17 @@ export const createComponentCandidateContract = registerContract({
   ],
 });
 
+export const componentImpactContract = registerContract({
+  method: "POST", path: "/api/components/{id}/impact",
+  summary: "Dry-run impact analysis of a candidate against a terminal baseline run of the same component: which cases must be recaptured if the acceptance matrix is re-run. Conservative and evidence-based, with exactly three bases. `asset-only` — the candidate's source-shape hash (source with every `asset_<sha256>` literal replaced by a placeholder) equals the baseline candidate's and the theme version is unchanged, so only asset literals moved: affected cases are those whose OBSERVED readiness resources (wave W4 `themeResources`) intersect the symmetric difference of asset references. `theme-only` — the source hash is identical and only the design-system theme version changed: affected cases are those whose observed theme tokens/icons intersect the theme diff (a changed font face applies document-wide and affects every case). `conservative` — anything else (both changed, no shape evidence in the candidate cache, a non-terminal baseline, a design-system move): every case is affected. A case with no readiness evidence at all — a dynamic URL, a reclaimed artifact, a frame from a renderer that predates the readiness protocol — is ALWAYS affected; there is no silent reuse. Writes nothing and captures nothing. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  requestSchema: z.strictObject({ candidateId: z.string(), baselineRunId: z.string() }),
+  responseSchema: acceptanceImpactSchema,
+  errors: [
+    ...acceptanceAuthErrors, errorCatalog.invalidRequest,
+    { status: 422, code: "baseline_run_mismatch", description: "the baseline run belongs to another component" },
+  ],
+});
+
 export const getComponentCandidateContract = registerContract({
   method: "GET", path: "/api/component-candidates/{candidateId}",
   summary: "Read an acceptance candidate by id (global namespace; it does not overlap /api/catalog/candidates). Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
@@ -1438,7 +1463,7 @@ export const getComponentCandidateContract = registerContract({
 
 export const createAcceptanceRunContract = registerContract({
   method: "POST", path: "/api/acceptance-runs",
-  summary: "Queue a matrix acceptance run over the candidate's cases. The case set comes either from a published case-set manifest (`caseSetId`, wave W2 — it also supplies the capture surface, per-case reference assets, expected geometry and per-case policy) or, by default, from the candidate's named examples; `cases` and `caseSetId` are mutually exclusive. The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh` controls reuse: `\"none\"` (default) reuses every cached case result, `\"failed\"` recaptures only the cases whose previous result for the same fingerprint was fail/indeterminate, `\"all\"` recaptures everything, and `{caseIds:[…]}` recaptures the listed cases (unknown id → 422 unknown_case_id; a listed alias forces its target). The forcing reason is recorded per case in `reuseReason` (`refresh:<mode>`) and in the evidence manifest. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  summary: "Queue a matrix acceptance run over the candidate's cases. The case set comes either from a published case-set manifest (`caseSetId`, wave W2 — it also supplies the capture surface, per-case reference assets, expected geometry and per-case policy) or, by default, from the candidate's named examples; `cases` and `caseSetId` are mutually exclusive. The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh` controls reuse: `\"none\"` (default) reuses every cached case result, `\"failed\"` recaptures only the cases whose previous result for the same fingerprint was fail/indeterminate, `\"all\"` recaptures everything, and `{caseIds:[…]}` recaptures the listed cases (unknown id → 422 unknown_case_id; a listed alias forces its target). The forcing reason is recorded per case in `reuseReason` (`refresh:<mode>`) and in the evidence manifest. `baselineRunId` (wave W6) turns the run into a PARTIAL recapture: the impact of the candidate against that terminal run of the same component (see POST /api/components/{id}/impact) is computed before the run is created and returned in `impact`; cases proven unaffected inherit the baseline verdict and artifacts without a capture (`reuseReason: \"impact:<basis>\"`, upserted under the new case fingerprint so later runs reuse them normally), affected cases are captured as usual, and an unprovable impact (`conservative`) simply runs everything. An explicit `refresh` always wins over the impact plan. 422 baseline_run_mismatch when the baseline belongs to another component. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
   status: 202,
   requestSchema: z.strictObject({
     candidateId: z.string(),
@@ -1450,11 +1475,13 @@ export const createAcceptanceRunContract = registerContract({
       z.enum(["none", "failed", "all"]),
       z.strictObject({ caseIds: z.array(z.string()).min(1).max(64) }),
     ]).optional(),
+    baselineRunId: z.string().optional(),
   }),
   responseSchema: z.looseObject({
     runId: z.string(), status: acceptanceRunStatusSchema, candidateId: z.string(), componentId: z.string(),
     policy: z.looseObject({ id: z.string(), hash: z.string() }),
     progress: acceptanceProgressSchema, cases: z.number(), cached: z.boolean(),
+    impact: acceptanceImpactSchema.optional(),
   }),
   errors: [
     ...acceptanceAuthErrors, errorCatalog.invalidRequest,
@@ -1468,6 +1495,7 @@ export const createAcceptanceRunContract = registerContract({
     { status: 422, code: "unknown_policy_profile" },
     { status: 422, code: "unknown_case_id", description: "refresh.caseIds names a case that is not part of this run's case set" },
     { status: 422, code: "case_set_mismatch", description: "the case set describes another component than the candidate" },
+    { status: 422, code: "baseline_run_mismatch", description: "baselineRunId names a run of another component" },
     { status: 422, code: "unsupported_option", description: "cases.concurrency / manifestAssetId are not supported" },
     { status: 503, code: "maintenance_in_progress", description: "a catalog migration holds the maintenance lock" },
   ],

@@ -269,6 +269,9 @@ function orderedCases(): [string, Case][] {
     ["GET /api/acceptance-runs/{runId}/cases", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/cases`), expected: err(404, "not_found") }],
     ["GET /api/acceptance-runs/{runId}/evidence", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/evidence`), expected: err(404, "not_found") }],
     ["POST /api/acceptance-runs/{runId}/cancel", { run: () => call("POST", `/api/acceptance-runs/${MISSING_RUN_ID}/cancel`, {}), expected: err(404, "not_found") }],
+    // W6: импакт-анализ. Как и у соседей, покрытие — по отказу: несуществующий кандидат отвечает
+    // 404 до чтения baseline-рана (адрес кандидата не должен работать оракулом).
+    ["POST /api/components/{id}/impact", { run: () => call("POST", "/api/components/contract-stars/impact", { candidateId: `cand_${"0".repeat(64)}`, baselineRunId: MISSING_RUN_ID }), expected: err(404, "not_found") }],
     // Case-set-манифесты (план 2026-08-03 §5 W2): PUT — happy path (он дешёвый, капчур не нужен),
     // чтение и coverage — по вычисленному контентному адресу того же манифеста.
     ["PUT /api/components/{id}/case-sets", { run: () => call("PUT", "/api/components/contract-stars/case-sets", { manifest: CONTRACT_MANIFEST }), expected: ok() }],

@@ -4,6 +4,7 @@
  *
  * ```
  * POST /api/components/:id/candidates        — validate head + идемпотентная durable-строка
+ * POST /api/components/:id/impact            — dry-run импакта кандидата к baseline-рану (W6)
  * GET  /api/component-candidates/:candidateId
  * POST /api/acceptance-runs                  — постановка рана (202)
  * GET  /api/acceptance-runs/:runId           — статус + gates + progress + eta + failedCases
@@ -40,7 +41,8 @@ import { ComponentRepo } from "../repos/components";
 import { zipResponse } from "./bundles";
 import type { AcceptanceOrchestrator, RefreshSpec } from "../acceptance/orchestrator";
 import type { AcceptanceCaseRow, AcceptanceRunRow, CandidateRow } from "../acceptance/repo";
-import { isCandidateId } from "../acceptance/ids";
+import { isCandidateId, isRunId } from "../acceptance/ids";
+import { computeImpact } from "../acceptance/impact";
 import { isCaseSetId } from "../../src/acceptance/caseSetSchema";
 import {
   ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, acceptanceMaxCasesPerRun, acceptancePolicy, evidenceMaxBytes, policyProfileHash,
@@ -50,7 +52,9 @@ import { readArtifact, readRunManifest, sanitizeEvidenceName, sha256Sums, type R
 /** Опции §19.1 фидбэка, отклонённые триажем (A2: `manifestAssetId` не поддерживается никогда). */
 const UNSUPPORTED_TOP_LEVEL = ["concurrency", "manifestAssetId"] as const;
 
-const KNOWN_RUN_FIELDS = new Set(["candidateId", "idempotencyKey", "policy", "cases", "refresh", "caseSetId"]);
+const KNOWN_RUN_FIELDS = new Set(["candidateId", "idempotencyKey", "policy", "cases", "refresh", "caseSetId", "baselineRunId"]);
+
+const KNOWN_IMPACT_FIELDS = new Set(["candidateId", "baselineRunId"]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -177,6 +181,9 @@ function runView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[]): Record<stri
     progress,
     eta,
     gates: parseJson(run.gates_json) ?? {},
+    // W6: план частичной пересъёмки, применённый к этому рану. `null` — импакт не считался
+    // (ран поставлен без `baselineRunId`), а не «ничего не затронуто».
+    impact: parseJson(run.impact_json),
     // Сортировка задана группировкой: сначала самые массовые группы (одна правка чинит больше всего
     // случаев). Пустой массив у ещё не терминализованного рана — не «причин нет», а «отчёт не собран».
     remediationGroups: Array.isArray(remediationGroups) ? remediationGroups : [],
@@ -289,6 +296,20 @@ async function startRun(request: Request, db: Database, principal: Principal, or
   // это меняет стоимость рана; неизвестный `caseId` отвергает `startRun` (422 unknown_case_id).
   const refresh = parseRefresh(body.refresh);
 
+  // `baselineRunId` (W6): режим частичной пересъёмки. Форма проверяется здесь, владение — ниже
+  // (baseline обязан принадлежать тому же компоненту, иначе это канал чтения чужих вердиктов).
+  const baselineRunId = body.baselineRunId;
+  if (baselineRunId !== undefined && (typeof baselineRunId !== "string" || !isRunId(baselineRunId))) {
+    throw new ApiError(400, "invalid_request", "baselineRunId must be an acceptance run id");
+  }
+  if (typeof baselineRunId === "string") {
+    const baseline = orchestrator.repo.requireRun(baselineRunId);
+    if (baseline.component_id !== candidate.component_id) {
+      throw new ApiError(422, "baseline_run_mismatch",
+        `Baseline run belongs to component ${baseline.component_id}, not the candidate's ${candidate.component_id}`);
+    }
+  }
+
   let cases: { key: string; props: Record<string, unknown> }[] | undefined;
   if (body.cases !== undefined) {
     if (isObject(body.cases) && body.cases.concurrency !== undefined) {
@@ -311,6 +332,7 @@ async function startRun(request: Request, db: Database, principal: Principal, or
     ...(caseSetId === undefined ? {} : { caseSetId: caseSetId as string }),
     ...(cases === undefined ? {} : { cases }),
     ...(refresh === "none" ? {} : { refresh }),
+    ...(typeof baselineRunId === "string" ? { baselineRunId } : {}),
   });
   return json({
     runId: started.run.run_id,
@@ -321,7 +343,43 @@ async function startRun(request: Request, db: Database, principal: Principal, or
     progress: parseJson(started.run.progress_json) ?? {},
     cases: started.cases.length,
     cached: started.cached,
+    // Отчёт импакта возвращается сразу на постановке (W6): агент видит стоимость рана до того,
+    // как тот начал снимать, и может отказаться от него.
+    ...(started.impact ? { impact: started.impact } : {}),
   }, 202, { ...noStore, location: `/api/acceptance-runs/${started.run.run_id}` });
+}
+
+/**
+ * `POST /api/components/:id/impact` — dry-run импакта (W6, D6): что изменилось между кандидатом и
+ * кандидатом baseline-рана и какие случаи придётся снять заново. Ничего не пишет и ничего не
+ * снимает; авторизация и гейт — те же, что у остальных acceptance-ручек.
+ */
+async function componentImpact(request: Request, db: Database, dataDir: string, id: string, principal: Principal, orchestrator: AcceptanceOrchestrator): Promise<Response> {
+  if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+  assertComponentOwner(db, id, principal);
+  const body = await readJson(request);
+  if (!isObject(body)) throw new ApiError(400, "invalid_request", "Request body must be an object");
+  for (const key of Object.keys(body)) {
+    if (!KNOWN_IMPACT_FIELDS.has(key)) throw new ApiError(400, "invalid_request", `Unknown field: ${key}`);
+  }
+  const candidateId = body.candidateId;
+  if (typeof candidateId !== "string" || !isCandidateId(candidateId)) {
+    throw new ApiError(400, "invalid_request", "candidateId is required and must be a candidate id");
+  }
+  const baselineRunId = body.baselineRunId;
+  if (typeof baselineRunId !== "string" || !isRunId(baselineRunId)) {
+    throw new ApiError(400, "invalid_request", "baselineRunId is required and must be an acceptance run id");
+  }
+  const candidate = orchestrator.repo.requireCandidate(candidateId);
+  // Обе стороны обязаны принадлежать компоненту из пути: иначе владелец одного компонента читал бы
+  // вердикты чужого через ручку своего.
+  if (candidate.component_id !== id) throw new ApiError(404, "not_found", "Candidate not found");
+  const baselineRun = orchestrator.repo.requireRun(baselineRunId);
+  if (baselineRun.component_id !== id) {
+    throw new ApiError(422, "baseline_run_mismatch", `Baseline run belongs to component ${baselineRun.component_id}, not ${id}`);
+  }
+  const impact = await computeImpact({ db, dataDir, repo: orchestrator.repo, candidate, baselineRun });
+  return json(impact, 200, noStore);
 }
 
 /** Ран + проверка владения. Формат `runId` валидируется в `requireRun`-предшественнике (regex ниже). */
@@ -403,12 +461,14 @@ export async function routeAcceptance(
   orchestrator?: AcceptanceOrchestrator,
 ): Promise<Response | null> {
   const isCandidateCreate = segments[0] === "components" && segments[2] === "candidates" && segments.length === 3;
+  const isImpact = segments[0] === "components" && segments[2] === "impact" && segments.length === 3;
   const isCandidateRead = segments[0] === "component-candidates";
   const isRun = segments[0] === "acceptance-runs";
-  if (!isCandidateCreate && !isCandidateRead && !isRun) return null;
+  if (!isCandidateCreate && !isImpact && !isCandidateRead && !isRun) return null;
   if (!orchestrator) throw new ApiError(404, "not_found", "Acceptance matrix is disabled");
 
   if (isCandidateCreate) return createCandidate(request, db, dataDir, segments[1]!, principal, orchestrator);
+  if (isImpact) return componentImpact(request, db, dataDir, segments[1]!, principal, orchestrator);
   if (isCandidateRead) {
     if (segments.length !== 2) throw new ApiError(404, "not_found", "API route not found");
     return getCandidate(request, db, segments[1]!, principal, orchestrator);

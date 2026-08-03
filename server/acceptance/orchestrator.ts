@@ -31,9 +31,10 @@ import type { CaseSetManifest } from "../../src/acceptance/caseSetSchema";
 import { CASE_POLICY_HASH_V0, type CaseSurface } from "./ids";
 import type { AcceptanceCaptureService, CandidateSubject, GateContext } from "./gates/types";
 import {
-  bySeverity, causesOfGates, executeCase, fingerprintOf, foldRunVerdict, progressOf,
+  bySeverity, carryBaselineCase, causesOfGates, executeCase, fingerprintOf, foldRunVerdict, progressOf,
   type CaseExecution, type CaseRunnerDeps,
 } from "./runner";
+import { baselineCaseIndex, computeImpact, type ImpactReport } from "./impact";
 import { groupRemediations, type RemediationGroup } from "./grouping";
 import {
   acceptancePolicy, DEFAULT_ACCEPTANCE_POLICY_ID, policyProfileHash, withRequiredVisual,
@@ -92,6 +93,13 @@ export interface StartRunInput {
   cases?: { key: string; props: Record<string, unknown> }[];
   /** Пересъёмка вместо reuse (A3); `true` — синоним `"all"` (совместимость W1a). */
   refresh?: RefreshSpec | boolean;
+  /**
+   * Частичная пересъёмка (W6, D6): терминальный ран того же компонента, относительно которого
+   * считается импакт. Незатронутые случаи получают вердикт baseline без съёмки, затронутые
+   * снимаются как обычно. Недоказуемый импакт (`conservative`) означает полный ран — режим
+   * никогда не «экономит» молча.
+   */
+  baselineRunId?: string;
 }
 
 const normalizeRefresh = (refresh: StartRunInput["refresh"]): RefreshSpec => {
@@ -104,6 +112,8 @@ export interface StartRunResult {
   run: AcceptanceRunRow;
   cases: AcceptanceCase[];
   cached: boolean;
+  /** Отчёт импакта, если ран поставлен с `baselineRunId` (W6). */
+  impact?: ImpactReport;
 }
 
 /**
@@ -159,6 +169,12 @@ export class AcceptanceOrchestrator {
   private readonly caseSets = new Map<string, AcceptanceCase[]>();
   private readonly surfaces = new Map<string, CaseSurface>();
   private readonly refreshes = new Map<string, RefreshSpec>();
+  /**
+   * Планы частичной пересъёмки (W6), по `runId`. Живут в памяти процесса — как и props случаев:
+   * ран, переживший рестарт, всё равно убивает стартовая уборка, а потеря плана деградирует
+   * безопасно (полная съёмка), а не в молчаливый reuse.
+   */
+  private readonly impacts = new Map<string, ImpactReport>();
   private active: string | null = null;
   private draining: Promise<void> | null = null;
 
@@ -212,6 +228,17 @@ export class AcceptanceOrchestrator {
         }
       }
     }
+    // Частичная пересъёмка (W6): импакт считается **до** создания рана — недоступный/чужой
+    // baseline обязан отказать постановке, а не всплыть посреди съёмки.
+    const impact = input.baselineRunId === undefined
+      ? null
+      : await computeImpact({
+        db: this.deps.db,
+        dataDir: this.deps.dataDir,
+        repo: this.repo,
+        candidate: candidateRow,
+        baselineRun: this.repo.requireRun(input.baselineRunId),
+      });
     const created = this.repo.createRun({
       candidateId: candidateRow.candidate_id,
       componentId: candidateRow.component_id,
@@ -239,9 +266,10 @@ export class AcceptanceOrchestrator {
       this.caseSets.set(created.run.run_id, cases);
       this.surfaces.set(created.run.run_id, surface);
       if (refresh !== "none") this.refreshes.set(created.run.run_id, refresh);
+      if (impact) this.impacts.set(created.run.run_id, impact);
       if (this.autoDrain) void this.drain();
     }
-    return { run: created.run, cases, cached: created.cached };
+    return { run: created.run, cases, cached: created.cached, ...(impact ? { impact } : {}) };
   }
 
   /** Cancel допустим только из `queued` (триаж A6): бегущий ран не отменяется. */
@@ -316,6 +344,7 @@ export class AcceptanceOrchestrator {
       this.caseSets.delete(runId);
       this.surfaces.delete(runId);
       this.refreshes.delete(runId);
+      this.impacts.delete(runId);
     }
   }
 
@@ -332,6 +361,13 @@ export class AcceptanceOrchestrator {
     const cases = this.caseSets.get(run.run_id)
       ?? (storedManifest ? buildCasesFromManifest(storedManifest) : buildCases(subject.entry));
     const refresh = this.refreshes.get(run.run_id) ?? "none";
+    // План частичной пересъёмки (W6). Он же — источник `impact_json` рана; `conservative`-план
+    // пишется в ран наравне с узким, потому что «доказать сужение не удалось» — это тоже отчёт.
+    const impact = this.impacts.get(run.run_id) ?? null;
+    const carryable = impact === null || impact.basis === "conservative"
+      ? new Set<string>()
+      : new Set(impact.unaffectedCases);
+    const baselineCases = impact === null ? new Map() : baselineCaseIndex(this.repo.cases(impact.baselineRunId));
 
     const shared = new Map<string, unknown>();
     const context: CaseRunnerDeps["context"] = {
@@ -364,7 +400,13 @@ export class AcceptanceOrchestrator {
       if (!current || isTerminalRunStatus(current.status)) return this.repo.requireRun(run.run_id);
       this.repo.updateCase(run.run_id, item.caseId, { status: "running", startedAt: new Date(this.now()).toISOString() });
       const force = this.forceOf(refresh, forced, item.caseId, fingerprintOf(deps, item), subject.componentId);
-      const execution = await executeCase(deps, item, {
+      // Приоритет за `refresh`: явный форс дороже, но он — прямое указание автора, и импакт не
+      // вправе его отменить. Перенос вердикта baseline пробуется только для незатронутых случаев
+      // и молча уступает съёмке, если доказательства baseline больше нет (артефакт вычищен).
+      const carried = force !== null || !carryable.has(item.caseId)
+        ? null
+        : await carryBaselineCase(deps, item, baselineCases.get(item.caseId) ?? { verdict: null, status: "pending", gates_json: null, capture_quality_json: null }, impact!.basis);
+      const execution = carried ?? await executeCase(deps, item, {
         determinismSampled: sampled.has(item.caseId),
         refresh: force !== null,
         ...(force === null ? {} : { refreshReason: force }),
@@ -397,6 +439,10 @@ export class AcceptanceOrchestrator {
       // `gates_json` — сводка статусов по гейтам, и смешивать в ней счётчики с диагностикой значило
       // бы завести в одном поле две формы. Роут поднимает их на верхний уровень ответа.
       progress: { ...progressOf(executions, cases.length, ema, 0), remediationGroups: remediationGroupsOf(executions, cases) },
+      // `impact_json` (W6): план частичной пересъёмки как он был применён. Пишется только когда
+      // ран действительно поставлен с baseline — иначе поле остаётся `null` («импакт не считался»),
+      // а не пустым отчётом.
+      ...(impact === null ? {} : { impact }),
       evidenceManifestHash: manifestHash,
     });
   }
@@ -455,6 +501,7 @@ export class AcceptanceOrchestrator {
       status: execution.status,
       reused: execution.reused,
       ...(execution.reuseReason?.startsWith("refresh:") ? { refreshReason: execution.reuseReason } : {}),
+      ...(execution.reused && execution.reuseReason !== null ? { reuseReason: execution.reuseReason } : {}),
       aliasOfCaseId: execution.aliasOfCaseId,
       artifacts: execution.artifacts.map((artifact) => ({ name: artifact.name, sha256: artifact.sha256, bytes: artifact.bytes })),
     }));
