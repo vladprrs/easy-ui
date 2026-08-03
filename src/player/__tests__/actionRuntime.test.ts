@@ -74,7 +74,7 @@ describe("EasyUiActionRuntime.dispatch", () => {
     const onError = vi.fn();
     const spec: Spec = { root: "r", elements: { r: { type: "L", props: {}, repeat: { statePath: "/rows" }, children: ["c"] }, c: { type: "T", props: {} } } };
     const runtime = new EasyUiActionRuntime({ initialState: { rows: [] }, screenIds: new Set(), deps: { navigate: vi.fn(), back: vi.fn(), openUrl: vi.fn(), restart: vi.fn() }, onError });
-    runtime.setScreenSpec(spec);
+    runtime.setScreenSpec("primary", spec);
     await runtime.dispatch({ action: "setState", params: { statePath: "/rows", value: Array.from({ length: 5000 }, () => 1) } }, ctx());
     expect(runtime.store.get("/rows")).toEqual([]); // rejected
     expect(onError).toHaveBeenCalled();
@@ -92,10 +92,35 @@ describe("EasyUiActionRuntime.dispatch", () => {
       },
     };
     const runtime = new EasyUiActionRuntime({ initialState: { rows: [] }, screenIds: new Set(), deps: { navigate: vi.fn(), back: vi.fn(), openUrl: vi.fn(), restart: vi.fn() }, onError });
-    runtime.setScreenSpec(spec);
+    runtime.setScreenSpec("primary", spec);
     await runtime.dispatch({ action: "setState", params: { statePath: "/rows", value: Array.from({ length: 2500 }, () => 1) } }, ctx());
     expect(runtime.store.get("/rows")).toEqual([]);
     expect(onError).toHaveBeenCalled();
+  });
+
+  it("checks each surface spec against the budget separately (D7)", async () => {
+    const onError = vi.fn();
+    const list = (statePath: string): Spec => ({
+      root: "r",
+      elements: { r: { type: "L", props: {}, repeat: { statePath }, children: ["c"] }, c: { type: "T", props: {} } },
+    });
+    const runtime = new EasyUiActionRuntime({ initialState: { kso: [], app: [] }, screenIds: new Set(), deps: { navigate: vi.fn(), back: vi.fn(), openUrl: vi.fn(), restart: vi.fn() }, onError });
+    runtime.setScreenSpec("kso", list("/kso"));
+    runtime.setScreenSpec("app", list("/app"));
+    // Половина бюджета на каждой панели проходит: проверяется каждая спека, не сумма.
+    await runtime.dispatch({ action: "setState", params: { statePath: "/kso", value: Array.from({ length: 600 }, () => 1) } }, ctx());
+    await runtime.dispatch({ action: "setState", params: { statePath: "/app", value: Array.from({ length: 600 }, () => 1) } }, ctx());
+    expect((runtime.store.get("/kso") as unknown[]).length).toBe(600);
+    expect((runtime.store.get("/app") as unknown[]).length).toBe(600);
+    expect(onError).not.toHaveBeenCalled();
+    // Спека второй поверхности не затирает первую: её собственный перебор отвергается.
+    await runtime.dispatch({ action: "setState", params: { statePath: "/app", value: Array.from({ length: 5000 }, () => 1) } }, ctx());
+    expect((runtime.store.get("/app") as unknown[]).length).toBe(600);
+    expect(onError).toHaveBeenCalled();
+    // Снятие регистрации панели убирает её из проверки.
+    runtime.setScreenSpec("app", null);
+    await runtime.dispatch({ action: "setState", params: { statePath: "/app", value: Array.from({ length: 5000 }, () => 1) } }, ctx());
+    expect((runtime.store.get("/app") as unknown[]).length).toBe(5000);
   });
 });
 

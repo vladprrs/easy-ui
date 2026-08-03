@@ -5,6 +5,8 @@ import { DeviceFrame, isPlayerHelpHotkey, isPlayerHotkeyEvent, useStageZoom } fr
 import { ScreensSidebar } from "./ScreensSidebar";
 import { buildPlayerPath, buildPrototypeRouteBase, documentLifetimeNonce, FlowResetBanner, type PlayerLocationState, usePlayerNavigation } from "./navigation";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
+import { hasSurfaces, screensOfSurface, surfaceOf } from "../prototype/surfaces";
+import { DuoStage } from "./DuoStage";
 import { ScreenSurface } from "./ScreenSurface";
 import { useStatusBarPreference } from "./statusBarPreference";
 import { chip, chipActive, pillDeep, pillGhost } from "../app/chrome";
@@ -108,6 +110,9 @@ export function ScreenView() {
   // её без эффекта (react-hooks/set-state-in-effect).
   const [noteScreenId, setNoteScreenId] = useState<string | null>(null);
   const stageZoom = useStageZoom();
+  // Дуо-док (план multi-surface, D10–D12): сцена — пара панелей, переключатель девайса
+  // прячется (устройство задаёт поверхность), хром считается от сфокусированной поверхности.
+  const duo = hasSurfaces(doc);
   const screen = doc.screens.find((item) => item.id === screenId);
   useDocumentTitle(screen
     ? playerDocumentTitle(doc.name, screen.name, version === undefined ? undefined : Number(version))
@@ -135,7 +140,12 @@ export function ScreenView() {
   const hasScenarioContext = stripScenarioSearch(location.search) !== location.search;
   // Zoom-контролы осмысленны только для фиксированного viewport (canvas-экран или
   // mobile/tablet); desktop auto-height рендерится fluid-веткой без масштаба.
-  const hasFixedViewport = screenCanvas !== undefined || canonicalViewport[device] !== null;
+  // На дуо-доке устройство берётся у поверхности экрана, а desktop-поверхность обязана
+  // нести canvas (D2a) — фиксированный вьюпорт есть у каждой панели.
+  const screenSurface = screen ? surfaceOf(doc, screen.id) : undefined;
+  const hasFixedViewport = duo
+    ? true
+    : screenCanvas !== undefined || canonicalViewport[device] !== null;
   // Оверлей интерактивных зон (T3): подписи целей строятся по документу, а зоны —
   // по сырым `on`-биндингам рантайм-метаданных внутри ScreenSurface.
   const currentFlowId = new URLSearchParams(location.search).get("flow");
@@ -217,7 +227,13 @@ export function ScreenView() {
   const zoomValue = stageZoom.value;
   const toggleFitActual = stageZoom.toggleFitActual;
   const isActualSize = zoomValue.mode === "manual" && zoomValue.zoom === 1;
-  const currentIndex = screen ? doc.screens.indexOf(screen) : -1;
+  // Стрелки ходят в пределах сфокусированной поверхности (D12): на одно-поверхностном
+  // документе это весь `doc.screens` в прежнем порядке.
+  const browseScreens = useMemo(
+    () => duo ? screensOfSurface(doc, navigation.focusedSurfaceId) : doc.screens.map((item) => item.id),
+    [doc, duo, navigation.focusedSurfaceId],
+  );
+  const currentIndex = screen ? browseScreens.indexOf(screen.id) : -1;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isPlayerHotkeyEvent(event)) return;
@@ -225,10 +241,10 @@ export function ScreenView() {
         // Shift+←/→ принадлежат шагам сценария (ScenarioBar, W4-6).
         if (event.shiftKey) return;
         const offset = event.key === "ArrowLeft" ? -1 : 1;
-        const target = doc.screens[currentIndex + offset];
+        const target = currentIndex < 0 ? undefined : browseScreens[currentIndex + offset];
         if (!target) return;
         event.preventDefault();
-        navigation.browseToScreen(target.id);
+        navigation.browseToScreen(target);
       } else if (event.key.toLowerCase() === "r") {
         event.preventDefault();
         navigation.restart();
@@ -242,7 +258,7 @@ export function ScreenView() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentIndex, doc.screens, hasFixedViewport, navigation, toggleFitActual]);
+  }, [browseScreens, currentIndex, hasFixedViewport, navigation, toggleFitActual]);
   // Единый хром /p/* (WF-4): вью поставляет только слоты, тело вью — stage (W1-1).
   const chrome = <PrototypeChrome
     prototypeId={doc.id}
@@ -291,13 +307,15 @@ export function ScreenView() {
         {/* Тумблер зон — включён тёмной пилюлей, выключен лавандовой (макет 04);
             подпись несёт состояние, потому что цвет его не сообщает (W4-9). */}
         <button type="button" aria-pressed={zonesVisible} onClick={() => setZonesVisible((visible) => !visible)} className={zonesVisible ? pillDeep : pillGhost}>{player.zonesToggle(zonesVisible)}</button>
-        <div role="group" aria-label={player.deviceAria} className="flex items-center gap-1">
+        {/* Переключатель девайса на surfaces-доке скрыт (D10): устройство панели
+            задаёт её поверхность, а не выбор зрителя. */}
+        {duo ? null : <div role="group" aria-label={player.deviceAria} className="flex items-center gap-1">
           {(["mobile", "tablet", "desktop"] as const).map((item) => (
             <button key={item} type="button" aria-pressed={device === item} disabled={item === "desktop" && blocksDesktopPreview} title={item === "desktop" && blocksDesktopPreview ? player.desktopOverlayUnavailable : undefined} onClick={() => { setDevice(item); stageZoom.fit(); }} className={`${device === item ? chipActive : chip} disabled:cursor-not-allowed disabled:opacity-50`}>
               {deviceNames[item]}
             </button>
           ))}
-        </div>
+        </div>}
         {hasFixedViewport && <div role="group" aria-label={player.zoomAria} className="flex items-center gap-0.5 rounded-full bg-pay-lavender/50 px-1 py-0.5">
           <button type="button" aria-pressed={zoomValue.mode === "fit"} onClick={stageZoom.fit} className={zoomChip}>{player.zoomFit}</button>
           <button type="button" aria-pressed={isActualSize} onClick={stageZoom.actualSize} className={zoomChip}>{player.zoomActual}</button>
@@ -358,7 +376,9 @@ export function ScreenView() {
     </div>
   </main>;
 
-  const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} canvas={screen.canvas} misclickHighlights hostPrimitivesAllowed={device !== "desktop" || screen.canvas !== undefined} interactiveZones={interactiveZones} />;
+  // D10: на дуо-доке разрешение примитивов хоста считается от поверхности экрана,
+  // на обычном — от выбранного в плеере превью-устройства (прежнее поведение).
+  const rendered = <ScreenSurface registry={registry} runtime={runtime} customDefinitions={customDefinitions} onError={onError} tree={tree!} surfaceId={screenSurface?.id} canvas={screen.canvas} misclickHighlights hostPrimitivesAllowed={(duo ? screenSurface!.device : device) !== "desktop" || screen.canvas !== undefined} interactiveZones={interactiveZones} />;
 
   return <main className="flex h-dvh min-h-0 flex-col">
     {shareDialog}
@@ -380,9 +400,29 @@ export function ScreenView() {
         инструментальные панели инспектора и сценариев. */}
     <div className="relative flex min-h-0 flex-1 bg-pay-lavender text-eui-ink">
       <ScreensSidebar doc={doc} currentScreen={screen.id} collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((prev) => !prev)} />
-      <DeviceFrame device={device} canvas={screen.canvas} zoom={zoomValue} onEffectiveScale={stageZoom.onEffectiveScale} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} statusBarHidden={statusBarHidden} scrollResetKey={screen.id}>
-        <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>{rendered}</ScreenErrorBoundary>
-      </DeviceFrame>
+      {duo
+        ? <DuoStage
+            doc={doc}
+            screenBySurface={navigation.screenBySurface}
+            focusedSurfaceId={navigation.focusedSurfaceId}
+            onFocusSurface={navigation.focusSurface}
+            registry={registry}
+            runtime={runtime}
+            customDefinitions={customDefinitions}
+            customTypes={customTypes}
+            onError={onError}
+            designSystem={doc.designSystem}
+            themeTokens={themeContent?.tokens}
+            statusBarHidden={statusBarHidden}
+            restart={navigation.restart}
+            zoom={zoomValue}
+            onEffectiveScale={stageZoom.onEffectiveScale}
+            misclickHighlights
+            interactiveZones={interactiveZones}
+          />
+        : <DeviceFrame device={device} canvas={screen.canvas} zoom={zoomValue} onEffectiveScale={stageZoom.onEffectiveScale} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} statusBarHidden={statusBarHidden} scrollResetKey={screen.id}>
+            <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>{rendered}</ScreenErrorBoundary>
+          </DeviceFrame>}
       {scenarios.open ? <ScenarioPanel doc={doc} screenId={screen.id} controller={scenarios} /> : null}
       {inspector.enabled && inspector.visible ? <InspectorPanel log={inspector.log} spec={screen.spec} definitions={customDefinitions} pins={pins} /> : null}
       {/* Подсказка про misclick-подсветку (макет 04): белая пилюля в левом нижнем

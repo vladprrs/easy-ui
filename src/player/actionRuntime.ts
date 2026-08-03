@@ -103,7 +103,13 @@ export class EasyUiActionRuntime {
   private readonly screenIds: ReadonlySet<string>;
   private readonly deps: PlayerRuntimeDeps;
   private readonly onError: (message: string, detail?: Record<string, unknown>) => void;
-  private currentSpec: Spec | null = null;
+  /**
+   * Активные спеки экранов — **по поверхности** (план multi-surface, D7). Дуо-сцена
+   * держит смонтированными обе панели, поэтому одно поле спеки затиралось бы второй
+   * поверхностью, а сумма стоимостей молча урезала бы вместимость каждой панели вдвое:
+   * бюджет проверяется по каждой активной спеке отдельно.
+   */
+  private readonly specsBySurface = new Map<string, Spec>();
   /** Ключи `doc.computed` — read-only write-цели и снапшот для инспектора. */
   private readonly computedKeyList: readonly string[];
   /** True while a dispatched state action mutates the store (suppresses the store-level log). */
@@ -197,13 +203,19 @@ export class EasyUiActionRuntime {
   }
 
   private withinBudget(state: StateModel): boolean {
-    if (!this.currentSpec) return true;
-    return computeRenderCost(this.currentSpec, this.currentSpec.root, state) <= REPEAT_RENDER_COST_BUDGET;
+    for (const spec of this.specsBySurface.values()) {
+      if (computeRenderCost(spec, spec.root, state) > REPEAT_RENDER_COST_BUDGET) return false;
+    }
+    return true;
   }
 
-  /** Registers the current screen tree for the mutation cost guard. */
-  setScreenSpec(spec: Spec | null): void {
-    this.currentSpec = spec;
+  /**
+   * Registers the current screen tree of a surface for the mutation cost guard.
+   * `spec === null` снимает регистрацию поверхности (размонтирование панели).
+   */
+  setScreenSpec(surfaceId: string, spec: Spec | null): void {
+    if (spec === null) this.specsBySurface.delete(surfaceId);
+    else this.specsBySurface.set(surfaceId, spec);
   }
 
   private async dispatchOne(action: RawAction, ctx: EmitContext): Promise<void> {

@@ -1,7 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { pillGhost } from "../app/chrome";
 import { loader, player } from "../app/strings/player";
+import { docSurfaces, primarySurface, surfaceOf, type SurfaceAwareDoc } from "../prototype/surfaces";
 
 /**
  * Причина входа на экран (W1-5, сквозное решение 3):
@@ -24,11 +25,25 @@ export interface PlayerNavigation {
   entryReason: PlayerEntryReason;
   /** Flow-переход (действие прототипа): push с ростом flowDepth. */
   navigate: (screenId: string) => void;
-  /** Браузерная навигация (сайдбар/стрелки): replace вне flowDepth. */
-  browseToScreen: (screenId: string) => void;
+  /**
+   * Браузерная навигация (сайдбар/стрелки/шаг сценария): replace вне flowDepth.
+   * `companions` (D5) — экраны других поверхностей: guided browse выставляет обе
+   * панели **одним** replace, а не двумя записями истории.
+   */
+  browseToScreen: (screenId: string, companions?: Record<string, string>) => void;
   goToScreen: (screenId: string) => void;
   back: () => void;
   restart: () => void;
+  /**
+   * Карта «поверхность → её текущий экран», прочитанная из URL (D6): path несёт
+   * экран сфокусированной поверхности, query — `on.<surfaceId>` остальных.
+   * Документ без `doc.surfaces` даёт одну синтетическую primary-запись.
+   */
+  screenBySurface: SurfaceScreenMap;
+  /** Поверхность, чей экран стоит в path: хром, стрелки и зум работают по ней. */
+  focusedSurfaceId: string;
+  /** Перенос фокуса на поверхность без смены её экрана (replace). */
+  focusSurface: (surfaceId: string) => void;
   /** Баннер «Состояние флоу сброшено»: bootstrap-вход не на стартовом экране. */
   flowResetVisible: boolean;
   dismissFlowReset: () => void;
@@ -67,7 +82,97 @@ export function buildPrototypeRouteBase(protoId: string, version?: number): stri
   return `/p/${encodeURIComponent(protoId)}${version === undefined ? "" : `/v/${version}`}`;
 }
 
-export function PlayerNavigationProvider({ startScreen, routeBase, children }: { startScreen: string; routeBase: string; children: ReactNode }) {
+/**
+ * Карта поверхностей в URL (план multi-surface, D6). **URL — источник истины**: path
+ * несёт экран сфокусированной поверхности (`/p/:id/s/:screenId`), query — экраны
+ * остальных (`?on.<surfaceId>=<screenId>`). Отсюда её восстанавливают share-ссылка,
+ * deep-link, Back/Forward и переход из CJM; рантайм действий карту не хранит.
+ */
+export const SURFACE_QUERY_PREFIX = "on.";
+export const surfaceQueryKey = (surfaceId: string) => `${SURFACE_QUERY_PREFIX}${surfaceId}`;
+
+/** Поверхность → её текущий экран. */
+export type SurfaceScreenMap = Readonly<Record<string, string>>;
+
+export interface SurfaceLocation {
+  screenBySurface: SurfaceScreenMap;
+  focusedSurfaceId: string;
+}
+
+const searchOf = (search: string): URLSearchParams => new URLSearchParams(search);
+const searchString = (params: URLSearchParams): string => {
+  const next = params.toString();
+  return next === "" ? "" : `?${next}`;
+};
+
+/** Удаляет всю карту поверхностей из query (restart, инвалидация сессии). */
+export function stripSurfaceSearch(search: string): string {
+  const params = searchOf(search);
+  for (const key of [...params.keys()]) if (key.startsWith(SURFACE_QUERY_PREFIX)) params.delete(key);
+  return searchString(params);
+}
+
+/**
+ * Читает карту из актуальных path+query. Неизвестный, чужой или отсутствующий
+ * `on.<surface>` — фолбэк на `startScreen` поверхности (D6: stale-query после
+ * переключения версий не должен показывать несуществующий экран).
+ */
+export function readSurfaceLocation(doc: SurfaceAwareDoc, screenId: string | undefined, search: string): SurfaceLocation {
+  const surfaces = docSurfaces(doc);
+  const focused = screenId === undefined ? primarySurface(doc) : surfaceOf(doc, screenId);
+  const params = searchOf(search);
+  const known = new Set(doc.screens.map((screen) => screen.id));
+  const screenBySurface: Record<string, string> = {};
+  for (const surface of surfaces) {
+    if (surface.id === focused.id) {
+      screenBySurface[surface.id] = screenId ?? surface.startScreen;
+      continue;
+    }
+    const requested = params.get(surfaceQueryKey(surface.id));
+    screenBySurface[surface.id] = requested !== null && known.has(requested) && surfaceOf(doc, requested).id === surface.id
+      ? requested
+      : surface.startScreen;
+  }
+  return { screenBySurface, focusedSurfaceId: focused.id };
+}
+
+/**
+ * Переписывает `on.*` под новую карту, сохраняя прочий query (`flow`/`step`/`debug`).
+ * Экран сфокусированной поверхности живёт в path и в query не дублируется; документ
+ * без `doc.surfaces` (одна синтетическая поверхность) не получает `on.*` вовсе —
+ * его URL байт-в-байт прежний.
+ */
+export function writeSurfaceSearch(doc: SurfaceAwareDoc, search: string, screenBySurface: SurfaceScreenMap, focusedSurfaceId: string): string {
+  const params = searchOf(stripSurfaceSearch(search));
+  for (const surface of docSurfaces(doc)) {
+    if (surface.id === focusedSurfaceId) continue;
+    const screenId = screenBySurface[surface.id];
+    // Экран по умолчанию (`startScreen` поверхности) в query не пишется: URL несёт
+    // только отклонения от старта, поэтому restart и deep-link без карты дают
+    // одинаковую — и минимальную — ссылку.
+    if (screenId !== undefined && screenId !== surface.startScreen) params.set(surfaceQueryKey(surface.id), screenId);
+  }
+  return searchString(params);
+}
+
+/** Снимок навигации, читаемый действиями: карта, фокус, глубина и query. */
+interface NavigationSnapshot {
+  screenBySurface: SurfaceScreenMap;
+  focusedSurfaceId: string;
+  flowDepth: number;
+  search: string;
+}
+
+export function PlayerNavigationProvider({ startScreen, routeBase, doc, children }: {
+  startScreen: string;
+  routeBase: string;
+  /**
+   * Документ — источник поверхностей (D6). Опционален: без него провайдер работает
+   * с одной синтетической primary-поверхностью, то есть ровно как до фичи.
+   */
+  doc?: SurfaceAwareDoc | undefined;
+  children: ReactNode;
+}) {
   const routerNavigate = useNavigate();
   const location = useLocation();
   const { protoId, screenId } = useParams();
@@ -81,31 +186,84 @@ export function PlayerNavigationProvider({ startScreen, routeBase, children }: {
   const isBootstrap = !state;
   const isStale = Boolean(state && state.sessionNonce !== sessionNonce);
 
+  const surfaceDoc = useMemo<SurfaceAwareDoc>(() => doc ?? { startScreen, screens: [] }, [doc, startScreen]);
+  const { screenBySurface, focusedSurfaceId } = useMemo(
+    () => readSurfaceLocation(surfaceDoc, screenId, search),
+    [screenId, search, surfaceDoc],
+  );
+
+  /**
+   * Актуальное состояние навигации для обработчиков (D6, R1-B1b/R4-m1). Два `navigate`
+   * в одном событии происходят **до** ре-рендера, поэтому карта и `flowDepth` берутся
+   * не из React-замыкания, а из снапшота, который каждый переход обновляет немедленно;
+   * после коммита снапшот пересинхронизируется с фактическим URL.
+   */
+  const navRef = useRef<NavigationSnapshot>({ screenBySurface, focusedSurfaceId, flowDepth: state?.flowDepth ?? 0, search });
+  const flowDepth = state?.flowDepth ?? 0;
+  useEffect(() => {
+    navRef.current = { screenBySurface, focusedSurfaceId, flowDepth, search };
+  }, [flowDepth, focusedSurfaceId, screenBySurface, search]);
+
   useEffect(() => {
     if (!protoId || (!isBootstrap && !isStale)) return;
     // stale (Back в историю до restart) — инвалидация: редирект на startScreen;
     // bootstrap (deep-link/reload) — остаёмся на запрошенном экране, сброс объясняет баннер.
     const target = isStale ? startScreen : (screenId ?? startScreen);
-    routerNavigate({ pathname: buildPlayerPath(routeBase, target), search }, {
+    // Карта нормализуется вместе с path: неизвестный `on.*` уезжает на startScreen
+    // своей поверхности, отсутствующий — дописывается (deep-link без карты).
+    const base = isStale ? stripSurfaceSearch(search) : search;
+    const entry = readSurfaceLocation(surfaceDoc, target, base);
+    const nextSearch = writeSurfaceSearch(surfaceDoc, base, entry.screenBySurface, entry.focusedSurfaceId);
+    routerNavigate({ pathname: buildPlayerPath(routeBase, target), search: nextSearch }, {
       replace: true,
       state: { sessionNonce, flowDepth: 0, entryReason: "bootstrap", documentNonce: documentLifetimeNonce } satisfies PlayerLocationState,
     });
-  }, [isBootstrap, isStale, protoId, routeBase, routerNavigate, screenId, search, sessionNonce, startScreen]);
+  }, [isBootstrap, isStale, protoId, routeBase, routerNavigate, screenId, search, sessionNonce, startScreen, surfaceDoc]);
 
   const navigate = useCallback((target: string) => {
-    if (!protoId || target === screenId || isBootstrap || isStale) return;
-    routerNavigate({ pathname: buildPlayerPath(routeBase, target), search }, {
-      state: { sessionNonce, flowDepth: (state?.flowDepth ?? 0) + 1, entryReason: "flow", documentNonce: documentLifetimeNonce } satisfies PlayerLocationState,
+    if (!protoId || isBootstrap || isStale) return;
+    const current = navRef.current;
+    const targetSurfaceId = surfaceOf(surfaceDoc, target).id;
+    // Ранний выход — «target уже открыт на своей поверхности **и** она сфокусирована»:
+    // иначе переход обязан хотя бы перенести фокус на панель цели.
+    if (current.screenBySurface[targetSurfaceId] === target && current.focusedSurfaceId === targetSurfaceId) return;
+    const nextMap = { ...current.screenBySurface, [targetSurfaceId]: target };
+    const nextSearch = writeSurfaceSearch(surfaceDoc, current.search, nextMap, targetSurfaceId);
+    const nextDepth = current.flowDepth + 1;
+    navRef.current = { screenBySurface: nextMap, focusedSurfaceId: targetSurfaceId, flowDepth: nextDepth, search: nextSearch };
+    routerNavigate({ pathname: buildPlayerPath(routeBase, target), search: nextSearch }, {
+      state: { sessionNonce, flowDepth: nextDepth, entryReason: "flow", documentNonce: documentLifetimeNonce } satisfies PlayerLocationState,
     });
-  }, [isBootstrap, isStale, protoId, routeBase, routerNavigate, screenId, search, sessionNonce, state?.flowDepth]);
+  }, [isBootstrap, isStale, protoId, routeBase, routerNavigate, sessionNonce, surfaceDoc]);
 
-  const browseToScreen = useCallback((target: string) => {
-    if (!protoId || target === screenId || isBootstrap || isStale) return;
-    routerNavigate({ pathname: buildPlayerPath(routeBase, target), search }, {
+  const browseToScreen = useCallback((target: string, companions?: Record<string, string>) => {
+    if (!protoId || isBootstrap || isStale) return;
+    const current = navRef.current;
+    const targetSurfaceId = surfaceOf(surfaceDoc, target).id;
+    const nextMap: Record<string, string> = { ...current.screenBySurface, [targetSurfaceId]: target };
+    for (const [surfaceId, companionScreen] of Object.entries(companions ?? {})) {
+      // Чужие/неизвестные записи игнорируются: карта резолвится вызывающим
+      // (`resolveStepCompanions`), но stored-документ мог прийти из другой версии формата.
+      if (surfaceId === targetSurfaceId || nextMap[surfaceId] === undefined) continue;
+      if (surfaceOf(surfaceDoc, companionScreen).id === surfaceId) nextMap[surfaceId] = companionScreen;
+    }
+    const unchanged = targetSurfaceId === current.focusedSurfaceId
+      && Object.entries(nextMap).every(([surfaceId, value]) => current.screenBySurface[surfaceId] === value);
+    if (unchanged) return;
+    const nextSearch = writeSurfaceSearch(surfaceDoc, current.search, nextMap, targetSurfaceId);
+    navRef.current = { ...current, screenBySurface: nextMap, focusedSurfaceId: targetSurfaceId, search: nextSearch };
+    routerNavigate({ pathname: buildPlayerPath(routeBase, target), search: nextSearch }, {
       replace: true,
-      state: { sessionNonce, flowDepth: state?.flowDepth ?? 0, entryReason: "browse", documentNonce: documentLifetimeNonce } satisfies PlayerLocationState,
+      state: { sessionNonce, flowDepth: current.flowDepth, entryReason: "browse", documentNonce: documentLifetimeNonce } satisfies PlayerLocationState,
     });
-  }, [isBootstrap, isStale, protoId, routeBase, routerNavigate, screenId, search, sessionNonce, state?.flowDepth]);
+  }, [isBootstrap, isStale, protoId, routeBase, routerNavigate, sessionNonce, surfaceDoc]);
+
+  const focusSurface = useCallback((surfaceId: string) => {
+    const current = navRef.current;
+    if (current.focusedSurfaceId === surfaceId) return;
+    const target = current.screenBySurface[surfaceId];
+    if (target !== undefined) browseToScreen(target);
+  }, [browseToScreen]);
 
   const back = useCallback(() => {
     if (isBootstrap || isStale || (state?.flowDepth ?? 0) === 0) return;
@@ -117,11 +275,20 @@ export function PlayerNavigationProvider({ startScreen, routeBase, children }: {
     const nonce = newNonce();
     setSessionNonce(nonce);
     setFlowResetDismissed(false);
-    routerNavigate({ pathname: buildPlayerPath(routeBase, startScreen), search }, {
+    // Все поверхности — на свои startScreen; карта из query вычищается (D6).
+    const nextSearch = stripSurfaceSearch(navRef.current.search);
+    const surfaces = docSurfaces(surfaceDoc);
+    navRef.current = {
+      screenBySurface: Object.fromEntries(surfaces.map((surface) => [surface.id, surface.startScreen])),
+      focusedSurfaceId: primarySurface(surfaceDoc).id,
+      flowDepth: 0,
+      search: nextSearch,
+    };
+    routerNavigate({ pathname: buildPlayerPath(routeBase, startScreen), search: nextSearch }, {
       replace: true,
       state: { sessionNonce: nonce, flowDepth: 0, entryReason: "flow", documentNonce: documentLifetimeNonce } satisfies PlayerLocationState,
     });
-  }, [protoId, routeBase, routerNavigate, search, startScreen]);
+  }, [protoId, routeBase, routerNavigate, startScreen, surfaceDoc]);
 
   const dismissFlowReset = useCallback(() => setFlowResetDismissed(true), []);
   const entryReason = state?.entryReason ?? "bootstrap";
@@ -137,9 +304,12 @@ export function PlayerNavigationProvider({ startScreen, routeBase, children }: {
     goToScreen: browseToScreen,
     back,
     restart,
+    screenBySurface,
+    focusedSurfaceId,
+    focusSurface,
     flowResetVisible,
     dismissFlowReset,
-  }), [back, browseToScreen, dismissFlowReset, entryReason, flowResetVisible, navigate, restart, sessionNonce, state?.flowDepth]);
+  }), [back, browseToScreen, dismissFlowReset, entryReason, flowResetVisible, focusSurface, focusedSurfaceId, navigate, restart, screenBySurface, sessionNonce, state?.flowDepth]);
 
   if (isBootstrap || isStale) return <div role="status" aria-label={loader.loadingPrototype} />;
   return <NavigationContext value={value}>{children}</NavigationContext>;

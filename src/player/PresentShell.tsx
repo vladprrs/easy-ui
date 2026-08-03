@@ -5,6 +5,8 @@ import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtim
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import type { PrototypeDoc } from "../prototype/schema";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
+import { docSurfaces, hasSurfaces, screensOfSurface, surfaceOf } from "../prototype/surfaces";
+import { DuoStage } from "./DuoStage";
 import { pillGhostOnDark } from "../app/chrome";
 import { player, present, presentDocumentTitle, share as shareStrings, shareDocumentTitle } from "../app/strings/player";
 import { useDocumentTitle } from "../app/useDocumentTitle";
@@ -22,6 +24,12 @@ import { useStatusBarPreference } from "./statusBarPreference";
 
 /** Презентация всегда вписывает фрейм в вьюпорт — зум-контролов нет (W1-2). */
 const fitZoom: StageZoom = { mode: "fit", zoom: 1 };
+
+/**
+ * Подпись переключателя поверхностей мобильной презентации. Живёт здесь, а не в
+ * `app/strings/player`: контрол появляется только на дуо-доках и владеется этой волной.
+ */
+const surfaceSwitcherAria = "Поверхности прототипа";
 
 /**
  * Режим презентации (W1-2, P0 «показать прототип заказчику»): маршруты
@@ -45,7 +53,7 @@ export function PresentShell({ share = false }: { share?: boolean }) {
   const [directEntry] = useState(() => navigationType === "POP");
   return <PrototypeLoader protoId={protoId} version={numericVersion} allowArchivedPlaceholder={!share}>
     {({ loaded, custom, runtimeKey, routeBase }) => (
-      <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} routeBase={`${share ? `/share/p/${encodeURIComponent(loaded.doc.id)}/v/${numericVersion}` : routeBase}/present`}>
+      <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} doc={loaded.doc} routeBase={`${share ? `/share/p/${encodeURIComponent(loaded.doc.id)}/v/${numericVersion}` : routeBase}/present`}>
         <LoadedPresent key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} playerBase={routeBase} metaVersion={loaded.designSystemMetaVersion} version={numericVersion} directEntry={directEntry} share={share} mobile={mobile} />
       </PlayerNavigationProvider>
     )}
@@ -118,21 +126,31 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
   const screen = doc.screens.find((item) => item.id === screenId);
   const hasStatusBar = screen !== undefined && Object.values(screen.spec.elements).some((element) => element.region === "statusBar");
   const tree = useMemo(() => (screen ? toRuntimeSpec(screen.spec, { customTypes }) : null), [screen, customTypes]);
+  // Дуо-док (D11–D12): показывается сфокусированная поверхность, вторая панель
+  // остаётся смонтированной (скрыта `display: none`), пейджер и стрелки ходят в
+  // пределах фокуса, а переключатель поверхностей живёт рядом с HUD.
+  const duo = hasSurfaces(doc);
+  const surfaces = docSurfaces(doc);
+  const presentScreens = useMemo(
+    () => duo ? screensOfSurface(doc, navigation.focusedSurfaceId) : doc.screens.map((item) => item.id),
+    [doc, duo, navigation.focusedSurfaceId],
+  );
+  const screenNames = useMemo(() => new Map(doc.screens.map((item) => [item.id, item.name])), [doc.screens]);
   // Возврат в плеер — на тот же экран, что открыт в презентации.
   // Query string (в т.ч. ?debug=1) сохраняется переходом (W1-5).
   const location = useLocation();
   const exitPath = `${screen ? buildPlayerPath(playerBase, screen.id) : playerBase}${location.search}`;
 
-  const currentIndex = screen ? doc.screens.indexOf(screen) : -1;
+  const currentIndex = screen ? presentScreens.indexOf(screen.id) : -1;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isPlayerHotkeyEvent(event)) return;
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         const offset = event.key === "ArrowLeft" ? -1 : 1;
-        const target = doc.screens[currentIndex + offset];
+        const target = currentIndex < 0 ? undefined : presentScreens[currentIndex + offset];
         if (!target) return;
         event.preventDefault();
-        navigation.browseToScreen(target.id);
+        navigation.browseToScreen(target);
       } else if (event.key.toLowerCase() === "r") {
         event.preventDefault();
         navigation.restart();
@@ -154,11 +172,13 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentIndex, doc.screens, exitPath, hotkeysVisible, hudOpen, navigation, routerNavigate, share]);
+  }, [currentIndex, exitPath, hotkeysVisible, hudOpen, navigation, presentScreens, routerNavigate, share]);
 
   const content = screen && tree
     ? <ScreenErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id} restart={navigation.restart}>
-        <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={customDefinitions} onError={onError} tree={tree} canvas={screen.canvas} hostPrimitivesAllowed={doc.device !== "desktop" || screen.canvas !== undefined} />
+        {/* Поверхность экрана (D10): на документе без `surfaces` это синтетическая
+            primary с `doc.device` — прежнее поведение слово в слово. */}
+        <ScreenSurface registry={runtime.registry} runtime={actionRuntime} customDefinitions={customDefinitions} onError={onError} tree={tree} surfaceId={surfaceOf(doc, screen.id).id} canvas={screen.canvas} hostPrimitivesAllowed={surfaceOf(doc, screen.id).device !== "desktop" || screen.canvas !== undefined} />
       </ScreenErrorBoundary>
     : <section role="alert" className="m-6 rounded-2xl bg-white/10 p-6 text-eui-orange">
         <h1 className="font-eui-display text-xl font-bold">{player.screenMissingTitle}</h1>
@@ -174,25 +194,56 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
       <div className="relative flex min-h-0 min-w-0 flex-1">
         {/* Компактный баннер сброса (W1-5): deep-link в середину флоу презентации. */}
         <FlowResetBanner compact />
-        {mobile ? <FluidStage canvas={screen?.canvas} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} resetKey={screen?.id}>
-          {content}
-        </FluidStage> : <DeviceFrame device={doc.device} canvas={screen?.canvas} zoom={fitZoom} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} statusBarHidden={statusBarHidden} scrollResetKey={screen?.id}>
-          {content}
-        </DeviceFrame>}
-        {mobile && <PresentHud open={hudOpen} onOpenChange={setHudOpen} navigation={navigation} current={currentIndex + 1} total={doc.screens.length} exitPath={exitPath} directEntry={directEntry} share={share} />}
+        {duo
+          ? <DuoStage
+              doc={doc}
+              screenBySurface={navigation.screenBySurface}
+              focusedSurfaceId={navigation.focusedSurfaceId}
+              onFocusSurface={navigation.focusSurface}
+              registry={runtime.registry}
+              runtime={actionRuntime}
+              customDefinitions={customDefinitions}
+              customTypes={customTypes}
+              onError={onError}
+              designSystem={doc.designSystem}
+              themeTokens={themeContent?.tokens}
+              statusBarHidden={statusBarHidden}
+              restart={navigation.restart}
+              stage={mobile ? "fluid" : "frame"}
+              layout={mobile ? "focused" : "row"}
+            />
+          : mobile ? <FluidStage canvas={screen?.canvas} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} resetKey={screen?.id}>
+            {content}
+          </FluidStage> : <DeviceFrame device={doc.device} canvas={screen?.canvas} zoom={fitZoom} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} statusBarHidden={statusBarHidden} scrollResetKey={screen?.id}>
+            {content}
+          </DeviceFrame>}
+        {/* Переключатель поверхностей мобильной презентации (D12). Живёт рядом с HUD,
+            а не внутри него: HUD автоскрывается через 4 секунды, а выбор панели —
+            постоянный контрол показа. */}
+        {mobile && duo && <nav aria-label={surfaceSwitcherAria} data-testid="surface-switcher" className="pointer-events-auto absolute left-1/2 top-2 z-40 flex -translate-x-1/2 gap-1 rounded-full bg-pay-deep/90 p-1 text-xs text-white">
+          {surfaces.map((surface) => <button
+            key={surface.id}
+            type="button"
+            aria-pressed={surface.id === navigation.focusedSurfaceId}
+            onClick={() => navigation.focusSurface(surface.id)}
+            className={`rounded-full px-3 py-1.5 font-medium transition-colors duration-100 ${surface.id === navigation.focusedSurfaceId ? "bg-white text-pay-deep" : "hover:bg-white/10"}`}
+          >{surface.name}</button>)}
+        </nav>}
+        {mobile && <PresentHud open={hudOpen} onOpenChange={setHudOpen} navigation={navigation} current={currentIndex + 1} total={presentScreens.length} exitPath={exitPath} directEntry={directEntry} share={share} />}
       </div>
       {!mobile && <footer className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 px-4 py-2.5">
+        {/* Пейджер — экраны сфокусированной поверхности (D12). */}
         <nav aria-label={present.pagerAria} className="flex max-w-full flex-wrap items-center justify-center gap-1.5">
-          {doc.screens.map((item) => (
+          {presentScreens.map((item) => (
             <span
-              key={item.id}
-              title={present.screenDot(item.name)}
-              aria-current={item.id === screen?.id ? "step" : undefined}
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${item.id === screen?.id ? "bg-white" : "bg-white/30"}`}
+              key={item}
+              title={present.screenDot(screenNames.get(item) ?? item)}
+              aria-current={item === screen?.id ? "step" : undefined}
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${item === screen?.id ? "bg-white" : "bg-white/30"}`}
             />
           ))}
         </nav>
-        <span className="text-xs tabular-nums text-eui-ondark-2">{present.counter(currentIndex + 1, doc.screens.length)}</span>
+        <span className="text-xs tabular-nums text-eui-ondark-2">{present.counter(currentIndex + 1, presentScreens.length)}</span>
         {hasStatusBar && <button type="button" aria-pressed={statusBarHidden} onClick={() => setStatusBarHidden(!statusBarHidden)} className={pillGhostOnDark}>{player.statusBarToggle}</button>}
         <button type="button" onClick={navigation.restart} className={pillGhostOnDark}>{player.restart}</button>
         {share ? <span className="text-xs text-eui-ondark-2">{shareStrings.viewerLabel}</span>

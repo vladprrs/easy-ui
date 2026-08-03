@@ -4,6 +4,7 @@ import type { PrototypeDoc } from "../prototype/schema";
 import type { ScenarioStep } from "../prototype/scenario";
 import { scenarioEntryScreen } from "../prototype/scenario";
 import { getAtPointer } from "../prototype/pointer";
+import { docSurfaces, surfaceOf } from "../prototype/surfaces";
 import { EasyUiActionRuntime, type EmitContext, type RawAction } from "./actionRuntime";
 
 /**
@@ -145,32 +146,77 @@ function collectStrings(value: unknown, into: string[]): void {
  * Навигация не трогает роутер — она живёт внутри сессии, поэтому прогон никогда не
  * уводит открытый плеер с экрана и может выполняться параллельно живому сеансу.
  */
+/** Позиция сессии: экран каждой поверхности плюс сфокусированная (план multi-surface, D12). */
+interface SessionPosition {
+  screenBySurface: Record<string, string>;
+  focused: string;
+}
+
 export class ScenarioSession {
   readonly runtime: EasyUiActionRuntime;
   readonly errors: string[] = [];
   readonly openedUrls: string[] = [];
-  private current: string;
-  private history: string[] = [];
+  private position: SessionPosition;
+  private history: SessionPosition[] = [];
 
   constructor(private readonly doc: PrototypeDoc, startScreen?: string) {
-    this.current = startScreen ?? doc.startScreen;
+    this.position = this.startPosition(startScreen);
     this.runtime = new EasyUiActionRuntime({
       initialState: doc.state,
       computed: doc.computed,
       screenIds: new Set(doc.screens.map((screen) => screen.id)),
       deps: {
-        navigate: (screenId) => { this.history.push(this.current); this.current = screenId; return Promise.resolve(); },
-        back: () => { const previous = this.history.pop(); if (previous !== undefined) this.current = previous; return Promise.resolve(); },
-        restart: () => { this.history = []; this.current = this.doc.startScreen; return Promise.resolve(); },
+        // Навигация двигает экран **той** поверхности, которой принадлежит цель, и
+        // переносит на неё фокус — ровно как живой плеер (D6).
+        navigate: (screenId) => {
+          const focused = surfaceOf(this.doc, screenId).id;
+          this.history.push(this.position);
+          this.position = { screenBySurface: { ...this.position.screenBySurface, [focused]: screenId }, focused };
+          return Promise.resolve();
+        },
+        back: () => { const previous = this.history.pop(); if (previous !== undefined) this.position = previous; return Promise.resolve(); },
+        // restart сбрасывает **все** поверхности на их startScreen (D12).
+        restart: () => { this.history = []; this.position = this.startPosition(); return Promise.resolve(); },
         openUrl: (url) => { this.openedUrls.push(url); return Promise.resolve(); },
       },
       onError: (message) => { this.errors.push(message); },
     });
   }
 
-  get screenId(): string { return this.current; }
-  get screen(): Screen | undefined { return this.doc.screens.find((screen) => screen.id === this.current); }
+  private startPosition(startScreen?: string): SessionPosition {
+    const screenBySurface = Object.fromEntries(docSurfaces(this.doc).map((surface) => [surface.id, surface.startScreen]));
+    const entry = startScreen ?? this.doc.startScreen;
+    const focused = surfaceOf(this.doc, entry).id;
+    screenBySurface[focused] = entry;
+    return { screenBySurface, focused };
+  }
+
+  /** Экран сфокусированной поверхности (для одно-поверхностного документа — просто текущий). */
+  get screenId(): string { return this.position.screenBySurface[this.position.focused]!; }
+  get screen(): Screen | undefined { return this.doc.screens.find((screen) => screen.id === this.screenId); }
   get state(): StateModel { return this.runtime.store.get("/") as StateModel; }
+
+  /** Экран поверхности; `undefined` — неизвестная поверхность. */
+  screenOfSurface(surfaceId: string): string | undefined { return this.position.screenBySurface[surfaceId]; }
+
+  /**
+   * `expectScreen` сверяется с картой: экран любой поверхности проверяется по **своей**
+   * поверхности, поэтому шаг про вторую панель не требует переноса фокуса (D12).
+   */
+  isCurrent(screenId: string): boolean {
+    return this.position.screenBySurface[surfaceOf(this.doc, screenId).id] === screenId;
+  }
+
+  /** Отрисованные сейчас экраны: сфокусированный первым, затем остальные панели. */
+  get activeScreens(): Screen[] {
+    const ids = [this.screenId, ...Object.entries(this.position.screenBySurface)
+      .filter(([surfaceId]) => surfaceId !== this.position.focused)
+      .map(([, screenId]) => screenId)];
+    return ids.flatMap((id) => {
+      const screen = this.doc.screens.find((item) => item.id === id);
+      return screen ? [screen] : [];
+    });
+  }
 }
 
 /** Ищет элемент по ключу среди отрисовываемых узлов текущего экрана. */
@@ -184,6 +230,21 @@ function findRendered(screen: Screen, state: StateModel, key: string): ElementCo
   return found;
 }
 
+/**
+ * Ищет элемент среди **активных** экранов сессии (D11: на дуо-доке смонтированы обе
+ * панели, кликнуть можно и по несфокусированной). Сфокусированный экран проверяется
+ * первым, поэтому одно-поверхностный документ ведёт себя как раньше.
+ */
+function locateElement(session: ScenarioSession, state: StateModel, elementKey: string): { screen: Screen; context: ElementContext | null } | null {
+  const declaring = session.activeScreens.filter((screen) => screen.spec.elements[elementKey]);
+  if (!declaring.length) return null;
+  for (const screen of declaring) {
+    const context = findRendered(screen, state, elementKey);
+    if (context) return { screen, context };
+  }
+  return { screen: declaring[0]!, context: null };
+}
+
 async function runStep(step: ScenarioStep, session: ScenarioSession, index: number): Promise<ScenarioStepResult> {
   const screenId = session.screenId;
   const result = (status: ScenarioStepStatus, message?: string): ScenarioStepResult =>
@@ -195,13 +256,14 @@ async function runStep(step: ScenarioStep, session: ScenarioSession, index: numb
   switch (step.type) {
     case "expectScreen": {
       if (!session.screen) return result("stale", `screen_missing:${step.screenId}`);
-      return screenId === step.screenId ? result("pass") : result("fail", `expected_screen:${step.screenId}`);
+      // Карта поверхностей: экран сверяется со **своей** панелью (D12).
+      return session.isCurrent(step.screenId) ? result("pass") : result("fail", `expected_screen:${step.screenId}`);
     }
     case "click": {
-      const authored = screen.spec.elements[step.elementKey];
+      const located = locateElement(session, state, step.elementKey);
       // Ключ ревизионно-скоупный: пропал ключ — это дрейф, а не провал сценария.
-      if (!authored) return result("stale", `element_missing:${step.elementKey}`);
-      const context = findRendered(screen, state, step.elementKey);
+      if (!located) return result("stale", `element_missing:${step.elementKey}`);
+      const context = located.context;
       if (!context) return result("fail", `element_not_rendered:${step.elementKey}`);
       const bindings = context.element.on?.press as RawAction | RawAction[] | undefined;
       // Обработчик мог исчезнуть вместе с переработкой экрана — тоже дрейф ревизии.
@@ -220,11 +282,16 @@ async function runStep(step: ScenarioStep, session: ScenarioSession, index: numb
     case "expectText": {
       const needle = step.text.toLowerCase();
       let hit = false;
-      walkScreen(screen, state, (context) => {
-        const strings: string[] = [];
-        collectStrings(resolveProps(context.element, state, context), strings);
-        if (strings.some((value) => value.toLowerCase().includes(needle))) { hit = true; return true; }
-      });
+      // Текст ищется на всех активных панелях: статус второй поверхности — такая же
+      // часть картинки, как экран сфокусированной.
+      for (const active of session.activeScreens) {
+        if (hit) break;
+        walkScreen(active, state, (context) => {
+          const strings: string[] = [];
+          collectStrings(resolveProps(context.element, state, context), strings);
+          if (strings.some((value) => value.toLowerCase().includes(needle))) { hit = true; return true; }
+        });
+      }
       return hit ? result("pass") : result("fail", `text_not_found:${step.text}`);
     }
     case "setState": {
@@ -237,9 +304,9 @@ async function runStep(step: ScenarioStep, session: ScenarioSession, index: numb
       return deepEqual(actual.value, step.value) ? result("pass") : result("fail", `state_mismatch:${step.pointer}`);
     }
     case "expectDisabled": {
-      const authored = screen.spec.elements[step.elementKey];
-      if (!authored) return result("stale", `element_missing:${step.elementKey}`);
-      const context = findRendered(screen, state, step.elementKey);
+      const located = locateElement(session, state, step.elementKey);
+      if (!located) return result("stale", `element_missing:${step.elementKey}`);
+      const context = located.context;
       if (!context) return result("fail", `element_not_rendered:${step.elementKey}`);
       const props = resolveProps(context.element, state, context);
       return props.disabled === true ? result("pass") : result("fail", `not_disabled:${step.elementKey}`);

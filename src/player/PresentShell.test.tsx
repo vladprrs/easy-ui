@@ -12,6 +12,9 @@ vi.mock("../customComponents/loader", () => ({ loadCustomComponents: mocks.loadC
 const hello = prototypeDocSchema.parse((await import("../../test/fixtures/hello-world.json")).default);
 const draft = (): PrototypeDraft => ({ doc: hello, rev: 1, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [] });
 
+/** Дуо-док (план multi-surface, D11–D12) — обе поверхности на одной ДС. */
+const presentDuoDoc = prototypeDocSchema.parse((await import("../../test/fixtures/duo-pos.json")).default);
+
 const presentOverlayDoc = prototypeDocSchema.parse({
   version: 1, id: "present-overlay", name: "Present Overlay", device: "tablet", startScreen: "main", state: {},
   screens: [{ id: "main", name: "Main", spec: {
@@ -324,5 +327,43 @@ describe("PresentShell (W2-1)", () => {
     expect(router.state.location.pathname).toBe("/share/p/hello-world/v/2/present/s/details");
     fireEvent.keyDown(window, { key: "?", shiftKey: true });
     expect(screen.queryByText("Вернуться в плеер")).toBeNull();
+  });
+});
+
+describe("PresentShell on a duo document (D11–D12)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.localStorage.clear();
+    vi.stubGlobal("matchMedia", matchMedia(false));
+    mocks.getDraft.mockResolvedValue({ ...draft(), doc: presentDuoDoc });
+    mocks.loadCustom.mockResolvedValue({ definitions: {}, components: {} });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("shows both panels on desktop and pages inside the focused surface", async () => {
+    renderAt("/p/duo-pos/present/s/kso-scan?mobile=0");
+    await screen.findByText("Товар в чеке");
+    expect(screen.getAllByTestId("surface-panel")).toHaveLength(2);
+    expect(screen.getByText("Приложение покупателя")).toBeTruthy();
+    // Пейджер — четыре экрана КСО, а не семь экранов документа.
+    expect(screen.getByRole("navigation", { name: "Экраны презентации" }).childElementCount).toBe(4);
+    expect(screen.getByText("2 / 4")).toBeTruthy();
+  });
+
+  it("keeps the hidden surface mounted on mobile and offers a surface switcher", async () => {
+    const router = renderAt("/p/duo-pos/present/s/kso-scan?mobile=1");
+    await screen.findByText("Товар в чеке");
+    const panels = screen.getAllByTestId("surface-panel");
+    expect(panels).toHaveLength(2);
+    // Скрытая панель смонтирована: её содержимое живёт в дереве (D11).
+    expect(panels[1]!.className).toContain("hidden");
+    expect(screen.getByText("Приложение покупателя")).toBeTruthy();
+
+    const switcher = screen.getByTestId("surface-switcher");
+    fireEvent.click(within(switcher).getByRole("button", { name: "Приложение" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/p/duo-pos/present/s/app-home"));
+    expect(router.state.location.search).toBe("?mobile=1&on.kso=kso-scan");
+    expect(screen.getAllByTestId("surface-panel")[0]!.className).toContain("hidden");
+    expect(screen.getByText("Товар в чеке")).toBeTruthy();
   });
 });

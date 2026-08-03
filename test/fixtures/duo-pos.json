@@ -1,0 +1,633 @@
+{
+  "version": 1,
+  "id": "duo-pos",
+  "name": "КСО и приложение покупателя",
+  "description": "Флоу через две поверхности: касса самообслуживания пишет статус заказа в общий стейт, приложение покупателя его читает.",
+  "device": "desktop",
+  "startScreen": "kso-idle",
+  "surfaces": [
+    {
+      "id": "kso",
+      "name": "КСО",
+      "device": "desktop",
+      "startScreen": "kso-idle"
+    },
+    {
+      "id": "app",
+      "name": "Приложение",
+      "device": "mobile",
+      "startScreen": "app-home"
+    }
+  ],
+  "state": {
+    "order": {
+      "status": "idle",
+      "statusLabel": "Нет активного заказа",
+      "total": 1290
+    }
+  },
+  "screens": [
+    {
+      "id": "kso-idle",
+      "name": "КСО · Ожидание",
+      "surface": "kso",
+      "note": "Касса ждёт покупателя. Статус заказа в общем стейте — «нет активного заказа».",
+      "canvas": {
+        "width": 1280,
+        "height": 800
+      },
+      "spec": {
+        "root": "kso-idle-stack",
+        "elements": {
+          "kso-idle-stack": {
+            "type": "Stack",
+            "props": {
+              "direction": "vertical",
+              "gap": "md"
+            },
+            "children": [
+              "kso-idle-title",
+              "kso-idle-status",
+              "kso-idle-scan"
+            ]
+          },
+          "kso-idle-title": {
+            "type": "Text",
+            "props": {
+              "text": "Касса самообслуживания"
+            }
+          },
+          "kso-idle-status": {
+            "type": "Text",
+            "props": {
+              "text": {
+                "$template": "Статус заказа: ${/order/statusLabel}"
+              }
+            }
+          },
+          "kso-idle-scan": {
+            "type": "Button",
+            "props": {
+              "label": "Сканировать товар"
+            },
+            "on": {
+              "press": [
+                {
+                  "action": "setState",
+                  "params": {
+                    "statePath": "/order/status",
+                    "value": "scanning"
+                  }
+                },
+                {
+                  "action": "setState",
+                  "params": {
+                    "statePath": "/order/statusLabel",
+                    "value": "Товар отсканирован"
+                  }
+                },
+                {
+                  "action": "navigate",
+                  "params": {
+                    "screenId": "kso-scan"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "kso-scan",
+      "name": "КСО · Оплата",
+      "surface": "kso",
+      "note": "Оплата на кассе пишет статус в общий стейт и открывает чек в приложении; сама касса остаётся живой панелью.",
+      "canvas": {
+        "width": 1280,
+        "height": 800
+      },
+      "spec": {
+        "root": "kso-scan-stack",
+        "elements": {
+          "kso-scan-stack": {
+            "type": "Stack",
+            "props": {
+              "direction": "vertical",
+              "gap": "md"
+            },
+            "children": [
+              "kso-scan-title",
+              "kso-scan-item",
+              "kso-scan-status",
+              "kso-scan-pay",
+              "kso-scan-cancel",
+              "kso-scan-thanks",
+              "kso-scan-finish"
+            ]
+          },
+          "kso-scan-title": {
+            "type": "Text",
+            "props": {
+              "text": "Товар в чеке"
+            }
+          },
+          "kso-scan-item": {
+            "type": "Text",
+            "props": {
+              "text": {
+                "$template": "Кофе с собой — ${/order/total} ₽"
+              }
+            }
+          },
+          "kso-scan-status": {
+            "type": "Text",
+            "props": {
+              "text": {
+                "$template": "Статус заказа: ${/order/statusLabel}"
+              }
+            }
+          },
+          "kso-scan-pay": {
+            "type": "Button",
+            "props": {
+              "label": "Оплатить"
+            },
+            "visible": {
+              "$state": "/order/status",
+              "eq": "scanning"
+            },
+            "on": {
+              "press": [
+                {
+                  "action": "setState",
+                  "params": {
+                    "statePath": "/order/status",
+                    "value": "paid"
+                  }
+                },
+                {
+                  "action": "setState",
+                  "params": {
+                    "statePath": "/order/statusLabel",
+                    "value": "Оплачен"
+                  }
+                },
+                {
+                  "action": "navigate",
+                  "params": {
+                    "screenId": "app-receipt"
+                  }
+                }
+              ]
+            }
+          },
+          "kso-scan-cancel": {
+            "type": "Button",
+            "props": {
+              "label": "Отменить на кассе"
+            },
+            "visible": {
+              "$state": "/order/status",
+              "eq": "scanning"
+            },
+            "on": {
+              "press": [
+                {
+                  "action": "setState",
+                  "params": {
+                    "statePath": "/order/status",
+                    "value": "cancelled"
+                  }
+                },
+                {
+                  "action": "setState",
+                  "params": {
+                    "statePath": "/order/statusLabel",
+                    "value": "Отменён на кассе"
+                  }
+                },
+                {
+                  "action": "navigate",
+                  "params": {
+                    "screenId": "kso-cancelled"
+                  }
+                }
+              ]
+            }
+          },
+          "kso-scan-thanks": {
+            "type": "Text",
+            "props": {
+              "text": "Оплата принята — чек ушёл в приложение"
+            },
+            "visible": {
+              "$state": "/order/status",
+              "eq": "paid"
+            }
+          },
+          "kso-scan-finish": {
+            "type": "Button",
+            "props": {
+              "label": "Завершить"
+            },
+            "visible": {
+              "$state": "/order/status",
+              "eq": "paid"
+            },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": {
+                  "screenId": "kso-done"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "kso-done",
+      "name": "КСО · Оплачено",
+      "surface": "kso",
+      "note": "Чек ушёл в приложение; касса готова к следующему покупателю.",
+      "canvas": {
+        "width": 1280,
+        "height": 800
+      },
+      "spec": {
+        "root": "kso-done-stack",
+        "elements": {
+          "kso-done-stack": {
+            "type": "Stack",
+            "props": {
+              "direction": "vertical",
+              "gap": "md"
+            },
+            "children": [
+              "kso-done-title",
+              "kso-done-status",
+              "kso-done-new"
+            ]
+          },
+          "kso-done-title": {
+            "type": "Text",
+            "props": {
+              "text": "Спасибо! Чек в приложении"
+            }
+          },
+          "kso-done-status": {
+            "type": "Text",
+            "props": {
+              "text": {
+                "$template": "Статус заказа: ${/order/statusLabel}"
+              }
+            }
+          },
+          "kso-done-new": {
+            "type": "Button",
+            "props": {
+              "label": "Новый заказ"
+            },
+            "on": {
+              "press": [
+                {
+                  "action": "setState",
+                  "params": {
+                    "statePath": "/order/status",
+                    "value": "idle"
+                  }
+                },
+                {
+                  "action": "setState",
+                  "params": {
+                    "statePath": "/order/statusLabel",
+                    "value": "Нет активного заказа"
+                  }
+                },
+                {
+                  "action": "navigate",
+                  "params": {
+                    "screenId": "kso-idle"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "kso-cancelled",
+      "name": "КСО · Отменено",
+      "surface": "kso",
+      "note": "Corner-кейс: кассир отменил заказ — приложение показывает отмену той же записью стейта.",
+      "canvas": {
+        "width": 1280,
+        "height": 800
+      },
+      "spec": {
+        "root": "kso-cancelled-stack",
+        "elements": {
+          "kso-cancelled-stack": {
+            "type": "Stack",
+            "props": {
+              "direction": "vertical",
+              "gap": "md"
+            },
+            "children": [
+              "kso-cancelled-title",
+              "kso-cancelled-status",
+              "kso-cancelled-new"
+            ]
+          },
+          "kso-cancelled-title": {
+            "type": "Text",
+            "props": {
+              "text": "Заказ отменён на кассе"
+            }
+          },
+          "kso-cancelled-status": {
+            "type": "Text",
+            "props": {
+              "text": {
+                "$template": "Статус заказа: ${/order/statusLabel}"
+              }
+            }
+          },
+          "kso-cancelled-new": {
+            "type": "Button",
+            "props": {
+              "label": "Новый заказ"
+            },
+            "on": {
+              "press": [
+                {
+                  "action": "setState",
+                  "params": {
+                    "statePath": "/order/status",
+                    "value": "idle"
+                  }
+                },
+                {
+                  "action": "setState",
+                  "params": {
+                    "statePath": "/order/statusLabel",
+                    "value": "Нет активного заказа"
+                  }
+                },
+                {
+                  "action": "navigate",
+                  "params": {
+                    "screenId": "kso-idle"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "app-home",
+      "name": "Приложение · Главный",
+      "surface": "app",
+      "note": "Покупатель видит статус заказа из общего стейта: отмена на кассе доезжает до приложения без единого действия.",
+      "spec": {
+        "root": "app-home-stack",
+        "elements": {
+          "app-home-stack": {
+            "type": "Stack",
+            "props": {
+              "direction": "vertical",
+              "gap": "md"
+            },
+            "children": [
+              "app-home-title",
+              "app-home-status",
+              "app-home-show",
+              "app-home-cancel-details"
+            ]
+          },
+          "app-home-title": {
+            "type": "Text",
+            "props": {
+              "text": "Приложение покупателя"
+            }
+          },
+          "app-home-status": {
+            "type": "Text",
+            "props": {
+              "text": {
+                "$template": "Статус заказа: ${/order/statusLabel}"
+              }
+            }
+          },
+          "app-home-show": {
+            "type": "Button",
+            "props": {
+              "label": "Показать код кассе"
+            },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": {
+                  "screenId": "kso-scan"
+                }
+              }
+            }
+          },
+          "app-home-cancel-details": {
+            "type": "Button",
+            "props": {
+              "label": "Показать детали отмены"
+            },
+            "visible": {
+              "$state": "/order/status",
+              "eq": "cancelled"
+            },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": {
+                  "screenId": "app-cancelled"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "app-receipt",
+      "name": "Приложение · Чек",
+      "surface": "app",
+      "note": "Чек появляется у покупателя ровно тогда, когда касса записала статус «оплачен».",
+      "spec": {
+        "root": "app-receipt-stack",
+        "elements": {
+          "app-receipt-stack": {
+            "type": "Stack",
+            "props": {
+              "direction": "vertical",
+              "gap": "md"
+            },
+            "children": [
+              "app-receipt-title",
+              "app-receipt-status",
+              "app-receipt-total",
+              "app-receipt-done"
+            ]
+          },
+          "app-receipt-title": {
+            "type": "Text",
+            "props": {
+              "text": "Электронный чек"
+            }
+          },
+          "app-receipt-status": {
+            "type": "Text",
+            "props": {
+              "text": {
+                "$template": "Статус заказа: ${/order/statusLabel}"
+              }
+            }
+          },
+          "app-receipt-total": {
+            "type": "Text",
+            "props": {
+              "text": {
+                "$template": "К оплате: ${/order/total} ₽"
+              }
+            }
+          },
+          "app-receipt-done": {
+            "type": "Button",
+            "props": {
+              "label": "Готово"
+            },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": {
+                  "screenId": "app-home"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "app-cancelled",
+      "name": "Приложение · Отмена",
+      "surface": "app",
+      "note": "Corner-кейс глазами покупателя: отмену видно без единого действия в приложении.",
+      "spec": {
+        "root": "app-cancelled-stack",
+        "elements": {
+          "app-cancelled-stack": {
+            "type": "Stack",
+            "props": {
+              "direction": "vertical",
+              "gap": "md"
+            },
+            "children": [
+              "app-cancelled-title",
+              "app-cancelled-status",
+              "app-cancelled-back"
+            ]
+          },
+          "app-cancelled-title": {
+            "type": "Text",
+            "props": {
+              "text": "Оплата отменена"
+            }
+          },
+          "app-cancelled-status": {
+            "type": "Text",
+            "props": {
+              "text": {
+                "$template": "Статус заказа: ${/order/statusLabel}"
+              }
+            }
+          },
+          "app-cancelled-back": {
+            "type": "Button",
+            "props": {
+              "label": "На главный"
+            },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": {
+                  "screenId": "app-home"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "id": "pos-main",
+      "name": "Оплата на КСО",
+      "description": "Покупка на кассе самообслуживания и чек в приложении.",
+      "steps": [
+        {
+          "screenId": "kso-idle",
+          "companions": {
+            "app": "app-home"
+          },
+          "note": "Касса ждёт покупателя, в приложении — главный экран."
+        },
+        {
+          "screenId": "kso-scan",
+          "companions": {
+            "app": "app-home"
+          },
+          "note": "Товар в чеке кассы; приложение всё ещё на главном экране."
+        },
+        {
+          "screenId": "app-receipt",
+          "companions": {
+            "kso": "kso-done"
+          },
+          "note": "Оплата прошла: касса благодарит, у покупателя — чек."
+        }
+      ]
+    },
+    {
+      "id": "pos-cancel",
+      "name": "Отмена на кассе",
+      "description": "Corner-кейс: заказ отменён на кассе, приложение показывает отмену.",
+      "parentId": "pos-main",
+      "steps": [
+        {
+          "screenId": "kso-scan",
+          "companions": {
+            "app": "app-home"
+          },
+          "note": "Покупатель передумал у кассы."
+        },
+        {
+          "screenId": "kso-cancelled",
+          "companions": {
+            "app": "app-cancelled"
+          },
+          "note": "Кассовая отмена пишет статус в общий стейт."
+        },
+        {
+          "screenId": "app-cancelled",
+          "companions": {
+            "kso": "kso-cancelled"
+          },
+          "note": "Приложение показывает отмену без действий покупателя."
+        }
+      ]
+    }
+  ]
+}

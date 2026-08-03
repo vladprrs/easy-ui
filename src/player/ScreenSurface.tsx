@@ -5,6 +5,7 @@ import { EUI_KEY_ATTRIBUTE } from "../catalog/runtime";
 import type { ComponentDefinition } from "../catalog/definitions";
 import type { createPlayerRuntime } from "../catalog/runtime";
 import { REGION_KINDS } from "../prototype/schema";
+import { SYNTHETIC_PRIMARY_SURFACE_ID } from "../prototype/surfaces";
 import { parseNavigateBinding, type NavigateTarget } from "../prototype/navigateBinding";
 import { player } from "../app/strings/player";
 import { buildScreenRenderPlan, type ElementMetadata, type RuntimeTree } from "../prototype/runtimeSpec";
@@ -19,6 +20,12 @@ export interface ScreenSurfaceProps {
   customDefinitions: Record<string, ComponentDefinition>;
   onError: (message: string, detail?: Record<string, unknown>) => void;
   tree: RuntimeTree;
+  /**
+   * Поверхность экрана (план multi-surface, D7): бюджет мутаций регистрируется
+   * per-surface, поэтому дуо-сцена не затирает спеку соседней панели. Документы без
+   * `doc.surfaces` пользуются синтетическим primary-id — их поведение не меняется.
+   */
+  surfaceId?: string;
   canvas?: { width: number; height: number } | undefined;
   /** Enables player-only 400ms hotspot/on.press hints after a click on inert space. */
   misclickHighlights?: boolean;
@@ -404,14 +411,14 @@ function MisclickHighlightSurface({ metadata, children }: { metadata: Record<str
  * капчер создаёт его с inert-deps, плеер/презентация — с живой навигацией.
  * Хром, стейдж и провайдеры store (JSONUIProvider) остаются у вызывающего.
  */
-export function ScreenSurface({ registry, runtime, customDefinitions, onError, tree, canvas, misclickHighlights = false, hostPrimitivesAllowed = true, interactiveZones }: ScreenSurfaceProps) {
+export function ScreenSurface({ registry, runtime, customDefinitions, onError, tree, surfaceId = SYNTHETIC_PRIMARY_SURFACE_ID, canvas, misclickHighlights = false, hostPrimitivesAllowed = true, interactiveZones }: ScreenSurfaceProps) {
   const screenRegions = useScreenRegions();
   const regionPolicy = screenRegions?.disposition;
   const specs = useMemo(() => {
     return buildScreenRenderPlan(tree, { canvas, regionPolicy, renderHostPrimitives: hostPrimitivesAllowed });
   }, [canvas, hostPrimitivesAllowed, regionPolicy, tree]);
 
-  useEffect(() => { runtime.setScreenSpec(tree.spec); return () => runtime.setScreenSpec(null); }, [runtime, tree.spec]);
+  useEffect(() => { runtime.setScreenSpec(surfaceId, tree.spec); return () => runtime.setScreenSpec(surfaceId, null); }, [runtime, surfaceId, tree.spec]);
   useEffect(() => {
     if (specs.hasBlockedHostPrimitives) console.warn("[overlay] Overlay is not rendered on a desktop flow screen without a canvas");
   }, [specs.hasBlockedHostPrimitives, tree]);

@@ -7,6 +7,7 @@ import { pillDeep } from "../app/chrome";
 import { player } from "../app/strings/player";
 import { FlowTree } from "../cjm/FlowTree";
 import { buildFlowTree, flowBreadcrumb } from "../prototype/flowGraph";
+import { resolveStepCompanions } from "../prototype/surfaces";
 import { isPlayerHotkeyEvent, setPlayerPopoverOpen } from "./DeviceFrame";
 import { buildPrototypeRouteBase, usePlayerNavigation } from "./navigation";
 
@@ -205,8 +206,14 @@ export function ScenarioBar({ doc, currentScreen, runtimeKey }: {
       [stateKey]: { lastConfirmed: current[stateKey]?.lastConfirmed ?? null, pendingTarget: target },
     }));
     pendingOrigins.current[stateKey] = currentScreen;
-    navigation.goToScreen(flow.steps[target]!.screenId);
-  }, [currentScreen, flow, navigation, stateKey]);
+    // Guided browse на дуо-доке выставляет **обе** панели одним replace (D5/D12):
+    // `step.companions` описывает, что в этот момент на второй поверхности.
+    const step = flow.steps[target]!;
+    const companions = Object.fromEntries(
+      resolveStepCompanions(doc, step).map((entry) => [entry.surface.id, entry.screenId]),
+    );
+    navigation.browseToScreen(step.screenId, companions);
+  }, [currentScreen, doc, flow, navigation, stateKey]);
 
   // Шаги сценария на Shift+←/→ (W4-6): без Shift те же клавиши остаются за
   // экранами документа, потому что сценарий есть далеко не у каждого прототипа.

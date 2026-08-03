@@ -139,7 +139,7 @@ function ReadyPlayer({ loaded, custom, runtimeKey, routeBase, metaVersion, debug
     return { published, draft: { doc: draft.doc, rev: draft.rev } };
   }, [loaded.doc.id, loaded.rev, version]);
   const versions = versionsState.status === "ready" ? versionsState.data : null;
-  return <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} routeBase={routeBase}>
+  return <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} doc={loaded.doc} routeBase={routeBase}>
     <LoadedPlayer key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} metaVersion={metaVersion} debug={debug} versions={versions} pins={loaded.components} />
   </PlayerNavigationProvider>;
 }

@@ -149,3 +149,55 @@ describe("runScenario", () => {
     expect(result.steps.map((step) => step.status)).toEqual(["pass", "pass"]);
   });
 });
+
+/**
+ * Дуо-документ (план multi-surface, D12): прогон держит карту «поверхность → экран»,
+ * `restart` сбрасывает **обе** поверхности, `expectScreen` сверяется с картой.
+ * Контракт шага при этом не меняется — те же `expectScreen`/`click`/`expectText`.
+ */
+const duoFixture = (await import("../../test/fixtures/duo-pos.json")).default;
+const duoDoc = (): PrototypeDoc => prototypeDocSchema.parse(structuredClone(duoFixture));
+
+describe("runScenario on a duo document", () => {
+  it("navigates the target surface, keeps the companion and matches expectScreen by surface", async () => {
+    const result = await run([
+      { type: "expectScreen", screenId: "kso-idle" },
+      // Экран второй поверхности — тоже часть картинки: сверка идёт с её панелью.
+      { type: "expectScreen", screenId: "app-home" },
+      { type: "click", elementKey: "kso-idle-scan" },
+      { type: "expectScreen", screenId: "kso-scan" },
+      // Оплата на кассе открывает чек в приложении: цель принадлежит второй поверхности.
+      { type: "click", elementKey: "kso-scan-pay" },
+      { type: "expectScreen", screenId: "app-receipt" },
+      // Касса осталась своей панелью на месте — и уже показывает новый статус.
+      { type: "expectScreen", screenId: "kso-scan" },
+      { type: "expectText", text: "Оплата принята" },
+      // Статус пишет касса, читают обе панели.
+      { type: "expectText", text: "Статус заказа: Оплачен" },
+      { type: "expectState", pointer: "/order/status", value: "paid" },
+    ], duoDoc());
+    expect(result.steps.map((step) => step.status)).toEqual(Array.from({ length: 10 }, () => "pass"));
+    expect(result.status).toBe("pass");
+  });
+
+  it("restart resets every surface", async () => {
+    const session = new ScenarioSession(duoDoc());
+    await session.runtime.dispatch({ action: "navigate", params: { screenId: "app-receipt" } }, { event: "press", payload: undefined, elementId: "x" });
+    await session.runtime.dispatch({ action: "navigate", params: { screenId: "kso-done" } }, { event: "press", payload: undefined, elementId: "x" });
+    expect(session.screenOfSurface("app")).toBe("app-receipt");
+    await session.runtime.dispatch({ action: "restart" }, { event: "press", payload: undefined, elementId: "x" });
+    expect(session.screenId).toBe("kso-idle");
+    expect(session.screenOfSurface("app")).toBe("app-home");
+    expect(session.screenOfSurface("kso")).toBe("kso-idle");
+  });
+
+  it("clicks an element of the non-focused panel", async () => {
+    const result = await run([
+      { type: "expectScreen", screenId: "kso-idle" },
+      // Кнопка живёт на панели приложения, фокус — на КСО: панель смонтирована (D11).
+      { type: "click", elementKey: "app-home-show" },
+      { type: "expectScreen", screenId: "kso-scan" },
+    ], duoDoc());
+    expect(result.steps.map((step) => step.status)).toEqual(["pass", "pass", "pass"]);
+  });
+});

@@ -1,5 +1,5 @@
 import { JSONUIProvider } from "@json-render/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, Outlet, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPlayerRuntime } from "../catalog/runtime";
@@ -10,7 +10,18 @@ import { emptyScenarioDraft } from "./scenarioPanel";
 import { ScreenErrorBoundary } from "./ScreenView";
 import { ScreenView } from "./ScreenView";
 
-const navigation = vi.hoisted(() => ({ navigate: vi.fn(), browse: vi.fn(), restart: vi.fn(), back: vi.fn() }));
+const duoFixture = (await import("../../test/fixtures/duo-pos.json")).default;
+
+const navigation = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  browse: vi.fn(),
+  restart: vi.fn(),
+  back: vi.fn(),
+  focusSurface: vi.fn(),
+  // Карта поверхностей мокнутой навигации: одно-поверхностные документы её не читают.
+  screenBySurface: { kso: "kso-scan", app: "app-home" } as Record<string, string>,
+  focusedSurfaceId: "kso",
+}));
 vi.mock("./navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./navigation")>()),
   usePlayerNavigation: () => ({ ...navigation, sessionNonce: "test", flowDepth: 0, entryReason: "flow" as const, goToScreen: navigation.browse, browseToScreen: navigation.browse, flowResetVisible: false, dismissFlowReset: () => {} }),
@@ -391,5 +402,47 @@ describe("ScreenView Overlay device rules and stage", () => {
     fireEvent.scroll(scroller);
     expect(overlay.parentElement).toBe(overlayLayer);
     expect(overlay.querySelector<HTMLElement>("[data-eui-overlay-content]")!.style.bottom).toBe(bottomBefore);
+  });
+});
+
+/**
+ * Дуо-док в плеере (план multi-surface, D10/D12): пара панелей, скрытый переключатель
+ * устройства, стрелки и сайдбар — в пределах сфокусированной поверхности.
+ */
+describe("ScreenView on a duo document", () => {
+  const duoDoc = () => prototypeDocSchema.parse(structuredClone(duoFixture));
+
+  beforeEach(() => {
+    navigation.browse.mockReset();
+    navigation.focusedSurfaceId = "kso";
+    navigation.screenBySurface = { kso: "kso-scan", app: "app-home" };
+  });
+
+  it("renders both panels and hides the device switcher", () => {
+    renderPlayer(duoDoc(), "/p/duo-pos/s/kso-scan");
+    expect(screen.getAllByTestId("surface-panel")).toHaveLength(2);
+    expect(screen.queryByRole("group", { name: "Устройство" })).toBeNull();
+    expect(screen.getByText("Товар в чеке")).toBeTruthy();
+    expect(screen.getByText("Приложение покупателя")).toBeTruthy();
+  });
+
+  it("moves the arrows inside the focused surface", () => {
+    renderPlayer(duoDoc(), "/p/duo-pos/s/kso-scan");
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    // Следующий экран КСО, а не следующий экран документа.
+    expect(navigation.browse).toHaveBeenCalledWith("kso-done");
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(navigation.browse).toHaveBeenLastCalledWith("kso-idle");
+  });
+
+  it("groups the sidebar by surface and marks the current screen of each panel", () => {
+    renderPlayer(duoDoc(), "/p/duo-pos/s/kso-scan");
+    // Панель сцены и группа сайдбара несут одно имя поверхности — ищем в сайдбаре.
+    const sidebar = screen.getByRole("complementary");
+    const app = within(sidebar).getByRole("region", { name: "Приложение" });
+    expect(within(app).getByRole("button", { name: "Приложение · Главный" }).getAttribute("aria-current")).toBe("page");
+    const kso = within(sidebar).getByRole("region", { name: "КСО" });
+    expect(within(kso).getByRole("button", { name: "КСО · Оплата" }).getAttribute("aria-current")).toBe("page");
+    expect(within(kso).getByRole("button", { name: "КСО · Ожидание" }).getAttribute("aria-current")).toBeNull();
   });
 });

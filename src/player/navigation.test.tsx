@@ -38,6 +38,143 @@ function routerAt(path: string, state?: PlayerLocationState, published = false) 
   );
 }
 
+/** Дуо-документ (план multi-surface): КСО (desktop) + приложение (mobile). */
+const duoDoc = {
+  device: "desktop" as const,
+  designSystem: "e2e-starter",
+  startScreen: "kso-idle",
+  surfaces: [
+    { id: "kso", name: "КСО", device: "desktop" as const, startScreen: "kso-idle" },
+    { id: "app", name: "Приложение", device: "mobile" as const, startScreen: "app-home" },
+  ],
+  screens: [
+    { id: "kso-idle", surface: "kso" },
+    { id: "kso-done", surface: "kso" },
+    { id: "app-home", surface: "app" },
+    { id: "app-receipt", surface: "app" },
+  ],
+};
+
+function DuoProbe() {
+  const nav = usePlayerNavigation();
+  const location = useLocation();
+  return <div>
+    <output data-testid="path">{location.pathname}</output>
+    <output data-testid="search">{location.search}</output>
+    <output data-testid="focused">{nav.focusedSurfaceId}</output>
+    <output data-testid="map">{JSON.stringify(nav.screenBySurface)}</output>
+    <output data-testid="depth">{String(nav.flowDepth)}</output>
+    {/* Два navigate в одном событии — разные поверхности (R1-B1b). */}
+    <button onClick={() => { nav.navigate("kso-done"); nav.navigate("app-receipt"); }}>pay</button>
+    <button onClick={() => nav.navigate("app-receipt")}>open receipt</button>
+    <button onClick={() => nav.browseToScreen("kso-done", { app: "app-receipt" })}>guided step</button>
+    <button onClick={() => nav.focusSurface("app")}>focus app</button>
+    <button onClick={nav.restart}>restart</button>
+  </div>;
+}
+
+function duoRouterAt(path: string, state?: PlayerLocationState) {
+  const [pathname, search] = path.split("?");
+  return createMemoryRouter(
+    [{
+      path: "/p/:protoId/s/:screenId",
+      element: <PlayerNavigationProvider startScreen="kso-idle" routeBase="/p/duo" doc={duoDoc}><DuoProbe /></PlayerNavigationProvider>,
+    }],
+    { initialEntries: [{ pathname, search: search === undefined ? "" : `?${search}`, state }] },
+  );
+}
+
+describe("player navigation — surfaces (D6)", () => {
+  it("two navigate calls in one event update both surfaces", async () => {
+    const router = duoRouterAt("/p/duo/s/kso-idle", sessionState());
+    render(<RouterProvider router={router} />);
+    await act(async () => screen.getByText("pay").click());
+    // Path несёт цель последнего перехода (фокус переехал на приложение),
+    // query — экран второй поверхности.
+    expect(router.state.location.pathname).toBe("/p/duo/s/app-receipt");
+    expect(router.state.location.search).toBe("?on.kso=kso-done");
+    expect(screen.getByTestId("focused").textContent).toBe("app");
+    expect(JSON.parse(screen.getByTestId("map").textContent!)).toEqual({ kso: "kso-done", app: "app-receipt" });
+    // flowDepth считается от актуального состояния, а не от React-замыкания.
+    expect((router.state.location.state as PlayerLocationState).flowDepth).toBe(2);
+  });
+
+  it("restores both panels from history on back", async () => {
+    const router = duoRouterAt("/p/duo/s/kso-idle", sessionState());
+    render(<RouterProvider router={router} />);
+    await act(async () => screen.getByText("pay").click());
+    await act(async () => router.navigate(-1));
+    expect(router.state.location.pathname).toBe("/p/duo/s/kso-done");
+    // Экран по умолчанию в query не пишется: приложение стоит на своём startScreen.
+    expect(router.state.location.search).toBe("");
+    await act(async () => router.navigate(1));
+    expect(router.state.location.pathname).toBe("/p/duo/s/app-receipt");
+    expect(JSON.parse(screen.getByTestId("map").textContent!)).toEqual({ kso: "kso-done", app: "app-receipt" });
+  });
+
+  it("deep link reads the companion surface from the query", async () => {
+    const router = duoRouterAt("/p/duo/s/kso-done?on.app=app-receipt");
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(screen.getByTestId("focused").textContent).toBe("kso"));
+    expect(JSON.parse(screen.getByTestId("map").textContent!)).toEqual({ kso: "kso-done", app: "app-receipt" });
+    expect(router.state.location.search).toBe("?on.app=app-receipt");
+  });
+
+  it("falls back to startScreen for an unknown or foreign on.* value", async () => {
+    const router = duoRouterAt("/p/duo/s/kso-done?on.app=kso-idle&on.gone=x&debug=1");
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(screen.getByTestId("focused").textContent).toBe("kso"));
+    // `kso-idle` принадлежит другой поверхности, `on.gone` — несуществующей: карта
+    // нормализуется на startScreen приложения, прочий query сохраняется.
+    expect(JSON.parse(screen.getByTestId("map").textContent!)).toEqual({ kso: "kso-done", app: "app-home" });
+    expect(router.state.location.search).toBe("?debug=1");
+  });
+
+  it("restart resets every surface and clears the map from the query", async () => {
+    const router = duoRouterAt("/p/duo/s/kso-idle?debug=1", sessionState());
+    render(<RouterProvider router={router} />);
+    await act(async () => screen.getByText("pay").click());
+    await act(async () => screen.getByText("restart").click());
+    expect(router.state.location.pathname).toBe("/p/duo/s/kso-idle");
+    expect(router.state.location.search).toBe("?debug=1");
+    expect(JSON.parse(screen.getByTestId("map").textContent!)).toEqual({ kso: "kso-idle", app: "app-home" });
+  });
+
+  it("guided browse sets both panels with a single replace", async () => {
+    const router = duoRouterAt("/p/duo/s/kso-idle", sessionState());
+    render(<RouterProvider router={router} />);
+    const before = router.state.location.key;
+    await act(async () => screen.getByText("guided step").click());
+    expect(router.state.location.pathname).toBe("/p/duo/s/kso-done");
+    expect(router.state.location.search).toBe("?on.app=app-receipt");
+    expect(router.state.location.key).not.toBe(before);
+    expect((router.state.location.state as PlayerLocationState).entryReason).toBe("browse");
+    // replace: возврат уводит из документа, а не на предыдущий шаг guided browse.
+    expect(router.state.historyAction).toBe("REPLACE");
+  });
+
+  it("focusSurface moves the focus without changing the companion screen", async () => {
+    const router = duoRouterAt("/p/duo/s/kso-idle", sessionState());
+    render(<RouterProvider router={router} />);
+    await act(async () => screen.getByText("focus app").click());
+    expect(router.state.location.pathname).toBe("/p/duo/s/app-home");
+    expect(router.state.location.search).toBe("");
+    expect(screen.getByTestId("focused").textContent).toBe("app");
+  });
+
+  it("navigate to a companion screen that is already open still moves the focus", async () => {
+    const router = duoRouterAt("/p/duo/s/kso-idle", sessionState());
+    render(<RouterProvider router={router} />);
+    // app-home уже открыт на второй панели, но фокус стоит на КСО.
+    await act(async () => screen.getByText("focus app").click());
+    expect(screen.getByTestId("focused").textContent).toBe("app");
+    const navigate = vi.spyOn(router, "navigate");
+    await act(async () => screen.getByText("open receipt").click());
+    expect(navigate).toHaveBeenCalled();
+    expect(router.state.location.pathname).toBe("/p/duo/s/app-receipt");
+  });
+});
+
 describe("player navigation", () => {
   it("does not navigate to the current screen or back at depth zero", async () => {
     const router = routerAt("/p/a/s/one", sessionState());
