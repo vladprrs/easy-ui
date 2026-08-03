@@ -9,7 +9,7 @@ import { REPEAT_RENDER_COST_BUDGET } from "../../src/prototype/validate";
 import { getDesignSystemVersion, getLatestDesignSystemContent } from "../designSystems";
 import type { ThemeContent } from "../designSystemsMeta";
 import { ApiError } from "../http";
-import { ensureDraftCandidate } from "../components/validate";
+import { ensureDraftCandidate, getCandidateForRev, type DraftCandidate } from "../components/validate";
 import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
 import { docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
@@ -32,6 +32,28 @@ export interface CaptureQuality {
   infraNoise: string[];
   runtimeWarnings: string[];
 }
+/**
+ * Исход **джобы** (амендмент A3): крэш chromium, таймаут и отказ очереди до классификации
+ * консоли (`noise.ts`, качество завершившегося капчура) вообще не доходят, поэтому у
+ * acceptance-ретраев своя таксономия. `queue_full` не бывает исходом поставленной джобы —
+ * его возвращает enqueue (см. {@link jobOutcomeOfError}).
+ */
+export type JobOutcome = "ok" | "worker_crash" | "timeout" | "queue_full" | "subprocess_error";
+
+/** Классификация провала джобы по сообщению воркер-раннера/исключения execute. */
+export function classifyJobFailure(message: string): Exclude<JobOutcome, "ok" | "queue_full"> {
+  if (/timed out|timeout|deadline/i.test(message)) return "timeout";
+  // `worker produced no result` — процесс умер, не написав результат (OOM/SIGKILL/креш chromium).
+  if (/produced no result|target closed|browser has been closed|crash|SIGSEGV|SIGKILL|out of memory/i.test(message)) return "worker_crash";
+  return "subprocess_error";
+}
+
+/** Исход для ошибки постановки/чтения джобы: 429 `queue_full` — единственный enqueue-исход. */
+export function jobOutcomeOfError(error: unknown): Exclude<JobOutcome, "ok"> {
+  if (error instanceof ApiError && error.code === "queue_full") return "queue_full";
+  return classifyJobFailure(error instanceof Error ? error.message : String(error));
+}
+
 export interface JobStatus { status: "queued" | "running" | "done" | "error"; result?: ScreenshotResult; error?: { code: string; message: string } }
 export interface ScreenshotImageResult extends CaptureQuality {
   kind: "image";
@@ -40,6 +62,23 @@ export interface ScreenshotImageResult extends CaptureQuality {
   consoleErrors: string[]; pageErrors: string[];
   bundleHash?: string;
   /** Draft head-revision target (P1b): the rendered rev, so clients can report "draft rev N". */
+  draftRev?: number;
+  componentPins?: { id: string; version: number; bundleHash: string }[];
+  rendererBuild: string | null; browserVersion: string;
+}
+/**
+ * Байтовый исход image-джобы (амендмент A4): PNG отдаётся вызывающему (acceptance-оркестратору,
+ * который кладёт его в CAS) и **не** ингестится в asset-store — у asset-store нет GC, а
+ * acceptance снимает десятки кадров на run. Включается опцией enqueue `deliver: "bytes"`;
+ * все существующие пути остаются на `deliver: "asset"`. Байты живут в памяти до истечения
+ * RESULT_TTL (10 мин), размер кадра ограничен теми же 20 Мпикс, что и у asset-режима.
+ */
+export interface ScreenshotImageBytesResult extends CaptureQuality {
+  kind: "image-bytes";
+  bytes: Uint8Array; width: number; height: number;
+  imageProduced: boolean;
+  consoleErrors: string[]; pageErrors: string[];
+  bundleHash?: string;
   draftRev?: number;
   componentPins?: { id: string; version: number; bundleHash: string }[];
   rendererBuild: string | null; browserVersion: string;
@@ -85,7 +124,7 @@ export interface ScreenshotComponentGeometryResult extends CaptureQuality, Geome
 }
 /** Geometry probe result, discriminated by `surface` (P1b добавил компонентную поверхность). */
 export type ScreenshotGeometryResult = ScreenshotPrototypeGeometryResult | ScreenshotComponentGeometryResult;
-export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult;
+export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult | ScreenshotImageBytesResult;
 
 export interface WorkerJob {
   captureOrigin: string; captureUrl: string; token: string;
@@ -116,7 +155,10 @@ interface InternalJob {
   /** Draft-capture extras (P1b): what the bootstrap carries instead of a published DTO. */
   draft?: { name: string; designSystem: string; bundleUrl: string; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>> };
   probe?: "geometry"; resolvedSpaceScale?: Record<SpaceToken, string>; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
+  /** A4: куда уезжает PNG — в asset-store (по умолчанию) или байтами в результат джобы. */
+  deliver?: "asset" | "bytes";
   result?: ScreenshotResult; error?: { code: string; message: string }; resultExpiresAt?: number;
+  jobOutcome?: JobOutcome;
 }
 
 /**
@@ -151,6 +193,8 @@ function emptyGeometryShape(): Pick<GeometryMeasurement, "safeArea" | "roleRects
 }
 
 export const MAX_QUEUE = 5;
+/** Слоты очереди, недоступные фоновым (acceptance) постановкам — план §4.7. */
+export const BACKGROUND_QUEUE_RESERVE = 2;
 export const GEOMETRY_RECT_LIMIT = REPEAT_RENDER_COST_BUDGET;
 const RESULT_TTL_MS = 10 * 60_000;
 
@@ -222,10 +266,21 @@ export class ScreenshotService {
   private requireAvailable(): void {
     if (!this.available()) throw new ApiError(501, "screenshot_unavailable", "Screenshot capture requires SERVE_DIST and an installed chromium");
   }
-  private guardQueue(): void {
+  /**
+   * Резервирование очереди (план §4.7): фоновые (acceptance) постановки отказываются на
+   * `MAX_QUEUE - BACKGROUND_QUEUE_RESERVE`, чтобы интерактиву всегда оставалось 2 слота из 5.
+   * Интерактивная ветка — прежний потолок, тот же код `queue_full`.
+   */
+  private guardQueue(lane: "interactive" | "background" = "interactive"): void {
     this.reapExpired();
-    if (this.queue.length >= MAX_QUEUE) throw new ApiError(429, "queue_full", "Screenshot queue is full; retry later");
+    const cap = lane === "background" ? MAX_QUEUE - BACKGROUND_QUEUE_RESERVE : MAX_QUEUE;
+    if (this.queue.length >= cap) throw new ApiError(429, "queue_full", "Screenshot queue is full; retry later");
   }
+
+  /** Текущая длина очереди (без учёта бегущей джобы) — для планировщика оркестратора. */
+  queueDepth(): number { this.reapExpired(); return this.queue.length; }
+  /** Есть ли слот под фоновую постановку прямо сейчас (без броска 429). */
+  hasBackgroundCapacity(): boolean { return this.queueDepth() < MAX_QUEUE - BACKGROUND_QUEUE_RESERVE; }
 
   /**
    * Ответ enqueue отдаёт разрешённые пины (P2.3/P5.2): для track:head-дока это единственный
@@ -324,6 +379,39 @@ export class ScreenshotService {
     const draft = await ensureDraftCandidate(this.deps.db, this.deps.dataDir, id, userId);
     // Сборка кандидата ждала своей очереди — cap мог заполниться, пока мы компилировали.
     this.guardQueue();
+    const { jobId } = this.pushDraftCapture(id, draft, viewport, dsf, opts);
+    return { jobId };
+  }
+
+  /**
+   * Захват, запиненный к **кандидату** (амендмент A10): бандл и handshake строятся от явной
+   * пары `{rev, sourceHash}` из candidate-кэша, а не от head'а компонента, поэтому смена
+   * head посреди acceptance-run'а не уводит снимаемый билд. Вытесненный бандл — `409
+   * candidate_evicted` (пересборки произвольного rev нет). Постановка фоновая
+   * (`background !== false`): интерактиву остаются зарезервированные слоты очереди.
+   */
+  async enqueueComponentCandidate(
+    id: string,
+    candidate: { rev: number; sourceHash: string },
+    opts: { props?: Record<string, unknown>; exampleName?: string; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry"; deliver?: "asset" | "bytes"; background?: boolean },
+  ): Promise<FrozenEnqueue> {
+    this.requireAvailable();
+    const { viewport, dsf } = validateViewport(opts.viewport, opts.deviceScaleFactor);
+    const lane = opts.background === false ? "interactive" : "background";
+    this.guardQueue(lane);
+    const draft = await getCandidateForRev(this.deps.db, this.deps.dataDir, id, candidate.rev, candidate.sourceHash);
+    this.guardQueue(lane);
+    return this.pushDraftCapture(id, draft, viewport, dsf, opts);
+  }
+
+  /** Общее тело draft/candidate-постановки: bootstrap, allowlist и handshake строятся от `draft`. */
+  private pushDraftCapture(
+    id: string,
+    draft: DraftCandidate,
+    viewport: Viewport,
+    dsf: number,
+    opts: { props?: Record<string, unknown>; exampleName?: string; theme?: string; waitForFonts?: boolean; probe?: "geometry"; deliver?: "asset" | "bytes" },
+  ): FrozenEnqueue {
     const repo = new ComponentRepo(this.deps.db);
     const meta = draft.entry.extracted!.meta!;
     let props = opts.props ?? {};
@@ -346,8 +434,9 @@ export class ScreenshotService {
       kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false,
       draft: { name: repo.row(id).name, designSystem: draft.designSystem, bundleUrl, ...(meta.propsJsonSchema !== undefined ? { propsJsonSchema: meta.propsJsonSchema } : {}), ...(meta.examples !== undefined ? { examples: meta.examples } : {}) },
       ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}),
+      ...(opts.deliver ? { deliver: opts.deliver } : {}),
     });
-    return { jobId };
+    return { jobId, expected };
   }
 
   private prototypeAllowedUrls(
@@ -438,6 +527,15 @@ export class ScreenshotService {
     if (!job) throw new ApiError(404, "job_not_found", "Screenshot job not found");
     return { status: job.status, ...(job.result ? { result: job.result } : {}), ...(job.error ? { error: job.error } : {}) };
   }
+  /**
+   * Исход джобы (A3) для in-process потребителей (acceptance-оркестратор). В HTTP-ответ
+   * `GET /api/screenshot-jobs/:id` намеренно не попадает: контракт этого роута — зона W1a
+   * по openapi/contracts, а таксономия нужна только оркестратору. `undefined` — джоба ещё
+   * не терминальна либо результат уже вычищен по RESULT_TTL.
+   */
+  outcome(jobId: string): JobOutcome | undefined {
+    return this.jobs.get(jobId)?.jobOutcome;
+  }
   /** Test-only introspection of the frozen enqueue snapshot. */
   peek(jobId: string): InternalJob | undefined { return this.jobs.get(jobId); }
 
@@ -476,7 +574,7 @@ export class ScreenshotService {
         ...(job.probe ? { probe: job.probe, geometryLimit: GEOMETRY_RECT_LIMIT, ...(job.geometryRoleKeys ? { geometryRoleKeys: job.geometryRoleKeys } : {}) } : {}),
       };
       const result = await this.deps.runJob(workerJob, JOB_DEADLINE_MS);
-      if (!result.ok) { job.status = "error"; job.error = { code: "capture_failed", message: result.error }; this.expire(job); return; }
+      if (!result.ok) { job.status = "error"; job.error = { code: "capture_failed", message: result.error }; job.jobOutcome = classifyJobFailure(result.error); this.expire(job); return; }
       const quality = this.qualityOf(result);
       if (job.probe === "geometry") {
         if (!("geometry" in result)) throw new Error("geometry worker result mismatch");
@@ -511,11 +609,33 @@ export class ScreenshotService {
           };
         }
         job.status = "done";
+        job.jobOutcome = "ok";
         this.expire(job);
         return;
       }
       if (!("pngBase64" in result)) throw new Error("image worker result mismatch");
       const bytes = Buffer.from(result.pngBase64, "base64");
+      const imageExtras = {
+        ...(job.expected.kind === "component" ? { bundleHash: job.expected.bundleHash }
+          : job.expected.kind === "component-draft" ? { bundleHash: job.expected.bundleHash, draftRev: job.expected.rev }
+          : { componentPins: job.componentPins }),
+      };
+      if (job.deliver === "bytes") {
+        // A4: acceptance-кадр не попадает в asset-store — байты уезжают вызывающему (в CAS).
+        job.result = {
+          kind: "image-bytes",
+          ...quality,
+          imageProduced: true,
+          bytes: new Uint8Array(bytes), width: result.width, height: result.height,
+          consoleErrors: result.consoleErrors, pageErrors: result.pageErrors,
+          ...imageExtras,
+          rendererBuild: job.expected.rendererBuild, browserVersion: result.browserVersion,
+        };
+        job.status = "done";
+        job.jobOutcome = "ok";
+        this.expire(job);
+        return;
+      }
       const assetRepo = new AssetRepo(this.deps.db, this.deps.dataDir);
       const ingest = await assetRepo.ingest(new Uint8Array(bytes), "image/png", "screenshot.png");
       job.result = {
@@ -524,16 +644,16 @@ export class ScreenshotService {
         imageProduced: true,
         imageUrl: `/api/assets/${ingest.asset.id}`, assetId: ingest.asset.id, width: result.width, height: result.height,
         consoleErrors: result.consoleErrors, pageErrors: result.pageErrors,
-        ...(job.expected.kind === "component" ? { bundleHash: job.expected.bundleHash }
-          : job.expected.kind === "component-draft" ? { bundleHash: job.expected.bundleHash, draftRev: job.expected.rev }
-          : { componentPins: job.componentPins }),
+        ...imageExtras,
         rendererBuild: job.expected.rendererBuild, browserVersion: result.browserVersion,
       };
       job.status = "done";
+      job.jobOutcome = "ok";
       this.expire(job);
     } catch (error) {
       job.status = "error";
       job.error = { code: error instanceof ApiError ? error.code : "capture_failed", message: error instanceof Error ? error.message : String(error) };
+      job.jobOutcome = jobOutcomeOfError(error);
       this.expire(job);
     } finally {
       this.sessions.revoke(session.token);

@@ -259,3 +259,33 @@ export async function ensureDraftCandidate(db: Database, dataDir: string, id: st
   }
   return { rev: head.rev, designSystem: head.designSystem, assetIds, sourceHash, entry: entry as CandidateEntry & { ok: true }, cached };
 }
+
+/**
+ * Кандидат по **явной ревизии** (амендмент A10): acceptance-run снимает кадры того билда,
+ * который был зафиксирован при создании кандидата, а не текущего head'а — за 8–15 минут
+ * run'а head может уехать. Отличия от {@link ensureDraftCandidate}:
+ * - исходник читается по `rev` (`repo.source(id, rev)`), а не по head;
+ * - пересборки нет: бандл обязан лежать в candidate-кэше (материализован при создании
+ *   кандидата), иначе `409 candidate_evicted` — пересобирать произвольный rev под
+ *   validate-слотом здесь запрещено;
+ * - проверяется физическое существование `bundle.js`, а не только запись `result.json`.
+ * `sourceHash` кандидата сверяется с хэшем исходника ревизии: расхождение означает, что
+ * пара `{rev, sourceHash}` не с этого компонента/ревизии.
+ */
+export async function getCandidateForRev(
+  db: Database,
+  dataDir: string,
+  id: string,
+  rev: number,
+  sourceHash: string,
+): Promise<DraftCandidate> {
+  const repo = new ComponentRepo(db);
+  const revision = repo.source(id, rev);
+  if (sha256(revision.source) !== sourceHash) {
+    throw new ApiError(409, "candidate_stale", `Candidate sourceHash does not match revision ${rev} of ${id}`);
+  }
+  const assetIds = collectAndValidateComponentAssetRefs(db, revision.source);
+  const found = await getCandidateBundle(dataDir, id, sourceHash);
+  if (!found) throw new ApiError(409, "candidate_evicted", "Candidate bundle is no longer available; re-create the candidate");
+  return { rev: revision.rev, designSystem: revision.designSystem, assetIds, sourceHash, entry: found.entry as CandidateEntry & { ok: true }, cached: true };
+}

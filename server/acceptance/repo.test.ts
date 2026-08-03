@@ -1,0 +1,346 @@
+import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { migrate } from "../migrations";
+import { AcceptanceRepo, isTerminalRunStatus } from "./repo";
+import { buildFingerprint, candidateId, caseFingerprintV0, isRunId, runId } from "./ids";
+import { ACCEPTANCE_POLICIES, policyProfileHash, requiredGates } from "./policies";
+
+const policy = ACCEPTANCE_POLICIES["default-v1"];
+const profileHash = policyProfileHash(policy);
+
+const dbForRepo = () => { const db = new Database(":memory:"); migrate(db); return db; };
+
+const surface = { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" } as const;
+
+function candidateInput(overrides: Partial<Parameters<AcceptanceRepo["createCandidate"]>[0]> = {}) {
+  return {
+    componentId: "yp-badge",
+    designSystem: "yandex-pay",
+    rev: 3,
+    sourceHash: "src-hash",
+    bundleHash: "bundle-hash",
+    hostAbiVersion: 4,
+    themeVersion: 7,
+    observedCatalogRevision: "catalog-rev-1",
+    policyProfileHash: profileHash,
+    createdBy: "user_a",
+    ...overrides,
+  };
+}
+
+function seedRun(repo: AcceptanceRepo, id: string, extra: Record<string, unknown> = {}) {
+  const { candidate } = repo.createCandidate(candidateInput(extra));
+  return repo.createRun({
+    candidateId: candidate.candidate_id,
+    componentId: candidate.component_id,
+    policyProfileId: policy.id,
+    policyProfileHash: profileHash,
+    createdBy: "user_a",
+    cases: [{ caseId: id, caseKey: "default", propsHash: "props-1", casePolicyHash: "case-policy-v0", caseFingerprint: "fp-1" }],
+  }).run;
+}
+
+// ------------------------------------------------------------------ схема v25
+
+test("v25 lands on a database migrated from scratch and leaves no foreign-key violations", () => {
+  const db = dbForRepo();
+  expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(25);
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  // Partial unique index — первый в проекте; его наличие и есть механизм «≤1 нетерминальный run».
+  const index = db.query("SELECT sql FROM sqlite_master WHERE type='index' AND name='acceptance_runs_one_in_flight'").get() as { sql: string } | null;
+  expect(index?.sql).toContain("WHERE status IN ('queued','running')");
+  db.close();
+});
+
+test("design_systems.acceptance defaults to 'off' so the pre-v25 INSERT (image rollback) still works", () => {
+  const db = dbForRepo();
+  db.run("INSERT INTO design_systems (id,name,description,builtin_provider,created_at,updated_at) VALUES ('legacy','Legacy','No acceptance column',NULL,'now','now')");
+  expect(db.query("SELECT acceptance FROM design_systems WHERE id='legacy'").get()).toEqual({ acceptance: "off" });
+  db.close();
+});
+
+// ------------------------------------------------------------ идентичность
+
+test("fingerprints are deterministic and key-order independent", () => {
+  const a = buildFingerprint({ sourceHash: "s", bundleHash: "b", hostAbiVersion: 4, themeVersion: 7 });
+  const b = buildFingerprint({ themeVersion: 7, hostAbiVersion: 4, bundleHash: "b", sourceHash: "s" });
+  expect(a).toBe(b);
+  expect(buildFingerprint({ sourceHash: "s", bundleHash: "b", hostAbiVersion: 4, themeVersion: null })).not.toBe(a);
+  expect(isRunId(runId())).toBe(true);
+  expect(isRunId("acc_not-a-uuid")).toBe(false);
+});
+
+test("identity is component-scoped: one sourceHash shared by two components never shares a candidate or a case result", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const first = repo.createCandidate(candidateInput({ componentId: "yp-badge" })).candidate;
+  const second = repo.createCandidate(candidateInput({ componentId: "yp-chip" })).candidate;
+
+  // Один и тот же source_hash/bundle_hash — это факт продукта (`componentIds` — множество).
+  expect(first.source_hash).toBe(second.source_hash);
+  expect(first.build_fingerprint).toBe(second.build_fingerprint);
+  // …но кандидаты разные: componentId в ключе (триаж E1/B1).
+  expect(first.candidate_id).not.toBe(second.candidate_id);
+  expect(first.candidate_id).toBe(candidateId({
+    componentId: "yp-badge", designSystem: "yandex-pay", rev: 3, buildFingerprint: first.build_fingerprint,
+  }));
+
+  // …и case-отпечатки разные при полностью одинаковых случае/поверхности — иначе cross-owner reuse.
+  const caseA = caseFingerprintV0({ candidateId: first.candidate_id, caseKey: "default", propsHash: "p", surface });
+  const caseB = caseFingerprintV0({ candidateId: second.candidate_id, caseKey: "default", propsHash: "p", surface });
+  expect(caseA).not.toBe(caseB);
+  expect(caseA).toBe(caseFingerprintV0({ candidateId: first.candidate_id, caseKey: "default", propsHash: "p", surface }));
+  db.close();
+});
+
+test("policy registry hashes both profiles distinctly and default-v1 keeps geometry advisory", () => {
+  expect(policyProfileHash(ACCEPTANCE_POLICIES["default-v1"]))
+    .not.toBe(policyProfileHash(ACCEPTANCE_POLICIES["pixel-strict-v1"]));
+  expect(requiredGates(policy)).toEqual(["audit", "contract", "defaults", "determinism", "render"]);
+  expect(policy.gates.geometry).toBe("advisory");
+  expect(policy.allowExceptions).toBe(false);
+});
+
+// -------------------------------------------------------------- кандидаты
+
+test("candidate creation is idempotent by candidate_id and reports cached on repeat", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const first = repo.createCandidate(candidateInput());
+  const second = repo.createCandidate(candidateInput());
+  expect(first.cached).toBe(false);
+  expect(second.cached).toBe(true);
+  expect(second.candidate.candidate_id).toBe(first.candidate.candidate_id);
+  expect((db.query("SELECT COUNT(*) n FROM component_candidates").get() as { n: number }).n).toBe(1);
+
+  // Повтор не переписывает мутируемые поля: promoted обязан пережить повторный POST.
+  repo.markPromoted(first.candidate.candidate_id, 12);
+  const third = repo.createCandidate(candidateInput());
+  expect(third.cached).toBe(true);
+  expect(third.candidate.status).toBe("promoted");
+  expect(third.candidate.promoted_version).toBe(12);
+  db.close();
+});
+
+test("candidate transitions validated -> promoted, is idempotent per version and conflicts on another", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const id = repo.createCandidate(candidateInput()).candidate.candidate_id;
+  expect(repo.requireCandidate(id).status).toBe("validated");
+  expect(repo.markPromoted(id, 5).promoted_version).toBe(5);
+  expect(repo.markPromoted(id, 5).status).toBe("promoted");
+  expect(() => repo.markPromoted(id, 6)).toThrow(/already promoted/i);
+  db.close();
+});
+
+// -------------------------------------------------------------------- раны
+
+test("the partial unique index yields acceptance_run_in_flight and releases the candidate after terminalization", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const candidate = repo.createCandidate(candidateInput()).candidate;
+  const base = {
+    candidateId: candidate.candidate_id, componentId: candidate.component_id,
+    policyProfileId: policy.id, policyProfileHash: profileHash, createdBy: "user_a",
+  };
+  const first = repo.createRun(base).run;
+  expect(first.status).toBe("queued");
+  expect(repo.requireCandidate(candidate.candidate_id).acceptance_run_id).toBe(first.run_id);
+
+  let error: unknown;
+  try { repo.createRun(base); } catch (caught) { error = caught; }
+  expect((error as { status: number; code: string }).status).toBe(409);
+  expect((error as { code: string }).code).toBe("acceptance_run_in_flight");
+
+  // Живой ран остаётся один — неудачная вставка не оставила мусора.
+  expect((db.query("SELECT COUNT(*) n FROM acceptance_runs").get() as { n: number }).n).toBe(1);
+
+  repo.startRun(first.run_id);
+  repo.terminalizeRun(first.run_id, { status: "fail", gates: { render: "fail" } });
+  const second = repo.createRun(base).run;
+  expect(second.run_id).not.toBe(first.run_id);
+  expect(second.status).toBe("queued");
+  db.close();
+});
+
+test("idempotency key returns the same run instead of a conflict", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const candidate = repo.createCandidate(candidateInput()).candidate;
+  const base = {
+    candidateId: candidate.candidate_id, componentId: candidate.component_id,
+    policyProfileId: policy.id, policyProfileHash: profileHash, createdBy: "user_a", idempotencyKey: "key-1",
+  };
+  const first = repo.createRun(base);
+  const second = repo.createRun(base);
+  expect(first.cached).toBe(false);
+  expect(second.cached).toBe(true);
+  expect(second.run.run_id).toBe(first.run.run_id);
+  db.close();
+});
+
+test("terminalization is a single transaction, is not repeated and does not rewrite a verdict", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const run = seedRun(repo, "case-1");
+  repo.startRun(run.run_id);
+  expect(repo.requireRun(run.run_id).started_at).not.toBeNull();
+
+  const failed = repo.terminalizeRun(run.run_id, { status: "fail", gates: { render: "fail" }, evidenceManifestHash: "sha-1" });
+  expect(failed.status).toBe("fail");
+  expect(failed.finished_at).not.toBeNull();
+  expect(isTerminalRunStatus(failed.status)).toBe(true);
+
+  const again = repo.terminalizeRun(run.run_id, { status: "pass", evidenceManifestHash: "sha-2" });
+  expect(again.status).toBe("fail");
+  expect(again.evidence_manifest_hash).toBe("sha-1");
+  expect(again.finished_at).toBe(failed.finished_at);
+
+  // Терминальный ран больше не двигается стартом.
+  expect(repo.startRun(run.run_id)).toBe(false);
+  db.close();
+});
+
+test("startup sweep terminalizes every non-terminal run and unblocks the candidate", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const run = seedRun(repo, "case-1");
+  repo.startRun(run.run_id);
+  const queued = seedRun(repo, "case-2", { componentId: "yp-chip" });
+
+  expect(repo.sweepNonTerminalRuns()).toBe(2);
+  expect(repo.requireRun(run.run_id).status).toBe("error");
+  expect(repo.requireRun(queued.run_id).status).toBe("error");
+  expect(repo.requireRun(run.run_id).finished_at).not.toBeNull();
+  expect(repo.inFlightRun(run.candidate_id)).toBeUndefined();
+  // Повторная уборка на чистой базе — ноль изменений.
+  expect(repo.sweepNonTerminalRuns()).toBe(0);
+  db.close();
+});
+
+test("watchdog selects only running runs older than the deadline", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const stale = seedRun(repo, "case-1");
+  const fresh = seedRun(repo, "case-2", { componentId: "yp-chip" });
+  repo.startRun(stale.run_id, new Date(Date.now() - 60 * 60 * 1000).toISOString());
+  repo.startRun(fresh.run_id);
+
+  const overdue = repo.runningRunsOlderThan(policy.runDeadlineMs);
+  expect(overdue.map(row => row.run_id)).toEqual([stale.run_id]);
+  for (const row of overdue) repo.terminalizeRun(row.run_id, { status: "error" });
+  expect(repo.runningRunsOlderThan(policy.runDeadlineMs)).toEqual([]);
+  db.close();
+});
+
+// ---------------------------------------------------------------- случаи
+
+test("case rows are patched field-by-field and untouched fields survive", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const run = seedRun(repo, "case-1");
+  repo.updateCase(run.run_id, "case-1", { status: "running", startedAt: "2026-08-03T00:00:00.000Z" });
+  repo.updateCase(run.run_id, "case-1", {
+    status: "done", verdict: "fail",
+    gates: { render: "fail" }, severity: { rank: 1, class: "structural" },
+    captureQuality: { captureClean: false, productErrors: 1, runtimeWarnings: 0, infraWarnings: 0 },
+    reuseReason: null, finishedAt: "2026-08-03T00:01:00.000Z",
+  });
+  const row = repo.case(run.run_id, "case-1");
+  expect(row).toMatchObject({ status: "done", verdict: "fail", started_at: "2026-08-03T00:00:00.000Z" });
+  expect(JSON.parse(row!.capture_quality_json!)).toMatchObject({ captureClean: false, productErrors: 1 });
+  expect(repo.cases(run.run_id)).toHaveLength(1);
+  db.close();
+});
+
+test("case results upsert, touch last_used_at, stay component-scoped and expose a union refcount", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const run = seedRun(repo, "case-1");
+  repo.putCaseResult({
+    caseFingerprint: "fp-1", componentId: "yp-badge",
+    artifacts: { png: "sha-a" }, metrics: { ms: 1200 }, verdict: "pass", producedRunId: run.run_id,
+  }, "2026-08-01T00:00:00.000Z");
+  repo.putCaseResult({
+    caseFingerprint: "fp-1", componentId: "yp-badge",
+    artifacts: { png: "sha-b" }, metrics: { ms: 900 }, verdict: "pass", producedRunId: run.run_id,
+  }, "2026-08-02T00:00:00.000Z");
+  expect((db.query("SELECT COUNT(*) n FROM acceptance_case_results").get() as { n: number }).n).toBe(1);
+  expect(repo.caseResult("fp-1")?.last_used_at).toBe("2026-08-02T00:00:00.000Z");
+  repo.touchCaseResult("fp-1", "2026-08-03T00:00:00.000Z");
+  expect(repo.caseResult("fp-1")?.last_used_at).toBe("2026-08-03T00:00:00.000Z");
+
+  // Владение проверяется поверх отпечатка — reuse чужого компонента невозможен.
+  expect(repo.caseResultForComponent("fp-1", "yp-badge")).toBeDefined();
+  expect(repo.caseResultForComponent("fp-1", "yp-chip")).toBeUndefined();
+
+  // Union-refcount: живой случай + строка кэша.
+  expect(repo.caseFingerprintRefcount("fp-1")).toEqual({ cases: 1, results: 1, total: 2 });
+  expect(repo.unreferencedCaseResults("2026-09-01T00:00:00.000Z")).toEqual([]);
+  db.run("DELETE FROM acceptance_cases");
+  expect(repo.caseFingerprintRefcount("fp-1")).toEqual({ cases: 0, results: 1, total: 1 });
+  expect(repo.unreferencedCaseResults("2026-09-01T00:00:00.000Z").map(row => row.case_fingerprint)).toEqual(["fp-1"]);
+  db.close();
+});
+
+// -------------------------------------------------------------------- GC
+
+test("the candidate sweeper skips promoted rows, live runs and anything a publish references", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const past = "2026-01-01T00:00:00.000Z";
+  const expired = (componentId: string) => {
+    const row = repo.createCandidate(candidateInput({ componentId })).candidate;
+    db.query("UPDATE component_candidates SET expires_at=? WHERE candidate_id=?").run(past, row.candidate_id);
+    return row;
+  };
+
+  const plain = expired("yp-plain");
+  const promoted = expired("yp-promoted");
+  repo.markPromoted(promoted.candidate_id, 2);
+  const busy = expired("yp-busy");
+  repo.createRun({
+    candidateId: busy.candidate_id, componentId: busy.component_id,
+    policyProfileId: policy.id, policyProfileHash: profileHash, createdBy: "user_a",
+  });
+  const provenance = expired("yp-provenance");
+  const provenanceRun = repo.createRun({
+    candidateId: provenance.candidate_id, componentId: provenance.component_id,
+    policyProfileId: policy.id, policyProfileHash: profileHash, createdBy: "user_a",
+  }).run;
+  repo.terminalizeRun(provenanceRun.run_id, { status: "pass" });
+  // Плоские TEXT-колонки A9: FK нет, поэтому защиту обеспечивает только запрос свипера.
+  db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('yp-provenance','YpProvenance',1,'yandex-pay','now','now')");
+  db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('yp-provenance',1,'src','yandex-pay','now')");
+  db.query(`INSERT INTO component_publishes
+    (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at,candidate_id,acceptance_run_id)
+    VALUES ('yp-provenance',1,1,'active','js','{}','src-hash','bundle-hash',4,'now',?,?)`)
+    .run(provenance.candidate_id, provenanceRun.run_id);
+
+  const swept = repo.sweepExpiredCandidates();
+  expect(swept.deleted).toBe(1);
+  // `promoted` отсеивается ещё выборкой (в кандидаты на удаление не попадает), поэтому в
+  // `skipped` остаются двое: кандидат с живым раном и кандидат, чей ран держит publish.
+  expect(swept.skipped).toBe(2);
+  expect(repo.candidate(plain.candidate_id)).toBeUndefined();
+  expect(repo.candidate(promoted.candidate_id)?.status).toBe("promoted");
+  expect(repo.candidate(busy.candidate_id)).toBeDefined();
+  expect(repo.candidate(provenance.candidate_id)).toBeDefined();
+  expect(repo.isRunReferencedByPublish(provenanceRun.run_id)).toBe(true);
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  db.close();
+});
+
+test("sweeping a plain expired candidate removes its terminal runs and cascades the cases", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const run = seedRun(repo, "case-1");
+  repo.terminalizeRun(run.run_id, { status: "pass" });
+  db.query("UPDATE component_candidates SET expires_at='2026-01-01T00:00:00.000Z'").run();
+
+  expect(repo.sweepExpiredCandidates()).toEqual({ deleted: 1, skipped: 0 });
+  expect(repo.run(run.run_id)).toBeUndefined();
+  expect((db.query("SELECT COUNT(*) n FROM acceptance_cases").get() as { n: number }).n).toBe(0);
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  db.close();
+});

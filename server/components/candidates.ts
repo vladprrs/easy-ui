@@ -102,6 +102,18 @@ export async function getCandidateBundle(
   catch { return null; }
 }
 
+/**
+ * Физическое существование бандла кандидата (A10): acceptance-run обязан проверять его и
+ * на постановке, и перед переиспользованием — `readCandidate` описывает только запись
+ * `result.json`, а вытеснение GC/ручная чистка сносит каталог целиком.
+ */
+export async function candidateBundlePresent(dataDir: string, componentId: string, sourceHash: string): Promise<boolean> {
+  const entry = await readCandidate(dataDir, sourceHash);
+  if (!entry?.ok || !entry.componentIds.includes(componentId)) return false;
+  try { return (await stat(resolve(candidateDir(dataDir, sourceHash), "bundle.js"))).size > 0; }
+  catch { return false; }
+}
+
 const entryBytes = async (dir: string): Promise<number> => {
   let total = 0;
   for (const file of await readdir(dir)) {
@@ -114,22 +126,37 @@ const entryBytes = async (dir: string): Promise<number> => {
  * Best-effort GC: сносит протухшие и битые записи, затем вытесняет самые старые, пока
  * суммарный вес кэша над потолком. Никогда не бросает — отказ GC не должен ронять ни
  * старт сервера, ни validate.
+ *
+ * `limits.pinned` (A10) — провайдер множества `sourceHash`, которые нельзя вытеснять
+ * (кандидаты нетерминальных acceptance-ранов). Параметр опционален: без него поведение
+ * ровно прежнее.
  */
 export async function gcCandidates(
   dataDir: string,
-  limits: { ttlMs?: number; maxBytes?: number } = {},
+  limits: { ttlMs?: number; maxBytes?: number; pinned?: () => Set<string> | Promise<Set<string>> } = {},
 ): Promise<{ removed: number }> {
   const ttlMs = limits.ttlMs ?? CANDIDATE_CACHE_TTL_MS;
   const maxBytes = limits.maxBytes ?? CANDIDATE_CACHE_MAX_BYTES;
+  // Пины (A10): sourceHash'и кандидатов нетерминальных acceptance-ранов. Провайдер зовётся
+  // один раз за проход; его отказ означает «список пинов неизвестен», и безопасная сторона —
+  // не вытеснить ничего, а не вытеснить запиненное.
+  let pinned: Set<string>;
+  try { pinned = (await limits.pinned?.()) ?? new Set<string>(); }
+  catch { return { removed: 0 }; }
   const root = candidatesRoot(dataDir);
   let names: string[];
   try { names = await readdir(root); } catch { return { removed: 0 }; }
   let removed = 0;
+  // Запиненные записи не вытесняются ни по TTL, ни по LRU, но их байты считаются в потолок —
+  // иначе пин молча поднял бы фактический размер кэша над `maxBytes`.
+  let pinnedBytes = 0;
   const alive: { dir: string; createdAt: number; bytes: number }[] = [];
   for (const name of names) {
     const dir = resolve(root, name);
     try {
       const entry = await readCandidate(dataDir, name);
+      // Битые записи вычищаются всегда: запиненного бандла там уже нет.
+      if (entry !== null && pinned.has(name)) { pinnedBytes += await entryBytes(dir); continue; }
       if (entry === null || candidateExpired(entry, Date.now(), ttlMs)) {
         await rm(dir, { recursive: true, force: true });
         removed++;
@@ -138,7 +165,7 @@ export async function gcCandidates(
       alive.push({ dir, createdAt: Date.parse(entry.createdAt), bytes: await entryBytes(dir) });
     } catch { /* гонка за одну запись — следующий GC дожмёт */ }
   }
-  let total = alive.reduce((sum, item) => sum + item.bytes, 0);
+  let total = alive.reduce((sum, item) => sum + item.bytes, pinnedBytes);
   for (const item of alive.sort((a, b) => a.createdAt - b.createdAt)) {
     if (total <= maxBytes) break;
     try {

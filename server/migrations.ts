@@ -161,6 +161,12 @@ const migrations = [
     // every FK-child into a temp table, drop the children, rebuild the parent, recreate the children
     // (with their FKs + PKs), restore the child rows, then PRAGMA foreign_key_check before bumping
     // user_version. Any new FK-child of component_publishes must be added to this list.
+    // Именно этот инвариант — причина, по которой шаг v25 добавил `candidate_id`/`acceptance_run_id`
+    // плоскими TEXT-колонками БЕЗ FK на `component_candidates`/`acceptance_runs` (амендмент A9
+    // плана family-acceptance): любой новый FK-ребёнок расширял бы контракт этой перестройки,
+    // а `ON DELETE SET NULL` + TTL-GC ранов молча терял бы provenance опубликованной версии.
+    // Колонки-свидетельства сами по себе перестройку не затрагивают: они на родителе, а
+    // `INSERT INTO component_publishes (...) SELECT ...` выше перечисляет столбцы явно.
     db.run("CREATE TABLE _prc_backup AS SELECT * FROM prototype_revision_components");
     db.run("CREATE TABLE _cpa_backup AS SELECT * FROM component_publish_assets");
     db.run("DROP TABLE prototype_revision_components");
@@ -650,6 +656,107 @@ const migrations = [
           WHERE json_extract(value,'$.designSystem') IN (SELECT id FROM design_systems WHERE retired=1))
         BEGIN SELECT RAISE(ABORT,'retired design system reference'); END`);
     }
+  },
+  (db: Database) => {
+    // v25: durable-слой candidate acceptance (RFC 2026-08-02 §3.2–3.3 с амендментами A1/A4/A9,
+    // план 2026-08-03 family-acceptance §5 W1a). Схема вводится целиком одной миграцией, потому
+    // что четыре таблицы связаны одним жизненным циклом (кандидат → run → случаи → CAS-результаты)
+    // и половинчатое состояние никому не полезно.
+    //
+    // 1. `component_candidates` — идентичность **component-scoped** (RFC §5/триаж E1): PK уже
+    //    содержит componentId+designSystem+rev+buildFingerprint, поэтому один `source_hash`,
+    //    принадлежащий нескольким компонентам, не коллидирует и не даёт cross-owner disclosure.
+    //    `build_fingerprint` — обычный индекс, НЕ unique (несколько компонентов/ревизий законно
+    //    делят сборочный отпечаток). `observed_catalog_revision` — справка, вне идентичности.
+    //    Строка иммутабельна кроме status/status_reason/acceptance_run_id/promoted_version.
+    // 2. `acceptance_runs` — иммутабелен после терминализации (D2). FK на `component_candidates`
+    //    допустим: обе таблицы создаются этим же шагом, ребёнок находится в acceptance-подсистеме
+    //    и не участвует в v8-перестройке `component_publishes`. Partial unique index —
+    //    «≤1 нетерминальный run на кандидата» (триаж E4): `SQLITE_CONSTRAINT` маппится
+    //    репозиторием в доменный `acceptance_run_in_flight` → 409. Это первый partial index
+    //    в проекте.
+    // 3. `acceptance_cases` — единственная мутируемая часть рана (D2); поля качества капчура
+    //    (D11) и severity живут здесь, run несёт только агрегат.
+    // 4. `acceptance_case_results` — cross-run кэш по `case_fingerprint` (D1) для reuse/дедупа;
+    //    `component_id` денормализован, потому что reuse обязан проверять владение. Ссылок FK
+    //    на раны нет намеренно: GC ранов не должен каскадом рушить кэш результатов.
+    // 5. `component_publishes.candidate_id`/`acceptance_run_id` — плоские TEXT без FK (A9,
+    //    см. комментарий-инвариант v8 выше). `design_systems.acceptance` — с обязательным
+    //    DEFAULT 'off': старый код (`routes/designSystems.ts`, `bundle/importer.ts`) INSERT'ит
+    //    без этой колонки, поэтому откат образа обязан оставаться безопасным. CHECK намеренно
+    //    нет — точка контроля контрактная, как у `kind`/`track`.
+    db.run(`CREATE TABLE component_candidates (
+      candidate_id TEXT PRIMARY KEY,
+      component_id TEXT NOT NULL, design_system TEXT NOT NULL, rev INTEGER NOT NULL,
+      source_hash TEXT NOT NULL, bundle_hash TEXT NOT NULL, host_abi_version INTEGER NOT NULL,
+      theme_version INTEGER,
+      build_fingerprint TEXT NOT NULL,
+      observed_catalog_revision TEXT NOT NULL,
+      policy_profile_hash TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('validated','promoted')),
+      status_reason TEXT,
+      acceptance_run_id TEXT,
+      promoted_version INTEGER,
+      created_by TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL)`);
+    db.run("CREATE INDEX component_candidates_build_fingerprint ON component_candidates (build_fingerprint)");
+    db.run("CREATE INDEX component_candidates_component ON component_candidates (component_id, created_at)");
+    db.run("CREATE INDEX component_candidates_expires ON component_candidates (expires_at)");
+
+    db.run(`CREATE TABLE acceptance_runs (
+      run_id TEXT PRIMARY KEY,
+      candidate_id TEXT NOT NULL REFERENCES component_candidates(candidate_id),
+      component_id TEXT NOT NULL,
+      idempotency_key TEXT,
+      status TEXT NOT NULL CHECK(status IN ('queued','running','pass','pass_with_exceptions','fail','error','cancelled')),
+      policy_profile_hash TEXT NOT NULL,
+      case_set_id TEXT,
+      policy_profile_id TEXT NOT NULL,
+      progress_json TEXT NOT NULL,
+      impact_json TEXT,
+      gates_json TEXT NOT NULL,
+      evidence_manifest_hash TEXT,
+      started_at TEXT, finished_at TEXT,
+      created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+      UNIQUE (candidate_id, idempotency_key))`);
+    db.run(`CREATE UNIQUE INDEX acceptance_runs_one_in_flight
+      ON acceptance_runs (candidate_id) WHERE status IN ('queued','running')`);
+    db.run("CREATE INDEX acceptance_runs_component ON acceptance_runs (component_id, created_at)");
+    db.run("CREATE INDEX acceptance_runs_status ON acceptance_runs (status, started_at)");
+
+    db.run(`CREATE TABLE acceptance_cases (
+      run_id TEXT NOT NULL REFERENCES acceptance_runs(run_id) ON DELETE CASCADE,
+      case_id TEXT NOT NULL,
+      case_key TEXT NOT NULL,
+      props_hash TEXT NOT NULL,
+      case_fingerprint TEXT NOT NULL,
+      case_policy_hash TEXT NOT NULL,
+      reference_asset_id TEXT,
+      expected_geometry_json TEXT,
+      status TEXT NOT NULL CHECK(status IN ('pending','running','done','error','skipped')),
+      verdict TEXT,
+      gates_json TEXT,
+      severity_json TEXT,
+      capture_quality_json TEXT,
+      alias_of_case_id TEXT,
+      reuse_reason TEXT,
+      started_at TEXT, finished_at TEXT,
+      PRIMARY KEY (run_id, case_id))`);
+    db.run("CREATE INDEX acceptance_cases_fingerprint ON acceptance_cases (case_fingerprint)");
+
+    db.run(`CREATE TABLE acceptance_case_results (
+      case_fingerprint TEXT PRIMARY KEY,
+      component_id TEXT NOT NULL,
+      artifacts_json TEXT NOT NULL,
+      metrics_json TEXT NOT NULL,
+      verdict TEXT NOT NULL,
+      produced_run_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT NOT NULL)`);
+    db.run("CREATE INDEX acceptance_case_results_last_used ON acceptance_case_results (last_used_at)");
+
+    db.run("ALTER TABLE component_publishes ADD COLUMN candidate_id TEXT DEFAULT NULL");
+    db.run("ALTER TABLE component_publishes ADD COLUMN acceptance_run_id TEXT DEFAULT NULL");
+    db.run("ALTER TABLE design_systems ADD COLUMN acceptance TEXT NOT NULL DEFAULT 'off'");
   },
 ] as const;
 
