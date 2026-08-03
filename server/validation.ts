@@ -9,6 +9,7 @@ import { hostPrimitiveDefinitions, hostPrimitiveNames } from "../src/catalog/hos
 import { collectCompositionRefs, expandCompositions, type CompositionCatalogEntry } from "../src/prototype/composition";
 import { resolveCompositionPins, type ComponentDependencyPin, type CompositionDependencyPin } from "./repos/compositions";
 import { docSurfaces, surfaceDesignSystem, surfaceOf } from "../src/prototype/surfaces";
+import type { ComponentLayout } from "../src/designSystems/types";
 
 // Walks every element prop looking for {"$asset":"<id>"} directives, returning the referenced ids.
 export function collectAssetIds(doc:PrototypeDoc):string[] {
@@ -75,10 +76,30 @@ export function componentCanonicalRoles(db: Database, designSystem: string): Rec
   return roles;
 }
 
-function expandNestedCompositions(doc: PrototypeDoc, compositions: Record<string, CompositionCatalogEntry>, componentRoles?: Record<string, string[]>): PrototypeDoc {
+/**
+ * Layout-контракты v1 активных компонентов ДС по имени типа (W8e). Token layout элемента
+ * тела v3 компилируется в props **детерминированно**, а эта карта нужна только для
+ * диагностики `composition/layout-unsupported` в save-пути.
+ */
+export function componentLayoutContracts(db: Database, designSystem: string): Record<string, ComponentLayout | undefined> {
+  const rows = db.query(`SELECT c.name name, p.definition_meta definitionMeta
+    FROM components c JOIN component_publishes p ON p.component_id=c.id AND p.status='active'
+    JOIN component_revisions r ON r.component_id=p.component_id AND r.rev=p.rev
+    WHERE r.design_system=? AND c.deleted_at IS NULL`).all(designSystem) as { name: string; definitionMeta: string }[];
+  const layouts: Record<string, ComponentLayout | undefined> = {};
+  for (const row of rows) {
+    try {
+      const meta = JSON.parse(row.definitionMeta) as { layout?: ComponentLayout };
+      if (meta.layout && typeof meta.layout === "object") layouts[row.name] = meta.layout;
+    } catch { /* invalid legacy metadata is reported by its own validation path */ }
+  }
+  return layouts;
+}
+
+function expandNestedCompositions(doc: PrototypeDoc, compositions: Record<string, CompositionCatalogEntry>, componentRoles?: Record<string, string[]>, componentLayouts?: Record<string, ComponentLayout | undefined>): PrototypeDoc {
   let current = doc;
   for (let pass = 0; pass <= COMPOSITION_EXPANSION_PASSES; pass += 1) {
-    const expanded = expandCompositions(current, { compositions, designSystem: current.designSystem, componentRoles });
+    const expanded = expandCompositions(current, { compositions, designSystem: current.designSystem, componentRoles, componentLayouts });
     if (expanded.issues.length) {
       throw new ApiError(422, "validation_failed", "Prototype document is invalid", {
         issues: expanded.issues.map((issue) => ({ path: issue.path.split("/").filter(Boolean), message: issue.message })),
@@ -127,7 +148,7 @@ export function expandPrototypeForSave(db:Database,doc:PrototypeDoc):{doc:Protot
   const {docs,sources,pins,componentPins,missing}=resolveCompositionPins(db,refs.map(ref=>ref.compositionId),doc.designSystem);
   if(missing.length) throw new ApiError(422,"validation_failed","Prototype references compositions that are unavailable",
     {issues:missing.map(entry=>({path:["screens"],message:entry.reason}))});
-  const expanded=expandNestedCompositions(doc,sources,componentCanonicalRoles(db,doc.designSystem));
+  const expanded=expandNestedCompositions(doc,sources,componentCanonicalRoles(db,doc.designSystem),componentLayoutContracts(db,doc.designSystem));
   if(componentPins.length) compositionComponentPins.set(expanded, new Map(componentPins.map((pin) => [pin.name, pin])));
   return {doc:expanded,pins,compositions:docs};
 }

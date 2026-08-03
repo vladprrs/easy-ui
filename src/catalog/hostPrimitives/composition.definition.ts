@@ -30,6 +30,11 @@ export const compositionDefinition = {
     composition: z.string().regex(slugPattern, "must be a slug"),
     /** Значения объявленных параметров композиции. */
     params: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * Выбор варианта композиции v3 (план 2026-08-03 W8f): «ось → значение».
+     * Резолвится в значения параметров при раскрытии; пересечение с `params` — ошибка.
+     */
+    variant: z.record(z.string(), z.string()).optional(),
   }),
   // Список слотов динамический — берётся из документа композиции (см. validate.ts).
   slots: [],

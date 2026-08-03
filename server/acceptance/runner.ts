@@ -21,6 +21,7 @@ import { artifactPresent } from "./evidence";
 import { caseFingerprintV0, type CaseSurface } from "./ids";
 import { CaptureInfraError } from "./gates/capture";
 import { GATE_ORDER, IMPLEMENTED_GATES } from "./gates";
+import { readinessBlocksVisual } from "./gates/readiness";
 import { renderQualityKey } from "./gates/render";
 import type { CandidateSubject, GateArtifactRef, GateContext, GateResult } from "./gates/types";
 import { requiredGates, type AcceptancePolicy, type GateName } from "./policies";
@@ -77,6 +78,13 @@ export function fingerprintOf(deps: Pick<CaseRunnerDeps, "candidate" | "surface"
     ...(item.casePolicyHash === undefined ? {} : { casePolicyHash: item.casePolicyHash }),
   });
 }
+
+/**
+ * Гейты, чей вердикт — **сравнение кадра** (с контуром, с самим собой, с эталоном). Ровно они
+ * запрещены на не-ready кадре (D5); структурные гейты (`contract`/`defaults`/`audit`) кадра не
+ * касаются и считаются как обычно.
+ */
+const COMPARING_GATES = new Set<GateName>(["geometry", "determinism", "visual"]);
 
 const SEVERITY_RANK: Record<SeverityClass, number> = { structural: 0, geometry: 1, raw: 2, aa: 3, indeterminate: 4 };
 
@@ -249,6 +257,19 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
   for (const name of GATE_ORDER) {
     const gate = IMPLEMENTED_GATES[name];
     if (!gate || modes[name] === "not-implemented") continue;
+    // **Инвариант D5**: кадр, не прошедший readiness, не получает визуального вердикта. Сравнения
+    // (геометрия, детерминизм, визуал W5a) не считаются вовсе — их результат относился бы к
+    // кадру, снятому до готовности шрифтов/ассетов, и обвинял бы компонент за чужой дефект.
+    // Это `indeterminate`, а не `fail`: вердикт не выдан, диагностика названа (D10 всё равно не
+    // даст такому случаю `pass`, а сам `fail` уже пришёл от гейта `readiness`).
+    if (COMPARING_GATES.has(name) && readinessBlocksVisual(ctx)) {
+      gates.push({
+        gate: name, status: "indeterminate",
+        detail: "Skipped: capture readiness was not met, so the frame gets no visual verdict (D5)",
+        metrics: { skippedByReadiness: true },
+      });
+      continue;
+    }
     try {
       gates.push(await gate.run(ctx));
     } catch (error) {

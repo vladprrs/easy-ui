@@ -10,6 +10,7 @@
  * а не сборки).
  */
 import { canonicalStringify } from "../../src/capture/canonicalJson";
+import { DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 
 /**
  * Роль гейта в вердикте (свёртка D10):
@@ -53,6 +54,13 @@ export interface AcceptancePolicy {
    * иначе профиль обещал бы проверку, которой в коде нет.
    */
   requireVisual: boolean;
+  /**
+   * Политика readiness капчура (W4, D5): её исполняет поверхность, её хэш входит в
+   * `case_fingerprint`, и по её исходу гейт `readiness` решает, имеет ли кадр право на
+   * визуальный вердикт. Профиль владеет ею целиком — «подождать подольше» перестаёт быть
+   * решением клиента.
+   */
+  readiness: ReadinessPolicy;
 }
 
 const DEFAULT_V1: AcceptancePolicy = {
@@ -68,7 +76,9 @@ const DEFAULT_V1: AcceptancePolicy = {
     // `layoutBounds` и обязан называть виновника overflow, поэтому блокировать им можно.
     geometry: "required",
     visual: "not-implemented",
-    readiness: "not-implemented",
+    // W4: readiness — обязательный гейт обоих профилей. Кадр, снятый до готовности шрифтов и
+    // ассетов, не получает визуального вердикта (инвариант D5), а не «оценивается со скидкой».
+    readiness: "required",
     regression: "not-implemented",
     interactions: "not-implemented",
   },
@@ -79,6 +89,7 @@ const DEFAULT_V1: AcceptancePolicy = {
   allowExceptions: false,
   geometry: { overflowPx: 1, sizeDeltaPx: 2, offsetPx: 2 },
   requireVisual: false,
+  readiness: DEFAULT_READINESS_POLICY,
 };
 
 /**

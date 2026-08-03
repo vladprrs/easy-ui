@@ -435,7 +435,9 @@ export function validatePublishedCompositionExpansion(
     } satisfies CompositionSource]),
   );
   const rootParams = Object.fromEntries(Object.entries(root.doc.params).flatMap(([name, parameter]) => {
-    if (parameter.default !== undefined) return [[name, parameter.default]];
+    // Параметр-действие (W8d) `default` не несёт: обязательный получает пустышку ниже.
+    const declaredDefault = "default" in parameter ? parameter.default : undefined;
+    if (declaredDefault !== undefined) return [[name, declaredDefault]];
     if (parameter.required) return [[name, placeholderForParam(parameter)]];
     return [];
   }));

@@ -19,6 +19,7 @@
  * ключей во входном объекте на хэш не влияет.
  */
 import { canonicalStringify } from "../../src/capture/canonicalJson";
+import { canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 
 const sha256 = (value: string): string => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 
@@ -30,12 +31,45 @@ const hashOf = (payload: unknown): string => sha256(canonicalStringify(payload))
  * единственный механизм автоматической инвалидации накопленного reuse. Признанная плата за
  * поэтапность (план §3 D1).
  */
-export const CASE_FINGERPRINT_ALGO_VERSION = 3;
+export const CASE_FINGERPRINT_ALGO_VERSION = 4;
 
-/** Заглушка readiness-политики до W4 (`docs/plans/2026-08-03-…` §5 W4). */
-export const READINESS_POLICY_HASH_V0 = "readiness-policy-v0";
-/** Заглушка отпечатка окружения капчура до W4. */
-export const CAPTURE_ENV_FINGERPRINT_V0 = "capture-env-v0";
+/**
+ * Хэш readiness-политики (W4) — тот же алгоритм, что у клиента
+ * (`src/capture/readinessPolicy.ts#readinessPolicyHash`): sha256 канонизованной политики. Здесь
+ * он синхронный (Bun), там — через WebCrypto; вход общий, поэтому значения совпадают, и гейт
+ * `readiness` сверяет опубликованный поверхностью хэш именно с этим.
+ */
+export function readinessPolicyHashOf(policy: ReadinessPolicy): string {
+  return sha256(canonicalReadinessPolicy(policy));
+}
+
+export const DEFAULT_READINESS_POLICY_HASH = readinessPolicyHashOf(DEFAULT_READINESS_POLICY);
+
+/**
+ * Версия схемы серверного отпечатка окружения. Растёт вместе со списком входов.
+ */
+const CAPTURE_ENV_ALGO_VERSION = 1;
+
+/**
+ * Отпечаток окружения капчура **на стороне сервера** (W4).
+ *
+ * Полный отпечаток формулы плана (`browserVersion`, `dpr`, `colorProfile`, `fontRasterFingerprint`)
+ * наблюдается в самой странице (`src/capture/env.ts`) и уезжает в результат джобы и в evidence —
+ * его и сравнивает гейт `readiness` между кадрами. Но `case_fingerprint` считается **до** съёмки
+ * (это ключ reuse-lookup'а), поэтому в него входит только та часть окружения, которую сервер
+ * знает заранее и которая не мигрирует после первого капчура: хост-платформа и хэш политики
+ * readiness. `dpr`/`colorScheme` в отпечатке не дублируются — они уже есть в `surface`.
+ */
+export function captureEnvFingerprintOf(readinessPolicyHash: string): string {
+  return hashOf({
+    algoVersion: CAPTURE_ENV_ALGO_VERSION,
+    platform: process.platform,
+    arch: process.arch,
+    readinessPolicyHash,
+  });
+}
+
+export const DEFAULT_CAPTURE_ENV_FINGERPRINT = captureEnvFingerprintOf(DEFAULT_READINESS_POLICY_HASH);
 /**
  * Заглушка per-case политики для examples-пути: у именованного example манифеста нет, а значит
  * нет ни профиля, ни допусков. Case-set-путь (W2) подставляет вместо неё `casePolicyHashOf`
@@ -112,8 +146,8 @@ export function caseFingerprint(input: CaseFingerprintInput): string {
 }
 
 /**
- * Значения-заглушки фаз W2/W4 подставляются здесь, а не у вызывающих: когда волна их заменит,
- * правка будет ровно в одном месте вместе с bump'ом `CASE_FINGERPRINT_ALGO_VERSION`.
+ * Значения readiness/env и заглушка case-политики подставляются здесь, а не у вызывающих: смысл
+ * входов меняется ровно в одном месте вместе с bump'ом `CASE_FINGERPRINT_ALGO_VERSION`.
  */
 export function caseFingerprintV0(input: {
   candidateId: string;
@@ -123,15 +157,20 @@ export function caseFingerprintV0(input: {
   referenceAssetId?: string | null;
   /** Case-set-путь (W2) передаёт реальный хэш политики случая; examples-путь — заглушку. */
   casePolicyHash?: string;
+  /** Политика readiness случая (W4); по умолчанию — дефолтная политика профиля. */
+  readinessPolicy?: ReadinessPolicy;
 }): string {
+  const readinessHash = input.readinessPolicy === undefined
+    ? DEFAULT_READINESS_POLICY_HASH
+    : readinessPolicyHashOf(input.readinessPolicy);
   return caseFingerprint({
     algoVersion: CASE_FINGERPRINT_ALGO_VERSION,
     candidateId: input.candidateId,
     caseKey: input.caseKey,
     propsHash: input.propsHash,
     surface: input.surface,
-    readinessPolicyHash: READINESS_POLICY_HASH_V0,
-    captureEnvFingerprint: CAPTURE_ENV_FINGERPRINT_V0,
+    readinessPolicyHash: readinessHash,
+    captureEnvFingerprint: captureEnvFingerprintOf(readinessHash),
     casePolicyHash: input.casePolicyHash ?? CASE_POLICY_HASH_V0,
     referenceAssetId: input.referenceAssetId ?? null,
   });

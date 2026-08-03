@@ -1670,7 +1670,7 @@ const compositionDocumentCommonSchema = {
  * Форма — discovery-проекция; строгая схема живёт в `src/prototype/compositionV3/params.ts`.
  */
 const compositionParamV3Schema = z.looseObject({
-  type: z.enum(["string", "number", "boolean", "json", "asset", "enum", "object", "array"]),
+  type: z.enum(["string", "number", "boolean", "json", "asset", "enum", "object", "array", "action"]),
   values: z.array(z.string()).optional(),
   schema: z.record(z.string(), z.looseObject({ type: z.enum(["string", "number", "boolean"]), required: z.boolean().optional(), default: z.json().optional() })).optional(),
   items: z.looseObject({ type: z.enum(["string", "number", "boolean", "object"]) }).optional(),
@@ -1692,6 +1692,19 @@ const compositionSlotsV3Schema = z.union([
     description: z.string().optional(),
   })),
 ]);
+/**
+ * Варианты v3 (план 2026-08-03 W8f): оси семейства, легальные комбинации и их параметры.
+ * Форма — discovery-проекция; строгая схема живёт в `src/prototype/compositionV3/variants.ts`.
+ */
+const compositionVariantsSchema = z.looseObject({
+  dimensions: z.record(z.string(), z.array(z.string())),
+  tuples: z.array(z.looseObject({
+    dims: z.record(z.string(), z.string()),
+    params: z.record(z.string(), z.unknown()).optional(),
+    description: z.string().optional(),
+  })).optional(),
+  defaults: z.record(z.string(), z.string()).optional(),
+});
 const compositionDocumentSchema = z.discriminatedUnion("version", [
   z.looseObject({ version: z.literal(1), ...compositionDocumentCommonSchema }),
   z.looseObject({ version: z.literal(2), atomicLevel: z.enum(["molecule", "organism", "template", "page"]), ...compositionDocumentCommonSchema }),
@@ -1701,6 +1714,7 @@ const compositionDocumentSchema = z.discriminatedUnion("version", [
     ...compositionDocumentCommonSchema,
     params: z.record(z.string(), compositionParamV3Schema),
     slots: compositionSlotsV3Schema,
+    variants: compositionVariantsSchema.optional(),
   }),
 ]);
 const compositionVersionSchema = z.looseObject({
@@ -2245,6 +2259,15 @@ export const capabilitiesResponseSchema = z.object({
      * приёмки — на публичных screenshot-ручках `probe` остаётся `geometry`.
      */
     geometryPaint: z.boolean(),
+    /**
+     * Deterministic Capture Readiness (план 2026-08-03 §5 W4): капчур-поверхность исполняет
+     * версионированную политику readiness (used-faces шрифты, декод изображений, network-quiet по
+     * ресурсам компонента, стабильные кадры, выключенные анимации) и публикует доказательство —
+     * `fontFaces`/`images`/`pendingRequests`/`themeResources` — плюс отпечаток окружения.
+     * В приёмке это обязательный гейт `readiness`: кадр с `met:false` не получает визуального и
+     * геометрического вердикта (инвариант D5).
+     */
+    captureReadiness: z.boolean(),
     /** Draft-preview сохранённой head-ревизии (план 2026-08-02 P1b); false при EASYUI_VALIDATE_DISABLED=1. */
     componentDraftPreview: z.boolean(),
     /** Head-tracking служебных прототипов (план 2026-08-02 P2): `track` в lifecycle-роуте. */

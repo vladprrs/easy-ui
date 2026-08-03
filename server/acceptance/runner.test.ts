@@ -12,6 +12,7 @@ import { buildCases, propsHashOf } from "./cases";
 import { artifactPresent, casPath, readRunManifest } from "./evidence";
 import type { AcceptanceCaptureService, CandidateSubject, GateResult } from "./gates/types";
 import { AcceptanceOrchestrator, type RefreshSpec } from "./orchestrator";
+import { readinessPolicyHashOf } from "./ids";
 import { ACCEPTANCE_POLICIES, policyProfileHash } from "./policies";
 import { AcceptanceRepo, type CandidateRow } from "./repo";
 import { caseVerdictOf, foldRunVerdict, progressOf, severityOf, type CaseExecution } from "./runner";
@@ -25,9 +26,30 @@ const profile = ACCEPTANCE_POLICIES["default-v1"];
 const COMPONENT_ID = "acc-runner-probe";
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
 
+/**
+ * Исход readiness «политика выполнена» (W4): хэш — тот же, что у политики профиля, иначе гейт
+ * честно ответил бы `indeterminate` («поверхность ждала по другой политике»).
+ */
+const READY_READINESS = {
+  readinessMet: true as boolean | null,
+  readinessReason: null as string | null,
+  readinessPolicyHash: readinessPolicyHashOf(ACCEPTANCE_POLICIES["default-v1"].readiness) as string | null,
+  readinessEvidence: {
+    fontFaces: [{ family: "Ya Sans", weight: "400", style: "normal", status: "loaded" }],
+    images: { total: 1, decoded: 1, failed: 0 },
+    pendingRequests: [] as string[],
+    framesWaited: 2, animationsDisabled: true,
+    themeResources: { tokens: ["--eui-color-bg"], icons: ["asset_icon"], images: [] },
+  } as Record<string, unknown> | null,
+  captureEnvFingerprint: "env-fingerprint" as string | null,
+  captureEnv: null as Record<string, unknown> | null,
+};
+
 // ------------------------------------------------------------------ заглушки
 
-const imageBytes = (bytes: Uint8Array, productError = false): ScreenshotResult => ({
+type ReadinessFields = typeof READY_READINESS;
+
+const imageBytes = (bytes: Uint8Array, productError = false, readiness: ReadinessFields = READY_READINESS): ScreenshotResult => ({
   kind: "image-bytes",
   bytes, width: 10, height: 10, imageProduced: true,
   consoleErrors: productError ? ["TypeError: props.label is not a function"] : [],
@@ -36,6 +58,7 @@ const imageBytes = (bytes: Uint8Array, productError = false): ScreenshotResult =
   productErrors: productError ? ["TypeError: props.label is not a function"] : [],
   infraNoise: [], runtimeWarnings: [],
   rendererBuild: null, browserVersion: "test/1",
+  ...readiness,
 });
 
 /**
@@ -44,12 +67,13 @@ const imageBytes = (bytes: Uint8Array, productError = false): ScreenshotResult =
  * обязательный гейт) не роняет случаи, предмет которых — reuse/retry/свёртка.
  */
 const PAINT_LAYOUT = { x: 64, y: 64, width: 140, height: 96 };
-const paintResult = (bytes: Uint8Array): ScreenshotResult => ({
+const paintResult = (bytes: Uint8Array, readiness: ReadinessFields = READY_READINESS): ScreenshotResult => ({
   kind: "paint", surface: "component", componentId: COMPONENT_ID, draftRev: 1, bundleHash: "bundle",
   designSystemMetaVersion: null, resolvedSpaceScale: {}, viewport: { width: 390, height: 844 }, dpr: 2,
   paintMargin: 64, bytes, width: 536, height: 448, imageProduced: true,
   captureClean: true, productErrors: [], infraNoise: [], runtimeWarnings: [],
   consoleErrors: [], pageErrors: [], rendererBuild: null, browserVersion: "test/1",
+  ...readiness,
   rects: [], truncated: false, total: 0,
   details: [{ key: "root", instance: 0, layoutBounds: { ...PAINT_LAYOUT }, effectSources: [], clipChain: [] }],
 } as unknown as ScreenshotResult);
@@ -68,6 +92,8 @@ class FakeCapture implements AcceptanceCaptureService {
   script: Script = () => "ok";
   /** Хук «что-то случилось снаружи, пока шла съёмка» (kill/resume-тест). */
   onEnqueue: (props: Record<string, unknown> | undefined) => void = () => {};
+  /** Исход readiness кадров этого капчура (W4); тесты D5 подменяют его на `met: false`. */
+  readiness: ReadinessFields = READY_READINESS;
   /** Кадр детерминирован по props: два разных случая обязаны давать разные артефакты. */
   bytesFor: (props: Record<string, unknown> | undefined) => Uint8Array =
     (props) => new Uint8Array([...PNG, ...new TextEncoder().encode(JSON.stringify(props ?? {}))]);
@@ -90,10 +116,10 @@ class FakeCapture implements AcceptanceCaptureService {
       this.statuses.set(jobId, { status: "error", error: { code: "capture_failed", message: "worker produced no result: killed" } });
       this.outcomes.set(jobId, "worker_crash");
     } else if (opts.probe === "paint") {
-      this.statuses.set(jobId, { status: "done", result: paintResult(this.bytesFor(opts.props)) });
+      this.statuses.set(jobId, { status: "done", result: paintResult(this.bytesFor(opts.props), this.readiness) });
       this.outcomes.set(jobId, "ok");
     } else {
-      this.statuses.set(jobId, { status: "done", result: imageBytes(this.bytesFor(opts.props), verdict === "product") });
+      this.statuses.set(jobId, { status: "done", result: imageBytes(this.bytesFor(opts.props), verdict === "product", this.readiness) });
       this.outcomes.set(jobId, "ok");
     }
     return Promise.resolve({ jobId });
@@ -364,6 +390,64 @@ test("infrastructure failures beyond the retry budget terminalize the run as err
   const cases = harness.repo.cases(run.run_id);
   expect(cases[0]!.status).toBe("error");
   expect(cases[0]!.verdict).toBeNull();
+  harness.db.close();
+});
+
+// ------------------------------------------------------ readiness / D5 (W4)
+
+test("readiness fail роняет случай, глушит сравнивающие гейты и не ретраится", async () => {
+  const harness = await setup();
+  harness.service.readiness = {
+    ...READY_READINESS,
+    readinessMet: false,
+    readinessReason: "images_failed",
+    readinessEvidence: {
+      ...(READY_READINESS.readinessEvidence as Record<string, unknown>),
+      images: { total: 1, decoded: 0, failed: 1 },
+      pendingRequests: ["image:/api/assets/asset_late_icon"],
+    },
+  };
+  const run = await startAndRun(harness);
+
+  expect(run.status).toBe("fail");
+  const rows = harness.repo.cases(run.run_id);
+  const alpha = rows.find((row) => row.case_id === "alpha")!;
+  expect(alpha.verdict).toBe("fail");
+  const gates = JSON.parse(alpha.gates_json!) as GateResult[];
+  const readiness = gates.find((gate) => gate.gate === "readiness")!;
+  expect(readiness.status).toBe("fail");
+  expect(readiness.detail).toContain("asset_late_icon");
+  expect((readiness.metrics as { reason: string }).reason).toBe("images_failed");
+  // Доказательство (включая themeResources — вход W6) уезжает в CAS даже у провала.
+  expect(readiness.artifacts?.map((artifact) => artifact.name)).toEqual(["readiness.json"]);
+  expect((readiness.metrics as { themeResources: { icons: string[] } }).themeResources.icons).toEqual(["asset_icon"]);
+
+  // Инвариант D5: сравнивающие гейты вердикта не выдают вовсе.
+  for (const name of ["geometry", "determinism"]) {
+    const gate = gates.find((item) => item.gate === name);
+    if (!gate) continue;
+    expect(gate.status).toBe("indeterminate");
+    expect((gate.metrics as { skippedByReadiness?: boolean }).skippedByReadiness).toBe(true);
+  }
+  // Не-ready — продуктовый исход: ретраев нет, а paint-джоба даже не ставится.
+  expect(harness.service.calls.filter((call) => call.probe === "paint")).toHaveLength(0);
+  expect(harness.service.renderCalls).toBe(2);
+  harness.db.close();
+});
+
+test("капчур без доказательства readiness даёт indeterminate, а не молчаливый pass", async () => {
+  const harness = await setup();
+  harness.service.readiness = {
+    ...READY_READINESS,
+    readinessMet: null, readinessReason: null, readinessPolicyHash: null, readinessEvidence: null,
+    captureEnvFingerprint: null,
+  };
+  const run = await startAndRun(harness);
+  expect(run.status).toBe("fail");
+  const gates = JSON.parse(harness.repo.cases(run.run_id)[0]!.gates_json!) as GateResult[];
+  expect(gates.find((gate) => gate.gate === "readiness")!.status).toBe("indeterminate");
+  // Вердикт не выдан — но и обвинения нет: severity класса `indeterminate`.
+  expect(JSON.parse(harness.repo.cases(run.run_id)[0]!.severity_json!)).toMatchObject({ class: "indeterminate" });
   harness.db.close();
 });
 

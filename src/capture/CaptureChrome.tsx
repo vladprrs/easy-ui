@@ -22,16 +22,17 @@ export function CaptureStyle() {
 }
 
 /**
- * Runs once after mount: waits for fonts and image decode inside the surface,
- * then publishes the readiness object (or an error readiness on failure).
+ * Runs once after mount: исполняет политику readiness над поверхностью (W4 — шрифты, декод
+ * картинок, тишина сети, стабильные кадры) и публикует handshake вместе с доказательством
+ * готовности и отпечатком окружения (или error-readiness при сбое).
  */
 export function usePublishOnSettle(ref: MutableRefObject<HTMLElement | null>, buildReady: () => CaptureReady): void {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        await settleSurface(ref.current ?? document);
-        if (!cancelled) publishReady(buildReady());
+        const { readiness, env } = await settleSurface(ref.current ?? document);
+        if (!cancelled) publishReady({ ...buildReady(), readiness, env });
       } catch (error) {
         if (!cancelled) publishReady({ status: "error", error: error instanceof Error ? error.message : String(error) });
       }

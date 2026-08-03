@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isAssetId, jsonValueSchema, type JsonValue } from "../schema";
+import { actionValueMatches } from "./actions";
 
 /**
  * Типизированные параметры композиций v3 (план 2026-08-03 §5 W8a, граница D7).
@@ -81,10 +82,22 @@ const arrayParamSchema = z.strictObject({
   description: descriptionSchema,
 });
 
-/** Параметр v3: плоские типы v1/v2 плюс `enum`/`object`/`array`. */
+/**
+ * Параметр-действие (W8d): значение — биндинг обработчика формата `element.on`.
+ * `default` не поддерживается: действие по умолчанию — это скрытое поведение, которого
+ * в теле композиции не видно; незаполненный необязательный параметр просто снимает событие.
+ */
+const actionParamSchema = z.strictObject({
+  type: z.literal("action"),
+  required: z.boolean().optional(),
+  description: descriptionSchema,
+});
+
+/** Параметр v3: плоские типы v1/v2 плюс `enum`/`object`/`array`/`action`. */
 export const compositionParamV3Schema = z.union([
-  flatParamSchema, enumParamSchema, objectParamSchema, arrayParamSchema,
+  flatParamSchema, enumParamSchema, objectParamSchema, arrayParamSchema, actionParamSchema,
 ]).superRefine((param, context) => {
+  if (param.type === "action") return;
   if (param.default === undefined) return;
   if (!paramValueMatches(param, param.default)) {
     context.addIssue({ code: "custom", path: ["default"], message: `default does not match the declared ${param.type} parameter` });
@@ -95,6 +108,7 @@ export type CompositionParamV3 = z.output<typeof compositionParamV3Schema>;
 export type CompositionEnumParam = z.output<typeof enumParamSchema>;
 export type CompositionObjectParam = z.output<typeof objectParamSchema>;
 export type CompositionArrayParam = z.output<typeof arrayParamSchema>;
+export type CompositionActionParam = z.output<typeof actionParamSchema>;
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -134,6 +148,7 @@ function objectMatches(shape: Record<string, CompositionScalarField>, value: unk
  */
 export function paramValueMatches(declared: CompositionParamV3, value: unknown): boolean {
   switch (declared.type) {
+    case "action": return actionValueMatches(value);
     case "enum": return typeof value === "string" && declared.values.includes(value);
     case "object": return objectMatches(declared.schema, value);
     case "array": {
@@ -149,6 +164,8 @@ export function paramValueMatches(declared: CompositionParamV3, value: unknown):
 /** Пустышка для probe-раскрытия обязательного параметра без default (публикация композиции). */
 export function paramPlaceholder(declared: CompositionParamV3): JsonValue | undefined {
   switch (declared.type) {
+    // Безобидное терминальное действие: probe-раскрытие ничего не навигирует, но форма валидна.
+    case "action": return { action: "back" };
     case "string": return "";
     case "number": return 0;
     case "boolean": return false;

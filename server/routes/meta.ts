@@ -146,6 +146,9 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // W3: геометрия 2.0 — `probe:"paint"` на candidate-пути приёмки и боевой гейт `geometry`
       // (layout/paint/overflow с названными источниками).
       geometryPaint: true,
+      // W4: readiness капчура — декларативная политика + доказательство (`themeResources` — вход
+      // импакт-анализа W6) + обязательный гейт `readiness` в обоих профилях приёмки.
+      captureReadiness: true,
       componentDraftPreview: options.validateDisabled !== true,
       // P2 (план 2026-08-02): `track: "head"` в lifecycle-роуте — служебный прототип
       // резолвит компонентные пины на последние active-публикации без пересохранения.

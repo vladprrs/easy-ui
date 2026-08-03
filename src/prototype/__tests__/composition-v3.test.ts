@@ -5,6 +5,7 @@ import {
   type CompositionCatalogEntry, type CompositionDoc,
 } from "../composition";
 import { paramValueMatches, type CompositionParamV3 } from "../compositionV3/params";
+import { variantDimensionsOf } from "../compositionV3/variants";
 import { inputPrototypeDocSchema, type PrototypeDoc } from "../schema";
 
 /**
@@ -677,5 +678,341 @@ describe("composition v3 — slots with metadata (W8c)", () => {
     expect(parse({ slots: { body: { allowedTypes: [] } }, spec: spec() }).success).toBe(false);
     // Слот словаря без своего `@eui/Slot`-элемента.
     expect(parse({ slots: { body: {}, extra: {} }, spec: spec() }).success).toBe(false);
+  });
+});
+
+/**
+ * W8d — параметр типа `action` (триаж T-M6). Рантайм-границы композиции не существует:
+ * host-элемент исчезает при раскрытии, поэтому «событие композиции» некому испустить.
+ * Точка ссылки передаёт готовый биндинг обработчика, раскрытие вписывает его в `on`.
+ */
+describe("composition v3 — action params", () => {
+  const tapRow = (extra: Record<string, unknown> = {}) => parsed({
+    params: { "on-tap": { type: "action", required: true }, "on-long": { type: "action" }, label: { type: "string", default: "Tap" } },
+    spec: {
+      root: "row",
+      elements: {
+        row: {
+          type: "Row", props: { text: { $param: "label" } },
+          on: { press: { $param: "on-tap" }, longPress: { $param: "on-long" } },
+          ...extra,
+        },
+      },
+    },
+  });
+
+  it("substitutes a single action and an array of actions into on", () => {
+    const single = expandCompositions(screen("row", { "on-tap": { action: "navigate", params: { screenId: "next" } } }), {
+      compositions: { row: pinned(tapRow()) },
+    });
+    expect(single.issues).toEqual([]);
+    const row = single.doc.screens[0]!.spec.elements["screen$row"]!;
+    expect(row.on).toEqual({ press: { action: "navigate", params: { screenId: "next" } } });
+    // Незаполненный необязательный action снимает событие целиком.
+    expect(row.on).not.toHaveProperty("longPress");
+
+    const many = expandCompositions(screen("row", {
+      "on-tap": [{ action: "setState", params: { statePath: "/tapped", value: true } }, { action: "navigate", params: { screenId: "next" } }],
+    }), { compositions: { row: pinned(tapRow()) } });
+    expect(many.issues).toEqual([]);
+    expect(many.doc.screens[0]!.spec.elements["screen$row"]!.on).toEqual({
+      press: [
+        { action: "setState", params: { statePath: "/tapped", value: true } },
+        { action: "navigate", params: { screenId: "next" } },
+      ],
+    });
+  });
+
+  it("splices a directive that sits inside an authored action array", () => {
+    const composition = parsed({
+      params: { "on-tap": { type: "action" } },
+      spec: {
+        root: "row",
+        elements: {
+          row: {
+            type: "Row", props: {},
+            on: { press: [{ action: "setState", params: { statePath: "/seen", value: true } }, { $param: "on-tap" }] },
+          },
+        },
+      },
+    });
+    const result = expandCompositions(screen("row", { "on-tap": { action: "back" } }), { compositions: { row: pinned(composition) } });
+    expect(result.issues).toEqual([]);
+    expect(result.doc.screens[0]!.spec.elements["screen$row"]!.on).toEqual({
+      press: [{ action: "setState", params: { statePath: "/seen", value: true } }, { action: "back" }],
+    });
+    // Незаполненный параметр оставляет только авторское действие (и снимает массив).
+    const unset = expandCompositions(screen("row"), { compositions: { row: pinned(composition) } });
+    expect(unset.doc.screens[0]!.spec.elements["screen$row"]!.on).toEqual({
+      press: { action: "setState", params: { statePath: "/seen", value: true } },
+    });
+  });
+
+  it("validates the handler binding at the reference point", () => {
+    const bad = expandCompositions(screen("row", { "on-tap": { action: "" } }), { compositions: { row: pinned(tapRow()) } });
+    expect(bad.issues.map((issue) => issue.message).join(" ")).toContain("must be of type action");
+
+    const missing = expandCompositions(screen("row"), { compositions: { row: pinned(tapRow()) } });
+    expect(missing.issues.map((issue) => issue.message).join(" ")).toContain("required composition param is missing: on-tap");
+
+    expect(paramValueMatches({ type: "action" }, { action: "back" })).toBe(true);
+    expect(paramValueMatches({ type: "action" }, [{ action: "back" }])).toBe(true);
+    expect(paramValueMatches({ type: "action" }, [])).toBe(false);
+    expect(paramValueMatches({ type: "action" }, { action: "back", nope: 1 })).toBe(false);
+    expect(paramValueMatches({ type: "action" }, "navigate")).toBe(false);
+  });
+
+  it("leaves navigation targets to the post-expansion validator", () => {
+    // Раскрытие проверяет только форму: существование экрана — дело validatePrototype,
+    // который работает уже по раскрытому документу (save-путь: expand → validate).
+    const result = expandCompositions(screen("row", { "on-tap": { action: "navigate", params: { screenId: "nowhere" } } }), {
+      compositions: { row: pinned(tapRow()) },
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.doc.screens[0]!.spec.elements["screen$row"]!.on).toEqual({
+      press: { action: "navigate", params: { screenId: "nowhere" } },
+    });
+  });
+
+  it("rejects action params outside on, and non-action params inside on", () => {
+    // action-параметр в props.
+    expect(parse({
+      params: { "on-tap": { type: "action" } },
+      spec: { root: "row", elements: { row: { type: "Row", props: { handler: { $param: "on-tap" } } } } },
+    }).success).toBe(false);
+    // Обычный параметр в позиции обработчика.
+    expect(parse({
+      params: { label: { type: "string" } },
+      spec: { root: "row", elements: { row: { type: "Row", props: {}, on: { press: { $param: "label" } } } } },
+    }).success).toBe(false);
+    // Необъявленный параметр в `on`.
+    expect(parse({
+      params: {},
+      spec: { root: "row", elements: { row: { type: "Row", props: {}, on: { press: { $param: "ghost" } } } } },
+    }).success).toBe(false);
+    // Директива внутри самого действия — подстановка туда не ходит.
+    expect(parse({
+      params: { screen: { type: "string" }, "on-tap": { type: "action" } },
+      spec: { root: "row", elements: { row: { type: "Row", props: {}, on: { press: { action: "navigate", params: { screenId: { $param: "screen" } } } } } } },
+    }).success).toBe(false);
+    // `when`/`$switch`/`repeatParam` не ветвятся по действию.
+    expect(parse({
+      params: { "on-tap": { type: "action" } },
+      spec: { root: "row", elements: { row: { type: "Row", props: {}, children: ["kid"] }, kid: { type: "Text", props: {}, when: { param: "on-tap", eq: "x" } } } },
+    }).success).toBe(false);
+    expect(parse({
+      params: { "on-tap": { type: "action" } },
+      spec: { root: "row", elements: { row: { type: "Row", props: { x: { $switch: { param: "on-tap", cases: { a: 1 }, default: 2 } } } } } },
+    }).success).toBe(false);
+    // action-параметр не несёт `default`.
+    expect(parse({
+      params: { "on-tap": { type: "action", default: { action: "back" } } },
+      spec: boxRoot,
+    }).success).toBe(false);
+  });
+
+  it("keeps on untouched in a v1/v2 body", () => {
+    const v2 = compositionDocSchema.parse({
+      version: 2, name: "V2", atomicLevel: "molecule", params: {}, slots: [],
+      spec: { root: "row", elements: { row: { type: "Row", props: {}, on: { press: { action: "back" } } } } },
+    });
+    const result = expandCompositions(screen("row"), { compositions: { row: pinned(v2) } });
+    expect(result.issues).toEqual([]);
+    expect(result.doc.screens[0]!.spec.elements["screen$row"]!.on).toEqual({ press: { action: "back" } });
+  });
+});
+
+/**
+ * W8e — token layout: декларация в токенах компилируется в props контракта
+ * spacing/layout v1. Новых рантайм-примитивов нет, `layout` в раскрытом дереве не остаётся.
+ */
+describe("composition v3 — token layout", () => {
+  const stack = (layout: Record<string, unknown>) => parsed({
+    params: {},
+    spec: { root: "row", elements: { row: { type: "Stack", props: { text: "x" }, layout } } },
+  });
+  const flexContract = {
+    version: 1 as const,
+    spacing: ["gap", "padding"] as ("gap" | "padding" | "paddingX" | "paddingY")[],
+    flow: { kind: "flex" as const, direction: { prop: "direction", vertical: ["vertical"], horizontal: ["horizontal"] }, wrap: { prop: "wrap", enabled: [true] } },
+  };
+
+  it("compiles tokens into the canonical props and drops the layout block", () => {
+    const composition = stack({
+      flow: { kind: "flex", direction: "vertical", wrap: true },
+      gap: "md", padding: "lg", align: "center", justify: "between",
+      sizing: { width: "full", grow: true }, radius: "xl", clip: true, background: "surface-muted",
+    });
+    const result = expandCompositions(screen("row"), { compositions: { row: pinned(composition) } });
+    expect(result.issues).toEqual([]);
+    const row = result.doc.screens[0]!.spec.elements["screen$row"]!;
+    expect(row).not.toHaveProperty("layout");
+    expect(row.props).toEqual({
+      text: "x", direction: "vertical", wrap: true, gap: "md", padding: "lg",
+      align: "center", justify: "between", width: "full", grow: true, radius: "xl", clip: true, background: "surface-muted",
+    });
+  });
+
+  it("reports composition/layout-unsupported against the design system contract", () => {
+    const composition = stack({ flow: { kind: "flex", direction: "horizontal" }, gap: "md", paddingX: "sm" });
+    const supported = expandCompositions(screen("row"), {
+      compositions: { row: pinned(composition) },
+      componentLayouts: { Stack: { ...flexContract, spacing: ["gap", "padding", "paddingX"] } },
+    });
+    expect(supported.issues).toEqual([]);
+
+    const unsupported = expandCompositions(screen("row"), {
+      compositions: { row: pinned(composition) },
+      componentLayouts: { Stack: flexContract },
+    });
+    expect(unsupported.issues.map((issue) => issue.code)).toEqual(["composition/layout-unsupported"]);
+    expect(unsupported.issues[0]!.message).toContain("paddingX");
+
+    const noContract = expandCompositions(screen("row"), {
+      compositions: { row: pinned(composition) },
+      componentLayouts: {},
+    });
+    expect(noContract.issues[0]!.code).toBe("composition/layout-unsupported");
+    expect(noContract.issues[0]!.message).toContain("does not declare the layout contract v1");
+
+    // Статическое направление потока компилировать нечем: оно присуще компоненту.
+    const fixed = expandCompositions(screen("row"), {
+      compositions: { row: pinned(stack({ flow: { kind: "flex", direction: "vertical" } })) },
+      componentLayouts: { Stack: { version: 1, spacing: ["gap"], flow: { kind: "flex", direction: "vertical" } } },
+    });
+    expect(fixed.issues[0]!.message).toContain("fixed vertical flow direction");
+  });
+
+  it("compiles identically without a contract map (client and server agree)", () => {
+    const composition = stack({ gap: "md", radius: "full" });
+    const withMap = expandCompositions(screen("row"), {
+      compositions: { row: pinned(composition) },
+      componentLayouts: { Stack: { version: 1, spacing: ["gap"] } },
+    });
+    const withoutMap = expandCompositions(screen("row"), { compositions: { row: pinned(composition) } });
+    expect(withoutMap.doc.screens[0]!.spec.elements["screen$row"]!.props)
+      .toEqual(withMap.doc.screens[0]!.spec.elements["screen$row"]!.props);
+  });
+
+  it("rejects raw values, empty blocks and props already taken by the compilation", () => {
+    expect(parse({ params: {}, spec: { root: "row", elements: { row: { type: "Stack", props: {}, layout: { gap: "12px" } } } } }).success).toBe(false);
+    expect(parse({ params: {}, spec: { root: "row", elements: { row: { type: "Stack", props: {}, layout: { background: "#ffffff" } } } } }).success).toBe(false);
+    expect(parse({ params: {}, spec: { root: "row", elements: { row: { type: "Stack", props: {}, layout: {} } } } }).success).toBe(false);
+    expect(parse({ params: {}, spec: { root: "row", elements: { row: { type: "Stack", props: {}, layout: { sizing: {} } } } } }).success).toBe(false);
+    expect(parse({ params: {}, spec: { root: "row", elements: { row: { type: "Stack", props: {}, layout: { flow: { kind: "grid", direction: "vertical" } } } } } }).success).toBe(false);
+    // Конфликт с авторским prop'ом — статически.
+    expect(parse({ params: {}, spec: { root: "row", elements: { row: { type: "Stack", props: { gap: "sm" }, layout: { gap: "md" } } } } }).success).toBe(false);
+    // v2 не знает `layout` вовсе.
+    expect(compositionDocSchema.safeParse({
+      version: 2, name: "V2", atomicLevel: "molecule", params: {}, slots: [],
+      spec: { root: "row", elements: { row: { type: "Stack", props: {}, layout: { gap: "md" } } } },
+    }).success).toBe(false);
+  });
+});
+
+/**
+ * W8f — варианты: одна композиция с легальными комбинациями осей вместо семейства копий.
+ */
+describe("composition v3 — variants", () => {
+  const variantDoc = parsed({
+    params: { tone: { type: "enum", values: ["brand", "muted"] }, dense: { type: "boolean" }, label: { type: "string", default: "Row" } },
+    variants: {
+      dimensions: { state: ["default", "pressed"], size: ["s", "m"] },
+      tuples: [
+        { dims: { state: "default", size: "s" }, params: { tone: "brand", dense: true } },
+        { dims: { state: "default", size: "m" }, params: { tone: "brand", dense: false } },
+        { dims: { state: "pressed", size: "m" }, params: { tone: "muted", dense: false } },
+      ],
+      defaults: { state: "default", size: "m" },
+    },
+    spec: { root: "row", elements: { row: { type: "Row", props: { tone: { $param: "tone" }, dense: { $param: "dense" }, text: { $param: "label" } } } } },
+  });
+
+  const variantScreen = (variant: unknown, params: Record<string, unknown> = {}): PrototypeDoc => inputPrototypeDocSchema.parse({
+    version: 1, id: "variant-screen", name: "Variant screen", designSystem: "test-ds", startScreen: "main", state: {},
+    screens: [{
+      id: "main", name: "Main",
+      spec: { root: "screen", elements: { screen: { type: COMPOSITION_TYPE, props: { composition: "row", variant, params } } } },
+    }],
+  }) as PrototypeDoc;
+
+  const expand = (variant: unknown, params: Record<string, unknown> = {}) =>
+    expandCompositions(variantScreen(variant, params), { compositions: { row: pinned(variantDoc) } });
+
+  it("resolves a tuple into parameter values and fills missing axes from defaults", () => {
+    const full = expand({ state: "pressed", size: "m" });
+    expect(full.issues).toEqual([]);
+    expect(full.doc.screens[0]!.spec.elements["screen$row"]!.props).toEqual({ tone: "muted", dense: false, text: "Row" });
+
+    // `size` доопределяется из defaults.
+    const partial = expand({ state: "default" });
+    expect(partial.issues).toEqual([]);
+    expect(partial.doc.screens[0]!.spec.elements["screen$row"]!.props).toEqual({ tone: "brand", dense: false, text: "Row" });
+  });
+
+  it("rejects unknown axes, unknown values and combinations outside the tuples", () => {
+    expect(expand({ shape: "round" }).issues[0]!.code).toBe("composition/variant-unknown");
+    expect(expand({ state: "hovered" }).issues[0]!.code).toBe("composition/variant-unknown");
+    const illegal = expand({ state: "pressed", size: "s" });
+    expect(illegal.issues[0]!.code).toBe("composition/variant-unknown-tuple");
+    expect(illegal.issues[0]!.message).toContain("size=s|state=pressed");
+  });
+
+  it("rejects an explicit param that the variant already fixes", () => {
+    const conflict = expand({ state: "default", size: "m" }, { tone: "muted" });
+    expect(conflict.issues.map((issue) => issue.code)).toEqual(["composition/variant-param-conflict"]);
+    // Параметр вне варианта задаётся явно как обычно.
+    const fine = expand({ state: "default", size: "m" }, { label: "Given" });
+    expect(fine.issues).toEqual([]);
+    expect(fine.doc.screens[0]!.spec.elements["screen$row"]!.props).toMatchObject({ text: "Given" });
+  });
+
+  it("reports a variant on a composition that declares none, and an axis without a default", () => {
+    const plain = parsed({ params: {}, spec: boxRoot });
+    const result = expandCompositions(variantScreen({ state: "default" }), { compositions: { row: pinned(plain) } });
+    expect(result.issues[0]!.code).toBe("composition/variant-unknown");
+
+    const noDefault = parsed({
+      params: { tone: { type: "enum", values: ["brand"] } },
+      variants: { dimensions: { state: ["default", "pressed"], size: ["s"] }, tuples: [{ dims: { state: "default", size: "s" }, params: { tone: "brand" } }] },
+      spec: { root: "row", elements: { row: { type: "Row", props: { tone: { $param: "tone" } } } } },
+    });
+    const incomplete = expandCompositions(variantScreen({ state: "default" }), { compositions: { row: pinned(noDefault) } });
+    expect(incomplete.issues[0]!.code).toBe("composition/variant-incomplete");
+  });
+
+  it("rejects malformed variant declarations at authoring time", () => {
+    const withVariants = (variants: Record<string, unknown>) => parse({
+      params: { tone: { type: "enum", values: ["brand"] } },
+      variants,
+      spec: { root: "row", elements: { row: { type: "Row", props: { tone: { $param: "tone" } } } } },
+    });
+    expect(withVariants({ dimensions: {} }).success).toBe(false);
+    expect(withVariants({ dimensions: { state: ["a", "a"] } }).success).toBe(false);
+    // Неполный tuple.
+    expect(withVariants({ dimensions: { state: ["a"], size: ["s"] }, tuples: [{ dims: { state: "a" } }] }).success).toBe(false);
+    // Дубль комбинации.
+    expect(withVariants({ dimensions: { state: ["a"] }, tuples: [{ dims: { state: "a" } }, { dims: { state: "a" } }] }).success).toBe(false);
+    // Значение вне оси и ось вне объявления.
+    expect(withVariants({ dimensions: { state: ["a"] }, tuples: [{ dims: { state: "b" } }] }).success).toBe(false);
+    expect(withVariants({ dimensions: { state: ["a"] }, tuples: [{ dims: { size: "a" } }] }).success).toBe(false);
+    // Параметр tuple'а не объявлен / не того типа.
+    expect(withVariants({ dimensions: { state: ["a"] }, tuples: [{ dims: { state: "a" }, params: { ghost: 1 } }] }).success).toBe(false);
+    expect(withVariants({ dimensions: { state: ["a"] }, tuples: [{ dims: { state: "a" }, params: { tone: "loud" } }] }).success).toBe(false);
+    // Defaults вне объявленных значений и вне перечисленных tuples.
+    expect(withVariants({ dimensions: { state: ["a"] }, defaults: { state: "b" } }).success).toBe(false);
+    expect(withVariants({ dimensions: { state: ["a", "b"] }, tuples: [{ dims: { state: "a" } }], defaults: { state: "b" } }).success).toBe(false);
+    // Tuple не задаёт action-параметр: биндинг принадлежит точке ссылки.
+    expect(parse({
+      params: { "on-tap": { type: "action" } },
+      variants: { dimensions: { state: ["a"] }, tuples: [{ dims: { state: "a" }, params: { "on-tap": { action: "back" } } }] },
+      spec: { root: "row", elements: { row: { type: "Row", props: {}, on: { press: { $param: "on-tap" } } } } },
+    }).success).toBe(false);
+  });
+
+  it("exports variant dimensions as a pure projection", () => {
+    expect(variantDimensionsOf(variantDoc)).toEqual({ state: ["default", "pressed"], size: ["s", "m"] });
+    expect(variantDimensionsOf(parsed({ params: {}, spec: boxRoot }))).toEqual({});
+    expect(variantDimensionsOf({ version: 2 })).toEqual({});
   });
 });

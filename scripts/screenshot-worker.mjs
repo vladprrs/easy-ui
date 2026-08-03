@@ -125,12 +125,19 @@ async function run(job) {
     if (canonicalStringify(readyToExpected(ready)) !== canonicalStringify(job.expected)) {
       return { ok: false, error: `readiness mismatch: got ${canonicalStringify(readyToExpected(ready))} expected ${canonicalStringify(job.expected)}`, consoleErrors, consoleWarnings, pageErrors };
     }
+    // W4: доказательство readiness и отпечаток окружения — рядом с handshake, вне сравнения с
+    // `expected` (политика в `expected` не дублируется, триаж R1-m2). Старый шелл их не шлёт —
+    // тогда поля просто отсутствуют, и результат остаётся прежним по форме.
+    const readinessFields = {
+      ...(ready.readiness ? { readiness: ready.readiness } : {}),
+      ...(ready.env ? { captureEnv: ready.env } : {}),
+    };
 
     if (job.probe === "geometry") {
       const measurements = await page.evaluate(collectGeometry, { limit: job.geometryLimit, roleKeys: job.geometryRoleKeys ?? {} });
       // Structural analysis runs outside the page: it is pure and unit-tested without a DOM.
       const geometry = { ...measurements, ...analyzeGeometry(measurements) };
-      return { ok: true, geometry, consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version() };
+      return { ok: true, geometry, consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version(), ...readinessFields };
     }
 
     // Paint-режим (план 2026-08-03 §3 D4, W3): **одна сессия** отдаёт и geometry-факты, и PNG.
@@ -156,6 +163,7 @@ async function run(job) {
         width: png.length >= 24 ? png.readUInt32BE(16) : job.viewport.width,
         height: png.length >= 24 ? png.readUInt32BE(20) : job.viewport.height,
         consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version(),
+        ...readinessFields,
       };
     }
 
@@ -163,7 +171,7 @@ async function run(job) {
     const buf = el ? await el.screenshot({ type: "png" }) : await page.screenshot({ type: "png" });
     const width = buf.length >= 24 ? buf.readUInt32BE(16) : job.viewport.width;
     const height = buf.length >= 24 ? buf.readUInt32BE(20) : job.viewport.height;
-    return { ok: true, pngBase64: buf.toString("base64"), width, height, consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version() };
+    return { ok: true, pngBase64: buf.toString("base64"), width, height, consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version(), ...readinessFields };
   } finally {
     try { await context?.close(); } catch { /* best effort */ }
     try { await browser?.close(); } catch { /* best effort */ }

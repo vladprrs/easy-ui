@@ -60,6 +60,17 @@ const actionSchema = z.strictObject({
   $if: z.unknown().optional(),
 });
 
+/**
+ * Грамматика одного действия и полного биндинга обработчика (`element.on.<event>`).
+ * Экспортируется без изменения формы: `on` ниже собран ровно из этих схем, а
+ * `compositionV3/actions.ts` (план 2026-08-03 W8d) проверяет значение параметра
+ * типа `action` теми же правилами, что и авторский `on`.
+ */
+export const elementActionSchema = actionSchema;
+export const elementHandlerSchema = z.union([actionSchema, z.array(actionSchema).min(1)]);
+export type ElementAction = z.output<typeof actionSchema>;
+export type ElementHandler = z.output<typeof elementHandlerSchema>;
+
 const repeatSchema = z.strictObject({
   statePath: z.string().startsWith("/"),
   key: z.string().min(1).optional(),
@@ -70,7 +81,7 @@ export const elementSchema = z.strictObject({
   props: z.record(z.string(), z.unknown()),
   children: z.array(z.string()).optional(),
   visible: z.unknown().optional(),
-  on: z.record(z.string(), z.union([actionSchema, z.array(actionSchema).min(1)])).optional(),
+  on: z.record(z.string(), elementHandlerSchema).optional(),
   repeat: repeatSchema.optional(),
   region: z.enum(REGION_KINDS).optional(),
   // Named-slot placement: routes this child into a parent custom component's slot

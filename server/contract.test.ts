@@ -699,6 +699,8 @@ describe("route contracts", () => {
       componentValidate: true,
       componentGeometry: true,
       geometryPaint: true,
+      // W4: декларативная readiness капчура + обязательный гейт `readiness`.
+      captureReadiness: true,
       componentDraftPreview: true,
       prototypeHeadTracking: true,
       readinessProfile: true,

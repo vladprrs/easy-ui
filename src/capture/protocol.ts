@@ -6,6 +6,8 @@
  * worker can canonically compare the shell's readiness with the enqueue
  * snapshot (`expected`).
  */
+import type { CaptureEnvInput } from "./env";
+import type { ReadinessPolicy } from "./readinessPolicy";
 
 export interface PrototypeExpected {
   kind: "prototype";
@@ -54,7 +56,40 @@ export interface ComponentDraftExpected {
 
 export type CaptureExpected = PrototypeExpected | ComponentExpected | ComponentDraftExpected;
 
-export interface PrototypeReady {
+/**
+ * Доказательство готовности кадра (план §5 W4). Едет **рядом** с handshake-полями и в сравнение
+ * `readyToExpected` ↔ `expected` не входит: политика в `expected` не дублируется (триаж R1-m2),
+ * сервер сверяет её хэш прямо в результате. Для не-acceptance путей поле advisory.
+ */
+export interface CaptureReadinessReport {
+  met: boolean;
+  reason?: string;
+  policyHash: string;
+  elapsedMs: number;
+  evidence: {
+    fontFaces: { family: string; weight: string; style: string; status: string }[];
+    images: { total: number; decoded: number; failed: number };
+    pendingRequests: string[];
+    framesWaited: number;
+    animationsDisabled: boolean;
+    /** Наблюдённые ресурсы темы — вход импакт-анализа W6 (триаж R2-14). */
+    themeResources: { tokens: string[]; icons: string[]; images: string[] };
+  };
+}
+
+/** Отпечаток окружения капчура (`src/capture/env.ts`) — публикуется вместе с readiness. */
+export interface CaptureEnvReport {
+  fingerprint: string;
+  input: CaptureEnvInput;
+}
+
+/** Общие для всех ready-вариантов дополнительные поля W4 (опциональны: старый шелл их не шлёт). */
+export interface CaptureReadyExtras {
+  readiness?: CaptureReadinessReport;
+  env?: CaptureEnvReport;
+}
+
+export interface PrototypeReady extends CaptureReadyExtras {
   status: "ready";
   kind: "prototype";
   prototypeInstanceId: string;
@@ -67,7 +102,7 @@ export interface PrototypeReady {
   rendererBuild: string | null;
 }
 
-export interface ComponentReady {
+export interface ComponentReady extends CaptureReadyExtras {
   status: "ready";
   kind: "component";
   componentId: string;
@@ -78,7 +113,7 @@ export interface ComponentReady {
   rendererBuild: string | null;
 }
 
-export interface ComponentDraftReady {
+export interface ComponentDraftReady extends CaptureReadyExtras {
   status: "ready";
   kind: "component-draft";
   componentId: string;
@@ -90,7 +125,7 @@ export interface ComponentDraftReady {
   rendererBuild: string | null;
 }
 
-export interface CaptureErrorReady {
+export interface CaptureErrorReady extends CaptureReadyExtras {
   status: "error";
   error: string;
 }
@@ -130,6 +165,11 @@ export interface CaptureBootstrap {
    * во всех прочих режимах — они не меняются ни на пиксель.
    */
   paint?: { marginPx: number };
+  /**
+   * Политика readiness джобы (W4). Отсутствует — поверхность берёт дефолт
+   * (`DEFAULT_READINESS_POLICY`), то есть интерактивные пути ведут себя как раньше.
+   */
+  readiness?: ReadinessPolicy;
   expected: CaptureExpected;
 }
 

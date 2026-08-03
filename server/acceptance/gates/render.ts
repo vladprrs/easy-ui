@@ -13,12 +13,18 @@ import type { Gate, GateContext, GateResult } from "./types";
 export const renderShaKey = (caseId: string): string => `render.sha:${caseId}`;
 /** Ключ мемо: качество капчура случая — его пишет в строку случая раннер (D11). */
 export const renderQualityKey = (caseId: string): string => `render.quality:${caseId}`;
+/**
+ * Ключ мемо: исход readiness кадра (W4). Гейт `readiness` не снимает своего капчура — он судит
+ * **тот самый кадр**, который получил `render`; иначе вердикт относился бы к другому кадру.
+ */
+export const renderReadinessKey = (caseId: string): string => `render.readiness:${caseId}`;
 
 export const renderGate: Gate = {
   name: "render",
   async run(ctx: GateContext): Promise<GateResult> {
     const capture = await captureCase(ctx);
     ctx.shared.set(renderQualityKey(ctx.case.caseId), capture.quality);
+    if (capture.readiness) ctx.shared.set(renderReadinessKey(ctx.case.caseId), capture.readiness);
     const image = capture.image;
     if (!image) {
       return {

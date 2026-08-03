@@ -281,3 +281,154 @@ describe("composition v3 — repeatParam and slot metadata", () => {
     db.close();
   });
 });
+
+/**
+ * W8d/W8e/W8f: параметр-действие, token layout и варианты проходят полный путь
+ * save → publish → ссылка из прототипа и живут за тем же kill-switch'ем.
+ */
+describe("composition v3 — actions, token layout and variants", () => {
+  const layoutProps = `z.strictObject({gap:z.enum(["none","sm","md"]).default("md"),padding:z.enum(["none","sm","md"]).default("none"),direction:z.enum(["vertical","horizontal"]).default("vertical"),wrap:z.boolean().default(false),label:z.string().default(""),radius:z.string().default("none")})`;
+  const layoutMeta = `{version:1 as const,spacing:["gap","padding"] as ("gap"|"padding")[],flow:{kind:"flex" as const,direction:{prop:"direction",vertical:["vertical"],horizontal:["horizontal"]},wrap:{prop:"wrap",enabled:[true]},slot:"default"}}`;
+  const layoutSource = `import {z} from "zod";
+export const definition={props:${layoutProps},description:"Layout row",slots:["default"],events:["press"],atomicLevel:"molecule" as const,ownership:{reason:"Owns the irreducible spacing and child-flow behavior"},layout:${layoutMeta}};
+export default function LayoutRow({props,slots}:any){return <div data-gap={props.gap} onClick={props.onPress}>{props.label}{slots.default}</div>;}`;
+
+  const setup = async () => {
+    const dir = await mkdtemp(resolve(process.cwd(), ".composition-v3-test-"));
+    dirs.push(dir);
+    const db = openDatabase(":memory:");
+    const handler = createTestHandler(db, { dataDir: dir });
+    const req = (url: string, method = "GET", value?: unknown) => handler(new Request(`http://test/api${url}`, {
+      method,
+      headers: value === undefined ? undefined : { "content-type": "application/json" },
+      body: value === undefined ? undefined : JSON.stringify(value),
+    }));
+    expect((await req("/components", "POST", { designSystem: "yandex-pay", id: "layout-row", name: "LayoutRow", source: layoutSource, intent: "Arranges spaced product rows with a flexible child flow" })).status).toBe(201);
+    expect((await req("/components/layout-row/publish", "POST", { baseRev: 1 })).status).toBe(201);
+    return { db, req };
+  };
+
+  const prototype = (id: string, elements: Record<string, unknown>) => ({
+    version: 1, id, name: "V3 host", designSystem: "yandex-pay", device: "mobile", startScreen: "main", state: { tapped: false },
+    screens: [
+      { id: "main", name: "Main", spec: { root: "screen", elements } },
+      { id: "next", name: "Next", spec: { root: "leaf", elements: { leaf: { type: "LayoutRow", props: { label: "next" } } } } },
+    ],
+  });
+
+  const actionDoc = {
+    version: 3, name: "Action row", atomicLevel: "molecule",
+    params: { "on-press": { type: "action", required: true }, label: { type: "string", default: "Tap" } },
+    slots: [],
+    spec: { root: "row", elements: { row: { type: "LayoutRow", props: { label: { $param: "label" } }, on: { press: { $param: "on-press" } } } } },
+  };
+
+  test("rejects action params, token layout and variants while the flag is off", async () => {
+    delete process.env.EASYUI_COMPOSITION_V3;
+    const { req } = await setup();
+    for (const doc of [
+      actionDoc,
+      { ...actionDoc, name: "Layout row", params: {}, spec: { root: "row", elements: { row: { type: "LayoutRow", props: {}, layout: { gap: "md" } } } } },
+      { ...actionDoc, name: "Variant row", params: { label: { type: "string", default: "x" } }, variants: { dimensions: { size: ["s"] }, tuples: [{ dims: { size: "s" }, params: { label: "S" } }] }, spec: { root: "row", elements: { row: { type: "LayoutRow", props: { label: { $param: "label" } } } } } },
+    ]) {
+      const created = await req("/compositions", "POST", { id: `c-${Math.random().toString(36).slice(2, 8)}`, designSystem: "yandex-pay", doc });
+      expect(created.status).toBe(422);
+      expect((await created.json() as { error: { code: string } }).error.code).toBe("composition_v3_disabled");
+    }
+  });
+
+  test("expands an action param into on and lets the prototype validator judge its target", async () => {
+    process.env.EASYUI_COMPOSITION_V3 = "1";
+    const { db, req } = await setup();
+    expect((await req("/compositions", "POST", { id: "action-row", designSystem: "yandex-pay", doc: actionDoc })).status).toBe(201);
+    expect((await req("/compositions/action-row/publish", "POST", { baseRev: 1 })).status).toBe(201);
+
+    const saved = await req("/prototypes", "POST", {
+      doc: prototype("v3-action", {
+        screen: { type: "@eui/Composition", props: { composition: "action-row", params: { "on-press": [{ action: "setState", params: { statePath: "/tapped", value: true } }, { action: "navigate", params: { screenId: "next" } }] } } },
+      }),
+    });
+    expect(saved.status).toBe(201);
+    // В БД едет авторский документ: биндинг живёт в props ссылки, а не в `on`.
+    const stored = (db.query("SELECT doc FROM prototype_revisions WHERE prototype_id='v3-action' AND rev=1").get() as { doc: string }).doc;
+    expect(stored).toContain("on-press");
+    expect(stored).not.toContain("\"on\":");
+
+    // Навигационная цель проверяется уже по раскрытому документу — обычным валидатором.
+    const broken = await req("/prototypes", "POST", {
+      doc: prototype("v3-action-bad", {
+        screen: { type: "@eui/Composition", props: { composition: "action-row", params: { "on-press": { action: "navigate", params: { screenId: "nowhere" } } } } },
+      }),
+    });
+    expect(broken.status).toBe(422);
+    expect(JSON.stringify(await broken.json())).toContain("navigate target does not exist");
+
+    // Форма биндинга — в точке ссылки.
+    const malformed = await req("/prototypes", "POST", {
+      doc: prototype("v3-action-malformed", {
+        screen: { type: "@eui/Composition", props: { composition: "action-row", params: { "on-press": "navigate" } } },
+      }),
+    });
+    expect(malformed.status).toBe(422);
+    expect(JSON.stringify(await malformed.json())).toContain("must be of type action");
+    db.close();
+  });
+
+  test("compiles token layout into props and reports composition/layout-unsupported from the save path", async () => {
+    process.env.EASYUI_COMPOSITION_V3 = "1";
+    const { db, req } = await setup();
+    const layoutDoc = (layout: Record<string, unknown>, name = "Layout row") => ({
+      version: 3, name, atomicLevel: "molecule", params: {}, slots: [],
+      spec: { root: "row", elements: { row: { type: "LayoutRow", props: { label: "x" }, layout } } },
+    });
+    expect((await req("/compositions", "POST", { id: "layout-ok", designSystem: "yandex-pay", doc: layoutDoc({ flow: { kind: "flex", direction: "horizontal", wrap: true }, gap: "md", padding: "sm" }) })).status).toBe(201);
+    expect((await req("/compositions/layout-ok/publish", "POST", { baseRev: 1 })).status).toBe(201);
+    expect((await req("/prototypes", "POST", {
+      doc: prototype("v3-layout", { screen: { type: "@eui/Composition", props: { composition: "layout-ok" } } }),
+    })).status).toBe(201);
+
+    // paddingX компонент не объявляет: контракт v1 из definition_meta ловит это в save-пути.
+    expect((await req("/compositions", "POST", { id: "layout-bad", designSystem: "yandex-pay", doc: layoutDoc({ paddingX: "md" }, "Layout row unsupported") })).status).toBe(201);
+    expect((await req("/compositions/layout-bad/publish", "POST", { baseRev: 1 })).status).toBe(201);
+    const unsupported = await req("/prototypes", "POST", {
+      doc: prototype("v3-layout-bad", { screen: { type: "@eui/Composition", props: { composition: "layout-bad" } } }),
+    });
+    expect(unsupported.status).toBe(422);
+    expect(JSON.stringify(await unsupported.json())).toContain("does not declare the paddingX spacing prop");
+    db.close();
+  });
+
+  test("resolves a variant into params and rejects a conflicting explicit param", async () => {
+    process.env.EASYUI_COMPOSITION_V3 = "1";
+    const { db, req } = await setup();
+    const doc = {
+      version: 3, name: "Variant row", atomicLevel: "molecule",
+      params: { label: { type: "string", default: "Row" }, gap: { type: "enum", values: ["none", "sm", "md"] } },
+      slots: [],
+      variants: {
+        dimensions: { size: ["s", "m"] },
+        tuples: [{ dims: { size: "s" }, params: { gap: "sm" } }, { dims: { size: "m" }, params: { gap: "md" } }],
+        defaults: { size: "m" },
+      },
+      spec: { root: "row", elements: { row: { type: "LayoutRow", props: { label: { $param: "label" }, gap: { $param: "gap" } } } } },
+    };
+    expect((await req("/compositions", "POST", { id: "variant-row", designSystem: "yandex-pay", doc })).status).toBe(201);
+    expect((await req("/compositions/variant-row/publish", "POST", { baseRev: 1 })).status).toBe(201);
+    expect((await req("/prototypes", "POST", {
+      doc: prototype("v3-variant", { screen: { type: "@eui/Composition", props: { composition: "variant-row", variant: { size: "s" }, params: { label: "Small" } } } }),
+    })).status).toBe(201);
+
+    const conflict = await req("/prototypes", "POST", {
+      doc: prototype("v3-variant-conflict", { screen: { type: "@eui/Composition", props: { composition: "variant-row", variant: { size: "s" }, params: { gap: "md" } } } }),
+    });
+    expect(conflict.status).toBe(422);
+    expect(JSON.stringify(await conflict.json())).toContain("set both by the variant and explicitly");
+
+    const illegal = await req("/prototypes", "POST", {
+      doc: prototype("v3-variant-illegal", { screen: { type: "@eui/Composition", props: { composition: "variant-row", variant: { size: "xl" } } } }),
+    });
+    expect(illegal.status).toBe(422);
+    expect(JSON.stringify(await illegal.json())).toContain("has no value");
+    db.close();
+  });
+});

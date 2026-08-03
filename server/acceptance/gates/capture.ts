@@ -12,7 +12,7 @@
  */
 import { ApiError } from "../../http";
 import { jobOutcomeOfError, type JobOutcome } from "../../screenshot/service";
-import type { CaptureQuality, ScreenshotResult } from "../../screenshot/service";
+import type { CaptureQuality, CaptureReadinessOutcome, ScreenshotResult } from "../../screenshot/service";
 import type { GateContext } from "./types";
 
 /** Потолок backoff'а на `queue_full` (RFC §4.2 «backoff-ретрай», триаж V7). */
@@ -40,6 +40,25 @@ export interface CaptureOutcome {
   /** Поле paint-режима, CSS px (W3): вход диагностики «увеличить маргин». */
   paintMargin?: number;
   browserVersion?: string;
+  /**
+   * Исход readiness кадра (W4). Отсутствует у режимов, которые его не несут (`probe:"geometry"`):
+   * гейт `readiness` трактует отсутствие как `indeterminate`, а не как «готов».
+   */
+  readiness?: CaptureReadinessOutcome;
+}
+
+/** Достаёт readiness-поля из результата джобы, не полагаясь на конкретный `kind`. */
+function readinessOf(result: ScreenshotResult): CaptureReadinessOutcome | undefined {
+  return "readinessMet" in result
+    ? {
+      readinessMet: result.readinessMet,
+      readinessReason: result.readinessReason,
+      readinessPolicyHash: result.readinessPolicyHash,
+      readinessEvidence: result.readinessEvidence,
+      captureEnvFingerprint: result.captureEnvFingerprint,
+      captureEnv: result.captureEnv,
+    }
+    : undefined;
 }
 
 const isRetryable = (outcome: JobOutcome): boolean => outcome !== "ok";
@@ -104,6 +123,9 @@ export async function captureCase(
           deviceScaleFactor: ctx.surface.dsf,
           theme: ctx.surface.theme,
           background: true,
+          // W4: политику readiness приносит профиль приёмки — «подождать подольше» перестаёт
+          // быть решением клиента, а её хэш обязан совпасть с тем, что войдёт в отпечаток случая.
+          readinessPolicy: ctx.policy.readiness,
           // Paint-джоба тоже отдаёт байты: кадр — половина её исхода, и он уезжает в CAS.
           ...(options.probe === undefined ? { deliver: "bytes" as const } : { probe: options.probe }),
           ...(options.probe === "paint"
@@ -150,10 +172,16 @@ export async function captureCase(
         image: { bytes: result.bytes, width: result.width, height: result.height },
         paintMargin: result.paintMargin,
         browserVersion: result.browserVersion,
+        ...(readinessOf(result) ? { readiness: readinessOf(result)! } : {}),
       };
     }
     if (result.kind === "image-bytes") {
-      return { jobId, retries: attempt, quality, image: { bytes: result.bytes, width: result.width, height: result.height }, browserVersion: result.browserVersion };
+      return {
+        jobId, retries: attempt, quality,
+        image: { bytes: result.bytes, width: result.width, height: result.height },
+        browserVersion: result.browserVersion,
+        ...(readinessOf(result) ? { readiness: readinessOf(result)! } : {}),
+      };
     }
     // `deliver:"asset"` в приёмке не используется: он ингестит кадр в asset-store (A4).
     lastOutcome = "subprocess_error";

@@ -97,7 +97,8 @@ test("policy registry hashes both profiles distinctly and geometry v2 is a requi
   expect(policyProfileHash(ACCEPTANCE_POLICIES["default-v1"]))
     .not.toBe(policyProfileHash(ACCEPTANCE_POLICIES["pixel-strict-v1"]));
   // W3: advisory-фаза геометрии закончена — гейт входит в обязательный набор обоих профилей.
-  expect(requiredGates(policy)).toEqual(["audit", "contract", "defaults", "determinism", "geometry", "render"]);
+  // W4: `readiness` — тоже обязательный: кадр, снятый до готовности, не судится визуально (D5).
+  expect(requiredGates(policy)).toEqual(["audit", "contract", "defaults", "determinism", "geometry", "readiness", "render"]);
   expect(policy.gates.geometry).toBe("required");
   expect(ACCEPTANCE_POLICIES["pixel-strict-v1"].gates.geometry).toBe("required");
   expect(policy.allowExceptions).toBe(false);

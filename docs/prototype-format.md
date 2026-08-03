@@ -444,6 +444,89 @@ An element of a v3 body may be cloned once per item of an `array` parameter. Thi
 - The publish probe of a composition has no reference point — it supplies no slot children — so it skips the slot contract but still expands fallbacks.
 - `when` over a subtree containing `@eui/Slot` remains rejected: conditional slots would orphan routed children.
 
+#### Action parameters
+
+A v3 parameter may be `{"type": "action"}`. Its value at the reference point is a **handler binding** in exactly the `element.on.<event>` grammar — one action or a non-empty array of them:
+
+```json
+{
+  "params": { "on-press": { "type": "action", "required": true } },
+  "spec": { "root": "row", "elements": {
+    "row": { "type": "YpListRow", "props": {}, "on": { "press": { "$param": "on-press" } } }
+  } }
+}
+```
+
+```json
+{ "type": "@eui/Composition", "props": { "composition": "action-row", "params": { "on-press": [
+  { "action": "setState", "params": { "statePath": "/tapped", "value": true } },
+  { "action": "navigate", "params": { "screenId": "next" } }
+] } } }
+```
+
+- This replaces the "typed child event → composition output" idea: the `@eui/Composition` element **disappears** during expansion, so there is no runtime boundary a composition event could cross. Expansion writes the supplied binding straight into `on` — after expansion it is an ordinary handler.
+- `{"$param": …}` is accepted in `on` **only** as the whole handler value or as an item of its array, **only** in a v3 body, and **only** for `action` parameters. Deeper inside an action (for example in `params.screenId`) it would silently not substitute, so it is rejected at authoring time. An `action` parameter used in `props` is rejected too, as are `when`, `$switch` and `repeatParam` over one.
+- An `action` parameter has no `default`. An unset optional one contributes no actions; an event left with none loses its key entirely.
+- The **form** of the binding is checked at the reference point (`composition param … must be of type action`). Everything semantic — the event exists on that component, the navigate target exists, state pointers resolve, at most one terminal action — is checked by the ordinary prototype validator, which runs on the **expanded** document (save path: expand → `snapshotDefinitions` → `validatePrototypeForSave`).
+
+#### `layout` — token layout
+
+Any element of a v3 body may carry `layout`, a closed declaration in design-system tokens that is **compiled into props of the spacing/layout contract v1** at expansion time. No new runtime primitive appears, and `layout` is gone from the expanded document, exactly like `when`.
+
+```json
+{ "type": "YpBox", "props": { "text": "x" }, "layout": {
+  "flow": { "kind": "flex", "direction": "vertical", "wrap": true },
+  "gap": "md", "padding": "lg", "align": "center", "justify": "between",
+  "sizing": { "width": "full", "grow": true }, "radius": "xl", "clip": true, "background": "surface-muted"
+} }
+```
+
+The compilation table is **fixed** — it must not depend on catalog metadata, because client-side expansion (which has no definition map) has to produce the same tree as the server:
+
+| facet | prop | values |
+|---|---|---|
+| `gap`, `padding`, `paddingX`, `paddingY` | same name | `none … 4xl` (canonical spacing scale) |
+| `flow.direction` | `direction` | `vertical` \| `horizontal` |
+| `flow.wrap` | `wrap` | `true` only (wrapping is opt-in; omission keeps the component default) |
+| `align` / `justify` | same name | `start\|center\|end\|stretch\|baseline` / `start\|center\|end\|between\|around` |
+| `sizing.width\|height\|basis` | `width` / `height` / `basis` | `auto\|full\|1/2\|1/3\|2/3\|1/4\|3/4` |
+| `sizing.grow` | `grow` | boolean |
+| `radius` | `radius` | `none … 4xl \| full` |
+| `clip` | `clip` | boolean |
+| `background` | `background` | a design-system token slug |
+
+- Raw pixels, colors and CSS strings are impossible by construction: every facet is a closed enum or a token slug.
+- A facet whose target prop the element already declares is rejected at authoring time (`layout compiles into props.gap, which the element already declares`).
+- Support is diagnosed against the component's own `layout` metadata where it is known — that is, in the prototype **save path**, where the server passes the design system's contract map into expansion. A type without a layout contract v1, a spacing prop it does not declare, a fixed (non-prop-driven) flow direction, a direction prop that is not literally `direction`, or wrapping that is not `wrap: true` all produce the expansion issue `composition/layout-unsupported`. Client-side expansion compiles the same props without the diagnosis.
+
+#### `variants` — legal combinations of one composition
+
+`variants` turns a family of near-identical compositions into one entity with named axes:
+
+```json
+{
+  "variants": {
+    "dimensions": { "state": ["default", "pressed"], "size": ["s", "m"] },
+    "tuples": [
+      { "dims": { "state": "default", "size": "s" }, "params": { "tone": "brand", "dense": true } },
+      { "dims": { "state": "pressed", "size": "m" }, "params": { "tone": "muted", "dense": false } }
+    ],
+    "defaults": { "state": "default", "size": "m" }
+  }
+}
+```
+
+The reference point selects one with `props.variant`:
+
+```json
+{ "type": "@eui/Composition", "props": { "composition": "row", "variant": { "state": "pressed" }, "params": { "label": "Given" } } }
+```
+
+- Every tuple must fix **all** dimensions, tuple values must belong to their dimension, duplicate combinations are rejected, and tuple `params` must name declared non-`action` parameters with type-correct values — all at authoring time. `defaults`, if complete, must itself be one of the tuples.
+- Resolution is expansion-time: axes missing from `variant` come from `defaults` (`composition/variant-incomplete` when there is none); when `tuples` are declared, **only** the listed combinations are legal (`composition/variant-unknown-tuple`); an unknown axis or value, or a `variant` on a composition that declares none, is `composition/variant-unknown`.
+- A parameter fixed by the variant **must not** also be passed in `params` — the two are records of the same value, and a silent winner would hide the divergence between the declared variant and the actual tree (`composition/variant-param-conflict`). Parameters outside the tuple are passed explicitly as usual.
+- `variantDimensionsOf(doc)` (`src/prototype/compositionV3/variants.ts`) is the pure projection of the declared axes for consumers outside expansion (verification matrices consume it separately).
+
 ### v1 restrictions
 
 `compositionDocSchema` enforces all of the following for a **v1** document (v2 lifts only the nesting rule):

@@ -24,6 +24,18 @@ import {
   compositionRepeatParamSchema, isIndexDirective, isItemDirective, isReservedRepeatKey,
   materializeRepeats, subtreeKeys, type CompositionRepeatParam, type RepeatScope,
 } from "./compositionV3/repeat";
+import {
+  compositionHandlerV3Schema, isActionParamDirective, substituteHandlers,
+} from "./compositionV3/actions";
+import {
+  compiledLayoutProps, compileLayout, compositionLayoutSchema, layoutSupportIssues,
+  type CompositionLayout,
+} from "./compositionV3/layout";
+import {
+  compositionVariantsSchema, resolveVariant, variantsIssues,
+  type CompositionVariants,
+} from "./compositionV3/variants";
+import type { ComponentLayout } from "../designSystems/types";
 
 /**
  * Версионированная композиция (волна 5, план 2026-07-27 §5.1).
@@ -107,8 +119,11 @@ const compositionDocV2Shape = {
  * при раскрытии — авторский/раскрытый документ прототипа его не знает.
  */
 const compositionElementV3Schema = elementSchema.extend({
+  // W8d: обработчик тела v3 дополнительно принимает `{"$param": …}` — параметр-действие.
+  on: z.record(z.string(), compositionHandlerV3Schema).optional(),
   when: compositionWhenSchema.optional(),
   repeatParam: compositionRepeatParamSchema.optional(),
+  layout: compositionLayoutSchema.optional(),
 });
 
 const compositionSpecV3Schema = z.strictObject({
@@ -192,6 +207,7 @@ const compositionDocV3Shape = {
   version: z.literal(3),
   params: z.record(slugSchema, compositionParamV3Schema).default({}),
   slots: compositionSlotsV3Schema.default([]),
+  variants: compositionVariantsSchema.optional(),
   spec: compositionSpecV3Schema,
 } as const;
 
@@ -203,19 +219,46 @@ type CompositionElementV3 = {
   children?: string[];
   slot?: string;
   repeat?: unknown;
+  on?: Record<string, unknown>;
   when?: CompositionWhen;
   repeatParam?: CompositionRepeatParam;
+  layout?: CompositionLayout;
 };
 
 /** Дополнительные статические правила v3: все ветки разрешимы от объявленных параметров. */
 function refineCompositionDocV3(doc: {
   slots: CompositionSlotsDeclaration;
   params: Record<string, CompositionParamV3>;
+  variants?: CompositionVariants;
   spec: { root: string; elements: Record<string, CompositionElementV3> };
 }, context: z.RefinementCtx): void {
   const { elements, root } = doc.spec;
   const declaredOf = (name: string): CompositionParamV3 | undefined =>
     Object.hasOwn(doc.params, name) ? doc.params[name] : undefined;
+
+  // --- W8f: варианты --------------------------------------------------------
+  if (doc.variants) {
+    for (const issue of variantsIssues(doc.variants)) {
+      context.addIssue({ code: "custom", path: issue.path, message: issue.message });
+    }
+    doc.variants.tuples?.forEach((tuple, index) => {
+      for (const [name, value] of Object.entries(tuple.params ?? {})) {
+        const at = ["variants", "tuples", index, "params", name];
+        const declared = declaredOf(name);
+        if (!declared) {
+          context.addIssue({ code: "custom", path: at, message: `variant tuple sets an undeclared param: ${name}` });
+          continue;
+        }
+        if (declared.type === "action") {
+          context.addIssue({ code: "custom", path: at, message: `variant tuples must not set the action param "${name}"; handler bindings belong to the reference point` });
+          continue;
+        }
+        if (!paramValueMatches(declared, value)) {
+          context.addIssue({ code: "custom", path: at, message: `variant tuple value for "${name}" must be of type ${declared.type}` });
+        }
+      }
+    });
+  }
 
   // --- W8b: ключевое пространство `repeatParam` -----------------------------
   // `<innerKey>__r<suffix>` живёт в **авторском** пространстве композиции, поэтому
@@ -327,6 +370,51 @@ function refineCompositionDocV3(doc: {
 
   for (const [key, element] of Object.entries(elements)) {
     const at = ["spec", "elements", key];
+
+    // --- W8e: token layout занимает канонические props — конфликт виден статически ---
+    if (element.layout) {
+      for (const prop of compiledLayoutProps(element.layout)) {
+        if (!Object.hasOwn(element.props, prop)) continue;
+        context.addIssue({ code: "custom", path: [...at, "layout"], message: `layout compiles into props.${prop}, which the element already declares` });
+      }
+    }
+
+    // --- W8d: `$param` в `on` — только action-параметры и только в позиции обработчика ---
+    for (const [event, binding] of Object.entries(element.on ?? {})) {
+      const eventAt = [...at, "on", event];
+      const checkDirective = (value: unknown, path: (string | number)[]): void => {
+        if (!isActionParamDirective(value)) return;
+        const declared = declaredOf(value.$param);
+        if (!declared) {
+          context.addIssue({ code: "custom", path, message: `on references an undeclared param: ${value.$param}` });
+          return;
+        }
+        if (declared.type !== "action") {
+          context.addIssue({ code: "custom", path, message: `on may only bind an action param; "${value.$param}" is ${declared.type}` });
+        }
+      };
+      // Подстановка не ходит глубже позиции действия: `$param` внутри самого действия
+      // (например, в его `params`) молча не сработал бы — поэтому он запрещён.
+      const rejectDeep = (value: unknown, path: (string | number)[]): void => {
+        if (Array.isArray(value)) { value.forEach((item, index) => rejectDeep(item, [...path, index])); return; }
+        if (!isObject(value)) return;
+        if (isActionParamDirective(value)) {
+          context.addIssue({ code: "custom", path, message: "$param inside an action is not substituted; bind the whole handler to an action param instead" });
+          return;
+        }
+        for (const [name, item] of Object.entries(value)) rejectDeep(item, [...path, name]);
+      };
+      if (isActionParamDirective(binding)) { checkDirective(binding, eventAt); continue; }
+      if (Array.isArray(binding)) {
+        binding.forEach((item, index) => {
+          if (isActionParamDirective(item)) { checkDirective(item, [...eventAt, index]); return; }
+          rejectDeep(item, [...eventAt, index]);
+        });
+        continue;
+      }
+      rejectDeep(binding, eventAt);
+    }
+
     const when = element.when;
     if (when !== undefined) {
       if (key === root) {
@@ -335,6 +423,8 @@ function refineCompositionDocV3(doc: {
       const declared = declaredOf(when.param);
       if (!declared) {
         context.addIssue({ code: "custom", path: [...at, "when", "param"], message: `when references an undeclared param: ${when.param}` });
+      } else if (declared.type === "action") {
+        context.addIssue({ code: "custom", path: [...at, "when", "param"], message: `when cannot branch on the action param "${when.param}"` });
       } else if (declared.type === "enum") {
         const candidates = [
           ...(Object.hasOwn(when, "eq") ? [when.eq] : []),
@@ -356,6 +446,11 @@ function refineCompositionDocV3(doc: {
     const walk = (value: unknown, relative: (string | number)[]): void => {
       if (Array.isArray(value)) { value.forEach((item, index) => walk(item, [...relative, index])); return; }
       if (!isObject(value)) return;
+      // W8d: action-параметр — это обработчик, а не значение props.
+      if (isParamDirective(value) && declaredOf(value.$param)?.type === "action") {
+        context.addIssue({ code: "custom", path: [...at, "props", ...relative], message: `action param "${value.$param}" must be bound in on, not in props` });
+        return;
+      }
       if (isItemDirective(value) || isIndexDirective(value)) {
         const item = value as { $item?: unknown; $index?: unknown };
         const directive = isItemDirective(value) ? "$item" : "$index";
@@ -405,6 +500,8 @@ function refineCompositionDocV3(doc: {
       const declared = declaredOf(directive.param);
       if (!declared) {
         context.addIssue({ code: "custom", path: [...path, "param"], message: `$switch references an undeclared param: ${directive.param}` });
+      } else if (declared.type === "action") {
+        context.addIssue({ code: "custom", path: [...path, "param"], message: `$switch cannot select on the action param "${directive.param}"` });
       } else if (declared.type === "enum" || declared.type === "boolean") {
         const universe = declared.type === "enum" ? declared.values : ["true", "false"];
         for (const caseKey of Object.keys(directive.cases)) {
@@ -448,6 +545,12 @@ export type CompositionParam = z.output<typeof compositionParamSchema>;
 export { compositionSlotNames, normalizeCompositionSlots };
 export type { CompositionSlotMeta, CompositionSlotsDeclaration };
 export type { CompositionRepeatParam };
+/** W8d–W8f: параметр-действие, token layout и варианты — публичная поверхность v3. */
+export { compileLayout, layoutSupportIssues } from "./compositionV3/layout";
+export type { CompositionLayout } from "./compositionV3/layout";
+export { resolveVariant, variantDimensionsOf } from "./compositionV3/variants";
+export type { CompositionVariants } from "./compositionV3/variants";
+export { actionValueMatches, substituteHandlers } from "./compositionV3/actions";
 
 /**
  * Документы, несущие каталожные метаданные (`atomicLevel`/`scope`/`canonicalFor`/`ownership`):
@@ -510,6 +613,13 @@ export interface ExpandCompositionsOptions {
    * передана; клиентское раскрытие ограничивается `allowedTypes`/кардинальностью.
    */
   componentRoles?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * Layout-контракты v1 по имени типа компонента (W8e). Как и `componentRoles`, есть
+   * только у сервера (`definition_meta`), поэтому `composition/layout-unsupported`
+   * эмитится, лишь когда карта передана. **Компиляция props от карты не зависит** —
+   * иначе клиентское раскрытие давало бы другое дерево.
+   */
+  componentLayouts?: Readonly<Record<string, ComponentLayout | undefined>>;
   /**
    * Контракт слотов (`required`/`cardinality`/`allowedTypes`/`allowedRoles`) проверяется в
    * **точке ссылки**. Probe-раскрытие публикации композиции ссылки не имеет — детей у слотов
@@ -625,7 +735,9 @@ function expandV1Compositions(
         }
       }
       for (const [name, declared] of Object.entries(composition.params)) {
-        const raw = Object.hasOwn(provided, name) ? (provided[name] as JsonValue) : declared.default;
+        // У параметра-действия (W8d) `default` не бывает; v1-путь его и не встретит.
+        const declaredDefault = "default" in declared ? declared.default : undefined;
+        const raw = Object.hasOwn(provided, name) ? (provided[name] as JsonValue) : declaredDefault;
         if (raw === undefined) {
           if (declared.required) issues.push({ path: path([...at, "props", "params", name]), message: `required composition param is missing: ${name}` });
           values.set(name, undefined);
@@ -879,7 +991,26 @@ function expandRecursiveCompositions(
         addIssue([...at, "on"], "events are not allowed on a composition reference; declare them inside the composition");
       }
 
-      const provided = isObject(host.props.params) ? host.props.params : {};
+      const explicit = isObject(host.props.params) ? host.props.params : {};
+      // --- W8f: вариант точки ссылки резолвится в значения параметров -----------
+      // Явный `params` и вариант — две записи одной величины: пересечение ключей
+      // отвергается, а не разрешается приоритетом (молчаливый приоритет скрыл бы
+      // расхождение между заявленным вариантом и фактическим деревом).
+      const declaredVariants = source.doc.version === 3 ? source.doc.variants : undefined;
+      let variantParams: Record<string, unknown> = {};
+      if (host.props.variant !== undefined) {
+        const resolved = resolveVariant(declaredVariants, host.props.variant);
+        if (!resolved.ok) {
+          for (const issue of resolved.issues) addIssue([...at, "props", "variant"], `composition ${source.id}: ${issue.message}`, issue.code);
+        } else {
+          variantParams = resolved.params;
+          for (const name of Object.keys(variantParams)) {
+            if (!Object.hasOwn(explicit, name)) continue;
+            addIssue([...at, "props", "params", name], `composition ${source.id}: param "${name}" is set both by the variant and explicitly`, "composition/variant-param-conflict");
+          }
+        }
+      }
+      const provided: Record<string, unknown> = { ...variantParams, ...explicit };
       const values = new Map<string, unknown | undefined>();
       for (const name of Object.keys(provided)) {
         if (!Object.hasOwn(source.doc.params, name)) {
@@ -887,7 +1018,10 @@ function expandRecursiveCompositions(
         }
       }
       for (const [name, declared] of Object.entries(source.doc.params)) {
-        const raw = Object.hasOwn(provided, name) ? provided[name] : declared.default;
+        // У параметра-действия (W8d) `default` не бывает — незаполненный необязательный
+        // action просто снимает событие при подстановке.
+        const fallback = "default" in declared ? declared.default : undefined;
+        const raw = Object.hasOwn(provided, name) ? provided[name] : fallback;
         if (raw === undefined) {
           if (declared.required) addIssue([...at, "props", "params", name], `required composition param is missing: ${name}`);
           values.set(name, undefined);
@@ -1076,6 +1210,25 @@ function expandRecursiveCompositions(
         if (isV3Body) {
           delete (elements[key] as { when?: unknown }).when;
           delete (elements[key] as { repeatParam?: unknown }).repeatParam;
+          // --- W8d: параметр-действие вписывается в `on` целевого элемента ---
+          const substitutedOn = substituteHandlers(element.on, innerKey, {
+            paramType: (name) => (Object.hasOwn(source.doc.params, name) ? source.doc.params[name]!.type : undefined),
+            paramValue: (name) => values.get(name),
+            addIssue: (message, code) => addIssue([...at, "props", "params"], `composition ${source.id} ${message}`, code),
+          });
+          if (substitutedOn === undefined) delete (elements[key] as { on?: unknown }).on;
+          else (elements[key] as { on?: unknown }).on = substitutedOn;
+          // --- W8e: token layout компилируется в props контракта v1 ---
+          const layout = element.layout;
+          delete (elements[key] as { layout?: unknown }).layout;
+          if (layout) {
+            (elements[key] as { props: Record<string, unknown> }).props = { ...compileLayout(layout), ...props };
+            if (options.componentLayouts) {
+              for (const issue of layoutSupportIssues(element.type, layout, options.componentLayouts[element.type])) {
+                addIssue([...base, key, "layout"], `composition ${source.id}: ${issue.message}`, issue.code);
+              }
+            }
+          }
         }
 
         const layer: ExpandedOriginLayer = {

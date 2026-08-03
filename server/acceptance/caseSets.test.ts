@@ -8,7 +8,8 @@ import {
   surfaceOfManifest, validateManifest,
 } from "./caseSets";
 import {
-  CAPTURE_ENV_FINGERPRINT_V0, CASE_FINGERPRINT_ALGO_VERSION, CASE_POLICY_HASH_V0, READINESS_POLICY_HASH_V0,
+  CASE_FINGERPRINT_ALGO_VERSION, CASE_POLICY_HASH_V0,
+  DEFAULT_CAPTURE_ENV_FINGERPRINT, DEFAULT_READINESS_POLICY_HASH,
   caseFingerprint, caseFingerprintV0,
 } from "./ids";
 
@@ -288,15 +289,17 @@ test("caseSetIdOf and the stored row agree on the address", () => {
 
 test("algoVersion bump invalidates every fingerprint accumulated by earlier waves", () => {
   // Граница волны обязана обнулить накопленный reuse: в W2 во входы вошёл `case_policy_hash`,
-  // в W3 — геометрия 2.0 (`probe:"paint"`, другой вердикт по тем же props), поэтому старый
-  // результат относится к другой модели случая (план §3 D1).
-  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(3);
+  // в W3 — геометрия 2.0 (`probe:"paint"`, другой вердикт по тем же props), в W4 — реальные
+  // readiness/env вместо заглушек, поэтому старый результат относится к другой модели случая
+  // (план §3 D1).
+  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(4);
   const base = {
     candidateId: `cand_${"0".repeat(64)}`, caseKey: "alpha", propsHash: "props-1",
     surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
-    readinessPolicyHash: READINESS_POLICY_HASH_V0, captureEnvFingerprint: CAPTURE_ENV_FINGERPRINT_V0,
+    readinessPolicyHash: DEFAULT_READINESS_POLICY_HASH, captureEnvFingerprint: DEFAULT_CAPTURE_ENV_FINGERPRINT,
     casePolicyHash: CASE_POLICY_HASH_V0, referenceAssetId: null,
   };
+  expect(caseFingerprint({ ...base, algoVersion: 4 })).not.toBe(caseFingerprint({ ...base, algoVersion: 3 }));
   expect(caseFingerprint({ ...base, algoVersion: 3 })).not.toBe(caseFingerprint({ ...base, algoVersion: 2 }));
   expect(caseFingerprint({ ...base, algoVersion: 2 })).not.toBe(caseFingerprint({ ...base, algoVersion: 1 }));
   // Случай case-set'а с собственной политикой и эталоном отличается от одноимённого examples-случая.

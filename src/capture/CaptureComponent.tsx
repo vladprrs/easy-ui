@@ -92,8 +92,10 @@ function ComponentCaptureSurface({ name, designSystem, theme, props, custom, rea
     void (async () => {
       try {
         const propsHash = await propsHashBrowser(props);
-        await settleSurface(ref.current ?? document);
-        if (!cancelled) publishReady(readyOf(propsHash));
+        // W4: доказательство готовности и отпечаток окружения едут рядом с handshake-полями;
+        // `readyToExpected` их не видит, поэтому сравнение с `expected` не меняется.
+        const { readiness, env } = await settleSurface(ref.current ?? document);
+        if (!cancelled) publishReady({ ...readyOf(propsHash), readiness, env });
       } catch (error) {
         if (!cancelled) publishReady({ status: "error", error: error instanceof Error ? error.message : String(error) });
       }

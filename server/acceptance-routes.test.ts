@@ -15,6 +15,8 @@ import { routeCaseSets } from "./routes/caseSets";
 import type { AcceptanceCaptureService } from "./acceptance/gates/types";
 import type { CaptureProbe, JobOutcome, JobStatus, ScreenshotResult } from "./screenshot/service";
 import type { InkBboxResult } from "./acceptance/inkBbox";
+import { readinessPolicyHashOf } from "./acceptance/ids";
+import { ACCEPTANCE_POLICIES } from "./acceptance/policies";
 
 /**
  * Роуты матричной приёмки (план 2026-08-03 §5 W1a, RFC §4.1–4.2).
@@ -50,12 +52,27 @@ export default function AccRoutesProbe({ props }: any) {
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
 
+/** Исход readiness «политика профиля выполнена» (W4) — иначе гейт `readiness` не даёт вердикта. */
+const READY_READINESS = {
+  readinessMet: true,
+  readinessReason: null,
+  readinessPolicyHash: readinessPolicyHashOf(ACCEPTANCE_POLICIES["default-v1"].readiness),
+  readinessEvidence: {
+    fontFaces: [], images: { total: 0, decoded: 0, failed: 0 }, pendingRequests: [],
+    framesWaited: 2, animationsDisabled: true,
+    themeResources: { tokens: [], icons: [], images: [] },
+  },
+  captureEnvFingerprint: "env-fingerprint",
+  captureEnv: null,
+};
+
 const imageBytes = (bytes: Uint8Array): ScreenshotResult => ({
   kind: "image-bytes",
   bytes, width: 10, height: 10, imageProduced: true,
   consoleErrors: [], pageErrors: [], captureClean: true,
   productErrors: [], infraNoise: [], runtimeWarnings: [],
   rendererBuild: null, browserVersion: "test/1",
+  ...READY_READINESS,
 } as unknown as ScreenshotResult);
 
 /** Paint-джоба (W3): geometry-факты и кадр из одной сессии; layout совпадает с чернилами ⇒ `clean`. */
@@ -68,6 +85,7 @@ const paintResult = (bytes: Uint8Array): ScreenshotResult => ({
   consoleErrors: [], pageErrors: [], rendererBuild: null, browserVersion: "test/1",
   rects: [], truncated: false, total: 0,
   details: [{ key: "root", instance: 0, layoutBounds: { ...PAINT_LAYOUT }, effectSources: [], clipChain: [] }],
+  ...READY_READINESS,
 } as unknown as ScreenshotResult);
 
 const cleanInk = (): Promise<InkBboxResult> => Promise.resolve({

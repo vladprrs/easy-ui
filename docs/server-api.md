@@ -1055,6 +1055,83 @@ case-set-манифеста (`policy.perCase.<id>`): `allowPaintOverflow` (ож�
 Артефакты случая — `paint.png` и `geometry.json` (факты + вердикт) в CAS evidence. Граница волны подняла
 `case_fingerprint.algoVersion` до 3: накопленный reuse прошлых волн инвалидирован.
 
+### Deterministic Capture Readiness (волна W4, план 2026-08-03)
+
+Готовность кадра перестала быть «подождать и надеяться»: капчур-поверхность исполняет
+**версионированную политику** и публикует доказательство. Наличие механизма в сборке —
+`features.captureReadiness` в `GET /capabilities`.
+
+```ts
+readinessPolicy = { version: 1, fonts: "used-faces" | "document-ready", images: "decoded",
+  network: { quietMs: 200, scope: "component-owned" }, frames: 2,
+  animations: "disabled", timeoutMs: 15000 }
+readinessPolicyHash = sha256(canonicalStringify(policy))       // src/capture/readinessPolicy.ts
+```
+
+Политика едет поверхности в `bootstrap.readiness` (её пинует acceptance-путь из профиля приёмки:
+`AcceptancePolicy.readiness`); джобы без неё работают по дефолтной политике — поведение
+интерактивных путей (галерея, библиотека, draft-preview) не изменилось. Поверхность по политике:
+
+1. гасит анимации/переходы инъекцией `*{animation:none!important;transition:none!important}`;
+2. поднимает и ждёт **реально применённые** `@font-face` (`fonts: "used-faces"` — семейства
+   собираются `getComputedStyle`-выборкой по поверхности), либо `document.fonts.ready`;
+3. декодирует все `img` поверхности (`images: "decoded"`);
+4. ждёт тишины сети `network.quietMs` по **ресурсам компонента** (same-origin `/api/assets`,
+   `/api/design-systems`) — чужие запросы страницы ожидание не продлевают;
+5. ждёт `frames` подряд стабильных rAF-кадров;
+6. упирается в `timeoutMs`: превышение не бросает ошибку, а даёт честный `met: false` с причиной.
+
+Доказательство публикуется рядом с handshake (`__EUI_CAPTURE_READY__.readiness` / `.env`) и **не
+входит** в сравнение с `expected` — сервер сверяет хэш политики прямо в результате:
+
+```json
+{
+  "met": false, "reason": "images_failed", "policyHash": "<sha256>", "elapsedMs": 15002,
+  "evidence": {
+    "fontFaces": [{"family":"Ya Sans","weight":"400","style":"normal","status":"loaded"}],
+    "images": {"total": 3, "decoded": 2, "failed": 1},
+    "pendingRequests": ["image:https://example.test/late-icon.svg"],
+    "framesWaited": 2, "animationsDisabled": true,
+    "themeResources": {
+      "tokens": ["--eui-color-bg-default", "--eui-color-fg-primary"],
+      "icons": ["asset_<sha256>"], "images": ["asset_<sha256>"]
+    }
+  }
+}
+```
+
+`themeResources` — **обязательная** часть доказательства: наблюдённые токены (имена CSS-переменных,
+на которые ссылаются стили поверхности), иконки темы и прочие ассеты, попавшие в кадр. Это
+единственный вход класса «сменилась только версия темы» в импакт-анализе W6; без них частичная
+пересъёмка невозможна.
+
+Отпечаток окружения (`src/capture/env.ts`) наблюдается там же:
+`captureEnvFingerprint = sha256({browserVersion, platform, dpr, colorScheme, colorProfile,
+fontRasterFingerprint, rendererBuild, readinessPolicyHash})`. `colorProfile` — best-effort
+(наблюдаемый gamut; при недоступности — `"colorSchemeOnly"`, точный ICC вне объёма),
+`fontRasterFingerprint` — канвас-проба (эталонная строка рисуется в offscreen canvas, пиксели
+хешируются). Байтовые исходы приёмки (`kind: "image-bytes"`, `kind: "paint"`) несут
+`readinessMet` / `readinessReason` / `readinessPolicyHash` / `readinessEvidence` /
+`captureEnvFingerprint`; контракты публичных screenshot-ручек не изменились.
+
+**Гейт `readiness`** — `required` в обоих профилях приёмки. Он судит тот же кадр, что снял `render`
+(своей съёмки не делает), кладёт доказательство в CAS (`readiness.json`) и даёт:
+
+- `fail` — `met: false`; причина и `pendingRequests` в `detail`/`metrics`. Это **продуктовый** исход:
+  авто-retry (A3) его не ретраит — ретраятся только инфраструктурные `jobOutcome`;
+- `indeterminate` — кадр не принёс доказательства вовсе (шелл старше протокола) либо поверхность
+  ждала по другой политике (`policyHash` ≠ политики профиля);
+- `pass` — политика выполнена.
+
+**Инвариант D5:** capture с `met:false` не получает визуального вердикта. Раннер при провале
+readiness не считает сравнивающие гейты случая (`geometry`, `determinism`, будущий `visual`) —
+они возвращают `indeterminate` с `metrics.skippedByReadiness: true`, а не обвиняют компонент за
+кадр, снятый до появления шрифта или иконки. Граница волны подняла `case_fingerprint.algoVersion`
+до 4, а `readinessPolicyHash`/`captureEnvFingerprint` в отпечатке случая перестали быть заглушками:
+хэш политики — общий с клиентом, серверная часть отпечатка окружения — платформа хоста плюс этот
+хэш (браузерная часть отпечатка наблюдается в кадре и живёт в evidence, потому что отпечаток
+случая считается **до** съёмки).
+
 ## Visual regression
 
 Встроенный визуальный gate: reference-baseline (PNG-ассет) закрепляется за **канонической поверхностью** (fingerprint), а candidate снимается тем же screenshot job-пайплайном (параметры капчера берутся **из fingerprint**) и сравнивается в отдельном node-подпроцессе (`scripts/visual-diff-worker.mjs`, `pixelmatch` + `pngjs`). UI — `/visual`.

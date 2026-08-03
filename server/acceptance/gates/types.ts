@@ -8,6 +8,7 @@
  */
 import type { Database } from "bun:sqlite";
 import type { CandidateEntry } from "../../components/candidates";
+import type { ReadinessPolicy } from "../../../src/capture/readinessPolicy";
 import type { CaptureProbe, JobOutcome, JobStatus } from "../../screenshot/service";
 import type { RunInkBbox } from "../inkBbox";
 import type { AcceptancePolicy, GateName } from "../policies";
@@ -62,6 +63,8 @@ export interface AcceptanceCaptureService {
       theme?: string; waitForFonts?: boolean; probe?: CaptureProbe; deliver?: "asset" | "bytes"; background?: boolean;
       /** W3 (`probe:"paint"`): поле вокруг компонента и ключи детальных измерений. */
       paintMargin?: number; geometryDetailKeys?: string[];
+      /** W4: политика readiness, которую обязана исполнить поверхность. */
+      readinessPolicy?: ReadinessPolicy;
     },
   ): Promise<{ jobId: string }>;
   get(jobId: string): JobStatus;

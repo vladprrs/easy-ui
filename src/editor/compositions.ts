@@ -99,7 +99,8 @@ const fallbackForParam = (declared: CompositionDoc["params"][string]): JsonValue
 export function defaultParams(composition: CompositionDoc): Record<string, JsonValue> {
   const params: Record<string, JsonValue> = {};
   for (const [name, declared] of Object.entries(composition.params)) {
-    if (declared.default !== undefined) { params[name] = declared.default; continue; }
+    const declaredDefault = "default" in declared ? declared.default : undefined;
+    if (declaredDefault !== undefined) { params[name] = declaredDefault; continue; }
     if (!declared.required) continue;
     const fallback = fallbackForParam(declared);
     if (fallback !== undefined) params[name] = fallback;

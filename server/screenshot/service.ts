@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import type { CaptureExpected } from "../../src/capture/protocol";
+import { DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 import type { GeometryCollection, GeometryRect, GeometryRole } from "../../src/capture/geometry.mjs";
 import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
 import type { SpaceToken } from "../../src/designSystems/types";
@@ -47,6 +48,22 @@ export type JobOutcome = "ok" | "worker_crash" | "timeout" | "queue_full" | "sub
  */
 export type CaptureProbe = "geometry" | "paint";
 
+/**
+ * Исход readiness капчура (план §3 D5, §5 W4). Едет только с байтовыми исходами приёмки
+ * (`image-bytes`/`paint`): публичные screenshot-ручки контракта не меняют. `null` — шелл
+ * доказательства не прислал (старый билд/preview): для не-acceptance путей это advisory, для
+ * гейта `readiness` — `indeterminate`, а не молчаливый pass.
+ */
+export interface CaptureReadinessOutcome {
+  readinessMet: boolean | null;
+  readinessReason: string | null;
+  /** sha256 политики, по которой шелл реально ждал — сверяется с политикой джобы. */
+  readinessPolicyHash: string | null;
+  readinessEvidence: Record<string, unknown> | null;
+  captureEnvFingerprint: string | null;
+  captureEnv: Record<string, unknown> | null;
+}
+
 /** Поле вокруг компонента в paint-режиме, CSS px (план §3 D4: «дефолт 64px»). */
 export const DEFAULT_PAINT_MARGIN_PX = 64;
 /** Потолок поля: 20 Мпикс-бюджет кадра тратится и на него. */
@@ -85,7 +102,7 @@ export interface ScreenshotImageResult extends CaptureQuality {
  * все существующие пути остаются на `deliver: "asset"`. Байты живут в памяти до истечения
  * RESULT_TTL (10 мин), размер кадра ограничен теми же 20 Мпикс, что и у asset-режима.
  */
-export interface ScreenshotImageBytesResult extends CaptureQuality {
+export interface ScreenshotImageBytesResult extends CaptureQuality, CaptureReadinessOutcome {
   kind: "image-bytes";
   bytes: Uint8Array; width: number; height: number;
   imageProduced: boolean;
@@ -101,7 +118,7 @@ export interface ScreenshotImageBytesResult extends CaptureQuality {
  * «image-кадра» больше нет — иначе `layoutBounds` и `paintBounds` относились бы к разным кадрам
  * (триаж R1-M3). Байты не ингестятся в asset-store (A4): режим доступен только candidate-пути.
  */
-export interface ScreenshotPaintResult extends CaptureQuality, GeometryMeasurement {
+export interface ScreenshotPaintResult extends CaptureQuality, GeometryMeasurement, CaptureReadinessOutcome {
   kind: "paint";
   surface: "component";
   componentId: string;
@@ -172,14 +189,19 @@ export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult 
 
 export interface WorkerJob {
   captureOrigin: string; captureUrl: string; token: string;
-  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: { marginPx: number }; expected: CaptureExpected };
+  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: { marginPx: number }; readiness?: ReadinessPolicy; expected: CaptureExpected };
   allowedUrls: string[]; viewport: Viewport; deviceScaleFactor: number; colorScheme: "light" | "dark"; waitForFonts: boolean; expected: CaptureExpected;
   probe?: CaptureProbe; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
   /** ≤20 ключей маркеров для детальных измерений; пустой массив — корневой маркер (W3). */
   geometryDetailKeys?: string[];
 }
-export type WorkerImageOk = { ok: true; pngBase64: string; width: number; height: number; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string };
-export type WorkerGeometryOk = { ok: true; geometry: GeometryCollection; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string };
+/** Доказательство readiness и отпечаток окружения, опубликованные шеллом (W4). */
+export type WorkerReadiness = {
+  readiness?: { met: boolean; reason?: string; policyHash: string; elapsedMs: number; evidence: Record<string, unknown> };
+  captureEnv?: { fingerprint: string; input: Record<string, unknown> };
+};
+export type WorkerImageOk = { ok: true; pngBase64: string; width: number; height: number; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string } & WorkerReadiness;
+export type WorkerGeometryOk = { ok: true; geometry: GeometryCollection; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string } & WorkerReadiness;
 /** Paint-джоба: geometry и PNG приезжают вместе — это и есть смысл режима. */
 export type WorkerPaintOk = WorkerImageOk & { geometry: GeometryCollection };
 export type WorkerOk = WorkerImageOk | WorkerGeometryOk | WorkerPaintOk;
@@ -208,6 +230,11 @@ interface InternalJob {
   geometryDetailKeys?: string[];
   /** A4: куда уезжает PNG — в asset-store (по умолчанию) или байтами в результат джобы. */
   deliver?: "asset" | "bytes";
+  /**
+   * W4: политика readiness, по которой обязана ждать поверхность. Присутствует у acceptance-джоб
+   * (её приносит профиль приёмки); прочие пути остаются на дефолте, то есть ведут себя как раньше.
+   */
+  readinessPolicy?: ReadinessPolicy;
   result?: ScreenshotResult; error?: { code: string; message: string }; resultExpiresAt?: number;
   jobOutcome?: JobOutcome;
 }
@@ -455,6 +482,8 @@ export class ScreenshotService {
       /** Поле paint-режима, CSS px; игнорируется в прочих режимах (W3). */
       paintMargin?: number;
       geometryDetailKeys?: string[];
+      /** Политика readiness случая (W4); по умолчанию — дефолтная политика. */
+      readinessPolicy?: ReadinessPolicy;
     },
   ): Promise<FrozenEnqueue> {
     this.requireAvailable();
@@ -463,7 +492,9 @@ export class ScreenshotService {
     this.guardQueue(lane);
     const draft = await getCandidateForRev(this.deps.db, this.deps.dataDir, id, candidate.rev, candidate.sourceHash);
     this.guardQueue(lane);
-    return this.pushDraftCapture(id, draft, viewport, dsf, opts);
+    // Acceptance-путь **всегда** пинует политику readiness явно: её хэш входит в `case_fingerprint`,
+    // поэтому «политика по умолчанию у поверхности» и «политика рана» обязаны быть одним объектом.
+    return this.pushDraftCapture(id, draft, viewport, dsf, { ...opts, readinessPolicy: opts.readinessPolicy ?? DEFAULT_READINESS_POLICY });
   }
 
   /** Общее тело draft/candidate-постановки: bootstrap, allowlist и handshake строятся от `draft`. */
@@ -475,6 +506,7 @@ export class ScreenshotService {
     opts: {
       props?: Record<string, unknown>; exampleName?: string; theme?: string; waitForFonts?: boolean;
       probe?: CaptureProbe; deliver?: "asset" | "bytes"; paintMargin?: number; geometryDetailKeys?: string[];
+      readinessPolicy?: ReadinessPolicy;
     },
   ): FrozenEnqueue {
     const repo = new ComponentRepo(this.deps.db);
@@ -506,6 +538,7 @@ export class ScreenshotService {
       ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}),
       ...(paintMargin === undefined ? {} : { paintMargin, geometryDetailKeys: (opts.geometryDetailKeys ?? []).slice(0, 20) }),
       ...(opts.deliver ? { deliver: opts.deliver } : {}),
+      ...(opts.readinessPolicy ? { readinessPolicy: opts.readinessPolicy } : {}),
     });
     return { jobId, expected };
   }
@@ -647,6 +680,8 @@ export class ScreenshotService {
       };
       // Поле paint-режима едет поверхности через bootstrap: она и решает, рисовать ли фон.
       if (job.paintMargin !== undefined) workerJob.bootstrap.paint = { marginPx: job.paintMargin };
+      // Политика readiness — туда же: поверхность исполняет её и публикует доказательство (W4).
+      if (job.readinessPolicy !== undefined) workerJob.bootstrap.readiness = job.readinessPolicy;
       const result = await this.deps.runJob(workerJob, JOB_DEADLINE_MS);
       if (!result.ok) { job.status = "error"; job.error = { code: "capture_failed", message: result.error }; job.jobOutcome = classifyJobFailure(result.error); this.expire(job); return; }
       const quality = this.qualityOf(result);
@@ -660,6 +695,7 @@ export class ScreenshotService {
           kind: "paint",
           surface: "component",
           ...quality,
+          ...this.readinessOf(result),
           componentId: job.expected.componentId,
           ...(job.expected.kind === "component-draft" ? { draftRev: job.expected.rev } : { version: job.expected.version }),
           bundleHash: job.expected.bundleHash,
@@ -730,6 +766,7 @@ export class ScreenshotService {
         job.result = {
           kind: "image-bytes",
           ...quality,
+          ...this.readinessOf(result),
           imageProduced: true,
           bytes: new Uint8Array(bytes), width: result.width, height: result.height,
           consoleErrors: result.consoleErrors, pageErrors: result.pageErrors,
@@ -763,6 +800,21 @@ export class ScreenshotService {
     } finally {
       this.sessions.revoke(session.token);
     }
+  }
+
+  /**
+   * Исход readiness капчура (W4). Шелл, не приславший доказательства (старый билд, preview),
+   * даёт `null` — «неизвестно», а не «готов»: гейт `readiness` отличает эти случаи.
+   */
+  private readinessOf(result: WorkerOk): CaptureReadinessOutcome {
+    return {
+      readinessMet: result.readiness ? result.readiness.met : null,
+      readinessReason: result.readiness?.reason ?? null,
+      readinessPolicyHash: result.readiness?.policyHash ?? null,
+      readinessEvidence: result.readiness?.evidence ?? null,
+      captureEnvFingerprint: result.captureEnv?.fingerprint ?? null,
+      captureEnv: result.captureEnv?.input ?? null,
+    };
   }
 
   /** Classify browser output once per job; capture-clean means no product errors. */
