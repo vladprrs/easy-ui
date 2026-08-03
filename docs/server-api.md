@@ -240,6 +240,48 @@ Share-cookie авторизует исключительно `GET`/`HEAD` по e
 
 Нормализованный `doc` — источник истины. Если ответ содержит `doc`, система находится только в `doc.designSystem` и не дублируется сверху: это draft, конкретная revision и опубликованная version. В list и meta, где документа нет, `designSystem` находится top-level и отражает текущий head. Ответы create, save и restore содержат только номер ревизии (и применимые warnings), поэтому отдельного поля системы в них нет. Старый документ без поля при чтении нормализуется в `designSystem: "shadcn"`.
 
+### Мульти-поверхностные документы (`doc.surfaces`)
+
+Документ может нести две **поверхности** — по девайс-панели на сцену плеера, с общим стейтом и (опционально) со своей дизайн-системой у каждой. Формат, правила валидации и авторские ограничения — `docs/prototype-format.md#surfaces-docsurfaces`; ниже — только серверный контракт.
+
+**Kill-switch `EASYUI_SURFACES` (по умолчанию фича ВЫКЛЮЧЕНА).** Полярность обратна `EASYUI_PUBLISH_GATES`: пустая переменная означает «писать нельзя». Без `EASYUI_SURFACES=1` любое сохранение документа с непустым `doc.surfaces` (`POST /prototypes`, `PUT /prototypes/:id`) отвечает `422 surfaces_disabled`. **Чтение не ограничено ничем**: сохранённые surfaces-документы читаются, рендерятся и снимаются всегда — иначе откат образа ломал бы уже записанные данные. Переменная читается на запросе через `surfacesWriteEnabled()`; в e2e и dev-скриптах она выставлена в `1`. На проде снятие switch'а — вопрос продуктовой приёмки, а не деплоя: по умолчанию прод surfaces-документы не накапливает.
+
+Discovery (`GET /api/capabilities`):
+
+- `features.surfaces` — формат `doc.surfaces`/`screen.surface`/`step.companions` поддержан кодом образа (stored-документы читаются). Всегда `true` начиная с этой волны;
+- `features.surfacesWrite` — разрешена **запись** (значение kill-switch'а). Флаги разнесены намеренно: «код умеет» и «писать можно» — разные вопросы для агента;
+- `limits.surfaces` — число поверхностей документа (v1 — ровно две), импортируется из `SURFACES_LIMIT` в `src/prototype/schema.ts`.
+
+**Пины тем: карта вместо скаляра.** Ревизия пинует версию темы **каждой** ДС документа (таблица `prototype_revision_theme_pins`, миграция v24). DTO ревизии/версии/draft несут:
+
+- `designSystemMetaVersion` — по-прежнему версия темы **primary**-ДС (`surfaces[0]`, для обычного документа — просто `doc.designSystem`); поле не меняет смысла для непереведённых клиентов;
+- `designSystemMetaVersions` — карта `дизайн-система → версия темы | null`.
+
+**Read-правило (бэкфила нет by design):** если строк в таблице для ревизии нет — она записана до миграции v24, и карта равна `{ <ДС primary>: designSystemMetaVersion }`. Restore копирует карту исходной ревизии; catalog-migration переносит строки вместе с ревизией, а таблица входит в `currentDataFingerprint`.
+
+**Производные пина.** `resolvedSpacingScale` считается для каждой ДС отдельно (geometry-probe второй поверхности меряет её шкалой). `builtin_catalog_hash` у одно-поверхностного документа побайтно прежний; при двух и более ДС это детерминированный sha256 по отсортированному множеству `(designSystem, metaVersion, per-ds hash)`.
+
+**Резолв компонентов и пины.** Тип экрана резолвится в ДС **его поверхности**; тип чужой ДС даёт ту же `422 validation_failed` («Unknown or unpublished component type in design system …»), что и неизвестный тип. Guard'ы пинов (save, publish, restore) проверяют принадлежность компонента **множеству** ДС документа, а не одной.
+
+**Warnings валидации (не блокирующие, эмитит только сервер).** При ≥2 различных ДС в документе — безусловное предупреждение о том, что `token()`/`Icon` читают глобальный снапшот primary-системы целиком; при пересечении семейств шрифтов пиннутых тем — предупреждение о том, что побеждает первая (primary) регистрация. Карту `ДС → тема` в валидацию передаёт сервер, поэтому клиентская валидация редактора этих warnings не эмитит.
+
+**Share.** Grant surfaces-документа кладёт в `dependencies` ресурсы тем **всех** ДС документа с их пиннутыми версиями (`/api/design-systems/<ds>/versions/<v>` и ассеты каждой темы) — иначе аноним получал бы вторую панель без темы.
+
+**Скриншоты.** `CaptureExpected`/`CaptureReady` несут резолвнутую пару `(designSystem, dsMetaVersion)` **снимаемого экрана**: у одно-поверхностного документа это `doc.designSystem`, у дуо-дока — система поверхности экрана, иначе дрейф темы второй ДС не детектировался бы handshake'ом. Capture-allowlist — объединение тем и ассетов всех ДС документа с их пиннутыми версиями. Съёмка остаётся поэкранной и в дефолтном состоянии (композитного дуо-кадра в v1 нет).
+
+**Ретайр ДС.** `DELETE /design-systems/:id` дополнительно блокируется surface-ссылками: счётчик `prototypeSurfaces` в `retireBlockers` считает прототипы, у которых **головная** ревизия ссылается на систему через `doc.surfaces[].designSystem`. Сканируются только головы — принятое ограничение того же класса, что сегодняшний счёт по `prototypes.design_system`. Триггеры целостности retired-систем пересозданы миграцией v24 и учитывают `doc.surfaces`.
+
+**Отказы v1 со стабильными кодами:**
+
+| Код | Когда | Почему v1 |
+|---|---|---|
+| `422 surfaces_disabled` | save документа с `doc.surfaces` при выключенном kill-switch | прод не накапливает surfaces-документы до приёмки |
+| `422 surfaces_not_exportable` | экспорт бандла прототипа, у которого `doc.surfaces` есть **в любой** ревизии; импорт такого документа — тем же кодом | манифест бандла v1 скалярен по ДС, ключ импортёра — `${designSystem}::${type}`; мульти-ДС манифест — v2 |
+| `422 composition_foreign_design_system` | композиция на экране, чья ДС ≠ `doc.designSystem` | резолвер композиционных пинов однодизайнсистемный; per-screen резолв — v2 |
+| `422 surface_design_system_not_supported` | `surface.designSystem` ≠ `doc.designSystem` при выключенном флаге поддержки | точка контроля в `src/prototype/schema.ts`; сегодня флаг включён |
+
+**Оговорка про `track: "head"`.** Head-tracking-документы непубликуемы и нешерабельны (`422 prototype_head_tracking` на publish/share/visual-baseline/bundle-export). Дуо-демо, которое показывают человеку по share-ссылке, поэтому **не может** быть одновременно `track: "head"`-документом: это либо служебный трекающий док, либо публикуемый демо-док.
+
 ### Canonical URLs
 
 Ответы `POST /prototypes`, `PUT /prototypes/:id` и `POST /prototypes/:id/publish` additively содержат `screens:[{id,url}]` — канонический player-URL каждого экрана. Для create/save это head-форма `/p/<id>/s/<screen>`, для publish — version-форма `/p/<id>/v/<n>/s/<screen>`. URL — это SPA-маршрут: истинность маршрута (существование экрана, готовность бандлов) подтверждает [render-status](#render-status), а не HTTP-код статики. SPA-fallback отдаёт `index.html` для любого GET/HEAD вне `/api/` и путей без расширения, независимо от заголовка `Accept` (programmatic-клиент без `Accept: text/html` тоже получает SPA); неизвестный extensionless-путь получает SPA и рендерит клиентскую 404-страницу.
@@ -988,13 +1030,14 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
   "conditions": ["$and", "$or", "$state", "$item", "$index", "eq", "neq", "gt", "gte", "lt", "lte", "not"],
   "computedOps": ["count", "sum", "sumProduct", "add"],
   "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5, "geometryRects": 2000, "flows": 24, "flowSteps": 50, "flowTotalSteps": 320, "flowDepth": 4, "compositionDepth": 5,
-    "computedEntries": 20, "computedFields": 4, "computedTerms": 8,
+    "computedEntries": 20, "computedFields": 4, "computedTerms": 8, "surfaces": 2,
     "validateUserConcurrent": 1, "validateGlobalConcurrent": 2, "validateCacheTtlHours": 24, "validateCacheMiB": 32 },
   "designSystems": ["shadcn", "wireframe", "..."],
   "resolvedSpaceScales": { "shadcn": { "none": "0px", "xs": "4px", "sm": "8px", "md": "12px", "lg": "16px", "xl": "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" } },
   "regions": ["statusBar", "header", "footer"],
   "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true, "computed": true, "screenRegions": true, "bundleExport": true, "bundleImport": true, "componentReuseGate": true, "compositionV2": true, "catalogMigration": true,
-    "componentValidate": true, "componentGeometry": true, "componentDraftPreview": true, "prototypeHeadTracking": true, "readinessProfile": true, "themeDryRun": true, "themeSparseOps": true, "themeSpacingResolverV2": true },
+    "componentValidate": true, "componentGeometry": true, "componentDraftPreview": true, "prototypeHeadTracking": true, "readinessProfile": true, "themeDryRun": true, "themeSparseOps": true, "themeSpacingResolverV2": true,
+    "surfaces": true, "surfacesWrite": false },
   "reuseGate": { "mode": "shadow", "intentRequired": false, "policyVersion": 1 }
 }
 ```
@@ -1016,8 +1059,10 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 | `themeDryRun` | PATCH темы умеет `dryRun` и no-op-детекцию | — |
 | `themeSparseOps` | PATCH темы умеет `addTokens`/`addFonts`/`addIcons` | — |
 | `themeSpacingResolverV2` | новые версии темы пишутся [резолвером 2](#тема-дизайн-системы-tokensfontsicons-и-версии) | `EASYUI_THEME_RESOLVER_V2_DISABLED=1` → `false`, новые версии остаются на резолвере 1 |
+| `surfaces` | образ понимает [мульти-поверхностные документы](#мульти-поверхностные-документы-docsurfaces) (`doc.surfaces`) на чтении и рендере | — |
+| `surfacesWrite` | разрешено **сохранять** документы с `doc.surfaces`; иначе `422 surfaces_disabled` | по умолчанию `false`; включает `EASYUI_SURFACES=1` |
 
-Все kill-switch'и (`EASYUI_VALIDATE_DISABLED`, `EASYUI_ACCEPTANCE_DISABLED`, `EASYUI_THEME_RESOLVER_V2_DISABLED`), как и `REUSE_GATE`, читаются один раз на входе процесса, поэтому discovery и поведение ручек не могут разойтись. Флаг `false` означает «выключено на этом инстансе», а отсутствие ключа — «образ старше этой волны»; клиент обязан различать эти случаи. Лимиты `validateUserConcurrent`/`validateGlobalConcurrent` описывают, когда прилетит `429 validate_in_flight`/`429 queue_full`, а `validateCacheTtlHours`/`validateCacheMiB` — срок жизни и потолок candidate-кэша (после вытеснения следующий draft-preview просто пересоберёт кандидата).
+`EASYUI_SURFACES` — единственный switch с **обратной** полярностью: пустое значение означает «запись выключена» (`surfacesWrite: false`), а не «разрешено». Он читается на запросе, поэтому discovery и поведение ручки совпадают по определению. Остальные kill-switch'и (`EASYUI_VALIDATE_DISABLED`, `EASYUI_ACCEPTANCE_DISABLED`, `EASYUI_THEME_RESOLVER_V2_DISABLED`), как и `REUSE_GATE`, читаются один раз на входе процесса, поэтому discovery и поведение ручек не могут разойтись. Флаг `false` означает «выключено на этом инстансе», а отсутствие ключа — «образ старше этой волны»; клиент обязан различать эти случаи. Лимиты `validateUserConcurrent`/`validateGlobalConcurrent` описывают, когда прилетит `429 validate_in_flight`/`429 queue_full`, а `validateCacheTtlHours`/`validateCacheMiB` — срок жизни и потолок candidate-кэша (после вытеснения следующий draft-preview просто пересоберёт кандидата).
 
 `features.compositionV2` — инстанс принимает документы композиций версии 2 (вложенность, `atomicLevel`); `features.catalogMigration` — доступны админские эндпоинты аудита и миграции каталога. `limits.compositionDepth` — максимальная глубина вложенности композиций, **внешняя композиция считается уровнем 1** (см. [формат](prototype-format.md#composition-document-v2)).
 
@@ -1149,6 +1194,8 @@ Compose healthcheck обращается без credentials к открытом�
 При выкладке поддержки `doc.flows` действует отдельное правило совместимости: в течение rollback-window нельзя персистить **ни одной** ревизии с `flows` — ни через create, ни через save, ни через restore. Старый образ не умеет читать такой документ, поэтому наличие flows-ревизии делает безопасный rollback образа невозможным. После окончания окна откат на образ без поддержки `flows` выполняется только вместе с откатом данных на совместимый backup.
 
 Для screen regions действует та же rollback-политика. Перед деплоем обязателен проверенный логический бэкап данных, совместимый со старым образом; его сохраняют на весь rollback-window. Несовместимость возникает в двух независимых случаях: строгая схема старого сервера не распарсит документ с полем элемента `region`, а документ с `@eui/FlowRoot` старый runtime не сможет отрендерить, поскольку у него нет ни host-рендерера, ни component pin для этого типа. Поэтому в течение rollback-window нельзя персистить через create, save или restore ни одной ревизии, содержащей `region` или `@eui/FlowRoot`. После первой такой записи откат на образ без screen regions допустим только вместе с восстановлением совместимого бэкапа.
+
+Мульти-поверхностные документы (`doc.surfaces`, миграция v24) подчиняются той же rollback-политике и защищены kill-switch'ем: **`EASYUI_SURFACES` на проде не задан, то есть запись фичи выключена по умолчанию** (`capabilities.features.surfacesWrite: false`), и прод surfaces-ревизий не накапливает. Включение — отдельное решение после продуктовой приёмки (сценарный проход по share-ссылке и corner-кейсам, см. план `docs/plans/2026-08-02-multi-surface-flows.md` §6), а не часть деплоя этой волны: старый образ не распарсит документ с `surfaces` и не отрендерит вторую панель, поэтому после первой такой записи откат образа возможен только вместе с восстановлением совместимого бэкапа. Сама миграция v24 добавляет таблицу `prototype_revision_theme_pins` и пересоздаёт триггеры retired-систем — старому образу она не мешает.
 
 Для композиций (миграция v18) действует та же rollback-политика, что для flows и screen regions: старый образ не знает host-примитивов `@eui/Composition`/`@eui/Slot` и не умеет раскрывать документ, поэтому в течение rollback-window нельзя персистить ни одной ревизии прототипа со ссылкой на композицию. Сама миграция только добавляет таблицы и старому образу не мешает.
 

@@ -1,0 +1,504 @@
+{
+  "version": 1,
+  "id": "duo-kso",
+  "name": "КСО и приложение: две поверхности на двух дизайн-системах",
+  "description": "Оплата на кассе самообслуживания и чек в приложении покупателя. Приложение — primary-поверхность на своей ДС, КСО — вторая поверхность на ДС терминала; статусы едут через общий стейт /order.",
+  "designSystem": "e2e-starter",
+  "device": "mobile",
+  "startScreen": "app-home",
+  "surfaces": [
+    {
+      "id": "app",
+      "name": "Приложение",
+      "device": "mobile",
+      "startScreen": "app-home"
+    },
+    {
+      "id": "kso",
+      "name": "КСО",
+      "device": "desktop",
+      "designSystem": "e2e-kso-ds",
+      "startScreen": "kso-idle"
+    }
+  ],
+  "state": {
+    "order": {
+      "status": "idle",
+      "statusLabel": "Нет активного заказа",
+      "total": 1290
+    }
+  },
+  "screens": [
+    {
+      "id": "app-home",
+      "name": "Приложение · Главный",
+      "surface": "app",
+      "note": "Покупатель видит статус заказа из общего стейта: всё, что происходит на кассе, доезжает сюда без единого действия.",
+      "spec": {
+        "root": "app-home-stack",
+        "elements": {
+          "app-home-stack": {
+            "type": "StarterStack",
+            "props": { "gap": "md" },
+            "children": ["app-home-title", "app-home-status", "app-home-qr", "app-home-retry", "app-home-receipt"]
+          },
+          "app-home-title": {
+            "type": "StarterText",
+            "props": { "text": "Приложение покупателя" }
+          },
+          "app-home-status": {
+            "type": "StarterText",
+            "props": { "text": { "$template": "Статус заказа: ${/order/statusLabel}" } }
+          },
+          "app-home-qr": {
+            "type": "StarterButton",
+            "props": { "label": "Показать QR кассе" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "kso-idle" }
+              }
+            }
+          },
+          "app-home-retry": {
+            "type": "StarterButton",
+            "props": { "label": "Повторить оплату" },
+            "visible": { "$state": "/order/status", "eq": "timeout" },
+            "on": {
+              "press": [
+                { "action": "setState", "params": { "statePath": "/order/status", "value": "scanned" } },
+                { "action": "setState", "params": { "statePath": "/order/statusLabel", "value": "Товар отсканирован" } },
+                { "action": "navigate", "params": { "screenId": "kso-scan" } }
+              ]
+            }
+          },
+          "app-home-receipt": {
+            "type": "StarterButton",
+            "props": { "label": "Открыть чек" },
+            "visible": { "$state": "/order/status", "eq": "paid" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "app-receipt" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "app-confirm",
+      "name": "Приложение · Подтверждение оплаты",
+      "surface": "app",
+      "note": "Касса передала оплату в приложение: подтверждение или истёкшее время — здесь.",
+      "stateOverrides": {
+        "order": { "status": "awaiting", "statusLabel": "Ожидает подтверждения в приложении" }
+      },
+      "spec": {
+        "root": "app-confirm-stack",
+        "elements": {
+          "app-confirm-stack": {
+            "type": "StarterStack",
+            "props": { "gap": "md" },
+            "children": ["app-confirm-title", "app-confirm-total", "app-confirm-status", "app-confirm-pay", "app-confirm-timeout"]
+          },
+          "app-confirm-title": {
+            "type": "StarterText",
+            "props": { "text": "Подтвердите оплату" }
+          },
+          "app-confirm-total": {
+            "type": "StarterText",
+            "props": { "text": { "$template": "К оплате: ${/order/total} ₽" } }
+          },
+          "app-confirm-status": {
+            "type": "StarterText",
+            "props": { "text": { "$template": "Статус заказа: ${/order/statusLabel}" } }
+          },
+          "app-confirm-pay": {
+            "type": "StarterButton",
+            "props": { "label": "Оплатить" },
+            "on": {
+              "press": [
+                { "action": "setState", "params": { "statePath": "/order/status", "value": "paid" } },
+                { "action": "setState", "params": { "statePath": "/order/statusLabel", "value": "Оплачен" } },
+                { "action": "navigate", "params": { "screenId": "app-receipt" } }
+              ]
+            }
+          },
+          "app-confirm-timeout": {
+            "type": "StarterButton",
+            "props": { "label": "Время вышло" },
+            "on": {
+              "press": [
+                { "action": "setState", "params": { "statePath": "/order/status", "value": "timeout" } },
+                { "action": "setState", "params": { "statePath": "/order/statusLabel", "value": "Истекло время оплаты" } },
+                { "action": "navigate", "params": { "screenId": "kso-timeout" } }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "app-receipt",
+      "name": "Приложение · Чек",
+      "surface": "app",
+      "note": "Чек появляется у покупателя ровно тогда, когда общий стейт получил статус «оплачен».",
+      "stateOverrides": {
+        "order": { "status": "paid", "statusLabel": "Оплачен" }
+      },
+      "spec": {
+        "root": "app-receipt-stack",
+        "elements": {
+          "app-receipt-stack": {
+            "type": "StarterStack",
+            "props": { "gap": "md" },
+            "children": ["app-receipt-title", "app-receipt-status", "app-receipt-total", "app-receipt-done"]
+          },
+          "app-receipt-title": {
+            "type": "StarterText",
+            "props": { "text": "Электронный чек" }
+          },
+          "app-receipt-status": {
+            "type": "StarterText",
+            "props": { "text": { "$template": "Статус заказа: ${/order/statusLabel}" } }
+          },
+          "app-receipt-total": {
+            "type": "StarterText",
+            "props": { "text": { "$template": "Оплачено: ${/order/total} ₽" } }
+          },
+          "app-receipt-done": {
+            "type": "StarterButton",
+            "props": { "label": "Готово" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "app-home" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "kso-idle",
+      "name": "КСО · Ожидание",
+      "surface": "kso",
+      "note": "Касса ждёт покупателя. Статус-бар терминала нарисован в макете экрана: canvas-экран не использует регионы @eui/FlowRoot.",
+      "canvas": { "width": 1280, "height": 800 },
+      "spec": {
+        "root": "kso-idle-frame",
+        "elements": {
+          "kso-idle-frame": {
+            "type": "KsoTerminalFrame",
+            "props": {
+              "title": "Касса самообслуживания",
+              "status": { "$template": "Статус заказа: ${/order/statusLabel}" }
+            },
+            "children": ["kso-idle-hint", "kso-idle-scan"]
+          },
+          "kso-idle-hint": {
+            "type": "KsoTerminalLine",
+            "props": { "text": "Поднесите QR из приложения к сканеру", "tone": "muted" }
+          },
+          "kso-idle-scan": {
+            "type": "KsoTerminalKey",
+            "props": { "label": "Сканировать товар", "kind": "primary" },
+            "on": {
+              "press": [
+                { "action": "setState", "params": { "statePath": "/order/status", "value": "scanned" } },
+                { "action": "setState", "params": { "statePath": "/order/statusLabel", "value": "Товар отсканирован" } },
+                { "action": "navigate", "params": { "screenId": "kso-scan" } }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "kso-scan",
+      "name": "КСО · Товар в чеке",
+      "surface": "kso",
+      "note": "Оплата на кассе передаёт подтверждение в приложение; касса остаётся живой панелью и читает тот же статус.",
+      "canvas": { "width": 1280, "height": 800 },
+      "stateOverrides": {
+        "order": { "status": "scanned", "statusLabel": "Товар отсканирован" }
+      },
+      "spec": {
+        "root": "kso-scan-frame",
+        "elements": {
+          "kso-scan-frame": {
+            "type": "KsoTerminalFrame",
+            "props": {
+              "title": "Товар в чеке",
+              "status": { "$template": "Статус заказа: ${/order/statusLabel}" }
+            },
+            "children": ["kso-scan-item", "kso-scan-pay", "kso-scan-cancel", "kso-scan-paid", "kso-scan-finish"]
+          },
+          "kso-scan-item": {
+            "type": "KsoTerminalLine",
+            "props": { "text": { "$template": "Кофе с собой — ${/order/total} ₽" } }
+          },
+          "kso-scan-pay": {
+            "type": "KsoTerminalKey",
+            "props": { "label": "Оплатить", "kind": "primary" },
+            "visible": { "$state": "/order/status", "eq": "scanned" },
+            "on": {
+              "press": [
+                { "action": "setState", "params": { "statePath": "/order/status", "value": "awaiting" } },
+                { "action": "setState", "params": { "statePath": "/order/statusLabel", "value": "Ожидает подтверждения в приложении" } },
+                { "action": "navigate", "params": { "screenId": "app-confirm" } }
+              ]
+            }
+          },
+          "kso-scan-cancel": {
+            "type": "KsoTerminalKey",
+            "props": { "label": "Отменить заказ", "kind": "secondary" },
+            "visible": { "$state": "/order/status", "eq": "scanned" },
+            "on": {
+              "press": [
+                { "action": "setState", "params": { "statePath": "/order/status", "value": "cancelled" } },
+                { "action": "setState", "params": { "statePath": "/order/statusLabel", "value": "Отменён на кассе" } },
+                { "action": "navigate", "params": { "screenId": "kso-cancelled" } }
+              ]
+            }
+          },
+          "kso-scan-paid": {
+            "type": "KsoTerminalLine",
+            "props": { "text": "Оплата принята — чек ушёл в приложение" },
+            "visible": { "$state": "/order/status", "eq": "paid" }
+          },
+          "kso-scan-finish": {
+            "type": "KsoTerminalKey",
+            "props": { "label": "Завершить", "kind": "primary" },
+            "visible": { "$state": "/order/status", "eq": "paid" },
+            "on": {
+              "press": {
+                "action": "navigate",
+                "params": { "screenId": "kso-done" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "kso-timeout",
+      "name": "КСО · Время оплаты истекло",
+      "surface": "kso",
+      "note": "Corner-кейс: подтверждение в приложении не пришло вовремя. Товар остался в чеке — сценарий продолжается повторным сканированием.",
+      "canvas": { "width": 1280, "height": 800 },
+      "stateOverrides": {
+        "order": { "status": "timeout", "statusLabel": "Истекло время оплаты" }
+      },
+      "spec": {
+        "root": "kso-timeout-frame",
+        "elements": {
+          "kso-timeout-frame": {
+            "type": "KsoTerminalFrame",
+            "props": {
+              "title": "Время оплаты истекло",
+              "status": { "$template": "Статус заказа: ${/order/statusLabel}" }
+            },
+            "children": ["kso-timeout-hint", "kso-timeout-rescan", "kso-timeout-cancel"]
+          },
+          "kso-timeout-hint": {
+            "type": "KsoTerminalLine",
+            "props": { "text": "Подтверждение в приложении не пришло. Товар остался в чеке." }
+          },
+          "kso-timeout-rescan": {
+            "type": "KsoTerminalKey",
+            "props": { "label": "Сканировать заново", "kind": "primary" },
+            "on": {
+              "press": [
+                { "action": "setState", "params": { "statePath": "/order/status", "value": "scanned" } },
+                { "action": "setState", "params": { "statePath": "/order/statusLabel", "value": "Товар отсканирован" } },
+                { "action": "navigate", "params": { "screenId": "kso-scan" } }
+              ]
+            }
+          },
+          "kso-timeout-cancel": {
+            "type": "KsoTerminalKey",
+            "props": { "label": "Отменить заказ", "kind": "secondary" },
+            "on": {
+              "press": [
+                { "action": "setState", "params": { "statePath": "/order/status", "value": "cancelled" } },
+                { "action": "setState", "params": { "statePath": "/order/statusLabel", "value": "Отменён на кассе" } },
+                { "action": "navigate", "params": { "screenId": "kso-cancelled" } }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "kso-cancelled",
+      "name": "КСО · Заказ отменён",
+      "surface": "kso",
+      "note": "Corner-кейс: отмена на кассе. Приложение узнаёт об этом из того же общего стейта, без единого действия покупателя.",
+      "canvas": { "width": 1280, "height": 800 },
+      "stateOverrides": {
+        "order": { "status": "cancelled", "statusLabel": "Отменён на кассе" }
+      },
+      "spec": {
+        "root": "kso-cancelled-frame",
+        "elements": {
+          "kso-cancelled-frame": {
+            "type": "KsoTerminalFrame",
+            "props": {
+              "title": "Заказ отменён",
+              "status": { "$template": "Статус заказа: ${/order/statusLabel}" }
+            },
+            "children": ["kso-cancelled-hint", "kso-cancelled-new"]
+          },
+          "kso-cancelled-hint": {
+            "type": "KsoTerminalLine",
+            "props": { "text": "Заказ отменён на кассе. Деньги не списаны." }
+          },
+          "kso-cancelled-new": {
+            "type": "KsoTerminalKey",
+            "props": { "label": "Новый заказ", "kind": "primary" },
+            "on": {
+              "press": [
+                { "action": "setState", "params": { "statePath": "/order/status", "value": "idle" } },
+                { "action": "setState", "params": { "statePath": "/order/statusLabel", "value": "Нет активного заказа" } },
+                { "action": "navigate", "params": { "screenId": "kso-idle" } }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "kso-done",
+      "name": "КСО · Покупка завершена",
+      "surface": "kso",
+      "note": "Касса свободна, чек у покупателя в приложении.",
+      "canvas": { "width": 1280, "height": 800 },
+      "stateOverrides": {
+        "order": { "status": "paid", "statusLabel": "Оплачен" }
+      },
+      "spec": {
+        "root": "kso-done-frame",
+        "elements": {
+          "kso-done-frame": {
+            "type": "KsoTerminalFrame",
+            "props": {
+              "title": "Спасибо за покупку",
+              "status": { "$template": "Статус заказа: ${/order/statusLabel}" }
+            },
+            "children": ["kso-done-hint", "kso-done-new"]
+          },
+          "kso-done-hint": {
+            "type": "KsoTerminalLine",
+            "props": { "text": "Чек отправлен в приложение покупателя." }
+          },
+          "kso-done-new": {
+            "type": "KsoTerminalKey",
+            "props": { "label": "Новый заказ", "kind": "primary" },
+            "on": {
+              "press": [
+                { "action": "setState", "params": { "statePath": "/order/status", "value": "idle" } },
+                { "action": "setState", "params": { "statePath": "/order/statusLabel", "value": "Нет активного заказа" } },
+                { "action": "navigate", "params": { "screenId": "kso-idle" } }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "id": "kso-main",
+      "name": "Оплата на КСО",
+      "description": "Покупатель показывает QR кассе, платит подтверждением в приложении и получает чек.",
+      "steps": [
+        {
+          "screenId": "app-home",
+          "companions": { "kso": "kso-idle" },
+          "note": "Покупатель открывает приложение; касса свободна и ждёт QR."
+        },
+        {
+          "screenId": "kso-idle",
+          "companions": { "app": "app-home" },
+          "note": "QR распознан — дальше действие переезжает на кассу."
+        },
+        {
+          "screenId": "kso-scan",
+          "companions": { "app": "app-home" },
+          "note": "Товар в чеке кассы; в приложении виден статус «Товар отсканирован»."
+        },
+        {
+          "screenId": "app-confirm",
+          "companions": { "kso": "kso-scan" },
+          "note": "Оплата подтверждается в приложении: касса ждёт и показывает «Ожидает подтверждения»."
+        },
+        {
+          "screenId": "app-receipt",
+          "companions": { "kso": "kso-scan" },
+          "note": "Чек у покупателя; касса читает тот же статус — на её экране «Оплачен»."
+        }
+      ]
+    },
+    {
+      "id": "kso-finish",
+      "name": "Завершение на кассе",
+      "description": "Что видит касса после оплаты.",
+      "parentId": "kso-main",
+      "steps": [
+        {
+          "screenId": "kso-scan",
+          "companions": { "app": "app-receipt" },
+          "note": "Статус «Оплачен» пришёл на кассу через общий стейт — появилась клавиша «Завершить»."
+        },
+        {
+          "screenId": "kso-done",
+          "companions": { "app": "app-receipt" },
+          "note": "Касса свободна для следующего покупателя."
+        }
+      ]
+    },
+    {
+      "id": "kso-timeout-case",
+      "name": "Таймаут оплаты и повторное сканирование",
+      "description": "Corner-кейс: подтверждение не пришло вовремя, заказ пересобирается на кассе.",
+      "parentId": "kso-main",
+      "steps": [
+        {
+          "screenId": "app-confirm",
+          "companions": { "kso": "kso-scan" },
+          "note": "Покупатель не успел подтвердить оплату."
+        },
+        {
+          "screenId": "kso-timeout",
+          "companions": { "app": "app-home" },
+          "note": "Касса показывает истёкшее время; приложение видит тот же статус."
+        },
+        {
+          "screenId": "kso-scan",
+          "companions": { "app": "app-home" },
+          "note": "Повторное сканирование возвращает заказ в оплату."
+        }
+      ]
+    },
+    {
+      "id": "kso-cancel-case",
+      "name": "Отмена на кассе",
+      "description": "Corner-кейс: заказ отменён на кассе.",
+      "parentId": "kso-main",
+      "steps": [
+        {
+          "screenId": "kso-scan",
+          "companions": { "app": "app-home" },
+          "note": "Покупатель передумал у кассы."
+        },
+        {
+          "screenId": "kso-cancelled",
+          "companions": { "app": "app-home" },
+          "note": "Отмена пишет статус в общий стейт — приложение показывает её без действий покупателя."
+        }
+      ]
+    }
+  ]
+}

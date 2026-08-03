@@ -46,8 +46,25 @@ declare module "*/author/driver.mjs" {
   export const MAX_ASSET_PIXELS: number;
   export function captureSurface(screen: Record<string, unknown>, device?: string): DriverViewport;
   export function assertCaptureSurfaceBudget(surface: DriverViewport, deviceScaleFactor?: number): DriverViewport;
+  /** Поверхность документа (`doc.surfaces`, план multi-surface-flows D1). */
+  export interface DriverSurfaceSpec {
+    id: string;
+    name?: string;
+    device?: string;
+    startScreen?: string;
+    designSystem?: string;
+  }
+  export interface DriverDocLike {
+    device?: string;
+    designSystem?: string;
+    surfaces?: readonly DriverSurfaceSpec[];
+    screens?: readonly Record<string, unknown>[];
+  }
+  export function surfaceOfScreen(doc: DriverDocLike, screen: Record<string, unknown> | undefined): DriverSurfaceSpec | null;
+  export function screenDevice(doc: DriverDocLike, screen: Record<string, unknown> | undefined): string;
+  export function screenDesignSystem(doc: DriverDocLike, screen: Record<string, unknown> | undefined): string | undefined;
   export function buildSnapPlan(
-    draft: { doc: { device?: string; screens: readonly Record<string, unknown>[] } },
+    draft: { doc: DriverDocLike & { screens: readonly Record<string, unknown>[] } },
     flags?: { viewport?: DriverViewport | null; dsf?: number; theme?: string },
   ): { screenId: string; viewport: DriverViewport; deviceScaleFactor?: number; theme?: string }[];
   export function buildBaselinePlan(

@@ -4,9 +4,9 @@ Prototype files live in `prototypes/*.json`. A file is a self-contained flow; it
 
 ## Document and screens
 
-The root is a strict object with `version: 1`, slug `id`, human-readable `name`, optional `description`, slug `designSystem` (default `"shadcn"`), `device` (`mobile`, `tablet`, or `desktop`, default `desktop`), slug `startScreen`, `state`, a non-empty `screens` array, and the optional additive fields `flows`, `computed` (see [Computed values](#computed-values)), and `architecture` (see [Architecture warnings](#architecture-warnings)). Screen IDs are unique slugs and `startScreen` must exist. The SQLite `design_systems` registry is the single source of registered systems; an unknown system is an error. `shadcn` and `wireframe` registry entries have code-backed builtin providers. A registry entry without a provider starts with no builtin definitions and can use published custom components assigned to it. The default remains `shadcn`, so existing documents without `designSystem` retain their meaning. Version 1 evolves additively: new fields are optional, so existing v1 documents remain valid.
+The root is a strict object with `version: 1`, slug `id`, human-readable `name`, optional `description`, slug `designSystem` (default `"shadcn"`), `device` (`mobile`, `tablet`, or `desktop`, default `desktop`), slug `startScreen`, `state`, a non-empty `screens` array, and the optional additive fields `flows`, `computed` (see [Computed values](#computed-values)), `surfaces` (see [Surfaces](#surfaces-docsurfaces)), and `architecture` (see [Architecture warnings](#architecture-warnings)). Screen IDs are unique slugs and `startScreen` must exist. The SQLite `design_systems` registry is the single source of registered systems; an unknown system is an error. `shadcn` and `wireframe` registry entries have code-backed builtin providers. A registry entry without a provider starts with no builtin definitions and can use published custom components assigned to it. The default remains `shadcn`, so existing documents without `designSystem` retain their meaning. Version 1 evolves additively: new fields are optional, so existing v1 documents remain valid.
 
-Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, optional non-blank `note` (at most 500 characters), optional `stateOverrides`, and `spec`. `note` is the author's caption below the screen in the CJM view. Screens appear in CJM in their `screens` array order. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, optional `on`, optional `repeat`, optional `slot`, and optional `region`. Its type and props must match the normalized definition in the document's selected design system. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
+Each screen has `id`, `name`, optional positive `{width,height}` `canvas`, optional non-blank `note` (at most 500 characters), optional `stateOverrides`, optional `surface` (required exactly when the document declares [surfaces](#surfaces-docsurfaces)), and `spec`. `note` is the author's caption below the screen in the CJM view. Screens appear in CJM in their `screens` array order. A spec contains only `root` and `elements`. An element contains only `type`, `props`, optional `children`, optional `visible`, optional `on`, optional `repeat`, optional `slot`, and optional `region`. Its type and props must match the normalized definition in the document's selected design system. Unknown props, including keys in nested objects, are errors. Elements form one tree rooted at `root` (maximum 500 elements and depth 50).
 
 **Element keys in an authored document must not contain `$`.** The character is reserved as the separator of expanded composition keys (`<hostKey>$<innerKey>`) and is rejected by `inputPrototypeDocSchema` — see [Versioned compositions](#versioned-compositions). The tolerant parser used for already stored rows (`storedPrototypeDocSchema`) does not apply that restriction, so existing revisions and expanded documents keep reading.
 
@@ -35,6 +35,70 @@ The keys `__proto__`, `prototype`, and `constructor` are forbidden at every over
 Derived numbers are not stored in `state`: the optional top-level `computed` field declares them, and they read like ordinary state through `{ "$state": "/key" }` or `${/key}` (see [Computed values](#computed-values)). A computed key may not collide with a top-level `state` key or be re-declared by a screen's `stateOverrides`, and no action or binding may write to it.
 
 Each CJM tile gets an isolated json-render state store. This does not isolate custom components' own local state or browser side effects such as portals, global listeners, or storage access.
+
+## Surfaces (`doc.surfaces`)
+
+The optional `surfaces` field turns a document into a **multi-surface** flow: one story played across two devices side by side — a self-checkout terminal and the customer's phone, a cashier's till and the app. The player renders one device frame per surface, both live and clickable, over **one shared state store**. A document without `surfaces` behaves exactly as before; the field is additive to format v1.
+
+```json
+{
+  "designSystem": "app-ds",
+  "device": "mobile",
+  "startScreen": "app-home",
+  "surfaces": [
+    { "id": "app", "name": "Приложение", "device": "mobile", "startScreen": "app-home" },
+    { "id": "kso", "name": "КСО", "device": "desktop", "designSystem": "kso-ds", "startScreen": "kso-idle" }
+  ],
+  "screens": [
+    { "id": "app-home", "surface": "app", "name": "…", "spec": { … } },
+    { "id": "kso-idle", "surface": "kso", "name": "…", "canvas": { "width": 1280, "height": 800 }, "spec": { … } }
+  ]
+}
+```
+
+A surface is `{ id: slug, name: 1..60 chars, device: mobile|tablet|desktop, startScreen: slug, designSystem?: slug }`. Surface IDs are unique. Writing a document with `surfaces` requires the server-side feature switch (`EASYUI_SURFACES=1`, `422 surfaces_disabled` otherwise) — see [server API](server-api.md#мульти-поверхностные-документы-docsurfaces). A worked two-design-system document is `test/fixtures/duo-kso.json`; `test/fixtures/duo-pos.json` is the single-design-system variant.
+
+**Rules of the authored input branch** (stored revisions are parsed without them, so rolling the image back keeps reading documents that already use surfaces; the referential rules below are the exception and run in both branches):
+
+- **exactly two surfaces in v1.** One surface adds nothing, and the scene, render budgets and screenshot queue are built for a pair. The live limit is published as `limits.surfaces` by `GET /api/capabilities`; raising it is additive;
+- **every screen declares `surface`** with an existing surface id, and a `surface` on a screen of a document without `surfaces` is an error. There are no silent defaults. Referential integrity (screen tags, unknown ids, duplicate ids, `companions` targets) is enforced in both branches, because reading code depends on it;
+- **`surfaces[0]` is the primary surface**, and the document scalars must agree with it: `doc.startScreen === surfaces[0].startScreen` and `doc.device === surfaces[0].device`. `surface.designSystem` is optional and defaults to `doc.designSystem`, i.e. to the design system of the primary surface. The point of the rule is graceful degradation: readers that do not know about surfaces (gallery cards, visual baselines, CJM placeholders) measure the document by its primary surface instead of by an arbitrary one;
+- **every screen of a `desktop` surface must declare a `canvas`.** Without one, the desktop branch of the device frame is fluid: it neither scales nor gets a spacing scope, so a terminal rendered in half a window is a broken layout rather than a smaller terminal. **Consequence:** `canvas` screens forbid `region`, so a desktop surface does not use `@eui/FlowRoot` regions — the terminal's own status bar and header are drawn in the screen layout. Mobile and tablet surfaces keep regions;
+- `surface.startScreen` must be a screen **of that surface**.
+
+**Component resolution is per surface** (`designSystem` of the screen's surface). A component of the other design system on a screen is the same error as an unknown type. Compositions are supported only on screens whose design system equals `doc.designSystem` (`422 composition_foreign_design_system` otherwise), and bundle export of a multi-surface prototype is rejected with `422 surfaces_not_exportable` in v1.
+
+### Navigation and the surface map
+
+`navigate` is unchanged and still takes only `screenId`: the target screen belongs to some surface, so the transition moves **that** surface to the screen and focuses its panel. The other panels keep their screens.
+
+The map of current screens lives in the **URL**, which makes it the single source of truth for share links, deep links and CJM jumps:
+
+- the path carries the focused screen — `/p/:id/s/:screenId`;
+- the query carries the screens of the other surfaces — `?on.<surfaceId>=<screenId>`.
+
+`back` walks browser history, so it restores whole maps. `restart` returns every surface to its `startScreen`, mints a new session nonce and **drops `on.*`** from the query (`flow`, `step`, `debug` and the rest survive). A deep link without `on.*` opens the other surfaces on their `startScreen`; an `on.*` entry pointing at an unknown screen (a stale link, or a link opened against another version) falls back to that surface's `startScreen` and the URL is normalized. Arrow keys, the present pager and the screens sidebar operate **within the focused surface**; the sidebar groups screens by surface.
+
+### Shared state, and how statuses cross surfaces
+
+Both surfaces share **one state store and one action runtime**: the terminal writes `/order/status`, the phone screen reads it with `{ "$state": … }` or `${…}` in the same tick. `computed` works unchanged, and `stateOverrides` still apply to CJM tiles only, never to the live player.
+
+**One event may carry at most one terminal action**, so "navigate both panels at once" is not expressible by design — and it is not needed: the canonical way to show a status change on the second surface is `navigate` on the acting surface **plus shared state** read by the other one. Do not try to encode a status change as a second `navigate`.
+
+### `step.companions`: what the other surface shows
+
+A flow step may declare `companions: { "<surfaceId>": "<screenId>" }` — "what is on the other surface at this moment". The key must be an **existing surface other than the one owning the step screen**, and the value must be a screen of that surface. Guided browsing and CJM deep links set **both** panels from it in one navigation, and the «Сценарии» view draws the companion tile next to the step tile. `step.note` is the canonical place for the textual annotation ("что в этот момент происходит на кассе"), and screen `stateOverrides` give the companion tile the status it should be showing.
+
+### v1 limits of per-surface theming
+
+Both design systems are resolved, pinned and served (components, theme versions, share resources, capture allowlist), and the non-primary panel is rendered inside a scoped theme wrapper. Two limits remain, and the server emits non-blocking validation warnings for them:
+
+- **`token()` and `Icon` read the global snapshot of the primary design system in full — both tokens and icons.** Components of the non-primary system get the primary system's values regardless of whether the non-primary theme declares icons of its own. The warning is unconditional whenever a document mixes two design systems. **Recipe:** put the icon- and `token()`-dependent design system on the **primary** surface, and keep the second surface on components that paint themselves with `color()`/`space()` — those compile to plain `var(--eui-*)` and are scoped correctly. Contextual `token()`/`Icon` is an ABI v5 topic;
+- **fonts are filtered by family only**: if both themes declare the same `family`, the first registration (the primary one) wins. The warning fires when the pinned themes of the two systems intersect by family. Scoping by renaming families is a v2 topic.
+
+### Screenshots of a multi-surface document
+
+Screen capture stays **per screen**: a frame is rendered from `doc.state` in the default state, without the companion panel, with `viewport = screen.canvas ?? canonical viewport of the surface device`. There is no composite duo frame in v1. Corner-case statuses of the second surface (payment timeout, cancellation at the till) are therefore reproduced in the **live player or a share link** — that is exactly what the `?on.*` map is for — and not through capture. `driver.mjs snap|baseline|geometry` resolve viewport and catalog from the screen's surface.
 
 ## Flows (scenario lanes)
 

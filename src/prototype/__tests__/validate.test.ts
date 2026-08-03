@@ -351,13 +351,32 @@ describe("repeat", () => {
 });
 
 describe("repository prototypes", () => {
-  const files = import.meta.glob("../../../test/fixtures/*.json", { eager: true, import: "default" });
-  for (const [filename, document] of Object.entries(files)) it(`${filename} is valid`, () => expect(messages(document)).toEqual([]));
+  const files = Object.entries(import.meta.glob("../../../test/fixtures/*.json", { eager: true, import: "default" }));
+  /**
+   * Юниту доступны определения только систем с builtin-провайдером. Фикстура на кастомной
+   * дизайн-системе (её компоненты живут в БД сервера) дала бы здесь ложные
+   * `unknown component type`, поэтому у неё проверяется структура документа, а полная
+   * валидация против настоящего каталога — это её публикация в e2e
+   * (`test/fixtures/duo-kso.json` → `e2e/dev/surfaces.spec.ts`).
+   */
+  const builtinDesignSystems = new Set(["shadcn", "wireframe"]);
+  const onBuiltinCatalog = ([, document]: [string, unknown]) =>
+    builtinDesignSystems.has((document as { designSystem?: string }).designSystem ?? "shadcn");
+  const unknownType = (message: string) => /unknown component type/.test(message);
+
+  for (const [filename, document] of files.filter(onBuiltinCatalog)) it(`${filename} is valid`, () => expect(messages(document)).toEqual([]));
   // Semantic warnings must stay calibrated: no shipped prototype gains a new warning.
-  for (const [filename, document] of Object.entries(files)) it(`${filename} has no warnings`, () => {
+  for (const [filename, document] of files.filter(onBuiltinCatalog)) it(`${filename} has no warnings`, () => {
     const parsed = prototypeDocSchema.parse(document);
     expect(validatePrototype(parsed).warnings).toEqual([]);
   });
+  for (const [filename, document] of files.filter((entry) => !onBuiltinCatalog(entry))) {
+    it(`${filename} is structurally valid on its custom design system`, () => {
+      expect(messages(document).filter((message) => !unknownType(message))).toEqual([]);
+      const parsed = prototypeDocSchema.parse(document);
+      expect(validatePrototype(parsed).warnings.map((warning) => warning.message).filter((message) => !unknownType(message))).toEqual([]);
+    });
+  }
 });
 
 describe("semantic warnings", () => {

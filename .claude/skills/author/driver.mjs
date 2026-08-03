@@ -425,6 +425,37 @@ export async function pollJob(path, { deadlineMs }) {
 
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
 
+/**
+ * Поверхность экрана мульти-поверхностного документа (`doc.surfaces`, формат D1–D3).
+ *
+ * Оборонительно: документ без `surfaces` (обычный случай) даёт `null`, неизвестный/отсутствующий
+ * тег `screen.surface` — primary (`surfaces[0]`). Тем самым любое производное значение
+ * (устройство, дизайн-система) у одно-поверхностных доков остаётся ровно прежним.
+ */
+export function surfaceOfScreen(doc, screen) {
+  const surfaces = Array.isArray(doc?.surfaces) ? doc.surfaces.filter((surface) => surface && typeof surface === "object") : [];
+  if (!surfaces.length) return null;
+  const tagged = screen?.surface === undefined ? undefined : surfaces.find((surface) => surface.id === screen.surface);
+  return tagged ?? surfaces[0] ?? null;
+}
+
+/**
+ * Устройство экрана — от его **поверхности** (D10/D14), а не от `doc.device`: у дуо-дока
+ * КСО-поверхность desktop, а приложение mobile, и вьюпорт съёмки обязан различаться.
+ * Фолбэк — `doc.device` (и `desktop`, если и его нет), то есть прежнее поведение.
+ */
+export function screenDevice(doc, screen) {
+  return surfaceOfScreen(doc, screen)?.device ?? doc?.device ?? "desktop";
+}
+
+/**
+ * Дизайн-система экрана — от его поверхности (`surface.designSystem`, дефолт — `doc.designSystem`,
+ * D3/D8). Нужна там, где драйвер тянет каталог/шкалу спейсинга под конкретный экран (geometry).
+ */
+export function screenDesignSystem(doc, screen) {
+  return surfaceOfScreen(doc, screen)?.designSystem ?? doc?.designSystem;
+}
+
 export function resolveViewport(screen, override, device = "desktop") {
   if (override) return { width: override.width, height: override.height };
   if (screen?.canvas && Number.isFinite(screen.canvas.width) && Number.isFinite(screen.canvas.height)) {
@@ -478,7 +509,7 @@ export function buildBaselinePlan(draft, options = {}) {
   const deviceScaleFactor = options.dsf ?? 1;
   const theme = options.theme ?? "light";
   const surfaces = draft.doc.screens.map((screen) => {
-    const viewport = resolveViewport(screen, options.viewport, draft.doc.device);
+    const viewport = resolveViewport(screen, options.viewport, screenDevice(draft.doc, screen));
     assertViewportPixelBudget(viewport, deviceScaleFactor);
     return { screenId: screen.id, viewport, deviceScaleFactor, theme };
   });
@@ -658,10 +689,13 @@ async function runGeometry(args) {
   const draft = await requireOk("draft", await call("GET", `/prototypes/${encoded}/draft`));
   const screen = draft.doc.screens.find((item) => item.id === screenId);
   if (!screen) throw new CliError(`screen ${screenId} not found in ${id}`);
-  const viewport = assertViewportPixelBudget(resolveViewport(screen, undefined, draft.doc.device), 1);
+  const viewport = assertViewportPixelBudget(resolveViewport(screen, undefined, screenDevice(draft.doc, screen)), 1);
+  // Каталог и шкала спейсинга — от ДС **поверхности** экрана: на дуо-доке замер второй
+  // поверхности иначе разбирался бы определениями чужой системы (D8/D14, R3-M6).
+  const designSystem = screenDesignSystem(draft.doc, screen);
   const [system, manifest] = await Promise.all([
-    requireOk("design system", await call("GET", `/design-systems/${encodeURIComponent(draft.doc.designSystem)}`)),
-    requireOk("catalog manifest", await call("GET", `/catalog/manifest?designSystem=${encodeURIComponent(draft.doc.designSystem)}`)),
+    requireOk("design system", await call("GET", `/design-systems/${encodeURIComponent(designSystem)}`)),
+    requireOk("catalog manifest", await call("GET", `/catalog/manifest?designSystem=${encodeURIComponent(designSystem)}`)),
   ]);
   const queued = await requireOk("geometry", await call("POST", `/prototypes/${encoded}/screens/${encodeURIComponent(screenId)}/screenshot`, {
     rev: draft.rev, viewport, deviceScaleFactor: 1, theme: "light", waitForFonts: true, probe: "geometry",
@@ -979,9 +1013,9 @@ async function snapScreen(id, screenId, outputDir, surface) {
  */
 export function buildSnapPlan(draft, flags = {}) {
   return draft.doc.screens.map((screen) => {
-    const viewport = resolveViewport(screen, flags.viewport, draft.doc.device);
+    const viewport = resolveViewport(screen, flags.viewport, screenDevice(draft.doc, screen));
     try {
-      assertCaptureSurfaceBudget(captureSurface(screen, draft.doc.device), flags.dsf ?? 1);
+      assertCaptureSurfaceBudget(captureSurface(screen, screenDevice(draft.doc, screen)), flags.dsf ?? 1);
       assertViewportPixelBudget(viewport, flags.dsf ?? 1);
     } catch (error) {
       throw new Error(`${screen.id}: ${error.message}`);

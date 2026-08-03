@@ -39,6 +39,9 @@ import {
   parseExpectations,
   readGeometryRects,
   resolveViewport,
+  buildSnapPlan,
+  screenDesignSystem,
+  screenDevice,
   type DriverReadinessGate,
 } from "../.claude/skills/author/driver.mjs";
 
@@ -1455,6 +1458,38 @@ describe("author driver planners", () => {
     expect(resolveViewport({ canvas: { width: 1, height: 9000 } }, undefined, "desktop")).toEqual({ width: 64, height: 4000 });
     expect(resolveViewport({}, undefined, "mobile")).toEqual({ width: 390, height: 844 });
     expect(resolveViewport({}, undefined, "desktop")).toEqual({ width: 1280, height: 800 });
+  });
+
+  test("multi-surface docs resolve viewport and catalog from the screen surface", () => {
+    // План 2026-08-02 multi-surface-flows, W5/R3-M5: у дуо-дока КСО-поверхность desktop, а
+    // приложение mobile — снимать обе в `doc.device` значило бы снимать в чужом вьюпорте.
+    const doc = {
+      device: "mobile",
+      designSystem: "app-ds",
+      surfaces: [
+        { id: "app", name: "Приложение", device: "mobile", startScreen: "app-home" },
+        { id: "kso", name: "КСО", device: "desktop", designSystem: "kso-ds", startScreen: "kso-idle" },
+      ],
+      screens: [
+        { id: "app-home", surface: "app" },
+        { id: "kso-idle", surface: "kso", canvas: { width: 1280, height: 800 } },
+        { id: "untagged" },
+      ],
+    };
+    expect(doc.screens.map((screen) => screenDevice(doc, screen))).toEqual(["mobile", "desktop", "mobile"]);
+    expect(doc.screens.map((screen) => screenDesignSystem(doc, screen))).toEqual(["app-ds", "kso-ds", "app-ds"]);
+    expect(buildSnapPlan({ doc }).map((surface) => surface.viewport)).toEqual([
+      { width: 390, height: 844 },
+      { width: 1280, height: 800 },
+      { width: 390, height: 844 },
+    ]);
+    // Одно-поверхностный документ: устройство и вьюпорт ровно прежние.
+    const single = { device: "tablet", designSystem: "solo-ds", screens: [{ id: "a" }] };
+    expect(screenDevice(single, single.screens[0])).toBe("tablet");
+    expect(screenDesignSystem(single, single.screens[0])).toBe("solo-ds");
+    expect(buildSnapPlan({ doc: single })[0]?.viewport).toEqual({ width: 834, height: 1112 });
+    expect(buildBaselinePlan({ rev: 1, prototypeInstanceId: "i", doc }, {}).surfaces.map((surface) => surface.viewport))
+      .toEqual([{ width: 390, height: 844 }, { width: 1280, height: 800 }, { width: 390, height: 844 }]);
   });
 
   test("enforces the 20 Mpx invariant and builds complete members", () => {
