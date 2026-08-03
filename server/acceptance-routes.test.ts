@@ -11,6 +11,7 @@ import { acquireMaintenanceLock, releaseMaintenanceLock } from "./maintenance";
 import type { Principal } from "./auth";
 import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
 import { routeAcceptance } from "./routes/acceptance";
+import { routeCaseSets } from "./routes/caseSets";
 import type { AcceptanceCaptureService } from "./acceptance/gates/types";
 import type { JobOutcome, JobStatus, ScreenshotResult } from "./screenshot/service";
 
@@ -245,8 +246,13 @@ test("постановка рана: unsupported_option, unknown_policy_profile 
   const { db, handler } = await setup();
   const candidate = await jsonOf<CandidateBody>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
 
+  // Битая форма `caseSetId` — 400 до lookup'а кандидата (W2), а не «нет набора»: адрес набора
+  // не должен работать оракулом.
+  const badCaseSet = await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId, caseSetId: "cset_x" }));
+  expect(badCaseSet.status).toBe(400);
+  expect(await jsonOf<{ error: { code: string } }>(badCaseSet)).toMatchObject({ error: { code: "invalid_request" } });
+
   for (const body of [
-    { candidateId: candidate.candidateId, caseSetId: "cset_x" },
     { candidateId: candidate.candidateId, manifestAssetId: "asset_x" },
     { candidateId: candidate.candidateId, concurrency: 4 },
     { candidateId: candidate.candidateId, cases: { concurrency: 4 } },
@@ -310,3 +316,155 @@ test("cancel: queued отменяется, второй нетерминальн
   expect(again.status).toBe(409);
   expect(await jsonOf<{ error: { code: string } }>(again)).toMatchObject({ error: { code: "run_not_cancellable" } });
 }, 120_000);
+
+// ------------------------------------------------------- case-set-манифесты (W2)
+
+/**
+ * Роуты case-set'ов (план 2026-08-03 §5 W2). Живут в этом файле по той же причине, что и
+ * acceptance-роуты: им нужен настоящий компонент и настоящий кандидат, а фикстура здесь одна.
+ */
+
+const REFERENCE_SHA = "c".repeat(64);
+const REFERENCE_ASSET = `asset_${REFERENCE_SHA}`;
+
+const seedAsset = (db: Database): string => {
+  db.run("INSERT INTO assets (id,sha256,mime,size,width,height,created_at) VALUES (?,?,'image/png',8,4,4,'now')", [REFERENCE_ASSET, REFERENCE_SHA]);
+  return REFERENCE_ASSET;
+};
+
+const caseSetManifest = (overrides: Record<string, unknown> = {}) => ({
+  manifestVersion: 1,
+  componentId: COMPONENT_ID,
+  source: { fileKey: "figma-file-key", componentSetNodeId: "54863:9518" },
+  capture: { viewport: { width: 320, height: 200 }, deviceScaleFactor: 2, theme: "light" },
+  dimensions: { tone: ["alpha", "beta"] },
+  cases: [
+    { id: "alpha", props: { label: "alpha" }, dims: { tone: "alpha" }, referenceAssetId: REFERENCE_ASSET, expectedGeometry: { width: 140, height: 96 } },
+    { id: "beta", props: { label: "beta" }, dims: { tone: "beta" } },
+    { id: "beta-copy", props: { label: "beta" }, aliasOf: "beta", dims: { tone: "beta" } },
+  ],
+  ...overrides,
+});
+
+interface CaseSetBody { caseSetId: string; cases: number; cached: boolean; warnings: string[]; coverage: { expectedTuples: number; presentTuples: number; missingTuples: unknown[]; duplicates: { caseIds: string[] }[] } }
+
+test("case-sets: PUT идемпотентен, GET и coverage отдают набор, отказы типизованы", async () => {
+  const { db, handler } = await setup({ autoDrain: false });
+  seedAsset(db);
+
+  const put = await handler(req(`/components/${COMPONENT_ID}/case-sets`, "PUT", { manifest: caseSetManifest() }));
+  expect(put.status, await put.clone().text()).toBe(200);
+  const created = await jsonOf<CaseSetBody>(put);
+  expect(created.caseSetId).toMatch(/^cset_[0-9a-f]{64}$/);
+  expect({ cases: created.cases, cached: created.cached }).toEqual({ cases: 3, cached: false });
+  expect(created.coverage).toMatchObject({ expectedTuples: 2, presentTuples: 2, missingTuples: [] });
+  expect(created.coverage.duplicates[0]!.caseIds).toEqual(["beta", "beta-copy"]);
+
+  const again = await jsonOf<CaseSetBody>(await handler(req(`/components/${COMPONENT_ID}/case-sets`, "PUT", { manifest: caseSetManifest() })));
+  expect({ id: again.caseSetId, cached: again.cached }).toEqual({ id: created.caseSetId, cached: true });
+
+  const read = await handler(req(`/case-sets/${created.caseSetId}`));
+  expect(read.status).toBe(200);
+  expect(await jsonOf<{ componentId: string; caseCount: number; source: { fileKey: string } }>(read))
+    .toMatchObject({ componentId: COMPONENT_ID, caseCount: 3, source: { fileKey: "figma-file-key" } });
+
+  const coverage = await handler(req(`/case-sets/${created.caseSetId}/coverage`));
+  expect(coverage.status).toBe(200);
+  expect(await jsonOf<{ dimensions: Record<string, string[]>; missingTuples: unknown[] }>(coverage))
+    .toMatchObject({ dimensions: { tone: ["alpha", "beta"] }, missingTuples: [] });
+
+  // Неполное покрытие видно как missingTuples, а не как отказ.
+  const partial = await jsonOf<CaseSetBody>(await handler(req(`/components/${COMPONENT_ID}/case-sets`, "PUT", {
+    manifest: caseSetManifest({ cases: [{ id: "alpha", props: { label: "alpha" }, dims: { tone: "alpha" } }] }),
+  })));
+  expect(partial.coverage.missingTuples).toEqual([{ tone: "beta" }]);
+
+  // Отказы: битый ассет, плохой charset, чужой componentId, дубль props без aliasOf.
+  const refusals: [string, unknown, number, string][] = [
+    ["asset", caseSetManifest({ cases: [{ id: "alpha", props: { label: "alpha" }, referenceAssetId: `asset_${"d".repeat(64)}` }] }), 422, "asset_not_found"],
+    ["charset", caseSetManifest({ cases: [{ id: "54863:9537", props: { label: "alpha" } }] }), 422, "validation_failed"],
+    ["component", caseSetManifest({ componentId: "someone-else" }), 422, "case_set_component_mismatch"],
+    ["props", caseSetManifest({ cases: [{ id: "one", props: { label: "x" } }, { id: "two", props: { label: "x" } }] }), 422, "duplicate_case_props"],
+  ];
+  for (const [label, manifest, status, code] of refusals) {
+    const response = await handler(req(`/components/${COMPONENT_ID}/case-sets`, "PUT", { manifest }));
+    expect({ label, status: response.status }).toEqual({ label, status });
+    expect(await jsonOf<{ error: { code: string } }>(response)).toMatchObject({ error: { code } });
+  }
+
+  // Неизвестный набор и битая форма id — одинаковый 404 (адрес набора не работает оракулом).
+  for (const id of [`cset_${"0".repeat(64)}`, "cset_nope"]) {
+    const missing = await handler(req(`/case-sets/${id}`));
+    expect({ id, status: missing.status }).toEqual({ id, status: 404 });
+  }
+}, 120_000);
+
+test("case-sets: гейт OFF даёт 404, чужой пользователь и share/capture — 403", async () => {
+  const off = await setup({ matrix: false });
+  for (const [path, method, body] of [
+    [`/components/${COMPONENT_ID}/case-sets`, "PUT", { manifest: caseSetManifest() }],
+    [`/case-sets/cset_${"0".repeat(64)}`, "GET", undefined],
+    [`/case-sets/cset_${"0".repeat(64)}/coverage`, "GET", undefined],
+  ] as [string, string, unknown][]) {
+    const response = await off.handler(req(path, method, body));
+    expect({ path, status: response.status }).toEqual({ path, status: 404 });
+  }
+
+  const { db, handler, orchestrator } = await setup({ autoDrain: false });
+  seedAsset(db);
+  const created = await jsonOf<CaseSetBody>(await handler(req(`/components/${COMPONENT_ID}/case-sets`, "PUT", { manifest: caseSetManifest() })));
+  const stranger = await new UserRepo(db).create({ name: "Case Set Stranger", password: "stranger-password-1", actorId: BOOTSTRAP_ADMIN_ID });
+  const call = (principal: Principal, path: string, method = "GET", body?: unknown) =>
+    routeCaseSets(req(path, method, body), db, path.slice(1).split("/"), principal, orchestrator);
+
+  const principals: Principal[] = [
+    { kind: "user", userId: stranger.id, name: stranger.name, isAdmin: false },
+    { kind: "share", scope: { grantId: "g", prototypeId: "p", version: 1, allowedUrls: [] } },
+    { kind: "capture", scope: { token: "t", allowedUrls: [] } },
+  ];
+  for (const principal of principals) {
+    for (const path of [`/case-sets/${created.caseSetId}`, `/case-sets/${created.caseSetId}/coverage`]) {
+      await expect(call(principal, path)).rejects.toMatchObject({ status: 403, code: "forbidden" });
+    }
+    await expect(call(principal, `/components/${COMPONENT_ID}/case-sets`, "PUT", { manifest: caseSetManifest() }))
+      .rejects.toMatchObject({ status: 403, code: "forbidden" });
+  }
+}, 120_000);
+
+test("ран по case-set'у: строки случаев несут эталон и ожидаемые габариты, чужой набор — 422", async () => {
+  const { db, handler, orchestrator } = await setup();
+  seedAsset(db);
+  const created = await jsonOf<CaseSetBody>(await handler(req(`/components/${COMPONENT_ID}/case-sets`, "PUT", { manifest: caseSetManifest() })));
+  const candidate = await jsonOf<CandidateBody>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
+
+  const started = await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId, caseSetId: created.caseSetId }));
+  expect(started.status, await started.clone().text()).toBe(202);
+  const run = await jsonOf<RunBody>(started);
+  // Три случая манифеста (не два examples кандидата) — набор действительно приехал из case-set'а.
+  expect(run.cases).toBe(3);
+  await orchestrator!.settled();
+
+  const view = await jsonOf<RunView & { caseSetId: string }>(await handler(req(`/acceptance-runs/${run.runId}`)));
+  expect(view.caseSetId).toBe(created.caseSetId);
+  expect(view.status).toBe("pass");
+
+  const cases = await jsonOf<{ cases: { caseId: string; referenceAssetId: string | null; aliasOfCaseId: string | null; verdict: string }[] }>(
+    await handler(req(`/acceptance-runs/${run.runId}/cases`)));
+  const byId = new Map(cases.cases.map((item) => [item.caseId, item]));
+  expect([...byId.keys()].sort()).toEqual(["alpha", "beta", "beta-copy"]);
+  expect(byId.get("alpha")!.referenceAssetId).toBe(REFERENCE_ASSET);
+  expect(byId.get("beta")!.referenceAssetId).toBeNull();
+  expect(byId.get("beta-copy")!.aliasOfCaseId).toBe("beta");
+  // Ожидаемые габариты уехали в durable-строку случая (потребитель — гейты W3/W5a).
+  const geometry = db.query("SELECT expected_geometry_json g FROM acceptance_cases WHERE run_id=? AND case_id='alpha'").get(run.runId) as { g: string | null };
+  expect(JSON.parse(geometry.g!)).toEqual({ width: 140, height: 96 });
+
+  // Набор другого компонента к этому кандидату не применим.
+  db.run(`INSERT INTO component_case_sets (case_set_id,component_id,design_system,manifest_json,case_count,source_file_key,source_node_id,created_by,created_at)
+    VALUES (?,?,?,?,?,NULL,NULL,'user_admin','now')`,
+    [`cset_${"e".repeat(64)}`, "another-component", "yandex-pay",
+      JSON.stringify({ ...caseSetManifest(), componentId: "another-component" }), 3]);
+  const mismatch = await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId, caseSetId: `cset_${"e".repeat(64)}` }));
+  expect(mismatch.status).toBe(422);
+  expect(await jsonOf<{ error: { code: string } }>(mismatch)).toMatchObject({ error: { code: "case_set_mismatch" } });
+}, 180_000);

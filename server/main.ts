@@ -38,6 +38,7 @@ import { assertMutationAllowed } from "./maintenance";
 import { routeCatalogMigrations } from "./routes/catalogMigrations";
 import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
 import { routeAcceptance } from "./routes/acceptance";
+import { routeCaseSets } from "./routes/caseSets";
 
 export type HandlerOptions = {
   ready?: () => boolean;
@@ -195,6 +196,10 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         // `POST /api/components/:id/candidates` живёт в компонентном namespace, а владеет им
         // acceptance-модуль. Без `options.acceptance` (флаг OFF) роут отвечает 404 на весь набор.
         const acceptance=await routeAcceptance(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.acceptance); if(acceptance) return finish(acceptance);
+        // Case-set-манифесты (план 2026-08-03 §5 W2). Диспатчится рядом с приёмкой и по той же
+        // причине: `PUT /api/components/:id/case-sets` живёт в компонентном namespace, а владеет
+        // им acceptance-модуль; без `options.acceptance` весь набор отвечает 404.
+        const caseSets=await routeCaseSets(request,db,segments.slice(1),principal,options.acceptance); if(caseSets) return finish(caseSets);
         if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),principal,options.dataDir,options.serveDist));
         if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{disabled:options.validateDisabled===true},{disabled:options.acceptanceDisabled===true,matrix:options.acceptance!==undefined,...(options.acceptance?{repo:options.acceptance.repo}:{})}));
         if(segments[1]==="compositions") return finish(await routeCompositions(request,db,segments.slice(1),principal));

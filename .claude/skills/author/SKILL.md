@@ -450,6 +450,42 @@ evidence: GET /api/acceptance-runs/acc_8f1c…/evidence (pass --evidence <file.z
 - `409 acceptance_run_in_flight` — у кандидата уже есть живой ран: не ставить второй, дождаться его через `accept-status`.
 - Ссылки приёмки на публикации: `promote` принимает `candidateId`/`acceptanceRunId` (тело запроса, не флаги верба) — ран обязан быть терминальным `pass`/`pass_with_exceptions` этого же кандидата, иначе `422 acceptance_run_mismatch`/`acceptance_run_not_passed`; при живом ране — `409 acceptance_run_in_flight`. Обе ссылки записываются в строку опубликованной версии как provenance.
 
+### Набор случаев семьи: `case-set`
+
+Именованных `examples` хватает атому, но не семье из 49 состояний с эталонами из Figma. Такой набор описывается **манифестом** и публикуется как сущность: сервер валидирует его целиком и адресует контентно (`caseSetId = "cset_" + sha256` канонизованного манифеста), поэтому повторная публикация того же манифеста идемпотентна, а изменённый манифест — **новый** набор (старые раны остаются воспроизводимыми).
+
+```jsonc
+{
+  "manifestVersion": 1,
+  "componentId": "pay-payment-card",
+  "source": { "fileKey": "…", "componentSetNodeId": "54863:9518" },
+  "capture": { "viewport": { "width": 390, "height": 844 }, "deviceScaleFactor": 2, "theme": "light" },
+  "dimensions": { "family": ["Product", "Split"], "state": ["Default", "Disabled"] },
+  "policy": { "profile": "pixel-strict-v1", "perCase": { "split-disabled": { "maxRawDiffPct": 2 } } },
+  "cases": [
+    { "id": "product-default", "props": { "family": "Product", "state": "Default" },
+      "dims": { "family": "Product", "state": "Default" },
+      "referenceAssetId": "asset_<sha256>", "expectedGeometry": { "width": 140, "height": 96 },
+      "cropLineage": { "parentNodeId": "54863:9518", "rect": [0, 0, 140, 96] } },
+    { "id": "product-default-copy", "props": { "family": "Product", "state": "Default" }, "aliasOf": "product-default" }
+  ]
+}
+```
+
+```bash
+node driver.mjs case-set put pay-payment-card matrix.json   # публикация манифеста → caseSetId + coverage
+node driver.mjs case-set coverage cset_…                    # чего не хватает в матрице
+node driver.mjs case-set get cset_…                         # манифест обратно
+node driver.mjs accept pay-payment-card --case-set cset_…   # ран по набору вместо examples
+```
+
+- `case.id` — charset `^[A-Za-z0-9._-]{1,64}$` (из него строятся имена записей evidence-архива), поэтому **Figma node id вида `54863:9537` не пройдёт** — санитизировать на своей стороне.
+- Эталон — **id ассета реестра** (`asset_<sha256>`, загрузить через `POST /api/assets`), а не байты: несуществующий ассет — `422 asset_not_found`.
+- Два случая с одинаковыми props — `422 duplicate_case_props`; осознанный дубликат помечается `aliasOf` (снимается один кадр, вердикт наследуется). Алиас обязан повторять props цели и не может ссылаться на другой алиас.
+- Покрытие: `expectedTuples` — декартово произведение `dimensions`, `missingTuples` — незакрытые ячейки, `duplicates` — ячейки с двумя случаями. Манифест без `dimensions` получает тривиальный coverage: фиктивное произведение по неполной Figma-матрице не выдумывается.
+- Неполные `dims` и расхождение props со схемой опубликованного компонента — **`warnings`**, а не отказ.
+- `capture` манифеста задаёт поверхность съёмки набора, `policy.perCase` входит в `case_policy_hash` случая: правка допуска одного случая инвалидирует reuse ровно его. Эталоны гейтами пока не потребляются (визуальный гейт — следующая волна), но уже записываются в строки случаев.
+
 ### Служебные прототипы: галереи, `track: head`, профиль readiness
 
 Probe-прототип (стикершит компонентов) нужен только со стадии молекул — атом принимается `preview`'ом. Если он всё же нужен, объявляй его служебным сразу после создания, **lifecycle-роутом, а не полем документа** (формат документа таких полей не имеет):

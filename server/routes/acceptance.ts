@@ -41,15 +41,16 @@ import { zipResponse } from "./bundles";
 import type { AcceptanceOrchestrator, RefreshSpec } from "../acceptance/orchestrator";
 import type { AcceptanceCaseRow, AcceptanceRunRow, CandidateRow } from "../acceptance/repo";
 import { isCandidateId } from "../acceptance/ids";
+import { isCaseSetId } from "../../src/acceptance/caseSetSchema";
 import {
   ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, acceptanceMaxCasesPerRun, acceptancePolicy, evidenceMaxBytes, policyProfileHash,
 } from "../acceptance/policies";
 import { readArtifact, readRunManifest, sanitizeEvidenceName, sha256Sums, type RunManifest } from "../acceptance/evidence";
 
-/** Опции §19.1 фидбэка, отклонённые триажем, и `caseSetId` (приезжает в W2) — явный 422, не молчание. */
-const UNSUPPORTED_TOP_LEVEL = ["concurrency", "manifestAssetId", "caseSetId"] as const;
+/** Опции §19.1 фидбэка, отклонённые триажем (A2: `manifestAssetId` не поддерживается никогда). */
+const UNSUPPORTED_TOP_LEVEL = ["concurrency", "manifestAssetId"] as const;
 
-const KNOWN_RUN_FIELDS = new Set(["candidateId", "idempotencyKey", "policy", "cases", "refresh"]);
+const KNOWN_RUN_FIELDS = new Set(["candidateId", "idempotencyKey", "policy", "cases", "refresh", "caseSetId"]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -241,6 +242,16 @@ async function startRun(request: Request, db: Database, principal: Principal, or
   if (typeof candidateId !== "string" || !isCandidateId(candidateId)) {
     throw new ApiError(400, "invalid_request", "candidateId is required and must be a candidate id");
   }
+  // Case-set-путь (W2): набор случаев, поверхность и per-case политики приходят из манифеста.
+  // Форма id проверяется **до** lookup'а кандидата (иначе битый id выглядел бы как «нет
+  // кандидата»); принадлежность набора кандидату сверяет `startRun` (422 case_set_mismatch).
+  const caseSetId = body.caseSetId;
+  if (caseSetId !== undefined && (typeof caseSetId !== "string" || !isCaseSetId(caseSetId))) {
+    throw new ApiError(400, "invalid_request", "caseSetId must be a case set id");
+  }
+  if (caseSetId !== undefined && body.cases !== undefined) {
+    throw new ApiError(400, "invalid_request", "cases and caseSetId are mutually exclusive sources of the case set");
+  }
   const candidate = orchestrator.repo.requireCandidate(candidateId);
   assertComponentOwner(db, candidate.component_id, principal);
 
@@ -282,6 +293,7 @@ async function startRun(request: Request, db: Database, principal: Principal, or
     createdBy: actor.userId,
     policyId,
     ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+    ...(caseSetId === undefined ? {} : { caseSetId: caseSetId as string }),
     ...(cases === undefined ? {} : { cases }),
     ...(refresh === "none" ? {} : { refresh }),
   });

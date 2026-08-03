@@ -421,7 +421,7 @@ Meta-ответы прототипов и компонентов additively не
 
 **`POST /components/:id/candidates`** (тело `{}`) выполняет тот же [validate-префлайт головы](#validate-префлайт-публикации) — с тем же троттлингом и теми же кодами — и этим же материализует бандл, который потом снимается **по ревизии кандидата**, а не по head. Строка идемпотентна по `{componentId, designSystem, rev, buildFingerprint}`: повтор на неизменённом билде возвращает тот же `candidateId` с `cached: true` и не сбрасывает его `status`. Бандл кандидата пинуется против GC candidate-кэша, пока на него ссылается нетерминальный ран. Ответ: `candidateId`, `componentId`, `designSystem`, `rev`, `sourceHash`, `bundleHash`, `hostAbiVersion`, `themeVersion`, `buildFingerprint`, `policyProfileHash`, `catalogRevision`, `status` (`validated|promoted`), `statusReason`, `acceptanceRunId`, `promotedVersion`, `createdAt`, `expiresAt`, `cached`, `warnings`. Уехавшая между префлайтом и записью голова — `409 revision_conflict {currentRev}`. Списочной ручки нет (триаж A7): кандидат адресуется своим id.
 
-**`POST /acceptance-runs`** `{candidateId, idempotencyKey?, policy?, cases?, refresh?}`. Профили — `default-v1` (по умолчанию) и `pixel-strict-v1`; неизвестный → `422 unknown_policy_profile`. Источник случаев в этой фазе — именованные `definition.examples` кандидата; `cases: [{key, props}]` задаёт набор явно. Дубликат props становится **алиасом** (одна съёмка, наследованный вердикт), пустой набор — `422 empty_case_set`, превышение `limits.acceptanceMaxCasesPerRun` — `422 case_set_too_large` (потолок считается до схлопывания алиасов). `idempotencyKey` уникален в паре с кандидатом и дедуплицирует **постановку** (ответ с `cached: true`); на синхронных ручках канон остаётся CAS по `baseRev`. У кандидата не может быть двух нетерминальных ранов — `409 acceptance_run_in_flight {runId}`; вытесненный бандл — `409 candidate_evicted`, разъехавшаяся пара `{rev, sourceHash}` — `409 candidate_stale`. Под maintenance-lock'ом каталога постановка отвечает `503 maintenance_in_progress` (обратная сторона: `acquireMaintenanceLock` отказывает при живом ране). Отклонённые конструкции — `422 unsupported_option`: `concurrency`, `cases.concurrency`, `manifestAssetId`, `caseSetId` (case-set'ы — волна W2) и частичный `refresh` (`refresh` понимает только `"none"` и `"all"`).
+**`POST /acceptance-runs`** `{candidateId, idempotencyKey?, policy?, cases?, refresh?}`. Профили — `default-v1` (по умолчанию) и `pixel-strict-v1`; неизвестный → `422 unknown_policy_profile`. Источник случаев в этой фазе — именованные `definition.examples` кандидата; `cases: [{key, props}]` задаёт набор явно. Дубликат props становится **алиасом** (одна съёмка, наследованный вердикт), пустой набор — `422 empty_case_set`, превышение `limits.acceptanceMaxCasesPerRun` — `422 case_set_too_large` (потолок считается до схлопывания алиасов). `idempotencyKey` уникален в паре с кандидатом и дедуплицирует **постановку** (ответ с `cached: true`); на синхронных ручках канон остаётся CAS по `baseRev`. У кандидата не может быть двух нетерминальных ранов — `409 acceptance_run_in_flight {runId}`; вытесненный бандл — `409 candidate_evicted`, разъехавшаяся пара `{rev, sourceHash}` — `409 candidate_stale`. Под maintenance-lock'ом каталога постановка отвечает `503 maintenance_in_progress` (обратная сторона: `acquireMaintenanceLock` отказывает при живом ране). Отклонённые конструкции — `422 unsupported_option`: `concurrency`, `cases.concurrency`, `manifestAssetId`. `caseSetId` (см. [case-set'ы](#case-set-манифесты-наборы-случаев-семьи)) задаёт набор случаев из опубликованного манифеста — он взаимоисключим с `cases` (`400 invalid_request`) и обязан принадлежать тому же компоненту, что кандидат (`422 case_set_mismatch`).
 
 **Исполнение.** Ран живёт вне screenshot-помпы: собственный цикл ставит capture-джобы по одной, оставляя интерактиву слоты очереди, ретраит только инфраструктурные исходы джобы и терминализуется watchdog'ом при превышении дедлайна профиля. Пережившие рестарт `queued|running`-раны переводятся в `error` стартовой уборкой — потеря дешёвая, потому что повтор переиспользует результаты случаев по `case_fingerprint` (в `progress.reused`). Гейты фазы 1: `contract`, `defaults`, `render`, `determinism` (повтор на выборке, побайтово), `audit` — обязательные; `geometry` — **advisory** (v1-семантика union-rect в вердикт не входит, боевой гейт приезжает в W3); `visual`/`readiness`/`regression`/`interactions` — `not-implemented` и в свёртке не участвуют. Свёртка: `fail` — любой случай `fail` **или** `indeterminate` по обязательному гейту; `error` — инфраструктурный отказ и нет ни одного `fail`; `cancelled` — по cancel; иначе `pass`. `reused`/`skipped`/алиасы не маскируют `fail`.
 
@@ -432,6 +432,51 @@ Meta-ответы прототипов и компонентов additively не
 **`POST /acceptance-runs/:runId/cancel`** отменяет только `queued`-ран; бегущий не отменяется — `409 run_not_cancellable` (он завершится сам либо по watchdog'у).
 
 **Лимиты в discovery.** `limits.acceptanceMaxCasesPerRun` (случаев на ран), `limits.acceptanceMaxJobsPerRun` (capture-джоб на ран у профиля по умолчанию), `limits.acceptanceCaseTtlHours` (TTL кэша результатов случаев) и `limits.evidenceMaxBytes` (потолок байт evidence и экспорта).
+
+### Case-set-манифесты: наборы случаев семьи
+
+Именованных `definition.examples` хватает атому, но не семье из десятков состояний с эталонами из Figma. Такой набор описывается **манифестом** и живёт отдельной сущностью (`component_case_sets`, миграция v26), а не ассетом: сервер обязан проверять полноту tuples, ссылки на эталоны, дубли props и crop lineage. Гейт и авторизация — те же, что у ручек приёмки (`EASYUI_ACCEPTANCE_MATRIX=1`, владелец компонента или админ; `share`/`capture` — `403`).
+
+| Метод | Путь | Ответ |
+|---|---|---|
+| `PUT` | `/components/:id/case-sets` | `200` `{caseSetId, componentId, designSystem, cases, cached, coverage, warnings}` |
+| `GET` | `/case-sets/:caseSetId` | `200` строка набора + `manifest` |
+| `GET` | `/case-sets/:caseSetId/coverage` | `200` покрытие измерений |
+
+**Контентная адресация.** `caseSetId = "cset_" + sha256(canonicalJson(manifest))`. Повторный `PUT` того же манифеста возвращает ту же строку с `cached: true` и **ничего не переписывает**; изменённый манифест — новый набор с новым id, поэтому раны, сославшиеся на прежний, остаются воспроизводимыми. Строка денормализует `componentId`, `designSystem`, `case_count` и Figma-`source`.
+
+**Манифест** (`manifestVersion: 1`, strict-объекты — неизвестное поле отвергается):
+
+```jsonc
+{
+  "manifestVersion": 1,
+  "componentId": "pay-payment-card",
+  "source": { "fileKey": "…", "componentSetNodeId": "54863:9518" },   // опционально
+  "capture": { "viewport": {"width": 390, "height": 844}, "deviceScaleFactor": 2, "theme": "light" },
+  "dimensions": { "family": ["Product", "Split"], "state": ["Default", "Disabled"] },  // опционально
+  "requireVisual": false,                                              // намерение для гейта visual (W5a)
+  "policy": { "profile": "pixel-strict-v1", "perCase": { "split-disabled": { "maxRawDiffPct": 2 } } },
+  "cases": [{
+    "id": "product-default",                                           // ^[A-Za-z0-9._-]{1,64}$
+    "props": { "family": "Product", "state": "Default" },
+    "dims": { "family": "Product", "state": "Default" },               // координата в матрице
+    "referenceAssetId": "asset_<sha256>",                              // эталон из реестра ассетов
+    "expectedGeometry": { "width": 140, "height": 96 },
+    "cropLineage": { "parentNodeId": "54863:9518", "rect": [0, 0, 140, 96] },
+    "aliasOf": null                                                    // явный дубликат props
+  }]
+}
+```
+
+Charset `case.id` совпадает с charset имён записей evidence-архива (защита от zip-slip), поэтому **Figma node id вида `54863:9537` не проходит** — санитизировать на клиенте.
+
+**Отказы `PUT`** (все `422`): `validation_failed` (схема, charset, `cropLineage.rect` с отрицательными координатами или нулевым размером), `case_set_component_mismatch` (манифест описывает другой `componentId`), `case_set_too_large` (больше `limits.acceptanceMaxCasesPerRun` случаев), `duplicate_case_id`, `duplicate_case_props` (одинаковые props без `aliasOf`), `invalid_alias_target` (цель отсутствует, сама является алиасом или имеет другие props), `asset_not_found` (эталона нет в реестре).
+
+**Предупреждения, а не отказы** (`warnings[]`): неполные/недекларированные `dims` и расхождение props со схемой опубликованной версии компонента — схема головы законно отличается от последней публикации, а манифест часто готовится до правки компонента.
+
+**Coverage** (`GET /case-sets/:caseSetId/coverage`): `dimensions`, `expectedTuples` (декартово произведение), `presentTuples` (различные tuples из `cases[].dims`), `missingTuples[]` и `duplicates[] {tuple, caseIds}`. Манифест без `dimensions` получает тривиальный отчёт (`expectedTuples: 0`, `presentTuples` = число случаев): фиктивное произведение по неполной Figma-матрице не выдумывается.
+
+**Ран по набору.** `POST /acceptance-runs {candidateId, caseSetId}` строит случаи из манифеста: `capture` задаёт поверхность съёмки, `referenceAssetId`/`expectedGeometry` уезжают в durable-строки случаев, `policy.profile` + `policy.perCase[caseId]` дают `case_policy_hash`, который входит в `case_fingerprint` — правка допуска одного случая инвалидирует reuse ровно его. Эталоны гейтами пока не потребляются (визуальный гейт — следующая волна), но уже записываются и видны в `GET /acceptance-runs/:runId/cases`.
 
 ### Поиск кандидатов на переиспользование
 

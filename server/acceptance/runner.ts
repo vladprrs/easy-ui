@@ -71,6 +71,10 @@ export function fingerprintOf(deps: Pick<CaseRunnerDeps, "candidate" | "surface"
     caseKey: item.caseKey,
     propsHash: item.propsHash,
     surface: deps.surface,
+    // Case-set-путь (W2): эталон и per-case политика — входы вердикта, поэтому их смена обязана
+    // инвалидировать reuse. Examples-путь оставляет заглушки `ids.ts`.
+    referenceAssetId: item.referenceAssetId ?? null,
+    ...(item.casePolicyHash === undefined ? {} : { casePolicyHash: item.casePolicyHash }),
   });
 }
 

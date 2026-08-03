@@ -30,13 +30,17 @@ const hashOf = (payload: unknown): string => sha256(canonicalStringify(payload))
  * единственный механизм автоматической инвалидации накопленного reuse. Признанная плата за
  * поэтапность (план §3 D1).
  */
-export const CASE_FINGERPRINT_ALGO_VERSION = 1;
+export const CASE_FINGERPRINT_ALGO_VERSION = 2;
 
 /** Заглушка readiness-политики до W4 (`docs/plans/2026-08-03-…` §5 W4). */
 export const READINESS_POLICY_HASH_V0 = "readiness-policy-v0";
 /** Заглушка отпечатка окружения капчура до W4. */
 export const CAPTURE_ENV_FINGERPRINT_V0 = "capture-env-v0";
-/** Заглушка per-case политики до W2 (case-set-манифест). */
+/**
+ * Заглушка per-case политики для examples-пути: у именованного example манифеста нет, а значит
+ * нет ни профиля, ни допусков. Case-set-путь (W2) подставляет вместо неё `casePolicyHashOf`
+ * (`caseSets.ts`), поэтому смена допуска одного случая инвалидирует reuse ровно его.
+ */
 export const CASE_POLICY_HASH_V0 = "case-policy-v0";
 
 export interface BuildFingerprintInput {
@@ -117,6 +121,8 @@ export function caseFingerprintV0(input: {
   propsHash: string;
   surface: CaseSurface;
   referenceAssetId?: string | null;
+  /** Case-set-путь (W2) передаёт реальный хэш политики случая; examples-путь — заглушку. */
+  casePolicyHash?: string;
 }): string {
   return caseFingerprint({
     algoVersion: CASE_FINGERPRINT_ALGO_VERSION,
@@ -126,7 +132,7 @@ export function caseFingerprintV0(input: {
     surface: input.surface,
     readinessPolicyHash: READINESS_POLICY_HASH_V0,
     captureEnvFingerprint: CAPTURE_ENV_FINGERPRINT_V0,
-    casePolicyHash: CASE_POLICY_HASH_V0,
+    casePolicyHash: input.casePolicyHash ?? CASE_POLICY_HASH_V0,
     referenceAssetId: input.referenceAssetId ?? null,
   });
 }

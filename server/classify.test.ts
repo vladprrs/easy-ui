@@ -34,6 +34,8 @@ function v14():Database {
   for(const table of ["acceptance_case_results","acceptance_cases","acceptance_runs","component_candidates"] as const) db.run(`DROP TABLE IF EXISTS ${table}`);
   for(const column of ["candidate_id","acceptance_run_id"] as const) db.run(`ALTER TABLE component_publishes DROP COLUMN ${column}`);
   db.run("ALTER TABLE design_systems DROP COLUMN acceptance");
+  // v26 завела case-set-манифесты — тот же приём.
+  db.run("DROP TABLE IF EXISTS component_case_sets");
   db.run("PRAGMA user_version=14");
   return db;
 }

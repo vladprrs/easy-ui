@@ -4,11 +4,13 @@ import {
   compositionDocSchema,
   expandCompositions,
   type CompositionDoc,
-  type CompositionDocV2,
+  isCompositionWithMetadata,
+  type CompositionDocWithMetadata,
   type CompositionCatalogEntry,
   type CompositionSource,
 } from "../../src/prototype/composition";
 import type { PrototypeDoc } from "../../src/prototype/schema";
+import { paramPlaceholder } from "../../src/prototype/compositionV3/params";
 import { hostPrimitiveNames } from "../../src/catalog/hostPrimitives/definitions";
 import { COMPOSITION_TYPE } from "../../src/catalog/hostPrimitives/composition.definition";
 import { ApiError } from "../http";
@@ -31,7 +33,7 @@ const TRANSITIONS: Record<string, string[]> = {
 const canonicalRoleSlugs = new Set<string>((JSON.parse(readFileSync(new URL("../catalog/roles.json", import.meta.url), "utf8")) as { roles?: Array<{ slug?: unknown }> }).roles
   ?.map((role) => role.slug).filter((slug): slug is string => typeof slug === "string") ?? []);
 
-export type { CompositionDocV2 } from "../../src/prototype/composition";
+export type { CompositionDocV2, CompositionDocV3, CompositionDocWithMetadata } from "../../src/prototype/composition";
 export type AnyCompositionDoc = CompositionDoc;
 
 export function safeParseCompositionDocument(value: unknown) {
@@ -44,8 +46,13 @@ export function parseCompositionDocument(value: unknown): AnyCompositionDoc {
   return parsed.data;
 }
 
-export const isCompositionV2 = (doc: CompositionDoc | AnyCompositionDoc): doc is CompositionDocV2 =>
-  (doc as { version?: unknown }).version === 2;
+/**
+ * Документ несёт каталожные метаданные (`atomicLevel`/`canonicalFor`/строгий closure) —
+ * то есть v2 **или старше**. С появлением v3 (план 2026-08-03 W8a) точечная сверка с
+ * `version === 2` молча выключала бы для v3 роли, strict-closure и publish-валидацию.
+ */
+export const isCompositionV2 = (doc: CompositionDoc | AnyCompositionDoc): doc is CompositionDocWithMetadata =>
+  isCompositionWithMetadata(doc as { version?: unknown });
 
 function assertCanonicalRoles(db: Database, doc: CompositionDoc, designSystem: string, excludeId?: string): void {
   if (!isCompositionV2(doc)) return;
@@ -384,15 +391,8 @@ export function buildCompositionDependencyManifest(db: Database, root: Compositi
   };
 }
 
-const placeholderForParam = (type: CompositionDocV2["params"][string]["type"]): unknown => {
-  switch (type) {
-    case "string": return "";
-    case "number": return 0;
-    case "boolean": return false;
-    case "asset": return { $asset: `asset_${"0".repeat(64)}` };
-    case "json": return null;
-  }
-};
+/** Пустышка probe-раскрытия обязательного параметра без `default` (включая типы v3). */
+const placeholderForParam = (declared: CompositionDoc["params"][string]): unknown => paramPlaceholder(declared);
 
 /**
  * Validate the publication's complete expanded tree. The probe supplies values only for
@@ -416,7 +416,7 @@ export function validatePublishedCompositionExpansion(
   );
   const rootParams = Object.fromEntries(Object.entries(root.doc.params).flatMap(([name, parameter]) => {
     if (parameter.default !== undefined) return [[name, parameter.default]];
-    if (parameter.required) return [[name, placeholderForParam(parameter.type)]];
+    if (parameter.required) return [[name, placeholderForParam(parameter)]];
     return [];
   }));
   const probe = {

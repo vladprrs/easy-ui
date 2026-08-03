@@ -52,6 +52,13 @@ export interface AcceptanceCase {
   propsHash: string;
   /** Целевой случай, чей вердикт наследуется (дубликат props), либо `null`. */
   aliasOfCaseId: string | null;
+  /**
+   * Поля case-set-пути (W2). Examples-путь их не заполняет: у именованного example нет ни эталона,
+   * ни ожидаемых габаритов, ни per-case политики — вместо них действуют заглушки `ids.ts`.
+   */
+  referenceAssetId?: string | null;
+  expectedGeometry?: { width: number; height: number } | null;
+  casePolicyHash?: string;
 }
 
 /** `caseId` из имени example: сам ключ, если он в charset, иначе стабильный хэш-суррогат. */

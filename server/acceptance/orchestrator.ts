@@ -23,6 +23,7 @@ import { ApiError } from "../http";
 import { ComponentRepo } from "../repos/components";
 import { getCandidateForRev } from "../components/validate";
 import { buildCases, DEFAULT_CASE_SURFACE, type AcceptanceCase } from "./cases";
+import { buildCasesFromManifest, CaseSetRepo, manifestOfRow, surfaceOfManifest } from "./caseSets";
 import { writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./evidence";
 import { CASE_POLICY_HASH_V0, type CaseSurface } from "./ids";
 import type { AcceptanceCaptureService, CandidateSubject, GateContext } from "./gates/types";
@@ -74,6 +75,11 @@ export interface StartRunInput {
   policyId?: string;
   idempotencyKey?: string | null;
   surface?: CaseSurface;
+  /**
+   * Case-set-манифест как источник случаев (W2). Взаимоисключим с `cases`: два источника набора
+   * в одном ране означали бы, что часть матрицы снята по другой политике.
+   */
+  caseSetId?: string;
   /** Явный набор случаев; по умолчанию — examples кандидата (A2). */
   cases?: { key: string; props: Record<string, unknown> }[];
   /** Пересъёмка вместо reuse (A3); `true` — синоним `"all"` (совместимость W1a). */
@@ -148,8 +154,21 @@ export class AcceptanceOrchestrator {
     const policy = acceptancePolicy(input.policyId ?? DEFAULT_ACCEPTANCE_POLICY_ID);
     if (!policy) throw new ApiError(422, "unknown_policy_profile", `Unknown acceptance policy profile: ${input.policyId}`);
     const subject = await this.resolve(candidateRow);
-    const surface = input.surface ?? DEFAULT_CASE_SURFACE;
-    const cases = buildCases(subject.entry, input.cases ? { cases: input.cases } : {});
+    // Case-set-путь (W2): набор, поверхность и per-case политики приходят из манифеста. Сверка
+    // владения — здесь: набор чужого компонента не должен даже начать ран (`case_set_mismatch`).
+    const caseSet = input.caseSetId === undefined ? null : new CaseSetRepo(this.deps.db).require(input.caseSetId);
+    if (caseSet && caseSet.component_id !== candidateRow.component_id) {
+      throw new ApiError(422, "case_set_mismatch",
+        `Case set describes component ${caseSet.component_id}, not the candidate's ${candidateRow.component_id}`);
+    }
+    if (caseSet && input.cases !== undefined) {
+      throw new ApiError(400, "invalid_request", "cases and caseSetId are mutually exclusive sources of the case set");
+    }
+    const manifest = caseSet ? manifestOfRow(caseSet) : null;
+    const surface = input.surface ?? (manifest ? surfaceOfManifest(manifest) : DEFAULT_CASE_SURFACE);
+    const cases = manifest
+      ? buildCasesFromManifest(manifest)
+      : buildCases(subject.entry, input.cases ? { cases: input.cases } : {});
     const refresh = normalizeRefresh(input.refresh);
     // Валидация `{caseIds}` — до создания строки рана: неизвестный id обязан отказать постановке,
     // а не тихо снять «ничего».
@@ -167,6 +186,7 @@ export class AcceptanceOrchestrator {
       policyProfileId: policy.id,
       policyProfileHash: policyProfileHash(policy),
       idempotencyKey: input.idempotencyKey ?? null,
+      caseSetId: caseSet?.case_set_id ?? null,
       createdBy: input.createdBy,
       progress: progressOf([], cases.length, null),
       gates: policy.gates,
@@ -175,7 +195,9 @@ export class AcceptanceOrchestrator {
         caseKey: item.caseKey,
         propsHash: item.propsHash,
         caseFingerprint: fingerprintOf({ candidate: subject, surface }, item),
-        casePolicyHash: CASE_POLICY_HASH_V0,
+        casePolicyHash: item.casePolicyHash ?? CASE_POLICY_HASH_V0,
+        referenceAssetId: item.referenceAssetId ?? null,
+        expectedGeometry: item.expectedGeometry ?? null,
         aliasOfCaseId: item.aliasOfCaseId,
       })),
     });
@@ -268,8 +290,12 @@ export class AcceptanceOrchestrator {
     if (!policy) throw new Error(`Run references an unknown policy profile: ${run.policy_profile_id}`);
     const candidateRow = this.repo.requireCandidate(run.candidate_id);
     const subject = await this.resolve(candidateRow);
-    const surface = this.surfaces.get(run.run_id) ?? DEFAULT_CASE_SURFACE;
-    const cases = this.caseSets.get(run.run_id) ?? buildCases(subject.entry);
+    // Набор восстановим и без памяти процесса, если ран стоит на case-set'е: манифест durable
+    // (`component_case_sets`), поэтому props/эталоны/политики берутся из него, а не из examples.
+    const storedManifest = run.case_set_id === null ? null : manifestOfRow(new CaseSetRepo(this.deps.db).require(run.case_set_id));
+    const surface = this.surfaces.get(run.run_id) ?? (storedManifest ? surfaceOfManifest(storedManifest) : DEFAULT_CASE_SURFACE);
+    const cases = this.caseSets.get(run.run_id)
+      ?? (storedManifest ? buildCasesFromManifest(storedManifest) : buildCases(subject.entry));
     const refresh = this.refreshes.get(run.run_id) ?? "none";
 
     const shared = new Map<string, unknown>();

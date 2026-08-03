@@ -35,9 +35,23 @@ const text = (value: unknown, name: string, required = true) => {
   return value;
 };
 
+/**
+ * Kill-switch D9 (план 2026-08-03 §3): **запись** композиций `version: 3` требует
+ * `EASYUI_COMPOSITION_V3=1`. Env читается на запросе — как `surfacesWriteEnabled` (D16):
+ * оператор включает флаг в Dokploy без пересборки образа. Чтение и **раскрытие** уже
+ * сохранённых v3-документов работает всегда: после первой v3-записи откат образа
+ * невозможен без чистки данных, поэтому обратный путь не должен зависеть от флага.
+ */
+export const compositionV3WriteEnabled = (raw: string | undefined = process.env.EASYUI_COMPOSITION_V3): boolean => raw === "1";
+
 function parseDoc(value: unknown): CompositionDoc {
   const parsed = safeParseCompositionDocument(value);
   if (!parsed.success) throw new ApiError(422, "validation_failed", "Composition document is invalid", { issues: parsed.error.issues });
+  if (parsed.data.version === 3 && !compositionV3WriteEnabled()) {
+    throw new ApiError(422, "composition_v3_disabled", "Composition v3 documents are disabled on this server (EASYUI_COMPOSITION_V3)", {
+      issues: [{ path: ["doc", "version"], message: "composition version 3 requires EASYUI_COMPOSITION_V3=1 on the server" }],
+    });
+  }
   // CompositionRepo keeps the historical v1 type surface for the rest of the server. v2 is
   // structurally identical at the persistence boundary and is discriminated at publish time.
   return parsed.data as CompositionDoc;

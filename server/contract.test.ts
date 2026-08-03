@@ -41,6 +41,8 @@ import {
 } from "./acceptance/policies";
 import { UserRepo } from "./users";
 import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
+import { caseSetIdOf } from "./acceptance/caseSets";
+import { caseSetManifestSchema } from "../src/acceptance/caseSetSchema";
 import type { AcceptanceCaptureService } from "./acceptance/gates/types";
 
 // Contract test (plan §G): every registered route contract is exercised through
@@ -111,6 +113,23 @@ async function flowDoc(id: string, screenIds = ["home", "a", "b"]): Promise<Prot
 const componentSource = await Bun.file("server/fixtures/rating-stars.tsx").text();
 /** Валидный по форме, но несуществующий `runId` приёмки (`acc_` + uuid — regex `isRunId`). */
 const MISSING_RUN_ID = "acc_00000000-0000-0000-0000-000000000000";
+
+/**
+ * Манифест case-set'а для контракта (план §5 W2). Две координаты одного измерения — достаточно,
+ * чтобы coverage-ответ был непустым; id набора вычисляется тем же контентным адресом, что на
+ * сервере, поэтому чтение и coverage адресуются без разбора ответа PUT.
+ */
+const CONTRACT_MANIFEST = {
+  manifestVersion: 1 as const,
+  componentId: "contract-stars",
+  capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 as const, theme: "light" as const },
+  dimensions: { tone: ["light", "dark"] },
+  cases: [
+    { id: "tone-light", props: { rating: 1 }, dims: { tone: "light" } },
+    { id: "tone-dark", props: { rating: 2 }, dims: { tone: "dark" } },
+  ],
+};
+const CONTRACT_CASE_SET_ID = caseSetIdOf(caseSetManifestSchema.parse(CONTRACT_MANIFEST));
 const componentPreviewSource = `import { z } from "zod";
 import type { BaseComponentProps } from "@json-render/react";
 
@@ -245,11 +264,16 @@ function orderedCases(): [string, Case][] {
     ["POST /api/components/{id}/candidates", { run: () => call("POST", "/api/components/contract-missing/candidates"), expected: err(404, "not_found") }],
     ["GET /api/component-candidates/{candidateId}", { run: () => call("GET", `/api/component-candidates/cand_${"0".repeat(64)}`), expected: err(404, "not_found") }],
     ["POST /api/acceptance-runs", { run: () => call("POST", "/api/acceptance-runs", { candidateId: `cand_${"0".repeat(64)}` }), expected: err(404, "not_found") }],
-    ["POST /api/acceptance-runs", { run: () => call("POST", "/api/acceptance-runs", { candidateId: `cand_${"0".repeat(64)}`, caseSetId: "cset_x" }), expected: err(422, "unsupported_option") }],
+    ["POST /api/acceptance-runs", { run: () => call("POST", "/api/acceptance-runs", { candidateId: `cand_${"0".repeat(64)}`, caseSetId: "cset_x" }), expected: err(400, "invalid_request") }],
     ["GET /api/acceptance-runs/{runId}", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}`), expected: err(404, "not_found") }],
     ["GET /api/acceptance-runs/{runId}/cases", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/cases`), expected: err(404, "not_found") }],
     ["GET /api/acceptance-runs/{runId}/evidence", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/evidence`), expected: err(404, "not_found") }],
     ["POST /api/acceptance-runs/{runId}/cancel", { run: () => call("POST", `/api/acceptance-runs/${MISSING_RUN_ID}/cancel`, {}), expected: err(404, "not_found") }],
+    // Case-set-манифесты (план 2026-08-03 §5 W2): PUT — happy path (он дешёвый, капчур не нужен),
+    // чтение и coverage — по вычисленному контентному адресу того же манифеста.
+    ["PUT /api/components/{id}/case-sets", { run: () => call("PUT", "/api/components/contract-stars/case-sets", { manifest: CONTRACT_MANIFEST }), expected: ok() }],
+    ["GET /api/case-sets/{caseSetId}", { run: () => call("GET", `/api/case-sets/${CONTRACT_CASE_SET_ID}`), expected: ok() }],
+    ["GET /api/case-sets/{caseSetId}/coverage", { run: () => call("GET", `/api/case-sets/${CONTRACT_CASE_SET_ID}/coverage`), expected: ok() }],
     ["GET /api/components/{id}/versions", { run: () => call("GET", "/api/components/contract-stars/versions"), expected: ok() }],
     ["GET /api/components/{id}/versions/{version}", { run: () => call("GET", "/api/components/contract-stars/versions/1"), expected: err(404, "not_found") }],
     ["GET /api/components/{id}/versions/{version}/bundle.js", { run: () => call("GET", "/api/components/contract-stars/versions/1/bundle.js"), expected: err(404, "not_found") }],
@@ -690,6 +714,8 @@ describe("route contracts", () => {
       surfaces: true,
       // Write-политика мульти-поверхностных документов — kill-switch EASYUI_SURFACES (D16).
       surfacesWrite: process.env.EASYUI_SURFACES === "1",
+      // Write-политика композиций v3 — kill-switch EASYUI_COMPOSITION_V3 (D9, план 2026-08-03).
+      compositionV3: process.env.EASYUI_COMPOSITION_V3 === "1",
     });
     expect(value.resolvedSpaceScales["yandex-pay"]).toMatchObject({ none: "0px", md: "12px", "4xl": "64px" });
   });

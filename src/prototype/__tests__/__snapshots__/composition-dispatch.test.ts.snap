@@ -1,0 +1,192 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`composition expansion dispatch (D8) > keeps a v2 reference on the nested path > v2-expansion 1`] = `
+"{
+  "doc": {
+    "designSystem": "test-ds",
+    "device": "desktop",
+    "id": "dispatch-v2",
+    "name": "Dispatch v2",
+    "screens": [
+      {
+        "id": "main",
+        "name": "Main",
+        "spec": {
+          "elements": {
+            "body": {
+              "props": {
+                "text": "Body"
+              },
+              "type": "Text"
+            },
+            "screen$label": {
+              "props": {
+                "text": "Given"
+              },
+              "type": "Text"
+            },
+            "screen$row-shell": {
+              "children": [
+                "screen$label",
+                "body"
+              ],
+              "props": {},
+              "type": "Box"
+            }
+          },
+          "root": "screen$row-shell"
+        }
+      }
+    ],
+    "startScreen": "main",
+    "state": {},
+    "version": 1
+  },
+  "expandedFrom": {
+    "screen$label": {
+      "chain": [
+        {
+          "compositionId": "payment-row",
+          "hostKey": "screen",
+          "innerKey": "label",
+          "version": 3
+        }
+      ],
+      "compositionId": "payment-row",
+      "hostKey": "screen",
+      "innerKey": "label"
+    },
+    "screen$row-shell": {
+      "chain": [
+        {
+          "compositionId": "payment-row",
+          "hostKey": "screen",
+          "innerKey": "row-shell",
+          "version": 3
+        }
+      ],
+      "compositionId": "payment-row",
+      "hostKey": "screen",
+      "innerKey": "row-shell"
+    }
+  },
+  "issues": [],
+  "refs": [
+    {
+      "compositionId": "payment-row",
+      "elementKey": "screen",
+      "screenId": "main",
+      "screenIndex": 0
+    }
+  ]
+}"
+`;
+
+exports[`composition expansion dispatch (D8) > keeps a wholly-v1 document on the frozen legacy path > v1-expansion 1`] = `
+"{
+  "doc": {
+    "description": "Тот же экран, что и monolith-screen.json, но собранный из композиции со слотами: внутренности видны в дереве и линтуются.",
+    "designSystem": "yandex-pay",
+    "device": "mobile",
+    "id": "ctyp-payment-success-composed",
+    "name": "CTYP payment success (composed)",
+    "screens": [
+      {
+        "id": "success",
+        "name": "Success",
+        "spec": {
+          "elements": {
+            "footer": {
+              "props": {
+                "alt": "Футер",
+                "src": "/footer.png"
+              },
+              "type": "Image"
+            },
+            "merchant": {
+              "props": {
+                "alt": "Магнит",
+                "src": "/merchant.png"
+              },
+              "type": "Image"
+            },
+            "method": {
+              "props": {
+                "alt": "Карта",
+                "src": "/card.png"
+              },
+              "type": "Image"
+            },
+            "nav": {
+              "props": {
+                "alt": "Навигация",
+                "src": "/nav.png"
+              },
+              "type": "Image"
+            },
+            "offer": {
+              "props": {
+                "alt": "Оффер",
+                "src": "/offer.png"
+              },
+              "type": "Image"
+            },
+            "root": {
+              "children": [
+                "screen$shell"
+              ],
+              "props": {},
+              "type": "@eui/FlowRoot"
+            },
+            "screen$badge": {
+              "props": {
+                "amount": "12 ₽"
+              },
+              "type": "CtypAccrualBadge"
+            },
+            "screen$shell": {
+              "children": [
+                "nav",
+                "merchant",
+                "screen$badge",
+                "offer",
+                "method",
+                "footer"
+              ],
+              "props": {
+                "tone": "success"
+              },
+              "type": "CtypSuccessShell"
+            }
+          },
+          "root": "root"
+        }
+      }
+    ],
+    "startScreen": "success",
+    "state": {},
+    "version": 1
+  },
+  "expandedFrom": {
+    "screen$badge": {
+      "compositionId": "ctyp-payment-success",
+      "hostKey": "screen",
+      "innerKey": "badge"
+    },
+    "screen$shell": {
+      "compositionId": "ctyp-payment-success",
+      "hostKey": "screen",
+      "innerKey": "shell"
+    }
+  },
+  "issues": [],
+  "refs": [
+    {
+      "compositionId": "ctyp-payment-success",
+      "elementKey": "screen",
+      "screenId": "success",
+      "screenIndex": 0
+    }
+  ]
+}"
+`;

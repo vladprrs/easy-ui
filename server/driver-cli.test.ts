@@ -1373,11 +1373,27 @@ describe("author driver promote verb", () => {
     expect(parseArgs(["accept-status", "acc_1", "--evidence", "run.zip"])).toMatchObject({ cmd: "accept-status", args: ["acc_1"], flags: { evidence: "run.zip" } });
   });
 
+  /** W2: `case-set` — подкоманда в первом позиционале, арность проверяется до сети. */
+  test("case-set parses its subcommands and refuses malformed argument lists", () => {
+    expect(parseArgs(["case-set", "put", "pay-card", "matrix.json"]))
+      .toMatchObject({ cmd: "case-set", args: ["put", "pay-card", "matrix.json"] });
+    expect(parseArgs(["case-set", "get", `cset_${"0".repeat(64)}`, "--json"]))
+      .toMatchObject({ cmd: "case-set", args: ["get", `cset_${"0".repeat(64)}`], flags: { json: true } });
+    expect(parseArgs(["case-set", "coverage", `cset_${"0".repeat(64)}`]))
+      .toMatchObject({ cmd: "case-set", args: ["coverage", `cset_${"0".repeat(64)}`] });
+    for (const args of [["case-set", "list", "pay-card"], ["case-set", "put", "pay-card"], ["case-set", "get", "a", "b"]]) {
+      expect(() => parseArgs(args)).toThrow();
+    }
+    // Ран по опубликованному набору: `--case-set` уезжает в тело постановки как `caseSetId`.
+    expect(parseArgs(["accept", "pay-card", "--case-set", `cset_${"0".repeat(64)}`]))
+      .toMatchObject({ cmd: "accept", flags: { caseSet: `cset_${"0".repeat(64)}` } });
+  });
+
   /** Деградация без матричного стека: читаемое сообщение вместо серии 404 по ручкам. */
   test("accept refuses readably when the server has no acceptance matrix", async () => {
     const { api, db } = await setup();
     seedComponent(db, "matrixless", "Matrixless");
-    for (const args of [["accept", "matrixless"], ["accept-status", "acc_00000000-0000-0000-0000-000000000000"]]) {
+    for (const args of [["accept", "matrixless"], ["accept-status", "acc_00000000-0000-0000-0000-000000000000"], ["case-set", "coverage", `cset_${"0".repeat(64)}`]]) {
       const result = await run(api, args);
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("features.acceptanceMatrix is off");

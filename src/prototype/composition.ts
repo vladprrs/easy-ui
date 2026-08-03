@@ -4,10 +4,18 @@ import {
 } from "../catalog/hostPrimitives/composition.definition";
 import { FLOW_ROOT_TYPE } from "../catalog/hostPrimitives/flowRoot.definition";
 import {
-  authoredElementKeySchema, elementSchema, isAssetId, jsonValueSchema, slugSchema,
+  authoredElementKeySchema, elementSchema, jsonValueSchema, slugSchema,
   type JsonValue, type PrototypeDoc,
 } from "./schema";
 import type { ValidationIssue } from "./types";
+import {
+  compositionParamV3Schema, paramValueMatches,
+  type CompositionParamV3,
+} from "./compositionV3/params";
+import {
+  compositionSwitchSchema, compositionWhenSchema, evaluateWhen, hiddenElementKeys,
+  isSwitchDirective, resolveSwitch, type CompositionWhen,
+} from "./compositionV3/conditions";
 
 /**
  * Версионированная композиция (волна 5, план 2026-07-27 §5.1).
@@ -85,11 +93,27 @@ const compositionDocV2Shape = {
   provenance: compositionProvenanceSchema.optional(),
 } as const;
 
-const refineCompositionDoc = (doc: {
+/**
+ * Тело композиции v3: тот же строгий `elementSchema` плюс параметрическое условие `when`
+ * (план 2026-08-03 W8a). Поле живёт **только** внутри композиции v3 и полностью исчезает
+ * при раскрытии — авторский/раскрытый документ прототипа его не знает.
+ */
+const compositionElementV3Schema = elementSchema.extend({
+  when: compositionWhenSchema.optional(),
+});
+
+const compositionSpecV3Schema = z.strictObject({
+  root: z.string().min(1),
+  elements: z.record(authoredElementKeySchema, compositionElementV3Schema),
+});
+
+interface RefinableCompositionDoc {
   slots: string[];
-  params: Record<string, { type: CompositionParamType; required?: boolean; default?: JsonValue }>;
-  spec: { root: string; elements: Record<string, { type: string; props: Record<string, unknown>; children?: string[]; region?: string; slot?: string }> };
-}, context: z.RefinementCtx, allowNested: boolean) => {
+  params: Record<string, { type: string; required?: boolean; default?: JsonValue }>;
+  spec: { root: string; elements: Record<string, { type: string; props: Record<string, unknown>; children?: string[]; region?: string; slot?: string; when?: CompositionWhen }> };
+}
+
+const refineCompositionDoc = (doc: RefinableCompositionDoc, context: z.RefinementCtx, allowNested: boolean) => {
   const { elements, root } = doc.spec;
   const keys = Object.keys(elements);
   if (keys.length > COMPOSITION_ELEMENTS_LIMIT) {
@@ -147,15 +171,131 @@ const refineCompositionDoc = (doc: {
   if (parentCount.get(root)) context.addIssue({ code: "custom", path: ["spec", "root"], message: "root element must not be a child" });
 };
 
+/**
+ * v3 = всё из v2 + типизированные параметры (`enum`/`object`/`array`) и параметрические
+ * условия (`element.when`, `{"$switch": …}` в props). Ветка аддитивна: v1/v2 не меняются.
+ */
+const compositionDocV3Shape = {
+  ...compositionDocV2Shape,
+  version: z.literal(3),
+  params: z.record(slugSchema, compositionParamV3Schema).default({}),
+  spec: compositionSpecV3Schema,
+} as const;
+
+const SWITCH_KEY = "$switch";
+
+/** Дополнительные статические правила v3: все ветки разрешимы от объявленных параметров. */
+function refineCompositionDocV3(doc: {
+  params: Record<string, CompositionParamV3>;
+  spec: { root: string; elements: Record<string, { type: string; props: Record<string, unknown>; children?: string[]; when?: CompositionWhen }> };
+}, context: z.RefinementCtx): void {
+  const { elements, root } = doc.spec;
+  const declaredOf = (name: string): CompositionParamV3 | undefined =>
+    Object.hasOwn(doc.params, name) ? doc.params[name] : undefined;
+
+  const subtreeHasSlot = (key: string): boolean => {
+    const seen = new Set<string>();
+    const stack = [key];
+    while (stack.length) {
+      const current = stack.pop()!;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      const element = elements[current];
+      if (!element) continue;
+      if (element.type === SLOT_TYPE) return true;
+      for (const child of element.children ?? []) stack.push(child);
+    }
+    return false;
+  };
+
+  for (const [key, element] of Object.entries(elements)) {
+    const at = ["spec", "elements", key];
+    const when = element.when;
+    if (when !== undefined) {
+      if (key === root) {
+        context.addIssue({ code: "custom", path: [...at, "when"], message: "the composition root must not declare when" });
+      }
+      const declared = declaredOf(when.param);
+      if (!declared) {
+        context.addIssue({ code: "custom", path: [...at, "when", "param"], message: `when references an undeclared param: ${when.param}` });
+      } else if (declared.type === "enum") {
+        const candidates = [
+          ...(Object.hasOwn(when, "eq") ? [when.eq] : []),
+          ...(Object.hasOwn(when, "neq") ? [when.neq] : []),
+          ...(when.in ?? []),
+        ];
+        for (const candidate of candidates) {
+          if (typeof candidate === "string" && declared.values.includes(candidate)) continue;
+          context.addIssue({ code: "custom", path: [...at, "when"], message: `when compares param "${when.param}" with a value outside its enum: ${JSON.stringify(candidate)}` });
+        }
+      }
+      // Слоты — контракт композиции с точкой ссылки; их условная материализация въезжает
+      // вместе со слотами-объектами (W8c), иначе маршрутизированные дети осиротеют.
+      if (subtreeHasSlot(key)) {
+        context.addIssue({ code: "custom", path: [...at, "when"], message: `when must not gate a subtree containing ${SLOT_TYPE}` });
+      }
+    }
+
+    const walk = (value: unknown, relative: (string | number)[]): void => {
+      if (Array.isArray(value)) { value.forEach((item, index) => walk(item, [...relative, index])); return; }
+      if (!isObject(value)) return;
+      if (!isSwitchDirective(value)) {
+        for (const [name, item] of Object.entries(value)) walk(item, [...relative, name]);
+        return;
+      }
+      const parsed = compositionSwitchSchema.safeParse(value[SWITCH_KEY]);
+      const path = [...at, "props", ...relative, SWITCH_KEY];
+      if (!parsed.success) {
+        context.addIssue({ code: "custom", path, message: `invalid $switch directive: ${parsed.error.issues.map((issue) => issue.message).join("; ")}` });
+        return;
+      }
+      const directive = parsed.data;
+      const declared = declaredOf(directive.param);
+      if (!declared) {
+        context.addIssue({ code: "custom", path: [...path, "param"], message: `$switch references an undeclared param: ${directive.param}` });
+      } else if (declared.type === "enum" || declared.type === "boolean") {
+        const universe = declared.type === "enum" ? declared.values : ["true", "false"];
+        for (const caseKey of Object.keys(directive.cases)) {
+          if (universe.includes(caseKey)) continue;
+          context.addIssue({ code: "custom", path: [...path, "cases"], message: `$switch case "${caseKey}" is not a value of param "${directive.param}"` });
+        }
+        // Исчерпаемость — статическая: без default каждое значение обязано иметь case.
+        if (directive.default === undefined) {
+          const missing = universe.filter((value) => !Object.hasOwn(directive.cases, value));
+          if (missing.length) {
+            context.addIssue({ code: "custom", path: [...path, "cases"], message: `$switch on param "${directive.param}" has no default and is missing cases: ${missing.join(", ")}` });
+          }
+        }
+      }
+      for (const [caseKey, caseValue] of Object.entries(directive.cases)) walk(caseValue, [...relative, SWITCH_KEY, "cases", caseKey]);
+      if (directive.default !== undefined) walk(directive.default, [...relative, SWITCH_KEY, "default"]);
+    };
+    walk(element.props, []);
+  }
+}
+
 const compositionDocV1Schema = z.strictObject(compositionDocV1Shape).superRefine((doc, context) => refineCompositionDoc(doc, context, false));
 const compositionDocV2Schema = z.strictObject(compositionDocV2Shape).superRefine((doc, context) => refineCompositionDoc(doc, context, true));
+const compositionDocV3Schema = z.strictObject(compositionDocV3Shape).superRefine((doc, context) => {
+  refineCompositionDoc(doc, context, true);
+  refineCompositionDocV3(doc, context);
+});
 
 /** Version 1 is deliberately kept as a separate branch: its shape and rules are frozen. */
-export const compositionDocSchema = z.discriminatedUnion("version", [compositionDocV1Schema, compositionDocV2Schema]);
+export const compositionDocSchema = z.discriminatedUnion("version", [compositionDocV1Schema, compositionDocV2Schema, compositionDocV3Schema]);
 export type CompositionDocV1 = z.output<typeof compositionDocV1Schema>;
 export type CompositionDocV2 = z.output<typeof compositionDocV2Schema>;
+export type CompositionDocV3 = z.output<typeof compositionDocV3Schema>;
 export type CompositionDoc = z.output<typeof compositionDocSchema>;
 export type CompositionParam = z.output<typeof compositionParamSchema>;
+
+/**
+ * Документы, несущие каталожные метаданные (`atomicLevel`/`scope`/`canonicalFor`/`ownership`):
+ * v2 и всё, что старше. Сервер использует это вместо точечной сверки с `version === 2`.
+ */
+export type CompositionDocWithMetadata = CompositionDocV2 | CompositionDocV3;
+export const isCompositionWithMetadata = (doc: { version?: unknown }): doc is CompositionDocWithMetadata =>
+  doc.version === 2 || doc.version === 3;
 
 // --- Раскрытие -------------------------------------------------------------
 
@@ -254,16 +394,6 @@ export function collectCompositionRefs(doc: PrototypeDoc): CompositionRef[] {
 
 const path = (parts: (string | number)[]) => "/" + parts.map(String).join("/");
 
-function typeMatches(type: CompositionParamType, value: unknown): boolean {
-  switch (type) {
-    case "string": return typeof value === "string";
-    case "number": return typeof value === "number";
-    case "boolean": return typeof value === "boolean";
-    case "asset": return isObject(value) && Object.keys(value).length === 1 && isAssetId(value.$asset);
-    case "json": return true;
-  }
-}
-
 /**
  * Раскрывает все `@eui/Composition` документа.
  *
@@ -329,7 +459,7 @@ function expandV1Compositions(
           values.set(name, undefined);
           continue;
         }
-        if (!typeMatches(declared.type, raw)) {
+        if (!paramValueMatches(declared, raw)) {
           issues.push({ path: path([...at, "props", "params", name]), message: `composition param ${name} must be of type ${declared.type}` });
         }
         values.set(name, raw);
@@ -457,7 +587,7 @@ interface RecursiveExpansionContext {
 const isCompositionSource = (value: CompositionCatalogEntry): value is CompositionSource => {
   if (!isObject(value) || !Object.hasOwn(value, "doc")) return false;
   const candidate = (value as unknown as { doc: unknown }).doc;
-  return isObject(candidate) && (candidate.version === 1 || candidate.version === 2);
+  return isObject(candidate) && (candidate.version === 1 || candidate.version === 2 || candidate.version === 3);
 };
 
 function normalizedComposition(id: string, options: ExpandCompositionsOptions): NormalizedComposition | undefined {
@@ -591,11 +721,15 @@ function expandRecursiveCompositions(
           values.set(name, undefined);
           continue;
         }
-        if (!typeMatches(declared.type, raw)) {
+        if (!paramValueMatches(declared, raw)) {
           addIssue([...at, "props", "params", name], `composition param ${name} must be of type ${declared.type}`);
         }
         values.set(name, raw);
       }
+
+      // v3-конструкции разрешаются **только** для тела v3: в v1/v2 объект с ключом `$switch`
+      // — обычное значение props, и раскрытие обязано остаться байт-в-байт прежним (D8).
+      const isV3Body = source.doc.version === 3;
 
       const substitute = (value: unknown, innerKey: string, relative: (string | number)[]): unknown => {
         if (isParamDirective(value)) {
@@ -605,6 +739,25 @@ function expandRecursiveCompositions(
             return undefined;
           }
           return values.get(name);
+        }
+        if (isV3Body && isSwitchDirective(value)) {
+          const where = `${innerKey}/${relative.join("/")}`;
+          const parsed = compositionSwitchSchema.safeParse(value.$switch);
+          if (!parsed.success) {
+            addIssue([...at, "props", "params"], `composition ${source.id} has an invalid $switch at ${where}`);
+            return undefined;
+          }
+          const directive = parsed.data;
+          if (!Object.hasOwn(source.doc.params, directive.param)) {
+            addIssue([...at, "props", "params"], `composition ${source.id} references an undeclared param "${directive.param}" at ${where}`);
+            return undefined;
+          }
+          const resolved = resolveSwitch(directive, values.get(directive.param));
+          if (!resolved.ok) {
+            addIssue([...at, "props", "params"], `composition ${source.id}: ${resolved.message} at ${where}`, "composition/switch-unresolved");
+            return undefined;
+          }
+          return substitute(resolved.value, innerKey, relative);
         }
         if (Array.isArray(value)) return value.map((item, index) => substitute(item, innerKey, [...relative, index]));
         if (isObject(value)) {
@@ -650,7 +803,21 @@ function expandRecursiveCompositions(
           addIssue([...base, child, "slot"], `composition ${source.id} declares slot "${slot}" but has no ${SLOT_TYPE} element for it`);
         }
       }
+      // --- параметрические условия v3 (`when`) ---
+      // Ложное условие снимает элемент **и всё его поддерево** до подсчёта раскрытых
+      // элементов, поэтому лимиты после раскрытия действуют на реально построенное дерево.
+      const hidden = isV3Body
+        ? hiddenElementKeys(source.doc.spec.elements as Record<string, { children?: string[]; when?: CompositionWhen }>, (when) => {
+          if (!Object.hasOwn(source.doc.params, when.param)) {
+            addIssue([...at, "props", "params"], `composition ${source.id} references an undeclared param "${when.param}" in when`);
+            return true;
+          }
+          return evaluateWhen(when, values.get(when.param));
+        })
+        : new Set<string>();
+
       const resolveChildren = (children: string[] | undefined): string[] => (children ?? []).flatMap((innerChild) => {
+        if (hidden.has(innerChild)) return [];
         const slot = slotNames.get(innerChild);
         if (slot !== undefined) return (filled.get(slot) ?? []).map(resolveReplacement);
         return [expandedKey(hostKey, innerChild)];
@@ -660,6 +827,7 @@ function expandRecursiveCompositions(
       const nextStack = [...context.stack, identity];
       for (const [innerKey, element] of Object.entries(source.doc.spec.elements)) {
         if (element.type === SLOT_TYPE) continue;
+        if (hidden.has(innerKey)) continue;
         const key = expandedKey(hostKey, innerKey);
         if (Object.hasOwn(elements, key)) {
           addIssue([...at], `expanded element key collides with an authored key: ${key}`);
@@ -673,6 +841,9 @@ function expandRecursiveCompositions(
           ...(children.length ? { children } : {}),
         };
         if (!children.length) delete (elements[key] as { children?: unknown }).children;
+        // `when` — авторская конструкция композиции: раскрытый элемент её не несёт
+        // (спека экрана строга, и никакого рантайм-условия из v3 не возникает).
+        if (isV3Body) delete (elements[key] as { when?: unknown }).when;
 
         const layer: ExpandedOriginLayer = {
           compositionId: source.id,
@@ -777,7 +948,7 @@ function expandRecursiveCompositions(
 }
 
 /**
- * Expands v1 and v2 composition documents. Bare v1 maps take the frozen
+ * Expands v1, v2 and v3 composition documents. Bare v1 maps take the frozen
  * implementation above; a versioned entry can be passed directly (for example
  * the API's `{ id, version, doc }` pin shape).
  */
@@ -790,8 +961,15 @@ export function expandCompositions(
   // reference is missing. This is important for frozen v1 diagnostics: an unresolved v1
   // reference must not acquire v2 depth/budget/origin behavior merely because its source is
   // unavailable. Mixed v1/v2 documents use the recursive path.
-  const hasV2Reference = refs.some((ref) => normalizedComposition(ref.compositionId, options)?.doc.version === 2);
-  if (!hasV2Reference) {
+  //
+  // D8 (план 2026-08-03): v3 обязан идти тем же nested-путём — тело v3 несёт `when`/`$switch`
+  // и вложенные композиции, которых legacy-раскрытие не знает; документ, ссылающийся только на
+  // v3, ушёл бы в v1-ветку и молча потерял бы обе конструкции.
+  const hasNestingCapableReference = refs.some((ref) => {
+    const version = normalizedComposition(ref.compositionId, options)?.doc.version;
+    return version === 2 || version === 3;
+  });
+  if (!hasNestingCapableReference) {
     const legacyCompositions: Record<string, CompositionDoc> = {};
     for (const [id] of Object.entries(options.compositions)) {
       const source = normalizedComposition(id, options);

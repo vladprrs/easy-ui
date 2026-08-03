@@ -3,7 +3,7 @@ import { inputBase, kicker } from "../app/chrome";
 import { SelectPill } from "../app/SelectPill";
 import { Toggle } from "../app/Toggle";
 import { editor } from "../app/strings/editor";
-import type { CompositionDoc, CompositionParam } from "../prototype/composition";
+import type { CompositionDoc } from "../prototype/composition";
 import { jsonValueSchema, type JsonValue } from "../prototype/schema";
 import type { EditorAction } from "./editorReducer";
 import type { ScreenElement, Screen } from "./compositions";
@@ -26,7 +26,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function ParamField({ name, declared, value, onCommit }: {
   name: string;
-  declared: CompositionParam;
+  declared: CompositionDoc["params"][string];
   value: JsonValue | undefined;
   onCommit: (value: JsonValue | undefined) => void;
 }) {
@@ -47,7 +47,9 @@ function ParamField({ name, declared, value, onCommit }: {
   if (declared.type === "asset") {
     return <div className="py-1">{label}<AssetValueField name={name} value={value} onCommit={(next) => onCommit(next as JsonValue)} /></div>;
   }
-  if (declared.type === "json") {
+  // Структурные параметры v3 (`object`/`array`) правятся тем же JSON-полем, что и `json`:
+  // их значение — обычный JSON, а форма проверяется валидацией в точке ссылки.
+  if (declared.type === "json" || declared.type === "object" || declared.type === "array") {
     return <JsonParamField key={`${docEpoch}:${name}`} name={name} value={value} onCommit={onCommit} label={label} />;
   }
   return <ScalarParamField

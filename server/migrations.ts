@@ -758,6 +758,32 @@ const migrations = [
     db.run("ALTER TABLE component_publishes ADD COLUMN acceptance_run_id TEXT DEFAULT NULL");
     db.run("ALTER TABLE design_systems ADD COLUMN acceptance TEXT NOT NULL DEFAULT 'off'");
   },
+  (db: Database) => {
+    // v26: case-set-манифесты (план 2026-08-03 family-acceptance §5 W2, амендмент A2; RFC §3.3).
+    //
+    // Манифест — сущность продукта, а не ассет: сервер обязан валидировать полноту tuples,
+    // ссылки на эталоны, дубли props и crop lineage, поэтому набор случаев живёт своей таблицей,
+    // а не JSON-блобом в asset-store (у которого нет ни схемы, ни владельца, ни GC).
+    //
+    // `case_set_id` — контентный адрес (`cset_` + sha256 канонизованного манифеста): повторная
+    // публикация того же манифеста идемпотентна и возвращает ту же строку, а изменённый манифест
+    // **никогда** не переписывает старый — раны, сославшиеся на прежний `case_set_id`, обязаны
+    // оставаться воспроизводимыми (`acceptance_runs.case_set_id` — плоский TEXT без FK, канон A9).
+    //
+    // FK на `components` нет по той же причине: удаление компонента не должно рвать провенанс
+    // уже проведённых приёмок; владение проверяется по денормализованному `component_id`.
+    db.run(`CREATE TABLE component_case_sets (
+      case_set_id TEXT PRIMARY KEY,
+      component_id TEXT NOT NULL,
+      design_system TEXT NOT NULL,
+      manifest_json TEXT NOT NULL,
+      case_count INTEGER NOT NULL,
+      source_file_key TEXT,
+      source_node_id TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL)`);
+    db.run("CREATE INDEX component_case_sets_component ON component_case_sets (component_id, created_at)");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

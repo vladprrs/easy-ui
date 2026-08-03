@@ -317,7 +317,7 @@ The reference itself is checked at expansion: an unknown parameter name in `prop
 
 ### Composition document v2
 
-`compositionDocSchema` is a discriminated union over `version`: `1` (frozen, non-nesting) and `2`. A v2 document keeps every v1 field and adds Atomic Design metadata plus the right to nest:
+`compositionDocSchema` is a discriminated union over `version`: `1` (frozen, non-nesting), `2` and `3` (see below). A v2 document keeps every v1 field and adds Atomic Design metadata plus the right to nest:
 
 ```json
 {
@@ -349,6 +349,59 @@ The reference itself is checked at expansion: an unknown parameter name in `prop
 `@eui/Slot` and `$param` keep their semantics at every level: a nested composition receives its parameters from the `props.params` of the referencing element (which may itself be a `$param` of the outer composition), and children routed into an outer slot travel through the nested slot they were addressed to. A v1 document referenced from a v2 parent keeps v1 behaviour — its own document is still rejected if it nests.
 
 **Origins are reversible through every layer.** Expanded keys stay `<hostKey>$<innerKey>` at each level (`checkout$picker$row$label`), and `expandedFrom[key]` carries the flat v1 fields (`compositionId`, `hostKey`, `innerKey`) plus `chain: Array<{compositionId, version, hostKey, innerKey}>` describing every layer from the screen down.
+
+### Composition document v3
+
+**Everything v3 adds is statically resolved from the parameter values at the reference point, at expansion time; runtime branching is `$cond` over `doc.state` only.** A v3 body carries no interpreter: `when` and `$switch` are gone from the expanded document, exactly like `$param`.
+
+`version: 3` is a third branch of the `compositionDocSchema` union: every v2 field (including the required `atomicLevel`, `canonicalFor`, `ownership`) plus typed parameters and parametric conditions. v1 and v2 documents are untouched — both their schema and their expansion output are byte-for-byte identical (fixed by dispatch snapshots in `src/prototype/__tests__/composition-dispatch.test.ts`).
+
+**Writing v3 is behind a kill-switch.** `POST /api/compositions` and `PUT /api/compositions/{id}` answer `422 composition_v3_disabled` unless the server runs with `EASYUI_COMPOSITION_V3=1`; discovery is `capabilities.features.compositionV3`. **Reading and expanding** stored v3 documents never depends on the flag.
+
+#### Typed parameters
+
+In addition to `string | number | boolean | json | asset`, a v3 parameter may be:
+
+```json
+{
+  "params": {
+    "tone":   { "type": "enum", "values": ["brand", "muted"], "default": "brand" },
+    "header": { "type": "object", "schema": { "title": { "type": "string", "required": true }, "badge": { "type": "string" } } },
+    "rows":   { "type": "array", "items": { "type": "object", "schema": { "text": { "type": "string", "required": true } } }, "maxItems": 10 }
+  }
+}
+```
+
+- `enum` — 1..30 unique string `values`; a value outside the set is rejected at the reference point.
+- `object` — a **flat** `schema` of 1..30 fields, each `string | number | boolean` with optional `required`/`default`. The supplied value must not carry undeclared keys, and every `required` field must be present.
+- `array` — `items` is a scalar type or the same flat object shape; `maxItems` is 1..50 and is enforced on the supplied value.
+- A declared `default` must itself satisfy the declaration. All parameters — typed or flat — count against the same 50-parameter limit.
+
+#### `element.when` — optional branches
+
+Any non-root element of a v3 body may carry `when`:
+
+```json
+{ "type": "YpText", "props": { "text": "Only in full mode" }, "when": { "param": "mode", "eq": "full" } }
+```
+
+- Exactly one of `eq`, `neq` or `in` (1..30 values) is required; comparison is by JSON value.
+- A false condition removes the element **and its whole subtree** — nothing is materialized, so a gated nested `@eui/Composition` is not expanded at all and the removal happens before the post-expansion budgets (`EXPANDED_ELEMENTS_LIMIT`, tree depth) are checked. There is no `else` branch: an optional branch is the absence of an element.
+- An unset optional parameter equals no JSON value: `eq`/`in` are false, `neq` is true.
+- Rejected at authoring time: `when` on the composition root, an undeclared `param`, a comparison value outside the `enum` of the referenced parameter, and `when` over a subtree containing `@eui/Slot` (conditional slots arrive with slot metadata in a later wave — routed children must not be orphaned).
+
+#### `$switch` — value selection in props
+
+Anywhere a prop value is allowed, `{"$switch": …}` selects a value by the parameter's value (the key of a case is the string form of the value — `"true"`/`"false"` for booleans, the decimal form for numbers):
+
+```json
+{ "props": { "tone": { "$switch": { "param": "tone", "cases": { "brand": "accent", "muted": "grey" }, "default": "accent" } } } }
+```
+
+- 1..30 cases; the selected value is substituted recursively, so `{"$param": …}` inside a case works.
+- For `enum` and `boolean` parameters the directive must be **exhaustive** or declare a `default`, and unknown case keys are rejected — both at authoring time.
+- For other parameter types a missing case without a `default` is an expansion issue (`composition/switch-unresolved`) and the prop key is dropped.
+- The directive is v3-only: in a v1/v2 body an object with a `$switch` key stays an ordinary prop value.
 
 ### v1 restrictions
 

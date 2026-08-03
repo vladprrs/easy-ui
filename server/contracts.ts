@@ -487,6 +487,8 @@ export const checkVisualReferenceContract = registerContract({
 const headTrackingError = { status: 422, code: "prototype_head_tracking", description: "The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot." } as const;
 /** Kill-switch D16 (план 2026-08-02 multi-surface-flows): запись `doc.surfaces` требует EASYUI_SURFACES=1. */
 const surfacesDisabledError = { status: 422, code: "surfaces_disabled", description: "The document declares doc.surfaces, but multi-surface writes are disabled on this server (EASYUI_SURFACES=1 enables them). Discovery: capabilities.features.surfacesWrite." } as const;
+/** Kill-switch D9 (план 2026-08-03 W8a): запись композиций `version:3` требует EASYUI_COMPOSITION_V3=1. */
+const compositionV3DisabledError = { status: 422, code: "composition_v3_disabled", description: "The composition document declares version 3, but v3 writes are disabled on this server (EASYUI_COMPOSITION_V3=1 enables them). Reading and expanding stored v3 documents always works. Discovery: capabilities.features.compositionV3." } as const;
 /** W3 (multi-surface §4): композиции допустимы только на экранах ДС документа; per-screen резолв — v2. */
 const compositionForeignDesignSystemError = { status: 422, code: "composition_foreign_design_system", description: "A composition is placed on a screen whose surface uses a design system other than doc.designSystem; compositions are single-design-system in v1." } as const;
 /** W3 (multi-surface §4): формат бандла скалярен по ДС, мульти-поверхностный документ не экспортируется. */
@@ -1392,10 +1394,11 @@ export const getComponentCandidateContract = registerContract({
 
 export const createAcceptanceRunContract = registerContract({
   method: "POST", path: "/api/acceptance-runs",
-  summary: "Queue a matrix acceptance run over the candidate's cases (wave W1a source: the candidate's named examples). The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh` controls reuse: `\"none\"` (default) reuses every cached case result, `\"failed\"` recaptures only the cases whose previous result for the same fingerprint was fail/indeterminate, `\"all\"` recaptures everything, and `{caseIds:[…]}` recaptures the listed cases (unknown id → 422 unknown_case_id; a listed alias forces its target). The forcing reason is recorded per case in `reuseReason` (`refresh:<mode>`) and in the evidence manifest. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  summary: "Queue a matrix acceptance run over the candidate's cases. The case set comes either from a published case-set manifest (`caseSetId`, wave W2 — it also supplies the capture surface, per-case reference assets, expected geometry and per-case policy) or, by default, from the candidate's named examples; `cases` and `caseSetId` are mutually exclusive. The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh` controls reuse: `\"none\"` (default) reuses every cached case result, `\"failed\"` recaptures only the cases whose previous result for the same fingerprint was fail/indeterminate, `\"all\"` recaptures everything, and `{caseIds:[…]}` recaptures the listed cases (unknown id → 422 unknown_case_id; a listed alias forces its target). The forcing reason is recorded per case in `reuseReason` (`refresh:<mode>`) and in the evidence manifest. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
   status: 202,
   requestSchema: z.strictObject({
     candidateId: z.string(),
+    caseSetId: z.string().optional(),
     idempotencyKey: z.string().min(1).max(200).optional(),
     policy: z.enum(["default-v1", "pixel-strict-v1"]).optional(),
     cases: z.array(z.strictObject({ key: z.string(), props: z.record(z.string(), z.unknown()) })).optional(),
@@ -1420,7 +1423,8 @@ export const createAcceptanceRunContract = registerContract({
     { status: 422, code: "duplicate_case_id" },
     { status: 422, code: "unknown_policy_profile" },
     { status: 422, code: "unknown_case_id", description: "refresh.caseIds names a case that is not part of this run's case set" },
-    { status: 422, code: "unsupported_option", description: "cases.concurrency / manifestAssetId / caseSetId are not supported in this phase" },
+    { status: 422, code: "case_set_mismatch", description: "the case set describes another component than the candidate" },
+    { status: 422, code: "unsupported_option", description: "cases.concurrency / manifestAssetId are not supported" },
     { status: 503, code: "maintenance_in_progress", description: "a catalog migration holds the maintenance lock" },
   ],
 });
@@ -1468,6 +1472,54 @@ export const cancelAcceptanceRunContract = registerContract({
     ...acceptanceAuthErrors,
     { status: 409, code: "run_not_cancellable", description: "only queued runs can be cancelled" },
   ],
+});
+
+/**
+ * Case-set-манифесты (план 2026-08-03 §5 W2, амендмент A2). Живут за тем же гейтом
+ * `EASYUI_ACCEPTANCE_MATRIX=1` и под той же авторизацией, что и приёмка (owner/admin; share/capture — 403).
+ */
+const caseSetCoverageSchema = z.looseObject({
+  dimensions: z.record(z.string(), z.array(z.string())),
+  expectedTuples: z.number(), presentTuples: z.number(),
+  missingTuples: z.array(z.record(z.string(), z.string())),
+  duplicates: z.array(z.looseObject({ tuple: z.record(z.string(), z.string()), caseIds: z.array(z.string()) })),
+});
+
+export const putComponentCaseSetContract = registerContract({
+  method: "PUT", path: "/api/components/{id}/case-sets",
+  summary: "Publish a case-set manifest for a component: the durable, content-addressed source of an acceptance run's cases (`caseSetId` = \"cset_\" + sha256 of the canonical manifest, so republishing the same manifest is idempotent and returns the same id with cached:true; an edited manifest is a NEW set and never overwrites the old one, so runs stay reproducible). The server validates the manifest as a product entity: schema (manifestVersion 1, strict objects, case ids matching ^[A-Za-z0-9._-]{1,64}$), the declared componentId, the per-run case ceiling, unique case ids, existence of every referenceAssetId in the asset registry (422 asset_not_found), duplicate props without `aliasOf` (422 duplicate_case_props), alias targets (must be another non-alias case with identical props), and crop-lineage rectangles. Dimension coverage gaps and props that disagree with the published component schema come back as `warnings`, never as failures. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
+  requestSchema: z.strictObject({ manifest: z.unknown() }),
+  responseSchema: z.looseObject({
+    caseSetId: z.string(), componentId: z.string(), designSystem: z.string(),
+    cases: z.number(), cached: z.boolean(), coverage: caseSetCoverageSchema, warnings: z.array(z.string()),
+  }),
+  errors: [
+    ...acceptanceAuthErrors, errorCatalog.invalidRequest, errorCatalog.payloadTooLarge, errorCatalog.validationFailed,
+    { status: 422, code: "case_set_component_mismatch", description: "the manifest names another componentId than the route" },
+    { status: 422, code: "case_set_too_large", description: "the manifest declares more cases than limits.acceptanceMaxCasesPerRun" },
+    { status: 422, code: "duplicate_case_id" },
+    { status: 422, code: "duplicate_case_props", description: "two cases declare identical props without aliasOf" },
+    { status: 422, code: "invalid_alias_target", description: "aliasOf names a missing case, an alias, or a case with different props" },
+    { status: 422, code: "asset_not_found", description: "a referenceAssetId is not in the asset registry" },
+  ],
+});
+
+export const getCaseSetContract = registerContract({
+  method: "GET", path: "/api/case-sets/{caseSetId}",
+  summary: "Read a case-set manifest with its stored metadata (component, design system, case count, Figma source, author). Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  responseSchema: z.looseObject({
+    caseSetId: z.string(), componentId: z.string(), designSystem: z.string(), caseCount: z.number(),
+    source: z.looseObject({ fileKey: z.string(), componentSetNodeId: z.string().nullable() }).nullable(),
+    createdBy: z.string(), createdAt: isoDate, manifest: z.unknown(),
+  }),
+  errors: [...acceptanceAuthErrors],
+});
+
+export const getCaseSetCoverageContract = registerContract({
+  method: "GET", path: "/api/case-sets/{caseSetId}/coverage",
+  summary: "Coverage report of a case set: the declared `dimensions`, the size of their Cartesian product (`expectedTuples`), how many distinct tuples the cases actually cover (`presentTuples`), the `missingTuples` and the tuples covered by more than one case (`duplicates`). A manifest without `dimensions` reports a trivial coverage (expectedTuples 0, presentTuples = number of cases): no fake Cartesian product is invented for an incomplete Figma matrix. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  responseSchema: z.looseObject({ caseSetId: z.string(), componentId: z.string(), ...caseSetCoverageSchema.shape }),
+  errors: [...acceptanceAuthErrors],
 });
 
 export const listComponentVersionsContract = registerContract({
@@ -1613,9 +1665,27 @@ const compositionDocumentCommonSchema = {
   spec: z.looseObject({ root: z.string(), elements: z.record(z.string(), z.unknown()) }),
   provenance: z.looseObject({ source: z.string().optional(), figmaNodeId: z.string().optional() }).optional(),
 } as const;
+/**
+ * Параметр v3 (план 2026-08-03 W8a): плоские типы v1/v2 плюс `enum`/`object`/`array`.
+ * Форма — discovery-проекция; строгая схема живёт в `src/prototype/compositionV3/params.ts`.
+ */
+const compositionParamV3Schema = z.looseObject({
+  type: z.enum(["string", "number", "boolean", "json", "asset", "enum", "object", "array"]),
+  values: z.array(z.string()).optional(),
+  schema: z.record(z.string(), z.looseObject({ type: z.enum(["string", "number", "boolean"]), required: z.boolean().optional(), default: z.json().optional() })).optional(),
+  items: z.looseObject({ type: z.enum(["string", "number", "boolean", "object"]) }).optional(),
+  maxItems: z.number().int().optional(),
+  required: z.boolean().optional(), default: z.json().optional(), description: z.string().optional(),
+});
 const compositionDocumentSchema = z.discriminatedUnion("version", [
   z.looseObject({ version: z.literal(1), ...compositionDocumentCommonSchema }),
   z.looseObject({ version: z.literal(2), atomicLevel: z.enum(["molecule", "organism", "template", "page"]), ...compositionDocumentCommonSchema }),
+  z.looseObject({
+    version: z.literal(3),
+    atomicLevel: z.enum(["molecule", "organism", "template", "page"]),
+    ...compositionDocumentCommonSchema,
+    params: z.record(z.string(), compositionParamV3Schema),
+  }),
 ]);
 const compositionVersionSchema = z.looseObject({
   version: positiveInt, rev: positiveInt, status: z.string(), statusReason: z.string().nullable(),
@@ -1644,7 +1714,7 @@ export const createCompositionContract = registerContract({
   status: 201,
   requestSchema: z.object({ id: slugString, doc: compositionDocumentSchema, designSystem: slugString, message: z.string().optional() }),
   responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1) }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, errorCatalog.notFound],
+  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, errorCatalog.notFound, compositionV3DisabledError],
 });
 
 export const getCompositionContract = registerContract({
@@ -1664,7 +1734,7 @@ export const saveCompositionContract = registerContract({
   summary: "Save a new head revision of the composition document (CAS on baseRev).",
   requestSchema: z.object({ doc: compositionDocumentSchema, ...casBody }),
   responseSchema: z.looseObject({ rev: z.number() }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.alreadyExists, errorCatalog.validationFailed],
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict, errorCatalog.alreadyExists, errorCatalog.validationFailed, compositionV3DisabledError],
 });
 
 export const deleteCompositionContract = registerContract({
@@ -2172,6 +2242,8 @@ export const capabilitiesResponseSchema = z.object({
     surfaces: z.boolean(),
     /** Запись документов с `doc.surfaces` разрешена (kill-switch D16, `EASYUI_SURFACES=1`); иначе `422 surfaces_disabled`. */
     surfacesWrite: z.boolean(),
+    /** Запись композиций `version:3` разрешена (kill-switch D9, `EASYUI_COMPOSITION_V3=1`); иначе `422 composition_v3_disabled`. Чтение/раскрытие сохранённых v3 — всегда. */
+    compositionV3: z.boolean(),
     /**
      * Матричная приёмка (план 2026-08-03 §5 W1a, `EASYUI_ACCEPTANCE_MATRIX=1`). Три флага —
      * один kill-switch, но разные подсистемы: кандидаты (`POST /api/components/:id/candidates`,

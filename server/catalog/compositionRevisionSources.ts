@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { CatalogRevisionSource } from "../catalogRevision";
 import { parseStoredCompositionDoc } from "../repos/compositions";
+import { isCompositionWithMetadata } from "../../src/prototype/composition";
 
 /** Discovery projection for the latest active composition publication of each id. */
 export function activeCompositionRevisionSources(db: Database): CatalogRevisionSource[] {
@@ -14,16 +15,18 @@ export function activeCompositionRevisionSources(db: Database): CatalogRevisionS
     ORDER BY c.design_system,c.id,p.version`).all() as { id: string; designSystem: string; version: number; doc: string; rev: number }[];
   return rows.map((row) => {
     const doc = parseStoredCompositionDoc(row.doc, row.id, row.rev);
+    // Каталожные метаданные несёт v2 **и старше** (v3 — план 2026-08-03 W8a).
+    const meta = isCompositionWithMetadata(doc) ? doc : undefined;
     return {
       kind: "composition",
       designSystem: row.designSystem,
       id: row.id,
       version: row.version,
       description: doc.description ?? "",
-      ...(doc.version === 2 && doc.atomicLevel !== undefined ? { atomicLevel: doc.atomicLevel } : {}),
-      ...(doc.version === 2 && doc.scope !== undefined ? { scope: doc.scope } : {}),
-      canonicalFor: doc.version === 2 ? doc.canonicalFor ?? [] : [],
-      ...(doc.version === 2 && doc.replacement !== undefined ? { replacement: doc.replacement } : {}),
+      ...(meta?.atomicLevel !== undefined ? { atomicLevel: meta.atomicLevel } : {}),
+      ...(meta?.scope !== undefined ? { scope: meta.scope } : {}),
+      canonicalFor: meta?.canonicalFor ?? [],
+      ...(meta?.replacement !== undefined ? { replacement: meta.replacement } : {}),
       meta: {
         propsJsonSchema: { type: "object", properties: Object.fromEntries(Object.entries(doc.params).map(([name, param]) => [name, { type: param.type }])) },
         events: [],

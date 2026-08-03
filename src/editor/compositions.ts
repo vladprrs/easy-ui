@@ -4,9 +4,10 @@ import { COMPOSITION_TYPE, SLOT_TYPE } from "../catalog/hostPrimitives/compositi
 import { FLOW_ROOT_TYPE } from "../catalog/hostPrimitives/flowRoot.definition";
 import {
   compositionDocSchema, expandCompositions, expandedKey,
-  type CompositionCatalogEntry, type CompositionDoc, type CompositionParamType, type CompositionSource,
+  type CompositionCatalogEntry, type CompositionDoc, type CompositionSource,
   type ExpandedOrigin,
 } from "../prototype/composition";
+import { paramPlaceholder } from "../prototype/compositionV3/params";
 import { slugSchema, type JsonValue, type PrototypeDoc } from "../prototype/schema";
 import type { ValidationIssue } from "../prototype/types";
 
@@ -78,8 +79,20 @@ export function expandForEditor(doc: PrototypeDoc, compositions: Record<string, 
 
 // --- Вставка ---------------------------------------------------------------
 
-const TYPE_DEFAULTS: Record<CompositionParamType, JsonValue | undefined> = {
-  string: "", number: 0, boolean: false, json: {}, asset: undefined,
+/**
+ * Пустышка для обязательного параметра без `default`. Плоские типы v1/v2 сохраняют
+ * прежние значения; типизированные параметры v3 берут пустышку из объявления
+ * (`enum` → первое значение, `object` → обязательные поля, `array` → пустой список).
+ */
+const fallbackForParam = (declared: CompositionDoc["params"][string]): JsonValue | undefined => {
+  switch (declared.type) {
+    case "string": return "";
+    case "number": return 0;
+    case "boolean": return false;
+    case "json": return {};
+    case "asset": return undefined;
+    default: return paramPlaceholder(declared);
+  }
 };
 
 /** Значения обязательных параметров при вставке: объявленный default, иначе пустышка по типу. */
@@ -88,7 +101,7 @@ export function defaultParams(composition: CompositionDoc): Record<string, JsonV
   for (const [name, declared] of Object.entries(composition.params)) {
     if (declared.default !== undefined) { params[name] = declared.default; continue; }
     if (!declared.required) continue;
-    const fallback = TYPE_DEFAULTS[declared.type];
+    const fallback = fallbackForParam(declared);
     if (fallback !== undefined) params[name] = fallback;
   }
   return params;

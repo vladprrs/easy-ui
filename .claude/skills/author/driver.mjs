@@ -17,7 +17,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | accept <componentId> [--policy <id>] [--refresh none|failed|all|id,id2] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -136,8 +136,11 @@ export const flagSpecs = Object.freeze({
     "--message": { value: true, key: "message" },
   },
   // План 2026-08-03 §5 W1c: матричная приёмка семейства одной командой (кандидат → ран → poll).
+  // План 2026-08-03 §5 W2: публикация и чтение case-set-манифеста семейства.
+  "case-set": { ...jsonFlag },
   accept: {
     ...jsonFlag,
+    "--case-set": { value: true, key: "caseSet" },
     "--policy": { value: true, key: "policy" },
     "--refresh": { value: true, key: "refresh", parse: parseRefreshFlag },
     "--timeout-sec": {
@@ -223,6 +226,8 @@ const ranges = Object.freeze({
   promote: [1, 1],
   accept: [1, 1],
   "accept-status": [1, 1],
+  // `case-set put <componentId> <manifest.json>` (3) | `case-set get|coverage <caseSetId>` (2).
+  "case-set": [2, 3],
   // 0 — каталожный sweep `audit --design-system`, 1 — подкоманда `audit reuse`.
   audit: [0, 1],
 });
@@ -292,6 +297,14 @@ export function parseArgs(argv) {
   // здесь необязательный фильтр, в отличие от каталожного sweep'а.
   if (commandForm === "audit" && !flags.versions && flags.designSystem === undefined) invalid("audit requires --design-system <id> or --versions");
   if (commandForm === "audit" && positionals.length !== 0) invalid("invalid arguments for audit");
+  // `case-set` — подкоманда в первом позиционале (канон `catalog list|search|get`); арность
+  // проверяется здесь, чтобы `case-set get a.json b.json` не уехало в сервер как «лишний» аргумент.
+  if (command === "case-set") {
+    const [subcommand] = positionals;
+    if (!["put", "get", "coverage"].includes(subcommand)) invalid("case-set requires a subcommand: put | get | coverage");
+    if (subcommand === "put" && positionals.length !== 3) invalid("usage: case-set put <componentId> <manifest.json>");
+    if (subcommand !== "put" && positionals.length !== 2) invalid(`usage: case-set ${subcommand} <caseSetId>`);
+  }
   if (command === "status" && positionals.length < 2 && !flags.allScreens) invalid("status requires <screenId> or --all-screens");
   if (command === "preview" && positionals.length === 2 && flags.example !== undefined) invalid("preview accepts either props.json or --example, not both");
   return { cmd: command, args: positionals, flags };
@@ -1796,6 +1809,53 @@ async function reportAcceptance(run, { command, componentId, candidateId, flags 
   }
 }
 
+/**
+ * Case-set-манифесты (план 2026-08-03 §5 W2).
+ *
+ * `case-set put` публикует манифест семейства (контентный адрес: повтор идемпотентен), `get`
+ * читает его обратно, `coverage` печатает покрытие измерений. Матрицу клиент не собирает: он
+ * отдаёт манифест, а полноту tuples, ссылки на эталоны и дубли props проверяет сервер.
+ */
+function coverageLines(coverage, { caseSetId, componentId }) {
+  const names = Object.keys(coverage.dimensions ?? {}).sort();
+  const lines = [
+    `case-set ${caseSetId}${componentId ? ` (${componentId})` : ""} coverage: ${coverage.presentTuples}/${coverage.expectedTuples} tuples, missing ${coverage.missingTuples?.length ?? 0}`,
+    `dimensions: ${names.length ? names.map((name) => `${name}=${coverage.dimensions[name].join("|")}`).join(" ") : "-"}`,
+  ];
+  const tuple = (item) => names.map((name) => `${name}=${item[name]}`).join(",");
+  for (const item of (coverage.missingTuples ?? []).slice(0, 20)) lines.push(`  missing: ${tuple(item)}`);
+  for (const item of coverage.duplicates ?? []) lines.push(`  duplicate: ${tuple(item.tuple)} → ${item.caseIds.join(", ")}`);
+  return lines;
+}
+
+async function runCaseSet(args, flags) {
+  const [subcommand] = args;
+  await requireAcceptanceMatrix();
+  if (subcommand === "put") {
+    const [, componentId, manifestPath] = args;
+    const manifest = await readJsonArgument(manifestPath, "case-set manifest");
+    const result = await requireOk("case-set put", await call("PUT", `/components/${encodeURIComponent(componentId)}/case-sets`, { manifest }));
+    report([
+      `case-set ${result.caseSetId} for ${result.componentId} (${result.designSystem}): ${result.cases} cases${result.cached ? " (cached: identical manifest already published)" : ""}`,
+      ...coverageLines(result.coverage ?? {}, { caseSetId: result.caseSetId }),
+      ...(result.warnings ?? []).map((warning) => `warning: ${warning}`),
+    ], { command: "case-set put", ...result });
+    return;
+  }
+  const [, caseSetId] = args;
+  const encoded = encodeURIComponent(caseSetId);
+  if (subcommand === "coverage") {
+    const coverage = await requireOk("case-set coverage", await call("GET", `/case-sets/${encoded}/coverage`));
+    report(coverageLines(coverage, coverage), { command: "case-set coverage", ...coverage });
+    return;
+  }
+  const result = await requireOk("case-set get", await call("GET", `/case-sets/${encoded}`));
+  report([
+    `case-set ${result.caseSetId} for ${result.componentId} (${result.designSystem}): ${result.caseCount} cases, created ${result.createdAt}`,
+    `source: ${result.source ? `${result.source.fileKey}${result.source.componentSetNodeId ? `#${result.source.componentSetNodeId}` : ""}` : "-"}`,
+  ], { command: "case-set get", ...result });
+}
+
 async function runAccept(args, flags) {
   const [id] = args;
   const encoded = encodeURIComponent(id);
@@ -1808,6 +1868,9 @@ async function runAccept(args, flags) {
   progress(`candidate ${candidate.candidateId} rev=${candidate.rev}${candidate.cached ? " (cached)" : ""}`);
   const started = await call("POST", "/acceptance-runs", {
     candidateId: candidate.candidateId,
+    // `--case-set` (W2): набор случаев, поверхность съёмки и per-case допуски берутся из
+    // опубликованного манифеста; без него источник — именованные examples кандидата.
+    ...(flags.caseSet === undefined ? {} : { caseSetId: flags.caseSet }),
     ...(flags.policy === undefined ? {} : { policy: flags.policy }),
     ...(flags.refresh === undefined ? {} : { refresh: flags.refresh }),
   });
@@ -2151,6 +2214,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "promote") await runPromote(args, flags);
   else if (cmd === "accept") await runAccept(args, flags);
   else if (cmd === "accept-status") await runAcceptStatus(args, flags);
+  else if (cmd === "case-set") await runCaseSet(args, flags);
   else if (cmd === "audit") await (args[0] === "reuse" ? runReuseAudit(flags) : flags.versions ? runVersionsAudit(flags) : runAudit(flags));
 }
 

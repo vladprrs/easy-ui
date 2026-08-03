@@ -20,6 +20,7 @@ import {
   SURFACES_LIMIT,
 } from "../../src/prototype/schema";
 import { surfacesWriteEnabled } from "./prototypes";
+import { compositionV3WriteEnabled } from "./compositions";
 import { ELEMENTS_PER_SCREEN_LIMIT, REPEAT_ELEMENT_LIMIT, REPEAT_RENDER_COST_BUDGET, TREE_DEPTH_LIMIT } from "../../src/prototype/validate";
 import { MAX_ASSET_BYTES } from "../assets/validate";
 import { listActiveDesignSystems } from "../designSystems";
@@ -179,6 +180,11 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // документа с `surfaces` отвечает `422 surfaces_disabled`. Разнесено с `surfaces`
       // намеренно: поддержка кода и разрешение записи — разные вопросы для агента.
       surfacesWrite: surfacesWriteEnabled(),
+      // План 2026-08-03 W8a: запись композиций `version: 3` (типизированные параметры,
+      // `when`/`$switch`) разрешена kill-switch'ем D9 `EASYUI_COMPOSITION_V3=1`; иначе
+      // create/save отвечает `422 composition_v3_disabled`. Чтение и раскрытие уже
+      // сохранённых v3 работают независимо от флага.
+      compositionV3: compositionV3WriteEnabled(),
     },
     reuseGate: {
       mode: reuseGateMode,
