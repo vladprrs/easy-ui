@@ -5,7 +5,11 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
-    mem_limit: 1g
+    # Host facts (R0 revision, 2026-08-03): 8 vCPU AMD Zen 4 / 8 GB RAM shared with
+    # Dokploy+traefik. Service gets half the host; the old 1g limit was a conservative
+    # over-provision inherited from the family plan.
+    mem_limit: 4g
+    cpus: 4
     environment:
       BASIC_AUTH: ${BASIC_AUTH:-}
       LEGACY_BASIC_AUTH: ${LEGACY_BASIC_AUTH:-}
@@ -19,6 +23,14 @@ services:
       EASYUI_THEME_RESOLVER_V2_DISABLED: ${EASYUI_THEME_RESOLVER_V2_DISABLED:-}
       EASYUI_ACCEPTANCE_MATRIX: ${EASYUI_ACCEPTANCE_MATRIX:-}
       EASYUI_COMPOSITION_V3: ${EASYUI_COMPOSITION_V3:-}
+      EASYUI_RENDERER_FLAGS: ${EASYUI_RENDERER_FLAGS:-}
+      EASYUI_RENDERER_EPOCH: ${EASYUI_RENDERER_EPOCH:-}
+      EASYUI_RENDERER_GUARD_DISABLED: ${EASYUI_RENDERER_GUARD_DISABLED:-}
+      EASYUI_RENDERER_STRICT_MANIFEST: ${EASYUI_RENDERER_STRICT_MANIFEST:-}
+      EASYUI_CAPTURE_RECEIPTS_DISABLED: ${EASYUI_CAPTURE_RECEIPTS_DISABLED:-}
+      EASYUI_VISUAL_SIGNALS_V2: ${EASYUI_VISUAL_SIGNALS_V2:-}
+      EASYUI_RENDERER_POOL: ${EASYUI_RENDERER_POOL:-}
+      EASYUI_CAPTURE_CACHE: ${EASYUI_CAPTURE_CACHE:-}
     expose:
       - "8787"
     volumes:
