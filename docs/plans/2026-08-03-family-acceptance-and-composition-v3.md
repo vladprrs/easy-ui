@@ -1,6 +1,6 @@
 # План: Matrix Acceptance, Geometry/Readiness 2.0, Reference Mapping и Composition v3
 
-Дата: 2026-08-03. Версия: **v3** (Stage 2 пройден: раунд 1 — 3 адверсариальных ревьюера [корректность/код, скоуп/декомпозиция, риски/эксплуатация], раунд 2 — верификационный; триажи — §10). Источник требований: `docs/EASYUI_PRODUCT_IMPROVEMENTS.md` §19 (P0.1–P0.4, P1.1–P1.4, KPI §19.10). База: `docs/plans/2026-08-02-candidate-acceptance-pipeline-rfc.md` v4 (R1 — promote-сага — в проде; R2/R3 — не начаты).
+Дата: 2026-08-03. Версия: **v3** (Stage 2 пройден: раунд 1 — 3 адверсариальных ревьюера [корректность/код, скоуп/декомпозиция, риски/эксплуатация], раунд 2 — верификационный; триажи — §10). **Stage 3 выполнен 2026-08-03: все волны W0–W7 (трек A) и W8a–g/W9 (трек B) реализованы** (af57b80…58ff2c9; инженерный гейт: verify + полный e2e 133 passed зелёные; замеры §1/§4 — фактические). Деплой и runtime-приёмка §7 на проде не проводились — флаги `EASYUI_ACCEPTANCE_MATRIX`/`EASYUI_COMPOSITION_V3` OFF до приёмки; отдельная команда. Источник требований: `docs/EASYUI_PRODUCT_IMPROVEMENTS.md` §19 (P0.1–P0.4, P1.1–P1.4, KPI §19.10). База: `docs/plans/2026-08-02-candidate-acceptance-pipeline-rfc.md` v4 (R1 — promote-сага — в проде; R2/R3 — не начаты).
 
 > Очередь исполнения: W0 (микро-релиз env) → трек A (W1a→W1b→W1c→W2→W3→W4→W5a→W5b→W6→W7); трек B (W8a…W8g → W9) стартует параллельно с W2. Весь трек A закрыт opt-in флагом `EASYUI_ACCEPTANCE_MATRIX` (дефолт OFF) до runtime-приёмки §7.
 
