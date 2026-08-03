@@ -3,11 +3,12 @@ import { normalizeDefinitions, type ComponentDefinition } from "../src/catalog/d
 import { normalizeEvents } from "../src/catalog/normalize";
 import { isAssetId, type PrototypeDoc } from "../src/prototype/schema";
 import { importPublished } from "./components/pipeline";
-import { requireActiveDesignSystem } from "./designSystems";
+import { getLatestDesignSystemContent, requireActiveDesignSystem } from "./designSystems";
 import { ApiError } from "./http";
 import { hostPrimitiveDefinitions, hostPrimitiveNames } from "../src/catalog/hostPrimitives/definitions";
 import { collectCompositionRefs, expandCompositions, type CompositionCatalogEntry } from "../src/prototype/composition";
 import { resolveCompositionPins, type ComponentDependencyPin, type CompositionDependencyPin } from "./repos/compositions";
+import { docSurfaces, surfaceDesignSystem, surfaceOf } from "../src/prototype/surfaces";
 
 // Walks every element prop looking for {"$asset":"<id>"} directives, returning the referenced ids.
 export function collectAssetIds(doc:PrototypeDoc):string[] {
@@ -75,6 +76,20 @@ function expandNestedCompositions(doc: PrototypeDoc, compositions: Record<string
 }
 
 /**
+ * Композиции v1 допустимы только на экранах, чья ДС совпадает с `doc.designSystem`
+ * (план §4, R1-M9/R2-M1/R3-M4): резолвер композиций (`resolveCompositionPins`) —
+ * однодизайнсистемный, а per-screen резолв отложен в v2. Стабильный код 422.
+ */
+export const COMPOSITION_FOREIGN_DESIGN_SYSTEM_CODE="composition_foreign_design_system";
+function assertCompositionsOnPrimarySurface(doc:PrototypeDoc,refs:{screenId:string;compositionId:string}[]):void {
+  const foreign=refs.filter(ref=>(surfaceDesignSystem(surfaceOf(doc,ref.screenId),doc)??doc.designSystem)!==doc.designSystem);
+  if(!foreign.length) return;
+  throw new ApiError(422,COMPOSITION_FOREIGN_DESIGN_SYSTEM_CODE,
+    "Compositions are only supported on screens whose design system matches the document design system",
+    {issues:foreign.map(ref=>({path:["screens"],message:`composition ${ref.compositionId} is placed on screen '${ref.screenId}' of a foreign design system`}))});
+}
+
+/**
  * Раскрытие композиций в **save-пути** (волна 5, B3 адверсариального ревью).
  *
  * Порядок обязателен: сначала раскрытие, потом `snapshotDefinitions` и
@@ -88,6 +103,7 @@ function expandNestedCompositions(doc: PrototypeDoc, compositions: Record<string
 export function expandPrototypeForSave(db:Database,doc:PrototypeDoc):{doc:PrototypeDoc;pins:CompositionPin[];compositions:Record<string,CompositionCatalogEntry>} {
   const refs=collectCompositionRefs(doc);
   if(!refs.length) return {doc,pins:[],compositions:{}};
+  assertCompositionsOnPrimarySurface(doc,refs);
   const {docs,sources,pins,componentPins,missing}=resolveCompositionPins(db,refs.map(ref=>ref.compositionId),doc.designSystem);
   if(missing.length) throw new ApiError(422,"validation_failed","Prototype references compositions that are unavailable",
     {issues:missing.map(entry=>({path:["screens"],message:entry.reason}))});
@@ -96,31 +112,74 @@ export function expandPrototypeForSave(db:Database,doc:PrototypeDoc):{doc:Protot
   return {doc:expanded,pins,compositions:docs};
 }
 
+/**
+ * Канал тем в валидацию (план D9): карта «ДС документа → её тема». Save-путь пинует
+ * последние версии тем, поэтому здесь читается именно последнее содержимое. Warnings D9
+ * эмитятся **только** когда эта карта передана — то есть только серверной валидацией.
+ */
+export function themesForDoc(db:Database,doc:PrototypeDoc):Record<string,{fonts?:{family?:unknown}[]}> {
+  const themes:Record<string,{fonts?:{family?:unknown}[]}>={};
+  for(const surface of docSurfaces(doc)) {
+    const systemId=surfaceDesignSystem(surface,doc)??doc.designSystem;
+    if(themes[systemId]) continue;
+    try { const content=getLatestDesignSystemContent(db,systemId); themes[systemId]={fonts:content.fonts}; }
+    catch { themes[systemId]={fonts:[]}; }
+  }
+  return themes;
+}
+
 export type ComponentPin={id:string;name:string;version:number;bundleHash:string;sourcePath:string};
-export async function snapshotDefinitions(db:Database,doc:PrototypeDoc,dataDir:string):Promise<{definitions:Record<string,ComponentDefinition>;pins:ComponentPin[]}> {
-  const builtin=requireActiveDesignSystem(db,doc.designSystem,["designSystem"]).definitions;
-  const types=new Set(doc.screens.flatMap(s=>Object.values(s.spec.elements).map(e=>e.type)).filter(t=>!Object.hasOwn(builtin,t)&&!hostPrimitiveNames.has(t)));
+/**
+ * Снимок определений документа (план multi-surface-flows §4, «резолв компонентов при сохранении»).
+ *
+ * Резолв идёт **по множеству ДС документа**: тип экрана резолвится в ДС его поверхности.
+ * `components.name` глобально UNIQUE (миграция v1), поэтому плоские name-keyed карты остаются
+ * корректными, а per-surface резолв — это политика: тип, принадлежащий чужой ДС, на экране не
+ * резолвится и даёт тот же 422, что неизвестный тип.
+ *
+ * Документ без `surfaces` даёт ровно одну группу (все экраны, ДС документа) — поведение,
+ * порядок пинов и содержимое `definitions` байт-в-байт как раньше.
+ */
+export async function snapshotDefinitions(db:Database,doc:PrototypeDoc,dataDir:string):Promise<{definitions:Record<string,ComponentDefinition>;pins:ComponentPin[];definitionsBySurface:Record<string,Record<string,ComponentDefinition>>}> {
+  const surfaces=docSurfaces(doc);
   const compositionPins=compositionComponentPins.get(doc);
-  const pins:ComponentPin[]=[]; const custom:Record<string,ComponentDefinition>={};
-  for(const name of [...types].sort()) {
-    const pinned=compositionPins?.get(name);
-    const row=pinned
-      ? db.query(`SELECT c.id,c.name,cp.version,cp.rev,cp.bundle_hash bundleHash,cr.source
-          FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.version=?
-          JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
-          WHERE c.id=? AND cr.design_system=?`).get(pinned.version,pinned.id,doc.designSystem) as {id:string;name:string;version:number;rev:number;bundleHash:string;source:string}|null
-      : db.query(`SELECT c.id,c.name,cp.version,cp.rev,cp.bundle_hash bundleHash,cr.source
-          FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.status='active'
-          JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
-          WHERE c.name=? AND cr.design_system=? AND c.deleted_at IS NULL ORDER BY cp.version DESC LIMIT 1`).get(name,doc.designSystem) as {id:string;name:string;version:number;rev:number;bundleHash:string;source:string}|null;
-    if(!row) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["screens"],message:`Unknown or unpublished component type in design system '${doc.designSystem}': ${name}`}]});
-    const {materializeSource}=await import("./components/pipeline"); const path=await materializeSource(dataDir,row.id,row.rev,row.source);
-    const mod=await importPublished(row.id,row.rev,path);
-    const raw=mod.definition as ComponentDefinition&{events?:unknown};
-    const {events,eventPayloadSchemas}=normalizeEvents(raw.events as Parameters<typeof normalizeEvents>[0]);
-    custom[name]={...raw,events,...(eventPayloadSchemas?{eventPayloadSchemas}:{})} as ComponentDefinition;
-    pins.push({id:row.id,name:row.name,version:row.version,bundleHash:row.bundleHash,sourcePath:path});
+  const pins:ComponentPin[]=[]; const pinnedIds=new Set<string>();
+  const builtinBySurface=new Map<string,Record<string,ComponentDefinition>>();
+  const customBySurface=new Map<string,Record<string,ComponentDefinition>>();
+  const allCustom:Record<string,ComponentDefinition>={};
+  for(const surface of surfaces) {
+    const designSystem=surfaceDesignSystem(surface,doc)??doc.designSystem;
+    const builtin=requireActiveDesignSystem(db,designSystem,["designSystem"]).definitions;
+    builtinBySurface.set(surface.id,builtin);
+    const screens=doc.screens.filter(screen=>surfaceOf(doc,screen.id).id===surface.id);
+    const types=new Set(screens.flatMap(s=>Object.values(s.spec.elements).map(e=>e.type)).filter(t=>!Object.hasOwn(builtin,t)&&!hostPrimitiveNames.has(t)));
+    const custom:Record<string,ComponentDefinition>={};
+    for(const name of [...types].sort()) {
+      const pinned=compositionPins?.get(name);
+      const row=pinned
+        ? db.query(`SELECT c.id,c.name,cp.version,cp.rev,cp.bundle_hash bundleHash,cr.source
+            FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.version=?
+            JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
+            WHERE c.id=? AND cr.design_system=?`).get(pinned.version,pinned.id,designSystem) as {id:string;name:string;version:number;rev:number;bundleHash:string;source:string}|null
+        : db.query(`SELECT c.id,c.name,cp.version,cp.rev,cp.bundle_hash bundleHash,cr.source
+            FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.status='active'
+            JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
+            WHERE c.name=? AND cr.design_system=? AND c.deleted_at IS NULL ORDER BY cp.version DESC LIMIT 1`).get(name,designSystem) as {id:string;name:string;version:number;rev:number;bundleHash:string;source:string}|null;
+      if(!row) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["screens"],message:`Unknown or unpublished component type in design system '${designSystem}': ${name}`}]});
+      const {materializeSource}=await import("./components/pipeline"); const path=await materializeSource(dataDir,row.id,row.rev,row.source);
+      const mod=await importPublished(row.id,row.rev,path);
+      const raw=mod.definition as ComponentDefinition&{events?:unknown};
+      const {events,eventPayloadSchemas}=normalizeEvents(raw.events as Parameters<typeof normalizeEvents>[0]);
+      custom[name]={...raw,events,...(eventPayloadSchemas?{eventPayloadSchemas}:{})} as ComponentDefinition;
+      allCustom[name]=custom[name]!;
+      if(!pinnedIds.has(row.id)) { pinnedIds.add(row.id); pins.push({id:row.id,name:row.name,version:row.version,bundleHash:row.bundleHash,sourcePath:path}); }
+    }
+    customBySurface.set(surface.id,custom);
   }
   // Transitional B1-B2 order: host fallback first, then live builtins, then custom.
-  return {definitions:{...hostPrimitiveDefinitions,...builtin,...normalizeDefinitions(custom)},pins};
+  const definitionsBySurface=Object.fromEntries(surfaces.map(surface=>[surface.id,
+    {...hostPrimitiveDefinitions,...builtinBySurface.get(surface.id)!,...normalizeDefinitions(customBySurface.get(surface.id)!)}]));
+  // Объединение для доковых линтов: при совпадении имени побеждает primary (surfaces[0]).
+  const builtinUnion=Object.assign({},...[...surfaces].reverse().map(surface=>builtinBySurface.get(surface.id)!)) as Record<string,ComponentDefinition>;
+  return {definitions:{...hostPrimitiveDefinitions,...builtinUnion,...normalizeDefinitions(allCustom)},pins,definitionsBySurface};
 }

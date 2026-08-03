@@ -7,6 +7,7 @@ import { loadCustomComponents } from "../customComponents/loader";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { canonicalViewport } from "../designSystems/deviceMetrics";
+import { surfaceDesignSystem, surfaceOf } from "../prototype/surfaces";
 import { ThemeStyle } from "../designSystems/theme";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 import { HostStageSurface } from "../catalog/hostPrimitives";
@@ -23,6 +24,11 @@ interface LoadedPrototype {
   componentManifestHash: string;
   builtinCatalogHash: string;
   components: PrototypeComponentPin[];
+  /**
+   * Карта пинов темы ревизии (`designSystemMetaVersions`, миграция v24). Поле аддитивное:
+   * ответ сервера без него читается как `{}` — handshake тогда берёт скаляр `dsMetaVersion`.
+   */
+  themePins: Record<string, number | null>;
   dsMetaVersion: number | null;
   theme: ThemeContent | null;
   renderable: boolean;
@@ -52,7 +58,8 @@ async function loadPrototype(id: string, rev: number | undefined, version: numbe
   const base = version !== undefined ? await getPrototypeVersion(id, version, signal)
     : rev !== undefined ? await getPrototypeRevisionFull(id, rev, signal)
     : await getPrototypeDraft(id, signal);
-  if (base.renderable === false) return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId ?? "archived", componentManifestHash: base.componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components: [], dsMetaVersion: base.designSystemMetaVersion ?? null, theme: null, renderable: false };
+  const themePins = (base as { designSystemMetaVersions?: Record<string, number | null> }).designSystemMetaVersions ?? {};
+  if (base.renderable === false) return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId ?? "archived", componentManifestHash: base.componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components: [], themePins, dsMetaVersion: base.designSystemMetaVersion ?? null, theme: null, renderable: false };
   const dsMetaVersion = base.designSystemMetaVersion ?? null;
   if(!base.prototypeInstanceId) throw new Error("Prototype response is missing prototypeInstanceId");
   const theme = await loadTheme(base.doc.designSystem, dsMetaVersion, signal);
@@ -61,7 +68,7 @@ async function loadPrototype(id: string, rev: number | undefined, version: numbe
   // строки из bootstrap — пины кадра описываются id/name/version/bundleUrl/bundleHash.
   const components = frozen?.components?.map(({ id, name, version, bundleUrl, bundleHash }) => ({ id, name, version, bundleUrl, bundleHash })) ?? base.components;
   const componentManifestHash = frozen?.componentManifestHash ?? base.componentManifestHash;
-  return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId, componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components, dsMetaVersion, theme, renderable: true };
+  return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId, componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components, themePins, dsMetaVersion, theme, renderable: true };
 }
 
 function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPrototype; custom?: CustomPlayerRuntime; screenId: string }) {
@@ -79,11 +86,17 @@ function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPr
   const screenIds = useMemo(() => new Set(doc.screens.map((s) => s.id)), [doc]);
 
   usePublishError(screen ? null : `Screen not found: ${screenId}`);
+  // Резолвнутая пара `(designSystem, dsMetaVersion)` **снимаемого экрана** (multi-surface D14):
+  // ДС берётся от поверхности экрана, версия темы — из карты пинов ревизии. Одно-поверхностный
+  // документ даёт `doc.designSystem` и тот же скаляр, что и раньше.
+  const screenDesignSystem = surfaceDesignSystem(surfaceOf(doc, screenId), doc) ?? doc.designSystem;
+  const screenMetaVersion = Object.hasOwn(loaded.themePins, screenDesignSystem) ? loaded.themePins[screenDesignSystem]! : loaded.dsMetaVersion;
   usePublishOnSettle(ref, (): CaptureReady => ({
     status: "ready", kind: "prototype", revision: loaded.rev,
     prototypeInstanceId: loaded.prototypeInstanceId,
     componentManifestHash: loaded.componentManifestHash, builtinCatalogHash: loaded.builtinCatalogHash,
-    dsMetaVersion: loaded.dsMetaVersion, rendererBuild: bootstrapRendererBuild(),
+    designSystem: screenDesignSystem ?? null,
+    dsMetaVersion: screenMetaVersion ?? null, rendererBuild: bootstrapRendererBuild(),
   }));
 
   if (!screen || !tree) return <div ref={ref} data-capture-error="screen-not-found" />;

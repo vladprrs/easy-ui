@@ -15,6 +15,44 @@ import type { Principal } from "../auth";
 import { prototypeAccess, requirePrototypeRead } from "../authorization";
 import { classifyRevision, type RevisionClassification } from "../classify";
 import { isServicePrototypeDocKind } from "../../src/prototype/architectureLints";
+import { docSurfaces, primarySurface, surfaceDesignSystem, type SurfaceAwareDoc } from "../../src/prototype/surfaces";
+
+/**
+ * ДС primary-поверхности (D3: у документа без `surfaces` — просто `doc.designSystem`).
+ * Значение колонки `prototype_revisions.design_system_meta_version` и ключ read-правила
+ * theme-pins — всегда про эту систему.
+ */
+export const primaryDesignSystem = (doc: PrototypeDoc): string =>
+  surfaceDesignSystem(primarySurface(doc as SurfaceAwareDoc), doc as SurfaceAwareDoc) ?? doc.designSystem;
+
+/**
+ * Все ДС документа (план multi-surface-flows §4). Порядок — primary первой, дальше по
+ * порядку поверхностей; дубликаты снимаются. Документ без `surfaces` даёт ровно
+ * `[doc.designSystem]`, поэтому все производные (пины, хэш, allowlist) байт-в-байт как раньше.
+ */
+export function docDesignSystems(doc: PrototypeDoc): string[] {
+  const seen = new Set<string>();
+  for (const surface of docSurfaces(doc as SurfaceAwareDoc)) {
+    const system = surfaceDesignSystem(surface, doc as SurfaceAwareDoc) ?? doc.designSystem;
+    seen.add(system);
+  }
+  return [...seen];
+}
+
+/**
+ * Карта пинов темы ревизии: `дизайн-система → версия темы`.
+ *
+ * **Read-правило (план §4, без бэкфила by design)**: если строк в
+ * `prototype_revision_theme_pins` нет (ревизия записана до миграции v24), карта — это
+ * `{ primaryDesignSystem(doc): design_system_meta_version }`, то есть ровно сегодняшний
+ * скаляр. Колонка остаётся primary-значением и после миграции.
+ */
+export function themePinsOf(db: Database, id: string, rev: number, doc: PrototypeDoc, columnValue: number | null): Record<string, number | null> {
+  const rows = db.query("SELECT design_system, meta_version FROM prototype_revision_theme_pins WHERE prototype_id=? AND rev=? ORDER BY design_system")
+    .all(id, rev) as { design_system: string; meta_version: number | null }[];
+  if (!rows.length) return { [primaryDesignSystem(doc)]: columnValue };
+  return Object.fromEntries(rows.map((row) => [row.design_system, row.meta_version]));
+}
 
 // `status` — статус публикации закреплённой версии (волна 3): включает бейдж «устарел»
 // в дереве компонентов редактора. Поле аддитивное, старые клиенты его игнорируют.
@@ -165,16 +203,36 @@ export class PrototypeRepo {
   }
   // Pins the latest design-system theme version onto the revision (diagnostic, like builtinCatalogHash).
   // `metaVersion` is undefined for fresh saves (resolve latest now) and explicit for restore (copy source pin).
-  private insertRevision(id:string, rev:number, doc:PrototypeDoc, message:string|null, createdAt:string, metaVersion?:number|null, figmaJson:string|null=null): void {
-    const pin=metaVersion===undefined?latestDesignSystemMetaVersion(this.db,doc.designSystem):metaVersion;
-    const system=requireActiveDesignSystem(this.db,doc.designSystem,["designSystem"]);
-    const pinnedTheme=pin===null?null:getDesignSystemVersion(this.db,doc.designSystem,pin);
-    if(pin!==null&&!pinnedTheme) throw new ApiError(422,"validation_failed","Pinned design-system theme version does not exist",{issues:[{path:["designSystem"],message:`Unknown theme version ${pin} for ${doc.designSystem}`}]});
-    // Резолвер spacing-шкалы — свойство пиннутой версии темы (миграция v23, план P6.3б).
-    const resolvedSpaceScale=resolveSpacingScale(doc.designSystem,pinnedTheme?.tokens??{},pinnedTheme?.spacingResolver);
+  private insertRevision(id:string, rev:number, doc:PrototypeDoc, message:string|null, createdAt:string, metaVersion?:number|null, figmaJson:string|null=null, themePins?:Record<string,number|null>): void {
+    // Пин каждой ДС документа (план §4). `themePins` задан только restore'ом — он копирует
+    // пины исходной ревизии; на свежем сохранении каждая ДС резолвит свою последнюю версию.
+    const systems=docDesignSystems(doc);
+    const primary=primaryDesignSystem(doc);
+    const pins=new Map<string,number|null>();
+    const hashes:[string,string][]=[];
+    let primaryHash:string|null=null;
+    for(const systemId of systems) {
+      const explicit=themePins&&Object.hasOwn(themePins,systemId)?themePins[systemId]!:(systemId===primary?metaVersion:undefined);
+      const pin=explicit===undefined?latestDesignSystemMetaVersion(this.db,systemId):explicit;
+      const system=requireActiveDesignSystem(this.db,systemId,["designSystem"]);
+      const pinnedTheme=pin===null?null:getDesignSystemVersion(this.db,systemId,pin);
+      if(pin!==null&&!pinnedTheme) throw new ApiError(422,"validation_failed","Pinned design-system theme version does not exist",{issues:[{path:["designSystem"],message:`Unknown theme version ${pin} for ${systemId}`}]});
+      // Резолвер spacing-шкалы — свойство пиннутой версии темы (миграция v23, план P6.3б).
+      const resolvedSpaceScale=resolveSpacingScale(systemId,pinnedTheme?.tokens??{},pinnedTheme?.spacingResolver);
+      const hash=builtinCatalogHashFor(systemId,system.definitions,resolvedSpaceScale);
+      if(systemId===primary) primaryHash=hash;
+      pins.set(systemId,pin);
+      hashes.push([systemId,hash]);
+    }
+    // Одна ДС — байт-в-байт сегодняшнее значение. Две и больше — детерминированный хэш по
+    // отсортированному множеству `(ds, metaVersion, per-ds hash)` (план §4, «производные пина»).
+    const builtinHash=hashes.length===1?primaryHash!
+      :new Bun.CryptoHasher("sha256").update(JSON.stringify([...hashes].sort(([a],[b])=>a.localeCompare(b)).map(([systemId,hash])=>[systemId,pins.get(systemId)??null,hash]))).digest("hex");
     this.db.query(`INSERT INTO prototype_revisions
       (prototype_id,rev,doc,builtin_catalog_hash,design_system_meta_version,figma_json,message,created_at) VALUES (?,?,?,?,?,?,?,?)`)
-      .run(id,rev,JSON.stringify(doc),builtinCatalogHashFor(doc.designSystem,system.definitions,resolvedSpaceScale),pin,figmaJson,message,createdAt);
+      .run(id,rev,JSON.stringify(doc),builtinHash,pins.get(primary)??null,figmaJson,message,createdAt);
+    const insertPin=this.db.query("INSERT INTO prototype_revision_theme_pins (prototype_id,rev,design_system,meta_version) VALUES (?,?,?,?)");
+    for(const [systemId,pin] of pins) insertPin.run(id,rev,systemId,pin);
   }
   private insertPins(id:string,rev:number,pins:ComponentPin[]):void {
     for(const pin of pins) {
@@ -242,13 +300,18 @@ export class PrototypeRepo {
       const source=this.db.query("SELECT doc,design_system_meta_version,figma_json FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,sourceRev) as {doc:string;design_system_meta_version:number|null;figma_json:string|null}|null;
       if (!source) throw new ApiError(404,"revision_not_found","Prototype revision not found");
       const doc=parseStoredPrototypeDoc(source.doc,id,sourceRev); const rev=head.head_rev+1; const at=now();
+      // Принадлежность пина — **множеству** ДС документа (план §4): у мульти-поверхностного
+      // дока компоненты второй поверхности законно живут в её собственной системе.
+      const systems=docDesignSystems(doc);
       const mismatched=this.db.query(`SELECT c.name FROM prototype_revision_components prc
         JOIN components c ON c.id=prc.component_id
         JOIN component_publishes cp ON cp.component_id=prc.component_id AND cp.version=prc.component_version
         JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
-        WHERE prc.prototype_id=? AND prc.rev=? AND cr.design_system<>? LIMIT 1`).get(id,sourceRev,doc.designSystem) as {name:string}|null;
+        WHERE prc.prototype_id=? AND prc.rev=? AND cr.design_system NOT IN (${systems.map(()=>"?").join(",")}) LIMIT 1`).get(id,sourceRev,...systems) as {name:string}|null;
       if(mismatched) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["screens"],message:`Component pin belongs to a different design system: ${mismatched.name}`}]});
-      this.insertRevision(id,rev,doc,`Restore revision ${sourceRev}`,at,source.design_system_meta_version,source.figma_json);
+      // Пины темы копируются из исходной ревизии (read-правило покрывает до-миграционные строки).
+      this.insertRevision(id,rev,doc,`Restore revision ${sourceRev}`,at,source.design_system_meta_version,source.figma_json,
+        themePinsOf(this.db,id,sourceRev,doc,source.design_system_meta_version));
       this.db.query(`INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version)
         SELECT prototype_id,?,component_id,component_version FROM prototype_revision_components WHERE prototype_id=? AND rev=?`).run(rev,id,sourceRev);
       this.db.query(`INSERT INTO prototype_revision_assets (prototype_id,rev,asset_id)
@@ -267,14 +330,17 @@ export class PrototypeRepo {
       // из неё нечего — версия обязана быть воспроизводимой (P2.2).
       if(head.track===HEAD_TRACK) throw headTrackingError("publish");
       const doc=parseStoredPrototypeDoc((this.db.query("SELECT doc FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,head.head_rev) as {doc:string}).doc,id,head.head_rev);
-      const definitions=requireActiveDesignSystem(this.db,doc.designSystem,["designSystem"]).definitions;
+      // Определения — объединение по всем ДС документа: тип второй поверхности резолвится
+      // её системой (принадлежность конкретной поверхности проверяет валидация save-пути).
+      const systems=docDesignSystems(doc);
+      const definitions=Object.assign({},...systems.map(systemId=>requireActiveDesignSystem(this.db,systemId,["designSystem"]).definitions)) as Record<string,unknown>;
       const customTypes=new Set(doc.screens.flatMap(s=>Object.values(s.spec.elements).map(e=>e.type)));
       const pinRows=this.db.query(`SELECT c.name,cr.design_system designSystem FROM prototype_revision_components p
         JOIN components c ON c.id=p.component_id
         JOIN component_publishes cp ON cp.component_id=p.component_id AND cp.version=p.component_version
         JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
         WHERE p.prototype_id=? AND p.rev=?`).all(id,head.head_rev) as {name:string;designSystem:string}[];
-      const mismatched=pinRows.find(pin=>pin.designSystem!==doc.designSystem);
+      const mismatched=pinRows.find(pin=>!systems.includes(pin.designSystem));
       if(mismatched) throw new ApiError(422,"validation_failed","Prototype document is invalid",{issues:[{path:["screens"],message:`Component pin belongs to a different design system: ${mismatched.name}`}]});
       const pinned=new Set(pinRows.map(x=>x.name));
       for(const type of customTypes) if(!Object.hasOwn(definitions,type)&&!hostPrimitiveNames.has(type)&&!pinned.has(type)) throw new ApiError(422,"validation_failed","Prototype references an unpublished custom component",{issues:[{path:["screens"],message:`Unpublished custom component: ${type}`}]});
@@ -377,12 +443,12 @@ export class PrototypeRepo {
    * `null` для обычных (pinned) доков, где пины иммутабельны и «момента резолва» нет.
    */
   private trackFields(track:string) { return {track, resolvedAt: track===HEAD_TRACK?now():null}; }
-  draft(id:string,principal?:Principal) { const r=this.row(id); const access=principal?requirePrototypeRead(this.db,id,principal):{owner:true}; const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev,r.track); const classification=this.classifyRevision(id,r.head_rev); return {...this.trackFields(r.track),doc:parseStoredPrototypeDoc(x.doc,id,x.rev),rev:x.rev,prototypeInstanceId:r.instance_id,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,r.head_rev),assets:this.assets(id,r.head_rev),designSystemMetaVersion:x.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(access.owner?{figma:parseFigmaStored(x.figma_json)}:{})}; }
+  draft(id:string,principal?:Principal) { const r=this.row(id); const access=principal?requirePrototypeRead(this.db,id,principal):{owner:true}; const x=this.revisionRow(id,r.head_rev); const components=this.pins(id,r.head_rev,r.track); const classification=this.classifyRevision(id,r.head_rev); const doc=parseStoredPrototypeDoc(x.doc,id,x.rev); return {...this.trackFields(r.track),doc,designSystemMetaVersions:themePinsOf(this.db,id,x.rev,doc,x.design_system_meta_version),rev:x.rev,prototypeInstanceId:r.instance_id,builtinCatalogHash:x.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,r.head_rev),assets:this.assets(id,r.head_rev),designSystemMetaVersion:x.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(access.owner?{figma:parseFigmaStored(x.figma_json)}:{})}; }
   revisions(id:string,limit:number,before?:number) { this.row(id); const sql=`SELECT rev,message,created_at FROM prototype_revisions WHERE prototype_id=? ${before!==undefined?"AND rev < ?":""} ORDER BY rev DESC LIMIT ?`; const rows=(before!==undefined?this.db.query(sql).all(id,before,limit):this.db.query(sql).all(id,limit)) as {rev:number;message:string|null;created_at:string}[]; return rows.map(r=>({rev:r.rev,message:r.message,createdAt:r.created_at})); }
   private revisionRow(id:string,rev:number): RevisionRow { const r=this.db.query("SELECT rev,doc,builtin_catalog_hash,design_system_meta_version,figma_json,message,created_at FROM prototype_revisions WHERE prototype_id=? AND rev=?").get(id,rev) as RevisionRow|null; if(!r) throw new ApiError(404,"revision_not_found","Prototype revision not found"); return r; }
-  revision(id:string,rev:number,principal?:Principal) { const proto=this.row(id); const owner=!principal||prototypeAccess(this.db,id,principal).owner; const r=this.revisionRow(id,rev); const components=this.pins(id,rev,proto.track); const classification=this.classifyRevision(id,rev); return {...this.trackFields(proto.track),rev:r.rev,prototypeInstanceId:proto.instance_id,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,rev),assets:this.assets(id,rev),designSystemMetaVersion:r.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(owner?{figma:parseFigmaStored(r.figma_json)}:{}),message:r.message,createdAt:r.created_at}; }
+  revision(id:string,rev:number,principal?:Principal) { const proto=this.row(id); const owner=!principal||prototypeAccess(this.db,id,principal).owner; const r=this.revisionRow(id,rev); const components=this.pins(id,rev,proto.track); const classification=this.classifyRevision(id,rev); const doc=parseStoredPrototypeDoc(r.doc,id,r.rev); return {...this.trackFields(proto.track),rev:r.rev,prototypeInstanceId:proto.instance_id,doc,designSystemMetaVersions:themePinsOf(this.db,id,r.rev,doc,r.design_system_meta_version),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,rev),assets:this.assets(id,rev),designSystemMetaVersion:r.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(owner?{figma:parseFigmaStored(r.figma_json)}:{}),message:r.message,createdAt:r.created_at}; }
   versions(id:string) { this.row(id); return (this.db.query("SELECT version,rev,published_at FROM prototype_publishes WHERE prototype_id=? ORDER BY version").all(id) as {version:number;rev:number;published_at:string}[]).map(r=>{const classification=this.classifyRevision(id,r.rev);return {version:r.version,rev:r.rev,publishedAt:r.published_at,renderable:classification.renderable,renderError:classification.error};}); }
-  version(id:string,version:number,principal?:Principal) { const proto=this.row(id); const owner=!principal||requirePrototypeRead(this.db,id,principal).owner; const p=this.db.query("SELECT rev,published_at FROM prototype_publishes WHERE prototype_id=? AND version=?").get(id,version) as {rev:number;published_at:string}|null; if(!p) throw new ApiError(404,"version_not_found","Prototype version not found"); const r=this.revisionRow(id,p.rev); const components=this.pins(id,p.rev,proto.track); const classification=this.classifyRevision(id,p.rev); return {...this.trackFields(proto.track),version,rev:p.rev,prototypeInstanceId:proto.instance_id,doc:parseStoredPrototypeDoc(r.doc,id,r.rev),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,p.rev),assets:this.assets(id,p.rev),designSystemMetaVersion:r.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(owner?{figma:parseFigmaStored(r.figma_json)}:{}),publishedAt:p.published_at}; }
+  version(id:string,version:number,principal?:Principal) { const proto=this.row(id); const owner=!principal||requirePrototypeRead(this.db,id,principal).owner; const p=this.db.query("SELECT rev,published_at FROM prototype_publishes WHERE prototype_id=? AND version=?").get(id,version) as {rev:number;published_at:string}|null; if(!p) throw new ApiError(404,"version_not_found","Prototype version not found"); const r=this.revisionRow(id,p.rev); const components=this.pins(id,p.rev,proto.track); const classification=this.classifyRevision(id,p.rev); const doc=parseStoredPrototypeDoc(r.doc,id,r.rev); return {...this.trackFields(proto.track),version,rev:p.rev,prototypeInstanceId:proto.instance_id,doc,designSystemMetaVersions:themePinsOf(this.db,id,r.rev,doc,r.design_system_meta_version),builtinCatalogHash:r.builtin_catalog_hash,componentManifestHash:this.manifestHash(components),components,compositions:this.compositions(id,p.rev),assets:this.assets(id,p.rev),designSystemMetaVersion:r.design_system_meta_version,renderable:classification.renderable,renderError:classification.error,...(owner?{figma:parseFigmaStored(r.figma_json)}:{}),publishedAt:p.published_at}; }
   setStatus(id:string,status:"private"|"published"|"archived") {
     const row=this.row(id); if(row.status===status) throw new ApiError(422,"invalid_transition",`Cannot transition ${row.status} → ${status}`);
     const allowed:Record<PrototypeRow["status"],PrototypeRow["status"][]>={private:["published","archived"],published:["private","archived"],archived:["private"]};

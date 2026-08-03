@@ -27,6 +27,8 @@ function v14():Database {
   for(const table of ["maintenance_locks","atomic_policy","catalog_migration_staging","catalog_migration_runs","catalog_replacements"] as const) db.run(`DROP TABLE IF EXISTS ${table}`);
   // v23 добавила колонку резолвера spacing-шкалы на версии тем — снимаем по той же причине.
   db.run("ALTER TABLE design_system_versions DROP COLUMN spacing_resolver");
+  // v24 завела таблицу пинов темы (мульти-поверхностные документы) — тот же приём.
+  db.run("DROP TABLE IF EXISTS prototype_revision_theme_pins");
   db.run("PRAGMA user_version=14");
   return db;
 }

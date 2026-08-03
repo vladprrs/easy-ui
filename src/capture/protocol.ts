@@ -13,6 +13,13 @@ export interface PrototypeExpected {
   rev: number;
   componentManifestHash: string;
   builtinCatalogHash: string;
+  /**
+   * Дизайн-система **снимаемого экрана** (план multi-surface-flows, D14): у мульти-поверхностного
+   * документа экраны разных поверхностей рендерятся разными ДС, и без явной системы дрейф темы
+   * второй ДС не детектировался бы handshake'ом. Для одно-поверхностного дока — `doc.designSystem`.
+   */
+  designSystem: string | null;
+  /** Пиннутая версия темы **этой** ДС (карта `prototype_revision_theme_pins`, миграция v24). */
   dsMetaVersion: number | null;
   rendererBuild: string | null;
 }
@@ -54,6 +61,8 @@ export interface PrototypeReady {
   revision: number;
   componentManifestHash: string;
   builtinCatalogHash: string;
+  /** Резолвнутая пара `(designSystem, dsMetaVersion)` снимаемого экрана — см. `PrototypeExpected`. */
+  designSystem: string | null;
   dsMetaVersion: number | null;
   rendererBuild: string | null;
 }

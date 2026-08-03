@@ -7,6 +7,7 @@ import { inputPrototypeDocSchema, type PrototypeDoc } from "../src/prototype/sch
 import { compositionDocSchema, collectCompositionRefs, type CompositionDoc } from "../src/prototype/composition";
 import { COMPOSITION_TYPE } from "../src/catalog/hostPrimitives/composition.definition";
 import { hostPrimitiveNames } from "../src/catalog/hostPrimitives/definitions";
+import { docSurfaces, surfaceDesignSystem, surfaceOf } from "../src/prototype/surfaces";
 import { catalogRevision, type CatalogRevisionSource } from "./catalogRevision";
 import {
   hashCatalogMigrationPlan,
@@ -200,6 +201,8 @@ export function currentDataFingerprint(db: Database): string {
     componentPins: db.query("SELECT prototype_id,rev,component_id,component_version FROM prototype_revision_components ORDER BY prototype_id,rev,component_id").all(),
     compositionPins: db.query("SELECT prototype_id,rev,composition_id,composition_version FROM prototype_revision_compositions ORDER BY prototype_id,rev,composition_id").all(),
     prototypeAssets: db.query("SELECT prototype_id,rev,asset_id FROM prototype_revision_assets ORDER BY prototype_id,rev,asset_id").all(),
+    // Пины темы (миграция v24): мутабельное состояние ревизий, влияющее на подготовленный план.
+    prototypeThemePins: db.query("SELECT prototype_id,rev,design_system,meta_version FROM prototype_revision_theme_pins ORDER BY prototype_id,rev,design_system").all(),
   };
   return sha256(canonicalStringify(rows));
 }
@@ -865,16 +868,22 @@ function pinsForPrototype(db: Database, document: PrototypeDoc): MigrationPins {
   const resolved = resolveCompositionPins(db, compositions, document.designSystem);
   if (resolved.missing.length) throw new ApiError(422, "validation_failed", "Migrated prototype references an unavailable composition", { issues: resolved.missing.map((entry) => ({ path: ["screens"], message: entry.reason })) });
   const componentPins = new Map<string, { id: string; version: number }>(resolved.componentPins.map((pin) => [pin.id, { id: pin.id, version: pin.version }]));
-  const builtin = requireActiveDesignSystem(db, document.designSystem, ["designSystem"]).definitions;
-  const types = new Set(document.screens.flatMap((screen) => Object.values(screen.spec.elements).map((element) => element.type)));
-  for (const type of types) {
-    if (hostPrimitiveNames.has(type) || Object.hasOwn(builtin, type)) continue;
-    const row = db.query(`SELECT c.id,cp.version
-      FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.status='active'
-      JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
-      WHERE c.name=? AND c.deleted_at IS NULL AND cr.design_system=? ORDER BY cp.version DESC LIMIT 1`).get(type, document.designSystem) as { id: string; version: number } | null;
-    if (!row) throw new ApiError(422, "validation_failed", `Migrated prototype references an unpublished component: ${type}`, { issues: [{ path: ["screens"], message: `Unknown or unpublished component type in design system '${document.designSystem}': ${type}` }] });
-    componentPins.set(row.id, { id: row.id, version: row.version });
+  // Мульти-поверхностный резолв (план §4, R3-B2): тип экрана резолвится в ДС его поверхности.
+  // Документ без `surfaces` даёт ровно одну группу — прежнее поведение байт-в-байт.
+  for (const surface of docSurfaces(document)) {
+    const designSystem = surfaceDesignSystem(surface, document) ?? document.designSystem;
+    const builtin = requireActiveDesignSystem(db, designSystem, ["designSystem"]).definitions;
+    const screens = document.screens.filter((screen) => surfaceOf(document, screen.id).id === surface.id);
+    const types = new Set(screens.flatMap((screen) => Object.values(screen.spec.elements).map((element) => element.type)));
+    for (const type of types) {
+      if (hostPrimitiveNames.has(type) || Object.hasOwn(builtin, type)) continue;
+      const row = db.query(`SELECT c.id,cp.version
+        FROM components c JOIN component_publishes cp ON cp.component_id=c.id AND cp.status='active'
+        JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
+        WHERE c.name=? AND c.deleted_at IS NULL AND cr.design_system=? ORDER BY cp.version DESC LIMIT 1`).get(type, designSystem) as { id: string; version: number } | null;
+      if (!row) throw new ApiError(422, "validation_failed", `Migrated prototype references an unpublished component: ${type}`, { issues: [{ path: ["screens"], message: `Unknown or unpublished component type in design system '${designSystem}': ${type}` }] });
+      componentPins.set(row.id, { id: row.id, version: row.version });
+    }
   }
   return {
     components: [...componentPins.values()].sort((left, right) => left.id.localeCompare(right.id)),
@@ -912,6 +921,9 @@ function rewritePrototypeHeads(db: Database, plan: CatalogMigrationPlan, runId: 
     for (const pin of pins.components) db.query("INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version) VALUES (?,?,?,?)").run(row.id, nextRev, pin.id, pin.version);
     for (const pin of pins.compositions) db.query("INSERT INTO prototype_revision_compositions (prototype_id,rev,composition_id,composition_version) VALUES (?,?,?,?)").run(row.id, nextRev, pin.id, pin.version);
     db.query("INSERT INTO prototype_revision_assets (prototype_id,rev,asset_id) SELECT prototype_id,?,asset_id FROM prototype_revision_assets WHERE prototype_id=? AND rev=?").run(nextRev, row.id, row.head_rev);
+    // Пины темы копируются как есть (миграция v24): каталог-миграция меняет компоненты, не темы.
+    // Отсутствие строк у исходной ревизии — легитимно (read-правило без бэкфила).
+    db.query("INSERT INTO prototype_revision_theme_pins (prototype_id,rev,design_system,meta_version) SELECT prototype_id,?,design_system,meta_version FROM prototype_revision_theme_pins WHERE prototype_id=? AND rev=?").run(nextRev, row.id, row.head_rev);
     db.query(`UPDATE prototypes SET name=?,description=?,device=?,screen_count=?,head_rev=?,design_system=?,updated_at=? WHERE id=?`)
       .run(transformed.name, transformed.description ?? null, transformed.device, transformed.screens.length, nextRev, transformed.designSystem, at, row.id);
     const sourcePublish = db.query("SELECT version FROM prototype_publishes WHERE prototype_id=? AND rev=?").get(row.id, row.head_rev) as { version: number } | null;

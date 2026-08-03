@@ -12,7 +12,8 @@ import { ApiError } from "../http";
 import { ensureDraftCandidate } from "../components/validate";
 import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
-import { PrototypeRepo } from "../repos/prototypes";
+import { docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
+import { surfaceDesignSystem, surfaceOf } from "../../src/prototype/surfaces";
 import { buildStaticAllowedUrls, rendererBuildFrom } from "./allowedUrls";
 import { classifyCaptureErrors } from "./noise";
 import { CaptureSessionStore, JOB_DEADLINE_MS } from "./sessions";
@@ -250,24 +251,28 @@ export class ScreenshotService {
     const snap = repo.screenRenderStatus(id, screenId, { rev: opts.rev, version: opts.version });
     const full = repo.revision(id, snap.rev);
     const componentPins = full.components.map((p) => ({ id: p.id, version: p.version, bundleHash: p.bundleHash }));
+    // Пины темы — карта по всем ДС документа (миграция v24; read-правило покрывает старые ревизии).
+    const themePins = themePinsOf(this.deps.db, id, snap.rev, full.doc, full.designSystemMetaVersion ?? null);
+    // ДС **снимаемого экрана**: у мульти-поверхностного дока это ДС его поверхности (D14).
+    const screenDesignSystem = surfaceDesignSystem(surfaceOf(full.doc, screenId), full.doc) ?? full.doc.designSystem;
+    const screenMetaVersion = themePins[screenDesignSystem] ?? null;
     const resolvedSpaceScale = opts.probe ? (() => {
-      const designSystem = (full.doc as { designSystem: string }).designSystem;
-      const themeContent = full.designSystemMetaVersion == null
-        ? getLatestDesignSystemContent(this.deps.db, designSystem)
-        : getDesignSystemVersion(this.deps.db, designSystem, full.designSystemMetaVersion);
+      const themeContent = screenMetaVersion == null
+        ? getLatestDesignSystemContent(this.deps.db, screenDesignSystem)
+        : getDesignSystemVersion(this.deps.db, screenDesignSystem, screenMetaVersion);
       // Резолвер — свойство пиннутой версии темы (миграция v23): старые версии остаются на legacy-пути.
-      return resolveSpacingScale(designSystem, themeContent?.tokens ?? {}, themeContent?.spacingResolver);
+      return resolveSpacingScale(screenDesignSystem, themeContent?.tokens ?? {}, themeContent?.spacingResolver);
     })() : undefined;
     const geometryRoleKeys = opts.probe === "geometry" ? geometryRoleKeysOf(full.doc, screenId) : undefined;
     const theme = opts.theme === "dark" ? "dark" : "light";
-    const expected: CaptureExpected = { kind: "prototype", prototypeInstanceId:full.prototypeInstanceId, rev: snap.rev, componentManifestHash: full.componentManifestHash, builtinCatalogHash: full.builtinCatalogHash, dsMetaVersion: full.designSystemMetaVersion ?? null, rendererBuild: this.rendererBuild };
+    const expected: CaptureExpected = { kind: "prototype", prototypeInstanceId:full.prototypeInstanceId, rev: snap.rev, componentManifestHash: full.componentManifestHash, builtinCatalogHash: full.builtinCatalogHash, designSystem: screenDesignSystem ?? null, dsMetaVersion: screenMetaVersion, rendererBuild: this.rendererBuild };
     const allowedUrls = this.prototypeAllowedUrls(
       id,
       screenId,
       full.components,
       full.assets.map((a) => a.id),
-      (full.doc as { designSystem?: string }).designSystem,
-      full.designSystemMetaVersion ?? null,
+      // Allowlist — объединение тем всех ДС документа с их пиннутыми версиями (D14).
+      docDesignSystems(full.doc).map((designSystem) => ({ designSystem, metaVersion: themePins[designSystem] ?? null })),
       opts.version !== undefined ? `/api/prototypes/${id}/versions/${opts.version}` : `/api/prototypes/${id}/revisions/${snap.rev}`,
     );
     const query = new URLSearchParams();
@@ -350,18 +355,20 @@ export class ScreenshotService {
     screenId: string,
     pins: { id: string; version: number }[],
     docAssetIds: string[],
-    designSystem?: string,
-    designSystemMetaVersion?: number | null,
+    // Все ДС документа с их пиннутыми версиями темы (multi-surface D14): одна запись у
+    // обычного дока — тот же набор URL, что и раньше.
+    themes: { designSystem?: string; metaVersion: number | null }[],
     snapshotUrl?: string,
   ): string[] {
     const set = new Set<string>();
     set.add(`/capture/${id}/s/${screenId}`);
-    if (designSystem) {
+    for (const { designSystem, metaVersion } of themes) {
+      if (!designSystem) continue;
       set.add(`/api/design-systems/${designSystem}`);
       set.add(`/api/design-systems/${designSystem}/versions/`);
-      const content = designSystemMetaVersion == null
+      const content = metaVersion == null
         ? getLatestDesignSystemContent(this.deps.db, designSystem)
-        : getDesignSystemVersion(this.deps.db, designSystem, designSystemMetaVersion);
+        : getDesignSystemVersion(this.deps.db, designSystem, metaVersion);
       for (const assetId of themeAssetIds(content)) set.add(`/api/assets/${assetId}`);
     }
     // enqueuePrototype always freezes the selector into the capture URL, so the shell

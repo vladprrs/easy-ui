@@ -6,7 +6,7 @@ import { EASY_UI_RUNTIME_V3_FILE } from "../shims/abi-v3";
 import { EASY_UI_RUNTIME_V4_FILE } from "../shims/abi-v4";
 import { getDesignSystemVersion } from "../designSystems";
 import { ApiError } from "../http";
-import { PrototypeRepo } from "../repos/prototypes";
+import { docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
 import { buildShareStaticAllowedUrls } from "../screenshot/allowedUrls";
 import { matchAllowed } from "../screenshot/sessions";
 
@@ -123,10 +123,15 @@ export class ShareRepo {
       if (abi === 4) resources.add(`/api/shims/v4/${EASY_UI_RUNTIME_V4_FILE}`);
     }
 
-    const metaVersion = published.designSystemMetaVersion;
-    if (metaVersion != null) {
-      resources.add(`/api/design-systems/${published.doc.designSystem}/versions/${metaVersion}`);
-      for (const id of themeAssetIds(getDesignSystemVersion(this.db, published.doc.designSystem, metaVersion))) assetIds.add(id);
+    // Ресурсы тем **всех** ДС документа с их пиннутыми версиями (план §4, R3-B4/R2-B3):
+    // у мульти-поверхностного дока вторая поверхность рендерится своей темой и своими ассетами.
+    // Read-правило карты покрывает ревизии, записанные до миграции v24 (без строк — колонка).
+    const themePins = themePinsOf(this.db, prototypeId, published.rev, published.doc, published.designSystemMetaVersion);
+    for (const designSystem of docDesignSystems(published.doc)) {
+      const metaVersion = themePins[designSystem] ?? null;
+      if (metaVersion == null) continue;
+      resources.add(`/api/design-systems/${designSystem}/versions/${metaVersion}`);
+      for (const id of themeAssetIds(getDesignSystemVersion(this.db, designSystem, metaVersion))) assetIds.add(id);
     }
     for (const id of assetIds) resources.add(`/api/assets/${id}`);
 

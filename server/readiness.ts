@@ -3,7 +3,7 @@ import { ApiError } from "./http";
 import { parseStoredPrototypeDoc, PrototypeRepo } from "./repos/prototypes";
 import { classifyRevision } from "./classify";
 import { ScenarioRepo } from "./repos/scenarios";
-import { collectAssetIds, snapshotDefinitions } from "./validation";
+import { collectAssetIds, snapshotDefinitions, themesForDoc } from "./validation";
 import { validatePrototype } from "../src/prototype/validate";
 import { isServicePrototypeDocKind } from "../src/prototype/architectureLints";
 import type { ArchitectureExemptedIssue, ValidationIssue } from "../src/prototype/types";
@@ -167,15 +167,19 @@ export async function computeReadiness(db: Database, prototypeId: string, option
   // Определения берутся тем же путём, что и save (последняя active-публикация каждого типа).
   // Ошибка резолва — не исключение отчёта: она становится fail гейта `schema`.
   let definitions: Record<string, ComponentDefinition> | null = null;
+  // Мульти-поверхностный резолвер — тот же, что у валидации save-пути (план §4, «Readiness»).
+  let definitionsBySurface: Record<string, Record<string, ComponentDefinition>> | undefined;
   let snapshotError: { code: string; message: string } | null = null;
   try {
-    definitions = (await snapshotDefinitions(db, doc, options.dataDir)).definitions;
+    const snapshot = await snapshotDefinitions(db, doc, options.dataDir);
+    definitions = snapshot.definitions;
+    definitionsBySurface = snapshot.definitionsBySurface;
   } catch (error) {
     snapshotError = error instanceof ApiError ? { code: error.code, message: error.message } : { code: "definitions_unavailable", message: error instanceof Error ? error.message : String(error) };
   }
 
   const validation = definitions
-    ? validatePrototype(doc, { definitions, kind: row.kind ?? undefined })
+    ? validatePrototype(doc, { definitions, kind: row.kind ?? undefined, ...(definitionsBySurface ? { definitionsBySurface } : {}), themes: themesForDoc(db, doc) })
     : null;
   const profile: ReadinessProfile = isServicePrototypeDocKind(row.kind ?? undefined) ? "service" : "product";
 

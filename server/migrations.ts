@@ -618,6 +618,39 @@ const migrations = [
     // Откат образа безопасен: старый код колонку не читает и резолвит всё legacy-путём.
     db.run("ALTER TABLE design_system_versions ADD COLUMN spacing_resolver INTEGER NOT NULL DEFAULT 1");
   },
+  (db: Database) => {
+    // v24: мульти-поверхностные документы (план 2026-08-02 multi-surface-flows, W3).
+    //
+    // 1. Пин темы становится картой «дизайн-система → версия темы». Колонка
+    //    `prototype_revisions.design_system_meta_version` **остаётся** значением primary-ДС
+    //    (совместимость: её читают старый образ, диффы и capture-handshake). Бэкфила нет
+    //    by design: ревизия без строк читается как `{primary: колонка}` — см. `themePinsOf`
+    //    в `server/repos/prototypes.ts` и `docs/server-api.md`.
+    // 2. Триггеры ретайрнутых ДС на `prototype_revisions` пересоздаются (DROP+CREATE тех же
+    //    двух имён — список `RETIRED_DESIGN_SYSTEM_TRIGGER_NAMES` не меняется): тела шага v15
+    //    forward-only и задним числом не переигрываются. Новое условие смотрит ещё и в
+    //    `doc.surfaces[].designSystem`. `json_each` по документу без `surfaces` даёт 0 строк,
+    //    поэтому обычные ревизии ведут себя ровно как раньше.
+    db.run(`CREATE TABLE prototype_revision_theme_pins (
+      prototype_id TEXT NOT NULL, rev INTEGER NOT NULL,
+      design_system TEXT NOT NULL, meta_version INTEGER,
+      PRIMARY KEY (prototype_id, rev, design_system),
+      FOREIGN KEY (prototype_id, rev) REFERENCES prototype_revisions(prototype_id, rev) ON DELETE CASCADE)`);
+
+    for (const suffix of ["insert", "update"] as const) {
+      db.run(`DROP TRIGGER IF EXISTS prototype_revisions_reject_retired_design_system_${suffix}`);
+      db.run(`CREATE TRIGGER prototype_revisions_reject_retired_design_system_${suffix}
+        BEFORE ${suffix === "insert" ? "INSERT" : "UPDATE OF prototype_id,doc"} ON prototype_revisions
+        WHEN EXISTS (
+          SELECT 1 FROM prototypes p JOIN design_systems ds
+            ON ds.id=COALESCE(json_extract(NEW.doc,'$.designSystem'),p.design_system)
+          WHERE p.id=NEW.prototype_id AND ds.retired=1)
+        OR EXISTS (
+          SELECT 1 FROM json_each(json_extract(NEW.doc,'$.surfaces'))
+          WHERE json_extract(value,'$.designSystem') IN (SELECT id FROM design_systems WHERE retired=1))
+        BEGIN SELECT RAISE(ABORT,'retired design system reference'); END`);
+    }
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {
@@ -635,10 +668,22 @@ function assertRegistryIntegrity(db:Database):void {
   if(composition) throw new Error(`Composition head design system mismatch: ${composition.id}`);
   const heads=db.query(`SELECT p.id,p.design_system,r.doc FROM prototypes p
     LEFT JOIN prototype_revisions r ON r.prototype_id=p.id AND r.rev=p.head_rev`).all() as {id:string;design_system:string;doc:string|null}[];
+  // Множество зарегистрированных ДС читается один раз: surface-скан ниже проверяет по нему
+  // ссылки `doc.surfaces[].designSystem` (плана multi-surface-flows §4, R3-M2).
+  const registeredSystems=new Set((db.query("SELECT id FROM design_systems").all() as {id:string}[]).map(row=>row.id));
   for(const head of heads) {
     let doc:unknown; try { doc=JSON.parse(head.doc??""); } catch { throw new Error(`Invalid prototype head document: ${head.id}`); }
     const system=(doc&&typeof doc==="object"&&(doc as {designSystem?:unknown}).designSystem)??"shadcn";
     if(system!==head.design_system) throw new Error(`Prototype head design system mismatch: ${head.id}`);
+    // Документ читается сырым `JSON.parse` (старт сервера не должен падать на документе,
+    // записанном более новой версией формата), поэтому surfaces проверяются оборонительно.
+    const surfaces=doc&&typeof doc==="object"?(doc as {surfaces?:unknown}).surfaces:undefined;
+    if(!Array.isArray(surfaces)) continue;
+    for(const surface of surfaces) {
+      const surfaceSystem=surface&&typeof surface==="object"?(surface as {designSystem?:unknown}).designSystem:undefined;
+      if(typeof surfaceSystem!=="string") continue;
+      if(!registeredSystems.has(surfaceSystem)) throw new Error(`Dangling design system reference in prototype surfaces: ${head.id} (${surfaceSystem})`);
+    }
   }
   const providers=db.query("SELECT id,builtin_provider FROM design_systems WHERE builtin_provider IS NOT NULL AND retired=0").all() as {id:string;builtin_provider:string}[];
   for(const row of providers) if(!(row.builtin_provider in designSystems)) throw new Error(`Unknown builtin provider for design system ${row.id}: ${row.builtin_provider}`);

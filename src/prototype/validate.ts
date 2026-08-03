@@ -16,6 +16,7 @@ import { validateRegionRules } from "./regionRules";
 import { isServicePrototypeDocKind, lintPrototypeArchitecture } from "./architectureLints";
 import { COMPOSITION_TYPE, SLOT_TYPE } from "../catalog/hostPrimitives/composition.definition";
 import type { CompositionDoc } from "./composition";
+import { docSurfaces, surfaceDesignSystem, surfaceOf } from "./surfaces";
 
 type Obj = Record<string, unknown>;
 const terminals = new Set(["navigate", "back", "restart", "openUrl"]);
@@ -314,13 +315,65 @@ export function validateElementProps({
   return { errors, warnings };
 }
 
+/**
+ * Тема поверхности для D9-предупреждений: нужна только форма, которую отдаёт сервер
+ * (`ThemeContent`), поэтому здесь описан её минимум — модуль не зависит от api-клиента.
+ */
+export type SurfaceThemeInput = { fonts?: readonly { family?: unknown }[] } | null | undefined;
+
+/**
+ * Ограничения per-surface темизации v1 (план multi-surface-flows, D9). Оба предупреждения
+ * **не блокирующие** и эмитятся только серверной валидацией (канал `options.themes`):
+ *
+ * (а) `token()` и `Icon` читают глобальный снапшот **primary**-ДС целиком — и токены, и иконки
+ *     (`src/designSystems/theme.tsx`), поэтому компоненты не-primary ДС получают чужие значения.
+ *     Предупреждение безусловное при ≥2 различных ДС в документе (R4-M6).
+ * (б) `fontRegistry` фильтрует шрифты **по family** — при совпадении family двух тем побеждает
+ *     та, что зарегистрировалась первой (primary). Предупреждение — при пересечении.
+ */
+export function surfaceThemeWarnings(doc: PrototypeDoc, themes: Record<string, SurfaceThemeInput>): ValidationIssue[] {
+  const warnings: ValidationIssue[] = [];
+  const systems: string[] = [];
+  for (const surface of docSurfaces(doc)) {
+    const system = surfaceDesignSystem(surface, doc) ?? doc.designSystem;
+    if (!systems.includes(system)) systems.push(system);
+  }
+  if (systems.length < 2) return warnings;
+  issue(warnings, ["surfaces"], `document mixes ${systems.length} design systems (${systems.join(", ")}); token() and Icon read the global snapshot of the primary system (${systems[0]}) — put the icon/token-dependent design system on the primary surface`);
+  const families = new Map<string, string[]>();
+  for (const system of systems) {
+    for (const font of themes[system]?.fonts ?? []) {
+      const family = typeof font?.family === "string" ? font.family.trim().replace(/^["']|["']$/g, "").toLowerCase() : "";
+      if (!family) continue;
+      const owners = families.get(family) ?? [];
+      if (!owners.includes(system)) owners.push(system);
+      families.set(family, owners);
+    }
+  }
+  for (const [family, owners] of [...families].sort(([a], [b]) => a.localeCompare(b))) {
+    if (owners.length < 2) continue;
+    issue(warnings, ["surfaces"], `font family '${family}' is declared by several design systems (${owners.join(", ")}); only the first registration wins (fontRegistry filters by family)`);
+  }
+  return warnings;
+}
+
 export function validatePrototype(
   doc: PrototypeDoc,
   // `kind` — вид прототипа (волна 0). Служебные виды выключают архитектурные
   // правила целиком; без значения правила работают как обычно.
   // `compositions` — документы композиций, на которые ссылается документ (волна 5):
   // из них берётся список слотов для `@eui/Composition`-родителя.
-  options?: { definitions?: Record<string, ComponentDefinition>; kind?: string; compositions?: Record<string, CompositionDoc> },
+  // `definitionsBySurface` — карта «поверхность → определения её ДС» (план multi-surface-flows,
+  // D8): тип экрана резолвится в ДС его поверхности, тип чужой ДС — ошибка `unknown component type`.
+  // `themes` — карта «ДС → пиннутая тема» (D9). Её передаёт только сервер, поэтому D9-warnings
+  // клиентская валидация редактора не эмитит — осознанно.
+  options?: {
+    definitions?: Record<string, ComponentDefinition>;
+    kind?: string;
+    compositions?: Record<string, CompositionDoc>;
+    definitionsBySurface?: Record<string, Record<string, ComponentDefinition>>;
+    themes?: Record<string, SurfaceThemeInput>;
+  },
 ): PrototypeValidationResult {
   const errors: ValidationIssue[] = [], warnings: ValidationIssue[] = [];
   errors.push(...validateOverlayRules(doc));
@@ -335,6 +388,14 @@ export function validatePrototype(
   const builtinNames = new Set<string>();
   // Архитектурный lint считается до обхода экранов: его результат подавляет
   // дублирующий atomic-nesting warning на тех же элементах.
+  // Определения экрана: карта его поверхности (если сервер её передал), иначе — общая.
+  const definitionsBySurface = options?.definitionsBySurface;
+  const definitionsForScreen = (screenId: string): Record<string, ComponentDefinition> => {
+    if (!definitionsBySurface) return definitions;
+    const surfaceDefinitions = definitionsBySurface[surfaceOf(doc, screenId).id];
+    return surfaceDefinitions ? { ...surfaceDefinitions, ...hostPrimitiveDefinitions } : definitions;
+  };
+  if (options?.themes) warnings.push(...surfaceThemeWarnings(doc, options.themes));
   const architecture = lintPrototypeArchitecture(doc, definitions, { kind: options?.kind });
   // P9 (план 2026-08-02): два предупреждения предполагают продуктовый поток и для служебных
   // видов ложны by design — недостижимый экран (галерея не навигируется) и интерактивный
@@ -352,6 +413,7 @@ export function validatePrototype(
   for (const [screenIndex, screen] of doc.screens.entries()) {
     const base = ["screens", screenIndex, "spec"];
     const overrideBase = ["screens", screenIndex, "stateOverrides"];
+    const screenDefinitions = definitionsForScreen(screen.id);
     const scanOverride = (value: unknown, path: (string | number)[], depth: number): void => {
       if (Array.isArray(value)) {
         value.forEach((item, index) => scanOverride(item, [...path, index], depth + 1));
@@ -439,7 +501,7 @@ export function validatePrototype(
     const parents = new Map<string, number>();
     for (const [key, element] of Object.entries(elements)) {
       const ep = [...base, "elements", key];
-      const definition = definitions[element.type];
+      const definition = screenDefinitions[element.type];
       if (!definition) { issue(errors, [...ep, "type"], `unknown component type: ${element.type}`); continue; }
       // Named slots: `slot` is valid only on a child of a custom component with capabilities.namedSlots,
       // and only for a slot name declared by that parent's definition.
@@ -447,7 +509,7 @@ export function validatePrototype(
       if (typeof childSlot === "string") {
         const parentKey = parentOf.get(key);
         const parent = parentKey ? elements[parentKey] : undefined;
-        const parentDef = parent ? definitions[parent.type] : undefined;
+        const parentDef = parent ? screenDefinitions[parent.type] : undefined;
         const parentIsCustom = Boolean(parent) && !builtinNames.has(parent!.type) && !hostPrimitiveNames.has(parent!.type) && Boolean(parentDef);
         // `@eui/Composition` — тоже допустимый slot-родитель (волна 5, B5 ревью):
         // список слотов берётся из документа композиции, а не из definition.slots.
@@ -479,7 +541,7 @@ export function validatePrototype(
         if (screen.canvas && [p.x,p.y,p.width,p.height].every((v) => typeof v === "number") && ((p.x as number) < 0 || (p.y as number) < 0 || (p.x as number)+(p.width as number)>screen.canvas.width || (p.y as number)+(p.height as number)>screen.canvas.height)) issue(errors, [...ep, "props"], "Hotspot is outside canvas bounds");
       }
       if (element.type === "Image") checkUrl(element.props.src, [...ep,"props","src"], true, errors);
-      const isCustomType = !builtinNames.has(element.type) && !hostPrimitiveNames.has(element.type) && Boolean(definitions[element.type]);
+      const isCustomType = !builtinNames.has(element.type) && !hostPrimitiveNames.has(element.type) && Boolean(screenDefinitions[element.type]);
       // --- Semantic warnings (never block validation) ---
       const sem = elementSemantics(element.type, definition, isCustomType);
       const hasHandler = Boolean(element.on) && Object.keys(element.on!).length > 0;
@@ -599,7 +661,7 @@ export function validatePrototype(
       if (visited.has(key)) return;
       visiting.add(key);
       const element = elements[key];
-      const definition = element ? definitions[element.type] : undefined;
+      const definition = element ? screenDefinitions[element.type] : undefined;
       const level = definition?.atomicLevel;
       if (element && level && !definition.layoutNeutral && ancestorLevel && atomicRank[level] > atomicRank[ancestorLevel]
         && !architecture.nestingReported.has(`${screenIndex}/${key}`)) {

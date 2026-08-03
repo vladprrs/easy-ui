@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SURFACES_LIMIT,
   SURFACE_DESIGN_SYSTEM_UNSUPPORTED_CODE,
+  SURFACE_DESIGN_SYSTEMS_SUPPORTED,
   inputPrototypeDocSchema,
   storedPrototypeDocSchema,
 } from "../schema";
@@ -166,16 +167,18 @@ describe("surfaces schema — D5 (companions)", () => {
   });
 });
 
-describe("surfaces schema — W1 per-surface design systems", () => {
-  it("accepts a surface design system equal to the document one and rejects a different one", () => {
+describe("surfaces schema — per-surface design systems (W3)", () => {
+  it("accepts a surface design system different from the document one", () => {
+    expect(SURFACE_DESIGN_SYSTEMS_SUPPORTED).toBe(true);
     expect(messages(duo({ surfaces: [{ ...kso, designSystem: "shadcn" }, app] }))).toEqual([]);
+    // W3 снял W1-запрет: код `surface_design_system_not_supported` остаётся стабильным, но
+    // входная ветка его больше не эмитит.
     const foreign = duo({ surfaces: [kso, { ...app, designSystem: "yandex-pay" }] });
-    expect(has(foreign, "surfaces/1/designSystem", `per-surface design systems are not supported yet (${SURFACE_DESIGN_SYSTEM_UNSUPPORTED_CODE})`)).toBe(true);
-    const issue = issues(foreign).find((entry) => entry.path.join("/") === "surfaces/1/designSystem");
-    expect((issue as { params?: { code?: string } }).params?.code).toBe(SURFACE_DESIGN_SYSTEM_UNSUPPORTED_CODE);
+    expect(messages(foreign)).toEqual([]);
+    expect(issues(foreign).some((entry) => (entry as { params?: { code?: string } }).params?.code === SURFACE_DESIGN_SYSTEM_UNSUPPORTED_CODE)).toBe(false);
   });
 
-  it("does not apply the authoring ban in the stored branch", () => {
+  it("reads a foreign-design-system surface in the stored branch", () => {
     expect(storedPrototypeDocSchema.safeParse(duo({ surfaces: [kso, { ...app, designSystem: "yandex-pay" }] })).success).toBe(true);
   });
 });

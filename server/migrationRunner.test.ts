@@ -247,3 +247,71 @@ describe("catalog migration runner", () => {
     db.close();
   });
 });
+
+// --- Мульти-поверхностный документ в каталог-миграции ------------------------
+// План 2026-08-02 multi-surface-flows §4 (R3-B2): резолв пинов по множеству ДС документа,
+// копирование строк `prototype_revision_theme_pins`, новая таблица в fingerprint.
+
+function componentIn(db: ReturnType<typeof openDatabase>, id: string, name: string, designSystem: string): void {
+  db.query("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES (?,?,1,?,'2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')").run(id, name, designSystem);
+  db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES (?,?,?,?,'2026-01-01T00:00:00.000Z')").run(id, 1, source(name), designSystem);
+  db.query(`INSERT INTO component_publishes
+    (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at)
+    VALUES (?,1,1,'active','',?, ?, ?,1,'2026-01-01T00:00:00.000Z')`).run(id, JSON.stringify({ description: name, events: [], slots: [], propsJsonSchema: { type: "object" } }), `source-${id}`, `bundle-${id}`);
+}
+
+function duoPrototype(db: ReturnType<typeof openDatabase>): void {
+  const doc = {
+    version: 1, id: "duo-prototype", name: "Duo prototype", designSystem: "yandex-pay", device: "desktop", startScreen: "kiosk", state: {},
+    surfaces: [
+      { id: "kso", name: "KSO", device: "desktop", startScreen: "kiosk" },
+      { id: "app", name: "App", device: "mobile", startScreen: "phone", designSystem: "duo-app-ds" },
+    ],
+    screens: [
+      { id: "kiosk", name: "Kiosk", surface: "kso", canvas: { width: 1080, height: 1920 }, spec: { root: "root", elements: { root: { type: "OldCard", props: {} } } } },
+      { id: "phone", name: "Phone", surface: "app", spec: { root: "root", elements: { root: { type: "AppCard", props: {} } } } },
+    ],
+  };
+  db.query(`INSERT INTO prototypes (id,name,device,screen_count,head_rev,design_system,instance_id,created_at,updated_at,status)
+    VALUES ('duo-prototype','Duo prototype','desktop',2,1,'yandex-pay','duo-instance','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z','private')`).run();
+  db.query("INSERT INTO prototype_revisions (prototype_id,rev,doc,builtin_catalog_hash,design_system_meta_version,created_at) VALUES ('duo-prototype',1,?,'hash',NULL,'2026-01-01T00:00:00.000Z')").run(JSON.stringify(doc));
+  db.query("INSERT INTO prototype_revision_components (prototype_id,rev,component_id,component_version) VALUES ('duo-prototype',1,'old-card',1),('duo-prototype',1,'app-card',1)").run();
+  db.query("INSERT INTO prototype_revision_theme_pins (prototype_id,rev,design_system,meta_version) VALUES ('duo-prototype',1,'yandex-pay',NULL),('duo-prototype',1,'duo-app-ds',NULL)").run();
+}
+
+describe("catalog migration on a multi-surface document", () => {
+  test("prepares and applies a plan with a duo document, re-pinning both design systems and copying theme pins", () => {
+    const db = openDatabase(":memory:");
+    db.query("INSERT INTO design_systems (id,name,description,builtin_provider,created_at,updated_at) VALUES ('duo-app-ds','App DS','fixture',NULL,'2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')").run();
+    componentIn(db, "old-card", "OldCard", "yandex-pay");
+    componentIn(db, "new-card", "NewCard", "yandex-pay");
+    componentIn(db, "app-card", "AppCard", "duo-app-ds");
+    duoPrototype(db);
+    const migrationPlan = { ...plan(db), groups: plan(db).groups.map((group) => ({ ...group, affectedPrototypeHeads: ["duo-prototype"] })) };
+
+    const prepared = prepareMigration(db, migrationPlan, "duo-run");
+    expect(prepared.status).toBe("prepared");
+    applyMigration(db, migrationPlan, prepared.runId);
+
+    const head = JSON.parse((db.query("SELECT doc FROM prototype_revisions WHERE prototype_id='duo-prototype' AND rev=2").get() as { doc: string }).doc);
+    expect(head.screens[0].spec.elements.root.type).toBe("NewCard");
+    // Компонент второй поверхности резолвится в её ДС и остаётся закреплённым.
+    expect(db.query("SELECT component_id FROM prototype_revision_components WHERE prototype_id='duo-prototype' AND rev=2 ORDER BY component_id").all())
+      .toEqual([{ component_id: "app-card" }, { component_id: "new-card" }]);
+    expect(db.query("SELECT design_system FROM prototype_revision_theme_pins WHERE prototype_id='duo-prototype' AND rev=2 ORDER BY design_system").all())
+      .toEqual([{ design_system: "duo-app-ds" }, { design_system: "yandex-pay" }]);
+    db.close();
+  });
+
+  test("the data fingerprint sees theme pins", () => {
+    const db = openDatabase(":memory:");
+    db.query("INSERT INTO design_systems (id,name,description,builtin_provider,created_at,updated_at) VALUES ('duo-app-ds','App DS','fixture',NULL,'2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')").run();
+    componentIn(db, "old-card", "OldCard", "yandex-pay");
+    componentIn(db, "app-card", "AppCard", "duo-app-ds");
+    duoPrototype(db);
+    const before = currentDataFingerprint(db);
+    db.run("UPDATE prototype_revision_theme_pins SET meta_version=7 WHERE prototype_id='duo-prototype' AND design_system='duo-app-ds'");
+    expect(currentDataFingerprint(db)).not.toBe(before);
+    db.close();
+  });
+});

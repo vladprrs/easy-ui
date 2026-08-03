@@ -219,7 +219,7 @@ describe("capture error classification", () => {
 
 describe("capture-session store", () => {
   const allowed = ["/capture/p/s/welcome", "/api/assets/", "/index.html"];
-  const expected = { kind: "prototype", prototypeInstanceId:"instance-test", rev: 1, componentManifestHash: "h", builtinCatalogHash: "b", dsMetaVersion: null, rendererBuild: null } as const;
+  const expected = { kind: "prototype", prototypeInstanceId:"instance-test", rev: 1, componentManifestHash: "h", builtinCatalogHash: "b", designSystem: "shadcn", dsMetaVersion: null, rendererBuild: null } as const;
 
   test("authorizes only loopback GET/HEAD on an allowlisted path with a live token", () => {
     const store = new CaptureSessionStore();

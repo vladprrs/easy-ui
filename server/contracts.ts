@@ -487,6 +487,10 @@ export const checkVisualReferenceContract = registerContract({
 const headTrackingError = { status: 422, code: "prototype_head_tracking", description: "The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot." } as const;
 /** Kill-switch D16 (план 2026-08-02 multi-surface-flows): запись `doc.surfaces` требует EASYUI_SURFACES=1. */
 const surfacesDisabledError = { status: 422, code: "surfaces_disabled", description: "The document declares doc.surfaces, but multi-surface writes are disabled on this server (EASYUI_SURFACES=1 enables them). Discovery: capabilities.features.surfacesWrite." } as const;
+/** W3 (multi-surface §4): композиции допустимы только на экранах ДС документа; per-screen резолв — v2. */
+const compositionForeignDesignSystemError = { status: 422, code: "composition_foreign_design_system", description: "A composition is placed on a screen whose surface uses a design system other than doc.designSystem; compositions are single-design-system in v1." } as const;
+/** W3 (multi-surface §4): формат бандла скалярен по ДС, мульти-поверхностный документ не экспортируется. */
+const surfacesNotExportableError = { status: 422, code: "surfaces_not_exportable", description: "The prototype declares doc.surfaces; the v1 bundle manifest cannot carry multi-surface documents (multi-design-system manifest is v2)." } as const;
 
 const baselineViewportSchema=z.strictObject({width:z.number().int(),height:z.number().int()});
 const baselineMemberSchema=z.strictObject({screenId:z.string(),viewport:baselineViewportSchema,deviceScaleFactor:deviceScaleSchema,theme:z.enum(["light","dark"]),referenceId:z.string()});
@@ -668,7 +672,7 @@ export const createPrototypeContract = registerContract({
   status: 201,
   requestSchema: z.object({ doc: inputPrototypeDocSchema, message: z.string().optional(), figma: figmaSchema.optional(), ...prototypeLifecycleSchema.omit({ track: true }).shape }),
   responseSchema: z.looseObject({ id: z.string(), rev: z.literal(1), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }, surfacesDisabledError],
+  errors: [errorCatalog.invalidRequest, errorCatalog.alreadyExists, errorCatalog.validationFailed, { status: 422, code: "asset_not_found" }, surfacesDisabledError, compositionForeignDesignSystemError],
 });
 
 const renderableSchema = z.object({ head: z.boolean(), published: z.boolean().nullable() });
@@ -706,7 +710,7 @@ export const savePrototypeContract = registerContract({
   summary: "Save a new head revision (CAS on baseRev); document id must match the path id.",
   requestSchema: z.object({ doc: inputPrototypeDocSchema, figma: figmaSchema.optional(), ...casBody }),
   responseSchema: z.looseObject({ rev: z.number(), warnings: z.array(issueSchema), screens: z.array(screenUrlSchema) }),
-  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.validationFailed, surfacesDisabledError],
+  errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.prototypeNotFound, errorCatalog.revConflict, errorCatalog.validationFailed, surfacesDisabledError, compositionForeignDesignSystemError],
 });
 
 export const deletePrototypeContract = registerContract({
@@ -732,6 +736,12 @@ const prototypeRevisionCoreSchema = z.looseObject({
   compositions: z.array(compositionPinSchema).optional(),
   assets: z.array(assetPublicSchema.omit({ width: true, height: true })),
   designSystemMetaVersion: z.number().nullable(),
+  /**
+   * Пины тем ревизии: `дизайн-система → версия темы` (миграция v24, план multi-surface §4).
+   * `designSystemMetaVersion` остаётся значением **primary**-ДС. Read-правило без бэкфила:
+   * ревизия без строк отдаёт `{ <primary ДС>: designSystemMetaVersion }`.
+   */
+  designSystemMetaVersions: z.record(z.string(), z.number().nullable()),
   figma: figmaResponseSchema.optional(),
   renderable:z.boolean(),renderError:prototypeRenderErrorSchema.nullable(),
   // P2.3: `track` ревизии и момент резолва head-пинов (`null` у обычных, pinned-доков).
@@ -1351,7 +1361,7 @@ export const exportPrototypeContract = registerContract({
   method: "GET", path: "/api/prototypes/{id}/export",
   summary: "Export a prototype revision (owner draft or a published version) with its full dependency closure as a ZIP bundle.",
   contentType: "application/zip",
-  errors: [exportUnauthorized, exportForbidden, errorCatalog.prototypeNotFound, errorCatalog.versionNotFound, exportTooLarge, headTrackingError],
+  errors: [exportUnauthorized, exportForbidden, errorCatalog.prototypeNotFound, errorCatalog.versionNotFound, exportTooLarge, headTrackingError, surfacesNotExportableError],
 });
 
 export const exportComponentContract = registerContract({
@@ -1365,7 +1375,7 @@ export const exportBundlesContract = registerContract({
   method: "GET", path: "/api/bundles/export",
   summary: "Export every prototype and component owned by the caller as a single ZIP bundle.",
   contentType: "application/zip",
-  errors: [exportUnauthorized, exportForbidden, exportTooLarge, headTrackingError],
+  errors: [exportUnauthorized, exportForbidden, exportTooLarge, headTrackingError, surfacesNotExportableError],
 });
 
 // --- Bundle import (ZIP) ---

@@ -31,13 +31,13 @@ export const FLOW_DEPTH_LIMIT = 4;
 export const SURFACES_LIMIT = 2;
 
 /**
- * W1-временный запрет per-surface дизайн-систем (план §5, W1): сервер ещё однодизайнсистемный
- * (пины, темы, share-гранты, capture-allowlist — W3), поэтому `surface.designSystem`, отличный
- * от `doc.designSystem`, отвергается **входной** веткой со стабильным кодом
- * `surface_design_system_not_supported`. Снятие в W3 — переключением этого флага в `true`
- * (и удалением ветки в `refinePrototypeDocAuthoring`).
+ * Per-surface дизайн-системы (план §5). **W3 снял W1-запрет**: сервер резолвит компоненты,
+ * пины, темы (`prototype_revision_theme_pins`, миграция v24), share-ресурсы и capture-allowlist
+ * по множеству ДС документа, поэтому `surface.designSystem`, отличный от `doc.designSystem`,
+ * принимается. Флаг оставлен точкой контроля: `false` возвращает стабильный отказ
+ * `surface_design_system_not_supported` без правки схемы.
  */
-export const SURFACE_DESIGN_SYSTEMS_SUPPORTED = false;
+export const SURFACE_DESIGN_SYSTEMS_SUPPORTED = true;
 /** Стабильный код W1-запрета; попадает в `issue.params.code` и в текст сообщения. */
 export const SURFACE_DESIGN_SYSTEM_UNSUPPORTED_CODE = "surface_design_system_not_supported";
 

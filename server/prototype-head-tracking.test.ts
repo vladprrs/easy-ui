@@ -184,6 +184,7 @@ function renderSurface(db: Database, job: WorkerJob) {
       rev: dto.rev,
       componentManifestHash: target.componentManifestHash ?? dto.componentManifestHash,
       builtinCatalogHash: dto.builtinCatalogHash,
+      designSystem: dto.doc.designSystem ?? null,
       dsMetaVersion: dto.designSystemMetaVersion ?? null,
       rendererBuild: job.bootstrap.expected.rendererBuild,
     },

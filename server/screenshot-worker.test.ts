@@ -21,7 +21,16 @@ describe("screenshot worker helpers", () => {
   });
 
   test("prototype readiness comparison includes the immutable instance id",()=>{
-    expect(readyToExpected({kind:"prototype",revision:2,prototypeInstanceId:"instance-2",componentManifestHash:"m",builtinCatalogHash:"b",dsMetaVersion:null,rendererBuild:null})).toEqual({kind:"prototype",rev:2,prototypeInstanceId:"instance-2",componentManifestHash:"m",builtinCatalogHash:"b",dsMetaVersion:null,rendererBuild:null});
+    expect(readyToExpected({kind:"prototype",revision:2,prototypeInstanceId:"instance-2",componentManifestHash:"m",builtinCatalogHash:"b",designSystem:"shadcn",dsMetaVersion:null,rendererBuild:null})).toEqual({kind:"prototype",rev:2,prototypeInstanceId:"instance-2",componentManifestHash:"m",builtinCatalogHash:"b",designSystem:"shadcn",dsMetaVersion:null,rendererBuild:null});
+  });
+
+  // Мульти-поверхностный handshake (multi-surface D14): поверхность обязана назвать резолвнутую
+  // ДС снимаемого экрана; отсутствие поля в ready деградирует до `null` и не совпадёт с expected.
+  test("prototype readiness carries the resolved design system of the captured screen",()=>{
+    expect(readyToExpected({kind:"prototype",revision:1,prototypeInstanceId:"i",componentManifestHash:"m",builtinCatalogHash:"b",designSystem:"yandex-pay",dsMetaVersion:4,rendererBuild:null}))
+      .toMatchObject({designSystem:"yandex-pay",dsMetaVersion:4});
+    expect(readyToExpected({kind:"prototype",revision:1,prototypeInstanceId:"i",componentManifestHash:"m",builtinCatalogHash:"b",dsMetaVersion:null,rendererBuild:null}))
+      .toMatchObject({designSystem:null});
   });
 
   test("component-draft readiness comparison carries the content-addressed identity",()=>{

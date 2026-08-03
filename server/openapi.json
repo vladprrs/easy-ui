@@ -772,7 +772,7 @@
                 }
               }
             },
-            "description": "prototype_head_tracking (The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot.)"
+            "description": "prototype_head_tracking (The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot.) | surfaces_not_exportable (The prototype declares doc.surfaces; the v1 bundle manifest cannot carry multi-surface documents (multi-design-system manifest is v2).)"
           }
         },
         "summary": "Export every prototype and component owned by the caller as a single ZIP bundle.",
@@ -14612,7 +14612,7 @@
                 }
               }
             },
-            "description": "validation_failed | asset_not_found | surfaces_disabled (The document declares doc.surfaces, but multi-surface writes are disabled on this server (EASYUI_SURFACES=1 enables them). Discovery: capabilities.features.surfacesWrite.)"
+            "description": "validation_failed | asset_not_found | surfaces_disabled (The document declares doc.surfaces, but multi-surface writes are disabled on this server (EASYUI_SURFACES=1 enables them). Discovery: capabilities.features.surfacesWrite.) | composition_foreign_design_system (A composition is placed on a screen whose surface uses a design system other than doc.designSystem; compositions are single-design-system in v1.)"
           }
         },
         "summary": "Create a prototype from a document (revision 1); validates against the design-system catalog.",
@@ -15821,7 +15821,7 @@
                 }
               }
             },
-            "description": "validation_failed | surfaces_disabled (The document declares doc.surfaces, but multi-surface writes are disabled on this server (EASYUI_SURFACES=1 enables them). Discovery: capabilities.features.surfacesWrite.)"
+            "description": "validation_failed | surfaces_disabled (The document declares doc.surfaces, but multi-surface writes are disabled on this server (EASYUI_SURFACES=1 enables them). Discovery: capabilities.features.surfacesWrite.) | composition_foreign_design_system (A composition is placed on a screen whose surface uses a design system other than doc.designSystem; compositions are single-design-system in v1.)"
           }
         },
         "summary": "Save a new head revision (CAS on baseRev); document id must match the path id.",
@@ -16361,6 +16361,22 @@
                         }
                       ]
                     },
+                    "designSystemMetaVersions": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
                     "doc": {
                       "additionalProperties": {},
                       "properties": {
@@ -16506,6 +16522,7 @@
                     "components",
                     "assets",
                     "designSystemMetaVersion",
+                    "designSystemMetaVersions",
                     "renderable",
                     "renderError"
                   ],
@@ -16598,7 +16615,7 @@
                 }
               }
             },
-            "description": "prototype_head_tracking (The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot.)"
+            "description": "prototype_head_tracking (The prototype tracks component heads (track: head); the operation requires an immutable pin snapshot.) | surfaces_not_exportable (The prototype declares doc.surfaces; the v1 bundle manifest cannot carry multi-surface documents (multi-design-system manifest is v2).)"
           }
         },
         "summary": "Export a prototype revision (owner draft or a published version) with its full dependency closure as a ZIP bundle.",
@@ -17998,6 +18015,22 @@
                         }
                       ]
                     },
+                    "designSystemMetaVersions": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
                     "doc": {
                       "additionalProperties": {},
                       "properties": {
@@ -18153,6 +18186,7 @@
                     "components",
                     "assets",
                     "designSystemMetaVersion",
+                    "designSystemMetaVersions",
                     "renderable",
                     "renderError",
                     "message",
@@ -21971,6 +22005,22 @@
                         }
                       ]
                     },
+                    "designSystemMetaVersions": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
                     "doc": {
                       "additionalProperties": {},
                       "properties": {
@@ -22122,6 +22172,7 @@
                     "components",
                     "assets",
                     "designSystemMetaVersion",
+                    "designSystemMetaVersions",
                     "renderable",
                     "renderError",
                     "version",

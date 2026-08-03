@@ -25,6 +25,21 @@ import { AssetRepo } from "../repos/assets";
 import { collectAssetIdsFromSource } from "../validation";
 import { themeAssetIds } from "../share/repo";
 
+/**
+ * Стабильный код отказа экспорта мульти-поверхностного документа (план §4, v1).
+ * Импортёр отвергает такой документ тем же кодом: манифест адресует компоненты ключом
+ * `${designSystem}::${type}` и не умеет описать вторую ДС.
+ */
+export const SURFACES_NOT_EXPORTABLE_CODE = "surfaces_not_exportable";
+export const surfacesNotExportableError = (id: string): ApiError =>
+  new ApiError(422, SURFACES_NOT_EXPORTABLE_CODE, `Prototype '${id}' declares doc.surfaces; the bundle format v1 cannot carry multi-surface documents`);
+/** Проверка по головной ревизии/версиям прототипа: `doc.surfaces` в любой из них — отказ. */
+function assertExportableSurfaces(db: Database, id: string): void {
+  const row = db.query(`SELECT 1 ok FROM prototype_revisions r
+    WHERE r.prototype_id=? AND json_type(r.doc,'$.surfaces')='array' LIMIT 1`).get(id);
+  if (row) throw surfacesNotExportableError(id);
+}
+
 // ZIP bundle exporter (plan T2). Builds the closure of a prototype / component / bulk export
 // in memory: manifest.json plus prototype docs, component TSX and content-addressed asset
 // bytes. The 512 MiB raw-size ceiling is checked from DB-recorded sizes before any bytes are
@@ -209,6 +224,10 @@ export class BundleClosure {
     // компонентов, а у track:head они резолвятся на момент чтения — архив был бы снимком
     // «на секунду», необратимо расходящимся с источником при импорте.
     assertPinnedTrack(this.db, id, "bundle-export");
+    // Мульти-поверхностный документ не выражается манифестом v1 (скалярные `designSystem`/
+    // `designSystemMetaVersion`, ключ импортёра `${designSystem}::${type}`), поэтому экспорт
+    // отклоняется стабильным 422 (план §4, R3-B3). Мульти-ДС манифест — v2.
+    assertExportableSurfaces(this.db, id);
     let snapshot: { doc: PrototypeDoc; rev: number; components: { id: string; version: number }[]; compositions: { id: string; version: number }[]; assets: { id: string }[]; designSystemMetaVersion: number | null };
     let exported: ExportedResource;
     if (selector.version !== undefined) {

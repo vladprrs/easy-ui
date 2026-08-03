@@ -24,6 +24,7 @@ import { PrototypeRepo } from "../repos/prototypes";
 import { sha256 } from "../components/pipeline";
 import type { ExtractResult } from "../components/extract-subprocess";
 import { getDesignSystemVersion, getIncludingRetired, latestDesignSystemMetaVersion } from "../designSystems";
+import { SURFACES_NOT_EXPORTABLE_CODE } from "./exporter";
 import { validateThemeAssets, type ThemeContent } from "../designSystemsMeta";
 import { checkSource, publishComponent } from "../routes/components";
 import { createPrototypeFromDoc, updatePrototypeFromDoc } from "../routes/prototypes";
@@ -457,6 +458,10 @@ async function importPrototype(db: Database, dataDir: string, bundle: BundleProt
   const missingCompositions = [...new Set(collectCompositionRefs(doc).map((ref) => ref.compositionId))]
     .filter((id) => !availableCompositions.has(id) && !activeCompositionById(db, id, doc.designSystem));
   if (missingCompositions.length) { report.push({ ...base, action: "error", detail: `dependency_failed: composition ${missingCompositions.join(", ")}` }); return; }
+
+  // Манифест v1 скалярен по ДС: мульти-поверхностный документ (в т.ч. из архива, собранного
+  // более новым форматом) отклоняется тем же стабильным кодом, что и экспорт (план §4).
+  if (Array.isArray((doc as { surfaces?: unknown }).surfaces)) { report.push({ ...base, action: "error", detail: `${SURFACES_NOT_EXPORTABLE_CODE}: multi-surface documents are not supported by the bundle format` }); return; }
 
   const existing = db.query("SELECT owner_id o,head_rev h FROM prototypes WHERE id=?").get(bundle.id) as { o: string | null; h: number } | null;
   try {

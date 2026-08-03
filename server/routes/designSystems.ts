@@ -134,6 +134,13 @@ const RETIRE_BLOCKERS=[
   {key:"components",sql:"SELECT COUNT(*) n FROM components WHERE design_system=? AND deleted_at IS NULL"},
   {key:"prototypes",sql:"SELECT COUNT(*) n FROM prototypes WHERE design_system=?"},
   {key:"compositions",sql:"SELECT COUNT(*) n FROM compositions WHERE design_system=? AND deleted_at IS NULL"},
+  // Мульти-поверхностные документы (план multi-surface-flows §4, R3-M2): поверхность может
+  // ссылаться на ДС, отличную от `prototypes.design_system`. Сканируются **головы** — принятое
+  // ограничение того же класса, что и сегодняшний счёт по `prototypes.design_system` (R4-m6).
+  {key:"prototypeSurfaces",sql:`SELECT COUNT(DISTINCT p.id) n FROM prototypes p
+    JOIN prototype_revisions r ON r.prototype_id=p.id AND r.rev=p.head_rev,
+    json_each(json_extract(r.doc,'$.surfaces'))
+    WHERE p.design_system<>?1 AND json_extract(value,'$.designSystem')=?1`},
 ] as const;
 
 function retireBlockers(db:Database,id:string):{counts:Record<string,number>;total:number} {

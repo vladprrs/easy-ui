@@ -543,14 +543,14 @@ describe("DELETE /api/design-systems/:id — мягкий ретайр", () => {
     expect(blocked.status).toBe(409);
     const error = await errorOf(blocked);
     expect(error.code).toBe("design_system_in_use");
-    expect(error.blockers).toEqual({ components: 1, prototypes: 0, compositions: 0, total: 1 });
+    expect(error.blockers).toEqual({ components: 1, prototypes: 0, compositions: 0, prototypeSurfaces: 0, total: 1 });
 
     // Надгробие компонента освобождает систему; живой прототип — снова блокирует.
     db.query("UPDATE components SET deleted_at=? WHERE id='busy-widget'").run(at);
     new PrototypeRepo(db).create(customDoc("busy-proto", "retire-busy"));
     const stillBlocked = await handler(req("/design-systems/retire-busy", "DELETE"));
     expect(stillBlocked.status).toBe(409);
-    expect((await errorOf(stillBlocked)).blockers).toEqual({ components: 0, prototypes: 1, compositions: 0, total: 1 });
+    expect((await errorOf(stillBlocked)).blockers).toEqual({ components: 0, prototypes: 1, compositions: 0, prototypeSurfaces: 0, total: 1 });
 
     db.query("DELETE FROM prototype_revisions WHERE prototype_id='busy-proto'").run();
     db.query("DELETE FROM prototypes WHERE id='busy-proto'").run();
