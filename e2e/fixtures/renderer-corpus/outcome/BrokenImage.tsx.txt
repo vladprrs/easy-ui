@@ -1,0 +1,34 @@
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+/**
+ * `outcome/`: **битое изображение**. Рядом стоят живой ассет (подставляется harness'ом) и
+ * заведомо отсутствующий — id снова собирается конкатенацией, иначе publish 422-ит
+ * непинуемый литерал.
+ *
+ * Сегодня (§1.4) `settleImages` валит кадр только при **полном** отсутствии растра: один
+ * загруженный `<img>` рядом с битым делает кадр «готовым», и джоба завершается `done`.
+ * Это и записано в `expected.json` как текущее поведение; R4 (`decoded-strict`) обязан
+ * выдать `image_load_failed` — ожидания фикстуры меняет владелец R4 (§6).
+ */
+export const definition = {
+  props: z.strictObject({ caption: z.string() }),
+  description: "Renderer corpus outcome fixture: a broken <img> next to a healthy asset",
+  atomicLevel: "atom" as const,
+  example: { caption: "broken-image" },
+};
+
+const MISSING_ASSET_ID = "asset_".concat("1".repeat(64));
+const HEALTHY_URL = "/api/assets/__ASSET_PNG__";
+
+export default function CorpusBrokenImage({ props }: EasyUIComponentProps<{ caption: string }>) {
+  return (
+    <div style={{ padding: 12, width: 320, fontFamily: '"YS Text", sans-serif' }}>
+      <div style={{ fontSize: 11, fontWeight: 500, marginBottom: 6 }}>{props.caption}</div>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+        <img src={HEALTHY_URL} alt="" width={64} height={64} />
+        <img src={`/api/assets/${MISSING_ASSET_ID}`} alt="broken" width={64} height={64} />
+      </div>
+    </div>
+  );
+}

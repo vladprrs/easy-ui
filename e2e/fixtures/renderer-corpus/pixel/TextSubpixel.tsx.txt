@@ -1,0 +1,34 @@
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+/**
+ * `pixel/`: один и тот же текст на **целых** и **дробных** координатах (§5 R2b, флаг
+ * `--disable-font-subpixel-positioning` из §2.1 P1). Строки сдвигаются на 0, 0.25, 0.37, 0.5,
+ * 0.75 px и дополнительно на дробную долю vw — при включённом субпиксельном позиционировании
+ * origin глифа зависит от дробной части, и растр перестаёт быть функцией входов.
+ */
+export const definition = {
+  props: z.strictObject({ caption: z.string() }),
+  description: "Renderer corpus fixture: identical text on integer and fractional offsets",
+  atomicLevel: "atom" as const,
+  example: { caption: "text-subpixel" },
+};
+
+const LINE = "Ямб хорей 0.5px — Wq. gjy 12,34 ₽";
+const OFFSETS = [0, 0.25, 0.37, 0.5, 0.75, 1];
+
+export default function CorpusTextSubpixel({ props }: EasyUIComponentProps<{ caption: string }>) {
+  return (
+    <div style={{ fontFamily: '"YS Text", sans-serif', width: 340, padding: 10, fontSize: 15, lineHeight: 1.4 }}>
+      <div style={{ fontSize: 11, fontWeight: 500 }}>{props.caption}</div>
+      {OFFSETS.map((offset) => (
+        <div key={`ml${offset}`} style={{ marginLeft: `${offset}px` }}>{LINE}</div>
+      ))}
+      {OFFSETS.map((offset) => (
+        <div key={`tx${offset}`} style={{ transform: `translateX(${offset}px)` }}>{LINE}</div>
+      ))}
+      <div style={{ width: "37.3vw", overflow: "hidden", whiteSpace: "nowrap" }}>{LINE}</div>
+      <div style={{ paddingLeft: "3.7%", fontWeight: 500 }}>{LINE}</div>
+    </div>
+  );
+}

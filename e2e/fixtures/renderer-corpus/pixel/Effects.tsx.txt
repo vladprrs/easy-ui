@@ -1,0 +1,39 @@
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+/**
+ * `pixel/`: прозрачность, тени и градиенты — композитные слои. Именно здесь Skia выбирает
+ * SIMD-путь смешивания и порядок тайлов, поэтому фикстура — главный кандидат на cross-host
+ * расхождение (§2.1 P1: `--disable-skia-runtime-opts`, `--disable-partial-raster`).
+ */
+export const definition = {
+  props: z.strictObject({ caption: z.string() }),
+  description: "Renderer corpus fixture: opacity, box-shadow and gradient compositing",
+  atomicLevel: "atom" as const,
+  example: { caption: "effects" },
+};
+
+export default function CorpusEffects({ props }: EasyUIComponentProps<{ caption: string }>) {
+  return (
+    <div style={{ fontFamily: '"YS Text", sans-serif', padding: 14, width: 320 }}>
+      <div style={{ fontSize: 11, fontWeight: 500, marginBottom: 8 }}>{props.caption}</div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ width: 88, height: 56, borderRadius: 12, background: "linear-gradient(135deg, #3b2fb5 0%, #ff4d4d 62%, #ffe600 100%)" }} />
+        <div style={{ width: 88, height: 56, borderRadius: 12, background: "radial-gradient(circle at 30% 35%, #ffffff 0%, #3b2fb5 70%)" }} />
+        <div style={{ width: 88, height: 56, borderRadius: 12, background: "#3b2fb5", boxShadow: "0 6px 14px rgba(59,47,181,0.45), inset 0 1px 0 rgba(255,255,255,0.6)" }} />
+      </div>
+      <div style={{ position: "relative", height: 74, marginTop: 12 }}>
+        {[0.15, 0.3, 0.45, 0.6, 0.75].map((opacity, index) => (
+          <div
+            key={`o${opacity}`}
+            style={{
+              position: "absolute", left: index * 27.5, top: index * 5.5, width: 96, height: 48,
+              borderRadius: 999, background: "#3b2fb5", opacity,
+            }}
+          />
+        ))}
+      </div>
+      <div style={{ marginTop: 10, height: 26, background: "linear-gradient(to right, rgba(59,47,181,0) 0%, rgba(59,47,181,1) 100%)", filter: "blur(0.4px)" }} />
+    </div>
+  );
+}

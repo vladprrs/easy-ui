@@ -1,0 +1,36 @@
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+/**
+ * `pixel/`: шрифт, пришедший **темой дизайн-системы**, а не глобальным CSS приложения.
+ * Harness публикует тему ДС корпуса с двумя faces семейства `Corpus Text` (байты — те же
+ * YS Text Regular/Medium из `public/fonts/`, загруженные ассетами), `serializeFontFaceCss`
+ * превращает их в `@font-face`, а `settleFonts` обязан дождаться загрузки до кадра.
+ *
+ * Отдельное семейство — не украшение: под именем `YS Text` face уже объявлен глобальным CSS
+ * SPA, и фикстура не отличила бы «тема доехала» от «доехал шрифт приложения». Здесь fallback
+ * виден сразу — при незагруженной теме растр уедет на системный sans.
+ */
+export const definition = {
+  props: z.strictObject({ caption: z.string() }),
+  description: "Renderer corpus fixture: design-system theme @font-face (weights 400/500)",
+  atomicLevel: "atom" as const,
+  example: { caption: "theme-font" },
+};
+
+const SAMPLE = "Тема ДС: Corpus Text — 1 234,56 ₽";
+
+export default function CorpusThemeFont({ props }: EasyUIComponentProps<{ caption: string }>) {
+  return (
+    <div style={{ fontFamily: '"Corpus Text", serif', width: 330, padding: 12, lineHeight: 1.36 }}>
+      <div style={{ fontSize: 11, fontWeight: 500 }}>{props.caption}</div>
+      {[13, 16, 20].map((size) => (
+        <div key={`r${size}`} style={{ fontSize: size, fontWeight: 400 }}>{SAMPLE}</div>
+      ))}
+      {[13, 16, 20].map((size) => (
+        <div key={`m${size}`} style={{ fontSize: size, fontWeight: 500 }}>{SAMPLE}</div>
+      ))}
+      <div style={{ fontSize: 14, fontWeight: 400, fontStyle: "italic" }}>{SAMPLE}</div>
+    </div>
+  );
+}

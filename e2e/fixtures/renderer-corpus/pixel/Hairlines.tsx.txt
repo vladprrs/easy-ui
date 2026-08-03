@@ -1,0 +1,36 @@
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+/**
+ * `pixel/`: волосяные линии. 1px, 0.5px и трансформированные разделители на DPR 1/2/3 —
+ * классический источник «то есть линия, то нет»: на DPR 1 полупиксельная граница попадает в
+ * антиалиасинг, на DPR 3 — в честный субпиксель. Вариант DPR матрицы держится на этой фикстуре.
+ */
+export const definition = {
+  props: z.strictObject({ caption: z.string() }),
+  description: "Renderer corpus fixture: hairline borders and dividers across DPR",
+  atomicLevel: "atom" as const,
+  example: { caption: "hairlines" },
+};
+
+const WIDTHS = [0.33, 0.5, 0.75, 1, 1.5, 2];
+
+export default function CorpusHairlines({ props }: EasyUIComponentProps<{ caption: string }>) {
+  return (
+    <div style={{ fontFamily: '"YS Text", sans-serif', padding: 12, width: 300 }}>
+      <div style={{ fontSize: 11, fontWeight: 500, marginBottom: 6 }}>{props.caption}</div>
+      {WIDTHS.map((width) => (
+        <div key={`h${width}`} style={{ borderTop: `${width}px solid currentColor`, paddingTop: 3, marginTop: 3, fontSize: 12 }}>
+          {`${width}px`}
+        </div>
+      ))}
+      <div style={{ marginTop: 8, borderTop: "1px solid currentColor", transform: "scaleY(0.5)", transformOrigin: "top" }} />
+      <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+        {WIDTHS.map((width) => (
+          <div key={`v${width}`} style={{ width: 34, height: 40, borderLeft: `${width}px solid #3b2fb5`, borderRight: `${width}px solid #ff4d4d` }} />
+        ))}
+      </div>
+      <div style={{ marginTop: 10, height: 24, backgroundImage: "repeating-linear-gradient(90deg, currentColor 0 1px, transparent 1px 5px)" }} />
+    </div>
+  );
+}

@@ -27,6 +27,8 @@
     "migration:v15:report": "bun server/cli/migrationV15Report.ts",
     "serve": "SERVE_DIST=dist PORT=4173 EASYUI_SURFACES=1 bun server/main.ts",
     "e2e": "playwright test",
+    "corpus:verify": "node scripts/renderer-corpus.mjs --verify",
+    "corpus:record": "node scripts/renderer-corpus.mjs --record",
     "perf:library": "tsx scripts/perf-library.mjs",
     "verify": "npm run typecheck && npm run server:typecheck && npm run lint && npm run test -- --run && npm run server:test && npm run validate:templates && npm run verify:openapi && npm run verify:sdk && npm run verify:renderer && npm run build && npm run check:css"
   },

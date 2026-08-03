@@ -1,0 +1,42 @@
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+/**
+ * `pixel/`: векторный растр. Слева — inline-SVG (штрихи, дуги, скошенные соединения), справа —
+ * тот же глиф, пришедший **ассетом** (`/api/assets/asset_…`, allowlist капчура) и отмасштабированный
+ * на дробные размеры. Вектор растеризуется Skia, поэтому фикстура — прямая проверка
+ * `--disable-skia-runtime-opts` (SIMD-пути выбираются по CPUID, §2.1 P1).
+ *
+ * `__ASSET_SVG__` подставляет harness (`scripts/renderer-corpus.mjs`) после загрузки ассета:
+ * литерал `asset_<sha256>` в исходнике пинуется при publish, поэтому он обязан существовать.
+ */
+export const definition = {
+  props: z.strictObject({ caption: z.string() }),
+  description: "Renderer corpus fixture: inline SVG strokes and an SVG asset at fractional sizes",
+  atomicLevel: "atom" as const,
+  example: { caption: "icon-svg" },
+};
+
+const ASSET_URL = "/api/assets/__ASSET_SVG__";
+
+export default function CorpusIconSvg({ props }: EasyUIComponentProps<{ caption: string }>) {
+  return (
+    <div style={{ fontFamily: '"YS Text", sans-serif', padding: 12, width: 320 }}>
+      <div style={{ fontSize: 11, fontWeight: 500, marginBottom: 6 }}>{props.caption}</div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 10 }}>
+        <svg width="64" height="64" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+          <circle cx="24" cy="24" r="21.5" stroke="currentColor" strokeWidth="2.5" />
+          <path d="M13.5 25.5 L21 33 L35.5 15.5" stroke="#3b2fb5" strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M4 44 L24 6 L44 44 Z" stroke="#ff4d4d" strokeWidth="1.5" fill="rgba(255,77,77,0.12)" />
+        </svg>
+        <svg width="37" height="37" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="1.25" y="1.25" width="21.5" height="21.5" rx="5.5" stroke="currentColor" strokeWidth="1.5" />
+          <path d="M6.5 12.5 L10.5 16.5 L17.5 7.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+        <img src={ASSET_URL} alt="" width={48} height={48} />
+        <img src={ASSET_URL} alt="" style={{ width: 33.5, height: 33.5 }} />
+        <img src={ASSET_URL} alt="" style={{ width: 21, height: 21, opacity: 0.55 }} />
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,61 @@
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+/**
+ * `pixel/`: badge со скруглением — второй кластер расхождений family-плана (§1). Радиусы
+ * целые и дробные, бордер 1px/1.5px, антиалиасинг дуги на разных DPR — это ровно тот растр,
+ * который ловит `--disable-partial-raster` и `--disable-skia-runtime-opts` (§2.1 P1).
+ */
+export const definition = {
+  props: z.strictObject({ caption: z.string() }),
+  description: "Renderer corpus fixture: rounded badges (integer and fractional radii)",
+  atomicLevel: "atom" as const,
+  example: { caption: "badge-radius" },
+};
+
+const RADII = [2, 4, 6.5, 10, 13.5, 999];
+
+export default function CorpusBadgeRadius({ props }: EasyUIComponentProps<{ caption: string }>) {
+  return (
+    <div style={{ fontFamily: '"YS Text", sans-serif', padding: 12, width: 320 }}>
+      <div style={{ fontSize: 11, fontWeight: 500, marginBottom: 6 }}>{props.caption}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+        {RADII.map((radius) => (
+          <span
+            key={`solid${radius}`}
+            style={{
+              display: "inline-block", padding: "5px 11px", fontSize: 13, fontWeight: 500,
+              borderRadius: radius, background: "#3b2fb5", color: "#ffffff",
+            }}
+          >
+            {`r${radius}`}
+          </span>
+        ))}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 9 }}>
+        {RADII.map((radius) => (
+          <span
+            key={`outline${radius}`}
+            style={{
+              display: "inline-block", padding: "4.5px 10.5px", fontSize: 13,
+              borderRadius: radius, border: "1px solid currentColor", color: "inherit",
+            }}
+          >
+            {`r${radius}`}
+          </span>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 9, marginTop: 9 }}>
+        {[1, 1.5, 2, 3].map((width) => (
+          <span
+            key={`bw${width}`}
+            style={{
+              display: "inline-block", width: 52, height: 30, borderRadius: "10px 3px 10px 3px",
+              border: `${width}px solid #ff4d4d`, background: "rgba(59,47,181,0.14)",
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}

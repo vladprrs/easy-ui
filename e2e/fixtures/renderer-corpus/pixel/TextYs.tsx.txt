@@ -1,0 +1,44 @@
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+/**
+ * Корпус рендерера, подмножество `pixel/` (план 2026-08-03-renderer-contract-2 §5 R2b).
+ *
+ * Цель фикстуры — растр **текста**: именно на нём family-план поймал `exact-rgba 0,6974%`
+ * между двумя одинаковыми по DOM компонентами. Гарнитура — YS Text 400/500 из `public/fonts/`
+ * (те же байты, что несёт образ в `dist/fonts` и хеширует `appFontsSha256`), кириллица + цифры
+ * + валютные знаки на четырёх кеглях: хинтинг и субпиксельное позиционирование видны на них.
+ *
+ * Цвет наследуется от поверхности (`text-foreground`), поэтому light/dark дают разный растр —
+ * вариант темы в матрице не вырождается в дубль байтов.
+ *
+ * Исходники корпуса лежат как `*.tsx.txt`: `tsconfig.json` включает `e2e/`, и настоящий `.tsx`
+ * с импортом `easy-ui/runtime` (модуль существует только в материализованном модуле сервера)
+ * уронил бы `npm run typecheck`. Канон репозитория — держать такие исходники текстом.
+ */
+export const definition = {
+  props: z.strictObject({ caption: z.string() }),
+  description: "Renderer corpus fixture: YS Text 400/500 raster (Cyrillic, digits, currency)",
+  atomicLevel: "atom" as const,
+  example: { caption: "text-ys" },
+};
+
+const SAMPLE = "Съешь ещё этих мягких булок";
+const DIGITS = "0123456789 · 1 234,56 ₽ · $1,234.56 · €987";
+
+export default function CorpusTextYs({ props }: EasyUIComponentProps<{ caption: string }>) {
+  return (
+    <div style={{ fontFamily: '"YS Text", sans-serif', width: 336, padding: 12, lineHeight: 1.32 }}>
+      <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: 0.4, textTransform: "uppercase" }}>{props.caption}</div>
+      {[12, 14, 17, 22].map((size) => (
+        <div key={`r${size}`} style={{ fontSize: size, fontWeight: 400 }}>{SAMPLE}</div>
+      ))}
+      {[12, 14, 17, 22].map((size) => (
+        <div key={`m${size}`} style={{ fontSize: size, fontWeight: 500 }}>{SAMPLE}</div>
+      ))}
+      <div style={{ fontSize: 15, fontWeight: 400, letterSpacing: 0.2 }}>{DIGITS}</div>
+      <div style={{ fontSize: 15, fontWeight: 500, letterSpacing: -0.2 }}>{DIGITS}</div>
+      <div style={{ fontSize: 13, fontWeight: 400, opacity: 0.62 }}>{SAMPLE.toUpperCase()}</div>
+    </div>
+  );
+}

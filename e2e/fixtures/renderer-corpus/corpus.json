@@ -1,0 +1,56 @@
+{
+  "corpusVersion": 1,
+  "designSystem": {
+    "id": "renderer-corpus",
+    "name": "Renderer Corpus",
+    "description": "Fixture design system of the renderer corpus (plan 2026-08-03-renderer-contract-2 §5 R2b)"
+  },
+  "assets": {
+    "png": { "file": "assets/checker.png", "mime": "image/png", "placeholder": "__ASSET_PNG__" },
+    "svg": { "file": "assets/glyph.svg", "mime": "image/svg+xml", "placeholder": "__ASSET_SVG__" },
+    "fontRegular": { "file": "public/fonts/YS-Text-Regular.woff2", "mime": "font/woff2", "repoRoot": true },
+    "fontMedium": { "file": "public/fonts/YS-Text-Medium.woff2", "mime": "font/woff2", "repoRoot": true }
+  },
+  "theme": {
+    "fonts": [
+      { "family": "Corpus Text", "asset": "fontRegular", "weight": 400, "style": "normal" },
+      { "family": "Corpus Text", "asset": "fontMedium", "weight": 500, "style": "normal" }
+    ]
+  },
+  "fixtures": [
+    { "id": "corpus-text-ys", "subset": "pixel", "name": "CorpusTextYs", "source": "pixel/TextYs.tsx.txt", "props": { "caption": "text-ys" }, "intent": "Растр текста YS Text 400/500 для корпуса детерминизма рендерера" },
+    { "id": "corpus-text-subpixel", "subset": "pixel", "name": "CorpusTextSubpixel", "source": "pixel/TextSubpixel.tsx.txt", "props": { "caption": "text-subpixel" }, "intent": "Текст на целых и дробных координатах для корпуса детерминизма рендерера" },
+    { "id": "corpus-badge-radius", "subset": "pixel", "name": "CorpusBadgeRadius", "source": "pixel/BadgeRadius.tsx.txt", "props": { "caption": "badge-radius" }, "intent": "Скруглённые badge для корпуса детерминизма рендерера" },
+    { "id": "corpus-icon-svg", "subset": "pixel", "name": "CorpusIconSvg", "source": "pixel/IconSvg.tsx.txt", "props": { "caption": "icon-svg" }, "intent": "Векторные иконки inline и ассетом для корпуса детерминизма рендерера" },
+    { "id": "corpus-image-raster", "subset": "pixel", "name": "CorpusImageRaster", "source": "pixel/ImageRaster.tsx.txt", "props": { "caption": "image-raster" }, "intent": "Растровая картинка в четырёх режимах масштабирования для корпуса детерминизма рендерера" },
+    { "id": "corpus-effects", "subset": "pixel", "name": "CorpusEffects", "source": "pixel/Effects.tsx.txt", "props": { "caption": "effects" }, "intent": "Прозрачность, тени и градиенты для корпуса детерминизма рендерера" },
+    { "id": "corpus-layout-flex-grid", "subset": "pixel", "name": "CorpusLayoutFlexGrid", "source": "pixel/LayoutFlexGrid.tsx.txt", "props": { "caption": "layout-flex-grid" }, "intent": "Flex и grid на дробных ширинах для корпуса детерминизма рендерера" },
+    { "id": "corpus-hairlines", "subset": "pixel", "name": "CorpusHairlines", "source": "pixel/Hairlines.tsx.txt", "props": { "caption": "hairlines" }, "intent": "Волосяные линии и разделители на разных DPR для корпуса детерминизма рендерера" },
+    { "id": "corpus-theme-font", "subset": "pixel", "name": "CorpusThemeFont", "source": "pixel/ThemeFont.tsx.txt", "props": { "caption": "theme-font" }, "intent": "Шрифт из темы дизайн-системы для корпуса детерминизма рендерера" },
+    { "id": "corpus-missing-font-asset", "subset": "outcome", "name": "CorpusMissingFontAsset", "source": "outcome/MissingFontAsset.tsx.txt", "props": { "caption": "missing-font-asset" }, "intent": "Отсутствующий шрифтовой ассет для корпуса исходов капчура" },
+    { "id": "corpus-broken-image", "subset": "outcome", "name": "CorpusBrokenImage", "source": "outcome/BrokenImage.tsx.txt", "props": { "caption": "broken-image" }, "intent": "Битое изображение рядом с живым для корпуса исходов капчура" },
+    { "id": "corpus-late-layout-mutation", "subset": "outcome", "name": "CorpusLateLayoutMutation", "source": "outcome/LateLayoutMutation.tsx.txt", "props": { "caption": "late-layout-mutation" }, "intent": "Поздняя мутация layout после окна стабилизации для корпуса исходов капчура" }
+  ],
+  "variants": [
+    { "id": "l-1-390x844", "theme": "light", "dsf": 1, "viewport": { "width": 390, "height": 844 }, "truncated": true },
+    { "id": "l-1-391x845", "theme": "light", "dsf": 1, "viewport": { "width": 391, "height": 845 } },
+    { "id": "l-1-360x640", "theme": "light", "dsf": 1, "viewport": { "width": 360, "height": 640 } },
+    { "id": "l-2-390x844", "theme": "light", "dsf": 2, "viewport": { "width": 390, "height": 844 } },
+    { "id": "l-2-391x845", "theme": "light", "dsf": 2, "viewport": { "width": 391, "height": 845 } },
+    { "id": "l-2-360x640", "theme": "light", "dsf": 2, "viewport": { "width": 360, "height": 640 } },
+    { "id": "l-2-412x915", "theme": "light", "dsf": 2, "viewport": { "width": 412, "height": 915 } },
+    { "id": "l-3-390x844", "theme": "light", "dsf": 3, "viewport": { "width": 390, "height": 844 } },
+    { "id": "l-3-391x845", "theme": "light", "dsf": 3, "viewport": { "width": 391, "height": 845 }, "truncated": true },
+    { "id": "l-3-360x640", "theme": "light", "dsf": 3, "viewport": { "width": 360, "height": 640 } },
+    { "id": "d-1-390x844", "theme": "dark", "dsf": 1, "viewport": { "width": 390, "height": 844 } },
+    { "id": "d-1-391x845", "theme": "dark", "dsf": 1, "viewport": { "width": 391, "height": 845 } },
+    { "id": "d-1-360x640", "theme": "dark", "dsf": 1, "viewport": { "width": 360, "height": 640 } },
+    { "id": "d-2-390x844", "theme": "dark", "dsf": 2, "viewport": { "width": 390, "height": 844 }, "truncated": true },
+    { "id": "d-2-391x845", "theme": "dark", "dsf": 2, "viewport": { "width": 391, "height": 845 } },
+    { "id": "d-2-360x640", "theme": "dark", "dsf": 2, "viewport": { "width": 360, "height": 640 } },
+    { "id": "d-2-412x915", "theme": "dark", "dsf": 2, "viewport": { "width": 412, "height": 915 } },
+    { "id": "d-3-390x844", "theme": "dark", "dsf": 3, "viewport": { "width": 390, "height": 844 } },
+    { "id": "d-3-391x845", "theme": "dark", "dsf": 3, "viewport": { "width": 391, "height": 845 } },
+    { "id": "d-3-360x640", "theme": "dark", "dsf": 3, "viewport": { "width": 360, "height": 640 } }
+  ]
+}

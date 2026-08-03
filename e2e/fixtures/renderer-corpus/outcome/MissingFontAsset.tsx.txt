@@ -1,0 +1,38 @@
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+/**
+ * `outcome/`: **отсутствующий шрифтовой ассет** (план 2026-08-03-renderer-contract-2 §5 R2b,
+ * ожидания переходят R4 — §6).
+ *
+ * `@font-face` ссылается на несуществующий `asset_<64 нулей>`; id собирается конкатенацией,
+ * потому что publish пинует все литералы `asset_[0-9a-f]{64}` исходника и 422-ит неизвестный
+ * (`ComponentRepo.pinAssets`). Запрос к нему вдобавок не входит в allowlist капчура, то есть
+ * блокируется deny-proxy воркера — ровно тот случай, что описан в §1.4: `settleFonts` сегодня
+ * **не валит** кадр на `FontFace.status === "error"`.
+ *
+ * Текущее (до R4) поведение, зафиксированное в `expected.json` и в
+ * `e2e/preview/renderer-determinism.spec.ts`: джоба завершается `done`, кадр рисуется
+ * fallback-шрифтом, типизированного кода нет. R4 обязан превратить это в `font_face_missing`
+ * (K3/K4) — вместе с ожиданиями этой фикстуры.
+ */
+export const definition = {
+  props: z.strictObject({ caption: z.string() }),
+  description: "Renderer corpus outcome fixture: @font-face pointing at a missing asset",
+  atomicLevel: "atom" as const,
+  example: { caption: "missing-font-asset" },
+};
+
+const MISSING_ASSET_ID = "asset_".concat("0".repeat(64));
+const FACE_CSS = `@font-face{font-family:"Corpus Missing";src:url("/api/assets/${MISSING_ASSET_ID}") format("woff2");font-weight:400;font-display:block}`;
+
+export default function CorpusMissingFontAsset({ props }: EasyUIComponentProps<{ caption: string }>) {
+  return (
+    <div style={{ padding: 12, width: 320 }}>
+      <style>{FACE_CSS}</style>
+      <div style={{ fontSize: 11, fontWeight: 500 }}>{props.caption}</div>
+      <div style={{ fontFamily: '"Corpus Missing", sans-serif', fontSize: 18 }}>Шрифт не доехал — 1 234 ₽</div>
+      <div style={{ fontFamily: '"Corpus Missing", sans-serif', fontSize: 13, fontWeight: 400 }}>fallback line</div>
+    </div>
+  );
+}

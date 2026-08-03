@@ -1,0 +1,42 @@
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+/**
+ * `pixel/`: flex и grid с дробной раскладкой. Ширина контейнера задана в `vw`, поэтому
+ * геометрия — функция вьюпорта варианта (390 → 343.2 px, 391 → 344.08 px): колонки `1fr`
+ * получают дробные ширины, и округление раскладки становится наблюдаемым в растре.
+ * Это же делает вариант «нечётный вьюпорт» матрицы не дублем чётного.
+ */
+export const definition = {
+  props: z.strictObject({ caption: z.string() }),
+  description: "Renderer corpus fixture: flex and grid layout on fractional widths",
+  atomicLevel: "atom" as const,
+  example: { caption: "layout-flex-grid" },
+};
+
+const CELLS = [1, 2, 3, 4, 5, 6, 7];
+
+export default function CorpusLayoutFlexGrid({ props }: EasyUIComponentProps<{ caption: string }>) {
+  return (
+    <div style={{ fontFamily: '"YS Text", sans-serif', padding: 10, width: "88vw", maxWidth: 460 }}>
+      <div style={{ fontSize: 11, fontWeight: 500, marginBottom: 6 }}>{props.caption}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 7 }}>
+        {CELLS.map((cell) => (
+          <div key={`g${cell}`} style={{ height: 34, borderRadius: 5, background: "rgba(59,47,181,0.18)", border: "1px solid rgba(59,47,181,0.5)", fontSize: 12, lineHeight: "32px", textAlign: "center" }}>
+            {cell}
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 5, marginTop: 8 }}>
+        <div style={{ flex: "1 1 0", height: 28, background: "#3b2fb5", borderRadius: 4 }} />
+        <div style={{ flex: "2 1 0", height: 28, background: "#ff4d4d", borderRadius: 4 }} />
+        <div style={{ flex: "3 1 0", height: 28, background: "#ffe600", borderRadius: 4 }} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "37% 1fr auto", gap: 6, marginTop: 8, fontSize: 13 }}>
+        <div style={{ border: "1px solid currentColor", padding: 4 }}>37%</div>
+        <div style={{ border: "1px solid currentColor", padding: 4 }}>1fr</div>
+        <div style={{ border: "1px solid currentColor", padding: 4 }}>auto</div>
+      </div>
+    </div>
+  );
+}

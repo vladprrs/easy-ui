@@ -1,0 +1,39 @@
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+/**
+ * `pixel/`: растровая картинка-ассет 64×64 в четырёх режимах — 1:1, увеличение, уменьшение на
+ * дробный размер и `object-fit: cover` в неквадратной рамке. Проверяется детерминизм
+ * ресемплинга (Skia mip/бикубик) и то, что декодированный растр вообще попал в кадр:
+ * `settleImages` считает картинку готовой по `naturalWidth`, а R4 переводит это в
+ * `decoded-strict` (§5 R4) — фикстура остаётся её позитивным контролем.
+ *
+ * `__ASSET_PNG__` подставляет harness после загрузки `assets/checker.png`.
+ */
+export const definition = {
+  props: z.strictObject({ caption: z.string() }),
+  description: "Renderer corpus fixture: raster asset at 1:1, upscaled, downscaled and cover-fitted",
+  atomicLevel: "atom" as const,
+  example: { caption: "image-raster" },
+};
+
+const ASSET_URL = "/api/assets/__ASSET_PNG__";
+
+export default function CorpusImageRaster({ props }: EasyUIComponentProps<{ caption: string }>) {
+  return (
+    <div style={{ fontFamily: '"YS Text", sans-serif', padding: 12, width: 320 }}>
+      <div style={{ fontSize: 11, fontWeight: 500, marginBottom: 6 }}>{props.caption}</div>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+        <img src={ASSET_URL} alt="" width={64} height={64} />
+        <img src={ASSET_URL} alt="" width={96} height={96} />
+        <img src={ASSET_URL} alt="" style={{ width: 47.5, height: 47.5 }} />
+        <div style={{ width: 84, height: 42, overflow: "hidden", borderRadius: 6 }}>
+          <img src={ASSET_URL} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        </div>
+      </div>
+      <div style={{ marginTop: 8, width: "44vw", height: 40, overflow: "hidden" }}>
+        <img src={ASSET_URL} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      </div>
+    </div>
+  );
+}

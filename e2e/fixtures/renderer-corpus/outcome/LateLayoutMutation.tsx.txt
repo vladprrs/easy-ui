@@ -1,0 +1,39 @@
+import { useEffect, useState } from "react";
+import { z } from "zod";
+import type { EasyUIComponentProps } from "easy-ui/runtime";
+
+/**
+ * `outcome/`: **поздняя мутация layout**. Через 380 мс после монтирования компонент дописывает
+ * строки и меняет высоту — то есть layout продолжает двигаться после того, как `settleFrames`
+ * досчитал свои N кадров и «доказал» покой (§1.4: перемера там нет).
+ *
+ * Сегодня джоба завершается `done`, а какой именно кадр попал в PNG — вопрос гонки; поэтому
+ * фикстура живёт в `outcome/`, где сверяется исход, а не sha256 (§5 R2b, T-M2). R4 вводит
+ * `src/capture/stability.ts` и обязан выдать `layout_unstable` за ≤3 попытки — ожидания
+ * меняет владелец R4 (§6).
+ */
+export const definition = {
+  props: z.strictObject({ caption: z.string() }),
+  description: "Renderer corpus outcome fixture: layout mutates after the frame settle window",
+  atomicLevel: "atom" as const,
+  example: { caption: "late-layout-mutation" },
+};
+
+export default function CorpusLateLayoutMutation({ props }: EasyUIComponentProps<{ caption: string }>) {
+  const [grown, setGrown] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setGrown(true), 380);
+    return () => clearTimeout(timer);
+  }, []);
+  return (
+    <div style={{ padding: 12, width: 320, fontFamily: '"YS Text", sans-serif' }}>
+      <div style={{ fontSize: 11, fontWeight: 500 }}>{props.caption}</div>
+      <div style={{ fontSize: 15 }}>Первая строка держит высоту 40px</div>
+      {grown
+        ? [1, 2, 3, 4].map((line) => (
+          <div key={`late${line}`} style={{ fontSize: 15, background: "rgba(255,77,77,0.18)" }}>{`Поздняя строка ${line}`}</div>
+        ))
+        : null}
+    </div>
+  );
+}
