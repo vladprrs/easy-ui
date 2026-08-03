@@ -401,6 +401,38 @@ Meta-ответы прототипов и компонентов additively не
 
 **Kill-switch.** `EASYUI_ACCEPTANCE_DISABLED=1` (читается один раз на входе процесса) убирает ручку — `404 not_found` — и гасит `features.acceptancePromote` в discovery. Publish при этом продолжает работать: гашение приёмки не делает дизайн-систему неопубликуемой.
 
+### Acceptance: кандидаты и матричные раны
+
+Матричная приёмка (план `docs/plans/2026-08-03-family-acceptance-and-composition-v3.md` §5 W1a, RFC §4.1–4.2) заменяет семейство из десятков клиентских операций **одной постановкой и polls**: неизменяемый кандидат (замороженный билд ревизии) + набор верификационных случаев → durable-ран с per-case вердиктами, гейтами и content-addressed evidence.
+
+**Kill-switch.** Весь набор ручек существует только при `EASYUI_ACCEPTANCE_MATRIX=1` (env читается один раз на входе процесса, как `REUSE_GATE`/`EASYUI_VALIDATE_DISABLED`). Флаг выключен → каждая ручка отвечает `404 not_found`, а `features.acceptanceMatrix|acceptanceCandidates|acceptanceRuns` в `/api/capabilities` равны `false`. Тем же флагом закрыты ссылки `candidateId`/`acceptanceRunId` у `POST /components/:id/promote`: при выключенной матрице они дают `422 acceptance_matrix_disabled` (в саму сагу promote они приезжают волной W1c — до неё `422 unsupported_option`).
+
+**Авторизация — одна на все ручки.** `requireUser` + владелец компонента по денормализованному `component_id` кандидата/рана (или админ). `share`- и `capture`-принципалы получают `403 forbidden` всегда: они проходят анонимный барьер и иначе читали бы чужие раны (тот же инвариант, что у `/catalog/candidates`). Артефакты CAS отдаются **только** внутри `runId`-scoped архива — ручки «по sha» нет by design: адрес артефакта не несёт владельца.
+
+| Метод | Путь | Ответ |
+|---|---|---|
+| `POST` | `/components/:id/candidates` | `200` кандидат + `cached` |
+| `GET` | `/component-candidates/:candidateId` | `200` кандидат |
+| `POST` | `/acceptance-runs` | `202` `{runId,status,cases,progress,cached}` |
+| `GET` | `/acceptance-runs/:runId` | `200` статус + gates + progress + eta + `failedCases` |
+| `GET` | `/acceptance-runs/:runId/cases` | `200` per-case вердикты и имена артефактов |
+| `GET` | `/acceptance-runs/:runId/evidence` | `200` `application/zip` |
+| `POST` | `/acceptance-runs/:runId/cancel` | `200` ран в статусе `cancelled` |
+
+**`POST /components/:id/candidates`** (тело `{}`) выполняет тот же [validate-префлайт головы](#validate-префлайт-публикации) — с тем же троттлингом и теми же кодами — и этим же материализует бандл, который потом снимается **по ревизии кандидата**, а не по head. Строка идемпотентна по `{componentId, designSystem, rev, buildFingerprint}`: повтор на неизменённом билде возвращает тот же `candidateId` с `cached: true` и не сбрасывает его `status`. Бандл кандидата пинуется против GC candidate-кэша, пока на него ссылается нетерминальный ран. Ответ: `candidateId`, `componentId`, `designSystem`, `rev`, `sourceHash`, `bundleHash`, `hostAbiVersion`, `themeVersion`, `buildFingerprint`, `policyProfileHash`, `catalogRevision`, `status` (`validated|promoted`), `statusReason`, `acceptanceRunId`, `promotedVersion`, `createdAt`, `expiresAt`, `cached`, `warnings`. Уехавшая между префлайтом и записью голова — `409 revision_conflict {currentRev}`. Списочной ручки нет (триаж A7): кандидат адресуется своим id.
+
+**`POST /acceptance-runs`** `{candidateId, idempotencyKey?, policy?, cases?, refresh?}`. Профили — `default-v1` (по умолчанию) и `pixel-strict-v1`; неизвестный → `422 unknown_policy_profile`. Источник случаев в этой фазе — именованные `definition.examples` кандидата; `cases: [{key, props}]` задаёт набор явно. Дубликат props становится **алиасом** (одна съёмка, наследованный вердикт), пустой набор — `422 empty_case_set`, превышение `limits.acceptanceMaxCasesPerRun` — `422 case_set_too_large` (потолок считается до схлопывания алиасов). `idempotencyKey` уникален в паре с кандидатом и дедуплицирует **постановку** (ответ с `cached: true`); на синхронных ручках канон остаётся CAS по `baseRev`. У кандидата не может быть двух нетерминальных ранов — `409 acceptance_run_in_flight {runId}`; вытесненный бандл — `409 candidate_evicted`, разъехавшаяся пара `{rev, sourceHash}` — `409 candidate_stale`. Под maintenance-lock'ом каталога постановка отвечает `503 maintenance_in_progress` (обратная сторона: `acquireMaintenanceLock` отказывает при живом ране). Отклонённые конструкции — `422 unsupported_option`: `concurrency`, `cases.concurrency`, `manifestAssetId`, `caseSetId` (case-set'ы — волна W2) и частичный `refresh` (`refresh` понимает только `"none"` и `"all"`).
+
+**Исполнение.** Ран живёт вне screenshot-помпы: собственный цикл ставит capture-джобы по одной, оставляя интерактиву слоты очереди, ретраит только инфраструктурные исходы джобы и терминализуется watchdog'ом при превышении дедлайна профиля. Пережившие рестарт `queued|running`-раны переводятся в `error` стартовой уборкой — потеря дешёвая, потому что повтор переиспользует результаты случаев по `case_fingerprint` (в `progress.reused`). Гейты фазы 1: `contract`, `defaults`, `render`, `determinism` (повтор на выборке, побайтово), `audit` — обязательные; `geometry` — **advisory** (v1-семантика union-rect в вердикт не входит, боевой гейт приезжает в W3); `visual`/`readiness`/`regression`/`interactions` — `not-implemented` и в свёртке не участвуют. Свёртка: `fail` — любой случай `fail` **или** `indeterminate` по обязательному гейту; `error` — инфраструктурный отказ и нет ни одного `fail`; `cancelled` — по cancel; иначе `pass`. `reused`/`skipped`/алиасы не маскируют `fail`.
+
+**`GET /acceptance-runs/:runId`** отдаёт `status`, `policy {id,hash}`, `progress {total, completed, reused, failed, running, eta {secondsRemaining, basis}}`, `gates` (сводка «гейт → статус → сколько случаев»), `evidenceManifestHash` и `failedCases`, отсортированные по severity (`{rank, class, score}`) с перечнем провалившихся гейтов и их `detail`. **`/cases`** добавляет `propsHash`, `caseFingerprint`, `aliasOfCaseId`, `reuseReason`, качество капчура и `artifacts: [{name, sha256, bytes}]` — имена и адреса, но не содержимое.
+
+**`GET /acceptance-runs/:runId/evidence`** — ZIP: `manifest.json`, `SHA256SUMS` (формат `sha256sum`, строки `"<sha256>  <caseId>/<name>"`) и сами артефакты по путям `<caseId>/<name>` (`render.png`, `geometry.json`, `determinism.png`, …). Манифест пишется при терминализации рана; до неё — `409 evidence_not_ready`. Сырьё тяжелее `limits.evidenceMaxBytes` — `413 evidence_too_large` (проверяется по размерам из манифеста, до чтения байтов). Артефакт, уже вычищенный GC evidence, остаётся строкой в `SHA256SUMS`, но отсутствует в архиве: `sha256sum -c` покажет ровно то, чего не хватает.
+
+**`POST /acceptance-runs/:runId/cancel`** отменяет только `queued`-ран; бегущий не отменяется — `409 run_not_cancellable` (он завершится сам либо по watchdog'у).
+
+**Лимиты в discovery.** `limits.acceptanceMaxCasesPerRun` (случаев на ран), `limits.acceptanceMaxJobsPerRun` (capture-джоб на ран у профиля по умолчанию), `limits.acceptanceCaseTtlHours` (TTL кэша результатов случаев) и `limits.evidenceMaxBytes` (потолок байт evidence и экспорта).
+
 ### Поиск кандидатов на переиспользование
 
 | Метод и путь | Тело / ответ |
@@ -1031,13 +1063,15 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
   "computedOps": ["count", "sum", "sumProduct", "add"],
   "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5, "geometryRects": 2000, "flows": 24, "flowSteps": 50, "flowTotalSteps": 320, "flowDepth": 4, "compositionDepth": 5,
     "computedEntries": 20, "computedFields": 4, "computedTerms": 8, "surfaces": 2,
+    "acceptanceMaxCasesPerRun": 64, "acceptanceMaxJobsPerRun": 128, "acceptanceCaseTtlHours": 336, "evidenceMaxBytes": 268435456,
     "validateUserConcurrent": 1, "validateGlobalConcurrent": 2, "validateCacheTtlHours": 24, "validateCacheMiB": 32 },
   "designSystems": ["shadcn", "wireframe", "..."],
   "resolvedSpaceScales": { "shadcn": { "none": "0px", "xs": "4px", "sm": "8px", "md": "12px", "lg": "16px", "xl": "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" } },
   "regions": ["statusBar", "header", "footer"],
   "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true, "computed": true, "screenRegions": true, "bundleExport": true, "bundleImport": true, "componentReuseGate": true, "compositionV2": true, "catalogMigration": true,
     "componentValidate": true, "componentGeometry": true, "componentDraftPreview": true, "prototypeHeadTracking": true, "readinessProfile": true, "themeDryRun": true, "themeSparseOps": true, "themeSpacingResolverV2": true,
-    "surfaces": true, "surfacesWrite": false },
+    "surfaces": true, "surfacesWrite": false,
+    "acceptanceMatrix": false, "acceptanceCandidates": false, "acceptanceRuns": false },
   "reuseGate": { "mode": "shadow", "intentRequired": false, "policyVersion": 1 }
 }
 ```
@@ -1061,8 +1095,11 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 | `themeSpacingResolverV2` | новые версии темы пишутся [резолвером 2](#тема-дизайн-системы-tokensfontsicons-и-версии) | `EASYUI_THEME_RESOLVER_V2_DISABLED=1` → `false`, новые версии остаются на резолвере 1 |
 | `surfaces` | образ понимает [мульти-поверхностные документы](#мульти-поверхностные-документы-docsurfaces) (`doc.surfaces`) на чтении и рендере | — |
 | `surfacesWrite` | разрешено **сохранять** документы с `doc.surfaces`; иначе `422 surfaces_disabled` | без переменной `false`; включает `EASYUI_SURFACES=1` (прод-compose задаёт дефолт `1` с f5eaa65) |
+| `acceptanceMatrix` | доступна [матричная приёмка](#acceptance-кандидаты-и-матричные-раны) целиком, включая ссылки `candidateId`/`acceptanceRunId` в promote | без `EASYUI_ACCEPTANCE_MATRIX=1` — `false`, все ручки набора `404`, promote со ссылками — `422 acceptance_matrix_disabled` |
+| `acceptanceCandidates` | доступны `POST /components/:id/candidates` и `GET /component-candidates/:id` | тот же флаг |
+| `acceptanceRuns` | доступны `/acceptance-runs*` (постановка, poll, cases, evidence, cancel) | тот же флаг |
 
-`EASYUI_SURFACES` — единственный switch с **обратной** полярностью: пустое значение означает «запись выключена» (`surfacesWrite: false`), а не «разрешено». Он читается на запросе, поэтому discovery и поведение ручки совпадают по определению. Остальные kill-switch'и (`EASYUI_VALIDATE_DISABLED`, `EASYUI_ACCEPTANCE_DISABLED`, `EASYUI_THEME_RESOLVER_V2_DISABLED`), как и `REUSE_GATE`, читаются один раз на входе процесса, поэтому discovery и поведение ручек не могут разойтись. Флаг `false` означает «выключено на этом инстансе», а отсутствие ключа — «образ старше этой волны»; клиент обязан различать эти случаи. Лимиты `validateUserConcurrent`/`validateGlobalConcurrent` описывают, когда прилетит `429 validate_in_flight`/`429 queue_full`, а `validateCacheTtlHours`/`validateCacheMiB` — срок жизни и потолок candidate-кэша (после вытеснения следующий draft-preview просто пересоберёт кандидата).
+`EASYUI_SURFACES` — единственный switch с **обратной** полярностью: пустое значение означает «запись выключена» (`surfacesWrite: false`), а не «разрешено». Он читается на запросе, поэтому discovery и поведение ручки совпадают по определению. Остальные kill-switch'и (`EASYUI_VALIDATE_DISABLED`, `EASYUI_ACCEPTANCE_DISABLED`, `EASYUI_ACCEPTANCE_MATRIX`, `EASYUI_THEME_RESOLVER_V2_DISABLED`), как и `REUSE_GATE`, читаются один раз на входе процесса, поэтому discovery и поведение ручек не могут разойтись. Флаг `false` означает «выключено на этом инстансе», а отсутствие ключа — «образ старше этой волны»; клиент обязан различать эти случаи. Лимиты `validateUserConcurrent`/`validateGlobalConcurrent` описывают, когда прилетит `429 validate_in_flight`/`429 queue_full`, а `validateCacheTtlHours`/`validateCacheMiB` — срок жизни и потолок candidate-кэша (после вытеснения следующий draft-preview просто пересоберёт кандидата).
 
 `features.compositionV2` — инстанс принимает документы композиций версии 2 (вложенность, `atomicLevel`); `features.catalogMigration` — доступны админские эндпоинты аудита и миграции каталога. `limits.compositionDepth` — максимальная глубина вложенности композиций, **внешняя композиция считается уровнем 1** (см. [формат](prototype-format.md#composition-document-v2)).
 

@@ -1267,6 +1267,9 @@ export const promoteComponentContract = registerContract({
     expectedCatalogRevision: z.string().optional(),
     supersede: z.enum(["auto", "none"]).optional(),
     reuseOverride: componentReuseOverrideSchema.optional(),
+    /** W1a: принимаются формой, но требуют EASYUI_ACCEPTANCE_MATRIX=1 и приезжают в сагу в W1c. */
+    candidateId: z.string().optional(),
+    acceptanceRunId: z.string().optional(),
   }),
   responseSchema: z.looseObject({
     version: z.number(), rev: z.number(), hostAbiVersion: z.number(),
@@ -1285,6 +1288,8 @@ export const promoteComponentContract = registerContract({
     { status: 422, code: "asset_not_found" },
     { status: 422, code: "atomic_policy_violation" },
     { status: 422, code: "event_schema_not_serializable" },
+    { status: 422, code: "acceptance_matrix_disabled", description: "candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off" },
+    { status: 422, code: "unsupported_option", description: "candidateId/acceptanceRunId are wired into the promote saga from wave W1c" },
     { status: 429, code: "validate_in_flight", description: "a validate/promote build is already in flight for this user" },
     { status: 429, code: "queue_full", description: "global validate concurrency cap reached" },
   ],
@@ -1314,6 +1319,147 @@ export const validateComponentContract = registerContract({
     { status: 422, code: "event_schema_not_serializable" },
     { status: 429, code: "validate_in_flight", description: "a validate run is already in flight for this user" },
     { status: 429, code: "queue_full", description: "global validate concurrency cap reached" },
+  ],
+});
+
+/**
+ * Матричная приёмка кандидата (план 2026-08-03 §5 W1a, RFC §4.1–4.2). Весь набор существует
+ * только при `EASYUI_ACCEPTANCE_MATRIX=1` — иначе 404 (`features.acceptanceMatrix=false`).
+ * Авторизация одна на все ручки: `requireUser` + владелец компонента по денормализованному
+ * `component_id` (или админ); `share`/`capture`-принципалы получают 403 всегда.
+ */
+const acceptanceCandidateFields = {
+  candidateId: z.string(), componentId: z.string(), designSystem: z.string(), rev: z.number(),
+  sourceHash: z.string(), bundleHash: z.string(), hostAbiVersion: z.number(), themeVersion: z.number().nullable(),
+  buildFingerprint: z.string(), policyProfileHash: z.string(), catalogRevision: z.string(),
+  status: z.enum(["validated", "promoted"]), statusReason: z.string().nullable(),
+  acceptanceRunId: z.string().nullable(), promotedVersion: z.number().nullable(),
+  createdAt: isoDate, expiresAt: isoDate,
+};
+
+const acceptanceRunStatusSchema = z.enum(["queued", "running", "pass", "pass_with_exceptions", "fail", "error", "cancelled"]);
+const acceptanceProgressSchema = z.looseObject({
+  total: z.number(), completed: z.number(), reused: z.number(), failed: z.number(), running: z.number(),
+  eta: z.looseObject({ secondsRemaining: z.number(), basis: z.enum(["measured", "estimate"]) }).optional(),
+});
+const acceptanceGateResultSchema = z.looseObject({ gate: z.string(), status: z.string(), detail: z.string().optional() });
+const acceptanceSeveritySchema = z.looseObject({ rank: z.number(), class: z.string(), score: z.number() }).nullable();
+
+const acceptanceRunViewSchema = z.looseObject({
+  runId: z.string(), candidateId: z.string(), componentId: z.string(), status: acceptanceRunStatusSchema,
+  policy: z.looseObject({ id: z.string(), hash: z.string() }),
+  caseSetId: z.string().nullable(), idempotencyKey: z.string().nullable(),
+  progress: acceptanceProgressSchema, eta: z.looseObject({}).nullable(),
+  gates: z.unknown(), evidenceManifestHash: z.string().nullable(),
+  createdAt: isoDate, startedAt: isoDate.nullable(), finishedAt: isoDate.nullable(),
+  failedCases: z.array(z.looseObject({
+    caseId: z.string(), caseKey: z.string(), status: z.string(), verdict: z.string().nullable(),
+    severity: acceptanceSeveritySchema, failedGates: z.array(acceptanceGateResultSchema),
+  })),
+});
+
+/** Общие отказы владения: чужой компонент — 403, несуществующий кандидат/ран — 404. */
+const acceptanceAuthErrors = [
+  { status: 403, code: "forbidden", description: "not the component owner, or a share/capture principal" },
+  errorCatalog.notFound,
+  errorCatalog.methodNotAllowed,
+] as const;
+
+export const createComponentCandidateContract = registerContract({
+  method: "POST", path: "/api/components/{id}/candidates",
+  summary: "Freeze the validated head revision into an immutable acceptance candidate: runs the same head validate preflight (and therefore materializes the candidate bundle that acceptance runs capture by revision), then writes an idempotent durable row keyed by {componentId, designSystem, rev, buildFingerprint}. Repeating the call on an unchanged build returns the same candidateId with cached:true and does NOT reset its status. The candidate bundle is pinned against the candidate-cache GC while a non-terminal run references it. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
+  requestSchema: z.strictObject({}),
+  responseSchema: z.looseObject({ ...acceptanceCandidateFields, cached: z.boolean(), warnings: z.array(z.string()) }),
+  errors: [
+    ...acceptanceAuthErrors, errorCatalog.invalidRequest,
+    { status: 409, code: "revision_conflict", description: "the component head moved while the candidate was being built" },
+    errorCatalog.payloadTooLarge, errorCatalog.validationFailed,
+    { status: 422, code: "asset_not_found" },
+    { status: 429, code: "validate_in_flight", description: "a validate/candidate build is already in flight for this user" },
+    { status: 429, code: "queue_full", description: "global validate concurrency cap reached" },
+  ],
+});
+
+export const getComponentCandidateContract = registerContract({
+  method: "GET", path: "/api/component-candidates/{candidateId}",
+  summary: "Read an acceptance candidate by id (global namespace; it does not overlap /api/catalog/candidates). Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  responseSchema: z.looseObject(acceptanceCandidateFields),
+  errors: [...acceptanceAuthErrors],
+});
+
+export const createAcceptanceRunContract = registerContract({
+  method: "POST", path: "/api/acceptance-runs",
+  summary: "Queue a matrix acceptance run over the candidate's cases (wave W1a source: the candidate's named examples). The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh: \"all\"` recaptures instead of reusing cached case results. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  status: 202,
+  requestSchema: z.strictObject({
+    candidateId: z.string(),
+    idempotencyKey: z.string().min(1).max(200).optional(),
+    policy: z.enum(["default-v1", "pixel-strict-v1"]).optional(),
+    cases: z.array(z.strictObject({ key: z.string(), props: z.record(z.string(), z.unknown()) })).optional(),
+    refresh: z.enum(["none", "all"]).optional(),
+  }),
+  responseSchema: z.looseObject({
+    runId: z.string(), status: acceptanceRunStatusSchema, candidateId: z.string(), componentId: z.string(),
+    policy: z.looseObject({ id: z.string(), hash: z.string() }),
+    progress: acceptanceProgressSchema, cases: z.number(), cached: z.boolean(),
+  }),
+  errors: [
+    ...acceptanceAuthErrors, errorCatalog.invalidRequest,
+    { status: 409, code: "acceptance_run_in_flight", description: "the candidate already has a queued/running run" },
+    { status: 409, code: "candidate_evicted", description: "the candidate bundle is gone from the cache; re-create the candidate" },
+    { status: 409, code: "candidate_stale", description: "the candidate {rev, sourceHash} pair no longer describes that revision" },
+    errorCatalog.payloadTooLarge,
+    { status: 422, code: "empty_case_set" },
+    { status: 422, code: "case_set_too_large" },
+    { status: 422, code: "duplicate_case_id" },
+    { status: 422, code: "unknown_policy_profile" },
+    { status: 422, code: "unsupported_option", description: "cases.concurrency / manifestAssetId / caseSetId / partial refresh are not supported in this phase" },
+    { status: 503, code: "maintenance_in_progress", description: "a catalog migration holds the maintenance lock" },
+  ],
+});
+
+export const getAcceptanceRunContract = registerContract({
+  method: "GET", path: "/api/acceptance-runs/{runId}",
+  summary: "Poll an acceptance run: status, per-gate roll-up, progress {total, completed, reused, failed, running}, ETA and failedCases sorted by severity. Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  responseSchema: acceptanceRunViewSchema,
+  errors: [...acceptanceAuthErrors],
+});
+
+export const getAcceptanceRunCasesContract = registerContract({
+  method: "GET", path: "/api/acceptance-runs/{runId}/cases",
+  summary: "Per-case verdicts of a run with gate results, severity, reuse reason and the evidence artifact names/digests (never bytes: artifact content is served only inside the runId-scoped evidence archive). Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  responseSchema: z.looseObject({
+    runId: z.string(),
+    cases: z.array(z.looseObject({
+      caseId: z.string(), caseKey: z.string(), status: z.string(), verdict: z.string().nullable(),
+      severity: acceptanceSeveritySchema, propsHash: z.string(), caseFingerprint: z.string(),
+      aliasOfCaseId: z.string().nullable(), reuseReason: z.string().nullable(), reused: z.boolean(),
+      referenceAssetId: z.string().nullable(), startedAt: isoDate.nullable(), finishedAt: isoDate.nullable(),
+      gates: z.array(acceptanceGateResultSchema),
+      artifacts: z.array(z.looseObject({ name: z.string(), sha256: z.string(), bytes: z.number() })),
+    })),
+  }),
+  errors: [...acceptanceAuthErrors],
+});
+
+export const getAcceptanceRunEvidenceContract = registerContract({
+  method: "GET", path: "/api/acceptance-runs/{runId}/evidence",
+  summary: "Download the run evidence archive (ZIP): manifest.json, SHA256SUMS and every CAS artifact under <caseId>/<name>. The manifest is written when the run terminalizes (409 evidence_not_ready before that); artifacts already reclaimed by the evidence GC stay listed in SHA256SUMS but are absent from the archive. Owner or admin only.",
+  contentType: "application/zip",
+  errors: [
+    ...acceptanceAuthErrors,
+    { status: 409, code: "evidence_not_ready", description: "the run has not terminalized yet" },
+    { status: 413, code: "evidence_too_large", description: "raw evidence exceeds limits.evidenceMaxBytes" },
+  ],
+});
+
+export const cancelAcceptanceRunContract = registerContract({
+  method: "POST", path: "/api/acceptance-runs/{runId}/cancel",
+  summary: "Cancel a run that is still queued. A running run is not cancellable (409 run_not_cancellable) — it terminalizes on its own or via the watchdog. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  responseSchema: acceptanceRunViewSchema,
+  errors: [
+    ...acceptanceAuthErrors,
+    { status: 409, code: "run_not_cancellable", description: "only queued runs can be cancelled" },
   ],
 });
 
@@ -1980,6 +2126,9 @@ export const capabilitiesResponseSchema = z.object({
     validateCacheTtlHours: z.number(), validateCacheMiB: z.number(),
     /** `doc.computed` (план 2026-08-02): записей в объекте, полей в `sumProduct`, термов в `add`. */
     computedEntries: z.number(), computedFields: z.number(), computedTerms: z.number(),
+    /** Матричная приёмка (план 2026-08-03 §5 W1a): ёмкость рана, TTL кэша случаев, потолок байт evidence. */
+    acceptanceMaxCasesPerRun: z.number(), acceptanceMaxJobsPerRun: z.number(),
+    acceptanceCaseTtlHours: z.number(), evidenceMaxBytes: z.number(),
     /** `doc.surfaces` (план 2026-08-02 multi-surface-flows, D1): число поверхностей документа (v1 — ровно две). */
     surfaces: z.number(),
   }),
@@ -2016,6 +2165,13 @@ export const capabilitiesResponseSchema = z.object({
     surfaces: z.boolean(),
     /** Запись документов с `doc.surfaces` разрешена (kill-switch D16, `EASYUI_SURFACES=1`); иначе `422 surfaces_disabled`. */
     surfacesWrite: z.boolean(),
+    /**
+     * Матричная приёмка (план 2026-08-03 §5 W1a, `EASYUI_ACCEPTANCE_MATRIX=1`). Три флага —
+     * один kill-switch, но разные подсистемы: кандидаты (`POST /api/components/:id/candidates`,
+     * `GET /api/component-candidates/:id`), раны (`/api/acceptance-runs*`) и матрица целиком
+     * (включая ссылки `candidateId`/`acceptanceRunId` в promote). Все false — ручек нет (404).
+     */
+    acceptanceMatrix: z.boolean(), acceptanceCandidates: z.boolean(), acceptanceRuns: z.boolean(),
   }),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`

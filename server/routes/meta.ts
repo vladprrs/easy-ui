@@ -30,6 +30,9 @@ import { DEFAULT_REUSE_GATE_MODE, type ReuseGateMode } from "../catalog/gate";
 import { CALIBRATED_POLICY } from "../catalog/policy";
 import { VALIDATE_GLOBAL_CONCURRENT, VALIDATE_USER_CONCURRENT } from "../components/validate";
 import { CANDIDATE_CACHE_MAX_BYTES, CANDIDATE_CACHE_TTL_MS } from "../components/candidates";
+import {
+  ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, acceptanceCaseTtlHours, acceptanceMaxCasesPerRun, evidenceMaxBytes,
+} from "../acceptance/policies";
 
 // Discovery endpoints (plan §G): /api/openapi.json, /api/schemas/*, /api/capabilities.
 // The OpenAPI document is the committed artifact generated from server/contracts.ts;
@@ -59,7 +62,7 @@ export const CAPABILITY_CONDITIONS = ["$and", "$or", "$state", "$item", "$index"
  * env внутри роута сделало бы discovery и гейт двумя источниками истины, а тесты в общем
  * процессе `bun test` мутировали бы друг другу глобальный env.
  */
-export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean; acceptanceDisabled?: boolean; spacingResolverV2Disabled?: boolean } = {}): JsonObject {
+export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean; acceptanceDisabled?: boolean; spacingResolverV2Disabled?: boolean; acceptanceMatrix?: boolean } = {}): JsonObject {
   const systems = listActiveDesignSystems(db);
   return {
     apiVersion: 1,
@@ -98,6 +101,12 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       computedEntries: COMPUTED_ENTRIES_LIMIT,
       computedFields: COMPUTED_FIELDS_LIMIT,
       computedTerms: COMPUTED_TERMS_LIMIT,
+      // Матричная приёмка (план 2026-08-03 §5 W1a): ёмкость одного рана, TTL кэша случаев и
+      // потолок байт evidence. Агент планирует набор до постановки, а не ловит 422 постфактум.
+      acceptanceMaxCasesPerRun,
+      acceptanceMaxJobsPerRun: ACCEPTANCE_POLICIES[DEFAULT_ACCEPTANCE_POLICY_ID].maxJobsPerRun,
+      acceptanceCaseTtlHours,
+      evidenceMaxBytes,
       // `doc.surfaces`: сколько поверхностей несёт документ (v1 — ровно две).
       // Импорт из места энфорса (`src/prototype/schema`), канон docs/server-api.md#capabilities.
       surfaces: SURFACES_LIMIT,
@@ -152,6 +161,13 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // провалидированной head-ревизии одной командой (auto-supersede прочих active).
       // false при EASYUI_ACCEPTANCE_DISABLED=1; publish при этом продолжает работать.
       acceptancePromote: options.acceptanceDisabled !== true,
+      // План 2026-08-03 §5 W1a: матричная приёмка кандидата (durable-кандидаты, раны, гейты,
+      // evidence). Все три флага — одно и то же `EASYUI_ACCEPTANCE_MATRIX=1`, но разнесены по
+      // подсистемам намеренно: W2+ включает case-set'ы и импакт отдельными ручками, и агент
+      // должен проверять именно ту, которую собирается звать, а не «приёмку вообще».
+      acceptanceMatrix: options.acceptanceMatrix === true,
+      acceptanceCandidates: options.acceptanceMatrix === true,
+      acceptanceRuns: options.acceptanceMatrix === true,
       // План 2026-08-02 (computed-state): top-level `doc.computed` — производные значения
       // стейта, read-only, читаются обычным `$state` по bare-ключу. Набор операций —
       // в `computedOps`, лимиты — в `limits.computed*`.
@@ -346,7 +362,7 @@ const jsonText = (body: string): Response =>
  * `reuseGateMode` едет от `HandlerOptions` (`server/main.ts`). Дефолт здесь существует только
  * ради вызывающих, которым фаза не важна (схемы и OpenAPI её не касаются).
  */
-export function routeMeta(request: Request, db: Database, segments: string[], reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean; acceptanceDisabled?: boolean; spacingResolverV2Disabled?: boolean } = {}): Response | null {
+export function routeMeta(request: Request, db: Database, segments: string[], reuseGateMode: ReuseGateMode = DEFAULT_REUSE_GATE_MODE, options: { validateDisabled?: boolean; acceptanceDisabled?: boolean; spacingResolverV2Disabled?: boolean; acceptanceMatrix?: boolean } = {}): Response | null {
   const requireGet = () => { if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed"); };
   if (segments[0] === "openapi.json" && segments.length === 1) {
     requireGet();

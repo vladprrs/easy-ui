@@ -33,7 +33,15 @@ import { CALIBRATED_POLICY } from "./catalog/policy";
 import { openDatabase } from "./db";
 import { MAX_JSON_BODY_BYTES } from "./http";
 import { GEOMETRY_RECT_LIMIT, MAX_QUEUE } from "./screenshot/service";
+import {
+  ACCEPTANCE_POLICIES,
+  acceptanceCaseTtlHours as ACCEPTANCE_CASE_TTL_HOURS,
+  acceptanceMaxCasesPerRun as ACCEPTANCE_MAX_CASES_PER_RUN,
+  evidenceMaxBytes as EVIDENCE_MAX_BYTES,
+} from "./acceptance/policies";
 import { UserRepo } from "./users";
+import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
+import type { AcceptanceCaptureService } from "./acceptance/gates/types";
 
 // Contract test (plan §G): every registered route contract is exercised through
 // createHandler — happy-path where the fixture is cheap, otherwise the typed error
@@ -48,7 +56,17 @@ let handler: (request: Request) => Promise<Response>;
 beforeAll(async () => {
   dir = await mkdtemp(resolve(process.cwd(), ".contract-test-"));
   db = openDatabase(":memory:");
-  handler = createTestHandler(db, { dataDir: dir }) as (request: Request) => Promise<Response>;
+  // Оркестратор приёмки — с заглушкой капчура и без автопрокрутки очереди: контракт-тест
+  // покрывает форму ручек и их типизованные отказы, а не исполнение рана (оно — в
+  // server/acceptance-routes.test.ts и в e2e/preview/acceptance-run.spec.ts).
+  const captureStub = {
+    enqueueComponentCandidate: async () => ({ jobId: "job_contract_stub" }),
+    get: () => ({ status: "error", error: { code: "screenshot_unavailable", message: "stub" } }),
+    outcome: () => undefined,
+    hasBackgroundCapacity: () => false,
+  } as unknown as AcceptanceCaptureService;
+  const acceptance = new AcceptanceOrchestrator({ db, dataDir: dir, service: captureStub, autoDrain: false });
+  handler = createTestHandler(db, { dataDir: dir, acceptance }) as (request: Request) => Promise<Response>;
   await new UserRepo(db).create({ name: "Login Fixture", password: "contract password", actorId: "user_admin" });
 });
 afterAll(async () => {
@@ -91,6 +109,8 @@ async function flowDoc(id: string, screenIds = ["home", "a", "b"]): Promise<Prot
 }
 
 const componentSource = await Bun.file("server/fixtures/rating-stars.tsx").text();
+/** Валидный по форме, но несуществующий `runId` приёмки (`acc_` + uuid — regex `isRunId`). */
+const MISSING_RUN_ID = "acc_00000000-0000-0000-0000-000000000000";
 const componentPreviewSource = `import { z } from "zod";
 import type { BaseComponentProps } from "@json-render/react";
 
@@ -220,6 +240,16 @@ function orderedCases(): [string, Case][] {
     // Validate-префлайт — как и publish, тяжёлый happy path (typecheck+compile+import) покрыт
     // в component-validate.test.ts; здесь — envelope 404.
     ["POST /api/components/{id}/validate", { run: () => call("POST", "/api/components/contract-missing/validate"), expected: err(404, "not_found") }],
+    // Матричная приёмка (план 2026-08-03 §5 W1a): happy-path (кандидат → ран → evidence) —
+    // в acceptance-routes.test.ts и e2e; здесь — форма ручек и их 404-конверт.
+    ["POST /api/components/{id}/candidates", { run: () => call("POST", "/api/components/contract-missing/candidates"), expected: err(404, "not_found") }],
+    ["GET /api/component-candidates/{candidateId}", { run: () => call("GET", `/api/component-candidates/cand_${"0".repeat(64)}`), expected: err(404, "not_found") }],
+    ["POST /api/acceptance-runs", { run: () => call("POST", "/api/acceptance-runs", { candidateId: `cand_${"0".repeat(64)}` }), expected: err(404, "not_found") }],
+    ["POST /api/acceptance-runs", { run: () => call("POST", "/api/acceptance-runs", { candidateId: `cand_${"0".repeat(64)}`, caseSetId: "cset_x" }), expected: err(422, "unsupported_option") }],
+    ["GET /api/acceptance-runs/{runId}", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}`), expected: err(404, "not_found") }],
+    ["GET /api/acceptance-runs/{runId}/cases", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/cases`), expected: err(404, "not_found") }],
+    ["GET /api/acceptance-runs/{runId}/evidence", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}/evidence`), expected: err(404, "not_found") }],
+    ["POST /api/acceptance-runs/{runId}/cancel", { run: () => call("POST", `/api/acceptance-runs/${MISSING_RUN_ID}/cancel`, {}), expected: err(404, "not_found") }],
     ["GET /api/components/{id}/versions", { run: () => call("GET", "/api/components/contract-stars/versions"), expected: ok() }],
     ["GET /api/components/{id}/versions/{version}", { run: () => call("GET", "/api/components/contract-stars/versions/1"), expected: err(404, "not_found") }],
     ["GET /api/components/{id}/versions/{version}/bundle.js", { run: () => call("GET", "/api/components/contract-stars/versions/1/bundle.js"), expected: err(404, "not_found") }],
@@ -613,6 +643,10 @@ describe("route contracts", () => {
       computedEntries: COMPUTED_ENTRIES_LIMIT,
       computedFields: COMPUTED_FIELDS_LIMIT,
       computedTerms: COMPUTED_TERMS_LIMIT,
+      acceptanceMaxCasesPerRun: ACCEPTANCE_MAX_CASES_PER_RUN,
+      acceptanceMaxJobsPerRun: ACCEPTANCE_POLICIES["default-v1"].maxJobsPerRun,
+      acceptanceCaseTtlHours: ACCEPTANCE_CASE_TTL_HOURS,
+      evidenceMaxBytes: EVIDENCE_MAX_BYTES,
       surfaces: SURFACES_LIMIT,
     });
     expect(value.computedOps).toEqual([...COMPUTED_OPS]);
@@ -647,6 +681,11 @@ describe("route contracts", () => {
       themeSparseOps: true,
       themeSpacingResolverV2: true,
       acceptancePromote: true,
+      // Контракт-тест поднимает handler с оркестратором приёмки (иначе acceptance-роуты
+      // не покрыть), поэтому матрица тут включена — на проде это `EASYUI_ACCEPTANCE_MATRIX`.
+      acceptanceMatrix: true,
+      acceptanceCandidates: true,
+      acceptanceRuns: true,
       computed: true,
       surfaces: true,
       // Write-политика мульти-поверхностных документов — kill-switch EASYUI_SURFACES (D16).

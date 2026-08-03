@@ -196,7 +196,7 @@ async function validatedExtractionForPublish(dataDir:string,sourceHash:string):P
   return {sourceHash,extracted:entry.extracted};
 }
 
-export async function routeComponents(request:Request,db:Database,segments:string[],principal:Principal,dataDir:string,reuseGateMode:ReuseGateMode=DEFAULT_REUSE_GATE_MODE,validate:{disabled?:boolean}={},acceptance:{disabled?:boolean}={}):Promise<Response>{
+export async function routeComponents(request:Request,db:Database,segments:string[],principal:Principal,dataDir:string,reuseGateMode:ReuseGateMode=DEFAULT_REUSE_GATE_MODE,validate:{disabled?:boolean}={},acceptance:{disabled?:boolean;matrix?:boolean}={}):Promise<Response>{
   const repo=new ComponentRepo(db);
   // `?includeDeleted=1` — единственный способ увидеть надгробия: голый GET по-прежнему
   // отдаёт 404 для мягко удалённого компонента (совместимость с driver.mjs и src/api/client.ts).
@@ -308,7 +308,14 @@ export async function routeComponents(request:Request,db:Database,segments:strin
   // `{baseRev, sourceHash}` из validate-receipt. Kill-switch EASYUI_ACCEPTANCE_DISABLED=1 →
   // ручки нет (404) и `features.acceptancePromote=false`.
   if(tail[0]==="promote"&&tail.length===1){if(acceptance.disabled)throw new ApiError(404,"not_found","Component promote is disabled");if(request.method!=="POST")throw new ApiError(405,"method_not_allowed","Method not allowed");const actor=requireResourceOwner(db,"components",id,principal);const systemId=repo.row(id).design_system;requireActiveDesignSystem(db,systemId,["designSystem"]);requireResourceOwner(db,"design_systems",systemId,principal);const b=body(await readJson(request));
-    for(const key of Object.keys(b))if(!["baseRev","sourceHash","expectedCatalogRevision","supersede","reuseOverride","message"].includes(key))throw new ApiError(400,"invalid_request",`Unknown field: ${key}`);
+    for(const key of Object.keys(b))if(!["baseRev","sourceHash","expectedCatalogRevision","supersede","reuseOverride","message","candidateId","acceptanceRunId"].includes(key))throw new ApiError(400,"invalid_request",`Unknown field: ${key}`);
+    // A7 (план 2026-08-03 §5 W1a/W1c): ссылки на durable-кандидата и его ран принимаются формой,
+    // но не работают без матричной приёмки. Отказ типизован: агент обязан отличать «фича выключена
+    // в этой сборке» от «сервер не знает такого поля» — второе он чинил бы удалением параметра.
+    if(b.candidateId!==undefined||b.acceptanceRunId!==undefined){
+      if(!acceptance.matrix)throw new ApiError(422,"acceptance_matrix_disabled","candidateId/acceptanceRunId require EASYUI_ACCEPTANCE_MATRIX=1");
+      throw new ApiError(422,"unsupported_option","candidateId/acceptanceRunId are accepted by promote from wave W1c");
+    }
     const sourceHash=text(b.sourceHash,"sourceHash")!;
     if(!/^[0-9a-f]{64}$/.test(sourceHash))throw new ApiError(400,"invalid_request","sourceHash must be a sha256 hex digest");
     const expectedCatalogRevision=text(b.expectedCatalogRevision,"expectedCatalogRevision",false);

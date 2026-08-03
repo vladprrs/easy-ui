@@ -6,7 +6,7 @@ import { createTestHandler } from "../test-auth";
 import { openDatabase } from "../db";
 import { BOOTSTRAP_ADMIN_ID } from "../users";
 import { sha256 } from "../components/pipeline";
-import { candidateBundlePresent, candidatesRoot, gcCandidates, writeCandidate } from "../components/candidates";
+import { candidateBundlePresent, candidatesRoot, gcCandidates, setCandidatePinProvider, writeCandidate } from "../components/candidates";
 import { classifyJobFailure, jobOutcomeOfError, MAX_QUEUE, ScreenshotService, type RunJob } from "./service";
 import { ApiError } from "../http";
 
@@ -212,5 +212,24 @@ describe("candidate GC pins (A10)", () => {
     await gcCandidates(dir, { ttlMs: -1 });
     expect(await candidateBundlePresent(dir, COMPONENT_ID, pinnedHash)).toBe(false);
     await expect(stat(resolve(candidatesRoot(dir), pinnedHash))).rejects.toThrow();
+  });
+
+  test("process-wide pin provider covers GC without explicit pinned (A10, GC-on-write)", async () => {
+    const dir = await mkdtemp(resolve(process.cwd(), ".acc-gc-proc-test-"));
+    dirs.push(dir);
+    const pinnedHash = "c".repeat(64);
+    await writeCandidate(dir, {
+      version: 1, sourceHash: pinnedHash, componentIds: [COMPONENT_ID], createdAt: new Date().toISOString(), ok: true, bundleHash: pinnedHash,
+    }, "export default null;\n");
+    setCandidatePinProvider(() => new Set([pinnedHash]));
+    try {
+      // Явного `pinned` нет — так GC вызывается из writeCandidate; провайдер обязан сработать.
+      await gcCandidates(dir, { ttlMs: -1 });
+      expect(await candidateBundlePresent(dir, COMPONENT_ID, pinnedHash)).toBe(true);
+    } finally {
+      setCandidatePinProvider(null);
+    }
+    await gcCandidates(dir, { ttlMs: -1 });
+    expect(await candidateBundlePresent(dir, COMPONENT_ID, pinnedHash)).toBe(false);
   });
 });

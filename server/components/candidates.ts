@@ -88,6 +88,18 @@ export async function writeCandidate(dataDir: string, entry: CandidateEntry, bun
 }
 
 /**
+ * Процесс-широкий провайдер пинов для GC-on-write (A10): без него интерактивный validate
+ * любого пользователя мог бы вытеснить бандл кандидата посреди acceptance-рана — стартовый
+ * gcCandidates пины получает, а вызов из writeCandidate шёл без них. Регистрируется один раз
+ * при создании оркестратора (main.ts).
+ */
+let processPinProvider: (() => Set<string> | Promise<Set<string>>) | null = null;
+
+export function setCandidatePinProvider(provider: (() => Set<string> | Promise<Set<string>>) | null): void {
+  processPinProvider = provider;
+}
+
+/**
  * Lookup для draft-preview (P1b): кандидат по паре `(componentId, sourceHash)`.
  * Возвращает null, когда записи нет, она протухла или хэш собирался под чужим компонентом.
  */
@@ -128,13 +140,16 @@ const entryBytes = async (dir: string): Promise<number> => {
  * старт сервера, ни validate.
  *
  * `limits.pinned` (A10) — провайдер множества `sourceHash`, которые нельзя вытеснять
- * (кандидаты нетерминальных acceptance-ранов). Параметр опционален: без него поведение
- * ровно прежнее.
+ * (кандидаты нетерминальных acceptance-ранов). Без явного параметра действует
+ * процесс-широкий провайдер (`setCandidatePinProvider`) — он покрывает и GC-on-write
+ * из `writeCandidate`: иначе интерактивный validate любого пользователя мог бы вытеснить
+ * бандл кандидата посреди acceptance-рана.
  */
 export async function gcCandidates(
   dataDir: string,
   limits: { ttlMs?: number; maxBytes?: number; pinned?: () => Set<string> | Promise<Set<string>> } = {},
 ): Promise<{ removed: number }> {
+  if (limits.pinned === undefined && processPinProvider !== null) limits = { ...limits, pinned: processPinProvider };
   const ttlMs = limits.ttlMs ?? CANDIDATE_CACHE_TTL_MS;
   const maxBytes = limits.maxBytes ?? CANDIDATE_CACHE_MAX_BYTES;
   // Пины (A10): sourceHash'и кандидатов нетерминальных acceptance-ранов. Провайдер зовётся

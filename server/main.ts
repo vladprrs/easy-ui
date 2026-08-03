@@ -32,10 +32,12 @@ import { LoginRateLimiter, routeAuth } from "./routes/auth";
 import { routeUsers } from "./routes/users";
 import { assertOwnersPresent, ensureBootstrapAdmin } from "./users";
 import { sweepStagingModules } from "./components/pipeline";
-import { gcCandidates } from "./components/candidates";
+import { gcCandidates, setCandidatePinProvider } from "./components/candidates";
 import { DEFAULT_REUSE_GATE_MODE, resolveReuseGateMode, type ReuseGateMode } from "./catalog/gate";
 import { assertMutationAllowed } from "./maintenance";
 import { routeCatalogMigrations } from "./routes/catalogMigrations";
+import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
+import { routeAcceptance } from "./routes/acceptance";
 
 export type HandlerOptions = {
   ready?: () => boolean;
@@ -64,6 +66,13 @@ export type HandlerOptions = {
   publicOrigin?: URL | string;
   screenshots?: ScreenshotService;
   visual?: VisualService;
+  /**
+   * Оркестратор матричной приёмки (план 2026-08-03 §5 W1a). Присутствие инстанса **и есть**
+   * kill-switch `EASYUI_ACCEPTANCE_MATRIX=1`: без него acceptance-роутов нет (404), а
+   * `capabilities.features.acceptance*` рапортуют false. Env читается один раз в `startServer` —
+   * тот же канон, что у `reuseGateMode`/`validateDisabled`.
+   */
+  acceptance?: AcceptanceOrchestrator;
   loginRateLimiter?: LoginRateLimiter;
 };
 
@@ -182,8 +191,12 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         const share=await routeShares(request,db,segments.slice(1),principal,{publicOrigin,serveDist:options.serveDist}); if(share) return finish(share);
         const bundles=await routeBundles(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE); if(bundles) return finish(bundles);
         const scenarios=await routeScenarios(request,db,segments.slice(1),principal); if(scenarios) return finish(scenarios);
+        // Приёмка кандидатов (план 2026-08-03 §5 W1a). Диспатчится ДО `components`, потому что
+        // `POST /api/components/:id/candidates` живёт в компонентном namespace, а владеет им
+        // acceptance-модуль. Без `options.acceptance` (флаг OFF) роут отвечает 404 на весь набор.
+        const acceptance=await routeAcceptance(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.acceptance); if(acceptance) return finish(acceptance);
         if(segments[1]==="prototypes") return finish(await routePrototypes(request,db,segments.slice(1),principal,options.dataDir,options.serveDist));
-        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{disabled:options.validateDisabled===true},{disabled:options.acceptanceDisabled===true}));
+        if(segments[1]==="components") return finish(await routeComponents(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{disabled:options.validateDisabled===true},{disabled:options.acceptanceDisabled===true,matrix:options.acceptance!==undefined}));
         if(segments[1]==="compositions") return finish(await routeCompositions(request,db,segments.slice(1),principal));
         if(segments[1]==="assets") return finish(await routeAssets(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data"));
         if(segments[1]==="design-systems") return finish(await routeDesignSystems(request,db,segments.slice(1),principal,{spacingResolverV2Disabled:options.spacingResolverV2Disabled===true}));
@@ -199,7 +212,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         if(segments[1]==="shims"&&segments[2]!==undefined&&/^v[1-9]\d*$/.test(segments[2])) return finish(routeShims(request,segments.slice(1)));
         // Режим гейта — часть discovery: `/api/capabilities` обязан рапортовать фактическую
         // фазу процесса, иначе агент узнаёт её только сломав собственный create.
-        const meta=routeMeta(request,db,segments.slice(1),options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{validateDisabled:options.validateDisabled===true,acceptanceDisabled:options.acceptanceDisabled===true,spacingResolverV2Disabled:options.spacingResolverV2Disabled===true}); if(meta) return finish(meta);
+        const meta=routeMeta(request,db,segments.slice(1),options.reuseGateMode??DEFAULT_REUSE_GATE_MODE,{validateDisabled:options.validateDisabled===true,acceptanceDisabled:options.acceptanceDisabled===true,spacingResolverV2Disabled:options.spacingResolverV2Disabled===true,acceptanceMatrix:options.acceptance!==undefined}); if(meta) return finish(meta);
         throw new ApiError(404,"not_found","API route not found");
       }
       if(staticResolution) return finish(await serveResolvedStatic(request,staticResolution));
@@ -223,13 +236,22 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     // Сироты staging-извлечения после SIGKILL при редеплое: `finally` их не переживает,
     // а DATA_DIR в проде — постоянный том (план 2026-07-31 §3.5).
     await sweepStagingModules(dataDir);
-    // P8: GC candidate-кэша на старте (TTL/потолок байт) и при каждой записи.
-    await gcCandidates(dataDir);
     const serveDist=options.serveDist??(process.env.SERVE_DIST||undefined);
     const captureHost=host==="0.0.0.0"||host==="::"?"127.0.0.1":host;
     const screenshots=new ScreenshotServiceImpl({db,dataDir,serveDist,captureOrigin:`http://${captureHost}:${port}`,chromiumAvailable:chromiumAvailable(),runJob:spawnWorker});
     const visual=new VisualServiceImpl({db,dataDir,screenshots});
-    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,reuseGateMode:resolveReuseGateMode(process.env.REUSE_GATE),validateDisabled:process.env.EASYUI_VALIDATE_DISABLED==="1",acceptanceDisabled:process.env.EASYUI_ACCEPTANCE_DISABLED==="1",spacingResolverV2Disabled:process.env.EASYUI_THEME_RESOLVER_V2_DISABLED==="1",legacyBasicAuth:resolveLegacyBasicAuthEnv(),publicOrigin,screenshots,visual})});
+    // Матричная приёмка — opt-in (план 2026-08-03 §5 W0/W1a). Оркестратор создаётся **до**
+    // `gcCandidates`: его конструктор делает стартовую уборку нетерминальных ранов (иначе
+    // переживший рестарт ран вечно держал бы кандидата partial-индексом), а `candidatePins`
+    // после неё честно описывает то, что нельзя вытеснять (A10).
+    const acceptance=process.env.EASYUI_ACCEPTANCE_MATRIX==="1"
+      ? new AcceptanceOrchestrator({db,dataDir,service:screenshots})
+      : undefined;
+    // A10: пины действуют и для GC-on-write (writeCandidate) — не только для стартового вызова.
+    setCandidatePinProvider(acceptance?acceptance.candidatePins:null);
+    // P8: GC candidate-кэша на старте (TTL/потолок байт) и при каждой записи.
+    await gcCandidates(dataDir,acceptance?{pinned:acceptance.candidatePins}:{});
+    const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,reuseGateMode:resolveReuseGateMode(process.env.REUSE_GATE),validateDisabled:process.env.EASYUI_VALIDATE_DISABLED==="1",acceptanceDisabled:process.env.EASYUI_ACCEPTANCE_DISABLED==="1",spacingResolverV2Disabled:process.env.EASYUI_THEME_RESOLVER_V2_DISABLED==="1",legacyBasicAuth:resolveLegacyBasicAuthEnv(),publicOrigin,screenshots,visual,...(acceptance?{acceptance}:{})})});
     return {server,db};
   } catch(error) { db.close(); throw error; }
 }

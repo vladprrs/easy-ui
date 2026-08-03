@@ -60,6 +60,1245 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/acceptance-runs": {
+      "post": {
+        "operationId": "post_acceptance_runs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "candidateId": {
+                    "type": "string"
+                  },
+                  "cases": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "props": {
+                          "additionalProperties": {},
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "props"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "idempotencyKey": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "policy": {
+                    "enum": [
+                      "default-v1",
+                      "pixel-strict-v1"
+                    ],
+                    "type": "string"
+                  },
+                  "refresh": {
+                    "enum": [
+                      "none",
+                      "all"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "candidateId"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "properties": {
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "candidateId": {
+                      "type": "string"
+                    },
+                    "cases": {
+                      "type": "number"
+                    },
+                    "componentId": {
+                      "type": "string"
+                    },
+                    "policy": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "hash": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash"
+                      ],
+                      "type": "object"
+                    },
+                    "progress": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "completed": {
+                          "type": "number"
+                        },
+                        "eta": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "basis": {
+                              "enum": [
+                                "measured",
+                                "estimate"
+                              ],
+                              "type": "string"
+                            },
+                            "secondsRemaining": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "secondsRemaining",
+                            "basis"
+                          ],
+                          "type": "object"
+                        },
+                        "failed": {
+                          "type": "number"
+                        },
+                        "reused": {
+                          "type": "number"
+                        },
+                        "running": {
+                          "type": "number"
+                        },
+                        "total": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "completed",
+                        "reused",
+                        "failed",
+                        "running"
+                      ],
+                      "type": "object"
+                    },
+                    "runId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "enum": [
+                        "queued",
+                        "running",
+                        "pass",
+                        "pass_with_exceptions",
+                        "fail",
+                        "error",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "status",
+                    "candidateId",
+                    "componentId",
+                    "policy",
+                    "progress",
+                    "cases",
+                    "cached"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (not the component owner, or a share/capture principal)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "acceptance_run_in_flight (the candidate already has a queued/running run) | candidate_evicted (the candidate bundle is gone from the cache; re-create the candidate) | candidate_stale (the candidate {rev, sourceHash} pair no longer describes that revision)"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "payload_too_large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "empty_case_set | case_set_too_large | duplicate_case_id | unknown_policy_profile | unsupported_option (cases.concurrency / manifestAssetId / caseSetId / partial refresh are not supported in this phase)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "maintenance_in_progress (a catalog migration holds the maintenance lock)"
+          }
+        },
+        "summary": "Queue a matrix acceptance run over the candidate's cases (wave W1a source: the candidate's named examples). The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh: \"all\"` recaptures instead of reusing cached case results. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/acceptance-runs/{runId}": {
+      "get": {
+        "operationId": "get_acceptance_runs_runId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": {},
+                  "properties": {
+                    "candidateId": {
+                      "type": "string"
+                    },
+                    "caseSetId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "componentId": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "eta": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {},
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "evidenceManifestHash": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "failedCases": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "caseId": {
+                            "type": "string"
+                          },
+                          "caseKey": {
+                            "type": "string"
+                          },
+                          "failedGates": {
+                            "items": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "detail": {
+                                  "type": "string"
+                                },
+                                "gate": {
+                                  "type": "string"
+                                },
+                                "status": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "gate",
+                                "status"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          "severity": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "class": {
+                                    "type": "string"
+                                  },
+                                  "rank": {
+                                    "type": "number"
+                                  },
+                                  "score": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "rank",
+                                  "class",
+                                  "score"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "verdict": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "caseId",
+                          "caseKey",
+                          "status",
+                          "verdict",
+                          "severity",
+                          "failedGates"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "finishedAt": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "gates": {},
+                    "idempotencyKey": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "policy": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "hash": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash"
+                      ],
+                      "type": "object"
+                    },
+                    "progress": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "completed": {
+                          "type": "number"
+                        },
+                        "eta": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "basis": {
+                              "enum": [
+                                "measured",
+                                "estimate"
+                              ],
+                              "type": "string"
+                            },
+                            "secondsRemaining": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "secondsRemaining",
+                            "basis"
+                          ],
+                          "type": "object"
+                        },
+                        "failed": {
+                          "type": "number"
+                        },
+                        "reused": {
+                          "type": "number"
+                        },
+                        "running": {
+                          "type": "number"
+                        },
+                        "total": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "completed",
+                        "reused",
+                        "failed",
+                        "running"
+                      ],
+                      "type": "object"
+                    },
+                    "runId": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "queued",
+                        "running",
+                        "pass",
+                        "pass_with_exceptions",
+                        "fail",
+                        "error",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "candidateId",
+                    "componentId",
+                    "status",
+                    "policy",
+                    "caseSetId",
+                    "idempotencyKey",
+                    "progress",
+                    "eta",
+                    "gates",
+                    "evidenceManifestHash",
+                    "createdAt",
+                    "startedAt",
+                    "finishedAt",
+                    "failedCases"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (not the component owner, or a share/capture principal)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          }
+        },
+        "summary": "Poll an acceptance run: status, per-gate roll-up, progress {total, completed, reused, failed, running}, ETA and failedCases sorted by severity. Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/acceptance-runs/{runId}/cancel": {
+      "post": {
+        "operationId": "post_acceptance_runs_runId_cancel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": {},
+                  "properties": {
+                    "candidateId": {
+                      "type": "string"
+                    },
+                    "caseSetId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "componentId": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "eta": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {},
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "evidenceManifestHash": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "failedCases": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "caseId": {
+                            "type": "string"
+                          },
+                          "caseKey": {
+                            "type": "string"
+                          },
+                          "failedGates": {
+                            "items": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "detail": {
+                                  "type": "string"
+                                },
+                                "gate": {
+                                  "type": "string"
+                                },
+                                "status": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "gate",
+                                "status"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          "severity": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "class": {
+                                    "type": "string"
+                                  },
+                                  "rank": {
+                                    "type": "number"
+                                  },
+                                  "score": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "rank",
+                                  "class",
+                                  "score"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "verdict": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "caseId",
+                          "caseKey",
+                          "status",
+                          "verdict",
+                          "severity",
+                          "failedGates"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "finishedAt": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "gates": {},
+                    "idempotencyKey": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "policy": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "hash": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash"
+                      ],
+                      "type": "object"
+                    },
+                    "progress": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "completed": {
+                          "type": "number"
+                        },
+                        "eta": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "basis": {
+                              "enum": [
+                                "measured",
+                                "estimate"
+                              ],
+                              "type": "string"
+                            },
+                            "secondsRemaining": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "secondsRemaining",
+                            "basis"
+                          ],
+                          "type": "object"
+                        },
+                        "failed": {
+                          "type": "number"
+                        },
+                        "reused": {
+                          "type": "number"
+                        },
+                        "running": {
+                          "type": "number"
+                        },
+                        "total": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "completed",
+                        "reused",
+                        "failed",
+                        "running"
+                      ],
+                      "type": "object"
+                    },
+                    "runId": {
+                      "type": "string"
+                    },
+                    "startedAt": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "queued",
+                        "running",
+                        "pass",
+                        "pass_with_exceptions",
+                        "fail",
+                        "error",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "candidateId",
+                    "componentId",
+                    "status",
+                    "policy",
+                    "caseSetId",
+                    "idempotencyKey",
+                    "progress",
+                    "eta",
+                    "gates",
+                    "evidenceManifestHash",
+                    "createdAt",
+                    "startedAt",
+                    "finishedAt",
+                    "failedCases"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (not the component owner, or a share/capture principal)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "run_not_cancellable (only queued runs can be cancelled)"
+          }
+        },
+        "summary": "Cancel a run that is still queued. A running run is not cancellable (409 run_not_cancellable) — it terminalizes on its own or via the watchdog. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/acceptance-runs/{runId}/cases": {
+      "get": {
+        "operationId": "get_acceptance_runs_runId_cases",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": {},
+                  "properties": {
+                    "cases": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "aliasOfCaseId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "artifacts": {
+                            "items": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "bytes": {
+                                  "type": "number"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "sha256": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "sha256",
+                                "bytes"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          "caseFingerprint": {
+                            "type": "string"
+                          },
+                          "caseId": {
+                            "type": "string"
+                          },
+                          "caseKey": {
+                            "type": "string"
+                          },
+                          "finishedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "gates": {
+                            "items": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "detail": {
+                                  "type": "string"
+                                },
+                                "gate": {
+                                  "type": "string"
+                                },
+                                "status": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "gate",
+                                "status"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          "propsHash": {
+                            "type": "string"
+                          },
+                          "referenceAssetId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "reuseReason": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "reused": {
+                            "type": "boolean"
+                          },
+                          "severity": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "class": {
+                                    "type": "string"
+                                  },
+                                  "rank": {
+                                    "type": "number"
+                                  },
+                                  "score": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "rank",
+                                  "class",
+                                  "score"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "startedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "verdict": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "caseId",
+                          "caseKey",
+                          "status",
+                          "verdict",
+                          "severity",
+                          "propsHash",
+                          "caseFingerprint",
+                          "aliasOfCaseId",
+                          "reuseReason",
+                          "reused",
+                          "referenceAssetId",
+                          "startedAt",
+                          "finishedAt",
+                          "gates",
+                          "artifacts"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "runId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "runId",
+                    "cases"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (not the component owner, or a share/capture principal)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          }
+        },
+        "summary": "Per-case verdicts of a run with gate results, severity, reuse reason and the evidence artifact names/digests (never bytes: artifact content is served only inside the runId-scoped evidence archive). Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/acceptance-runs/{runId}/evidence": {
+      "get": {
+        "operationId": "get_acceptance_runs_runId_evidence",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "Success"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (not the component owner, or a share/capture principal)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "evidence_not_ready (the run has not terminalized yet)"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "evidence_too_large (raw evidence exceeds limits.evidenceMaxBytes)"
+          }
+        },
+        "summary": "Download the run evidence archive (ZIP): manifest.json, SHA256SUMS and every CAS artifact under <caseId>/<name>. The manifest is written when the run terminalizes (409 evidence_not_ready before that); artifacts already reclaimed by the evidence GC stay listed in SHA256SUMS but are absent from the archive. Owner or admin only.",
+        "x-easyui-validated": false
+      }
+    },
     "/api/assets": {
       "get": {
         "operationId": "get_assets",
@@ -1031,7 +2270,16 @@
                     "features": {
                       "additionalProperties": false,
                       "properties": {
+                        "acceptanceCandidates": {
+                          "type": "boolean"
+                        },
+                        "acceptanceMatrix": {
+                          "type": "boolean"
+                        },
                         "acceptancePromote": {
+                          "type": "boolean"
+                        },
+                        "acceptanceRuns": {
                           "type": "boolean"
                         },
                         "assets": {
@@ -1144,7 +2392,10 @@
                         "acceptancePromote",
                         "computed",
                         "surfaces",
-                        "surfacesWrite"
+                        "surfacesWrite",
+                        "acceptanceMatrix",
+                        "acceptanceCandidates",
+                        "acceptanceRuns"
                       ],
                       "type": "object"
                     },
@@ -1155,6 +2406,15 @@
                     "limits": {
                       "additionalProperties": false,
                       "properties": {
+                        "acceptanceCaseTtlHours": {
+                          "type": "number"
+                        },
+                        "acceptanceMaxCasesPerRun": {
+                          "type": "number"
+                        },
+                        "acceptanceMaxJobsPerRun": {
+                          "type": "number"
+                        },
                         "assetMiB": {
                           "type": "number"
                         },
@@ -1177,6 +2437,9 @@
                           "type": "number"
                         },
                         "elements": {
+                          "type": "number"
+                        },
+                        "evidenceMaxBytes": {
                           "type": "number"
                         },
                         "flowDepth": {
@@ -1244,6 +2507,10 @@
                         "computedEntries",
                         "computedFields",
                         "computedTerms",
+                        "acceptanceMaxCasesPerRun",
+                        "acceptanceMaxJobsPerRun",
+                        "acceptanceCaseTtlHours",
+                        "evidenceMaxBytes",
                         "surfaces"
                       ],
                       "type": "object"
@@ -4354,6 +5621,175 @@
         "x-easyui-validated": true
       }
     },
+    "/api/component-candidates/{candidateId}": {
+      "get": {
+        "operationId": "get_component_candidates_candidateId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidateId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": {},
+                  "properties": {
+                    "acceptanceRunId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "buildFingerprint": {
+                      "type": "string"
+                    },
+                    "bundleHash": {
+                      "type": "string"
+                    },
+                    "candidateId": {
+                      "type": "string"
+                    },
+                    "catalogRevision": {
+                      "type": "string"
+                    },
+                    "componentId": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "hostAbiVersion": {
+                      "type": "number"
+                    },
+                    "policyProfileHash": {
+                      "type": "string"
+                    },
+                    "promotedVersion": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rev": {
+                      "type": "number"
+                    },
+                    "sourceHash": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "enum": [
+                        "validated",
+                        "promoted"
+                      ],
+                      "type": "string"
+                    },
+                    "statusReason": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "themeVersion": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "candidateId",
+                    "componentId",
+                    "designSystem",
+                    "rev",
+                    "sourceHash",
+                    "bundleHash",
+                    "hostAbiVersion",
+                    "themeVersion",
+                    "buildFingerprint",
+                    "policyProfileHash",
+                    "catalogRevision",
+                    "status",
+                    "statusReason",
+                    "acceptanceRunId",
+                    "promotedVersion",
+                    "createdAt",
+                    "expiresAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (not the component owner, or a share/capture principal)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          }
+        },
+        "summary": "Read an acceptance candidate by id (global namespace; it does not overlap /api/catalog/candidates). Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "x-easyui-validated": false
+      }
+    },
     "/api/components": {
       "get": {
         "operationId": "get_components",
@@ -5311,6 +6747,248 @@
         "x-easyui-validated": false
       }
     },
+    "/api/components/{id}/candidates": {
+      "post": {
+        "operationId": "post_components_id_candidates",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {},
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": {},
+                  "properties": {
+                    "acceptanceRunId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "buildFingerprint": {
+                      "type": "string"
+                    },
+                    "bundleHash": {
+                      "type": "string"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "candidateId": {
+                      "type": "string"
+                    },
+                    "catalogRevision": {
+                      "type": "string"
+                    },
+                    "componentId": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "hostAbiVersion": {
+                      "type": "number"
+                    },
+                    "policyProfileHash": {
+                      "type": "string"
+                    },
+                    "promotedVersion": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rev": {
+                      "type": "number"
+                    },
+                    "sourceHash": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "enum": [
+                        "validated",
+                        "promoted"
+                      ],
+                      "type": "string"
+                    },
+                    "statusReason": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "themeVersion": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "warnings": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "candidateId",
+                    "componentId",
+                    "designSystem",
+                    "rev",
+                    "sourceHash",
+                    "bundleHash",
+                    "hostAbiVersion",
+                    "themeVersion",
+                    "buildFingerprint",
+                    "policyProfileHash",
+                    "catalogRevision",
+                    "status",
+                    "statusReason",
+                    "acceptanceRunId",
+                    "promotedVersion",
+                    "createdAt",
+                    "expiresAt",
+                    "cached",
+                    "warnings"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (not the component owner, or a share/capture principal)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "revision_conflict (the component head moved while the candidate was being built)"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "payload_too_large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed | asset_not_found"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validate_in_flight (a validate/candidate build is already in flight for this user) | queue_full (global validate concurrency cap reached)"
+          }
+        },
+        "summary": "Freeze the validated head revision into an immutable acceptance candidate: runs the same head validate preflight (and therefore materializes the candidate bundle that acceptance runs capture by revision), then writes an idempotent durable row keyed by {componentId, designSystem, rev, buildFingerprint}. Repeating the call on an unchanged build returns the same candidateId with cached:true and does NOT reset its status. The candidate bundle is pinned against the candidate-cache GC while a non-terminal run references it. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
+        "x-easyui-validated": false
+      }
+    },
     "/api/components/{id}/draft": {
       "get": {
         "operationId": "get_components_id_draft",
@@ -5699,10 +7377,16 @@
                 },
                 "additionalProperties": false,
                 "properties": {
+                  "acceptanceRunId": {
+                    "type": "string"
+                  },
                   "baseRev": {
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991,
                     "type": "integer"
+                  },
+                  "candidateId": {
+                    "type": "string"
                   },
                   "expectedCatalogRevision": {
                     "type": "string"
@@ -6140,7 +7824,7 @@
                 }
               }
             },
-            "description": "validation_failed | asset_not_found | atomic_policy_violation | event_schema_not_serializable"
+            "description": "validation_failed | asset_not_found | atomic_policy_violation | event_schema_not_serializable | acceptance_matrix_disabled (candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off) | unsupported_option (candidateId/acceptanceRunId are wired into the promote saga from wave W1c)"
           },
           "429": {
             "content": {

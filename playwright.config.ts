@@ -9,6 +9,10 @@ const adminEnv = `ADMIN_NAME='E2E Admin' ADMIN_PASSWORD=e2e-admin-password`;
 // Kill-switch D16 (план 2026-08-02 multi-surface-flows): без EASYUI_SURFACES=1 сохранение
 // документа с `doc.surfaces` отвечает 422 surfaces_disabled и surfaces-e2e не проходят.
 const surfacesEnv = `EASYUI_SURFACES=1`;
+// Матричная приёмка (план 2026-08-03 §5 W1a) — opt-in: без EASYUI_ACCEPTANCE_MATRIX=1 весь набор
+// acceptance-ручек отвечает 404 и `e2e/preview/acceptance-run.spec.ts` не проходит. Прецедент —
+// surfacesEnv выше: флаг задаётся в команде webServer, а не глобально в окружении прогона.
+const acceptanceEnv = `EASYUI_ACCEPTANCE_MATRIX=1`;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -34,7 +38,7 @@ export default defineConfig({
       timeout: 180_000,
     },
     {
-      command: `${adminEnv} npm run build && rm -rf .e2e-data/preview && ${adminEnv} ${surfacesEnv} DATA_DIR=.e2e-data/preview SERVE_DIST=dist PORT=4173 ${bun} server/main.ts`,
+      command: `${adminEnv} npm run build && rm -rf .e2e-data/preview && ${adminEnv} ${surfacesEnv} ${acceptanceEnv} DATA_DIR=.e2e-data/preview SERVE_DIST=dist PORT=4173 ${bun} server/main.ts`,
       url: `http://${bunHost}:4173/api/health`,
       reuseExistingServer: false,
       timeout: 300_000,
