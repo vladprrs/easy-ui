@@ -3,7 +3,10 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Outlet, useParams, useSearchParams } from "react-router";
 import { getPrototypeDraft, listPrototypeVersions, type PrototypeComponentPin, type PrototypeDraft, type PrototypeVersionSummary, type ThemeContent } from "../api/client";
 import { useApi } from "../api/hooks";
-import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
+import type { ComponentRegistry } from "@json-render/react";
+import { createSurfacePlayerRuntime, type CustomPlayerRuntime, type createPlayerRuntime } from "../catalog/runtime";
+import { docSurfaces, surfaceDesignSystem } from "../prototype/surfaces";
+import { pinDesignSystems } from "./PrototypeLoader";
 import type { ComponentDefinition } from "../catalog/definitions";
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import type { PrototypeDoc } from "../prototype/schema";
@@ -20,6 +23,13 @@ export interface PlayerOutletContext {
   doc: PrototypeDoc;
   runtimeKey: string;
   registry: ReturnType<typeof createPlayerRuntime>["registry"];
+  /**
+   * Реестр на поверхность (план multi-surface, D8): `surfaceId → registry`. Документ без
+   * `surfaces` держит здесь единственную запись с тем же объектом, что `registry`.
+   */
+  registries: Readonly<Record<string, ComponentRegistry>>;
+  /** Пины тем ревизии `ДС → версия` — панель не-primary ДС берёт отсюда свою тему (D9). */
+  themePins: Readonly<Record<string, number | null>>;
   runtime: EasyUiActionRuntime;
   customTypes: ReadonlySet<string>;
   customDefinitions: Record<string, ComponentDefinition>;
@@ -41,18 +51,24 @@ export interface PlayerOutletContext {
   pins: PrototypeComponentPin[];
 }
 
-function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions, pins }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; metaVersion: number | null | undefined; debug: boolean; versions: PlayerOutletContext["versions"]; pins: PrototypeComponentPin[] }) {
+function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, themePins, debug, versions, pins }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; metaVersion: number | null | undefined; themePins: Readonly<Record<string, number | null>>; debug: boolean; versions: PlayerOutletContext["versions"]; pins: PrototypeComponentPin[] }) {
   const themeContent = useDesignSystemTheme(doc.designSystem, metaVersion);
   const navigation = usePlayerNavigation();
   const navigationRef = useRef(navigation);
   useEffect(() => { navigationRef.current = navigation; }, [navigation]);
+  // Реестр на поверхность (D8): экшены/хендлеры общие, различается только резолв типов.
+  const surfaces = useMemo(
+    () => docSurfaces(doc).map((surface) => ({ id: surface.id, designSystem: surfaceDesignSystem(surface, doc) })),
+    [doc],
+  );
+  const componentDesignSystems = useMemo(() => pinDesignSystems(pins), [pins]);
   // eslint-disable-next-line react-hooks/refs
-  const runtime = useMemo(() => createPlayerRuntime({
+  const runtime = useMemo(() => createSurfacePlayerRuntime({
     navigate: (screenId) => navigationRef.current.navigate(screenId),
     back: () => navigationRef.current.back(),
     openUrl: (url) => { window.open(url, "_blank", "noopener,noreferrer"); },
     restart: () => navigationRef.current.restart(),
-  }, custom, doc.designSystem), [custom, doc.designSystem]);
+  }, custom, surfaces, componentDesignSystems), [componentDesignSystems, custom, surfaces]);
 
   const customDefinitions = useMemo(() => custom?.definitions ?? {}, [custom]);
   const customTypes = useMemo(() => new Set(Object.keys(customDefinitions)), [customDefinitions]);
@@ -116,6 +132,8 @@ function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions, p
       doc,
       runtimeKey,
       registry: runtime.registry,
+      registries: runtime.registries,
+      themePins,
       runtime: inspectorSession.actionRuntime,
       customTypes,
       customDefinitions,
@@ -130,7 +148,7 @@ function LoadedPlayer({ doc, custom, runtimeKey, metaVersion, debug, versions, p
   </JSONUIProvider>;
 }
 
-function ReadyPlayer({ loaded, custom, runtimeKey, routeBase, metaVersion, debug, version }: { loaded: PrototypeDraft; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; metaVersion: number | null | undefined; debug: boolean; version?: number }) {
+function ReadyPlayer({ loaded, custom, runtimeKey, routeBase, metaVersion, themePins, debug, version }: { loaded: PrototypeDraft; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; metaVersion: number | null | undefined; themePins: Readonly<Record<string, number | null>>; debug: boolean; version?: number }) {
   const versionsState = useApi(async (signal) => {
     const [published, draft] = await Promise.all([
       listPrototypeVersions(loaded.doc.id, signal),
@@ -140,7 +158,7 @@ function ReadyPlayer({ loaded, custom, runtimeKey, routeBase, metaVersion, debug
   }, [loaded.doc.id, loaded.rev, version]);
   const versions = versionsState.status === "ready" ? versionsState.data : null;
   return <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} doc={loaded.doc} routeBase={routeBase}>
-    <LoadedPlayer key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} metaVersion={metaVersion} debug={debug} versions={versions} pins={loaded.components} />
+    <LoadedPlayer key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} metaVersion={metaVersion} themePins={themePins} debug={debug} versions={versions} pins={loaded.components} />
   </PlayerNavigationProvider>;
 }
 
@@ -155,6 +173,6 @@ export function PlayerShell() {
   if (debugParam && !debug) setDebug(true); // render-time latch (never turns back off)
   const numericVersion = version === undefined ? undefined : Number(version);
   return <PrototypeLoader protoId={protoId} version={numericVersion}>
-    {({ loaded, custom, runtimeKey, routeBase }) => <ReadyPlayer loaded={loaded} custom={custom} runtimeKey={runtimeKey} routeBase={routeBase} metaVersion={loaded.designSystemMetaVersion} debug={debug} version={numericVersion} />}
+    {({ loaded, custom, runtimeKey, routeBase }) => <ReadyPlayer loaded={loaded} custom={custom} runtimeKey={runtimeKey} routeBase={routeBase} metaVersion={loaded.designSystemMetaVersion} themePins={loaded.designSystemMetaVersions ?? {}} debug={debug} version={numericVersion} />}
   </PrototypeLoader>;
 }

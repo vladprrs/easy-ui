@@ -13,6 +13,8 @@ import { TileErrorBoundary } from "../cjm/CjmScreenTile";
 import { createCjmRegistry } from "../cjm/cjmRegistry";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { editorStripTile, previewNativeWidth } from "../designSystems/deviceMetrics";
+// D13: лента рисует экран рамкой его поверхности (см. EditorCanvas).
+import { hasSurfaces, surfaceOf } from "../prototype/surfaces";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 import { CanvasLayers } from "../player/CanvasLayers";
 
@@ -72,11 +74,13 @@ function ScreenTile({ doc, screen, registry, handlers, runtimeKey, stateEpoch, s
   );
   const initialState = useMemo(() => applyComputed(mergeScreenState(doc.state, screen.stateOverrides), doc.computed), [doc.computed, doc.state, screen.stateOverrides]);
   const key = `${runtimeKey}:${screen.id}:${stateEpoch}`;
-  return <article style={{ width: editorStripTile.width }}>
+  const surface = surfaceOf(doc, screen.id);
+  return <article style={{ width: editorStripTile.width }} data-surface={surface.id}>
     <div className="relative">
+      {hasSurfaces(doc) ? <span className="pointer-events-none absolute top-1 left-1 z-10 max-w-[calc(100%-8px)] truncate rounded-full bg-pay-deep/85 px-2 py-0.5 text-[10px] leading-tight font-medium text-white" data-testid="editor-strip-surface">{surface.name}</span> : null}
       <TileErrorBoundary key={key} prototypeId={doc.id} screenId={screen.id}>
         <JSONUIProvider key={key} registry={registry} handlers={handlers} initialState={initialState}>
-          <div inert>{tree && specs ? <StripFrame nativeWidth={screen.canvas?.width ?? previewNativeWidth[doc.device]} nativeHeight={screen.canvas?.height} resetKey={key} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}><EasyUiRuntimeProvider value={runtimeValue}>{screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}</EasyUiRuntimeProvider></StripFrame> : <div className="flex items-center justify-center rounded-item border border-eui-ink/10 bg-white text-sm text-eui-slate-500" style={{ width: editorStripTile.width, height: editorStripTile.heightCap }}>{editor.noContent}</div>}</div>
+          <div inert>{tree && specs ? <StripFrame nativeWidth={screen.canvas?.width ?? previewNativeWidth[surfaceOf(doc, screen.id).device]} nativeHeight={screen.canvas?.height} resetKey={key} designSystem={doc.designSystem} themeTokens={themeContent?.tokens}><EasyUiRuntimeProvider value={runtimeValue}>{screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}</EasyUiRuntimeProvider></StripFrame> : <div className="flex items-center justify-center rounded-item border border-eui-ink/10 bg-white text-sm text-eui-slate-500" style={{ width: editorStripTile.width, height: editorStripTile.heightCap }}>{editor.noContent}</div>}</div>
         </JSONUIProvider>
       </TileErrorBoundary>
       <button type="button" aria-label={editor.selectScreenAria(screen.name)} aria-pressed={selected} onClick={onSelect} className="absolute inset-0 rounded-item focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pay-red aria-pressed:outline-2 aria-pressed:outline-pay-deep" />

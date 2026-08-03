@@ -59,7 +59,9 @@ describe("ScopedThemeSurface", () => {
     const rootBefore = getComputedStyle(document.documentElement).getPropertyValue("--eui-color-primary");
     const view = render(<ScopedThemeSurface systemId="alpha" theme={theme({ "color.primary": "#111" })}><span /></ScopedThemeSurface>);
     const reset = document.head.querySelector<HTMLStyleElement>("style[data-eui-scoped-reset]");
-    expect(reset?.textContent).toContain("[data-eui-scoped-surface] *");
+    expect(reset?.textContent).toContain("[data-eui-scoped-reset] *");
+    expect(reset?.textContent).not.toContain("[data-eui-scoped-surface]");
+    expect(surface(view.container, "alpha").hasAttribute("data-eui-scoped-reset")).toBe(true);
     expect(reset?.textContent).not.toContain("html");
     expect(document.documentElement.className).toBe(htmlClass);
     expect(getComputedStyle(document.documentElement).getPropertyValue("--eui-color-primary")).toBe(rootBefore);
@@ -75,6 +77,18 @@ describe("ScopedThemeSurface", () => {
     expect(document.head.querySelectorAll("style[data-eui-scoped-reset]")).toHaveLength(1);
     view.unmount();
     expect(document.head.querySelectorAll("style[data-eui-scoped-reset]")).toHaveLength(0);
+  });
+
+  // R4-M5: раньше reset-стиль ключевался на `data-eui-scoped-surface`, поэтому соседний
+  // CJM-тайл/Library-превью замораживал живую панель дуо-плеера через глобальный стиль.
+  it("does not freeze a resetAnimations={false} surface when another scoped surface is on the page", () => {
+    const view = render(<>
+      <ScopedThemeSurface systemId="tile" theme={theme({})}><span /></ScopedThemeSurface>
+      <ScopedThemeSurface systemId="panel" resetAnimations={false} theme={theme({})}><span /></ScopedThemeSurface>
+    </>);
+    expect(document.head.querySelectorAll("style[data-eui-scoped-reset]")).toHaveLength(1);
+    expect(surface(view.container, "tile").hasAttribute("data-eui-scoped-reset")).toBe(true);
+    expect(surface(view.container, "panel").hasAttribute("data-eui-scoped-reset")).toBe(false);
   });
 
   it("renders without a theme", () => {

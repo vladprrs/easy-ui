@@ -8,7 +8,7 @@ import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { canonicalViewport } from "../designSystems/deviceMetrics";
 import { surfaceDesignSystem, surfaceOf } from "../prototype/surfaces";
-import { ThemeStyle } from "../designSystems/theme";
+import { themeMetaVersion, ThemeStyle } from "../designSystems/theme";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 import { HostStageSurface } from "../catalog/hostPrimitives";
 import { CaptureSurface } from "./CaptureSurface";
@@ -30,6 +30,9 @@ interface LoadedPrototype {
    */
   themePins: Record<string, number | null>;
   dsMetaVersion: number | null;
+  /** ДС **поверхности снимаемого экрана** и её версия темы (D14): по ним грузится тема кадра. */
+  screenDesignSystem: string;
+  screenMetaVersion: number | null;
   theme: ThemeContent | null;
   renderable: boolean;
 }
@@ -54,21 +57,25 @@ function bootstrapPrototypeTarget(): PrototypeBootstrapTarget | undefined {
   return target?.kind === "prototype" && Array.isArray(target.components) ? target : undefined;
 }
 
-async function loadPrototype(id: string, rev: number | undefined, version: number | undefined, signal: AbortSignal): Promise<LoadedPrototype> {
+async function loadPrototype(id: string, screenId: string, rev: number | undefined, version: number | undefined, signal: AbortSignal): Promise<LoadedPrototype> {
   const base = version !== undefined ? await getPrototypeVersion(id, version, signal)
     : rev !== undefined ? await getPrototypeRevisionFull(id, rev, signal)
     : await getPrototypeDraft(id, signal);
-  const themePins = (base as { designSystemMetaVersions?: Record<string, number | null> }).designSystemMetaVersions ?? {};
-  if (base.renderable === false) return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId ?? "archived", componentManifestHash: base.componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components: [], themePins, dsMetaVersion: base.designSystemMetaVersion ?? null, theme: null, renderable: false };
+  const themePins = base.designSystemMetaVersions ?? {};
+  // D14: ДС и версия темы берутся у **поверхности снимаемого экрана**. Одно-поверхностный
+  // документ даёт `doc.designSystem` и тот же скаляр `designSystemMetaVersion`, что и раньше.
+  const screenDesignSystem = surfaceDesignSystem(surfaceOf(base.doc, screenId), base.doc) ?? base.doc.designSystem;
   const dsMetaVersion = base.designSystemMetaVersion ?? null;
+  const screenMetaVersion = themeMetaVersion(themePins, screenDesignSystem, dsMetaVersion) ?? null;
+  if (base.renderable === false) return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId ?? "archived", componentManifestHash: base.componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components: [], themePins, dsMetaVersion, screenDesignSystem, screenMetaVersion, theme: null, renderable: false };
   if(!base.prototypeInstanceId) throw new Error("Prototype response is missing prototypeInstanceId");
-  const theme = await loadTheme(base.doc.designSystem, dsMetaVersion, signal);
+  const theme = await loadTheme(screenDesignSystem, screenMetaVersion, signal);
   const frozen = bootstrapPrototypeTarget();
   // `status` в загрузчик не едет: он диагностический, а его домен (ComponentStatus) шире
   // строки из bootstrap — пины кадра описываются id/name/version/bundleUrl/bundleHash.
   const components = frozen?.components?.map(({ id, name, version, bundleUrl, bundleHash }) => ({ id, name, version, bundleUrl, bundleHash })) ?? base.components;
   const componentManifestHash = frozen?.componentManifestHash ?? base.componentManifestHash;
-  return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId, componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components, themePins, dsMetaVersion, theme, renderable: true };
+  return { doc: base.doc, rev: base.rev, prototypeInstanceId: base.prototypeInstanceId, componentManifestHash, builtinCatalogHash: base.builtinCatalogHash, components, themePins, dsMetaVersion, screenDesignSystem, screenMetaVersion, theme, renderable: true };
 }
 
 function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPrototype; custom?: CustomPlayerRuntime; screenId: string }) {
@@ -88,9 +95,11 @@ function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPr
   usePublishError(screen ? null : `Screen not found: ${screenId}`);
   // Резолвнутая пара `(designSystem, dsMetaVersion)` **снимаемого экрана** (multi-surface D14):
   // ДС берётся от поверхности экрана, версия темы — из карты пинов ревизии. Одно-поверхностный
-  // документ даёт `doc.designSystem` и тот же скаляр, что и раньше.
-  const screenDesignSystem = surfaceDesignSystem(surfaceOf(doc, screenId), doc) ?? doc.designSystem;
-  const screenMetaVersion = Object.hasOwn(loaded.themePins, screenDesignSystem) ? loaded.themePins[screenDesignSystem]! : loaded.dsMetaVersion;
+  // документ даёт `doc.designSystem` и тот же скаляр, что и раньше. Ровно эта же пара
+  // определяет загруженную тему кадра (`loadPrototype`), поэтому handshake и пиксели не расходятся.
+  const { screenDesignSystem, screenMetaVersion } = loaded;
+  // D10: устройство поверхности экрана, а не `doc.device` — на дуо-доке это разные значения.
+  const screenSurface = surfaceOf(doc, screenId);
   usePublishOnSettle(ref, (): CaptureReady => ({
     status: "ready", kind: "prototype", revision: loaded.rev,
     prototypeInstanceId: loaded.prototypeInstanceId,
@@ -100,18 +109,18 @@ function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPr
   }));
 
   if (!screen || !tree) return <div ref={ref} data-capture-error="screen-not-found" />;
-  const size = screen.canvas ?? canonicalViewport[doc.device] ?? null;
+  const size = screen.canvas ?? canonicalViewport[screenSurface.device] ?? null;
   const style = {
     position: "relative" as const,
     ...(screen.canvas
       ? { width: screen.canvas.width, height: screen.canvas.height }
       : size ? { width: size.width, height: size.height } : { width: "100%" as const }),
   };
-  return <SurfaceSpacingScope systemId={doc.designSystem} themeTokens={loaded.theme?.tokens}>
+  return <SurfaceSpacingScope systemId={screenDesignSystem} themeTokens={loaded.theme?.tokens}>
     <div ref={setSurfaceRef} id="eui-capture-surface" className="bg-background text-foreground" style={style}>
       <ThemeStyle content={loaded.theme} />
       <HostStageSurface stageHostRef={stageHostRef}>
-        <CaptureSurface designSystem={doc.designSystem} custom={custom} tree={tree} initialState={doc.state} computed={doc.computed} screenIds={screenIds} canvas={screen.canvas} hostPrimitivesAllowed={doc.device !== "desktop" || screen.canvas !== undefined} />
+        <CaptureSurface designSystem={screenDesignSystem} custom={custom} tree={tree} initialState={doc.state} computed={doc.computed} screenIds={screenIds} canvas={screen.canvas} hostPrimitivesAllowed={screenSurface.device !== "desktop" || screen.canvas !== undefined} />
       </HostStageSurface>
     </div>
   </SurfaceSpacingScope>;
@@ -143,7 +152,7 @@ export function CapturePrototype() {
   const rev = revParam !== null && /^[1-9][0-9]*$/.test(revParam) ? Number(revParam) : undefined;
   const version = versionParam !== null && /^[1-9][0-9]*$/.test(versionParam) ? Number(versionParam) : undefined;
 
-  const state = useApi((signal) => loadPrototype(protoId ?? "", rev, version, signal), [protoId, rev, version]);
+  const state = useApi((signal) => loadPrototype(protoId ?? "", screenId ?? "", rev, version, signal), [protoId, screenId, rev, version]);
   usePublishError(state.status === "error" ? errorMessage(state.error) : null);
 
   return <>

@@ -52,7 +52,7 @@ export type EditorAction =
   | { type: "set-element-slot"; screenId: string; elementKey: string; slot: string | undefined }
   | { type: "insert-composition"; screenId: string; parentKey: string | null; compositionId: string; composition: CompositionDoc }
   | { type: "extract-composition"; screenId: string; rootKey: string; compositionId: string; composition: CompositionDoc; keptChildren?: readonly string[]; params?: Record<string, JsonValue> }
-  | { type: "set-screen-meta"; screenId: string; patch: Partial<Pick<Screen, "name" | "note" | "stateOverrides" | "canvas">> }
+  | { type: "set-screen-meta"; screenId: string; patch: Partial<Pick<Screen, "name" | "note" | "stateOverrides" | "canvas" | "surface">> }
   | { type: "set-doc-meta"; patch: DocMetaPatch }
   | { type: "undo" }
   | { type: "redo" }

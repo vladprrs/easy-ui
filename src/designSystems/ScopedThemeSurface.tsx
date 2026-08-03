@@ -22,12 +22,19 @@ export function scopedThemeStyle(tokens: ThemeContent["tokens"] | undefined): Sc
   return Object.fromEntries(entries) as ScopedStyle;
 }
 
-const SCOPE_ATTR = "data-eui-scoped-surface";
+/**
+ * Opt-in атрибут заморозки анимаций (план multi-surface, D9/R4-M5). Раньше reset-стиль
+ * ключевался на `data-eui-scoped-surface`, то есть на **любом** scoped-инстансе страницы:
+ * один CJM-тайл или Library-превью замораживали заодно и живую панель дуо-плеера, потому
+ * что стиль глобальный и refcounted. Теперь стиль пишет `resetAnimations`-инстанс, а
+ * действует он только на тех, кто сам этот атрибут выставил.
+ */
+const RESET_ATTR = "data-eui-scoped-reset";
 
 // Эквивалент CaptureChrome/CaptureStyle, но scoped: useCaptureTheme не переиспользуем — он
 // переключает классы на document.documentElement, а превью не имеет права трогать хром.
 const RESET_CSS =
-  `[${SCOPE_ATTR}],[${SCOPE_ATTR}] *,[${SCOPE_ATTR}] *::before,[${SCOPE_ATTR}] *::after` +
+  `[${RESET_ATTR}],[${RESET_ATTR}] *,[${RESET_ATTR}] *::before,[${RESET_ATTR}] *::after` +
   "{animation-duration:0s!important;animation-delay:0s!important;" +
   "transition-duration:0s!important;transition-delay:0s!important;scroll-behavior:auto!important}";
 
@@ -70,7 +77,15 @@ export function ScopedThemeSurface({ systemId, theme, className, resetAnimations
   }, [resetAnimations]);
 
   return <SurfaceSpacingScope systemId={systemId} themeTokens={theme?.tokens}>
-    <div className={className} style={scopedThemeStyle(theme?.tokens)} data-eui-scoped-surface="" data-eui-scoped-system={systemId}>
+    <div
+      className={className}
+      style={scopedThemeStyle(theme?.tokens)}
+      data-eui-scoped-surface=""
+      data-eui-scoped-system={systemId}
+      // Заморозка — только на подписавшихся (R4-M5): панель плеера с `resetAnimations={false}`
+      // атрибут не несёт и остаётся живой, сколько бы превью ни висело на той же странице.
+      {...(resetAnimations ? { [RESET_ATTR]: "" } : {})}
+    >
       {children}
     </div>
   </SurfaceSpacingScope>;

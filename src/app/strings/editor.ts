@@ -142,6 +142,10 @@ export const editor = {
   diffFlowParentLabel: "родительский сценарий",
   diffMainFlowLabel: "Главный сценарий",
   diffDesignSystemLabel: "Дизайн-система",
+  /** Поверхности документа (план multi-surface, D13): правки видны в истории и в 409-диалоге. */
+  diffSurfaceLabel: (name: string) => `Поверхность «${name}»`,
+  diffSurfacesLabel: "Поверхности",
+  diffScreenSurfaceLabel: "поверхность",
   diffTypeLabel: "тип",
   diffHandlerLabel: (event: string) => `обработчик «${event}»`,
   diffRepeatLabel: "повтор (repeat)",
@@ -184,6 +188,11 @@ export const editor = {
   descriptionLabel: "Описание",
   startScreenLabel: "Стартовый экран",
   deviceLabel: "Устройство",
+  // Мульти-поверхностные документы (план multi-surface, D3/D13): `doc.device` и
+  // `doc.startScreen` обязаны совпадать с primary-поверхностью, поэтому в UI они
+  // только для чтения — иначе любой клик давал бы неисправимую в редакторе 422.
+  surfaceLabel: "Поверхность",
+  surfacesLockedHint: "Задаётся поверхностями документа: значение primary-поверхности. Правится через API.",
   canvasLegend: "Холст",
   widthLabel: "Ширина",
   heightLabel: "Высота",

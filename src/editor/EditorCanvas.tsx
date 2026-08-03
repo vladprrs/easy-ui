@@ -13,6 +13,9 @@ import { mergeScreenState } from "../prototype/stateOverrides";
 import { CanvasLayers } from "../player/CanvasLayers";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { previewNativeWidth } from "../designSystems/deviceMetrics";
+// D13: канвас рисует экран рамкой **его поверхности** — на дуо-доке `doc.device` относится
+// только к primary. Документ без `surfaces` получает синтетическую primary с теми же скалярами.
+import { surfaceOf } from "../prototype/surfaces";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 
 type Screen = PrototypeDoc["screens"][number];
@@ -274,7 +277,7 @@ export function EditorCanvas({ doc, screen, registry, handlers, runtimeKey, stat
   return <EditorCanvasErrorBoundary key={screen.id} prototypeId={doc.id} screenId={screen.id}>
     <JSONUIProvider key={`${runtimeKey}:${screen.id}:${stateEpoch}`} registry={registry} handlers={handlers} initialState={initialState}>
       <EditorFrame
-        nativeWidth={screen.canvas?.width ?? previewNativeWidth[doc.device]}
+        nativeWidth={screen.canvas?.width ?? previewNativeWidth[surfaceOf(doc, screen.id).device]}
         nativeHeight={screen.canvas?.height}
         designSystem={doc.designSystem}
         themeTokens={themeContent?.tokens}

@@ -21,6 +21,7 @@ import { CompositionPanel } from "./CompositionPanel";
 import { ExtractCompositionDialog, InsertCompositionDialog } from "./CompositionDialogs";
 import { PropsForm } from "./propsForm/PropsForm";
 import { suggestRegion } from "./regionSuggestion";
+import { docSurfaces as documentSurfaces, hasSurfaces, surfaceOf } from "../prototype/surfaces";
 
 const inputClass = `${inputBase} mt-1 w-full bg-white`;
 const overridesSchema = z.record(z.string(), jsonValueSchema);
@@ -124,6 +125,10 @@ export function InspectorPanel({ state, definitions, dispatch, pins, issues, com
   const [canvasConfirm, setCanvasConfirm] = useState<{ width: number; height: number } | null>(null);
   const screenIndex = state.doc.screens.findIndex((item) => item.id === state.selection.screenId);
   const screen = state.doc.screens[screenIndex];
+  // Поверхности документа (D13): список для селекта экрана и признак «скаляры документа
+  // заперты инвариантами D3». Документ без `surfaces` даёт одну синтетическую primary.
+  const docSurfaces = documentSurfaces(state.doc);
+  const surfacesLocked = hasSurfaces(state.doc);
   if (!screen) return <aside className="w-90 shrink-0 border-l border-eui-ink/10 bg-white p-4"><p className="font-eui-ui text-sm text-eui-slate-500">{editor.screenMissing}</p></aside>;
   const elementKey = state.selection.elementKey;
   const element = elementKey ? screen.spec.elements[elementKey] : undefined;
@@ -214,14 +219,24 @@ export function InspectorPanel({ state, definitions, dispatch, pins, issues, com
     <Section title={editor.sectionScreen}><div className="space-y-3">
       <BlurText key={`name:${screen.id}:${screen.name}`} label={editor.nameLabel} value={screen.name} onCommit={(name) => dispatch({ type: "set-screen-meta", screenId: screen.id, patch: { name } })} />
       <BlurText key={`note:${screen.id}:${screen.note ?? ""}`} label={editor.noteLabel} multiline value={screen.note ?? ""} onCommit={(note) => dispatch({ type: "set-screen-meta", screenId: screen.id, patch: { note: note.trim() ? note : undefined } })} />
+      {/* Принадлежность экрана поверхности (D13). Список поверхностей в UI не правится
+          (v1 — авторинг через API), поэтому селект появляется только на surfaces-доке. */}
+      {docSurfaces.length > 1 ? <label className="block font-eui-ui text-xs text-eui-slate-500">{editor.surfaceLabel}<select
+        className={`${inputClass} text-eui-ink`}
+        value={surfaceOf(state.doc, screen.id).id}
+        onChange={(event) => dispatch({ type: "set-screen-meta", screenId: screen.id, patch: { surface: event.target.value } })}
+      >{docSurfaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label> : null}
       <CanvasEditor key={`canvas:${screen.id}:${screen.canvas?.width ?? ""}:${screen.canvas?.height ?? ""}`} canvas={screen.canvas} onCommit={commitCanvas} />
       <JsonEditor key={`overrides:${screen.id}:${JSON.stringify(screen.stateOverrides ?? {})}`} label="stateOverrides (JSON)" objectOnly value={screen.stateOverrides ?? {}} validate={validateOverrideTree} onCommit={(stateOverrides) => dispatch({ type: "set-screen-meta", screenId: screen.id, patch: { stateOverrides } })} />
     </div></Section>
     <Section title={editor.sectionPrototype}><div className="space-y-3">
       <BlurText key={`doc-name:${state.doc.name}`} label={editor.nameLabel} value={state.doc.name} onCommit={(name) => dispatch({ type: "set-doc-meta", patch: { name } })} />
       <BlurText key={`description:${state.doc.description ?? ""}`} label={editor.descriptionLabel} multiline value={state.doc.description ?? ""} onCommit={(description) => dispatch({ type: "set-doc-meta", patch: { description } })} />
-      <label className="block font-eui-ui text-xs text-eui-slate-500">{editor.startScreenLabel}<select className={`${inputClass} text-eui-ink`} value={state.doc.startScreen} onChange={(event) => dispatch({ type: "set-doc-meta", patch: { startScreen: event.target.value } })}>{state.doc.screens.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label className="block font-eui-ui text-xs text-eui-slate-500">{editor.deviceLabel}<select className={`${inputClass} text-eui-ink`} value={state.doc.device} onChange={(event) => dispatch({ type: "set-doc-meta", patch: { device: event.target.value as EditorState["doc"]["device"] } })}><option value="mobile">{deviceNames.mobile}</option><option value="tablet">{deviceNames.tablet}</option><option value="desktop">{deviceNames.desktop}</option></select></label>
+      {/* D3/D13: на surfaces-доке `startScreen`/`device` обязаны равняться primary-поверхности —
+          редактируемый контрол давал бы 422, которую в UI нечем исправить. */}
+      <label className="block font-eui-ui text-xs text-eui-slate-500">{editor.startScreenLabel}<select className={`${inputClass} text-eui-ink disabled:cursor-not-allowed disabled:opacity-60`} value={state.doc.startScreen} disabled={surfacesLocked} title={surfacesLocked ? editor.surfacesLockedHint : undefined} onChange={(event) => dispatch({ type: "set-doc-meta", patch: { startScreen: event.target.value } })}>{state.doc.screens.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label className="block font-eui-ui text-xs text-eui-slate-500">{editor.deviceLabel}<select className={`${inputClass} text-eui-ink disabled:cursor-not-allowed disabled:opacity-60`} value={state.doc.device} disabled={surfacesLocked} title={surfacesLocked ? editor.surfacesLockedHint : undefined} onChange={(event) => dispatch({ type: "set-doc-meta", patch: { device: event.target.value as EditorState["doc"]["device"] } })}><option value="mobile">{deviceNames.mobile}</option><option value="tablet">{deviceNames.tablet}</option><option value="desktop">{deviceNames.desktop}</option></select></label>
+      {surfacesLocked ? <p className="font-eui-ui text-[11px] text-eui-slate-500">{editor.surfacesLockedHint}</p> : null}
     </div></Section>
     {canvasConfirm ? <ConfirmModal
       title={editor.canvasRegionsDialogTitle}

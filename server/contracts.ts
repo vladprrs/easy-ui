@@ -849,6 +849,11 @@ export const prototypeRevisionDiffContract = registerContract({
     state: z.union([diffMapSchema, omittedSchema]).optional(),
     /** Производные значения стейта (`doc.computed`) — та же map-форма, что у `state`. */
     computed: z.union([diffMapSchema, omittedSchema]).optional(),
+    /**
+     * Поверхности документа (`doc.surfaces`, план multi-surface D13) — map-форма по `id`
+     * поверхности: правка устройства/стартового экрана панели видна в истории ревизий.
+     */
+    surfaces: z.union([diffMapSchema, omittedSchema]).optional(),
     screens: screensDiffSchema.optional(),
     flows: z.union([elementValueDiffSchema, omittedSchema]).optional(),
     screenOrder: z.union([z.strictObject({ from: z.array(boundedDiffString).max(100), to: z.array(boundedDiffString).max(100) }), omittedSchema]).optional(),
@@ -858,7 +863,7 @@ export const prototypeRevisionDiffContract = registerContract({
       screensAdded: z.number().int().nonnegative(), screensRemoved: z.number().int().nonnegative(), screensChanged: z.number().int().nonnegative(),
       staticElementsAdded: z.number().int().nonnegative(), staticElementsRemoved: z.number().int().nonnegative(), staticElementsChanged: z.number().int().nonnegative(),
       identical: z.boolean(), docIdentical: z.boolean(), truncated: z.boolean(),
-      omittedSections: z.array(z.enum(["props", "elements", "screens", "flows", "state", "computed", "doc", "pins", "renderInputs", "screenOrder"])),
+      omittedSections: z.array(z.enum(["props", "elements", "screens", "flows", "state", "computed", "doc", "pins", "surfaces", "renderInputs", "screenOrder"])),
     }),
   }),
   errors: [errorCatalog.invalidRequest, errorCatalog.prototypeNotFound, errorCatalog.revisionNotFound],

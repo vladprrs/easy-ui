@@ -174,6 +174,19 @@ export function ThemeStyle({ content, fonts = true }: { content: ThemeContent | 
   return null;
 }
 
+/**
+ * Версия темы конкретной ДС из карты пинов ревизии (`designSystemMetaVersions`, миграция v24).
+ * Read-правило без бэкфила (план multi-surface §4): ревизии без строк отдают пустую карту, и
+ * читатель падает на скаляр `designSystemMetaVersion` — значение primary-ДС.
+ */
+export function themeMetaVersion(
+  pins: Readonly<Record<string, number | null>> | undefined,
+  designSystem: string,
+  fallback: number | null | undefined,
+): number | null | undefined {
+  return pins && Object.hasOwn(pins, designSystem) ? pins[designSystem] : fallback;
+}
+
 /** Fetches the theme content for a system: the pinned version, or the latest for head (metaVersion null). */
 export function useDesignSystemTheme(designSystem: string | undefined, metaVersion: number | null | undefined): ThemeContent | null {
   const [content, setContent] = useState<ThemeContent | null>(null);

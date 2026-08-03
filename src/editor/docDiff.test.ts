@@ -301,3 +301,37 @@ describe("humanizeIssues (422-форматтер)", () => {
     expect(humanizeIssues(doc, undefined)).toEqual([]);
   });
 });
+
+describe("diffDocs surfaces (multi-surface D13)", () => {
+  const duo = (): PrototypeDoc => prototypeDocSchema.parse({
+    version: 1, id: "duo", name: "Дуо", device: "desktop", startScreen: "kso", state: {},
+    surfaces: [
+      { id: "kso", name: "КСО", device: "desktop", startScreen: "kso" },
+      { id: "app", name: "Приложение", device: "mobile", startScreen: "app" },
+    ],
+    screens: [
+      { id: "kso", name: "Касса", surface: "kso", canvas: { width: 1080, height: 1920 }, spec: { root: "t", elements: { t: { type: "Text", props: { text: "Касса" } } } } },
+      { id: "app", name: "Приложение", surface: "app", spec: { root: "t", elements: { t: { type: "Text", props: { text: "Дом" } } } } },
+    ],
+  });
+
+  it("описывает правку поверхности и смену тега экрана по-русски", () => {
+    const next = duo();
+    next.surfaces = [next.surfaces![0]!, { ...next.surfaces![1]!, name: "Телефон", device: "tablet" }];
+    next.screens = [{ ...next.screens[0]!, surface: "app" }, next.screens[1]!];
+    const changes = diffDocs(duo(), next).map(formatDocChange);
+    expect(changes).toContain("Поверхность «Приложение» — переименовано («Приложение» → «Телефон»)");
+    expect(changes).toContain("Поверхность «Телефон» › Устройство — изменено («mobile» → «tablet»)");
+    expect(changes).toContain("Экран «Касса» › поверхность — изменено («kso» → «app»)");
+  });
+
+  it("адресует zod-issue про поверхности в терминах документа", () => {
+    expect(describeDocPath(duo(), "/surfaces/1/device")).toBe("Поверхность «Приложение» › device");
+    expect(describeDocPath(duo(), ["surfaces"])).toBe("Поверхности");
+    expect(describeDocPath(duo(), "/screens/0/surface")).toBe("Экран «Касса» › поверхность");
+  });
+
+  it("не выдумывает изменений на документе без поверхностей", () => {
+    expect(diffDocs(makeDoc(), makeDoc()).filter((change) => change.segments[0]?.startsWith("Поверхность"))).toEqual([]);
+  });
+});

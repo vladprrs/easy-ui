@@ -189,3 +189,43 @@ describe("editorReducer", () => {
     expect(state.future).toHaveLength(HISTORY_LIMIT);
   });
 });
+
+// Round-trip редактора на surfaces-доке (план multi-surface, D13): правки экрана и
+// метаданных не имеют права терять `doc.surfaces` и `step.companions` — они не
+// представлены в UI и потерялись бы молча.
+describe("editorReducer на surfaces-доке", () => {
+  const duo = prototypeDocSchema.parse({
+    version: 1, id: "duo", name: "Дуо", device: "desktop", startScreen: "kso", state: {},
+    surfaces: [
+      { id: "kso", name: "КСО", device: "desktop", startScreen: "kso" },
+      { id: "app", name: "Приложение", device: "mobile", designSystem: "pay-two", startScreen: "app" },
+    ],
+    screens: [
+      { id: "kso", name: "Касса", surface: "kso", canvas: { width: 1080, height: 1920 }, spec: { root: "t", elements: { t: { type: "Text", props: { text: "Касса" } } } } },
+      { id: "app", name: "Приложение", surface: "app", spec: { root: "t", elements: { t: { type: "Text", props: { text: "Дом" } } } } },
+    ],
+    flows: [{ id: "pay", name: "Оплата", steps: [{ screenId: "kso", companions: { app: "app" }, note: "Касса ждёт" }] }],
+  });
+
+  it("сохраняет surfaces и companions через правки, undo и redo", () => {
+    let state = createEditorState({ doc: duo, rev: 1 });
+    state = editorReducer(state, { type: "set-screen-meta", screenId: "app", patch: { name: "Приложение покупателя" } });
+    state = editorReducer(state, { type: "set-doc-meta", patch: { name: "Дуо v2" } });
+    state = editorReducer(state, { type: "set-element-props", screenId: "kso", elementKey: "t", props: { text: "Оплата" } });
+    const check = (value: typeof state) => {
+      expect(value.doc.surfaces).toEqual(duo.surfaces);
+      expect(value.doc.flows?.[0]?.steps[0]?.companions).toEqual({ app: "app" });
+      expect(value.doc.screens.map((screen) => screen.surface)).toEqual(["kso", "app"]);
+    };
+    check(state);
+    check(editorReducer(state, { type: "undo" }));
+    check(editorReducer(editorReducer(state, { type: "undo" }), { type: "redo" }));
+  });
+
+  it("переносит экран на другую поверхность, не трогая остального документа", () => {
+    const state = editorReducer(createEditorState({ doc: duo, rev: 1 }), { type: "set-screen-meta", screenId: "app", patch: { surface: "kso" } });
+    expect(state.doc.screens.find((screen) => screen.id === "app")?.surface).toBe("kso");
+    expect(state.doc.surfaces).toEqual(duo.surfaces);
+    expect(state.dirty).toBe(true);
+  });
+});

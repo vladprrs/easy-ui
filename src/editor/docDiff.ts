@@ -72,6 +72,8 @@ function diffScreen(changes: DocChange[], before: Screen, after: Screen): void {
   if (before.name !== after.name) {
     changes.push({ kind: "renamed", segments: [editor.diffScreenLabel(before.name)], detail: editor.diffScalarDetail(before.name, after.name) });
   }
+  // D13: принадлежность экрана поверхности — такое же поле экрана, как заметка/холст.
+  diffValue(changes, [label, editor.diffScreenSurfaceLabel], before.surface, after.surface);
   diffValue(changes, [label, editor.diffNoteLabel], before.note, after.note);
   diffValue(changes, [label, editor.diffCanvasLabel], before.canvas, after.canvas);
   diffRecord(changes, [label, editor.diffOverridesLabel], before.stateOverrides, after.stateOverrides);
@@ -125,6 +127,33 @@ function diffFlows(changes: DocChange[], before: PrototypeDoc["flows"], after: P
   }
 }
 
+/**
+ * Diff поверхностей (план multi-surface, D13): матчинг по `id`, как у сценариев, поэтому
+ * переименование поверхности не читается как «удалили и добавили». Правка поверхностей
+ * меняет устройство и стартовый экран целой панели — молча её терять нельзя.
+ */
+function diffSurfaces(changes: DocChange[], before: PrototypeDoc["surfaces"], after: PrototypeDoc["surfaces"]): void {
+  const nextById = new Map((after ?? []).map((surface) => [surface.id, surface]));
+  for (const surface of before ?? []) {
+    const counterpart = nextById.get(surface.id);
+    if (!counterpart) {
+      changes.push({ kind: "removed", segments: [editor.diffSurfaceLabel(surface.name)] });
+      continue;
+    }
+    if (surface.name !== counterpart.name) {
+      changes.push({ kind: "renamed", segments: [editor.diffSurfaceLabel(surface.name)], detail: editor.diffScalarDetail(surface.name, counterpart.name) });
+    }
+    const label = editor.diffSurfaceLabel(counterpart.name);
+    diffValue(changes, [label, editor.deviceLabel], surface.device, counterpart.device);
+    diffValue(changes, [label, editor.startScreenLabel], surface.startScreen, counterpart.startScreen);
+    diffValue(changes, [label, editor.diffDesignSystemLabel], surface.designSystem, counterpart.designSystem);
+  }
+  const baseIds = new Set((before ?? []).map((surface) => surface.id));
+  for (const surface of after ?? []) {
+    if (!baseIds.has(surface.id)) changes.push({ kind: "added", segments: [editor.diffSurfaceLabel(surface.name)] });
+  }
+}
+
 const DOC_FIELD_LABELS: Partial<Record<keyof PrototypeDoc, string>> = {
   name: editor.nameLabel,
   description: editor.descriptionLabel,
@@ -143,6 +172,7 @@ export function diffDocs(base: PrototypeDoc, next: PrototypeDoc): DocChange[] {
   for (const field of Object.keys(DOC_FIELD_LABELS) as (keyof typeof DOC_FIELD_LABELS)[]) {
     diffValue(changes, [DOC_FIELD_LABELS[field]!], base[field], next[field]);
   }
+  diffSurfaces(changes, base.surfaces, next.surfaces);
   diffFlows(changes, base.flows, next.flows);
   diffRecord(changes, [editor.diffStateLabel], base.state, next.state);
   // `computed` — такой же record верхнего уровня, как state (ключи bare); `null` в stored-ветке ⇒ `?? undefined`.
@@ -193,6 +223,7 @@ function describeScreenPath(screen: Screen | undefined, index: string, rest: str
   if (head === undefined) return [label];
   if (head === "name") return [label, editor.nameLabel];
   if (head === "note") return [label, editor.diffNoteLabel];
+  if (head === "surface") return [label, editor.diffScreenSurfaceLabel];
   if (head === "canvas") return [label, editor.diffCanvasLabel, ...tail];
   if (head === "stateOverrides") return [label, editor.diffOverridesLabel, ...tail];
   if (head === "spec") {
@@ -221,6 +252,13 @@ export function describeDocPath(doc: PrototypeDoc, path: string | (string | numb
     if (index === undefined) return editor.diffScreensLabel;
     const screen = /^\d+$/.test(index) ? doc.screens[Number(index)] : doc.screens.find((item) => item.id === index);
     return describeScreenPath(screen, index, screenRest).join(" › ");
+  }
+  if (head === "surfaces") {
+    const [index, ...surfaceRest] = rest;
+    if (index === undefined) return editor.diffSurfacesLabel;
+    const surface = /^\d+$/.test(index) ? doc.surfaces?.[Number(index)] : doc.surfaces?.find((item) => item.id === index);
+    const label = surface ? editor.diffSurfaceLabel(surface.name) : `${editor.diffSurfacesLabel}[${index}]`;
+    return [label, ...surfaceRest].join(" › ");
   }
   if (head === "state") return [editor.diffStateLabel, ...rest].join(" › ");
   // Ключи computed — bare, как у state: адрес zod-issue и validate-issue совпадают посегментно.

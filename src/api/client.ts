@@ -134,7 +134,10 @@ export interface PrototypeMeta {
 }
 // `status` — статус публикации закреплённой версии компонента (волна 3). Опционален:
 // старые ответы/фикстуры его не несут, инспектор рисует бейдж «устарел» только когда он есть.
-export interface PrototypeComponentPin { id: string; name: string; version: number; bundleUrl: string; bundleHash: string; status?: ComponentStatus }
+// `designSystem` — ДС компонента (план multi-surface, D8). Опционален: имена компонентов
+// глобально уникальны (`components.name UNIQUE`), поэтому плоские name-keyed карты корректны и
+// без него, а per-surface реестр без этого поля просто не сужается (см. `surfaceRegistries`).
+export interface PrototypeComponentPin { id: string; name: string; version: number; bundleUrl: string; bundleHash: string; status?: ComponentStatus; designSystem?: string }
 export interface AssetPin { id: string; sha256: string; mime: string; size: number }
 export interface UploadedAsset extends AssetPin { url: string; width?: number; height?: number; deduplicated?: true }
 export interface EditorAsset extends AssetPin { name?: string }
@@ -152,6 +155,13 @@ export interface PrototypeDraft {
   /** Раскрытый ключ → происхождение из композиции (для дерева компонентов). */
   compositionRefs?: Record<string, ExpandedOrigin>;
   designSystemMetaVersion?: number | null;
+  /**
+   * Пины тем ревизии `дизайн-система → версия темы` (миграция v24, план multi-surface §4).
+   * `designSystemMetaVersion` остаётся значением **primary**-ДС; карта покрывает все ДС
+   * документа. Поле опционально: старые ответы и фикстуры его не несут — читатель тогда
+   * пользуется скаляром (read-правило без бэкфила).
+   */
+  designSystemMetaVersions?: Record<string, number | null>;
   // Asset pins and figma provenance of the revision (WF-5). Optional in the type because test
   // fixtures elide them, but the server always includes both (figma is null for legacy revisions).
   assets?: AssetPin[];

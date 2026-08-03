@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { getComponentVersion, getPrototypeDraft } from "../api/client";
+import { getComponentVersion, getDesignSystemVersion, getPrototypeDraft } from "../api/client";
 import { prototypeDocSchema } from "../prototype/schema";
 import { CapturePrototype } from "./CapturePrototype";
 import { CaptureComponent, CaptureComponentDraft } from "./CaptureComponent";
@@ -40,6 +40,9 @@ vi.mock("../api/client", () => ({
   getPrototypeVersion: vi.fn(),
   getComponentMeta: vi.fn(async () => ({ id: "widget", name: "Widget", designSystem: "shadcn", headRev: 1, versions: [], updatedAt: "" })),
   getComponentVersion: vi.fn(async () => ({ version: 2, rev: 1, source: "", designSystem: "shadcn", bundleHash: "bh", hostAbiVersion: 2, events: [], slots: [], example: { label: "x" }, examples: { compact: { label: "compact" }, wide: { label: "wide" } }, assets: [], publishedAt: "" })),
+  // Тема ДС: токен несёт имя системы и версию — так виден выбор именно ДС поверхности (D14).
+  getDesignSystemById: vi.fn(async (id: string) => ({ tokens: { "color.brand": `${id}@head` }, fonts: [], icons: [] })),
+  getDesignSystemVersion: vi.fn(async (id: string, version: number) => ({ tokens: { "color.brand": `${id}@${version}` }, fonts: [], icons: [] })),
 }));
 
 vi.mock("../customComponents/loader", () => ({
@@ -241,5 +244,53 @@ describe("capture component draft (P1b)", () => {
     renderDraftCapture();
     await waitFor(() => expect(document.querySelector("[data-capture-error]")).not.toBeNull());
     expect(screen.queryByTestId("widget")).toBeNull();
+  });
+});
+
+
+// Дуо-док: primary — desktop-КСО с холстом (D2a), вторая поверхность — мобильное
+// приложение на своей ДС. Съёмка поэкранная (D14), поэтому тема/скоуп/устройство
+// берутся у поверхности снимаемого экрана, а не у скаляров документа.
+const duoCaptureDoc = prototypeDocSchema.parse({
+  version: 1, id: "cap-duo", name: "Capture duo", designSystem: "kiosk-ds", device: "desktop", startScreen: "kso-idle", state: {},
+  surfaces: [
+    { id: "kso", name: "КСО", device: "desktop", startScreen: "kso-idle" },
+    { id: "app", name: "Приложение", device: "mobile", designSystem: "pay-ds", startScreen: "app-home" },
+  ],
+  screens: [
+    { id: "kso-idle", name: "Idle", surface: "kso", canvas: { width: 1080, height: 1920 }, spec: { root: "r", elements: { r: { type: "Text", props: { text: "КСО" } } } } },
+    { id: "app-home", name: "Home", surface: "app", spec: { root: "r", elements: { r: { type: "Text", props: { text: "Приложение" } } } } },
+  ],
+});
+
+describe("capture per-surface theming (multi-surface D10/D14)", () => {
+  const duoDraft = {
+    doc: duoCaptureDoc, rev: 4, prototypeInstanceId: "duo-instance",
+    componentManifestHash: "m", builtinCatalogHash: "b", components: [],
+    designSystemMetaVersion: 1,
+    designSystemMetaVersions: { "kiosk-ds": 1, "pay-ds": 7 },
+  };
+
+  it("loads the theme of the captured screen surface design system", async () => {
+    vi.mocked(getPrototypeDraft).mockResolvedValue(duoDraft as never);
+    const router = createMemoryRouter([{ path: "/capture/:protoId/s/:screenId", element: <CapturePrototype /> }], { initialEntries: ["/capture/cap-duo/s/app-home"] });
+    render(<RouterProvider router={router} />);
+    // Тема — ДС поверхности экрана и её пин из карты `designSystemMetaVersions`.
+    await waitFor(() => expect(getDesignSystemVersion).toHaveBeenCalledWith("pay-ds", 7, expect.anything()));
+    await waitFor(() => expect(document.head.querySelector("style[data-eui-theme]")?.textContent).toContain("pay-ds@7"));
+    // Тот же резолв уезжает в handshake — пиксели и отчёт не расходятся.
+    await waitFor(() => expect(window.__EUI_CAPTURE_READY__).toMatchObject({ designSystem: "pay-ds", dsMetaVersion: 7 }));
+    // D10: mobile-поверхность без холста снимается каноническим мобильным вьюпортом,
+    // а не desktop-скаляром документа.
+    await waitFor(() => expect(document.getElementById("eui-capture-surface")?.style.width).toBe("390px"));
+  });
+
+  it("keeps the primary surface on the document design system and its own device", async () => {
+    vi.mocked(getPrototypeDraft).mockResolvedValue(duoDraft as never);
+    const router = createMemoryRouter([{ path: "/capture/:protoId/s/:screenId", element: <CapturePrototype /> }], { initialEntries: ["/capture/cap-duo/s/kso-idle"] });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(getDesignSystemVersion).toHaveBeenCalledWith("kiosk-ds", 1, expect.anything()));
+    await waitFor(() => expect(window.__EUI_CAPTURE_READY__).toMatchObject({ designSystem: "kiosk-ds", dsMetaVersion: 1 }));
+    await waitFor(() => expect(document.getElementById("eui-capture-surface")?.style.width).toBe("1080px"));
   });
 });

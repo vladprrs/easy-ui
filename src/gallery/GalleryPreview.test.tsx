@@ -69,3 +69,40 @@ describe("GalleryPreviewErrorBoundary", () => {
     expect(screen.getByRole("button", { name: "Gallery host hotspot" })).toBeTruthy();
   });
 });
+
+describe("GalleryPreviewFrame на дуо-доке (multi-surface)", () => {
+  beforeEach(() => {
+    mocks.getThemeVersion.mockReset().mockResolvedValue({ systemId: "shadcn", version: 1, createdAt: "2026-08-01T00:00:00Z", tokens: {}, fonts: [], icons: [] });
+    mocks.getLatestTheme.mockReset().mockResolvedValue({ id: "shadcn", latestMetaVersion: 1, tokens: {}, fonts: [], icons: [] });
+  });
+  afterEach(cleanup);
+
+  it("подписывает превью бейджем поверхностей и меряет его по primary (D3)", () => {
+    const doc = prototypeDocSchema.parse({
+      version: 1, id: "duo-gallery", name: "Дуо", designSystem: "shadcn", device: "desktop", startScreen: "kso", state: {},
+      surfaces: [
+        { id: "kso", name: "КСО", device: "desktop", startScreen: "kso" },
+        { id: "app", name: "Приложение", device: "mobile", startScreen: "app" },
+      ],
+      screens: [
+        { id: "kso", name: "Касса", surface: "kso", canvas: { width: 1080, height: 1920 }, spec: { root: "t", elements: { t: { type: "Text", props: { text: "Касса" } } } } },
+        { id: "app", name: "Дом", surface: "app", spec: { root: "t", elements: { t: { type: "Text", props: { text: "Дом" } } } } },
+      ],
+    });
+    render(<GalleryPreviewFrame draft={{ doc, rev: 1, builtinCatalogHash: "b", componentManifestHash: "m", components: [], designSystemMetaVersion: 1 }} />);
+    const badge = screen.getByTestId("gallery-preview-surfaces");
+    expect(badge.textContent).toBe("2 поверхности");
+    expect(badge.getAttribute("title")).toBe("Поверхности: КСО, Приложение");
+    // Кадр — стартовый экран primary-поверхности, то есть КСО с его холстом.
+    expect(document.querySelector<HTMLElement>("[data-eui-stage-viewport='gallery']")!.style.width).toBe("1080px");
+  });
+
+  it("не рисует бейдж на обычном документе", () => {
+    const doc = prototypeDocSchema.parse({
+      version: 1, id: "plain-gallery", name: "Plain", designSystem: "shadcn", device: "mobile", startScreen: "home", state: {},
+      screens: [{ id: "home", name: "Дом", spec: { root: "t", elements: { t: { type: "Text", props: { text: "Дом" } } } } }],
+    });
+    render(<GalleryPreviewFrame draft={{ doc, rev: 1, builtinCatalogHash: "b", componentManifestHash: "m", components: [], designSystemMetaVersion: 1 }} />);
+    expect(screen.queryByTestId("gallery-preview-surfaces")).toBeNull();
+  });
+});

@@ -8,6 +8,7 @@ import { buildPlayerPath } from "../player/navigation";
 import { buildFlowTree, flattenFlowTree, screenFlowIndex, type FlowTreeNode } from "../prototype/flowGraph";
 import { verifyEdge, type NavigationGraph } from "../prototype/navigationGraph";
 import type { PrototypeDoc } from "../prototype/schema";
+import { resolveStepCompanions } from "../prototype/surfaces";
 import { ConnectivityLegend, ConnectivityMarker } from "./ConnectivityLegend";
 import { FlowTree } from "./FlowTree";
 import { LazyMount } from "./LazyMount";
@@ -45,7 +46,7 @@ function FlowSection({ node, doc, graph, routeBase, renderTile, sharedFlows, reg
   doc: PrototypeDoc;
   graph: NavigationGraph;
   routeBase: string;
-  renderTile: (screenId: string, flowId: string, stepIndex: number, noteOverride: string | undefined, onOpen: () => void) => ReactNode;
+  renderTile: (screenId: string, flowId: string, stepIndex: number, noteOverride: string | undefined, onOpen: () => void, companions?: Readonly<Record<string, string>>) => ReactNode;
   sharedFlows: number;
   register: (flowId: string, element: HTMLElement | null) => void;
   onOpenStep: (flowId: string, stepIndex: number) => void;
@@ -55,9 +56,15 @@ function FlowSection({ node, doc, graph, routeBase, renderTile, sharedFlows, reg
   const headingId = `${sectionDomId(flow.id)}-heading`;
   const firstStep = flow.steps[0];
   const screenNames = useMemo(() => new Map(doc.screens.map((screen) => [screen.id, screen.name])), [doc.screens]);
+  // Вход в плеер с первого шага выставляет **обе** панели: companions шага уезжают в
+  // `?on.<surface>=<screen>` (план multi-surface, D5/D6) — иначе вторая поверхность
+  // открылась бы на своём startScreen и corner-кейс шага не воспроизвёлся бы.
   const playerHref = firstStep === undefined
     ? undefined
-    : `${buildPlayerPath(routeBase, firstStep.screenId)}?${new URLSearchParams({ flow: flow.id, step: "0" })}`;
+    : `${buildPlayerPath(routeBase, firstStep.screenId)}?${new URLSearchParams([
+        ["flow", flow.id], ["step", "0"],
+        ...resolveStepCompanions(doc, firstStep).map((item) => [`on.${item.surface.id}`, item.screenId]),
+      ])}`;
 
   // Итог копирования — временная подпись той же кнопки, а не новое состояние секции:
   // раньше «Ссылка скопирована» залипало навсегда и через минуту читалось как
@@ -111,12 +118,20 @@ function FlowSection({ node, doc, graph, routeBase, renderTile, sharedFlows, reg
         {flow.steps.map((step, stepIndex) => {
           const previous = flow.steps[stepIndex - 1];
           const verified = previous === undefined ? null : verifyEdge(graph, previous.screenId, step.screenId);
+          // D5: «что в этот момент на другой поверхности». Парный тайл встаёт под тайлом шага
+          // и рендерится своим экраном — со своими `stateOverrides` (механизм уже есть в тайле)
+          // и своей ДС. Он же уезжает в deep-link шага как `?on.<surface>=<screen>` (D6).
+          const companions = resolveStepCompanions(doc, step);
+          const companionMap = Object.fromEntries(companions.map((item) => [item.surface.id, item.screenId]));
           return <li key={`${flow.id}:${stepIndex}`} className="w-[132px] shrink-0" data-screen-id={step.screenId} data-flow-step={stepIndex}>
             <LazyMount
               data-cjm-step={`${flow.id}:${stepIndex}`}
               placeholderHeight={sheetStripTile.fallbackHeight}
               placeholderWidth={sheetStripTile.width}
-            >{renderTile(step.screenId, flow.id, stepIndex, step.note, () => onOpenStep(flow.id, stepIndex))}</LazyMount>
+            >{renderTile(step.screenId, flow.id, stepIndex, step.note, () => onOpenStep(flow.id, stepIndex), companionMap)}</LazyMount>
+            {companions.map((companion) => <div key={companion.surface.id} className="mt-2" data-cjm-companion={companion.surface.id} data-screen-id={companion.screenId}>
+              {renderTile(companion.screenId, flow.id, stepIndex, undefined, () => onOpenStep(flow.id, stepIndex), companionMap)}
+            </div>)}
             <p className="mt-2 text-[11px] text-eui-slate-500">{cjm.stepNumber(stepIndex + 1)}</p>
             <div className="flex items-start gap-1.5">
               <p className="min-w-0 flex-1 text-[11px] leading-tight text-eui-ink">{screenNames.get(step.screenId) ?? step.screenId}</p>
@@ -137,7 +152,7 @@ export function ScenarioSheet({ doc, graph, routeBase, renderTile, renderStage }
   doc: PrototypeDoc;
   graph: NavigationGraph;
   routeBase: string;
-  renderTile: (screenId: string, flowId: string, stepIndex: number, noteOverride: string | undefined, onOpen: () => void) => ReactNode;
+  renderTile: (screenId: string, flowId: string, stepIndex: number, noteOverride: string | undefined, onOpen: () => void, companions?: Readonly<Record<string, string>>) => ReactNode;
   /** Кадр 330×640 для лайтбокса (макет 03). */
   renderStage: (screenId: string) => ReactNode;
 }) {

@@ -32,7 +32,9 @@ const STRING_LIMIT = 160;
 const SCREEN_ORDER_LIMIT = 100;
 const DEFAULT_LEAF_BUDGET = 500;
 const HARD_BYTE_BUDGET = 256 * 1024;
-const OMIT_PRIORITY = ["props", "elements", "screens", "flows", "state", "computed", "doc", "pins", "renderInputs", "screenOrder"] as const;
+// `surfaces` стоит поздно: секция крошечная (в v1 ровно две записи), а правка поверхности
+// меняет устройство/стартовый экран целой панели — её омиссия обесценила бы весь дифф.
+const OMIT_PRIORITY = ["props", "elements", "screens", "flows", "state", "computed", "doc", "pins", "surfaces", "renderInputs", "screenOrder"] as const;
 const MISSING = Symbol("missing");
 type MaybeValue = unknown | typeof MISSING;
 // Optional response sections are assembled dynamically, then replaced by the
@@ -188,9 +190,9 @@ function screensDiff(fromDoc: PrototypeDoc, toDoc: PrototypeDoc, ctx: BuildConte
   for (const screen of toDoc.screens) {
     const before = from.get(screen.id); if (!before) continue;
     const entry: MutableRecord = { id: boundedString(screen.id, ctx) };
-    const beforeMeta = { name: before.name, ...(Object.hasOwn(before, "note") ? { note: before.note } : {}), ...(Object.hasOwn(before, "canvas") ? { canvas: before.canvas } : {}), root: (before.spec as MutableRecord).root };
-    const afterMeta = { name: screen.name, ...(Object.hasOwn(screen, "note") ? { note: screen.note } : {}), ...(Object.hasOwn(screen, "canvas") ? { canvas: screen.canvas } : {}), root: screen.spec.root };
-    const meta = fieldDiff(beforeMeta, afterMeta, ["name", "note", "canvas", "root"], ctx, "screens"); if (meta.length) entry.meta = meta;
+    const beforeMeta = { name: before.name, ...(Object.hasOwn(before, "note") ? { note: before.note } : {}), ...(Object.hasOwn(before, "canvas") ? { canvas: before.canvas } : {}), ...(Object.hasOwn(before, "surface") ? { surface: before.surface } : {}), root: (before.spec as MutableRecord).root };
+    const afterMeta = { name: screen.name, ...(Object.hasOwn(screen, "note") ? { note: screen.note } : {}), ...(Object.hasOwn(screen, "canvas") ? { canvas: screen.canvas } : {}), ...(Object.hasOwn(screen, "surface") ? { surface: screen.surface } : {}), root: screen.spec.root };
+    const meta = fieldDiff(beforeMeta, afterMeta, ["name", "note", "canvas", "surface", "root"], ctx, "screens"); if (meta.length) entry.meta = meta;
     const overrides = mapDiff(before.stateOverrides, screen.stateOverrides, ctx, "screens"); if (overrides) entry.stateOverrides = overrides;
     const elements = elementsDiff(before, screen as MutableRecord, ctx, summary); if (elements) entry.elements = elements;
     if (Object.keys(entry).length > 1) { changed.push(entry); summary.screensChanged++; count(ctx, "screens"); }
@@ -263,6 +265,10 @@ export function diffPrototypeDocs(from: PrototypeRevisionForDiff, to: PrototypeR
   const state = mapDiff(from.doc.state, to.doc.state, ctx, "state"); if (state) response.state = state;
   // `doc.computed` — та же map-форма, что и state: ключи bare, значения (спеки операций) непрозрачны.
   const computed = mapDiff(from.doc.computed, to.doc.computed, ctx, "computed"); if (computed) response.computed = computed;
+  // `doc.surfaces` — массив, но матчится по `id`: карта `id → поверхность` даёт
+  // added/removed/changed без ложных «сдвигов» при перестановке (план multi-surface, D13).
+  const surfaceMap = (doc: PrototypeDoc) => Object.fromEntries((doc.surfaces ?? []).map((surface) => [surface.id, surface]));
+  const surfaces = mapDiff(surfaceMap(from.doc), surfaceMap(to.doc), ctx, "surfaces"); if (surfaces) response.surfaces = surfaces;
   const screens = screensDiff(from.doc, to.doc, ctx, summary); if (screens) response.screens = screens;
   const fromFlows = own(from.doc, "flows"), toFlows = own(to.doc, "flows");
   if (!equal(fromFlows, toFlows)) {

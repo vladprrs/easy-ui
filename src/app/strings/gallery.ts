@@ -22,6 +22,9 @@ export const gallery = {
   apiUnavailable: "API недоступен",
   // Превью карточки: дыра вместо картинки не говорит, сломан прототип или сеть.
   previewUnavailable: "Превью недоступно",
+  /** Дуо-док (план multi-surface): превью показывает primary-поверхность (D3) — бейдж говорит, что есть вторая. */
+  surfacesBadge: (count: number) => `${count} поверхности`,
+  surfacesBadgeTitle: (names: string) => `Поверхности: ${names}`,
   designSystemsAria: "Дизайн-системы",
   allSystems: "Все",
   tabsAria: "Разделы галереи",

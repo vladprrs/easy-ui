@@ -95,7 +95,7 @@ export function PlayerHotkeysHelp({ onClose, present = false, canExitPresent = p
 }
 
 export function ScreenView() {
-  const { doc, runtimeKey, registry, runtime, customTypes, customDefinitions, onError, themeContent, inspector, versions, scenarios, pins } = useOutletContext<PlayerOutletContext>();
+  const { doc, runtimeKey, registry, registries, themePins, runtime, customTypes, customDefinitions, onError, themeContent, inspector, versions, scenarios, pins } = useOutletContext<PlayerOutletContext>();
   const { screenId } = useParams();
   const { version } = useParams();
   const navigation = usePlayerNavigation();
@@ -407,6 +407,8 @@ export function ScreenView() {
             focusedSurfaceId={navigation.focusedSurfaceId}
             onFocusSurface={navigation.focusSurface}
             registry={registry}
+            registries={registries}
+            themePins={themePins}
             runtime={runtime}
             customDefinitions={customDefinitions}
             customTypes={customTypes}

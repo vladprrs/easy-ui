@@ -408,3 +408,66 @@ describe("CjmShell", () => {
     expect(second.value).toBe("Two");
   });
 });
+
+// Дуо-док (план multi-surface, D5/D13): шаг сценария на КСО с companion-экраном
+// приложения. Вторая поверхность живёт на своей ДС, её экран несёт `stateOverrides`.
+const duoDoc = prototypeDocSchema.parse({
+  version: 1, id: "duo-journey", name: "КСО и приложение", designSystem: "shadcn", device: "desktop", startScreen: "kso-idle",
+  state: { status: "idle" },
+  surfaces: [
+    { id: "kso", name: "КСО", device: "desktop", startScreen: "kso-idle" },
+    { id: "app", name: "Приложение", device: "mobile", designSystem: "pay-two", startScreen: "app-idle" },
+  ],
+  screens: [
+    { id: "kso-idle", name: "Касса ждёт", surface: "kso", canvas: { width: 1080, height: 1920 }, spec: { root: "t", elements: { t: { type: "Text", props: { text: "Касса" } } } } },
+    { id: "app-idle", name: "Приложение ждёт", surface: "app", spec: { root: "t", elements: { t: { type: "Text", props: { text: { $state: "/status" } } } } } },
+    { id: "app-paid", name: "Чек", surface: "app", stateOverrides: { status: "paid" }, spec: { root: "t", elements: { t: { type: "Text", props: { text: { $state: "/status" } } } } } },
+  ],
+  flows: [{ id: "pay", name: "Оплата", steps: [{ screenId: "kso-idle", companions: { app: "app-paid" } }] }],
+});
+const duoDraft: PrototypeDraft = {
+  doc: duoDoc, rev: 2, builtinCatalogHash: "builtin", componentManifestHash: "empty", components: [],
+  designSystemMetaVersion: 1, designSystemMetaVersions: { shadcn: 1, "pay-two": 5 },
+};
+
+describe("CJM на дуо-доке (multi-surface)", () => {
+  beforeEach(() => {
+    mocks.getDraft.mockReset().mockResolvedValue(duoDraft);
+    mocks.getThemeVersion.mockReset().mockImplementation(async (id: string, version: number) => ({ systemId: id, version, createdAt: "2026-08-01T00:00:00Z", tokens: { "color.brand": `${id}@${version}` }, fonts: [], icons: [] }));
+    mocks.getLatestTheme.mockReset().mockResolvedValue({ id: "shadcn", latestMetaVersion: 1, tokens: {}, fonts: [], icons: [] });
+    mocks.loadCustom.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("подписывает тайлы поверхностью и ставит парный тайл companion-экрана", async () => {
+    renderAt("/p/duo-journey/cjm");
+    const badges = await screen.findAllByTestId("cjm-tile-surface");
+    // Парный тайл companion-экрана стоит рядом с тайлом шага (D5) и рисует свой экран.
+    const companion = await waitFor(() => {
+      const node = document.querySelector('[data-cjm-companion="app"]');
+      if (!node) throw new Error("companion tile is not rendered");
+      return node as HTMLElement;
+    });
+    expect(companion.getAttribute("data-screen-id")).toBe("app-paid");
+    expect(companion.querySelector('[data-surface="app"]')).not.toBeNull();
+    // Бейджи поверхностей — на обоих тайлах ленты шага.
+    expect(badges.map((node) => node.textContent)).toContain("КСО");
+    await waitFor(() => expect(screen.getAllByTestId("cjm-tile-surface").map((node) => node.textContent)).toContain("Приложение"));
+  });
+
+  it("deep-link сценария выставляет обе панели плеера (?on.*)", async () => {
+    renderAt("/p/duo-journey/cjm");
+    const link = await screen.findByRole("link", { name: "В плеер →" });
+    expect(link.getAttribute("href")).toContain("on.app=app-paid");
+    expect(link.getAttribute("href")).toContain("flow=pay");
+  });
+
+  it("тайл второй ДС получает собственную scoped-тему", async () => {
+    renderAt("/p/duo-journey/cjm");
+    const scoped = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('[data-eui-scoped-system="pay-two"]');
+      if (!node) throw new Error("scoped tile is not rendered");
+      return node;
+    });
+    await waitFor(() => expect(scoped.style.getPropertyValue("--eui-color-brand")).toBe("pay-two@5"));
+  });
+});

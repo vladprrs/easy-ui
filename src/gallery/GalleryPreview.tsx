@@ -14,6 +14,7 @@ import { HostStageSurface } from "../catalog/hostPrimitives";
 import { CanvasLayers } from "../player/CanvasLayers";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
+import { docSurfaces, hasSurfaces } from "../prototype/surfaces";
 import { ArchivedPrototype } from "../player/PrototypeLoader";
 import { pillGhost } from "../app/chrome";
 import { common } from "../app/strings/common";
@@ -116,7 +117,19 @@ export function GalleryPreviewFrame({ draft, themeContent: suppliedThemeContent,
   const height = Math.min(scaledHeight, 200);
   const key = `${doc.id}:${draft.rev}:${screen.id}`;
 
-  return <>{manageTheme ? <ThemeStyle content={themeContent} /> : null}<div className="mx-auto max-w-full overflow-hidden rounded-inset bg-background text-foreground" style={{ width: galleryWidth, height }} data-testid={`gallery-preview-${doc.id}`}>
+  // Превью дуо-дока меряется по primary-поверхности (D3) — как и остальные непереведённые
+  // читатели `doc.device`/`doc.designSystem`. Бейдж говорит, что за кадром есть вторая панель.
+  const surfaces = docSurfaces(doc);
+  const surfacesBadge = hasSurfaces(doc)
+    ? <span
+        className="pointer-events-none absolute top-1.5 left-1.5 z-10 rounded-full bg-pay-deep/85 px-2 py-0.5 text-[10px] leading-tight font-medium text-white"
+        data-testid="gallery-preview-surfaces"
+        title={gallery.surfacesBadgeTitle(surfaces.map((surface) => surface.name).join(", "))}
+      >{gallery.surfacesBadge(surfaces.length)}</span>
+    : null;
+
+  return <>{manageTheme ? <ThemeStyle content={themeContent} /> : null}<div className="relative mx-auto max-w-full overflow-hidden rounded-inset bg-background text-foreground" style={{ width: galleryWidth, height }} data-testid={`gallery-preview-${doc.id}`}>
+    {surfacesBadge}
     <div style={{ width: tileSize.width, height: height / galleryScale, transform: `scale(${galleryScale})`, transformOrigin: "top left" }}>
       <SurfaceSpacingScope systemId={doc.designSystem} themeTokens={themeContent?.tokens}>
       <div ref={setStageHostRef} inert data-eui-stage-viewport="gallery" style={{ position: "relative", width: nativeWidth, ...(screen.canvas?.height === undefined ? {} : { height: screen.canvas.height }), transform: `scale(${deviceScale})`, transformOrigin: "top left" }}>

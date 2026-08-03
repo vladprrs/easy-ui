@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router";
-import { ApiError, type PrototypeDraft } from "../api/client";
+import { ApiError, type PrototypeComponentPin, type PrototypeDraft } from "../api/client";
+import { docSurfaces, surfaceDesignSystem } from "../prototype/surfaces";
 import { useApi } from "../api/hooks";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { loadCustomComponents } from "../customComponents/loader";
@@ -86,6 +87,35 @@ export interface PrototypeLoaderResult {
   routeBase: string;
 }
 
+/**
+ * Дизайн-системы документа (план multi-surface, D8): ДС каждой поверхности, без повторов, в
+ * порядке поверхностей. Документ без `surfaces` даёт ровно `[doc.designSystem]`.
+ */
+export function documentDesignSystems(doc: PrototypeDraft["doc"]): string[] {
+  const systems = docSurfaces(doc).map((surface) => surfaceDesignSystem(surface, doc) ?? doc.designSystem);
+  return [...new Set(systems)];
+}
+
+/**
+ * Ключ рантайм-сессии. На дуо-доке в него входят **все** ДС документа: смена ДС любой
+ * поверхности обязана пересоздать реестры, стор и тему. Одно-поверхностный документ даёт
+ * ту же строку, что и раньше (единственная ДС — `doc.designSystem`).
+ */
+export function prototypeRuntimeKey(loaded: PrototypeDraft): string {
+  const revision = "version" in loaded ? `v${(loaded as { version: number }).version}` : `r${loaded.rev}`;
+  return `${loaded.doc.id}:${revision}:${loaded.componentManifestHash}:${documentDesignSystems(loaded.doc).join("+")}`;
+}
+
+/**
+ * `имя компонента → его ДС` из пинов ревизии (D8). Сервер поле не обязан отдавать —
+ * тогда карта пуста и per-surface реестры не сужаются (см. `scopeCustomRuntime`).
+ */
+export function pinDesignSystems(pins: readonly PrototypeComponentPin[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const pin of pins) if (pin.designSystem !== undefined) map[pin.name] = pin.designSystem;
+  return map;
+}
+
 interface PrototypeLoaderProps {
   protoId?: string;
   version?: number;
@@ -106,9 +136,7 @@ function LoadedPrototype({ loaded, routeBase, children }: {
   useDocumentTitle(customState.status === "loading" ? loader.loadingPrototype : undefined);
   if (customState.status === "loading") return <LoaderSkeleton label={loader.loadingComponents} />;
   if (customState.status === "error") return <LoadError error={customState.error} retry={customState.reload} />;
-  const revision = "version" in loaded ? `v${loaded.version}` : `r${loaded.rev}`;
-  const runtimeKey = `${loaded.doc.id}:${revision}:${loaded.componentManifestHash}:${loaded.doc.designSystem}`;
-  return children({ loaded, custom: customState.data, runtimeKey, routeBase });
+  return children({ loaded, custom: customState.data, runtimeKey: prototypeRuntimeKey(loaded), routeBase });
 }
 
 export function PrototypeLoader({ protoId, version, allowArchivedPlaceholder = true, children }: PrototypeLoaderProps) {
@@ -133,7 +161,6 @@ export function PrototypeLoader({ protoId, version, allowArchivedPlaceholder = t
   // This is the single frontend renderability gate: no component bundle is
   // requested and no runtime is created for an archived revision.
   if (prototypeState.data.renderable === false) return allowArchivedPlaceholder ? <ArchivedPrototype /> : <MissingPrototype />;
-  const revision = "version" in prototypeState.data ? `v${prototypeState.data.version}` : `r${prototypeState.data.rev}`;
-  const runtimeKey = `${prototypeState.data.doc.id}:${revision}:${prototypeState.data.componentManifestHash}:${prototypeState.data.doc.designSystem}`;
+  const runtimeKey = prototypeRuntimeKey(prototypeState.data);
   return <LoadedPrototype key={runtimeKey} loaded={prototypeState.data} routeBase={buildPrototypeRouteBase(protoId, version)}>{children}</LoadedPrototype>;
 }

@@ -166,3 +166,48 @@ describe("InspectorPanel", () => {
     expect(current.past).toHaveLength(1);
   });
 });
+
+// Дуо-док редактора (план multi-surface, D13).
+const duoDoc = prototypeDocSchema.parse({
+  version: 1, id: "duo", name: "КСО и приложение", device: "desktop", startScreen: "kso-idle", state: {},
+  surfaces: [
+    { id: "kso", name: "КСО", device: "desktop", startScreen: "kso-idle" },
+    { id: "app", name: "Приложение", device: "mobile", startScreen: "app-home" },
+  ],
+  screens: [
+    { id: "kso-idle", name: "Касса", surface: "kso", canvas: { width: 1080, height: 1920 }, spec: { root: "t", elements: { t: { type: "Text", props: { text: "Касса" } } } } },
+    { id: "app-home", name: "Приложение", surface: "app", spec: { root: "t", elements: { t: { type: "Text", props: { text: "Дом" } } } } },
+  ],
+});
+
+describe("InspectorPanel на surfaces-доке (D13)", () => {
+  const state = { ...createEditorState({ doc: duoDoc, rev: 1 }), selection: { screenId: "app-home", elementKey: null } };
+
+  it("даёт селект поверхности экрана со значениями из doc.surfaces", () => {
+    const dispatch = vi.fn();
+    render(<InspectorPanel state={state} definitions={{}} dispatch={dispatch} />);
+    const select = screen.getByLabelText("Поверхность") as HTMLSelectElement;
+    expect([...select.options].map((option) => option.value)).toEqual(["kso", "app"]);
+    expect(select.value).toBe("app");
+    fireEvent.change(select, { target: { value: "kso" } });
+    expect(dispatch).toHaveBeenCalledWith({ type: "set-screen-meta", screenId: "app-home", patch: { surface: "kso" } });
+  });
+
+  it("запирает device и startScreen документа: они равны primary-поверхности (D3)", () => {
+    render(<InspectorPanel state={state} definitions={{}} dispatch={vi.fn()} />);
+    expect((screen.getByLabelText("Устройство") as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByLabelText("Стартовый экран") as HTMLSelectElement).disabled).toBe(true);
+    // Подсказка объясняет причину — иначе серый контрол читается как поломка.
+    expect(screen.getAllByTitle(/Задаётся поверхностями документа/).length).toBeGreaterThan(0);
+  });
+
+  it("на обычном документе контролы остаются живыми и селекта поверхности нет", () => {
+    const plain = prototypeDocSchema.parse({
+      version: 1, id: "plain", name: "Plain", device: "mobile", startScreen: "home", state: {},
+      screens: [{ id: "home", name: "Дом", spec: { root: "t", elements: { t: { type: "Text", props: { text: "Дом" } } } } }],
+    });
+    render(<InspectorPanel state={{ ...createEditorState({ doc: plain, rev: 1 }), selection: { screenId: "home", elementKey: null } }} definitions={{}} dispatch={vi.fn()} />);
+    expect((screen.getByLabelText("Устройство") as HTMLSelectElement).disabled).toBe(false);
+    expect(screen.queryByLabelText("Поверхность")).toBeNull();
+  });
+});

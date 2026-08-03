@@ -1,16 +1,17 @@
 import { JSONUIProvider } from "@json-render/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useNavigationType, useParams } from "react-router";
-import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
+import { createSurfacePlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
 import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
 import type { PrototypeDoc } from "../prototype/schema";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
-import { docSurfaces, hasSurfaces, screensOfSurface, surfaceOf } from "../prototype/surfaces";
+import { docSurfaces, hasSurfaces, screensOfSurface, surfaceDesignSystem, surfaceOf } from "../prototype/surfaces";
 import { DuoStage } from "./DuoStage";
+import { pinDesignSystems } from "./PrototypeLoader";
 import { pillGhostOnDark } from "../app/chrome";
 import { player, present, presentDocumentTitle, share as shareStrings, shareDocumentTitle } from "../app/strings/player";
 import { useDocumentTitle } from "../app/useDocumentTitle";
-import type { ThemeContent } from "../api/client";
+import type { PrototypeComponentPin, ThemeContent } from "../api/client";
 import { EasyUiActionRuntime } from "./actionRuntime";
 import { DeviceFrame, isPlayerHelpHotkey, isPlayerHotkeyEvent, type StageZoom } from "./DeviceFrame";
 import { FluidStage } from "./FluidStage";
@@ -54,7 +55,7 @@ export function PresentShell({ share = false }: { share?: boolean }) {
   return <PrototypeLoader protoId={protoId} version={numericVersion} allowArchivedPlaceholder={!share}>
     {({ loaded, custom, runtimeKey, routeBase }) => (
       <PlayerNavigationProvider key={runtimeKey} startScreen={loaded.doc.startScreen} doc={loaded.doc} routeBase={`${share ? `/share/p/${encodeURIComponent(loaded.doc.id)}/v/${numericVersion}` : routeBase}/present`}>
-        <LoadedPresent key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} playerBase={routeBase} metaVersion={loaded.designSystemMetaVersion} version={numericVersion} directEntry={directEntry} share={share} mobile={mobile} />
+        <LoadedPresent key={runtimeKey} doc={loaded.doc} custom={custom} runtimeKey={runtimeKey} playerBase={routeBase} metaVersion={loaded.designSystemMetaVersion} themePins={loaded.designSystemMetaVersions ?? {}} pins={loaded.components} version={numericVersion} directEntry={directEntry} share={share} mobile={mobile} />
       </PlayerNavigationProvider>
     )}
   </PrototypeLoader>;
@@ -66,6 +67,10 @@ interface LoadedPresentProps {
   runtimeKey: string;
   playerBase: string;
   metaVersion: number | null | undefined;
+  /** Пины тем ревизии (`ДС → версия`) — панель второй ДС берёт свою тему отсюда (D9). */
+  themePins: Readonly<Record<string, number | null>>;
+  /** Пины компонентов ревизии: дают `имя → ДС` для per-surface реестров (D8). */
+  pins: PrototypeComponentPin[];
   version: number | undefined;
   directEntry: boolean;
   share: boolean;
@@ -84,7 +89,7 @@ function ThemedLoadedPresent(props: LoadedPresentProps) {
   return <LoadedPresentContent {...props} themeContent={themeContent} />;
 }
 
-function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, directEntry, share, mobile, themeContent }: LoadedPresentProps & { themeContent: ThemeContent | null }) {
+function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, directEntry, share, mobile, themeContent, themePins, pins }: LoadedPresentProps & { themeContent: ThemeContent | null }) {
   const { screenId } = useParams();
   const navigation = usePlayerNavigation();
   const routerNavigate = useNavigate();
@@ -95,13 +100,16 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
   useEffect(() => { navigationRef.current = navigation; }, [navigation]);
   useDocumentTitle(share && version !== undefined ? shareDocumentTitle(doc.name, version) : presentDocumentTitle(doc.name, version));
 
+  // Реестр на поверхность (D8) — тот же контракт, что в плеере: экшены общие, различается резолв типов.
+  const runtimeSurfaces = useMemo(() => docSurfaces(doc).map((item) => ({ id: item.id, designSystem: surfaceDesignSystem(item, doc) })), [doc]);
+  const componentDesignSystems = useMemo(() => pinDesignSystems(pins), [pins]);
   // eslint-disable-next-line react-hooks/refs
-  const runtime = useMemo(() => createPlayerRuntime({
+  const runtime = useMemo(() => createSurfacePlayerRuntime({
     navigate: (target) => navigationRef.current.navigate(target),
     back: () => navigationRef.current.back(),
     openUrl: (url) => { window.open(url, "_blank", "noopener,noreferrer"); },
     restart: () => navigationRef.current.restart(),
-  }, custom, doc.designSystem), [custom, doc.designSystem]);
+  }, custom, runtimeSurfaces, componentDesignSystems), [componentDesignSystems, custom, runtimeSurfaces]);
   const customDefinitions = useMemo(() => custom?.definitions ?? {}, [custom]);
   const customTypes = useMemo(() => new Set(Object.keys(customDefinitions)), [customDefinitions]);
   const onError = useMemo(() => (message: string, detail?: Record<string, unknown>) => {
@@ -201,6 +209,9 @@ function LoadedPresentContent({ doc, custom, runtimeKey, playerBase, version, di
               focusedSurfaceId={navigation.focusedSurfaceId}
               onFocusSurface={navigation.focusSurface}
               registry={runtime.registry}
+              registries={runtime.registries}
+              themePins={themePins}
+              pinnedThemesOnly={share}
               runtime={actionRuntime}
               customDefinitions={customDefinitions}
               customTypes={customTypes}

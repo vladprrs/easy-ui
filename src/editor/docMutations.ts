@@ -2,7 +2,9 @@ import type { PrototypeDoc, RegionKind } from "../prototype/schema";
 
 export type Screen = PrototypeDoc["screens"][number];
 
-type ScreenPatch = Partial<Pick<Screen, "name" | "note" | "stateOverrides" | "canvas">>;
+// `surface` — принадлежность экрана поверхности (план multi-surface, D13): единственное
+// поле поверхностей, правимое в UI редактора; сам список `doc.surfaces` авторится через API.
+type ScreenPatch = Partial<Pick<Screen, "name" | "note" | "stateOverrides" | "canvas" | "surface">>;
 type DocMetaPatch = Partial<Pick<PrototypeDoc, "name" | "description" | "startScreen" | "device">>;
 
 function patchObject<T extends object>(value: T, patch: Partial<T>): T {

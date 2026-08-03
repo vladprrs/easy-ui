@@ -18956,6 +18956,7 @@
                               "computed",
                               "doc",
                               "pins",
+                              "surfaces",
                               "renderInputs",
                               "screenOrder"
                             ],
@@ -19010,6 +19011,16 @@
                         "omittedSections"
                       ],
                       "type": "object"
+                    },
+                    "surfaces": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/__schema4"
+                        },
+                        {
+                          "$ref": "#/$defs/__schema3"
+                        }
+                      ]
                     },
                     "to": {
                       "additionalProperties": false,

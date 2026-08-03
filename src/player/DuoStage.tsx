@@ -1,10 +1,14 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
+import type { ComponentRegistry } from "@json-render/react";
 import type { ThemeContent } from "../api/client";
 import type { ComponentDefinition } from "../catalog/definitions";
 import type { createPlayerRuntime } from "../catalog/runtime";
 import type { PrototypeDoc, Surface } from "../prototype/schema";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
-import { docSurfaces } from "../prototype/surfaces";
+import { docSurfaces, surfaceDesignSystem } from "../prototype/surfaces";
+import { ScopedThemeSurface } from "../designSystems/ScopedThemeSurface";
+import { acquireThemeFonts } from "../designSystems/fontRegistry";
+import { themeMetaVersion, useDesignSystemTheme } from "../designSystems/theme";
 import { player } from "../app/strings/player";
 import type { EasyUiActionRuntime } from "./actionRuntime";
 import { DeviceFrame, type StageZoom } from "./DeviceFrame";
@@ -36,6 +40,15 @@ export interface DuoStageProps {
   /** Перенос фокуса по клику на заголовок панели. */
   onFocusSurface: (surfaceId: string) => void;
   registry: ReturnType<typeof createPlayerRuntime>["registry"];
+  /** Реестры по поверхностям (D8); отсутствие записи — фолбэк на общий `registry`. */
+  registries?: Readonly<Record<string, ComponentRegistry>> | undefined;
+  /** Пины тем ревизии `ДС → версия` для панели не-primary ДС (D9). */
+  themePins?: Readonly<Record<string, number | null>> | undefined;
+  /**
+   * Share-режим: тему читать только по пину ревизии. Публичная ссылка не имеет права
+   * ходить в изменяемый head-эндпоинт темы — как и `PresentShell` для primary-ДС.
+   */
+  pinnedThemesOnly?: boolean;
   runtime: EasyUiActionRuntime;
   customDefinitions: Record<string, ComponentDefinition>;
   customTypes: ReadonlySet<string>;
@@ -60,6 +73,9 @@ export function DuoStage({
   focusedSurfaceId,
   onFocusSurface,
   registry,
+  registries,
+  themePins,
+  pinnedThemesOnly = false,
   runtime,
   customDefinitions,
   customTypes,
@@ -89,7 +105,9 @@ export function DuoStage({
         visible={visible}
         showHeader={layout === "row"}
         onFocusSurface={onFocusSurface}
-        registry={registry}
+        registry={registries?.[surface.id] ?? registry}
+        themePins={themePins}
+        pinnedThemesOnly={pinnedThemesOnly}
         runtime={runtime}
         customDefinitions={customDefinitions}
         customTypes={customTypes}
@@ -108,7 +126,7 @@ export function DuoStage({
   </div>;
 }
 
-interface SurfacePanelProps extends Omit<DuoStageProps, "screenBySurface" | "focusedSurfaceId" | "layout"> {
+interface SurfacePanelProps extends Omit<DuoStageProps, "screenBySurface" | "focusedSurfaceId" | "layout" | "registries"> {
   surface: Surface;
   screenId: string;
   focused: boolean;
@@ -128,6 +146,8 @@ function SurfacePanel({
   showHeader,
   onFocusSurface,
   registry,
+  themePins,
+  pinnedThemesOnly = false,
   runtime,
   customDefinitions,
   customTypes,
@@ -142,6 +162,21 @@ function SurfacePanel({
   interactiveZones,
   stage = "frame",
 }: SurfacePanelProps) {
+  // D9: primary-поверхность живёт под глобальным `ThemeStyle` документа (как сегодня);
+  // панель с ДРУГОЙ ДС получает scoped-тему и собственные @font-face. `resetAnimations`
+  // здесь строго `false` — панель интерактивна, и заморозка анимаций убила бы демо.
+  const ownDesignSystem = surfaceDesignSystem(surface, doc) === designSystem ? undefined : surfaceDesignSystem(surface, doc);
+  const scopedMetaVersion = ownDesignSystem === undefined ? null : themeMetaVersion(themePins, ownDesignSystem, null) ?? null;
+  // Share без пина темы — тема не читается вовсе (тот же контракт, что у primary в PresentShell).
+  const scopedDesignSystem = pinnedThemesOnly && scopedMetaVersion === null ? undefined : ownDesignSystem;
+  const scopedTheme = useDesignSystemTheme(scopedDesignSystem, scopedMetaVersion);
+  useEffect(() => {
+    if (scopedDesignSystem === undefined || scopedTheme === null) return;
+    return acquireThemeFonts(scopedDesignSystem, scopedMetaVersion, scopedTheme);
+  }, [scopedDesignSystem, scopedMetaVersion, scopedTheme]);
+  const panelDesignSystem = scopedDesignSystem ?? designSystem;
+  const panelTokens = scopedDesignSystem === undefined ? themeTokens : scopedTheme?.tokens;
+
   const screen = doc.screens.find((item) => item.id === screenId);
   const spec = screen?.spec;
   // customTypes — стабильный Set загрузчика: дерево пересобирается вместе со спекой.
@@ -167,18 +202,29 @@ function SurfacePanel({
       </ScreenErrorBoundary>
     : <p role="status" className="p-6 text-sm text-eui-slate-500">{player.screenMissingTitle}</p>;
 
-  const body = stage === "fluid"
-    ? <FluidStage canvas={screen?.canvas} designSystem={designSystem} themeTokens={themeTokens} resetKey={screen?.id}>{content}</FluidStage>
+  const stageBody = stage === "fluid"
+    ? <FluidStage canvas={screen?.canvas} designSystem={panelDesignSystem} themeTokens={panelTokens} resetKey={screen?.id}>{content}</FluidStage>
     : <DeviceFrame
         device={surface.device}
         canvas={screen?.canvas}
         zoom={zoom ?? fitZoom}
         onEffectiveScale={onEffectiveScale}
-        designSystem={designSystem}
-        themeTokens={themeTokens}
+        designSystem={panelDesignSystem}
+        themeTokens={panelTokens}
         statusBarHidden={statusBarHidden}
         scrollResetKey={screen?.id}
       >{content}</DeviceFrame>;
+  // Flex-классы обязаны остаться на элементе-обёртке: `ScopedThemeSurface` вставляет
+  // собственный div между секцией панели и стейджем, и без них `flex-1` DeviceFrame
+  // не получил бы высоты (D9).
+  const body = scopedDesignSystem === undefined
+    ? stageBody
+    : <ScopedThemeSurface
+        systemId={scopedDesignSystem}
+        theme={scopedTheme}
+        resetAnimations={false}
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+      >{stageBody}</ScopedThemeSurface>;
 
   return <section
     data-testid="surface-panel"

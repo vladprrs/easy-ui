@@ -162,3 +162,48 @@ describe("diffPrototypeDocs", () => {
     expect(result.summary).toMatchObject({ truncated: true, omittedSections: ["flows"] });
   });
 });
+
+describe("diffPrototypeDocs surfaces (multi-surface D13)", () => {
+  const surfaces = [
+    { id: "kso", name: "КСО", device: "desktop" as const, startScreen: "home" },
+    { id: "app", name: "Приложение", device: "mobile" as const, startScreen: "app" },
+  ];
+  const duo = (override: Partial<PrototypeDoc> = {}) => doc({
+    surfaces,
+    screens: [
+      { id: "home", name: "Home", surface: "kso", canvas: { width: 1080, height: 1920 }, spec: { root: "root", elements: { root: { type: "Text", props: { text: "kso" } } } } },
+      { id: "app", name: "App", surface: "app", spec: { root: "root", elements: { root: { type: "Text", props: { text: "app" } } } } },
+    ],
+    ...override,
+  });
+
+  test("reports a changed surface as its own section", () => {
+    const after = duo({ surfaces: [surfaces[0]!, { ...surfaces[1]!, designSystem: "pay-two" }] });
+    const result = diffPrototypeDocs(revision(1, duo()), revision(2, after)) as any;
+    expect(result.surfaces.changed).toHaveLength(1);
+    expect(result.surfaces.changed[0].key).toBe("app");
+    expect(result.surfaces.changed[0].to.value.designSystem).toBe("pay-two");
+    expect(result.summary.identical).toBe(false);
+  });
+
+  test("reports an added surface and the screen re-tagged to it", () => {
+    const before = doc({ screens: [{ id: "home", name: "Home", spec: { root: "root", elements: { root: { type: "Text", props: { text: "kso" } } } } }] });
+    const after = doc({
+      surfaces,
+      screens: [
+        { id: "home", name: "Home", surface: "kso", spec: { root: "root", elements: { root: { type: "Text", props: { text: "kso" } } } } },
+        { id: "app", name: "App", surface: "app", spec: { root: "root", elements: { root: { type: "Text", props: { text: "app" } } } } },
+      ],
+    });
+    const result = diffPrototypeDocs(revision(1, before), revision(2, after)) as any;
+    expect(result.surfaces.added.map((entry: any) => entry.key).sort()).toEqual(["app", "kso"]);
+    // Тег экрана — обычное поле экрана: правка видна в `screens.changed[].meta`.
+    expect(result.screens.changed[0].meta).toContainEqual({ key: "surface", from: { missing: true }, to: { value: "kso" } });
+  });
+
+  test("keeps documents without surfaces byte-identical to the previous shape", () => {
+    const result = diffPrototypeDocs(revision(1, doc()), revision(2, doc())) as any;
+    expect(result.surfaces).toBeUndefined();
+    expect(result.summary.identical).toBe(true);
+  });
+});

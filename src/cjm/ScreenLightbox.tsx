@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { pillGhostOnDark } from "../app/chrome";
 import { lightbox } from "../app/strings/cjm";
 import { buildPlayerPath } from "../player/navigation";
+import { resolveStepCompanions } from "../prototype/surfaces";
 import type { Flow, PrototypeDoc } from "../prototype/schema";
 import { getCjmTransitions } from "./CjmScreenTile";
 
@@ -85,7 +86,11 @@ export function ScreenLightbox(props: ScreenLightboxProps) {
         <button type="button" aria-pressed={zonesVisible} onClick={onToggleZones} className={`${pillGhostOnDark} px-3 py-1.5 text-[13px]`}>
           {lightbox.zonesToggle(zonesVisible)}
         </button>
-        <Link className={`${pillGhostOnDark} px-3 py-1.5 text-[13px]`} to={`${buildPlayerPath(routeBase, screen.id)}?${new URLSearchParams({ flow: flow.id, step: String(stepIndex) })}`}>
+        <Link className={`${pillGhostOnDark} px-3 py-1.5 text-[13px]`} to={`${buildPlayerPath(routeBase, screen.id)}?${new URLSearchParams([
+          ["flow", flow.id], ["step", String(stepIndex)],
+          // Обе панели плеера (D5/D6): companions шага — в `?on.<surface>=<screen>`.
+          ...resolveStepCompanions(doc, step).map((item) => [`on.${item.surface.id}`, item.screenId]),
+        ])}`}>
           {lightbox.openInPlayer}
         </Link>
         <button ref={closeRef} type="button" aria-label={lightbox.close} title={lightbox.close} onClick={onClose} className={`${circle} h-9 w-9 text-lg leading-none`}>

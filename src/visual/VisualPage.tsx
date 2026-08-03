@@ -19,6 +19,7 @@ import { visual } from "../app/strings/visual";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import { ApiError } from "../api/client";
 import { canonicalViewport } from "../designSystems/deviceMetrics";
+import { surfaceOf } from "../prototype/surfaces";
 
 const scopeFilters: { id: string | null; label: string }[] = [
   { id: null, label: visual.scopeAll },
@@ -265,7 +266,12 @@ function CaptureReference({ onCreated }: { onCreated: (id: string) => void }) {
       && fp.theme === theme && fp.deviceScaleFactor === Number(dsf);
   });
   const selectedScreen = snapshot?.doc.screens.find((screen) => screen.id === resolvedScreenId);
-  const prototypeViewport = selectedScreen?.canvas ?? (snapshot ? canonicalViewport[snapshot.doc.device] : null) ?? fingerprintViewport(existingPrototypeReference);
+  // D3/D10: вьюпорт — от поверхности **выбранного экрана**. На обычном документе это
+  // синтетическая primary, то есть прежний `doc.device`; на дуо-доке страница перестаёт
+  // мерить экран второй поверхности чужим устройством.
+  const prototypeViewport = selectedScreen?.canvas
+    ?? (snapshot ? canonicalViewport[surfaceOf(snapshot.doc, resolvedScreenId).device] : null)
+    ?? fingerprintViewport(existingPrototypeReference);
   const componentViewport = fingerprintViewport(existingComponentReference) ?? canonicalViewport.mobile;
   const viewport = scope === "prototype-screen" ? prototypeViewport : componentViewport;
 

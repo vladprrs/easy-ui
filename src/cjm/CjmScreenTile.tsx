@@ -15,6 +15,8 @@ import { cjm } from "../app/strings/cjm";
 import { lanesTile, lightboxStageTile, previewNativeWidth, previewTileSizes, sheetStripTile } from "../designSystems/deviceMetrics";
 import type { DeviceKind } from "../designSystems/deviceMetrics";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
+import { ScopedThemeSurface } from "../designSystems/ScopedThemeSurface";
+import { hasSurfaces, surfaceDesignSystem, surfaceOf } from "../prototype/surfaces";
 import { CanvasLayers } from "../player/CanvasLayers";
 
 export type CjmTransition =
@@ -94,7 +96,13 @@ export class TileErrorBoundary extends Component<{ prototypeId: string; screenId
   }
 }
 
-export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, routeBase, customTypes, customDefinitions, themeContent, noteOverride, flowId, stepIndex, variant = "full", onOpen }: { doc: PrototypeDoc; screen: PrototypeDoc["screens"][number]; registry: ComponentRegistry; handlers: NonNullable<JSONUIProviderProps["handlers"]>; runtimeKey: string; routeBase: string; customTypes?: ReadonlySet<string>; customDefinitions?: Record<string, ComponentDefinition>; themeContent?: ThemeContent | null; noteOverride?: string; flowId?: string; stepIndex?: number;
+export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, routeBase, customTypes, customDefinitions, themeContent, noteOverride, flowId, stepIndex, companions, variant = "full", onOpen }: { doc: PrototypeDoc; screen: PrototypeDoc["screens"][number]; registry: ComponentRegistry; handlers: NonNullable<JSONUIProviderProps["handlers"]>; runtimeKey: string; routeBase: string; customTypes?: ReadonlySet<string>; customDefinitions?: Record<string, ComponentDefinition>; themeContent?: ThemeContent | null; noteOverride?: string; flowId?: string; stepIndex?: number;
+  /**
+   * Экраны остальных поверхностей для deep-link в плеер (план multi-surface, D5/D6):
+   * `surfaceId → screenId` уезжает в query как `?on.<surfaceId>=<screenId>`, поэтому переход
+   * из CJM выставляет **обе** панели, а не только сфокусированную.
+   */
+  companions?: Readonly<Record<string, string>>;
   /**
    * `sheet` — мини-тайл ленты «Сценарии» (макет 02): только кадр, подпись рисует лента.
    * `stage` — телефон лайтбокса (макет 03): кадр 330×640 без ссылки поверх.
@@ -120,20 +128,35 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
     [customDefinitions, specs],
   );
   const initialState = useMemo(() => applyComputed(mergeScreenState(doc.state, screen.stateOverrides), doc.computed), [doc.computed, doc.state, screen.stateOverrides]);
-  const nativeWidth = screen.canvas?.width ?? previewNativeWidth[doc.device];
-  const tileWidth = previewTileSizes[doc.device].width;
+  // Поверхность экрана (D10): устройство рамки, ДС темы и бейдж — её, а не документа.
+  // На документе без `surfaces` это синтетическая primary, равная скалярам документа.
+  const duo = hasSurfaces(doc);
+  const surface = surfaceOf(doc, screen.id);
+  const tileDesignSystem = surfaceDesignSystem(surface, doc) ?? doc.designSystem;
+  const scoped = tileDesignSystem !== doc.designSystem;
+  const nativeWidth = screen.canvas?.width ?? previewNativeWidth[surface.device];
+  const tileWidth = previewTileSizes[surface.device].width;
   const playerPath = buildPlayerPath(routeBase, screen.id);
-  const tilePath = flowId === undefined || stepIndex === undefined
-    ? playerPath
-    : `${playerPath}?${new URLSearchParams({ flow: flowId, step: String(stepIndex) })}`;
+  const tileQuery = new URLSearchParams([
+    ...(flowId !== undefined && stepIndex !== undefined ? [["flow", flowId], ["step", String(stepIndex)]] : []),
+    // Экраны остальных поверхностей — навигационный формат W2 (`?on.<surface>=<screen>`).
+    ...Object.entries(companions ?? {}).map(([surfaceId, screenId]) => [`on.${surfaceId}`, screenId]),
+  ]).toString();
+  const tilePath = tileQuery === "" ? playerPath : `${playerPath}?${tileQuery}`;
   const sheet = variant === "sheet";
   const stage = variant === "stage";
   const lane = variant === "lane";
   const frameSize = sheet ? sheetStripTile : stage ? lightboxStageTile : lane ? lanesTile : undefined;
+  const framed = tree && specs ? <CjmFrame device={surface.device} nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`} designSystem={tileDesignSystem} themeTokens={themeContent?.tokens} size={frameSize}><EasyUiRuntimeProvider value={runtimeValue}>{screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}</EasyUiRuntimeProvider></CjmFrame> : <div className="flex items-center justify-center rounded-field bg-background text-center text-[11px] text-eui-slate-500" style={{ width: frameSize?.width ?? tileWidth, height: frameSize?.fallbackHeight ?? 256 }}>{cjm.noContent}</div>;
   const frame = <>
     <TileErrorBoundary key={`${runtimeKey}:${screen.id}`} prototypeId={doc.id} screenId={screen.id}>
       <JSONUIProvider key={`${runtimeKey}:${screen.id}`} registry={registry} handlers={handlers} initialState={initialState}>
-        <div inert>{tree && specs ? <CjmFrame device={doc.device} nativeWidth={nativeWidth} nativeHeight={screen.canvas?.height} resetKey={`${runtimeKey}:${screen.id}`} designSystem={doc.designSystem} themeTokens={themeContent?.tokens} size={frameSize}><EasyUiRuntimeProvider value={runtimeValue}>{screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}</EasyUiRuntimeProvider></CjmFrame> : <div className="flex items-center justify-center rounded-field bg-background text-center text-[11px] text-eui-slate-500" style={{ width: frameSize?.width ?? tileWidth, height: frameSize?.fallbackHeight ?? 256 }}>{cjm.noContent}</div>}</div>
+        {/* Тайл ДРУГОЙ ДС (план multi-surface, D9): токены и spacing — её, заморозка анимаций
+            для инертного тайла штатная (`resetAnimations` по умолчанию), и она больше не
+            протекает на живые панели плеера — reset ключуется на собственном атрибуте (R4-M5). */}
+        <div inert>{scoped
+          ? <ScopedThemeSurface systemId={tileDesignSystem} theme={themeContent ?? null}>{framed}</ScopedThemeSurface>
+          : framed}</div>
       </JSONUIProvider>
     </TileErrorBoundary>
     {/* Лайтбокс (макет 03) перехватывает клик по тайлу; ссылка в плеер остаётся
@@ -143,8 +166,14 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
       : <button type="button" onClick={onOpen} className="cjm-tile-link absolute inset-0 rounded-field" aria-label={cjm.openScreenAria(screen.name, doc.name)} />}
   </>;
 
+  // Бейдж поверхности (D13/CJM): на одно-поверхностном документе его нет вовсе —
+  // «primary» в подписи было бы шумом. `data-surface` — якорь для тестов и печати.
+  const badge = duo
+    ? <span className="cjm-tile-surface pointer-events-none absolute top-1 left-1 z-10 max-w-[calc(100%-8px)] truncate rounded-full bg-pay-deep/85 px-2 py-0.5 text-[10px] leading-tight font-medium text-white" data-testid="cjm-tile-surface">{surface.name}</span>
+    : null;
+
   if (sheet) {
-    return <article className="cjm-tile relative rounded-field bg-white p-0" style={{ width: sheetStripTile.width }}>{frame}</article>;
+    return <article className="cjm-tile relative rounded-field bg-white p-0" data-surface={surface.id} style={{ width: sheetStripTile.width }}>{badge}{frame}</article>;
   }
 
   if (stage) {
@@ -160,8 +189,8 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
     // Ширина тайла = ширина колонки грида (`lanesTile.width`), поэтому паддинга нет:
     // любой лишний пиксель развёл бы шаг сетки и pitch, по которому `CjmEdgesOverlay`
     // раскладывает рёбра (план 2026-07-31, W3-2).
-    return <article className="cjm-tile rounded-item bg-white" style={{ width: lanesTile.width }}>
-      <div className="relative">{frame}</div>
+    return <article className="cjm-tile rounded-item bg-white" data-surface={surface.id} style={{ width: lanesTile.width }}>
+      <div className="relative">{badge}{frame}</div>
       <h2 className="mt-2 truncate text-[11px] font-medium text-eui-ink" title={screen.name}>{screen.name}</h2>
       {noteOverride ?? screen.note ? <p className="mt-0.5 text-[11px] leading-tight text-eui-slate-500">{noteOverride ?? screen.note}</p> : null}
     </article>;
@@ -170,8 +199,8 @@ export function CjmScreenTile({ doc, screen, registry, handlers, runtimeKey, rou
   // Чипы переходов и «демо-состояние» сняты (план 2026-07-31, W3-6): спека тайла
   // подписей не знает, а перечень переходов дублировал рёбра дорожек и подписи зон
   // лайтбокса. Радиус — 12 из брендовой шкалы.
-  return <article className="cjm-tile rounded-item bg-white p-3" style={{ width: tileWidth + 24 }}>
-    <div className="relative">{frame}</div>
+  return <article className="cjm-tile rounded-item bg-white p-3" data-surface={surface.id} style={{ width: tileWidth + 24 }}>
+    <div className="relative">{badge}{frame}</div>
     <h2 className="mt-4 min-w-0 truncate text-lg font-medium" title={screen.name}>{screen.name}</h2>
     {noteOverride ?? screen.note ? <p className="mt-1 text-[13px] text-eui-slate-500">{noteOverride ?? screen.note}</p> : null}
   </article>;

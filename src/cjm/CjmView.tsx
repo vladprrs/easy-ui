@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
 import { PrototypeChrome } from "../app/PrototypeChrome";
 import { inset, pillGhost, pillPrimary, segmentActive, segmentIdle, segmentTrack } from "../app/chrome";
@@ -9,8 +9,12 @@ import { buildPlayerPath } from "../player/navigation";
 import { cjm, cjmDocumentTitle } from "../app/strings/cjm";
 import { useDocumentTitle } from "../app/useDocumentTitle";
 import type { CustomPlayerRuntime } from "../catalog/runtime";
-import { createPlayerRuntime } from "../catalog/runtime";
-import { ThemeStyle, useDesignSystemTheme } from "../designSystems/theme";
+import { createSurfacePlayerRuntime } from "../catalog/runtime";
+import type { PrototypeComponentPin, ThemeContent } from "../api/client";
+import { ThemeStyle, themeMetaVersion, useDesignSystemTheme } from "../designSystems/theme";
+import { acquireThemeFonts } from "../designSystems/fontRegistry";
+import { docSurfaces, surfaceDesignSystem, surfaceOf } from "../prototype/surfaces";
+import { documentDesignSystems, pinDesignSystems } from "../player/PrototypeLoader";
 import { lanesTile, previewTileSizes } from "../designSystems/deviceMetrics";
 import { buildNavigationGraph, type EdgeVerification } from "../prototype/navigationGraph";
 import type { PrototypeDoc } from "../prototype/schema";
@@ -166,13 +170,38 @@ function laneOriginLabel(origin: CjmLaneOrigin): string {
   return cjm.laneDetached;
 }
 
-export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSystemMetaVersion }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; version?: number; designSystemMetaVersion?: number | null }) {
+export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSystemMetaVersion, themePins, pins }: { doc: PrototypeDoc; custom?: CustomPlayerRuntime; runtimeKey: string; routeBase: string; version?: number; designSystemMetaVersion?: number | null;
+  /** Пины тем ревизии `ДС → версия` (миграция v24): тайл второй поверхности берёт свою тему отсюда. */
+  themePins?: Readonly<Record<string, number | null>>;
+  /** Пины компонентов ревизии — дают `имя → ДС` для реестра на поверхность (D8). */
+  pins?: PrototypeComponentPin[];
+}) {
   useDocumentTitle(cjmDocumentTitle(doc.name, version));
   const [shareOpen, setShareOpen] = useState(false);
-  const runtime = useMemo(() => createPlayerRuntime({ navigate() {}, back() {}, openUrl() {}, restart() {} }, custom, doc.designSystem), [custom, doc.designSystem]);
+  // Реестр на поверхность (D8): резолв типа — в ДС поверхности его экрана.
+  const surfaces = useMemo(() => docSurfaces(doc), [doc]);
+  const runtimeSurfaces = useMemo(() => surfaces.map((surface) => ({ id: surface.id, designSystem: surfaceDesignSystem(surface, doc) })), [doc, surfaces]);
+  const componentDesignSystems = useMemo(() => pinDesignSystems(pins ?? []), [pins]);
+  const runtime = useMemo(() => createSurfacePlayerRuntime({ navigate() {}, back() {}, openUrl() {}, restart() {} }, custom, runtimeSurfaces, componentDesignSystems), [componentDesignSystems, custom, runtimeSurfaces]);
   const registry = useMemo(() => createCjmRegistry(runtime.registry), [runtime.registry]);
+  const registries = useMemo(
+    () => Object.fromEntries(Object.entries(runtime.registries).map(([surfaceId, value]) => [surfaceId, createCjmRegistry(value)])),
+    [runtime.registries],
+  );
   const customTypes = useMemo(() => new Set(Object.keys(custom?.definitions ?? {})), [custom]);
   const themeContent = useDesignSystemTheme(doc.designSystem, designSystemMetaVersion);
+  // Вторая ДС документа (SURFACES_LIMIT = 2 в v1, D1): ровно один дополнительный хук темы.
+  const secondaryDesignSystem = documentDesignSystems(doc).find((system) => system !== doc.designSystem);
+  const secondaryMetaVersion = secondaryDesignSystem === undefined ? null : themeMetaVersion(themePins, secondaryDesignSystem, null) ?? null;
+  const secondaryTheme = useDesignSystemTheme(secondaryDesignSystem, secondaryMetaVersion);
+  useEffect(() => {
+    if (secondaryDesignSystem === undefined || secondaryTheme === null) return;
+    return acquireThemeFonts(secondaryDesignSystem, secondaryMetaVersion, secondaryTheme);
+  }, [secondaryDesignSystem, secondaryMetaVersion, secondaryTheme]);
+  const themeByDesignSystem = useMemo<Record<string, ThemeContent | null>>(
+    () => ({ [doc.designSystem]: themeContent, ...(secondaryDesignSystem === undefined ? {} : { [secondaryDesignSystem]: secondaryTheme }) }),
+    [doc.designSystem, secondaryDesignSystem, secondaryTheme, themeContent],
+  );
   const graph = useMemo(() => buildNavigationGraph(doc), [doc]);
   const layout = useMemo(() => computeCjmLanes(doc, graph), [doc, graph]);
   const routing = useMemo(() => computeLogicalEdgeRoutes(layout), [layout]);
@@ -213,10 +242,12 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
     <button type="button" className={pillGhost} onClick={() => setShareOpen(true)}>{cjm.share}</button>
     <Link className={pillPrimary} to={`${routeBase}/present${presentSearch(location.search)}`}>{cjm.present}</Link>
   </>;
-  const renderTile = (screenId: string, flowId?: string, stepIndex?: number, noteOverride?: string, variant?: "full" | "sheet" | "stage" | "lane", onOpen?: () => void) => {
+  const renderTile = (screenId: string, flowId?: string, stepIndex?: number, noteOverride?: string, variant?: "full" | "sheet" | "stage" | "lane", onOpen?: () => void, companions?: Readonly<Record<string, string>>) => {
     const screen = screens.get(screenId);
     if (!screen) return null;
-    return <CjmScreenTile doc={doc} screen={screen} registry={registry} handlers={runtime.handlers} runtimeKey={runtimeKey} routeBase={routeBase} customTypes={customTypes} customDefinitions={custom?.definitions} themeContent={themeContent} noteOverride={noteOverride} flowId={flowId} stepIndex={stepIndex} variant={variant} onOpen={onOpen} />;
+    const surface = surfaceOf(doc, screen.id);
+    const tileDesignSystem = surfaceDesignSystem(surface, doc) ?? doc.designSystem;
+    return <CjmScreenTile doc={doc} screen={screen} registry={registries[surface.id] ?? registry} handlers={runtime.handlers} runtimeKey={runtimeKey} routeBase={routeBase} customTypes={customTypes} customDefinitions={custom?.definitions} themeContent={themeByDesignSystem[tileDesignSystem] ?? themeContent} noteOverride={noteOverride} flowId={flowId} stepIndex={stepIndex} companions={companions} variant={variant} onOpen={onOpen} />;
   };
   // Единый хром /p/* (WF-4): навигация Плеер/Редактор живёт в сегментах хрома,
   // тело вью — только stage (шапка канвы + лента экранов).
@@ -264,7 +295,7 @@ export function CjmView({ doc, custom, runtimeKey, routeBase, version, designSys
           doc={doc}
           graph={graph}
           routeBase={routeBase}
-          renderTile={(screenId, flowId, stepIndex, noteOverride, onOpen) => renderTile(screenId, flowId, stepIndex, noteOverride, "sheet", onOpen)}
+          renderTile={(screenId, flowId, stepIndex, noteOverride, onOpen, companions) => renderTile(screenId, flowId, stepIndex, noteOverride, "sheet", onOpen, companions)}
           renderStage={(screenId) => renderTile(screenId, undefined, undefined, undefined, "stage")}
         />
       </div> : <div className="mt-5">
