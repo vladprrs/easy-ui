@@ -62,6 +62,10 @@ node driver.mjs composition <id> <doc.json> --design-system <ds>
 node driver.mjs composition publish <id>
 ```
 
+Границу «композиция или компонент» считает сервер: `POST /api/compositions/analyze` c телом `{doc, designSystem?}` (read-only, `features.compositionAnalyze`) отвечает `composition` | `extend-component` | `needs-ownership-component` плюс `unsupported[]` (`timer`, `async-data`, `scroll`, `dom-measurement`, `custom-action`, `business-state`, `dynamic-directive`, лимиты) и `dependencyImpact`. Тот же вердикт печатает workbench: `POST /api/catalog/candidates` c `proposed.kind:"composition"` и черновым `compositionDoc` → `outcome`/`explanation`/`matches`. Для композиции гейт ничего не блокирует — исход рекомендательный.
+
+**Composition v3** (`features.compositionV3`, запись включается `EASYUI_COMPOSITION_V3=1`; на проде включена) снимает прежние ограничения формата: типизованные параметры (`enum`/`object`/`array`/`action`), `element.when` — необязательные ветки, `{"$switch":{param,cases,default}}` в значении пропа, **`repeatParam`** — клонирование поддерева по элементам `array`-параметра (`{"$item":"field"}`/`{"$index":true}` внутри), слоты с метаданными (`required`/`allowedTypes`/`allowedRoles`/`cardinality`/`fallback`), токенный `layout` (закрытый набор фасетов, компилируется в пропы layout-контракта v1) и `variants` (оси + легальные кортежи, выбор через `props.variant` у ссылки). Всё это раскрывается **на момент сохранения прототипа** — в сохранённом документе не остаётся ни `when`, ни `$switch`, ни `$param`; рантайм-ветвление по-прежнему только `$cond` над `doc.state`. Проверить раскрытие до записи: `POST /api/compositions/:id/preview-tree` c `{params?, variant?, rev?}` — это тот же `expandCompositions` с трассировкой (взятые ветки, выбранные case'ы, число клонов repeat, привязки слотов, во что скомпилировался `layout`, `expandedTree`, `issues[]`).
+
 ### 3. `409` — терминальный STOP
 
 `component_reuse_required`, `canonical_role_conflict`, `catalog_changed` приходят с `retryable: false`. **Не ретраить, не переименовывать ради обхода, не звать `--force-new` автоматически** — драйвер печатает кандидатов и `decisionId` и выходит с кодом `2`. Нормальный ответ — переиспользовать/расширить показанного кандидата. После `catalog_changed` заново выполни discovery и покажи новое решение человеку; старое подтверждение не переносится.
@@ -104,7 +108,11 @@ node driver.mjs prototype my-flow.json
 
 Машинная версия — `GET /api/schemas/prototype-document.json`, сводка возможностей — `GET /api/capabilities`. Ниже — рабочая выжимка.
 
-Корень: `{version: 1, id, name, description?, designSystem, device?, startScreen, state?, screens[], flows?, architecture?}`. `designSystem` обязателен для новых записей и должен быть slug активной зарегистрированной системы; `id` и все ID — slugs.
+Корень: `{version: 1, id, name, description?, designSystem, device?, startScreen, state?, computed?, screens[], flows?, architecture?, surfaces?}`. `designSystem` обязателен для новых записей и должен быть slug активной зарегистрированной системы; `id` и все ID — slugs.
+
+**`computed` — производные числа стейта** (счётчик/сумма/итог; не держать их в `state` руками): `{"cartCount":{"op":"count","from":"/cart"}, "cartUnits":{"op":"sum","from":"/cart","field":"qty"}, "cartSubtotal":{"op":"sumProduct","from":"/cart","fields":["price","qty"]}, "cartTotal":{"op":"add","terms":["/cartSubtotal","/shippingFee",-500]}}`. Ключи — bare (как в `state`), читаются как обычный стейт (`{"$state":"/cartTotal"}`, `${/cartTotal}`). Значения read-only: `setState`/`pushState`/`removeState`/`$bindState`/`repeat` по computed-пути — ошибка валидации; терм `add`-пойнтера ссылается только на **ранее объявленный** ключ; деньги — целыми единицами. Лимиты и список операций — `GET /api/capabilities` (`computedOps`, `limits.computed*`). Построчная арифметика внутри repeat невыразима — кладите готовую строку полем item.
+
+`surfaces?` — дуо-документ (история через два устройства сразу, общий стейт, две живые панели плеера; ровно две поверхности, каждый экран несёт `surface`, у desktop-поверхности обязателен `canvas`). Нужны `features.surfaces` **и** `features.surfacesWrite`; полные правила — `docs/prototype-format.md#surfaces-docsurfaces` на инстансе. Для одноповерхностной пересборки ДС поле не нужно.
 
 Экран: `{id, name, canvas?: {width,height}, note?, stateOverrides?, spec: {root, elements}}`. Элемент: `{type, props, children?, visible?, on?, repeat?, slot?, region?}` — только эти ключи. Элементы образуют одно дерево от `root` (≤500 элементов, глубина ≤50).
 
@@ -345,7 +353,7 @@ node driver.mjs expect expected.json actual.json --tolerance 2 --json
 
 `expected.json` пишет автор из выписки макета: `{"tolerance":1,"elements":[{"key":"c","size":{"width":328,"height":56}},{"key":"stack","instance":0,"axis":"row","gap":8,"padding":{"left":16,"right":16},"tolerance":2}]}`. `key`/`instance` — маркер замера (у компонентной поверхности он один, ключ `c`); `size` — `{width?,height?}`; `gap` — число (все зазоры равны) или массив по порядку, меряется как наблюдаемый зазор между box'ами прямых видимых детей; `padding` — число или объект сторон, меряется как отступ между box'ом элемента и bounding box'ом детей. Ось: `axis` → computed `flexDirection` layout owner'а → вывод из rect'ов. Допуск: файловый `tolerance` (по умолчанию 1 px) < per-element `tolerance`; `--tolerance N` перекрывает файловый дефолт. Exit: 0 — сошлось, 2 — расхождения, 1 — битый файл. Верб оффлайновый.
 
-**Итоговый цикл атома:** правка → save ревизии без публикации → `preview --rev head-draft` (пиксели) → `expect` (числа) → `POST /api/components/:id/validate` (publish-набор проверок без создания версии: typecheck/compile/import, definition, asset-refs, поля provenance; receipt не покрывает canonical-role и reuse-гейт) → **`promote` ровно один раз** (см. «Приёмка головы: `promote`»).
+**Итоговый цикл атома:** правка → save ревизии без публикации → `preview --rev head-draft` (пиксели) → `expect` (числа) → `POST /api/components/:id/validate` (publish-набор проверок без создания версии: typecheck/compile/import, definition, asset-refs, поля provenance; receipt не покрывает canonical-role и reuse-гейт) → **`accept`** (матричная приёмка всех состояний, если у компонента их больше одного) → **`promote` ровно один раз** (см. «Приёмка головы: `promote`», ссылки `candidateId`/`acceptanceRunId` — в «Матричной приёмке»).
 
 ### Приёмка головы: `promote`
 
@@ -362,17 +370,84 @@ node driver.mjs promote rating-stars --strict-catalog   # отказать, ес
 - Каталого-временные проверки (host-имя, каноническая роль, атомарная политика, asset-refs) promote перепрогоняет — он их не обходит.
 - KPI-срез по версиям: `node driver.mjs audit --versions [--design-system <id>]` (версии/active/статусы/даты на компонент; exit 2, если у компонента не осталось active-версии).
 
+### Матричная приёмка семейства: `accept`
+
+Приёмка всех состояний компонента одной командой вместо самописных matrix-скриптов: `POST /components/:id/candidates` (иммутабельный кандидат по head-ревизии) → `POST /acceptance-runs` → poll до терминального вердикта. Набор случаев, гейты (`render`, `readiness`, `geometry`, `visual`, `determinism`), severity, reuse и evidence считает **сервер**.
+
+```bash
+node driver.mjs accept pay-payment-card                       # кандидат → ран → poll → вердикт
+node driver.mjs accept pay-payment-card --case-set cset_…     # ран по набору случаев вместо examples
+node driver.mjs accept pay-payment-card --refresh failed      # переснять только упавшие случаи
+node driver.mjs accept pay-payment-card --refresh alpha,beta  # переснять перечисленные case id
+node driver.mjs accept pay-payment-card --baseline-run acc_…  # частичная пересъёмка по импакту
+node driver.mjs accept pay-payment-card --evidence run.zip    # + скачать evidence-архив
+node driver.mjs accept-status acc_…                           # вердикт уже поставленного рана
+node driver.mjs impact pay-payment-card --candidate cand_… --baseline-run acc_…   # dry-run: что придётся переснять
+```
+
+- Требует `features.acceptanceMatrix` в `/api/capabilities` (opt-in `EASYUI_ACCEPTANCE_MATRIX=1`; на проде включено). Без него верб падает читаемо, `promote` продолжает работать.
+- Прогресс (`completed/total`, `reused`, ETA) идёт в **stderr** — stdout принадлежит `--json`. Exit: 0 — `pass`/`pass_with_exceptions`, 2 — `fail`/`error`/`cancelled` и клиентский таймаут (`--timeout-sec`, дефолт 1800; ран на сервере продолжается, добирать вердикт — `accept-status <runId>`).
+- Байты evidence по умолчанию не качаются: печатается адрес архива; `--evidence <file.zip>` сохраняет zip (`manifest.json` + `SHA256SUMS` + артефакты случаев). Распаковывать только с проверкой имён записей (абсолютные пути и `..` отвергать).
+- `409 acceptance_run_in_flight` — у кандидата уже есть живой ран: не ставить второй, дождаться его через `accept-status`.
+- **Гейты случая.** `readiness` (обязателен в обоих профилях) судит тот же кадр, что снял `render`: `met:false` — продуктовый провал (шрифт/иконка/ассет не доехали, `pendingRequests` в `detail`), и по инварианту D5 сравнивающие гейты такого случая дают `indeterminate`, а не обвиняют компонент. `geometry` меряет **краску**: `layoutBounds` (union in-flow потомков), `paintBounds` (ink-bbox по альфе), `effectSources[]` (кто красит за коробкой: `filter`, `box-shadow`, `outline`, `transform`, `position:absolute|fixed`), `clipChain[]`; вердикт — `clean | paint-overflow-clipped | paint-overflow-not-clipped | layout-overflow | indeterminate`, а `fail` невозможен без названного источника. Допуски случая — `allowPaintOverflow`/`expectedClip`/`expectedGeometry` манифеста.
+- **Визуальный гейт** сравнивает `paint.png` с эталоном случая (`referenceAssetId`), обрезав эталон по `cropLineage.rect` и добив обе картинки прозрачным до общего холста; расхождение габаритов больше `maxDimensionDeltaPx` профиля (`default-v1` — 8 px, `pixel-strict-v1` — 4 px) даёт `indeterminate`, а не выдуманный процент. Метрики: `rawDiffPct` (порог 0.1, по нему вердикт), `aaDiffPct` (порог 0.25 — структурный остаток), `maxChannelDelta`, `regions[]`, `bestOffset {dx,dy,residualPct}`. Бюджет — `policy.perCase.<id>.maxRawDiffPct`, иначе профильный (`default-v1` — 2 %, `pixel-strict-v1` — 0.5 %). Обязателен только в `pixel-strict-v1` или при `requireVisual: true` манифеста.
+- **Причины и ремедиации.** Провалившийся/`indeterminate` визуальный случай несёт `causes[]` (`{code, confidence, detail, elementKey?, region?}`): `surface-tint`, `edge-radius-stroke`, `geometry-shift`, `text-raster-residual`, `missing-late-asset`, `alpha-compositing`, `effect-overflow`, `descendant-outside-mask`, `unclassified`. Терминальный ран несёт `remediationGroups` — случаи, сгруппированные по общей причине (виновник `elementKey` или сигнатура области + `variantFamily` — пересечение `dims` участников): одна сломанная иконка в 20 состояниях = одна группа с одним `suggestion`, а не 20 отдельных находок. Классификация — диагностика поверх вердикта, на pass/fail не влияет.
+- **Частичная пересъёмка (`--baseline-run <runId>`).** `impact` считает базис заранее: `asset-only` (форма исходника побайтово та же, тема не менялась — переснимаются случаи, чьи наблюдённые `themeResources` содержат изменившийся ассет), `theme-only` (сменилась версия темы — переснимаются случаи, применившие изменившиеся токены/иконки; смена шрифта действует документ-широко → все), `conservative` (всё остальное, `reason` называет причину). Случай без readiness-evidence всегда считается затронутым — молчаливого reuse не бывает; явный `--refresh` перебивает импакт.
+- **Ссылка приёмки на публикацию**: `promote` принимает `candidateId`/`acceptanceRunId` (в теле запроса, не флагами верба) — ран обязан быть терминальным `pass`/`pass_with_exceptions` этого же кандидата, иначе `422 acceptance_run_mismatch`/`acceptance_run_not_passed`; при живом ране — `409 acceptance_run_in_flight`. Обе ссылки записываются в строку опубликованной версии как provenance.
+
+### Набор случаев семьи: `case-set`
+
+Именованных `examples` хватает атому, но не семье из 49 состояний с эталонами из макета. Такой набор описывается **манифестом** и публикуется как сущность: сервер валидирует его целиком и адресует контентно (`caseSetId = "cset_" + sha256` канонизованного манифеста), поэтому повторная публикация того же манифеста идемпотентна, а изменённый манифест — **новый** набор (старые раны остаются воспроизводимыми).
+
+```jsonc
+{
+  "manifestVersion": 1,
+  "componentId": "pay-payment-card",
+  "source": { "fileKey": "…", "componentSetNodeId": "54863:9518" },
+  "capture": { "viewport": { "width": 390, "height": 844 }, "deviceScaleFactor": 2, "theme": "light" },
+  "dimensions": { "family": ["Product", "Split"], "state": ["Default", "Disabled"] },
+  "policy": { "profile": "pixel-strict-v1", "perCase": { "split-disabled": { "maxRawDiffPct": 2 } } },
+  "cases": [
+    { "id": "product-default", "props": { "family": "Product", "state": "Default" },
+      "dims": { "family": "Product", "state": "Default" },
+      "referenceAssetId": "asset_<sha256>", "expectedGeometry": { "width": 140, "height": 96 },
+      "cropLineage": { "parentNodeId": "54863:9518", "rect": [0, 0, 140, 96] } },
+    { "id": "product-default-copy", "props": { "family": "Product", "state": "Default" }, "aliasOf": "product-default" }
+  ]
+}
+```
+
+```bash
+node driver.mjs case-set put pay-payment-card matrix.json   # публикация манифеста → caseSetId + coverage
+node driver.mjs case-set coverage cset_…                    # чего не хватает в матрице
+node driver.mjs case-set get cset_…                         # манифест обратно
+```
+
+- `case.id` — charset `^[A-Za-z0-9._-]{1,64}$` (из него строятся имена записей evidence-архива), поэтому **node id макета вида `54863:9537` не пройдёт** — санитизировать на своей стороне.
+- Эталон — **id ассета реестра** (`asset_<sha256>`, загрузить через `POST /api/assets`), а не байты: несуществующий ассет — `422 asset_not_found`. Эталоны потребляются визуальным гейтом (см. выше), `cropLineage.rect` обязателен, если эталон вырезается из общего фрейма матрицы.
+- Два случая с одинаковыми props — `422 duplicate_case_props`; осознанный дубликат помечается `aliasOf` (снимается один кадр, вердикт наследуется). Алиас обязан повторять props цели и не может ссылаться на другой алиас.
+- Покрытие: `expectedTuples` — декартово произведение `dimensions`, `missingTuples` — незакрытые ячейки, `duplicates` — ячейки с двумя случаями. Манифест без `dimensions` получает тривиальный coverage.
+- Неполные `dims` и расхождение props со схемой опубликованного компонента — **`warnings`**, а не отказ.
+- `capture` манифеста задаёт поверхность съёмки набора, `policy.perCase` входит в `case_policy_hash` случая: правка допуска одного случая инвалидирует reuse ровно его.
+
 ### Клиентский кэш ответов: `--cache-dir`
 
 Глобальные флаги любого верба: `--cache-dir <dir>` (или `EASYUI_CACHE_DIR`) включает локальный кэш read-only ответов, `--cache-refresh` (или `EASYUI_CACHE_REFRESH=1`) форсирует промах.
 
 ```bash
 node driver.mjs catalog list yandex-pay --cache-dir .easyui-cache --json
+node driver.mjs accept pay-payment-card --case-set cset_… --cache-dir .easyui-cache --json
 ```
 
 - **Кэш — ускоритель, а не свидетельство**: доказательство остаётся серверным, а в отчёт всегда идёт `cache.status` (`hit|miss|refresh|off`; в `--json` — поле, иначе строка в stderr).
 - Кэшируются только read-only GET'ы (capabilities, каталог, версии компонентов, кандидаты, case-set'ы, **терминальные** раны приёмки и их evidence). Мутации, auth и нетерминальные раны — никогда.
 - Ключ включает идентичность (`sha256(baseUrl + "\n" + username)`): общий каталог не отдаёт ответы чужой учётки. Токены и куки в кэш не пишутся, каталог создаётся с правами `0700`, blob'ы сверяются с `SHA256SUMS` (подмена = промах). При `EASYUI_LEGACY_BASIC_AUTH` кэш выключен.
+
+### Отпечаток рендерера
+
+`GET /api/capabilities` → `renderer` и `GET /api/health` → `renderer` объявляют идентичность рендерера **до съёмки**: `browserName`/`browserVersion`, `launchedExecutable` (фактически это `chrome-headless-shell`, а не полный `chrome`), sha запускаемого бинаря, хэши шрифтового стека, флагов запуска и readiness-политики, и итоговый `fingerprint`. Он входит в отпечаток случая приёмки, поэтому апгрейд браузера честно инвалидирует накопленный reuse, а `provenance` (buildSha/imageRef) в отпечаток **не** входит — иначе каждый коммит обнулял бы приёмку.
+
+Практическое следствие: если фактическая версия браузера воркера разошлась с объявленной, capture-джоба терминализуется `{"status":"error","error":{"code":"renderer_mismatch"}}` и кадра нет вовсе. Это не дефект компонента и не ретраится клиентом — сообщать владельцу инстанса (образ разъехался с манифестом).
 
 ### Служебные прототипы: галереи, `track: head`, профиль readiness
 
@@ -440,4 +515,7 @@ node driver.mjs diff my-flow              # head против head-1; `diff my-f
 - `save failed (409)` — параллельное редактирование того же id (CAS-конфликт); повторить запуск драйвера (он перечитает `headRev`).
 - `409 component_reuse_required` / `canonical_role_conflict` / `catalog_changed` — терминальный STOP, см. «Главное правило».
 - `snap` вернул 501 `screenshot_unavailable` — инстанс без `SERVE_DIST`/chromium (голый локальный сервер); на проде работает.
+- Джоба съёмки завершилась `renderer_mismatch` — фактический браузер образа разошёлся с объявленным манифестом рендерера; кадра нет, клиентский ретрай не поможет (см. «Отпечаток рендерера»).
+- `409 acceptance_run_in_flight` — у кандидата уже идёт ран приёмки: не ставить второй, дождаться через `accept-status <runId>`.
+- Случай приёмки провалил `readiness` (`met:false`) — кадр снят до того, как доехали шрифт/иконка/ассет: сравнивающие гейты этого случая честно отдают `indeterminate`. Чинить ресурс (тема, реестр ассетов), а не компонент.
 - Экран «рендерится, но пусто/не так» — `node driver.mjs status <id> <screen>` (пины/бандлы/маршрут), `node driver.mjs geometry <id> <screen>` (rect'ы/issues) и `?debug=1` в плеере (события, payload, диффы стейта).

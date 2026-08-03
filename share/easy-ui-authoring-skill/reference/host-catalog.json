@@ -1,5 +1,14 @@
 {
-  "note": "Fetch exact custom definitions from the target server. These host names are reserved and globally available.",
+  "note": "Fetch exact custom definitions from the target server (driver.mjs catalog get <ds> <Type...>). These host names are reserved, globally available in every design system and cannot be taken by a published component.",
   "contentTypes": ["Image", "Hotspot"],
-  "extractionTypes": ["Overlay"]
+  "extractionTypes": ["Overlay"],
+  "structuralTypes": ["@eui/FlowRoot", "@eui/Composition", "@eui/Slot"],
+  "hostTypeNotes": {
+    "Image": "props.src — asset reference ({\"$asset\":\"asset_<sha256>\"}) or an absolute path starting with /",
+    "Hotspot": "clickable rectangle; requires screen.canvas, its rect is static numbers inside that canvas; forbidden inside repeat and inside a region subtree",
+    "Overlay": "viewport-sticky content (placement, optional inset and scrim); only as a direct child of the screen root; forbidden on desktop screens without canvas",
+    "@eui/FlowRoot": "neutral root required by region-based screens (region: statusBar|header|footer on its direct children); gives children nothing — no padding, color or font; allowed only in the root, without repeat/visible/on",
+    "@eui/Composition": "reference to a published composition (props.composition, props.params, props.variant); children are routed into the composition's slots; repeat and region on it are errors",
+    "@eui/Slot": "insertion point, valid only inside a composition document; inside a screen it is a validation error"
+  }
 }

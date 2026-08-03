@@ -8,7 +8,7 @@
 - `driver.mjs` — CLI-харнес (все операции: каталог, компоненты, прототипы, скриншоты, публикация).
 - `easyui-auth.mjs` — auth-клиент драйвера (должен лежать рядом с `driver.mjs`).
 - `examples/` — рабочие образцы: TSX-компоненты (`rating-stars.tsx` — ABI v1, `plan-picker.tsx` — typed events + named slots) и документы прототипов (`rating-demo.json`, `plan-demo.json`, `yp-checkout-demo.json` — Yandex Pay DS).
-- `reference/host-catalog.json` — встроенные host-типы (`Image`/`Hotspot`/`Overlay`/`@eui/FlowRoot`).
+- `reference/host-catalog.json` — встроенные host-типы (`Image`/`Hotspot`/`Overlay`/`@eui/FlowRoot`/`@eui/Composition`/`@eui/Slot`) с их контрактами.
 
 ## Как отдать коллегам
 
@@ -30,3 +30,4 @@ node driver.mjs get prototypes
 - Экран из существующих компонентов — это `composition`, а не новый компонент.
 - Props валидируются строго: `catalog get` по каждому используемому типу обязателен.
 - Проверка результата: `status` → `geometry` → `snap` (серверные скриншоты), PNG смотреть глазами.
+- Цикл компонента без лишних версий: правки сохраняются ревизией (`PUT`), смотрятся `preview --rev head-draft`, числа сверяет `expect`, публикуется голова один раз — `promote`. Семья вариантов принимается серверной матрицей: `case-set` (случаи + эталоны-ассеты) → `accept` (гейты render/readiness/geometry/visual, причины, evidence-архив).
