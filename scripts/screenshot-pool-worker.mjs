@@ -17,7 +17,7 @@
 // Ресайкл: бюджет джоб (20), TTL, порог RSS дерева процессов и **всегда** после не-`ok` исхода —
 // упавшая джоба могла оставить браузер в непонятном состоянии, и следующий кадр обязан быть
 // снят с чистого листа.
-/* global process, URL, window */
+/* global process, URL, window, setTimeout, clearTimeout */
 import net from "node:net";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
