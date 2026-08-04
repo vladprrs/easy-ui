@@ -18,6 +18,25 @@ function optionalPositiveInt(value: unknown, name: string): number | undefined {
 function unavailable(): never { throw new ApiError(501, "screenshot_unavailable", "Screenshot capture requires SERVE_DIST and an installed chromium"); }
 
 /**
+ * Авторизация receipt'а джобы (§5 R5, N12). Ключ владения записан рядом со ссылкой в сторе,
+ * поэтому проверка **не зависит от живой джобы**: результат живёт 10 минут, receipt — 7 суток
+ * (V-N4). Проверяется текущее владение целью, а не запомненный пользователь: сменился владелец
+ * компонента — сменился и тот, кому receipt доступен.
+ *
+ * Ручки «по sha» у receipt'ов нет и не будет (инвариант `server/routes/acceptance.ts:26`):
+ * у content-addressed документа нет владельца, и такая ручка была бы cross-owner-каналом.
+ */
+export function authorizeReceiptOwner(db: Database, ownerKey: string, principal: Principal): void {
+  const separator = ownerKey.indexOf(":");
+  const kind = ownerKey.slice(0, separator);
+  const id = ownerKey.slice(separator + 1);
+  if (kind === "prototype" && id.length > 0) { requirePrototypeRead(db, id, principal); return; }
+  if (kind === "component" && id.length > 0) { requireResourceOwner(db, "components", id, principal); return; }
+  // Неразбираемый ключ владения — не повод отдать документ: доступ выводится только из владения.
+  throw new ApiError(403, "forbidden", "Capture receipt is not accessible to this principal");
+}
+
+/**
  * Screenshot job routes. Returns `null` when the path is not a screenshot route
  * so the caller can fall through to the generic API router. When the path is a
  * screenshot route but the service is unavailable, POST returns 501 directly.
@@ -36,6 +55,16 @@ export async function routeScreenshots(request: Request, db:Database, service: S
     // Component-джобы (published и draft) перепроверяют владельца компонента, как и постановка.
     if(job?.kind==="component"){const match=/^\/capture\/component\/([^/]+)\//.exec(job.captureUrl);if(match)requireResourceOwner(db,"components",decodeURIComponent(match[1]!),principal);}
     return json(service.get(segments[1]!), 200, noStore);
+  }
+  // GET /api/screenshot-jobs/:jobId/receipt — capture receipt кадра (§5 R5). Job-scoped: и живая
+  // джоба, и вычищенная резолвятся через индекс стора, авторизация — по записанному ключу владения.
+  if (segments[0] === "screenshot-jobs" && segments.length === 3 && segments[2] === "receipt") {
+    if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+    if (!service) throw new ApiError(404, "receipt_not_found", "Capture receipt not found");
+    const found = await service.receiptFor(segments[1]!);
+    if (!found) throw new ApiError(404, "receipt_not_found", "Capture receipt not found");
+    authorizeReceiptOwner(db, found.ownerKey, principal);
+    return json({ receiptSha256: found.receiptSha256, receipt: found.receipt }, 200, noStore);
   }
   // POST /api/prototypes/:id/screens/:screenId/screenshot
   if (segments[0] === "prototypes" && segments.length === 5 && segments[2] === "screens" && segments[4] === "screenshot") {

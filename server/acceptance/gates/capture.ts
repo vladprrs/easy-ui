@@ -45,6 +45,11 @@ export interface CaptureOutcome {
    * гейт `readiness` трактует отсутствие как `indeterminate`, а не как «готов».
    */
   readiness?: CaptureReadinessOutcome;
+  /**
+   * Адрес capture-receipt'а кадра (R5). Отсутствует, если receipt'ы выключены kill-switch'ем:
+   * гейт `render` тогда просто не кладёт `receipt.json` в evidence — вердикт от этого не зависит.
+   */
+  receiptSha256?: string;
 }
 
 /** Достаёт readiness-поля из результата джобы, не полагаясь на конкретный `kind`. */
@@ -170,7 +175,7 @@ export async function captureCase(
     if (result.kind === "geometry") {
       const geometry: Record<string, unknown> = { ...result };
       delete geometry.kind;
-      return { jobId, retries: attempt, quality, geometry };
+      return { jobId, retries: attempt, quality, geometry, ...(result.receiptSha256 === undefined ? {} : { receiptSha256: result.receiptSha256 }) };
     }
     if (result.kind === "paint") {
       const geometry: Record<string, unknown> = { ...result };
@@ -181,6 +186,7 @@ export async function captureCase(
         image: { bytes: result.bytes, width: result.width, height: result.height },
         paintMargin: result.paintMargin,
         browserVersion: result.browserVersion,
+        ...(result.receiptSha256 === undefined ? {} : { receiptSha256: result.receiptSha256 }),
         ...(readinessOf(result) ? { readiness: readinessOf(result)! } : {}),
       };
     }
@@ -189,6 +195,7 @@ export async function captureCase(
         jobId, retries: attempt, quality,
         image: { bytes: result.bytes, width: result.width, height: result.height },
         browserVersion: result.browserVersion,
+        ...(result.receiptSha256 === undefined ? {} : { receiptSha256: result.receiptSha256 }),
         ...(readinessOf(result) ? { readiness: readinessOf(result)! } : {}),
       };
     }

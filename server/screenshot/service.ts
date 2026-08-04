@@ -20,6 +20,8 @@ import { ComponentRepo } from "../repos/components";
 import { docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
 import { surfaceDesignSystem, surfaceOf } from "../../src/prototype/surfaces";
 import { resolveCaptureMode } from "../capture/modes";
+import { buildCaptureReceipt, type CaptureReceipt, type CaptureReceiptOutput, type CaptureReceiptTarget } from "../../src/capture/receipt";
+import { getJobReceipt, putAssetReceipt, putJobReceipt, putReceipt, readReceipt, receiptsDisabled } from "../capture/receiptStore";
 import { buildDeterminismArgs, compareBrowserVersion, policyHashOf, rendererDeclaration, rendererFingerprintOf, strictManifestEnabled } from "../capture/renderer";
 import { buildStaticAllowedUrls, rendererBuildFrom } from "./allowedUrls";
 import { classifyCaptureErrors } from "./noise";
@@ -158,6 +160,12 @@ export interface ScreenshotImageResult extends CaptureQuality {
   rendererBuild: string | null; browserVersion: string;
   /** Объявленный рендерер джобы (R1): отпечаток и его входы. */
   renderer?: RendererOnJob;
+  /**
+   * Адрес capture-receipt'а этого кадра в сторе receipt'ов (R5). Отсутствует, если receipt'ы
+   * выключены kill-switch'ем `EASYUI_CAPTURE_RECEIPTS_DISABLED=1` либо запись не удалась
+   * (капчур из-за этого не проваливается — доказательство не важнее кадра).
+   */
+  receiptSha256?: string;
 }
 /**
  * Байтовый исход image-джобы (амендмент A4): PNG отдаётся вызывающему (acceptance-оркестратору,
@@ -176,6 +184,8 @@ export interface ScreenshotImageBytesResult extends CaptureQuality, CaptureReadi
   componentPins?: { id: string; version: number; bundleHash: string }[];
   rendererBuild: string | null; browserVersion: string;
   renderer?: RendererOnJob;
+  /** Адрес capture-receipt'а этого кадра (R5). */
+  receiptSha256?: string;
 }
 /**
  * Исход режима `probe:"paint"` (план 2026-08-03 §3 D4, §5 W3): **одна browser-сессия** отдаёт и
@@ -206,6 +216,8 @@ export interface ScreenshotPaintResult extends CaptureQuality, GeometryMeasureme
   rendererBuild: string | null;
   browserVersion: string;
   renderer?: RendererOnJob;
+  /** Адрес capture-receipt'а этого кадра (R5). */
+  receiptSha256?: string;
 }
 /** Geometry measurements shared by both capture surfaces (additive wave-7.1 shape). */
 interface GeometryMeasurement {
@@ -225,6 +237,8 @@ interface GeometryMeasurement {
 }
 export interface ScreenshotPrototypeGeometryResult extends CaptureQuality, GeometryMeasurement {
   kind: "geometry";
+  /** Адрес capture-receipt'а измерительной джобы (R5): у неё `output: null` — кадра нет (C-M8). */
+  receiptSha256?: string;
   surface: "prototype";
   resolvedRev: number;
   prototypeInstanceId: string;
@@ -237,6 +251,8 @@ export interface ScreenshotPrototypeGeometryResult extends CaptureQuality, Geome
 /** Component-surface geometry probe (P1b): published version or draft head revision. */
 export interface ScreenshotComponentGeometryResult extends CaptureQuality, GeometryMeasurement {
   kind: "geometry";
+  /** Адрес capture-receipt'а измерительной джобы (R5): у неё `output: null` — кадра нет (C-M8). */
+  receiptSha256?: string;
   surface: "component";
   componentId: string;
   /** Published target — mutually exclusive with `draftRev`. */
@@ -272,8 +288,15 @@ export type WorkerReadiness = {
   readiness?: { met: boolean; reason?: string; codes?: unknown; policyHash: string; elapsedMs: number; evidence: Record<string, unknown> };
   captureEnv?: { fingerprint: string; input: Record<string, unknown> };
 };
-export type WorkerImageOk = { ok: true; pngBase64: string; width: number; height: number; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string } & WorkerReadiness;
-export type WorkerGeometryOk = { ok: true; geometry: GeometryCollection; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string } & WorkerReadiness;
+/**
+ * Тайминги фаз воркера (R5). Пофазовый раскол ожидания живёт в странице и сюда не приезжает —
+ * см. `src/capture/receipt.ts`.
+ */
+export type WorkerTimings = { navigateMs: number | null; readyMs: number | null; screenshotMs: number | null; totalMs: number | null };
+/** Общие для всех исходов воркера факты происхождения кадра (R5). */
+export type WorkerCaptureFacts = { timings?: WorkerTimings; pngSha256?: string; surfaceRect?: { x: number; y: number; width: number; height: number } | null };
+export type WorkerImageOk = { ok: true; pngBase64: string; width: number; height: number; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string } & WorkerReadiness & WorkerCaptureFacts;
+export type WorkerGeometryOk = { ok: true; geometry: GeometryCollection; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string } & WorkerReadiness & WorkerCaptureFacts;
 /** Paint-джоба: geometry и PNG приезжают вместе — это и есть смысл режима. */
 export type WorkerPaintOk = WorkerImageOk & { geometry: GeometryCollection };
 export type WorkerOk = WorkerImageOk | WorkerGeometryOk | WorkerPaintOk;
@@ -320,6 +343,14 @@ interface InternalJob {
    * которой считался `case_fingerprint` при reuse-lookup'е.
    */
   renderer: RendererOnJob;
+  /**
+   * Ключ владения целью капчура (R5): `component:<id>` / `prototype:<id>`. Он же уезжает в
+   * индекс `jobId → receipt` — авторизация ручки receipt'а обязана работать и после того, как
+   * джоба вычищена по `RESULT_TTL_MS` (V-N4), поэтому она выводится из ключа, а не из живой джобы.
+   */
+  owner: { kind: "prototype" | "component"; id: string };
+  /** Адрес receipt'а этого капчура (R5), если он собран. */
+  receiptSha256?: string;
   result?: ScreenshotResult; error?: { code: string; message: string }; resultExpiresAt?: number;
   jobOutcome?: JobOutcome;
   /** Типизированная причина капчура (R3), если она известна: едет в `GET /api/screenshot-jobs/:id`. */
@@ -559,7 +590,7 @@ export class ScreenshotService {
     query.set("theme", theme); query.set("dsf", String(dsf));
     const captureUrl = `/capture/${encodeURIComponent(id)}/s/${encodeURIComponent(screenId)}?${query}`;
     const capturePins: CapturePin[] = full.components.map((p) => ({ id: p.id, name: p.name, version: p.version, bundleUrl: p.bundleUrl, bundleHash: p.bundleHash, status: p.status }));
-    const {jobId}=this.push({ kind: "prototype", expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins, capturePins, captureManifestHash: full.componentManifestHash, fonts, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
+    const {jobId}=this.push({ kind: "prototype", owner: { kind: "prototype", id }, expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins, capturePins, captureManifestHash: full.componentManifestHash, fonts, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
     return {jobId,expected,components:capturePins};
   }
 
@@ -585,7 +616,7 @@ export class ScreenshotService {
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/${version}?${query}`;
     // Компонентная геометрия (P1b): шкала — из последней темы, ролей экрана у одиночного компонента нет.
     const resolvedSpaceScale = opts.probe ? resolveSpacingScale(dto.designSystem, themeContent.tokens, themeContent.spacingResolver) : undefined;
-    const {jobId}=this.push({ kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, fonts: fontManifestOf(themeContent), ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}) });
+    const {jobId}=this.push({ kind: "component", owner: { kind: "component", id }, expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, fonts: fontManifestOf(themeContent), ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}) });
     return {jobId,expected};
   }
 
@@ -679,7 +710,7 @@ export class ScreenshotService {
       ? Math.min(Math.max(Math.round(opts.paintMargin ?? DEFAULT_PAINT_MARGIN_PX), 0), MAX_PAINT_MARGIN_PX)
       : undefined;
     const { jobId } = this.push({
-      kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false,
+      kind: "component", owner: { kind: "component", id }, expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false,
       draft: { name: repo.row(id).name, designSystem: draft.designSystem, bundleUrl, ...(meta.propsJsonSchema !== undefined ? { propsJsonSchema: meta.propsJsonSchema } : {}), ...(meta.examples !== undefined ? { examples: meta.examples } : {}) },
       // Драфт и кандидат приёмки: компонент не пинует тему, поэтому манифест — от последней версии
       // темы его ДС, той же, что уже дала `dsMetaVersion` handshake'а.
@@ -876,6 +907,12 @@ export class ScreenshotService {
       // Kill-switch `EASYUI_RENDERER_STRICT_MANIFEST=0`: расхождение остаётся видимым, но капчур
       // доигрывается (T-M7 — аварийная ручка на случай, если сверка валит весь прод).
       if (mismatch !== null) quality.runtimeWarnings.push(`renderer_mismatch: ${mismatch}`);
+      // Receipt собирается **здесь** — после воркера и до ветвления по kind (E4): иначе asset-путь
+      // (интерактивный `snap`, кадр визуального рана) снова остался бы без доказательств
+      // происхождения, то есть дыра §1.6 закрылась бы только для байтового канала.
+      const receiptSha256 = await this.storeReceipt(job, result, quality, mismatch);
+      if (receiptSha256 !== undefined) job.receiptSha256 = receiptSha256;
+      const receiptField = receiptSha256 === undefined ? {} : { receiptSha256 };
       if (job.probe === "paint") {
         // Комбинированный исход: обе половины обязаны приехать из одной сессии, иначе вердикт
         // геометрии сравнивал бы разные кадры (триаж R1-M3) — поэтому это `throw`, не деградация.
@@ -886,6 +923,7 @@ export class ScreenshotService {
           kind: "paint",
           surface: "component",
           ...quality,
+          ...receiptField,
           ...this.readinessOf(result),
           componentId: job.expected.componentId,
           ...(job.expected.kind === "component-draft" ? { draftRev: job.expected.rev } : { version: job.expected.version }),
@@ -917,6 +955,7 @@ export class ScreenshotService {
             kind: "geometry",
             surface: "prototype",
             ...quality,
+            ...receiptField,
             resolvedRev: job.expected.rev,
             prototypeInstanceId: job.expected.prototypeInstanceId,
             componentPins: job.componentPins ?? [],
@@ -931,6 +970,7 @@ export class ScreenshotService {
             kind: "geometry",
             surface: "component",
             ...quality,
+            ...receiptField,
             componentId: job.expected.componentId,
             ...(job.expected.kind === "component-draft" ? { draftRev: job.expected.rev } : { version: job.expected.version }),
             bundleHash: job.expected.bundleHash,
@@ -958,6 +998,7 @@ export class ScreenshotService {
         job.result = {
           kind: "image-bytes",
           ...quality,
+          ...receiptField,
           ...this.readinessOf(result),
           imageProduced: true,
           bytes: new Uint8Array(bytes), width: result.width, height: result.height,
@@ -973,9 +1014,16 @@ export class ScreenshotService {
       }
       const assetRepo = new AssetRepo(this.deps.db, this.deps.dataDir);
       const ingest = await assetRepo.ingest(new Uint8Array(bytes), "image/png", "screenshot.png");
+      // Индекс `assetId → receipt` пишется **после** ингеста: до него assetId не существует
+      // (V-N7). По нему R6 резолвит рендерер эталона, залитого серверным капчуром (T-B2).
+      if (receiptSha256 !== undefined) {
+        try { await putAssetReceipt(this.deps.dataDir, ingest.asset.id, receiptSha256); }
+        catch (error) { quality.runtimeWarnings.push(`receipt_asset_index_failed: ${error instanceof Error ? error.message : String(error)}`); }
+      }
       job.result = {
         kind: "image",
         ...quality,
+        ...receiptField,
         imageProduced: true,
         imageUrl: `/api/assets/${ingest.asset.id}`, assetId: ingest.asset.id, width: result.width, height: result.height,
         consoleErrors: result.consoleErrors, pageErrors: result.pageErrors,
@@ -1008,6 +1056,111 @@ export class ScreenshotService {
     const verdict = compareBrowserVersion(job.renderer.browserVersion, result.browserVersion);
     if (verdict !== "mismatch") return null;
     return `declared browser ${job.renderer.browserVersion} (renderer manifest, source=${job.renderer.source}) does not match the browser that rendered this frame (${result.browserVersion})`;
+  }
+
+  /** Цель капчура в форме receipt'а (R5): поля, неприменимые к виду цели, — `null`. */
+  private receiptTargetOf(job: InternalJob): CaptureReceiptTarget {
+    const expected = job.expected;
+    if (expected.kind === "prototype") {
+      return {
+        kind: "prototype", componentId: null, prototypeId: job.owner.id,
+        version: null, rev: expected.rev, sourceHash: null, bundleHash: null,
+        dsMetaVersion: expected.dsMetaVersion, propsHash: null,
+      };
+    }
+    if (expected.kind === "component-draft") {
+      return {
+        kind: "component-draft", componentId: expected.componentId, prototypeId: null,
+        version: null, rev: expected.rev, sourceHash: expected.sourceHash, bundleHash: expected.bundleHash,
+        dsMetaVersion: expected.dsMetaVersion, propsHash: expected.propsHash,
+      };
+    }
+    return {
+      kind: "component", componentId: expected.componentId, prototypeId: null,
+      version: expected.version, rev: null, sourceHash: null, bundleHash: expected.bundleHash,
+      dsMetaVersion: expected.dsMetaVersion, propsHash: expected.propsHash,
+    };
+  }
+
+  /**
+   * Собирает и сохраняет receipt капчура (§3 E4). Возвращает его адрес либо `undefined`, если
+   * receipt'ы выключены kill-switch'ем или запись не удалась: доказательство происхождения не
+   * важнее самого кадра, поэтому отказ стора никогда не валит джобу — он едет предупреждением.
+   */
+  private async storeReceipt(job: InternalJob, result: WorkerOk, quality: CaptureQuality, mismatch: string | null): Promise<string | undefined> {
+    if (receiptsDisabled()) return undefined;
+    try {
+      const readiness = this.readinessOf(result);
+      const png = "pngBase64" in result;
+      // `probe:"geometry"` — измерительная джоба: PNG в этой ветке не существует, и `output`
+      // честно `null`, а не нулевые размеры (C-M8).
+      const output: CaptureReceiptOutput | null = png
+        ? {
+          viewport: job.viewport,
+          dpr: job.dsf,
+          colorScheme: job.theme,
+          pngWidth: result.width,
+          pngHeight: result.height,
+          pngSha256: result.pngSha256 ?? null,
+          surfaceRect: result.surfaceRect ?? null,
+          ...(job.paintMargin === undefined ? {} : { paintMargin: job.paintMargin }),
+        }
+        : null;
+      const receipt = buildCaptureReceipt({
+        renderer: rendererDeclaration(),
+        fingerprint: job.renderer.fingerprint,
+        observedBrowserVersion: result.browserVersion ?? null,
+        // Расхождение объявленного и наблюдённого доехало сюда только с выключенной строгой
+        // сверкой (иначе джоба уже терминализована) — в receipt оно предупреждение, но видимое.
+        drift: mismatch === null ? [] : [{ code: "renderer_mismatch" as const, severity: "warning" as const, detail: mismatch }],
+        target: this.receiptTargetOf(job),
+        fontManifestHash: job.fonts?.manifestHash ?? null,
+        readiness: {
+          met: readiness.readinessMet,
+          policyHash: readiness.readinessPolicyHash,
+          codes: readiness.readinessCodes,
+          elapsedMs: result.readiness?.elapsedMs ?? null,
+          evidence: readiness.readinessEvidence,
+        },
+        console: { errors: result.consoleErrors ?? [], warnings: result.consoleWarnings ?? [], pageErrors: result.pageErrors ?? [] },
+        output,
+        timings: { ...(result.timings ?? {}), readinessMs: result.readiness?.elapsedMs ?? null },
+        captureClean: quality.captureClean,
+      });
+      const stored = await putReceipt(this.deps.dataDir, receipt);
+      // Индекс джобы — сразу после записи: он и есть канал доступа (N12), и он обязан пережить
+      // саму джобу (`RESULT_TTL_MS` 10 мин против 7 суток стора, V-N4).
+      await putJobReceipt(this.deps.dataDir, job.id, { receiptSha256: stored.sha256, ownerKey: `${job.owner.kind}:${job.owner.id}` });
+      return stored.sha256;
+    } catch (error) {
+      quality.runtimeWarnings.push(`receipt_store_failed: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * Пины свипера receipt'ов: адреса, на которые ссылаются **живые** job-результаты. Пока джоба
+   * жива, её receipt обязан быть читаем ручкой — вытеснение по TTL/LRU здесь было бы дырой.
+   */
+  liveReceiptShas(): Set<string> {
+    const shas = new Set<string>();
+    for (const job of this.jobs.values()) if (job.receiptSha256) shas.add(job.receiptSha256);
+    return shas;
+  }
+
+  /**
+   * Receipt джобы для HTTP-ручки (N12). Живая джоба и мёртвая резолвятся одинаково — через
+   * индекс стора; `ownerKey` возвращается **вместе** с документом, авторизацию делает роут.
+   */
+  async receiptFor(jobId: string): Promise<{ receiptSha256: string; ownerKey: string; receipt: CaptureReceipt } | null> {
+    const link = await getJobReceipt(this.deps.dataDir, jobId)
+      ?? (() => {
+        const job = this.jobs.get(jobId);
+        return job?.receiptSha256 ? { receiptSha256: job.receiptSha256, ownerKey: `${job.owner.kind}:${job.owner.id}`, createdAt: "" } : null;
+      })();
+    if (link === null) return null;
+    const receipt = await readReceipt(this.deps.dataDir, link.receiptSha256);
+    return receipt === null ? null : { receiptSha256: link.receiptSha256, ownerKey: link.ownerKey, receipt };
   }
 
   /**

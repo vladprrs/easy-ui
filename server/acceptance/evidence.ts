@@ -180,6 +180,25 @@ const parseJson = (raw: string | null): unknown => {
   try { return JSON.parse(raw); } catch { return null; }
 };
 
+/**
+ * Адреса, на которые ссылаются доказательства приёмки (case-результаты и гейты случаев).
+ *
+ * Используется дважды: внутри `gcEvidence` как «живое множество» CAS и — с волны R5 — как
+ * **пин-множество свипера receipt-стора**. Второе не косметика: гейт `render` кладёт в CAS ровно
+ * те байты, что лежат в `.receipts`, поэтому у receipt'а и его CAS-копии один адрес, и вытеснение
+ * из receipt-стора того, на что ссылается живой per-run манифест, оставило бы доказательство
+ * читаемым только в одном из двух контуров. Пин делает оба согласованными, не связывая GC.
+ */
+export function referencedArtifactShas(repo: AcceptanceRepo): Set<string> {
+  const live = new Set<string>();
+  for (const row of repo.allCaseResults()) collectShas(parseJson(row.artifacts_json), live);
+  for (const row of repo.allCaseGates()) {
+    collectShas(parseJson(row.gates_json), live);
+    collectShas(parseJson(row.capture_quality_json), live);
+  }
+  return live;
+}
+
 export interface EvidenceGcOptions {
   graceMs?: number;
   maxBytes?: number;
@@ -222,12 +241,7 @@ export async function gcEvidence(dataDir: string, repo: AcceptanceRepo, options:
   }
 
   // 2. Живое множество адресов.
-  const live = new Set<string>();
-  for (const row of repo.allCaseResults()) collectShas(parseJson(row.artifacts_json), live);
-  for (const row of repo.allCaseGates()) {
-    collectShas(parseJson(row.gates_json), live);
-    collectShas(parseJson(row.capture_quality_json), live);
-  }
+  const live = referencedArtifactShas(repo);
 
   // 3. Обход CAS.
   const files: { sha: string; path: string; bytes: number; mtimeMs: number }[] = [];

@@ -5,6 +5,7 @@
 // context.route allowlist keyed on the exact capture origin + allowed paths.
 /* global process, Buffer, URL, window, setTimeout, clearTimeout */
 import net from "node:net";
+import { createHash } from "node:crypto";
 import { analyzeGeometry, collectGeometry } from "../src/capture/geometry.mjs";
 
 /** Deterministic JSON for canonical readiness comparison (mirrors src/capture/canonicalJson.ts). */
@@ -119,7 +120,17 @@ async function readStdin() {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+/**
+ * Тайминги капчура для receipt'а (§5 R5). Меряет их воркер, потому что только он знает границы
+ * фаз процесса: навигация, ожидание готовности шелла, сам снимок. Пофазовый раскол ожидания
+ * (шрифты/картинки/сеть/кадры) живёт внутри страницы (`collectReadiness`) и в receipt приезжает
+ * суммарным `readinessMs` — правка readiness вне объёма волны (см. `src/capture/receipt.ts`).
+ */
+const elapsedSince = (startedAt) => Math.max(0, Math.round(Date.now() - startedAt));
+
 async function run(job) {
+  const startedAt = Date.now();
+  const timings = { navigateMs: null, readyMs: null, screenshotMs: null, totalMs: null };
   const { chromium } = await import("playwright");
   const consoleErrors = [];
   const consoleWarnings = [];
@@ -186,6 +197,7 @@ async function run(job) {
     // Навигация — отдельный типизированный исход (§5 R3): «страница не открылась» и «страница
     // открылась, но шелл не сошёлся с ожиданием» — разные диагнозы, и клиент обязан различать их
     // без чтения текста ошибки.
+    const navigateAt = Date.now();
     try {
       await page.goto(job.captureOrigin + job.captureUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
     } catch (error) {
@@ -195,11 +207,14 @@ async function run(job) {
         consoleErrors, consoleWarnings, pageErrors,
       };
     }
+    timings.navigateMs = elapsedSince(navigateAt);
 
+    const readyAt = Date.now();
     const ready = await (async () => {
       const handle = await page.waitForFunction(() => window.__EUI_CAPTURE_READY__ ?? null, null, { timeout: 20000, polling: 100 });
       return handle.jsonValue();
     })().catch((error) => ({ status: "error", error: `capture handshake timed out: ${error?.message ?? String(error)}` }));
+    timings.readyMs = elapsedSince(readyAt);
     // Шелл не опубликовал handshake либо опубликовал ошибку — это исполнение страницы, а не
     // навигация и не поверхность: `runtime_error`.
     if (!ready || ready.status === "error") return { ok: false, code: WORKER_FAILURE_CODES.runtime, error: ready?.error ?? "capture reported error", consoleErrors, consoleWarnings, pageErrors };
@@ -218,7 +233,8 @@ async function run(job) {
       const measurements = await page.evaluate(collectGeometry, { limit: job.geometryLimit, roleKeys: job.geometryRoleKeys ?? {} });
       // Structural analysis runs outside the page: it is pure and unit-tested without a DOM.
       const geometry = { ...measurements, ...analyzeGeometry(measurements) };
-      return { ok: true, geometry, consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version(), ...readinessFields };
+      timings.totalMs = elapsedSince(startedAt);
+      return { ok: true, geometry, consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version(), timings, ...readinessFields };
     }
 
     // Paint-режим (план 2026-08-03 §3 D4, W3): **одна сессия** отдаёт и geometry-факты, и PNG.
@@ -237,25 +253,41 @@ async function run(job) {
       // здесь молча снимался viewport: получался кадр «чего-то», который затем сравнивался с
       // эталоном компонента и давал необъяснимый визуальный провал вместо честной причины.
       if (!surface) return { ok: false, code: WORKER_FAILURE_CODES.surfaceMissing, error: "#eui-capture-surface is missing in the captured document", consoleErrors, consoleWarnings, pageErrors };
+      // Бокс поверхности снимается **до** кадра и в тех же CSS px, что и geometry: receipt R5
+      // обязан говорить, какой прямоугольник стал кадром, а не только его размер в device px.
+      const surfaceRect = await surface.boundingBox().catch(() => null);
       // `omitBackground` снимает белую подложку браузера: без неё альфа за пределами компонента
       // была бы непрозрачной и ink-bbox совпал бы с кадром целиком.
+      const paintAt = Date.now();
       const png = await surface.screenshot({ type: "png", omitBackground: true });
+      timings.screenshotMs = elapsedSince(paintAt);
+      timings.totalMs = elapsedSince(startedAt);
       return {
         ok: true, geometry: paintGeometry,
         pngBase64: png.toString("base64"),
+        pngSha256: createHash("sha256").update(png).digest("hex"),
+        surfaceRect,
         width: png.length >= 24 ? png.readUInt32BE(16) : job.viewport.width,
         height: png.length >= 24 ? png.readUInt32BE(20) : job.viewport.height,
-        consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version(),
+        consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version(), timings,
         ...readinessFields,
       };
     }
 
     const el = await page.$("#eui-capture-surface");
     if (!el) return { ok: false, code: WORKER_FAILURE_CODES.surfaceMissing, error: "#eui-capture-surface is missing in the captured document", consoleErrors, consoleWarnings, pageErrors };
+    const surfaceRect = await el.boundingBox().catch(() => null);
+    const shotAt = Date.now();
     const buf = await el.screenshot({ type: "png" });
+    timings.screenshotMs = elapsedSince(shotAt);
+    timings.totalMs = elapsedSince(startedAt);
     const width = buf.length >= 24 ? buf.readUInt32BE(16) : job.viewport.width;
     const height = buf.length >= 24 ? buf.readUInt32BE(20) : job.viewport.height;
-    return { ok: true, pngBase64: buf.toString("base64"), width, height, consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version(), ...readinessFields };
+    return {
+      ok: true, pngBase64: buf.toString("base64"), pngSha256: createHash("sha256").update(buf).digest("hex"),
+      surfaceRect, width, height, consoleErrors, consoleWarnings, pageErrors,
+      browserVersion: browser.version(), timings, ...readinessFields,
+    };
   } finally {
     try { await context?.close(); } catch { /* best effort */ }
     try { await browser?.close(); } catch { /* best effort */ }

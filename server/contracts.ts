@@ -367,6 +367,8 @@ const screenshotImageResultSchema = z.object({
     contextOptionsHash: z.string().nullable(), launchDeterminismArgsHash: z.string(),
     colorProfile: z.literal("srgb"), source: z.enum(["manifest", "fallback"]),
   }).optional(),
+  /** Адрес capture-receipt'а кадра (R5): читается ручкой `GET /api/screenshot-jobs/{jobId}/receipt`. */
+  receiptSha256: z.string().optional(),
 });
 const geometryLayoutContextSchema = z.object({
   display: z.string(), flexDirection: z.string(), flexWrap: z.string(), rowGap: z.string(), columnGap: z.string(),
@@ -380,6 +382,8 @@ const geometryRectSchema = z.object({
 // Geometry-результат дискриминирован по поверхности (P1b добавил компонентную к прототипной).
 const geometryMeasurementFields = {
   viewport: viewportSchema, dpr: z.number(), rects: z.array(geometryRectSchema), truncated: z.boolean(), total: z.number().int().nonnegative(),
+  /** Адрес capture-receipt'а измерительной джобы (R5); у неё `output: null` — кадра нет. */
+  receiptSha256: z.string().optional(),
 };
 const screenshotPrototypeGeometryResultSchema = z.object({
   kind: z.literal("geometry"), surface: z.literal("prototype"),
@@ -412,6 +416,71 @@ export const captureFailureCodeSchema = z.enum([
 ]);
 /** Таксономия исхода **джобы** (A3): инфраструктура против терминального `renderer_mismatch`. */
 export const jobOutcomeSchema = z.enum(["ok", "worker_crash", "timeout", "queue_full", "subprocess_error", "renderer_mismatch", "surface_missing"]);
+
+/**
+ * Capture receipt (план renderer-contract-2 §3 E4, §5 R5) — один документ о происхождении кадра
+ * на **оба** канала доставки. Форма — `src/capture/receipt.ts`; ручки «по sha» нет (N12).
+ */
+const captureCodeSchema = z.object({ code: captureFailureCodeSchema, severity: z.enum(["error", "warning"]), detail: z.string(), ref: z.string().optional() });
+export const captureReceiptSchema = z.object({
+  receiptVersion: z.literal(1),
+  renderer: z.object({
+    rendererSchema: z.number().int().positive(), rendererVersion: z.string(),
+    os: z.string(), arch: z.string(), nodeVersion: z.string().nullable(), playwrightVersion: z.string().nullable(),
+    browserName: z.string(), browserVersion: z.string().nullable(), browserRevision: z.string().nullable(),
+    launchedExecutable: z.string().nullable(), browserExecutableSha256: z.string().nullable(),
+    fontStackSha256: z.string().nullable(), appFontsSha256: z.string().nullable(), systemLibsHash: z.string().nullable(),
+    launchDeterminismArgsHash: z.string(), contextOptionsHash: z.string().nullable(),
+    colorProfile: z.literal("srgb"), source: z.enum(["manifest", "fallback"]),
+    provenance: z.object({ buildSha: z.string().nullable(), imageRef: z.string().nullable(), builtAt: z.string().nullable(), bunVersion: z.string().nullable() }).nullable(),
+    fingerprint: z.string(), observedBrowserVersion: z.string().nullable(), drift: z.array(captureCodeSchema),
+  }),
+  target: z.object({
+    kind: z.enum(["prototype", "component", "component-draft"]),
+    componentId: z.string().nullable(), prototypeId: z.string().nullable(),
+    version: z.number().int().nullable(), rev: z.number().int().nullable(), sourceHash: z.string().nullable(),
+    bundleHash: z.string().nullable(), dsMetaVersion: z.number().int().nullable(), propsHash: z.string().nullable(),
+  }),
+  resources: z.object({
+    fontManifestHash: z.string().nullable(),
+    fontFaces: z.array(z.object({
+      family: z.string(), weight: z.string(), style: z.string(),
+      assetId: z.string().nullable(), sha256: z.string().nullable(), status: z.string(),
+      checked: z.boolean().nullable(), required: z.boolean().nullable(),
+    })),
+    images: z.array(z.object({
+      url: z.string(), assetId: z.string().nullable(),
+      naturalWidth: z.number().nullable(), naturalHeight: z.number().nullable(),
+      decoded: z.boolean().nullable(), contentHash: z.string().nullable(),
+    })),
+    themeResources: z.object({ tokens: z.array(z.string()), icons: z.array(z.string()), images: z.array(z.string()) }).nullable(),
+  }),
+  console: z.object({ errors: z.array(z.string()), warnings: z.array(z.string()), pageErrors: z.array(z.string()) }),
+  output: z.object({
+    viewport: viewportSchema, dpr: z.number(), colorScheme: z.enum(["light", "dark"]),
+    pngWidth: z.number(), pngHeight: z.number(), pngSha256: z.string().nullable(),
+    surfaceRect: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).nullable(),
+    paintMargin: z.number().optional(),
+  }).nullable(),
+  timings: z.object({
+    navigateMs: z.number().nullable(), fontsMs: z.number().nullable(), imagesMs: z.number().nullable(),
+    networkMs: z.number().nullable(), framesMs: z.number().nullable(), stabilizeMs: z.number().nullable(),
+    screenshotMs: z.number().nullable(), totalMs: z.number().nullable(),
+    readyMs: z.number().nullable(), readinessMs: z.number().nullable(),
+  }),
+  verdict: z.object({
+    captureClean: z.boolean(), codes: z.array(captureCodeSchema),
+    readinessMet: z.boolean().nullable(), readinessPolicyHash: z.string().nullable(),
+  }),
+});
+
+export const screenshotJobReceiptContract = registerContract({
+  method: "GET",
+  path: "/api/screenshot-jobs/{jobId}/receipt",
+  summary: "Read the capture receipt of a screenshot job: declared renderer and its fingerprint, capture target, resource manifest (theme font faces and decoded images), console output, PNG identity (`pngSha256`, surface rect) and the readiness verdict. Job-scoped by design — there is no receipt-by-sha handle (a content-addressed document has no owner). The receipt outlives the job result (10 min) in a dedicated store (7-day TTL, 64 MB LRU cap), so a settled-and-reaped job still answers here; `output` is null for geometry probes, which produce no frame. Absent when receipts are disabled (EASYUI_CAPTURE_RECEIPTS_DISABLED=1) or the receipt has been evicted.",
+  responseSchema: z.object({ receiptSha256: z.string(), receipt: captureReceiptSchema }),
+  errors: [{ status: 403, code: "forbidden" }, { status: 404, code: "receipt_not_found" }],
+});
 
 export const screenshotJobContract = registerContract({
   method: "GET",

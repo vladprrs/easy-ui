@@ -34,10 +34,13 @@ import { routeUsers } from "./routes/users";
 import { assertOwnersPresent, ensureBootstrapAdmin } from "./users";
 import { sweepStagingModules } from "./components/pipeline";
 import { gcCandidates, setCandidatePinProvider } from "./components/candidates";
+import { gcReceipts, setReceiptPinProvider } from "./capture/receiptStore";
 import { DEFAULT_REUSE_GATE_MODE, resolveReuseGateMode, type ReuseGateMode } from "./catalog/gate";
 import { assertMutationAllowed } from "./maintenance";
 import { routeCatalogMigrations } from "./routes/catalogMigrations";
 import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
+import { AcceptanceRepo } from "./acceptance/repo";
+import { referencedArtifactShas } from "./acceptance/evidence";
 import { routeAcceptance } from "./routes/acceptance";
 import { routeCaseSets } from "./routes/caseSets";
 
@@ -265,6 +268,17 @@ export async function startServer(options:{port?:number;database?:string;serveDi
     setCandidatePinProvider(acceptance?acceptance.candidatePins:null);
     // P8: GC candidate-кэша на старте (TTL/потолок байт) и при каждой записи.
     await gcCandidates(dataDir,acceptance?{pinned:acceptance.candidatePins}:{});
+    // R5: свипер receipt'ов — та же схема, что у кандидатов (GC на старте и при записи), с пином
+    // живых job-результатов: пока джоба жива, её receipt обязан быть читаем ручкой.
+    // Пины: живые job-результаты **и** адреса, на которые ссылаются per-run манифесты приёмки —
+    // у receipt'а и его CAS-копии один адрес (см. `referencedArtifactShas`).
+    setReceiptPinProvider(()=>{
+      const pins=screenshots.liveReceiptShas();
+      try { for(const sha of referencedArtifactShas(new AcceptanceRepo(db))) pins.add(sha); }
+      catch { /* приёмка выключена или таблиц ещё нет — пины живых джоб остаются в силе */ }
+      return pins;
+    });
+    await gcReceipts(dataDir);
     const server=Bun.serve({hostname:host,port,fetch:createHandler(db,{ready:()=>true,serveDist,dataDir,reuseGateMode:resolveReuseGateMode(process.env.REUSE_GATE),validateDisabled:process.env.EASYUI_VALIDATE_DISABLED==="1",acceptanceDisabled:process.env.EASYUI_ACCEPTANCE_DISABLED==="1",spacingResolverV2Disabled:process.env.EASYUI_THEME_RESOLVER_V2_DISABLED==="1",legacyBasicAuth:resolveLegacyBasicAuthEnv(),publicOrigin,screenshots,visual,...(acceptance?{acceptance}:{})})});
     return {server,db};
   } catch(error) { db.close(); throw error; }

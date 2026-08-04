@@ -235,6 +235,9 @@ function orderedCases(): [string, Case][] {
     ["POST /api/components/{id}/versions/{version}/screenshot", { run: () => call("POST", "/api/components/contract-stars/versions/1/screenshot", { viewport: { width: 320, height: 480 } }), expected: err(501, "screenshot_unavailable") }],
     ["POST /api/components/{id}/head/screenshot", { run: () => call("POST", "/api/components/contract-stars/head/screenshot", { viewport: { width: 320, height: 480 } }), expected: err(501, "screenshot_unavailable") }],
     ["GET /api/screenshot-jobs/{jobId}", { run: () => call("GET", "/api/screenshot-jobs/nope"), expected: err(404, "job_not_found") }],
+    // Receipt существует только у снятого кадра (R5); в контрактном стенде capture-сервиса нет —
+    // проверяется типизированный конверт отказа, как и у прочих screenshot-ручек.
+    ["GET /api/screenshot-jobs/{jobId}/receipt", { run: () => call("GET", "/api/screenshot-jobs/nope/receipt"), expected: err(404, "receipt_not_found") }],
     // Visual references (DB-backed happy paths; check requires the capture pipeline)
     ["PUT /api/visual-references", { run: () => call("PUT", "/api/visual-references", { fingerprint: { scope: "prototype-screen", prototypeId: "contract-proto", screenId: state.screenId, refRevision: 1, viewport: { width: 320, height: 480 }, deviceScaleFactor: 1, theme: "light" }, assetId: state.assetId }), expected: ok() }],
     ["GET /api/visual-references", { run: () => call("GET", "/api/visual-references?scope=prototype-screen"), expected: ok() }],
