@@ -138,6 +138,7 @@ function disabledCache(reason) {
     async write() { },
     async receipt() { },
     async link() { },
+    async links() { return []; },
     learn() { },
     summary() { return { status: "off", reason }; },
     line() { return `cache: off (${reason})`; },
@@ -329,13 +330,22 @@ export async function openCache({ dir, baseUrl, user, refresh = false, refreshRe
       const file = join(root, "receipts", safeSegment(verb, "verb"), `${safeSegment(key, "key")}.json`);
       await store(file, `${JSON.stringify({ schema: CACHE_SCHEMA, verb, key, at: new Date(now()).toISOString(), cache: this.summary(), ...payload }, null, 2)}\n`);
     },
+    /**
+     * Накопленные связи в порядке записи. Это **подсказка** («по какому кандидату уже шла
+     * приёмка»), а не источник истины: состояние ранов живёт на сервере и читается сетевым
+     * запросом (план 2026-08-04 §W2b, C13). Битый/отсутствующий файл — пустой список.
+     */
+    async links() {
+      const raw = await readVerified(linksPath);
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw.toString("utf8"));
+        return Array.isArray(parsed?.links) ? parsed.links : [];
+      } catch { return []; }
+    },
     /** Связи candidate → run → cases → artifacts → report: навигация агента по накопленному. */
     async link(record) {
-      let links = [];
-      const raw = await readVerified(linksPath);
-      if (raw) {
-        try { const parsed = JSON.parse(raw.toString("utf8")); if (Array.isArray(parsed?.links)) links = parsed.links; } catch { links = []; }
-      }
+      const links = await this.links();
       links.push({ at: new Date(now()).toISOString(), ...record });
       await store(linksPath, `${JSON.stringify({ schema: CACHE_SCHEMA, links: links.slice(-LINKS_LIMIT) }, null, 2)}\n`);
     },

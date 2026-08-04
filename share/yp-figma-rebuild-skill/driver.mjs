@@ -430,7 +430,10 @@ const isTransient = (status) => status >= 500;
  * раны не кэшируются никогда, поэтому poll идущего рана по-прежнему ходит на сервер.
  */
 async function call(method, path, body, options = {}) {
-  const hit = await cache.read(method, path, body);
+  // `noCache` — прямой сетевой запрос мимо чтения кэша (запись при этом обновляется). Нужен
+  // там, где ответ мутабелен и «свежий по TTL» ≠ «актуальный»: автовыбор связки promote читает
+  // раны кандидата только с сервера (план 2026-08-04 §W2b, C22).
+  const hit = options.noCache === true ? null : await cache.read(method, path, body);
   if (hit) return { status: hit.status, json: hit.json ?? null };
   // Reads are retried by default; writes only when the caller opts in (snap enqueue).
   const retries = options.retries ?? (method === "GET" ? RETRY_BACKOFF_MS.length : 0);
@@ -2067,6 +2070,83 @@ async function resolvePromoteAcceptance(id, meta, receipt, flags, capabilities) 
   return { candidateId, acceptanceRunId: runId, candidate, run };
 }
 
+/**
+ * Автовыбор связки promote без флагов (план 2026-08-04 §W2b, остаток P0-1).
+ *
+ * Правила, которые здесь важнее кода:
+ *
+ * 1. **Раны читаются с сервера, а не из кэша.** `component-candidates/:id` кэшируется как `fresh`
+ *    (мутабельные `status`/`runs[]`), и «свежий по TTL» ответ вполне может не знать о ране,
+ *    поставленном минуту назад. Автовыбор ходит `noCache` — иначе тёплый кэш молча превращал бы
+ *    приёмленную сборку в публикацию без provenance (C22).
+ * 2. **Скалярный `candidate.acceptanceRunId` источником не является** — это последний
+ *    *поставленный* ран, а не принятый (C4). Выбор идёт только по `runs[].promotionEligible`,
+ *    который сервер посчитал профильным предикатом promote.
+ * 3. **link-store — подсказка, а не свидетельство** (C13): он лишь называет кандидата, по
+ *    которому уже шла приёмка; всё, что решает исход, перечитывается с сервера, а несовпадение
+ *    подсказки с головой просто уводит на идемпотентный `POST …/candidates`.
+ * 4. **Автовыбор не превращает `promote` в ошибку** — кроме неоднозначности: 0 подходящих ранов
+ *    даёт прежнее поведение (публикация без линковки + warning), ≥2 — терминальную локальную
+ *    ошибку до POST, потому что «взять первый» приписало бы версии произвольное свидетельство.
+ */
+async function autoSelectPromoteAcceptance(id, meta, receipt, capabilities) {
+  if (capabilities.features?.acceptanceMatrix !== true) return null;
+  const describesHead = (candidate) => Boolean(candidate)
+    && candidate.componentId === id
+    && candidate.sourceHash === receipt.sourceHash
+    && candidate.rev === meta.headRev;
+  const readView = async (candidateId) => {
+    if (typeof candidateId !== "string" || candidateId === "") return null;
+    const response = await call("GET", `/component-candidates/${encodeURIComponent(candidateId)}`, undefined, { noCache: true });
+    return response.status === 200 ? response.json : null;
+  };
+
+  // Подсказка link-store: имя кандидата, по которому эта машина уже гоняла приёмку. Всё
+  // остальное (в том числе «а он вообще про эту сборку?») проверяется по свежему ответу.
+  let candidate = null;
+  const links = await cache.links();
+  for (let index = links.length - 1; index >= 0 && candidate === null; index -= 1) {
+    const record = links[index];
+    if (record?.componentId !== id) continue;
+    const view = await readView(record.candidateId);
+    if (describesHead(view)) candidate = view;
+  }
+  if (candidate === null) {
+    // Идемпотентный кандидат головы: повтор на неизменённом билде возвращает ту же строку
+    // (`cached: true`) и не сбрасывает её статус — это чтение состояния, а не новая сборка.
+    const created = await call("POST", `/components/${encodeURIComponent(id)}/candidates`, {});
+    if (created.status !== 200 && created.status !== 201) {
+      out(`warning: acceptance auto-link skipped: could not read the head candidate of ${id} (${created.status}${errorCode(created) ? ` ${errorCode(created)}` : ""}); promoting without an acceptance link`);
+      return null;
+    }
+    candidate = await readView(created.json?.candidateId);
+  }
+  if (!describesHead(candidate)) {
+    out(`warning: acceptance auto-link skipped: no candidate describes the validated head (rev ${meta.headRev}); promoting without an acceptance link`);
+    return null;
+  }
+  const runs = Array.isArray(candidate.runs) ? candidate.runs : [];
+  const eligible = runs.filter((run) => run?.promotionEligible === true && typeof run.runId === "string");
+  if (eligible.length === 0) {
+    out(`warning: no promotion-eligible acceptance run for candidate ${candidate.candidateId} (${runs.length} run(s) known); promoting without an acceptance link — run 'driver.mjs accept ${id}' to build one`);
+    return null;
+  }
+  if (eligible.length > 1) {
+    throw new CliError([
+      `promote cannot pick an acceptance run for ${id}: ${eligible.length} runs of candidate ${candidate.candidateId} are promotion-eligible; pass the one you mean with --candidate ${candidate.candidateId} --acceptance-run <runId>:`,
+      ...eligible.map((run) => `  ${run.runId} status=${run.status ?? "-"} policy=${run.policyProfileId ?? "-"} finished=${run.finishedAt ?? "-"}`),
+    ].join("\n"));
+  }
+  const [run] = eligible;
+  return {
+    candidateId: candidate.candidateId,
+    acceptanceRunId: run.runId,
+    candidate,
+    run: { runId: run.runId, status: run.status, policy: { id: run.policyProfileId } },
+    auto: true,
+  };
+}
+
 /** Строка выбранной связки: что именно приписывается будущей версии (печатается до мутации). */
 export function promoteLinkLine(link) {
   const candidate = link.candidate
@@ -2075,7 +2155,7 @@ export function promoteLinkLine(link) {
   const run = link.run
     ? `${link.run.runId} (${link.run.status}${link.run.policy?.id ? `, policy ${link.run.policy.id}` : ""})`
     : link.acceptanceRunId ?? "-";
-  return `acceptance link: candidate=${candidate} run=${run}`;
+  return `acceptance link: candidate=${candidate} run=${run}${link.auto ? " (auto-selected from the candidate runs)" : ""}`;
 }
 
 async function runPromote(args, flags) {
@@ -2089,7 +2169,10 @@ async function runPromote(args, flags) {
   if (!meta) throw new CliError(`components/${id} not found; hint: run 'driver.mjs get components'`);
   const receipt = await requireOk("validate", await call("POST", `/components/${encoded}/validate`));
   for (const warning of receipt.warnings ?? []) out(`warning: ${warning}`);
-  const link = await resolvePromoteAcceptance(id, meta, receipt, flags, capabilities);
+  // Явные флаги — источник истины; без них связка ищется автоматически (W2b) и её отсутствие
+  // остаётся штатным исходом: promote публикует голову без линковки, как и раньше.
+  const link = await resolvePromoteAcceptance(id, meta, receipt, flags, capabilities)
+    ?? await autoSelectPromoteAcceptance(id, meta, receipt, capabilities);
   // Выбранная связка печатается **до** мутации: читатель лога видит, какой кандидат и какой ран
   // приписываются версии, ещё до того, как версия появилась.
   if (link) out(promoteLinkLine(link));
@@ -2132,7 +2215,9 @@ async function runPromote(args, flags) {
       `superseded: ${result.superseded?.length ? result.superseded.map((version) => `v${version}`).join(", ") : "-"}${result.cached ? " (warm candidate: no recompile)" : ""}`,
       ...(result.warnings ?? []).map((warning) => `warning: ${warning}`),
     ],
-    { command: "promote", id, designSystem: meta.designSystem, ...result, candidateId, acceptanceRunId },
+    // `acceptanceLinkSource` отвечает на вопрос «откуда взялась доказательная база версии»:
+    // флаги агента, автовыбор по runs[] кандидата или её нет вовсе (W2b).
+    { command: "promote", id, designSystem: meta.designSystem, ...result, candidateId, acceptanceRunId, acceptanceLinkSource: link ? (link.auto ? "auto" : "flags") : "none" },
   );
 }
 

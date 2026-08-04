@@ -56,6 +56,7 @@ declare module "*/author/cache.mjs" {
     ): Promise<void>;
     receipt(verb: string, key: string, payload: Record<string, unknown>): Promise<void>;
     link(record: Record<string, unknown>): Promise<void>;
+    links(): Promise<Record<string, unknown>[]>;
     learn(body: unknown): Promise<void> | void;
     summary(): DriverCacheSummary;
     line(): string;

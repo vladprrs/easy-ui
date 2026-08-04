@@ -1793,6 +1793,111 @@ describe("author driver promote linking (W2a)", () => {
   }, 30_000);
 });
 
+/**
+ * План 2026-08-04 §W2b: автовыбор связки promote без флагов. Проверяется ровно то, что делает
+ * клиент: откуда он берёт раны (сеть, не кэш), какой из них выбирает (`promotionEligible`, не
+ * скалярный `acceptanceRunId`) и что делает при 0 и ≥2 подходящих.
+ */
+const RUN_SECOND = "acc_00000000-0000-0000-0000-000000000022";
+const RUN_FAILED = "acc_00000000-0000-0000-0000-000000000033";
+
+type StubRunEntry = { runId: string; status: string; policyProfileId: string; caseSetId: string | null; finishedAt: string | null; promotionEligible: boolean };
+
+function stubRun(runId: string, overrides: Partial<StubRunEntry> = {}): StubRunEntry {
+  return { runId, status: "pass", policyProfileId: "pixel-strict-v1", caseSetId: "cset_x", finishedAt: "2026-08-04T10:00:00.000Z", promotionEligible: true, ...overrides };
+}
+
+/** Кандидат головы с подставляемым `runs[]`: список меняется между вызовами драйвера. */
+function autoLinkRoutes(state: { runs: StubRunEntry[]; scalarRunId?: string | null }) {
+  return {
+    ...promoteStubRoutes(),
+    "POST /api/components/linked/candidates": () => ({ json: { candidateId: CANDIDATE, componentId: "linked", rev: 2, sourceHash: SOURCE_HASH, cached: true, warnings: [] } }),
+    [`GET /api/component-candidates/${CANDIDATE}`]: () => ({
+      json: {
+        candidateId: CANDIDATE, componentId: "linked", rev: 2, sourceHash: SOURCE_HASH, status: "validated",
+        // Скалярное поле — «последний поставленный» ран: автовыбор обязан его игнорировать (C4).
+        acceptanceRunId: state.scalarRunId === undefined ? RUN_FAILED : state.scalarRunId,
+        runs: state.runs,
+      },
+    }),
+  } as Record<string, (body: Record<string, unknown> | null) => StubReply>;
+}
+
+describe("author driver promote auto-link (W2b)", () => {
+  test("a single promotion-eligible run is picked without flags and reaches the promote body", async () => {
+    const state = { runs: [stubRun(RUN)] };
+    const { api, calls, promotes } = await stubApi(autoLinkRoutes(state));
+    const result = await run(api, ["promote", "linked"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(`acceptance link: candidate=${CANDIDATE} (rev 2, validated) run=${RUN} (pass, policy pixel-strict-v1) (auto-selected from the candidate runs)`);
+    expect(result.stdout.indexOf("acceptance link:")).toBeLessThan(result.stdout.indexOf("promoted linked version"));
+    expect(promotes()[0]?.body).toMatchObject({ candidateId: CANDIDATE, acceptanceRunId: RUN });
+    // Кандидат головы читается идемпотентным POST, раны — сетевым GET candidate-view.
+    expect(calls.some((call) => call.method === "POST" && call.path === "/api/components/linked/candidates")).toBe(true);
+    expect(calls.some((call) => call.method === "GET" && call.path === `/api/component-candidates/${CANDIDATE}`)).toBe(true);
+
+    const json = await run(api, ["promote", "linked", "--json"]);
+    expect(JSON.parse(json.stdout)).toMatchObject({ command: "promote", candidateId: CANDIDATE, acceptanceRunId: RUN, acceptanceLinkSource: "auto" });
+  }, 30_000);
+
+  test("a warm cache with a stale candidate-view does not hide a fresh run", async () => {
+    const state: { runs: StubRunEntry[] } = { runs: [] };
+    const { api, promotes } = await stubApi(autoLinkRoutes(state));
+    const cacheDir = resolve(await testDirectory(), "cache");
+    // Первый прогон греет кэш кандидатом без ранов (fresh-TTL — 5 минут).
+    const cold = await run(api, ["promote", "linked", "--cache-dir", cacheDir]);
+    expect(cold.exitCode).toBe(0);
+    expect(Object.keys(promotes()[0]?.body ?? {})).not.toContain("candidateId");
+    // Ран появился после прогрева: тёплая запись про него не знает, а автовыбор — обязан.
+    state.runs = [stubRun(RUN)];
+    const warm = await run(api, ["promote", "linked", "--cache-dir", cacheDir]);
+    expect(warm.exitCode).toBe(0);
+    expect(promotes()[1]?.body).toMatchObject({ candidateId: CANDIDATE, acceptanceRunId: RUN });
+  }, 30_000);
+
+  test("no eligible run keeps promote unlinked with a warning; the scalar acceptanceRunId is not a source", async () => {
+    const state = { runs: [stubRun(RUN_FAILED, { status: "fail", promotionEligible: false })], scalarRunId: RUN_FAILED };
+    const { api, promotes } = await stubApi(autoLinkRoutes(state));
+    const result = await run(api, ["promote", "linked"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("no promotion-eligible acceptance run");
+    expect(result.stdout).toContain("acceptance: candidate=- run=-");
+    expect(Object.keys(promotes()[0]?.body ?? {})).not.toContain("candidateId");
+    expect(Object.keys(promotes()[0]?.body ?? {})).not.toContain("acceptanceRunId");
+  }, 30_000);
+
+  test("a failed run next to an eligible one is not picked", async () => {
+    const state = { runs: [stubRun(RUN_FAILED, { status: "fail", promotionEligible: false }), stubRun(RUN)] };
+    const { api, promotes } = await stubApi(autoLinkRoutes(state));
+    const result = await run(api, ["promote", "linked"]);
+    expect(result.exitCode).toBe(0);
+    expect(promotes()[0]?.body).toMatchObject({ candidateId: CANDIDATE, acceptanceRunId: RUN });
+  }, 30_000);
+
+  test("two eligible runs are an ambiguity: local error with the list, zero promote POSTs", async () => {
+    const state = { runs: [stubRun(RUN), stubRun(RUN_SECOND, { policyProfileId: "default-v1", finishedAt: "2026-08-04T11:00:00.000Z" })] };
+    const { api, promotes } = await stubApi(autoLinkRoutes(state));
+    const result = await run(api, ["promote", "linked"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("2 runs of candidate");
+    expect(result.stderr).toContain(`${RUN} status=pass policy=pixel-strict-v1 finished=2026-08-04T10:00:00.000Z`);
+    expect(result.stderr).toContain(`${RUN_SECOND} status=pass policy=default-v1 finished=2026-08-04T11:00:00.000Z`);
+    expect(promotes()).toHaveLength(0);
+  }, 30_000);
+
+  test("without the matrix stack promote does not even look for a candidate", async () => {
+    const routes = {
+      ...autoLinkRoutes({ runs: [stubRun(RUN)] }),
+      "GET /api/capabilities": () => ({ json: { features: { acceptancePromote: true, acceptanceMatrix: false } } }),
+    } as Record<string, (body: Record<string, unknown> | null) => StubReply>;
+    const { api, calls, promotes } = await stubApi(routes);
+    const result = await run(api, ["promote", "linked"]);
+    expect(result.exitCode).toBe(0);
+    expect(calls.some((call) => call.path === "/api/components/linked/candidates")).toBe(false);
+    expect(Object.keys(promotes()[0]?.body ?? {})).not.toContain("candidateId");
+  }, 30_000);
+});
+
 /** План 2026-08-04 §W2a (D5): `--recapture` — скоуп, `--refresh` — выбор случаев. */
 describe("author driver accept refresh algebra (W2a)", () => {
   const acceptRoutes = (refresh: unknown) => ({
