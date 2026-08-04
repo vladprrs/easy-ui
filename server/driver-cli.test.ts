@@ -943,7 +943,9 @@ describe("author driver snap contract", () => {
 
 // --- R8b: capture receipt в CLI (план renderer-contract-2 §5) --------------------------------
 
-type ReceiptFileEntry = { screenId: string; jobId: string | null; receiptSha256: string | null; receipt: Record<string, any> | null };
+/** Разбор receipt-файла в тесте: ровно те поля, которые он проверяет (без `any`). */
+type ReceiptDoc = { receiptVersion: number; renderer: { fingerprint: string }; target: unknown; output: { pngWidth: number; pngHeight: number; pngSha256: string | null } };
+type ReceiptFileEntry = { screenId: string; jobId: string | null; receiptSha256: string | null; receipt: ReceiptDoc | null };
 
 describe("author driver capture receipt", () => {
   test("codes are collected from the job failure, the receipt verdict and the renderer drift without duplicates", () => {
@@ -1024,7 +1026,7 @@ describe("author driver capture receipt", () => {
     expect(payload.receiptSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(payload.renderer.rendererFingerprint).toMatch(/^[0-9a-f]{64}$/);
     expect(payload.codes).toEqual([]);
-    const file = JSON.parse(await Bun.file(receiptPath).text()) as { command: string; componentId: string; receiptSha256: string; receipt: Record<string, any> };
+    const file = JSON.parse(await Bun.file(receiptPath).text()) as { command: string; componentId: string; receiptSha256: string; receipt: ReceiptDoc };
     expect(file).toMatchObject({ command: "preview", componentId: "stars", receiptSha256: payload.receiptSha256 });
     expect(file.receipt.target).toMatchObject({ kind: "component", componentId: "stars", version: 1 });
     // `pngSha256` считает воркер; стаб теста его не присылает, и receipt честно пишет null.
