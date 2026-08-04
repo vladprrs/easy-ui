@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// easy-ui authoring driver. Zero dependencies (Node 18+); `shoot` needs playwright.
+// easy-ui authoring driver. Zero dependencies (Node 18+): любая съёмка идёт через серверный
+// рендерер (план renderer-contract-2 §5 R8a — один рендерер, локального браузера в драйвере нет).
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -18,7 +19,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -217,7 +218,8 @@ export const flagSpecs = Object.freeze({
   },
   get: { ...jsonFlag },
   delete: { ...jsonFlag },
-  shoot: { ...jsonFlag },
+  // R8a: `shoot` — алиас `snap --all-screens`, поэтому и контракт флагов у него снаповский.
+  shoot: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags },
   snap: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags },
   preview: {
     ...jsonFlag,
@@ -333,6 +335,11 @@ export function parseArgs(argv) {
       continue;
     }
     const spec = specs[token];
+    // R8a: escape-hatch локального браузера не сохраняется — вместо «unknown flag» объясняем,
+    // почему его нет, чтобы старый сценарий не искал опечатку.
+    if (!spec && token === "--local-browser") {
+      invalid("--local-browser is gone: every capture runs on the server renderer (GET /api/capabilities → renderer)");
+    }
     if (!spec) invalid(`unknown flag for ${commandForm}: ${token}`);
     if (seen.has(token)) invalid(`duplicate flag: ${token}`);
     seen.add(token);
@@ -1176,8 +1183,35 @@ export function buildSnapPlan(draft, flags = {}) {
   });
 }
 
-async function runSnap(args, flags) {
+/**
+ * Предполётная сверка рендерера (R8a). Съёмка идёт только на сервере, поэтому агент обязан
+ * знать, **чем** сняли: сборка без манифеста (`source: "fallback"`) рисует локально
+ * установленным браузером, и её кадры несопоставимы с эталонами прода. Проверка мягкая —
+ * старый сервер без секции `renderer` и недоступные capabilities не должны валить съёмку.
+ */
+export function rendererPreflightWarning(capabilities) {
+  const renderer = capabilities?.renderer;
+  if (!renderer) return "server capabilities carry no renderer section: build predates the renderer contract, frames are not comparable to baselines";
+  if (renderer.source === "fallback") {
+    return `server renderer has no manifest (source: fallback, chromium ${renderer.browserVersion ?? "unknown"}): dev build, frames are not comparable to baselines`;
+  }
+  return null;
+}
+
+async function warnOnRenderer() {
+  let capabilities;
+  try {
+    const response = await call("GET", "/capabilities");
+    if (response.status !== 200) return;
+    capabilities = response.json;
+  } catch { return; }
+  const warning = rendererPreflightWarning(capabilities);
+  if (warning) console.error(`renderer: ${warning}`);
+}
+
+async function runSnap(args, flags, command = "snap") {
   const [id, outputDir = `author-shots/${id}`] = args;
+  await warnOnRenderer();
   const draft = await requireOk("draft", await call("GET", `/prototypes/${encodeURIComponent(id)}/draft`));
   let plan;
   try { plan = buildSnapPlan(draft, flags); }
@@ -1195,7 +1229,7 @@ async function runSnap(args, flags) {
   const exitCode = snapExitCode(rows);
   if (jsonMode) {
     report(null, {
-      command: "snap", prototypeId: id, outputDir, rev: draft.rev, exitCode,
+      command, prototypeId: id, outputDir, rev: draft.rev, exitCode,
       // Применённые значения: сервер по умолчанию снимает dsf 1 в светлой теме.
       dsf: flags.dsf ?? 1, theme: flags.theme ?? "light", screens: rows,
     });
@@ -1305,6 +1339,7 @@ async function finishPreviewProbe(id, result, { flags, viewport, deviceScaleFact
  * до постановки, чтобы kill-switch не маскировался под странный 404.
  */
 async function runPreview(args, flags) {
+  await warnOnRenderer();
   const [id, propsPath] = args;
   const draft = flags.rev === "head-draft";
   const probe = flags.probe === "geometry";
@@ -1323,7 +1358,7 @@ async function runPreview(args, flags) {
   }
   if (!draft) {
     if (typeof meta.publishedVersion !== "number") {
-      throw new CliError(`component ${id} has no published version; shoot the saved draft with --rev head-draft or publish first (driver.mjs component ...)`);
+      throw new CliError(`component ${id} has no published version; render the saved draft with --rev head-draft or publish first (driver.mjs component ...)`);
     }
     version = meta.publishedVersion;
   }
@@ -1528,6 +1563,7 @@ async function runDiff(args, flags) {
 }
 
 async function runBaseline(args, flags) {
+  await warnOnRenderer();
   const [id, outputDir] = args;
   const encoded = encodeURIComponent(id);
   const draftResponse = await call("GET", `/prototypes/${encoded}/draft`);
@@ -1588,6 +1624,7 @@ function checkRow(member, baselineRev, run) {
 }
 
 async function runCheck(args, flags) {
+  await warnOnRenderer();
   const [id] = args;
   const encoded = encodeURIComponent(id);
   const baselineResponse = await call("GET", `/visual-baselines/prototypes/${encoded}`);
@@ -2467,31 +2504,10 @@ export async function main(argv = process.argv.slice(2)) {
     await requireOk("delete", await call("DELETE", `/${kind}/${encodeURIComponent(id)}`, body), [204]);
     report(`${spec.verb} ${kind}/${id}`, { command: "delete", kind, id, deleted: true });
   } else if (cmd === "shoot") {
-    const [id, outputDir = `author-shots/${id}`] = args;
-    const draft = await requireOk("draft", await call("GET", `/prototypes/${encodeURIComponent(id)}/draft`));
-    await mkdir(outputDir, { recursive: true });
-    const { chromium } = await import("playwright");
-    const browser = await chromium.launch();
-    await client.login();
-    const context = await browser.newContext({ viewport: { width: 480, height: 800 }, ...(client.legacyAuthorization ? { extraHTTPHeaders: { authorization: client.legacyAuthorization } } : {}) });
-    const [name, value] = client.cookieHeader.split("=", 2);
-    await context.addCookies([{ name, value, url: API.replace(/\/api$/, "") }]);
-    const page = await context.newPage();
-    const errors = [];
-    const shots = [];
-    page.on("pageerror", (error) => errors.push(error.message));
-    page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-    const base = API.replace(/\/api$/, "");
-    for (const screen of draft.doc.screens) {
-      await page.goto(`${base}/p/${id}/s/${screen.id}`, { waitUntil: "networkidle" });
-      await page.screenshot({ path: `${outputDir}/${screen.id}.png` });
-      shots.push({ screenId: screen.id, path: `${outputDir}/${screen.id}.png` });
-      out(`${outputDir}/${screen.id}.png`);
-    }
-    await context.close();
-    await browser.close();
-    if (jsonMode) report(null, { command: "shoot", prototypeId: id, outputDir, shots, errors });
-    if (errors.length) throw new CliError(`browser errors:\n${errors.join("\n")}`);
+    // R8a: одна съёмочная дорога. Локальный playwright снимал другим браузером, другими
+    // шрифтами и без readiness — кадры были несравнимы с эталонами и с приёмкой.
+    console.error("shoot is a deprecated alias of `snap --all-screens` (single server renderer); use snap directly");
+    await runSnap(args, { ...flags, allScreens: true }, "shoot");
   } else if (cmd === "snap") await runSnap(args, flags);
   else if (cmd === "preview") await runPreview(args, flags);
   else if (cmd === "status") await runStatus(args, flags);

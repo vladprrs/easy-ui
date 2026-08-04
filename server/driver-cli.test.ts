@@ -22,6 +22,7 @@ import {
   failingGates,
   readinessExitCode,
   snapExitCode,
+  rendererPreflightWarning,
   summarizeCapture,
   analyzeGeometryGaps,
   buildBaselineMembers,
@@ -889,6 +890,52 @@ describe("author driver snap contract", () => {
     const payload = JSON.parse(result.stdout) as { screens: { screenId: string }[] };
     expect(payload.screens.map((screen) => screen.screenId)).toEqual(["welcome", "second"]);
     expect(stub.calls()).toBe(2);
+  });
+
+  // R8a: локального браузера в драйвере нет — `shoot` снимает тем же серверным рендерером.
+  test("shoot is a deprecated alias of snap --all-screens and never launches a local browser", async () => {
+    const stub = pngRunJob();
+    const { api, directory } = await setup(undefined, stub.runJob);
+    await saveDoc(api, await twoScreenDoc("shoot-alias"));
+    const result = await run(api, ["shoot", "shoot-alias", `${directory}/shots`, "--json"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("deprecated alias");
+    expect(stub.calls()).toBe(2);
+    const payload = JSON.parse(result.stdout) as { command: string; screens: { screenId: string; path: string }[] };
+    expect(payload.command).toBe("shoot");
+    expect(payload.screens.map((screen) => screen.screenId)).toEqual(["welcome", "second"]);
+    expect(await Bun.file(payload.screens[0]!.path).exists()).toBe(true);
+    // Съёмочные флаги у алиаса те же, что у snap.
+    const flagged = await run(api, ["shoot", "shoot-alias", `${directory}/shots`, "--dsf", "2", "--theme", "dark", "--json"]);
+    expect(flagged.exitCode).toBe(0);
+    expect(stub.jobs()[2]).toMatchObject({ deviceScaleFactor: 2, colorScheme: "dark" });
+    // Два полных прогона драйвера (4 капчура) не укладываются в дефолтные 5с bun-таймаута.
+  }, 30_000);
+
+  test("--local-browser is refused with an explanation instead of an unknown-flag message", async () => {
+    const { api, directory } = await setup(undefined, pngRunJob().runJob);
+    const result = await run(api, ["shoot", "shoot-local", `${directory}/shots`, "--local-browser"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--local-browser is gone");
+    expect(result.stderr).toContain("server renderer");
+  });
+
+  // Предполётная сверка (R8a): дев-сервер без renderer-манифеста предупреждает, но не валит съёмку.
+  test("a server renderer without a manifest warns on stderr without changing the exit code", async () => {
+    const stub = pngRunJob();
+    const { api, directory } = await setup(undefined, stub.runJob);
+    await saveDoc(api, await fixture("snap-fallback"));
+    const result = await run(api, ["snap", "snap-fallback", `${directory}/shots`, "--json"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("renderer:");
+    expect(result.stderr).toContain("fallback");
+  });
+
+  test("renderer preflight only speaks up about builds whose frames are not comparable", () => {
+    expect(rendererPreflightWarning({ renderer: { source: "manifest", browserVersion: "149.0.7827.55" } })).toBeNull();
+    expect(rendererPreflightWarning({ renderer: { source: "fallback", browserVersion: "149.0.7827.55" } })).toContain("fallback");
+    expect(rendererPreflightWarning({})).toContain("no renderer section");
+    expect(rendererPreflightWarning(null)).toContain("no renderer section");
   });
 });
 

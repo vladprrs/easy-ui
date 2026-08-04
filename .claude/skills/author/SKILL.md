@@ -560,14 +560,16 @@ curl … -X POST -d '{"kind":"component-gallery","track":"head"}' \
 
 Ссылка `…/p/<id>` из вывода драйвера открывается в браузере под теми же кредами; экраны — `…/p/<id>/s/<screenId>`. Отладка интеракций — добавить `?debug=1`: inspector-панель показывает события с payload, экшены, диффы стейта и статусы шрифтов.
 
-Скриншоты — два способа, **предпочитать `snap`** (серверный рендер, playwright в окружении агента не нужен):
+Скриншоты снимает **только сервер** — один рендерер на всех (тот же браузер, шрифты и readiness-протокол, что у эталонов и приёмки). Локального playwright драйвер не требует и не запускает:
 
 ```bash
 node driver.mjs snap my-flow ./shots                 # server-side: job API + PNG из asset registry
 node driver.mjs snap my-flow ./shots --all-screens --json   # машинный отчёт по всем экранам
-node driver.mjs shoot my-flow ./shots                # локальный playwright, если установлен
+node driver.mjs shoot my-flow ./shots                # deprecated: алиас `snap --all-screens`
 # ./shots/<screenId>.png на каждый экран
 ```
+
+Перед съёмкой драйвер сверяет `GET /api/capabilities` → секцию `renderer` и пишет на stderr предупреждение, если сборка сервера без renderer-манифеста (`source: "fallback"`, dev-инстанс) или секции нет вовсе — кадры такого сервера несопоставимы с эталонами. Само предупреждение съёмку не прерывает и на exit code не влияет.
 
 **Exit codes `snap`:**
 
@@ -663,7 +665,7 @@ Discovery: `GET /api/openapi.json` (полный OpenAPI 3.1), `GET /api/capabil
 - `$event`/`$if`/`slot` работают по definition custom-компонента; host-типы не получают custom-семантику.
 - `$itemKey` требует `repeat.key`; `$item`/`$index` вне repeat-поддерева — ошибка.
 - Длинные JSON-тела в шелле не инлайнить (бэктики выполняются как command substitution) — писать payload в файл; драйвер избавляет от этого.
-- `shoot` ждёт `networkidle` — на медленном инстансе первый экран может грузить bundle компонента дольше секунды, это нормально. `snap` этим не страдает (серверный readiness-протокол сам ждёт шрифты и изображения), но очередь скриншотов на сервере ограничена (429 при переполнении — повторить).
+- Ждать загрузки самому не нужно: серверный readiness-протокол `snap` сам дожидается шрифтов и изображений. Очередь скриншотов на сервере ограничена (429 при переполнении — повторить).
 
 ## Troubleshooting
 
@@ -675,6 +677,7 @@ Discovery: `GET /api/openapi.json` (полный OpenAPI 3.1), `GET /api/capabil
 - `publish failed (422 validation_failed): ...` + `issue /source: Type check failed` (компонент) — читать вывод tsc в issue; save такие ошибки не ловит.
 - `publish failed (422) ... event_schema_not_serializable` — typed-схема события содержит transform/preprocess/custom-логику; упростить до чистых object/string/number/enum-схем.
 - `save failed (409)` — параллельное редактирование того же id (CAS-конфликт); повторить запуск драйвера (он перечитает `headRev`).
-- `shoot` падает с `Cannot find package 'playwright'` — использовать `snap` (серверные скриншоты, playwright не нужен) либо смотреть прототип в браузере по ссылке player.
+- `unknown flag ... --local-browser` / ожидание локального playwright — локальной съёмки в драйвере больше нет (один рендерер, план renderer-contract-2 R8a): снимает `snap`, `shoot` — его алиас. Если сервер снимать не может, смотреть прототип в браузере по ссылке player.
+- На stderr `renderer: server renderer has no manifest (source: fallback…)` — снимает dev-сборка своим браузером; PNG получите, но сравнивать их с эталонами/приёмкой прода нельзя.
 - `snap`/`preview` вернул 501 `screenshot_unavailable` — инстанс без `SERVE_DIST`/chromium (например голый локальный `server:dev`); на проде работает. `429 queue_full` у `preview` ретраится драйвером самостоятельно.
 - Экран «рендерится, но пусто/не так» — `node driver.mjs status <id> <screen>` (пины/бандлы/маршрут) и `?debug=1` в плеере (события, payload, диффы стейта).

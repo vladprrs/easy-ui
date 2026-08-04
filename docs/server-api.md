@@ -1007,6 +1007,7 @@ Cursor — каноническая строка `<ISO-8601>~<asset_id>`, нап
 | `POST /components/:id/versions/:version/screenshot` | `{props?\|exampleName?, viewport, deviceScaleFactor?, theme?, waitForFonts?, probe?:"geometry"}` → `202 {jobId}`; `props` и `exampleName` взаимоисключающие |
 | `POST /components/:id/head/screenshot` | То же тело; снимает сохранённую **неопубликованную** head-ревизию → `202 {jobId}`. См. [Draft-preview](#draft-preview-head-ревизии-компонента) |
 | `GET /screenshot-jobs/:jobId` | `{status: queued\|running\|done\|error, result?, error?}` |
+| `GET /screenshot-jobs/:jobId/receipt` | `{receiptSha256, receipt}` — capture receipt кадра, см. [Capture receipt](#capture-receipt-волна-r5-план-2026-08-03-renderer-contract-2) |
 
 Прототипная постановка additively возвращает `components[]` — разрешённые на момент enqueue пины (`{id,name,version,bundleHash}`). Для [head-tracking](#head-tracking-служебных-прототипов) дока это единственный момент, когда клиент узнаёт, какие версии компонентов реально пойдут в кадр. Постановка требует владения ресурсом; `GET /screenshot-jobs/:jobId` перепроверяет доступ по цели джобы — read-доступ к прототипу для прототипных и владение компонентом для компонентных, включая draft-джобы.
 
@@ -1959,3 +1960,93 @@ elementKey }`.
 (было: такой отказ классифицировался как `subprocess_error`). Терминальные исходы теперь два —
 `renderer_mismatch` и `surface_missing`: повтор капчура даёт ровно ту же пустую страницу, и бюджет
 `maxInfraRetries` приёмки на него больше не тратится.
+
+### Capture receipt (волна R5, план 2026-08-03 renderer-contract-2)
+
+Каждый капчур теперь оставляет **один машиночитаемый документ о происхождении кадра** — и на
+байтовом канале приёмки, и на asset-канале (интерактивный `snap`, кадр визуального рана). До
+волны доказательства ехали только байтовым каналом: кадр в asset-store не нёс ни рендерера, ни
+readiness, ни таймингов.
+
+Receipt собирается в `ScreenshotService` **после воркера и до ветвления по kind**, поэтому его
+получают все режимы. Форма (`src/capture/receipt.ts`, `receiptVersion: 1`):
+
+| Блок | Содержимое |
+|---|---|
+| `renderer` | объявление рендерера (§ [Renderer fingerprint 2.0](#renderer-fingerprint-20-волна-r1-план-2026-08-03-renderer-contract-2)) + `fingerprint`, `provenance`, `observedBrowserVersion`, `drift[]` (typed-коды расхождения) |
+| `target` | `kind`, `componentId`/`prototypeId`, `version`/`rev`, `sourceHash?`, `bundleHash`, `dsMetaVersion`, `propsHash`; неприменимые поля — `null` |
+| `resources` | `fontManifestHash`, `fontFaces[]` (`family/weight/style/assetId/sha256/status/checked/required`), `images[]` (`url/assetId/интринсики/decoded/contentHash`), `themeResources` |
+| `console` | `errors[]`, `warnings[]`, `pageErrors[]` |
+| `output` | `viewport`, `dpr`, `colorScheme`, `pngWidth/pngHeight`, `pngSha256`, `surfaceRect`, `paintMargin?` — **`null` для `probe:"geometry"`**: кадра в этой ветке не существует |
+| `timings` | `navigateMs`, `screenshotMs`, `totalMs`, `readyMs`, `readinessMs` измеряются; пофазовые `fontsMs/imagesMs/networkMs/framesMs/stabilizeMs` объявлены и пока `null` — их источник (`collectReadiness`) публикует только суммарный `elapsedMs`. `null` означает «не измерялось», а не «ноль» |
+| `verdict` | `captureClean`, `codes[]` (типизированные коды readiness), `readinessMet`, `readinessPolicyHash` |
+
+Receipt **детерминирован** для одного входа во всём, кроме `timings` и `renderer.provenance.builtAt`.
+
+**Доступ — только job-scoped:**
+
+| Метод и путь | Ответ |
+|---|---|
+| `GET /screenshot-jobs/:jobId/receipt` | `200 {receiptSha256, receipt}` · `403 forbidden` · `404 receipt_not_found` |
+
+Ручки «по sha» нет и не будет: у content-addressed документа нет владельца (дедуп даёт один адрес
+двум владельцам), поэтому такая ручка была бы cross-owner-каналом — тот же инвариант, что у
+CAS-артефактов приёмки. Авторизация выводится из владения **целью** капчура (read-доступ к
+прототипу либо владение компонентом) и записана рядом со ссылкой, поэтому работает и после того,
+как сама джоба вычищена по `RESULT_TTL` (10 минут): receipt живёт дольше неё. Результат джобы
+дополнительно несёт аддитивное поле `receiptSha256`.
+
+**Хранение.** `<DATA_DIR>/.receipts/<sha[0:2]>/<sha>` плюс два индекса: `jobId → {receiptSha256,
+ownerKey}` (ручка выше) и `assetId → receiptSha256` (пишется **после** ингеста кадра — до него
+assetId не существует; по нему следующая волна резолвит рендерер визуального эталона). Свипер:
+TTL 7 суток, потолок 64 МБ, LRU по mtime, GC на старте процесса и при каждой записи. Пины: адреса
+живых job-результатов и адреса, на которые ссылаются per-run манифесты приёмки, не вытесняются.
+
+**Приёмка.** Гейт `render` кладёт `receipt.json` в CAS приёмки как обычный артефакт случая
+(попадает в per-run манифест и `SHA256SUMS`) и публикует `receiptSha256` в метриках. Копия, а не
+ссылка: у CAS приёмки refcount по строкам ранов, у receipt-стора — TTL/LRU, и связывать два
+контура GC нельзя. Байты копируются дословно, поэтому адрес CAS-копии совпадает с адресом
+receipt'а.
+
+**Kill-switch.** `EASYUI_CAPTURE_RECEIPTS_DISABLED=1` — receipt'ы не собираются и не пишутся;
+кадры при этом снимаются как прежде, `receiptSha256` просто отсутствует, а ручка отвечает `404`.
+Дефолт — receipt'ы включены. Отказ записи receipt'а никогда не валит капчур: он едет
+`runtimeWarnings`-предупреждением (`receipt_store_failed`).
+
+**Цена диска.** Receipt — компактный JSON (порядок ≈1–2 КБ на кадр; факт замера — в §4 плана),
+`.receipts` входит в периметр `du`-приёмки тома вместе с `assets/`, `.acceptance/cas` и
+`.candidates`.
+
+### Один рендерер в харнесе: `shoot` → `snap`, офлайн-съёмка `docker run` (волна R8a, план 2026-08-03 renderer-contract-2)
+
+Локальный браузер из харнеса убран. `.claude/skills/author/driver.mjs` больше не импортирует
+`playwright` и не делает `chromium.launch()`; верб `shoot` сохранён как **deprecated-алиас**
+`snap --all-screens` (та же постановка job'а, тот же readiness-протокол, те же exit codes
+`0/2/1`, тот же `--json`-отчёт с `command: "shoot"`) и печатает о своём статусе строку на stderr.
+Escape-hatch `--local-browser` **не заводится**: два рендерера означали бы два набора шрифтов и
+два набора пикселей, из которых один заведомо несопоставим с эталонами и с приёмкой. Флаг
+распознаётся парсером только затем, чтобы объяснить своё отсутствие вместо «unknown flag».
+
+**Предполётная сверка рендерера.** Перед съёмкой (`snap`, и потому `shoot`) драйвер читает
+`GET /api/capabilities` → секцию `renderer` и пишет на stderr предупреждение, если секции нет
+(сборка старше renderer-контракта) либо `source: "fallback"` (сборка без `renderer-manifest.json`
+рисует локально установленным браузером). Проверка **мягкая**: недоступные capabilities, ответ не-200 и
+любая ошибка сети её глушат, exit code съёмки от неё не зависит — иначе один разъехавшийся
+дев-инстанс блокировал бы работу вместо того, чтобы её пометить.
+
+**Офлайн-съёмка.** Агенту без доступа к проду доступен ровно тот же рендерер — образ поднимается
+локально, и драйвер ходит в него:
+
+```bash
+docker run -d --name easyui-offline --shm-size=1g -p 127.0.0.1:8787:8787 \
+  -e ADMIN_NAME='Offline Admin' -e ADMIN_PASSWORD='offline-admin-password' \
+  -e PUBLIC_ORIGIN=http://127.0.0.1:8787 ghcr.io/vladprrs/easy-ui:<sha>
+EASYUI_API=http://127.0.0.1:8787/api EASYUI_USERNAME='Offline Admin' \
+  EASYUI_PASSWORD='offline-admin-password' \
+  node .claude/skills/author/driver.mjs snap my-flow ./shots --json
+```
+
+Отпечаток такого прогона — отпечаток образа (`docker run <image> cat /app/renderer-manifest.json`
+и `GET /api/capabilities` → `renderer.fingerprint`); кадры сопоставимы с прод-кадрами того же
+digest'а. Автоматическая проверка рецепта (корпус `docker run` против корпуса драйвера по
+`expected.json`) — волна R8b.

@@ -310,7 +310,7 @@ node driver.mjs design-system my-system "My Design System" "Components for my pr
 
 Ссылка `…/p/<id>` из вывода драйвера открывается в браузере под теми же кредами; экраны — `…/p/<id>/s/<screenId>`. Отладка интеракций — добавить `?debug=1`: inspector-панель показывает события с payload, экшены, диффы стейта и статусы шрифтов.
 
-Скриншоты — **`snap`** (серверный рендер, playwright в окружении агента не нужен):
+Скриншоты снимает **только сервер** — один рендерер на всех (тот же браузер, шрифты и readiness-протокол, что у эталонов и приёмки); локальный playwright не нужен и драйвером не запускается. Верб — **`snap`** (`shoot` — его deprecated-алиас, разворачивается в `snap --all-screens`):
 
 ```bash
 node driver.mjs snap my-flow ./shots                 # server-side: job API + PNG из asset registry
@@ -320,6 +320,8 @@ node driver.mjs snap my-flow ./shots --dsf 2 --theme dark   # ретина-ма�
 ```
 
 Вьюпорт по умолчанию — canvas-aware (canvas экрана, иначе канонический вьюпорт устройства — паритет с `geometry`/`baseline`); переопределяется `--viewport WxH`. PNG = capture-поверхность × dsf; бюджет `surface × dsf² ≤ 16 Mpx` (лимит ингеста ассетов) проверяется до постановки job'а — крупный canvas при `--dsf 2` может не влезть.
+
+Перед съёмкой драйвер сверяет `GET /api/capabilities` → секцию `renderer` и пишет на stderr предупреждение, если у сборки нет renderer-манифеста (`source: "fallback"` — dev-инстанс) или секции нет вовсе: кадры такого сервера несопоставимы с эталонами. Предупреждение съёмку не прерывает и на exit code не влияет.
 
 **Exit codes `snap`:**
 
@@ -522,6 +524,8 @@ node driver.mjs diff my-flow              # head против head-1; `diff my-f
 - `409 component_reuse_required` / `canonical_role_conflict` / `catalog_changed` — терминальный STOP, см. «Главное правило».
 - `snap` вернул 501 `screenshot_unavailable` — инстанс без `SERVE_DIST`/chromium (голый локальный сервер); на проде работает.
 - Джоба съёмки завершилась `renderer_mismatch` — фактический браузер образа разошёлся с объявленным манифестом рендерера; кадра нет, клиентский ретрай не поможет (см. «Отпечаток рендерера»).
+- `unknown flag ... --local-browser` или ожидание локального playwright — локальной съёмки в драйвере нет: снимает серверный рендерер, `shoot` — алиас `snap --all-screens`.
+- На stderr `renderer: server renderer has no manifest (source: fallback…)` — снимает dev-сборка своим браузером; PNG получите, но сравнивать их с эталонами и приёмкой прода нельзя.
 - `409 acceptance_run_in_flight` — у кандидата уже идёт ран приёмки: не ставить второй, дождаться через `accept-status <runId>`.
 - Случай приёмки провалил `readiness` (`met:false`) — кадр снят до того, как доехали шрифт/иконка/ассет: сравнивающие гейты этого случая честно отдают `indeterminate`. Чинить ресурс (тема, реестр ассетов), а не компонент.
 - Экран «рендерится, но пусто/не так» — `node driver.mjs status <id> <screen>` (пины/бандлы/маршрут), `node driver.mjs geometry <id> <screen>` (rect'ы/issues) и `?debug=1` в плеере (события, payload, диффы стейта).

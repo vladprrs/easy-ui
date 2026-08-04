@@ -30,6 +30,7 @@ declare module "*/author/driver.mjs" {
   }
   export const flagSpecs: Readonly<Record<string, Readonly<Record<string, DriverFlagSpec>>>>;
   export function parseArgs(argv: readonly string[]): DriverParsedArgs;
+  export function rendererPreflightWarning(capabilities: unknown): string | null;
   export interface DriverViewport { width: number; height: number }
   export interface DriverSurface {
     screenId: string;
