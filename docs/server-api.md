@@ -548,6 +548,7 @@ Examples-путь больше не хэширует заглушку `CASE_POLI
 | Метод | Путь | Ответ |
 |---|---|---|
 | `PUT` | `/components/:id/case-sets` | `200` `{caseSetId, componentId, designSystem, cases, cached, coverage, warnings}` |
+| `POST` | `/components/:id/case-sets/validate` | `200` `{caseSetId, componentId, designSystem, cases {count, ids}, coverage, warnings, wouldBeCached}` — dry-run без записи |
 | `GET` | `/case-sets/:caseSetId` | `200` строка набора + `manifest` |
 | `GET` | `/case-sets/:caseSetId/coverage` | `200` покрытие измерений |
 
@@ -607,11 +608,29 @@ Examples-путь больше не хэширует заглушку `CASE_POLI
 
 Charset `case.id` совпадает с charset имён записей evidence-архива (защита от zip-slip), поэтому **Figma node id вида `54863:9537` не проходит** — санитизировать на клиенте.
 
-**Отказы `PUT`** (все `422`): `validation_failed` (схема, charset, `cropLineage.rect` с отрицательными координатами или нулевым размером), `case_set_component_mismatch` (манифест описывает другой `componentId`), `case_set_too_large` (больше `limits.acceptanceMaxCasesPerRun` случаев), `duplicate_case_id`, `duplicate_case_props` (одинаковые props без `aliasOf`), `invalid_alias_target` (цель отсутствует, сама является алиасом или имеет другие props), `asset_not_found` (эталона нет в реестре), `crop_rect_out_of_bounds` (применяемый `rect` не помещается в размеры ассета — раньше воркер молча клампил вырезку и сравнивал не то, что объявлено), `crop_lineage_conflict` (`referenceSurface: "content-hug"` вместе с `cropLineage` требует `sourceSurface: "figma-node"`: «ассет уже вырезан» и «вырежи из него» — взаимоисключающие утверждения об одном ассете).
+**Отказы `PUT`** (все `422`): `validation_failed` (схема, charset, `cropLineage.rect` с отрицательными координатами или нулевым размером), `case_set_component_mismatch` (манифест описывает другой `componentId`), `case_set_too_large` (больше `limits.acceptanceMaxCasesPerRun` случаев), `case_set_coverage_too_large` (декартово произведение `dimensions` больше `limits.caseSetMaxExpectedTuples`; считается перемножением длин осей до материализации), `duplicate_case_id`, `duplicate_case_props` (одинаковые props без `aliasOf`), `invalid_alias_target` (цель отсутствует, сама является алиасом или имеет другие props), `asset_not_found` (эталона нет в реестре), `crop_rect_out_of_bounds` (применяемый `rect` не помещается в размеры ассета — раньше воркер молча клампил вырезку и сравнивал не то, что объявлено), `crop_lineage_conflict` (`referenceSurface: "content-hug"` вместе с `cropLineage` требует `sourceSurface: "figma-node"`: «ассет уже вырезан» и «вырежи из него» — взаимоисключающие утверждения об одном ассете).
 
 **Предупреждения, а не отказы** (`warnings[]`): `expectedGeometry`, равный размерам эталона и похожий на padded-канву (`корень + 2×64`) — тот самый способ уронить геометрию 12/12; `referenceSurface: "content-hug"` без `expectedGeometry` (канва будет выведена из измеренного `layoutBounds`); неполные/недекларированные `dims` и расхождение props со схемой опубликованной версии компонента — схема головы законно отличается от последней публикации, а манифест часто готовится до правки компонента.
 
-**Coverage** (`GET /case-sets/:caseSetId/coverage`): `dimensions`, `expectedTuples` (декартово произведение), `presentTuples` (различные tuples из `cases[].dims`), `missingTuples[]` и `duplicates[] {tuple, caseIds}`. Манифест без `dimensions` получает тривиальный отчёт (`expectedTuples: 0`, `presentTuples` = число случаев): фиктивное произведение по неполной Figma-матрице не выдумывается.
+**Coverage** (`GET /case-sets/:caseSetId/coverage`): `dimensions`, `expectedTuples` (декартово произведение), `presentTuples` (различные tuples из `cases[].dims`), `missingTuples[]` (не более **64** ячеек), `missingCount` (полное число незакрытых ячеек), `truncated` и `duplicates[] {tuple, caseIds}`. Считать пропуски по `missingTuples.length` нельзя — на больших семьях список усечён; истина в `missingCount`. Манифест без `dimensions` получает тривиальный отчёт (`expectedTuples: 0`, `presentTuples` = число случаев): фиктивное произведение по неполной Figma-матрице не выдумывается.
+
+**Лимиты набора** (все — в `GET /api/capabilities` → `limits`, волна 2026-08-04 W6):
+
+| Лимит | Значение | Смысл |
+|---|---|---|
+| `caseSetManifestVersion` | `1` | единственная принимаемая версия манифеста |
+| `caseSetMaxCases` | `512` | абсолютный потолок массива `cases` (защита парсера); продуктовый потолок рана — `acceptanceMaxCasesPerRun` |
+| `caseSetMaxDimensions` | `8` | число осей `dimensions` |
+| `caseSetMaxDimensionValues` | `64` | значений в одной оси; **≥ `acceptanceMaxCasesPerRun` by design** — одна каноническая ось обязана вмещать целый ран, иначе семья из 49 состояний шардируется только из-за схемы |
+| `caseSetMaxExpectedTuples` | `4096` | потолок декартова произведения `dimensions`; превышение — `422 case_set_coverage_too_large` |
+
+Потолок произведения проверяется **перемножением длин осей**, до построения хотя бы одной ячейки: 8 осей по 64 значения — это 2.8·10^14 tuples, и материализация такого произведения убила бы процесс. Отказ приходит на обоих путях — при `PUT`/`validate` манифеста и при чтении `/coverage`.
+
+**Sparse-семьи: одна каноническая ось.** Семья, чьи состояния не раскладываются в честную решётку (Figma-матрица с дырами), описывается **одной** осью с перечислением состояний (`dimensions: {state: [… 49 значений …]}`), а не произведением осей с `missingTuples` в половине ячеек. 49 состояний — это один `case-set` и один ран: шардировать вручную не нужно и не следует (два набора = два `cset_`, два рана и ручная сшивка provenance).
+
+**Подсказки схемы, на которых чаще всего спотыкаются.** `componentId` — **обязательное** поле манифеста и обязано совпадать с id в пути (`422 case_set_component_mismatch`). `null` схема не принимает **нигде**: необязательное поле надо **опускать**, а не занулять — `"cropLineage": null` это `422 validation_failed`, а не «нет lineage» (то же верно для `expectedGeometry`, `referenceSurface`, `dims`, `aliasOf`, `source`, `policy`).
+
+**Dry-run: `POST /components/:id/case-sets/validate`.** Те же проверки, что у `PUT`, **без записи**: ответ несёт вычисленный `caseSetId`, `cases {count, ids}` (набор случаев рана в том виде, в каком его построил бы оркестратор — с алиасами и отказом `empty_case_set`), `coverage`, `warnings` и `wouldBeCached` (набор с таким адресом уже опубликован, то есть `PUT` был бы идемпотентным повтором). Гейт возможности — `capabilities.features.caseSetValidate`; авторизация и коды отказов — как у `PUT`. Раньше единственным способом узнать вердикт сервера была мутирующая публикация, и черновой манифест оставлял в базе `cset_`-строку навсегда.
 
 **Ран по набору.** `POST /acceptance-runs {candidateId, caseSetId}` строит случаи из манифеста: `capture` задаёт поверхность съёмки, `referenceAssetId`/`referenceSurface`/`referencePlacement`/`expectedGeometry`/`cropLineage` уезжают в durable-строки случаев, `policy.profile` + `policy.perCase[caseId]` дают `case_policy_hash`, который входит в `case_fingerprint` — правка допуска одного случая инвалидирует reuse ровно его. Эталон и его нормализацию потребляет [визуальный гейт](#минимальный-визуальный-гейт-приёмки-волна-w5a-план-2026-08-03-2-a5); все поля происхождения эталона — входы `comparisonFingerprint`, поэтому их правка даёт **re-diff** (пересравнение сохранённого кадра), а не пересъёмку и не пересчёт по старым метрикам.
 
@@ -2490,3 +2509,74 @@ node scripts/renderer-corpus.mjs --verify --report --bootstrap --truncated \
 `mismatches: 0` — то есть CLI-нога и HTTP-нога сходятся байт-в-байт, а `receipt.output.pngSha256`
 совпадает с sha скачанного PNG. Отличие от docker-прогона — только отпечаток рендерера (`fallback`
 против `manifest`), сам инвариант от него не зависит.
+
+### Тёплый пул воркеров капчура (волна R9a, план 2026-08-03 renderer-contract-2)
+
+До этой волны каждая джоба капчура стоила **отдельного процесса**: спавн node, `chromium.launch()`,
+поднятие deny-proxy, один кадр, `browser.close()`. Запуск браузера — это ~0,5 с чистых накладных
+расходов на каждый кадр, и на матричной приёмке (десятки кадров подряд) они складываются в минуты.
+
+Пул (`scripts/screenshot-pool-worker.mjs`) — **долгоживущий** процесс: один `browser` обслуживает
+много джоб, NDJSON-протокол по stdin/stdout, ответы разбираются по `id` джобы.
+
+**Включение.** `EASYUI_RENDERER_POOL=1`. Выбор имплемента делает сам `RunJob`
+(`server/screenshot/worker-runner.ts`) на каждой джобе, поэтому флаг флипается без пересборки:
+`1` — пул, любое другое значение — доволновой процесс-на-джобу (`spawnPerJobWorker`, остаётся
+каноном и не трогается волной).
+
+**Что пул НЕ меняет — и почему.** Канон поведения капчура — strict-воркер
+`scripts/screenshot-worker.mjs`: готовность, handshake, типизированные коды (R3), поля receipt'а
+(R5). Всё, что влияет на растр и на границу egress, пул **импортирует** из него
+(`buildLaunchArgs`, `CAPTURE_CONTEXT_OPTIONS`, `matchAllowed`, `canonicalStringify`,
+`readyToExpected`, `WORKER_FAILURE_CODES`), а не переписывает: собственного списка launch-аргументов
+у пула нет вовсе (тест `server/screenshot-pool-worker.test.ts`). Детерминизм-args, как и раньше,
+приезжают **в payload джобы** — окружение воркер не читает (T-m17).
+
+**Изоляция джоб.** Браузер общий, **контекст — свой на каждую джобу**, `context.close()` в
+`finally`. Cookie, `localStorage`, service workers и initScript-бутстрап
+(`__EUI_CAPTURE_BOOTSTRAP__`) живут внутри контекста и между джобами не переживают — это
+проверяется живым тестом, а не рассуждением: фикстурная страница логирует то, что видит, **до**
+того как пачкает контекст, и вторая джоба того же браузера обязана увидеть чистый лист и свой
+собственный бутстрап.
+
+**Ресайкл.** Deny-proxy долгоживущий, и его порт зашит в launch-аргументы — поэтому смена
+`captureOrigin` (или набора детерминизм-args) переиспользованием браузера быть не может.
+Причины ресайкла, в порядке проверки:
+
+| Причина | Условие | Зачем |
+|---|---|---|
+| `origin_changed` | `captureOrigin`/`determinismArgs` джобы ≠ те, с которыми запущен браузер | launch-аргументы фиксируют порт deny-proxy и bypass-list |
+| `job_failed` | предыдущая джоба вернула не-`ok` | упавшая джоба могла оставить браузер в неизвестном состоянии |
+| `job_budget` | `jobs >= EASYUI_POOL_MAX_JOBS` (20) | верхняя граница накопленной утечки chromium |
+| `ttl` | возраст браузера `>= EASYUI_POOL_TTL_MS` (10 мин) | то же по времени простоя |
+| `rss` | RSS **дерева** процессов пула `>= EASYUI_POOL_RSS_MB` (1500 МБ) | ~37% `mem_limit: 4g` — ресайкл срабатывает задолго до 75%-бюджета контейнера |
+
+RSS меряется по всему дереву (node пула + chromium + рендереры): память пула — это память
+браузера. `/proc` недоступен ⇒ `null`, и порог RSS просто не участвует в решении.
+
+**Живучесть.** Дедлайн джобы в пуле — событие **процесса**, а не джобы: клиент убивает всю группу
+процессов (как и per-job воркер) и поднимает пул заново на следующей джобе; смерть процесса
+пула отвечает всем ожидающим обычным `{ok:false}`, а не висящим промисом.
+
+#### Замер (K7): cold/warm p95 и RSS
+
+`npm run measure:capture -- --pool 1 --cases 30` (канон `scripts/measure-acceptance.mjs`): скрипт
+поднимает изолированный Bun preview, публикует компонент-пробник и делает N последовательных
+капчуров через публичный API, семплируя RSS дерева процессов сервера. Первый капчур — **cold**,
+остальные — **warm** (p50/p95/max). Вердикт печатается полем `verdict`:
+
+> **прод ON, если warm p95 ≤ 1,0 с/case и устойчивый RSS ≤ 75% `mem_limit`; иначе пул остаётся
+> dev/CI-only — это валидный результат волны, а не провал.**
+
+Факты dev-хоста (8 vCPU, `EASYUI_RENDERER_FLAGS=1`, 30 капчуров, по два прогона на конфигурацию;
+`mem_limit` прода — 4 ГБ, бюджет 75% = 3072 МБ) — в §4 плана.
+
+#### Конкуренция и «один тяжёлый подпроцесс»
+
+Правило family-плана «один тяжёлый подпроцесс» волной **не отменяется**: конкуренция capture в
+`ScreenshotService` остаётся жёсткой единицей, джобы внутри пула исполняются строго
+последовательно, ручка конкуренции волной не вводится. Основание — замер: выигрыш пула получен на
+последовательном потоке (−44% warm p95) без единого нового конкурентного подпроцесса, а поднятие
+конкуренции меняет профиль RSS (каждый параллельный контекст — это ещё один рендерер chromium) и
+обязано мериться отдельно. Если ручка появится, то — отдельным env с дефолтом 1 и собственным
+замером.
