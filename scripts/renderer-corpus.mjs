@@ -23,9 +23,25 @@
  * `--force` (перезаписать расходящиеся sha при `--record` без bump'а `RENDERER_VERSION`),
  * `--server-log` (не глушить stderr сервера).
  *
+ * Режимы волны R2c (CI-гейт, N13):
+ *   `--server-url http://127.0.0.1:8787` — не поднимать свой Bun, а работать с уже запущенным
+ *      сервером (в CI это `docker run` SHA-образа: гейт обязан мерить **образ**, а не dev-хост);
+ *   `--out <file>` — записать host record прогона (renderer + полная матрица) для CI-артефакта;
+ *   `--bootstrap` — если для отпечатка текущего хоста ожиданий в `expected.json` **нет**, прогон
+ *      снимает матрицу, публикует отчёт и НЕ красится (первый пуш не должен блокироваться о
+ *      кросс-хост дельту K2); при наличии ожиданий гейт жёсткий независимо от флага;
+ *   `--adopt <file>` — вмерджить host record (артефакт CI) в `expected.json` без сервера: после
+ *      этого гейт для того отпечатка становится жёстким.
+ *
+ * Per-fingerprint ожидания. Корень `expected.json` — запись dev-хоста (историческая, R2b).
+ * Ожидания любого другого отпечатка живут в `hosts["<source>:<fingerprint>"]` (аддитивно,
+ * та же форма: `pixel`/`outcome`/`sizes` + метаданные). Сверка выбирает запись по отпечатку
+ * текущего сервера: корень, если совпал, иначе `hosts[key]`, иначе — «ожиданий нет».
+ *
  * Инварианты волны (§6): sha-часть `expected.json` меняется **только** вместе с bump'ом
  * `RENDERER_VERSION` — иначе `--record` отказывается перезаписывать расхождение; ожидания
- * подмножества `outcome/` переходят во владение R4.
+ * подмножества `outcome/` переходят во владение R4. `--record --truncated` запрещён: усечённая
+ * матрица не имеет права переставлять метку `truncated` полной записи.
  *
  * Вывод — одна JSON-строка отчёта в stdout; ненулевой exit code при расхождениях.
  */
@@ -48,9 +64,13 @@ const REPORT = args.includes("--report");
 const FORCE = args.includes("--force");
 const KEEP = args.includes("--keep");
 const SERVER_LOG = args.includes("--server-log");
+const BOOTSTRAP = args.includes("--bootstrap");
 const REPEAT = Math.max(1, Number(flag("repeat", "1")));
 const ONLY = new Set(flagAll("fixture"));
 const PORT = Number(flag("port", "4198"));
+const SERVER_URL = flag("server-url", null);
+const OUT = flag("out", null);
+const ADOPT = flag("adopt", null);
 
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const CORPUS_DIR = resolve(ROOT, "e2e/fixtures/renderer-corpus");
@@ -60,9 +80,9 @@ const EXPECTED_PATH = resolve(CORPUS_DIR, "expected.json");
 // Каталог — под уже игнорируемым `.measure-data/` (канон `measure-acceptance.mjs`), поэтому
 // прогон с `--keep` не оставляет мусор в `git status`.
 const DATA_DIR = ".measure-data/renderer-corpus";
-const BASE = `http://127.0.0.1:${PORT}`;
-const ADMIN_NAME = "Corpus Admin";
-const ADMIN_PASSWORD = "corpus-admin-password";
+const BASE = SERVER_URL ?? `http://127.0.0.1:${PORT}`;
+const ADMIN_NAME = process.env.CORPUS_ADMIN_NAME ?? "Corpus Admin";
+const ADMIN_PASSWORD = process.env.CORPUS_ADMIN_PASSWORD ?? "corpus-admin-password";
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -98,7 +118,7 @@ function expectStatus(step, result, allowed) {
 
 async function waitForHealth(child) {
   for (let attempt = 0; attempt < 240; attempt += 1) {
-    if (child.exitCode !== null) throw new Error(`server exited early with code ${child.exitCode}`);
+    if (child !== null && child.exitCode !== null) throw new Error(`server exited early with code ${child.exitCode}`);
     try {
       const response = await fetch(`${BASE}/api/health`);
       if (response.ok) return;
@@ -270,15 +290,26 @@ function diffMatrix(expected, actual, fixtures, variants) {
   return mismatches;
 }
 
-/** Расхождения между двумя проходами одной матрицы — прямая метрика K1. */
-function diffPasses(first, second, fixtures, variants) {
+/**
+ * Расхождения между проходами одной матрицы — прямая метрика K1.
+ *
+ * Сверяются **все пары** проходов, а не только (1,2): при `--repeat 3+` дрейф может проявиться
+ * на третьем проходе (прогрев кэшей раствора, эпизодический GC) и обязан быть виден.
+ */
+function diffPasses(passes, fixtures, variants, quarantined = new Set()) {
   const drift = [];
-  for (const fixture of fixtures) {
-    if (fixture.subset !== "pixel") continue;
-    for (const variant of variants) {
-      const a = first.pixel[fixture.id]?.[variant.id] ?? null;
-      const b = second.pixel[fixture.id]?.[variant.id] ?? null;
-      if (a !== b) drift.push({ key: `${fixture.id}/${variant.id}`, first: a, second: b });
+  for (let i = 0; i < passes.length; i += 1) {
+    for (let j = i + 1; j < passes.length; j += 1) {
+      for (const fixture of fixtures) {
+        if (fixture.subset !== "pixel") continue;
+        if (quarantined.has(fixture.id)) continue;
+        for (const variant of variants) {
+          if (quarantined.has(`${fixture.id}/${variant.id}`)) continue;
+          const a = passes[i].pixel[fixture.id]?.[variant.id] ?? null;
+          const b = passes[j].pixel[fixture.id]?.[variant.id] ?? null;
+          if (a !== b) drift.push({ key: `${fixture.id}/${variant.id}`, passA: i + 1, passB: j + 1, first: a, second: b });
+        }
+      }
     }
   }
   return drift;
@@ -289,61 +320,170 @@ async function readExpected() {
   catch { return null; }
 }
 
+// --- per-fingerprint ожидания -------------------------------------------------------
+
+/** Ключ хоста рендерера в `expected.json.hosts`. */
+const hostKeyOf = (declaration) => `${declaration.source ?? "unknown"}:${declaration.fingerprint ?? "unknown"}`;
+
 /**
- * Запись `expected.json`. Инвариант §6: sha-часть меняется только вместе с bump'ом
- * `RENDERER_VERSION` — расхождение при неизменной версии рендерера отклоняется без `--force`.
+ * Выбирает запись ожиданий под отпечаток текущего сервера.
+ *
+ * Корень документа — историческая dev-запись (R2b) и остаётся авторитетной для своего отпечатка;
+ * все остальные хосты (в первую очередь — образ, `source: "manifest"`) живут в `hosts[key]`.
+ * `null` означает «для этого хоста ожиданий ещё нет» — bootstrap-режим гейта.
  */
-async function writeExpected(previous, actual, renderer, fixtures, variants) {
-  if (previous !== null && !FORCE && previous.rendererVersion === renderer.rendererVersion) {
-    const conflicts = [];
-    for (const fixture of fixtures) {
-      if (fixture.subset !== "pixel") continue;
-      for (const variant of variants) {
-        const want = previous.pixel?.[fixture.id]?.[variant.id];
-        const got = actual.pixel[fixture.id]?.[variant.id];
-        if (want !== undefined && got !== undefined && want !== got) conflicts.push(`${fixture.id}/${variant.id}`);
-      }
-    }
-    if (conflicts.length > 0) {
-      throw new Error(
-        `--record refuses to rewrite ${conflicts.length} sha expectation(s) while RENDERER_VERSION is unchanged `
-        + `(${renderer.rendererVersion}): ${conflicts.slice(0, 5).join(", ")}${conflicts.length > 5 ? ", …" : ""}. `
-        + "Bump RENDERER_VERSION (plan §6) or pass --force deliberately.",
-      );
+function resolveExpectations(document, declaration) {
+  if (document === null) return null;
+  const key = hostKeyOf(declaration);
+  if (document.rendererFingerprint === declaration.fingerprint && document.rendererSource === declaration.source) {
+    return { scope: "root", key, record: document };
+  }
+  const host = document.hosts?.[key];
+  if (host === undefined) return null;
+  // `quarantined` наследуется от корня, если у записи хоста нет собственного списка: карантин —
+  // свойство фикстуры, а не хоста (§4).
+  return { scope: "host", key, record: { quarantined: document.quarantined ?? [], ...host } };
+}
+
+/** Человекочитаемое сравнение отпечатков — печатается ПЕРЕД перечнем расхождений (§5 R2c). */
+function fingerprintDrift(record, declaration) {
+  const fields = [
+    ["rendererFingerprint", record?.rendererFingerprint ?? null, declaration.fingerprint],
+    ["rendererSource", record?.rendererSource ?? null, declaration.source],
+    ["rendererVersion", record?.rendererVersion ?? null, declaration.rendererVersion],
+    ["determinismFlags", record?.determinismFlags ?? null, declaration.determinismFlags],
+  ];
+  const differing = fields.filter(([, want, got]) => want !== got).map(([name]) => name);
+  return { differs: differing.length > 0, differing, fields: Object.fromEntries(fields.map(([name, want, got]) => [name, { expected: want, actual: got }])) };
+}
+
+function printDrift(drift, mismatches) {
+  const lines = [`[corpus] fingerprint drift: ${drift.differs ? `DIFFERENT (${drift.differing.join(", ")})` : "none — same renderer host"}`];
+  for (const [name, pair] of Object.entries(drift.fields)) {
+    lines.push(`[corpus]   ${name.padEnd(20)} expected=${pair.expected} actual=${pair.actual}${pair.expected === pair.actual ? "" : "   <-- differs"}`);
+  }
+  lines.push(drift.differs
+    ? "[corpus]   verdict: расхождения sha ниже — кандидат на кросс-хост дельту (K2), а не регрессию рендерера"
+    : "[corpus]   verdict: отпечаток тот же — расхождения sha ниже суть регрессия детерминизма (K1)");
+  lines.push(`[corpus] mismatches: ${mismatches.length}`);
+  for (const item of mismatches.slice(0, 20)) lines.push(`[corpus]   ${item.key} ${item.kind}${item.want && item.got ? ` want=${String(item.want).slice(0, 16)} got=${String(item.got).slice(0, 16)}` : ""}`);
+  process.stderr.write(`${lines.join("\n")}\n`);
+}
+
+/** Инвариант §6: sha-часть меняется только вместе с bump'ом `RENDERER_VERSION`. */
+function assertRecordAllowed(previousRecord, actual, renderer, fixtures, variants) {
+  if (previousRecord === null || FORCE || previousRecord.rendererVersion !== renderer.rendererVersion) return;
+  const conflicts = [];
+  for (const fixture of fixtures) {
+    if (fixture.subset !== "pixel") continue;
+    for (const variant of variants) {
+      const want = previousRecord.pixel?.[fixture.id]?.[variant.id];
+      const got = actual.pixel[fixture.id]?.[variant.id];
+      if (want !== undefined && got !== undefined && want !== got) conflicts.push(`${fixture.id}/${variant.id}`);
     }
   }
-  const document = {
-    corpusVersion: 1,
+  if (conflicts.length > 0) {
+    throw new Error(
+      `--record refuses to rewrite ${conflicts.length} sha expectation(s) while RENDERER_VERSION is unchanged `
+      + `(${renderer.rendererVersion}): ${conflicts.slice(0, 5).join(", ")}${conflicts.length > 5 ? ", …" : ""}. `
+      + "Bump RENDERER_VERSION (plan §6) or pass --force deliberately.",
+    );
+  }
+}
+
+/** Мерджит снятую матрицу в запись ожиданий (корневую либо хостовую). */
+function mergeRecord(previousRecord, actual, renderer, truncated) {
+  const record = {
     rendererVersion: renderer.rendererVersion,
     rendererSchema: renderer.rendererSchema,
     rendererFingerprint: renderer.fingerprint,
     rendererSource: renderer.source,
     determinismFlags: renderer.determinismFlags,
     recordedAt: new Date().toISOString(),
-    truncated: TRUNCATED,
-    quarantined: previous?.quarantined ?? [],
-    pixel: { ...(previous?.pixel ?? {}) },
-    outcome: { ...(previous?.outcome ?? {}) },
-    sizes: { ...(previous?.sizes ?? {}) },
+    truncated,
+    pixel: { ...(previousRecord?.pixel ?? {}) },
+    outcome: { ...(previousRecord?.outcome ?? {}) },
+    sizes: { ...(previousRecord?.sizes ?? {}) },
   };
-  for (const [id, byVariant] of Object.entries(actual.pixel)) document.pixel[id] = { ...(document.pixel[id] ?? {}), ...byVariant };
-  for (const [id, byVariant] of Object.entries(actual.outcome)) document.outcome[id] = { ...(document.outcome[id] ?? {}), ...byVariant };
-  for (const [id, byVariant] of Object.entries(actual.sizes)) document.sizes[id] = { ...(document.sizes[id] ?? {}), ...byVariant };
+  for (const [id, byVariant] of Object.entries(actual.pixel)) record.pixel[id] = { ...(record.pixel[id] ?? {}), ...byVariant };
+  for (const [id, byVariant] of Object.entries(actual.outcome)) record.outcome[id] = { ...(record.outcome[id] ?? {}), ...byVariant };
+  for (const [id, byVariant] of Object.entries(actual.sizes)) record.sizes[id] = { ...(record.sizes[id] ?? {}), ...byVariant };
+  return record;
+}
+
+/**
+ * Запись `expected.json`. Если отпечаток текущего сервера совпал с корневым (или файла ещё нет) —
+ * пишется корень; иначе запись едет в `hosts["<source>:<fingerprint>"]` **аддитивно**, не трогая
+ * ни корневые dev-ожидания, ни ожидания других хостов.
+ */
+async function writeExpected(previous, resolved, actual, renderer, fixtures, variants, truncated = TRUNCATED) {
+  const previousRecord = resolved?.record ?? null;
+  assertRecordAllowed(previousRecord, actual, renderer, fixtures, variants);
+  const record = mergeRecord(previousRecord, actual, renderer, truncated);
+  const rootScope = previous === null || resolved?.scope === "root";
+  const document = rootScope
+    ? { corpusVersion: 1, ...record, quarantined: previous?.quarantined ?? [], ...(previous?.hosts ? { hosts: previous.hosts } : {}) }
+    : { ...previous, hosts: { ...(previous.hosts ?? {}), [hostKeyOf(renderer)]: record } };
+  // Порядок ключей документа держим стабильным: метаданные → карантин → матрицы → hosts.
+  const ordered = rootScope
+    ? {
+      corpusVersion: 1,
+      rendererVersion: record.rendererVersion, rendererSchema: record.rendererSchema,
+      rendererFingerprint: record.rendererFingerprint, rendererSource: record.rendererSource,
+      determinismFlags: record.determinismFlags, recordedAt: record.recordedAt, truncated: record.truncated,
+      quarantined: document.quarantined,
+      pixel: record.pixel, outcome: record.outcome, sizes: record.sizes,
+      ...(document.hosts ? { hosts: document.hosts } : {}),
+    }
+    : document;
+  await writeFile(EXPECTED_PATH, `${JSON.stringify(ordered, null, 2)}\n`);
+  return ordered;
+}
+
+/**
+ * `--adopt <file>`: вмерджить host record (артефакт CI-прогона корпуса в образе) в `expected.json`
+ * без поднятия сервера. После adopt'а гейт для этого отпечатка становится жёстким.
+ */
+async function adopt(file) {
+  const payload = JSON.parse(await readFile(resolve(process.cwd(), file), "utf8"));
+  const renderer = payload.renderer ?? {};
+  if (!renderer.fingerprint) throw new Error(`${file}: no renderer.fingerprint — not a corpus host record`);
+  if (payload.truncated === true && !FORCE) throw new Error(`${file}: record is truncated — adopt only full 12×20 matrices (or pass --force)`);
+  if ((payload.captureFailures ?? 0) > 0) throw new Error(`${file}: record has ${payload.captureFailures} capture failure(s) — refusing to adopt`);
+  const previous = await readExpected();
+  if (previous === null) throw new Error(`${EXPECTED_PATH} is missing — record the dev baseline first`);
+  const resolved = resolveExpectations(previous, renderer);
+  if (resolved?.scope === "root") throw new Error("adopt target equals the root record — re-record with --record instead");
+  const key = hostKeyOf(renderer);
+  const pseudoFixtures = Object.keys(payload.pixel ?? {}).map((id) => ({ id, subset: "pixel" }));
+  const pseudoVariants = [...new Set(Object.values(payload.pixel ?? {}).flatMap((byVariant) => Object.keys(byVariant)))].map((id) => ({ id }));
+  assertRecordAllowed(resolved?.record ?? null, payload, renderer, pseudoFixtures, pseudoVariants);
+  const record = mergeRecord(resolved?.record ?? null, payload, renderer, payload.truncated === true);
+  const document = { ...previous, hosts: { ...(previous.hosts ?? {}), [key]: record } };
   await writeFile(EXPECTED_PATH, `${JSON.stringify(document, null, 2)}\n`);
-  return document;
+  process.stdout.write(`${JSON.stringify({ mode: "adopt", hostKey: key, pixelFixtures: Object.keys(record.pixel).length, outcomeFixtures: Object.keys(record.outcome).length })}\n`);
 }
 
 // --- main ---------------------------------------------------------------------------
 
 async function main() {
-  try { statSync(resolve(ROOT, "dist/index.html")); }
-  catch { throw new Error("dist/ is missing — run `npm run build` first (capture needs SERVE_DIST)"); }
+  if (ADOPT !== null && ADOPT !== undefined) { await adopt(ADOPT); return; }
+  if (RECORD && TRUNCATED) {
+    throw new Error("--record --truncated is refused: a 12×3 matrix must not relabel the full record as truncated (plan §5 R2c)");
+  }
+  // Внешний сервер (`--server-url`, в CI — контейнер образа) держит собственные dist/DATA_DIR.
+  if (SERVER_URL === null || SERVER_URL === undefined) {
+    try { statSync(resolve(ROOT, "dist/index.html")); }
+    catch { throw new Error("dist/ is missing — run `npm run build` first (capture needs SERVE_DIST)"); }
+  }
 
   const { manifest, fixtures, variants } = await loadManifest();
-  await rm(resolve(ROOT, DATA_DIR), { recursive: true, force: true });
-  await mkdir(resolve(ROOT, DATA_DIR), { recursive: true });
+  if (SERVER_URL === null || SERVER_URL === undefined) {
+    await rm(resolve(ROOT, DATA_DIR), { recursive: true, force: true });
+    await mkdir(resolve(ROOT, DATA_DIR), { recursive: true });
+  }
 
-  const child = spawn(`${process.env.HOME}/.bun/bin/bun`, ["server/main.ts"], {
+  const child = (SERVER_URL !== null && SERVER_URL !== undefined) ? null : spawn(`${process.env.HOME}/.bun/bin/bun`, ["server/main.ts"], {
     cwd: ROOT,
     env: {
       ...process.env,
@@ -360,8 +500,8 @@ async function main() {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout.on("data", () => {});
-  child.stderr.on("data", (chunk) => { if (SERVER_LOG) process.stderr.write(chunk); });
+  child?.stdout.on("data", () => {});
+  child?.stderr.on("data", (chunk) => { if (SERVER_LOG) process.stderr.write(chunk); });
 
   try {
     await waitForHealth(child);
@@ -382,26 +522,49 @@ async function main() {
     const actual = passes[0];
 
     const previous = await readExpected();
+    const resolved = resolveExpectations(previous, declaration);
+    const hostKey = hostKeyOf(declaration);
     const failures = passes.flatMap((pass) => pass.failures);
     let mismatches = [];
     let expectedDocument = previous;
+    let bootstrapped = false;
     if (RECORD && failures.length > 0) {
       throw new Error(`${failures.length} pixel capture(s) produced no PNG — refusing to record: ${JSON.stringify(failures.slice(0, 5))}`);
     }
     if (RECORD) {
-      expectedDocument = await writeExpected(previous, actual, declaration, published, variants);
-    } else {
-      if (previous === null) throw new Error(`${EXPECTED_PATH} is missing — run with --record first`);
-      if (previous.rendererVersion !== declaration.rendererVersion) {
-        throw new Error(`expected.json was recorded for RENDERER_VERSION ${previous.rendererVersion}, server declares ${declaration.rendererVersion} — re-record (plan §6)`);
+      expectedDocument = await writeExpected(previous, resolved, actual, declaration, published, variants);
+    } else if (resolved === null) {
+      // Ожиданий для этого отпечатка ещё нет. Это ровно первый прогон корпуса внутри образа:
+      // fingerprint образа (`source: "manifest"`) не совпадает с dev-фолбэком, по которому
+      // записан корень. Bootstrap-режим публикует матрицу отчётом и НЕ красит гейт; жёстким
+      // гейт становится после `--adopt` снятой записи (плана §5 R2c).
+      if (!BOOTSTRAP) {
+        throw new Error(
+          `no expectations for renderer host ${hostKey} in ${EXPECTED_PATH} `
+          + `(root record is ${previous?.rendererSource ?? "none"}:${previous?.rendererFingerprint ?? "none"}). `
+          + "Run with --bootstrap to publish the matrix instead of failing, then adopt it via --adopt.",
+        );
       }
-      mismatches = diffMatrix(previous, actual, published, variants);
+      bootstrapped = true;
+      process.stderr.write(`[corpus] bootstrap: no expectations for host ${hostKey} — publishing the matrix without gating\n`);
+    } else {
+      if (resolved.record.rendererVersion !== declaration.rendererVersion) {
+        throw new Error(`expectations for host ${hostKey} were recorded for RENDERER_VERSION ${resolved.record.rendererVersion}, server declares ${declaration.rendererVersion} — re-record (plan §6)`);
+      }
+      mismatches = diffMatrix(resolved.record, actual, published, variants);
     }
-    const drift = passes.length > 1 ? diffPasses(passes[0], passes[1], published, variants) : [];
+    const drift = diffPasses(passes, published, variants, new Set((resolved?.record.quarantined ?? expectedDocument?.quarantined) ?? []));
+    const driftReport = resolved === null ? null : fingerprintDrift(resolved.record, declaration);
+    // «fingerprint drift» печатается ПЕРЕД перечнем расхождений: читателю лога сначала нужен
+    // ответ «тот ли это хост», и только потом — список разошедшихся sha (§5 R2c, миноры R2b).
+    if (mismatches.some((item) => item.kind === "sha_mismatch")) printDrift(driftReport, mismatches);
 
     const report = {
       mode: RECORD ? "record" : "verify",
       truncated: TRUNCATED,
+      bootstrap: bootstrapped,
+      expectationScope: RECORD ? (resolved?.scope ?? "root") : (resolved?.scope ?? "none"),
+      hostKey,
       fixtures: published.length,
       variants: variants.length,
       captures: passes.reduce((sum, pass) => sum + pass.captured, 0),
@@ -413,18 +576,26 @@ async function main() {
       msPerCapture: Math.round(passes.reduce((sum, pass) => sum + pass.msTotal, 0) / Math.max(1, passes.reduce((sum, pass) => sum + pass.captured, 0))),
       renderer: declaration,
       quarantined: expectedDocument?.quarantined ?? [],
+      ...(driftReport !== null ? { fingerprintDrift: driftReport } : {}),
       ...(mismatches.length > 0 ? { mismatchDetail: mismatches.slice(0, 20) } : {}),
       ...(drift.length > 0 ? { driftDetail: drift.slice(0, 20) } : {}),
       ...(failures.length > 0 ? { failureDetail: failures.slice(0, 20) } : {}),
       ...(REPORT ? { msByFixture: actual.msByFixture, sizes: actual.sizes } : {}),
     };
     process.stdout.write(`${JSON.stringify(report)}\n`);
+    // Host record прогона для CI-артефакта и soft cross-host гейта: та же форма, что запись
+    // `expected.json`, поэтому файл принимается `--adopt` как есть.
+    if (OUT !== null && OUT !== undefined) {
+      await writeFile(resolve(process.cwd(), OUT), `${JSON.stringify({ ...report, pixel: actual.pixel, outcome: actual.outcome, sizes: actual.sizes }, null, 2)}\n`);
+    }
     if (mismatches.length > 0 || drift.length > 0 || failures.length > 0) process.exitCode = 1;
   } finally {
-    child.kill("SIGTERM");
-    await sleep(500);
-    if (child.exitCode === null) child.kill("SIGKILL");
-    if (!KEEP) await rm(resolve(ROOT, DATA_DIR), { recursive: true, force: true });
+    if (child !== null) {
+      child.kill("SIGTERM");
+      await sleep(500);
+      if (child.exitCode === null) child.kill("SIGKILL");
+      if (!KEEP) await rm(resolve(ROOT, DATA_DIR), { recursive: true, force: true });
+    }
   }
 }
 

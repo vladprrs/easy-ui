@@ -1,9 +1,25 @@
 name: build-image
 
+# Три job'а вместо одного (план `docs/plans/2026-08-03-renderer-contract-2.md` §5 R2c, находка N13):
+#   build          — собирает образ и пушит **только SHA-тег** (кандидат, ещё не `latest`);
+#   renderer-corpus — гоняет корпус рендерера ВНУТРИ этого образа (гейт K1/K2);
+#   deploy         — только после зелёного корпуса: перевешивает `latest` на тот же digest
+#                    (`buildx imagetools create`, без пересборки) и дёргает Dokploy.
+# Красный корпус ⇒ `latest` не двигается и деплоя нет.
+
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
+    inputs:
+      corpus-sanity:
+        description: "break — прогнать корпус на намеренно сломанном ожидании (демонстрация красного гейта, без деплоя)"
+        type: choice
+        options:
+          - "off"
+          - "break"
+        default: "off"
 
 permissions:
   contents: read
@@ -13,9 +29,17 @@ concurrency:
   group: build-image-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  IMAGE: ghcr.io/vladprrs/easy-ui
+
 jobs:
-  build-and-deploy:
+  build:
+    # Fork-PR: GITHUB_TOKEN read-only — push в GHCR невозможен; корпус обязан идти по образу,
+    # поэтому fork-PR сборку не запускаем вовсе (иначе красный login вместо внятного сигнала).
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.ref }}
     steps:
       - uses: actions/checkout@v4
 
@@ -27,22 +51,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # main → latest+SHA; любая другая ветка (workflow_dispatch) → только SHA-тег
-      # (candidate image для restore-drill, находка R3-3). Деплой — только push в main.
-      - name: Compute image tags
-        id: tags
-        run: |
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            echo "tags=ghcr.io/vladprrs/easy-ui:latest,ghcr.io/vladprrs/easy-ui:${{ github.sha }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tags=ghcr.io/vladprrs/easy-ui:${{ github.sha }}" >> "$GITHUB_OUTPUT"
-          fi
+      # Только SHA-тег. `latest` перевешивает job `deploy` — после гейта корпуса (N13).
+      - name: Compute image ref
+        id: image
+        run: echo "ref=${IMAGE}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          tags: ${{ steps.image.outputs.ref }}
           build-args: EASYUI_BUILD_SHA=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -50,8 +68,155 @@ jobs:
             org.opencontainers.image.source=https://github.com/vladprrs/easy-ui
             org.opencontainers.image.revision=${{ github.sha }}
 
+  renderer-corpus:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      IMAGE_REF: ${{ needs.build.outputs.image }}
+      CORPUS_BASE: http://127.0.0.1:8787
+      # Полная матрица 12×20 в main/workflow_dispatch, усечённая 12×3 в PR-CI (§4 «CI»).
+      # corpus-sanity=break гоняет усечённую матрицу дважды (см. шаги ниже).
+      CORPUS_TRUNCATED: ${{ (github.event_name == 'pull_request' || inputs.corpus-sanity == 'break') && '--truncated' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Гейт обязан мерить прод-целевую конфигурацию рендерера: детерминизм-флаги в образе
+      # выключены по умолчанию (§7.6), поэтому EASYUI_RENDERER_FLAGS=1 передаётся явно (V-N2).
+      # REUSE_GATE=shadow: 12 фикстур корпуса — намеренно похожие пробники одной ДС, гейт
+      # переиспользования к детерминизму растра отношения не имеет.
+      - name: Start image
+        run: |
+          docker run -d --name corpus --shm-size=1g -p 127.0.0.1:8787:8787 \
+            -e EASYUI_RENDERER_FLAGS=1 \
+            -e REUSE_GATE=shadow \
+            -e ADMIN_NAME='Corpus Admin' \
+            -e ADMIN_PASSWORD='corpus-admin-password' \
+            -e PUBLIC_ORIGIN="$CORPUS_BASE" \
+            "$IMAGE_REF"
+          for attempt in $(seq 1 120); do
+            if curl -fsS "$CORPUS_BASE/api/health" | grep -q '"status":"ready"'; then
+              echo "image healthy after ${attempt} attempt(s)"; exit 0
+            fi
+            sleep 2
+          done
+          echo "image did not become healthy in 240s"; docker logs corpus; exit 1
+
+      - name: Renderer declaration of the image
+        run: curl -fsS "$CORPUS_BASE/api/capabilities" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.stringify(JSON.parse(s).renderer,null,2)))'
+
+      # --- обычный прогон (main / PR) --------------------------------------------------
+      # `--bootstrap`: если для отпечатка ОБРАЗА ожиданий в expected.json ещё нет (а при первом
+      # пуске волны их нет — корневая запись снята на dev-хосте в фолбэке, отпечаток другой),
+      # job снимает матрицу, публикует её артефактом и НЕ красится. Гейт становится жёстким,
+      # как только запись образа вмерджена в expected.json (`--adopt`, см. docs/server-api.md).
+      - name: Renderer corpus
+        if: ${{ inputs.corpus-sanity != 'break' }}
+        run: |
+          set -o pipefail
+          node scripts/renderer-corpus.mjs --verify --report --bootstrap \
+            --server-url "$CORPUS_BASE" $CORPUS_TRUNCATED \
+            --out corpus-report.json | tee corpus-summary.json
+
+      # Bootstrap-режим не должен оставаться незамеченным: гейт в нём декоративен (сравнивать
+      # не с чем). ::warning:: + job summary — сигнал «адоптни артефакт», пока это не сделано,
+      # каждый прогон по новому отпечатку (bump браузера/шрифтов/флагов) снова уходит в bootstrap.
+      - name: Corpus bootstrap warning
+        if: ${{ inputs.corpus-sanity != 'break' }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const r = JSON.parse(fs.readFileSync("corpus-report.json", "utf8"));
+            if (r.bootstrap) {
+              const host = r.hostKey ?? "unknown";
+              console.log(`::warning title=renderer-corpus bootstrap::corpus gate is NON-GATING for host ${host} — download the artifact and run --adopt to arm the gate`);
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `⚠️ **Corpus gate in bootstrap mode** for \`${host}\`: expectations for this image fingerprint are not recorded; the gate did not compare anything. Adopt the artifact (\`node scripts/renderer-corpus.mjs --adopt …\`) and commit expected.json.\n`);
+            } else {
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `✅ Corpus gate armed for \`${r.hostKey}\`: ${r.captures} captures, ${r.mismatches} mismatches.\n`);
+            }
+          '
+
+      # --- corpus-sanity=break: демонстрация «красный корпус блокирует деплой» ----------
+      # Шаг 1 — снять матрицу образа (bootstrap, усечённая), шаг 2 — сломать в ней один sha и
+      # вмерджить как ожидание этого отпечатка, шаг 3 — обычный verify обязан упасть.
+      # main не портится: правки живут только в workspace прогона, deploy на dispatch не идёт.
+      - name: Renderer corpus (sanity break) — record
+        if: ${{ inputs.corpus-sanity == 'break' }}
+        run: |
+          node scripts/renderer-corpus.mjs --verify --report --bootstrap \
+            --server-url "$CORPUS_BASE" --truncated --out corpus-sanity.json
+
+      - name: Renderer corpus (sanity break) — poison one expectation
+        if: ${{ inputs.corpus-sanity == 'break' }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const record = JSON.parse(fs.readFileSync("corpus-sanity.json", "utf8"));
+            const fixture = Object.keys(record.pixel)[0];
+            const variant = Object.keys(record.pixel[fixture])[0];
+            record.pixel[fixture][variant] = "0".repeat(64);
+            fs.writeFileSync("corpus-sanity.json", JSON.stringify(record, null, 2));
+            console.log(`corpus-sanity: poisoned ${fixture}/${variant}`);
+          '
+          node scripts/renderer-corpus.mjs --adopt corpus-sanity.json --force
+
+      - name: Renderer corpus (sanity break) — verify must fail
+        if: ${{ inputs.corpus-sanity == 'break' }}
+        run: |
+          set -o pipefail
+          node scripts/renderer-corpus.mjs --verify --report \
+            --server-url "$CORPUS_BASE" --truncated --out corpus-report.json | tee corpus-summary.json
+
+      # Артефакт — вход soft cross-host гейта (K2): его сравнивают с локальным прогоном того же
+      # образа, процедура — docs/server-api.md#Deployment.
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: renderer-corpus-${{ github.sha }}
+          path: |
+            corpus-report.json
+            corpus-summary.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Image logs
+        if: ${{ failure() }}
+        run: docker logs corpus | tail -n 200
+
+      - name: Stop image
+        if: ${{ always() }}
+        run: docker rm -f corpus || true
+
+  deploy:
+    needs: [build, renderer-corpus]
+    runs-on: ubuntu-latest
+    # Деплой — только для push в main и только после зелёного корпуса. Sanity-прогон
+    # (workflow_dispatch) сюда не доходит по обоим условиям.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Тот же digest, что прошёл корпус: imagetools только перевешивает тег, не пересобирает.
+      - name: Promote ${{ needs.build.outputs.image }} to :latest
+        run: |
+          docker buildx imagetools create --tag "${IMAGE}:latest" "${{ needs.build.outputs.image }}"
+          docker buildx imagetools inspect "${IMAGE}:latest" | head -n 5
+
       - name: Trigger Dokploy deploy
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         env:
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
         run: |

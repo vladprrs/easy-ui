@@ -396,7 +396,7 @@ Meta-ответы прототипов и компонентов additively не
 
 **Recovery и идемпотентность.** Крах фазы A компенсируется `fail()`/`failStagingPublishes` — ровно как у publish. Повторный promote тех же `{baseRev, sourceHash}` после этого **проходит**: `already_published` проверяется по строкам ревизии *вне* статуса `failed`. Схема запрещает две публикации одной ревизии (`UNIQUE (component_id, rev)`), а R1 идёт без миграций, поэтому повтор переписывает `failed`-строку на месте — номер версии сохраняется, дырки в нумерации не возникает. Повтор поверх **успешной** версии остаётся терминальным `409 already_published`.
 
-**Коды ошибок.** `400 invalid_request`/`base_rev_required`; `403 admin_required` (`reuseOverride` не от админа); `404 not_found`; `409 revision_conflict|source_hash_mismatch|already_published|catalog_changed|canonical_role_conflict|candidate_unavailable`; `422 validation_failed|asset_not_found|atomic_policy_violation|event_schema_not_serializable`; `413 payload_too_large`; `429 validate_in_flight|queue_full`. `candidate_unavailable` — редкая гонка с GC кэша: повторить validate+promote. Ни один `409` не ретраится автоматически.
+**Коды ошибок.** `400 invalid_request`/`base_rev_required`; `403 admin_required` (`reuseOverride` не от админа); `404 not_found`; `409 revision_conflict|source_hash_mismatch|already_published|catalog_changed|canonical_role_conflict|candidate_unavailable|candidate_rejected`; `422 validation_failed|asset_not_found|atomic_policy_violation|event_schema_not_serializable`; `413 payload_too_large`; `429 validate_in_flight|queue_full`. `candidate_unavailable` — редкая гонка с GC кэша: повторить validate+promote. Ни один `409` не ретраится автоматически.
 
 **Publish не меняется.** `POST /components/:id/publish` остаётся полноценным путём публикации (в т.ч. когда приёмка погашена kill-switch'ем); bundle-import публикует своим путём и помечается аудит-событием `publish.import`. Успешный promote пишет `component.promoted` с fingerprints (`sourceHash`/`bundleHash`/`hostAbiVersion`/`themeVersion`/`catalogRevision`/`superseded`) — это источник KPI-метрик приёмки.
 
@@ -414,6 +414,7 @@ Meta-ответы прототипов и компонентов additively не
 |---|---|---|
 | `POST` | `/components/:id/candidates` | `200` кандидат + `cached` |
 | `GET` | `/component-candidates/:candidateId` | `200` кандидат |
+| `POST` | `/component-candidates/:candidateId/reject` | `200` кандидат с `rejected: true` |
 | `POST` | `/acceptance-runs` | `202` `{runId,status,cases,progress,cached}` |
 | `GET` | `/acceptance-runs/:runId` | `200` статус + gates + progress + eta + `failedCases` |
 | `GET` | `/acceptance-runs/:runId/cases` | `200` per-case вердикты и имена артефактов |
@@ -421,7 +422,22 @@ Meta-ответы прототипов и компонентов additively не
 | `POST` | `/acceptance-runs/:runId/cancel` | `200` ран в статусе `cancelled` |
 | `POST` | `/components/:id/impact` | `200` отчёт импакта (dry-run, ничего не снимает) |
 
-**`POST /components/:id/candidates`** (тело `{}`) выполняет тот же [validate-префлайт головы](#validate-префлайт-публикации) — с тем же троттлингом и теми же кодами — и этим же материализует бандл, который потом снимается **по ревизии кандидата**, а не по head. Строка идемпотентна по `{componentId, designSystem, rev, buildFingerprint}`: повтор на неизменённом билде возвращает тот же `candidateId` с `cached: true` и не сбрасывает его `status`. Бандл кандидата пинуется против GC candidate-кэша, пока на него ссылается нетерминальный ран. Ответ: `candidateId`, `componentId`, `designSystem`, `rev`, `sourceHash`, `bundleHash`, `hostAbiVersion`, `themeVersion`, `buildFingerprint`, `policyProfileHash`, `catalogRevision`, `status` (`validated|promoted`), `statusReason`, `acceptanceRunId`, `promotedVersion`, `createdAt`, `expiresAt`, `cached`, `warnings`. Уехавшая между префлайтом и записью голова — `409 revision_conflict {currentRev}`. Списочной ручки нет (триаж A7): кандидат адресуется своим id.
+**`POST /components/:id/candidates`** (тело `{}`) выполняет тот же [validate-префлайт головы](#validate-префлайт-публикации) — с тем же троттлингом и теми же кодами — и этим же материализует бандл, который потом снимается **по ревизии кандидата**, а не по head. Строка идемпотентна по `{componentId, designSystem, rev, buildFingerprint}`: повтор на неизменённом билде возвращает тот же `candidateId` с `cached: true` и не сбрасывает его `status`. Бандл кандидата пинуется против GC candidate-кэша, пока на него ссылается нетерминальный ран. Ответ: `candidateId`, `componentId`, `designSystem`, `rev`, `sourceHash`, `bundleHash`, `hostAbiVersion`, `themeVersion`, `buildFingerprint`, `policyProfileHash`, `catalogRevision`, `status` (`validated|promoted`), `statusReason`, `rejected`, `decision` (`{reason, actor, createdAt}` либо `null`), `acceptanceRunId`, `promotedVersion`, `createdAt`, `expiresAt`, `cached`, `warnings`. Уехавшая между префлайтом и записью голова — `409 revision_conflict {currentRev}`. Списочной ручки нет (триаж A7): кандидат адресуется своим id.
+
+**`POST /component-candidates/:candidateId/reject`** `{reason}` — отклонение сборки человеком (RFC §4.1, волна R3b). Владелец компонента или админ; `reason` обязателен (непустая строка). Решение пишется **append-only**-строкой в `candidate_decisions`: хранимый enum `status` не расширяется, а `rejected` — вычисляемый признак DTO (`rejected: true` + `decision {reason, actor, createdAt}`). Пишется аудит-событие `candidate.rejected`.
+
+**Отклонение терминально — «разотклонения» нет.**
+
+- Promote **всей ревизии** блокируется: `POST /components/:id/promote` перед фазой A проверяет, есть ли отклонённый кандидат для `(component_id, design_system, rev = baseRev)`, и отвечает `409 candidate_rejected` с `{candidateId, decision}`. Предикат работает на **обоих** путях promote — и с `candidateId`, и на receipt-пути `{baseRev, sourceHash}` — и **не зависит** от `EASYUI_ACCEPTANCE_MATRIX` (таблицы заводятся безусловными миграциями v25/v27). Семантика намеренно широкая: отклонена сборка ревизии — заблокированы и её пересборки с другим `buildFingerprint` (иная тема/ABI). Выход — новая ревизия компонента.
+- Надгробие переживает TTL: свипер просроченных кандидатов **не удаляет** кандидатов с decision-строками (как не удаляет `promoted`), иначе `ON DELETE CASCADE` снёс бы решение и TTL работал бы отложенным `unreject`.
+- Повторный `POST /components/:id/candidates` той же сборки возвращает **того же** отклонённого кандидата (`cached: true`, `rejected: true`), а не создаёт чистого.
+- Ручек `unreject`/`DELETE` нет.
+
+Отказы: `409 candidate_already_rejected` — кандидат уже отклонён, в `details` существующее решение `{reason, actor, createdAt}` (арбитр гонки — partial unique index, а не предпроверка); `409 candidate_promoted` `{currentVersion}` — сборка уже опубликована, отклонять нечего. **`candidate_promoted` ≠ `candidate_already_promoted`**: второй код принадлежит CAS'у саги promote (`markPromoted` фазы B, `details {promotedVersion}`) и означает «кандидат уже помечен promoted другим прогоном саги».
+
+Reject **не** отменяет ран приёмки и ничего не мутирует в самом кандидате: отклонённый кандидат с живым (`queued|running`) раном продолжает занимать in-flight-слот до терминализации рана — это ожидаемое поведение, отмена рана — `POST /acceptance-runs/:runId/cancel`.
+
+CLI: `driver.mjs reject <candidateId> --reason <text>`.
 
 **`POST /acceptance-runs`** `{candidateId, idempotencyKey?, policy?, cases?, refresh?, baselineRunId?}`. Профили — `default-v1` (по умолчанию) и `pixel-strict-v1`; неизвестный → `422 unknown_policy_profile`. Источник случаев в этой фазе — именованные `definition.examples` кандидата; `cases: [{key, props}]` задаёт набор явно. Дубликат props становится **алиасом** (одна съёмка, наследованный вердикт), пустой набор — `422 empty_case_set`, превышение `limits.acceptanceMaxCasesPerRun` — `422 case_set_too_large` (потолок считается до схлопывания алиасов). `idempotencyKey` уникален в паре с кандидатом и дедуплицирует **постановку** (ответ с `cached: true`); на синхронных ручках канон остаётся CAS по `baseRev`. У кандидата не может быть двух нетерминальных ранов — `409 acceptance_run_in_flight {runId}`; вытесненный бандл — `409 candidate_evicted`, разъехавшаяся пара `{rev, sourceHash}` — `409 candidate_stale`. Под maintenance-lock'ом каталога постановка отвечает `503 maintenance_in_progress` (обратная сторона: `acquireMaintenanceLock` отказывает при живом ране). Отклонённые конструкции — `422 unsupported_option`: `concurrency`, `cases.concurrency`, `manifestAssetId`. `caseSetId` (см. [case-set'ы](#case-set-манифесты-наборы-случаев-семьи)) задаёт набор случаев из опубликованного манифеста — он взаимоисключим с `cases` (`400 invalid_request`) и обязан принадлежать тому же компоненту, что кандидат (`422 case_set_mismatch`).
 
@@ -850,7 +866,7 @@ assets/<sha256>                        # сырые байты, имя = sha256 
 
 **Provenance опубликованной версии сознательно мутабельна**: `PUT …/provenance` с `rev` опубликованной версии меняет то, что отдаёт `GET /components/:id/versions/:v`. Иммутабельна только байтовая часть версии — `compiled_js`, `bundle_hash`, `definition_meta`. Ровно ради этого слой и вводился.
 
-Миграция v27 аддитивна (`CREATE TABLE` + индексы, без перестроек) и включает **backfill**: каждой head-ревизии с непустым `figma_json` пишется `seq = 1`-запись (автор `migration:component_provenance`). Без него первый же source-PUT без `figma` обнулил бы provenance у компонентов без seq-истории. Той же миграцией создаётся `candidate_decisions` (надгробия отклонений кандидатов, FK `ON DELETE CASCADE` + partial unique index) — схема под волну R3b; ручки reject в этой волне нет.
+Миграция v27 аддитивна (`CREATE TABLE` + индексы, без перестроек) и включает **backfill**: каждой head-ревизии с непустым `figma_json` пишется `seq = 1`-запись (автор `migration:component_provenance`). Без него первый же source-PUT без `figma` обнулил бы provenance у компонентов без seq-истории. Той же миграцией создаётся `candidate_decisions` (надгробия отклонений кандидатов, FK `ON DELETE CASCADE` + partial unique index); ручка `POST /component-candidates/:candidateId/reject` и promote-предикат приехали волной R3b — см. [acceptance](#acceptance-кандидаты-и-матричные-раны).
 
 Регресс-гард: `npm run verify:provenance` (`scripts/check-provenance-resolver.ts`) держит закрытый allowlist читателей/писателей `figma_json` — новый путь обязан ходить через резолвер `server/figma.ts` либо попасть в allowlist осознанной правкой.
 
@@ -1747,3 +1763,79 @@ Compose healthcheck обращается без credentials к открытом�
 Для композиций (миграция v18) действует та же rollback-политика, что для flows и screen regions: старый образ не знает host-примитивов `@eui/Composition`/`@eui/Slot` и не умеет раскрывать документ, поэтому в течение rollback-window нельзя персистить ни одной ревизии прототипа со ссылкой на композицию. Сама миграция только добавляет таблицы и старому образу не мешает.
 
 SQLite работает в WAL-режиме: корректный backup должен учитывать основной `.db` вместе с файлами `-wal` и `-shm` либо выполняться штатным SQLite backup-механизмом. `docker compose down -v` удаляет named volume и все постоянные данные — на production эту команду применять нельзя.
+
+### CI-гейт корпуса рендерера и soft cross-host сверка (волна R2c, план 2026-08-03 renderer-contract-2)
+
+С волны R2c `.github/workflows/build-image.yml` — три job'а вместо одного (находка N13: раньше
+сборка, `latest` и `compose.deploy` были шагами одного job'а, и любой «после-job» был декоративен):
+
+| Job | Что делает | Условие |
+|---|---|---|
+| `build` | собирает образ и пушит **только SHA-тег** `ghcr.io/vladprrs/easy-ui:<sha>` (кандидат) | всегда |
+| `renderer-corpus` | `docker run` этого SHA-образа с `EASYUI_RENDERER_FLAGS=1` и `REUSE_GATE=shadow`, прогон `scripts/renderer-corpus.mjs --verify --server-url http://127.0.0.1:8787`; полная матрица 12×20 в main, усечённая 12×3 в PR | всегда |
+| `deploy` | `docker buildx imagetools create --tag …:latest …:<sha>` (перевешивает тег на тот же digest, без пересборки) + `compose.deploy` в Dokploy | только `push` в `main` и только после зелёного корпуса |
+
+Красный корпус ⇒ тег `latest` не двигается и деплоя нет. Флаги детерминизма передаются
+контейнеру **явно**: дефолт образа — OFF (порядок прод-включения — §7 плана), и без явного
+`EASYUI_RENDERER_FLAGS=1` гейт мерил бы не ту конфигурацию рендерера.
+
+Операционные следствия (осознанные): **каждый** push в `main`, включая docs-only, платит полный
+корпус до деплоя (~8–15 мин на GH-раннере сверх сборки — закладывай в latency хотфиксов; `paths-ignore`
+не ставим сознательно: гейт без исключений); fork-PR сборку не запускают вовсе (GITHUB_TOKEN
+read-only, push SHA-образа в GHCR невозможен — guard на job `build`); PR из этого репозитория
+пушат SHA-теги в GHCR без политики очистки — периодическая ручная уборка пакета.
+Bootstrap-режим **не тихий**: шаг `Corpus bootstrap warning` вешает `::warning::` и строку в job
+summary, пока ожидания образа не адоптированы — не оставляй гейт декоративным.
+
+**Per-fingerprint ожидания.** Пиксели зависят от хоста растеризации, поэтому `expected.json`
+хранит ожидания **по отпечатку рендерера**: корень файла — историческая запись dev-хоста
+(`rendererSource: "fallback"`), любые другие хосты — в `hosts["<source>:<fingerprint>"]` в той же
+форме (`pixel`/`outcome`/`sizes` + метаданные). `--verify` выбирает запись по отпечатку текущего
+сервера; `--record` пишет в корень, если отпечаток совпал с корневым, и в `hosts[…]` иначе —
+аддитивно, не трогая чужие записи.
+
+**Bootstrap-режим гейта.** У образа отпечаток другой (`source: "manifest"`, свой sha бинаря
+headless-shell и свой font stack), поэтому при первом прогоне ожиданий для него ещё нет. В этом
+случае `--bootstrap` снимает матрицу, кладёт её в артефакт и **не красит** job. Как только запись
+образа вмерджена, гейт для этого отпечатка становится жёстким — флаг `--bootstrap` на него больше
+не влияет. Перевод гейта в жёсткий режим:
+
+```bash
+gh run download <run-id> -n renderer-corpus-<sha>   # артефакт job'а renderer-corpus
+node scripts/renderer-corpus.mjs --adopt corpus-report.json   # вмерджить в hosts[...] expected.json
+git add e2e/fixtures/renderer-corpus/expected.json && git commit
+```
+
+`--adopt` отказывается принимать усечённую (12×3) запись и запись с провалившимися капчурами:
+эталон полной матрицы нельзя завести из PR-прогона.
+
+**Soft cross-host гейт (K2).** Артефакт CI-прогона сравнивается с локальным прогоном **того же
+digest'а**:
+
+```bash
+docker run -d --name corpus --shm-size=1g -p 127.0.0.1:8787:8787 \
+  -e EASYUI_RENDERER_FLAGS=1 -e REUSE_GATE=shadow \
+  -e ADMIN_NAME='Corpus Admin' -e ADMIN_PASSWORD='corpus-admin-password' \
+  -e PUBLIC_ORIGIN=http://127.0.0.1:8787 ghcr.io/vladprrs/easy-ui:<sha>
+node scripts/renderer-corpus.mjs --verify --bootstrap --report \
+  --server-url http://127.0.0.1:8787 --out corpus-local.json
+```
+
+Шаг 1 — сверка отпечатков: если `renderer.fingerprint` обоих прогонов совпал, а sha разошлись,
+это регрессия детерминизма (K1), а не кросс-хост дельта. Шаг 2 — сверка матриц `pixel` двух
+файлов: **ноль расходящихся случаев ⇒ 0 ppm ⇒ K2 выполнен байт-точно**, гейт можно держать
+жёстким на обоих хостах. Шаг 3 (только если случаи разошлись) — квалификация остатка в ppm:
+sha этого не даёт, нужны сами PNG, поэтому оба прогона повторяются с `--keep` и кадры
+сравниваются `scripts/visual-diff-worker.mjs`; ppm = `differingPixels / totalPixels × 1e6`,
+суммарно по матрице. Порог решения — **≤50 ppm суммарно**; edge-квалификация остатка (внутри
+маски краёв) возможна только после волны R7a, когда маска появится.
+
+**Карантин фикстуры.** Флакующая фикстура помечается в `quarantined` файла `expected.json` (по
+`id` фикстуры или по `fixture/variant`) — `--verify` её пропускает, main не краснеет; список
+наследуется хостовыми записями из корня. Каждая постановка в карантин обязана сопровождаться
+фактом в §4 плана: что именно флакует и по какой гипотезе.
+
+**Проверка самого гейта.** `workflow_dispatch` с входом `corpus-sanity=break` снимает усечённую
+матрицу образа, портит в ней один sha, вмердживает как ожидание этого отпечатка и повторяет
+`--verify` — прогон обязан покраснеть. Деплой при этом не запускается (job `deploy` требует
+`push` в `main`), а правки живут только в workspace прогона, так что `main` не портится.
