@@ -23,6 +23,8 @@ import {
   readinessExitCode,
   snapExitCode,
   rendererPreflightWarning,
+  captureCodes,
+  captureReceiptEvidence,
   summarizeCapture,
   analyzeGeometryGaps,
   buildBaselineMembers,
@@ -863,7 +865,7 @@ describe("author driver snap contract", () => {
     const override = await run(api, ["snap", "snap-canvas", `${directory}/canvas-shots`, "--viewport", "390x844", "--json"]);
     expect(override.exitCode).toBe(0);
     expect(stub.jobs()[2]).toMatchObject({ viewport: { width: 390, height: 844 } });
-  });
+  }, 30_000);
 
   test("a canvas that would exceed the asset ingest limit at --dsf 2 is refused before enqueue", async () => {
     const stub = pngRunJob();
@@ -937,6 +939,124 @@ describe("author driver snap contract", () => {
     expect(rendererPreflightWarning({})).toContain("no renderer section");
     expect(rendererPreflightWarning(null)).toContain("no renderer section");
   });
+});
+
+// --- R8b: capture receipt в CLI (план renderer-contract-2 §5) --------------------------------
+
+type ReceiptFileEntry = { screenId: string; jobId: string | null; receiptSha256: string | null; receipt: Record<string, any> | null };
+
+describe("author driver capture receipt", () => {
+  test("codes are collected from the job failure, the receipt verdict and the renderer drift without duplicates", () => {
+    const state = { failure: { code: "renderer_mismatch", message: "declared 149 vs observed 150" } };
+    const receipt = {
+      verdict: { codes: [{ code: "font_face_missing", severity: "error", detail: "Corpus Text 500" }] },
+      renderer: {
+        fingerprint: "fp",
+        drift: [
+          { code: "renderer_mismatch", severity: "warning", detail: "declared 149 vs observed 150" },
+          { code: "renderer_mismatch", severity: "error", detail: "declared 149 vs observed 150" },
+        ],
+      },
+    };
+    expect(captureCodes(state, receipt)).toEqual([
+      { code: "renderer_mismatch", severity: "error", detail: "declared 149 vs observed 150" },
+      { code: "font_face_missing", severity: "error", detail: "Corpus Text 500" },
+      { code: "renderer_mismatch", severity: "warning", detail: "declared 149 vs observed 150" },
+    ]);
+    expect(captureCodes(null, null)).toEqual([]);
+  });
+
+  test("the fingerprint comes from the job result, and a missing receipt degrades to nulls instead of lies", () => {
+    const state = {
+      result: { receiptSha256: "abc", renderer: { fingerprint: "fp", rendererVersion: "r2", source: "manifest", browserVersion: "149.0.1" } },
+    };
+    expect(captureReceiptEvidence(state, null)).toEqual({
+      receiptSha256: "abc",
+      renderer: { rendererFingerprint: "fp", rendererVersion: "r2", source: "manifest", browserVersion: "149.0.1" },
+      codes: [],
+    });
+    expect(captureReceiptEvidence({ result: {} }, null)).toEqual({ receiptSha256: null, renderer: null, codes: [] });
+  });
+
+  test("snap --json carries receiptSha256/fingerprint/codes and --receipt writes the документ per screen", async () => {
+    const { api, directory } = await setup(undefined, pngRunJob().runJob);
+    await saveDoc(api, await twoScreenDoc("snap-receipt"));
+    const receiptPath = resolve(directory, "receipts/snap.json");
+    const result = await run(api, ["snap", "snap-receipt", `${directory}/shots`, "--receipt", receiptPath, "--json"]);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      receipt: string;
+      screens: { screenId: string; jobId: string; receiptSha256: string; renderer: { rendererFingerprint: string; source: string }; codes: unknown[] }[];
+    };
+    expect(payload.receipt).toBe(receiptPath);
+    expect(payload.screens).toHaveLength(2);
+    for (const screen of payload.screens) {
+      expect(screen.receiptSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(screen.renderer.rendererFingerprint).toMatch(/^[0-9a-f]{64}$/);
+      expect(screen.codes).toEqual([]);
+    }
+    // Два экрана — два разных капчура, поэтому и джобы разные.
+    expect(payload.screens[0]!.jobId).not.toBe(payload.screens[1]!.jobId);
+
+    const file = JSON.parse(await Bun.file(receiptPath).text()) as { command: string; prototypeId: string; receipts: ReceiptFileEntry[] };
+    expect(file).toMatchObject({ command: "snap", prototypeId: "snap-receipt" });
+    expect(file.receipts.map((entry) => entry.screenId)).toEqual(["welcome", "second"]);
+    for (const [index, entry] of file.receipts.entries()) {
+      expect(entry.receiptSha256).toBe(payload.screens[index]!.receiptSha256);
+      // Документ — тот самый, что отдаёт job-scoped ручка: рендерер, цель и PNG-идентичность.
+      expect(entry.receipt!.receiptVersion).toBe(1);
+      expect(entry.receipt!.renderer.fingerprint).toBe(payload.screens[index]!.renderer.rendererFingerprint);
+      expect(entry.receipt!.target).toMatchObject({ kind: "prototype", prototypeId: "snap-receipt" });
+      expect(entry.receipt!.output.pngWidth).toBe(2);
+    }
+  }, 30_000);
+
+  test("preview --receipt writes the job receipt and prints its sha in both modes", async () => {
+    const { api, db, directory } = await setup(undefined, pngRunJob().runJob);
+    seedComponent(db, "stars", "Stars");
+    const receiptPath = resolve(directory, "stars-receipt.json");
+    const result = await run(api, ["preview", "stars", "--out", resolve(directory, "stars.png"), "--receipt", receiptPath, "--json"]);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      receipt: string; receiptSha256: string; renderer: { rendererFingerprint: string }; codes: unknown[];
+    };
+    expect(payload.receipt).toBe(receiptPath);
+    expect(payload.receiptSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(payload.renderer.rendererFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(payload.codes).toEqual([]);
+    const file = JSON.parse(await Bun.file(receiptPath).text()) as { command: string; componentId: string; receiptSha256: string; receipt: Record<string, any> };
+    expect(file).toMatchObject({ command: "preview", componentId: "stars", receiptSha256: payload.receiptSha256 });
+    expect(file.receipt.target).toMatchObject({ kind: "component", componentId: "stars", version: 1 });
+    // `pngSha256` считает воркер; стаб теста его не присылает, и receipt честно пишет null.
+    expect(file.receipt.output).toMatchObject({ pngWidth: 2, pngHeight: 3, pngSha256: null });
+
+    // Человекочитаемый режим печатает тот же адрес в строке пинов — без него агент не знает,
+    // чем снят кадр, который он смотрит глазами.
+    const human = await run(api, ["preview", "stars", "--out", resolve(directory, "stars-2.png"), "--receipt", resolve(directory, "r2.json")]);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).toContain(`receipt=${payload.receiptSha256}`);
+    expect(human.stdout).toContain(resolve(directory, "r2.json"));
+  }, 30_000);
+
+  test("a server with receipts disabled still snaps: the file carries nulls and the reason goes to stderr", async () => {
+    process.env.EASYUI_CAPTURE_RECEIPTS_DISABLED = "1";
+    try {
+      const { api, directory } = await setup(undefined, pngRunJob().runJob);
+      await saveDoc(api, await fixture("snap-no-receipt"));
+      const receiptPath = resolve(directory, "none.json");
+      const result = await run(api, ["snap", "snap-no-receipt", `${directory}/shots`, "--receipt", receiptPath, "--json"]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("server returned no capture receipt");
+      const payload = JSON.parse(result.stdout) as { screens: { receiptSha256: string | null; renderer: { rendererFingerprint: string } | null }[] };
+      expect(payload.screens[0]!.receiptSha256).toBeNull();
+      // Отпечаток объявлен на постановке джобы и не зависит от kill-switch'а receipt'ов.
+      expect(payload.screens[0]!.renderer!.rendererFingerprint).toMatch(/^[0-9a-f]{64}$/);
+      const file = JSON.parse(await Bun.file(receiptPath).text()) as { receipts: ReceiptFileEntry[] };
+      expect(file.receipts[0]).toMatchObject({ receiptSha256: null, receipt: null });
+    } finally {
+      delete process.env.EASYUI_CAPTURE_RECEIPTS_DISABLED;
+    }
+  }, 30_000);
 });
 
 // --- Wave DX.1 verb: preview (component screenshot on the published head version) -----------

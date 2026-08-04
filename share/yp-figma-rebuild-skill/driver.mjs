@@ -19,7 +19,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -89,6 +89,12 @@ export const CACHE_FLAGS = Object.freeze({
 });
 const CACHE_VALUE_FLAGS = Object.keys(CACHE_FLAGS).filter((flag) => CACHE_FLAGS[flag].value);
 const allScreensFlag = { "--all-screens": { value: false, key: "allScreens" } };
+/**
+ * `--receipt <file.json>` (план renderer-contract-2 §5 **R8b**): скачать capture receipt снятой
+ * джобы (R5) в файл. Один файл на команду — у `snap` это документ со списком экранов, у
+ * `preview` — receipt единственной джобы; форма описана в `docs/server-api.md` (секция драйвера).
+ */
+const receiptFlag = { "--receipt": { value: true, key: "receipt" } };
 const catalogLimitFlag = {
   value: true,
   key: "limit",
@@ -219,11 +225,12 @@ export const flagSpecs = Object.freeze({
   get: { ...jsonFlag },
   delete: { ...jsonFlag },
   // R8a: `shoot` — алиас `snap --all-screens`, поэтому и контракт флагов у него снаповский.
-  shoot: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags },
-  snap: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags },
+  shoot: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag },
+  snap: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag },
   preview: {
     ...jsonFlag,
     ...surfaceFlags,
+    ...receiptFlag,
     "--example": { value: true, key: "example" },
     "--rev": { value: true, key: "rev", enum: ["head-draft"] },
     "--probe": { value: true, key: "probe", enum: ["geometry"] },
@@ -1130,6 +1137,88 @@ export function summarizeCapture(result) {
   };
 }
 
+/**
+ * Типизированные коды капчура (R3) одного кадра, собранные из всех источников, которые их
+ * публикуют: терминальный `failure` джобы (HTTP-контракт `GET /screenshot-jobs/:id`),
+ * `verdict.codes` receipt'а (readiness) и `renderer.drift` (расхождение объявленного и
+ * наблюдённого рендерера, доехавшее с выключенной строгой сверкой).
+ *
+ * Дедупликация по тройке `code|severity|detail`: один и тот же код может приехать и джобой, и
+ * receipt'ом — печатать его дважды значит врать о числе причин.
+ */
+export function captureCodes(state, receipt) {
+  const codes = [];
+  const seen = new Set();
+  const push = (code) => {
+    if (!code || typeof code.code !== "string") return;
+    const entry = { code: code.code, severity: code.severity ?? "error", detail: code.detail ?? "" };
+    const key = `${entry.code}|${entry.severity}|${entry.detail}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    codes.push(entry);
+  };
+  if (state?.failure?.code) push({ code: state.failure.code, severity: "error", detail: state.failure.message ?? "" });
+  // Коды readiness есть прямо в результате джобы (R3) — receipt для них не обязателен.
+  for (const code of state?.result?.readinessCodes ?? []) push(code);
+  for (const code of receipt?.verdict?.codes ?? []) push(code);
+  for (const code of receipt?.renderer?.drift ?? []) push(code);
+  return codes;
+}
+
+/**
+ * Свидетельство происхождения кадра для `--json` (R8b): адрес receipt'а, отпечаток рендерера и
+ * типизированные коды. Отпечаток берётся из результата джобы (`result.renderer`, R1) — он есть и
+ * без чтения receipt'а; документ receipt'а, если он прочитан, уточняет коды и служит фолбэком
+ * для старых результатов. Ничего не выдумываем: неизвестное — `null`.
+ */
+export function captureReceiptEvidence(state, receiptDocument) {
+  const result = state?.result ?? {};
+  const receipt = receiptDocument?.receipt ?? null;
+  const declared = result.renderer ?? receipt?.renderer ?? null;
+  return {
+    receiptSha256: result.receiptSha256 ?? receiptDocument?.receiptSha256 ?? null,
+    renderer: declared === null ? null : {
+      rendererFingerprint: declared.fingerprint ?? null,
+      rendererVersion: declared.rendererVersion ?? null,
+      source: declared.source ?? null,
+      browserVersion: declared.browserVersion ?? null,
+    },
+    codes: captureCodes(state, receipt),
+  };
+}
+
+/**
+ * Документ receipt'а джобы. Ручка **job-scoped** (N12: ручки «по sha» нет), а чтение — мягкое:
+ * receipts могут быть выключены kill-switch'ем, вытеснены свипером или отсутствовать на сборке
+ * до волны R5. Ни один из этих случаев не имеет права уронить съёмку — кадр уже снят.
+ */
+async function fetchReceipt(jobId) {
+  try {
+    const response = await call("GET", `/screenshot-jobs/${encodeURIComponent(jobId)}/receipt`);
+    if (response.status !== 200 || !response.json?.receipt) {
+      lastReceiptFailure = response.status === 200 ? "empty receipt" : `HTTP ${response.status}${response.status === 403 ? " forbidden (owner changed?)" : ""}`;
+      return null;
+    }
+    lastReceiptFailure = null;
+    return response.json;
+  } catch (error) { lastReceiptFailure = String(error?.message ?? error); return null; }
+}
+let lastReceiptFailure = null;
+
+/**
+ * Свидетельство одной джобы. Документ receipt'а тянем только когда он кому-то нужен: файл
+ * `--receipt` или `--json` (там коды readiness видны только через receipt).
+ */
+async function captureEvidence(jobId, state, wantDocument) {
+  const document = wantDocument && jobId ? await fetchReceipt(jobId) : null;
+  return { ...captureReceiptEvidence(state, document), document };
+}
+
+async function writeReceiptFile(path, payload) {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(payload, null, 2)}\n`);
+}
+
 /** snap contract: 1 when any screen produced no PNG, 2 when PNGs carry product errors, else 0. */
 export function snapExitCode(rows) {
   if (rows.some((row) => !row.imageProduced)) return EXIT.failed;
@@ -1140,7 +1229,7 @@ export function snapExitCode(rows) {
 /** Infra failures (job error/timeout, 5xx) get one more attempt; product errors never do. */
 export const SNAP_ATTEMPTS = 2;
 
-async function snapScreen(id, screenId, outputDir, surface) {
+async function snapScreen(id, screenId, outputDir, surface, wantReceipt = false) {
   const encoded = encodeURIComponent(id);
   let failure = null;
   const body = {
@@ -1155,14 +1244,29 @@ async function snapScreen(id, screenId, outputDir, surface) {
       if (isTransient(queued.status)) continue;
       break;
     }
-    const state = await pollJob(`/screenshot-jobs/${encodeURIComponent(queued.json.jobId)}`, { deadlineMs: 60_000 });
+    const jobId = queued.json.jobId;
+    const state = await pollJob(`/screenshot-jobs/${encodeURIComponent(jobId)}`, { deadlineMs: 60_000 });
     if (state.status !== "done") { failure = `screenshot ${state.status}: ${JSON.stringify(state)}`; continue; }
     const summary = summarizeCapture(state.result);
     const path = `${outputDir}/${screenId}.png`;
     if (summary.imageProduced) await downloadImage(state.result.imageUrl, path);
-    return { screenId, attempts: attempt, viewport: surface.viewport, failure: summary.imageProduced ? null : "job reported no image", path: summary.imageProduced ? path : null, ...summary };
+    // Свидетельство происхождения кадра (R8b) — на том же jobId, что и сам кадр.
+    // Документ receipt тянем только под --receipt: в --json коды readiness и отпечаток берутся
+    // из результата джобы, а лишний HTTP-раунд на каждый экран делал горячий путь флаки (R8b).
+    const evidence = await captureEvidence(jobId, state, wantReceipt);
+    return {
+      screenId, attempts: attempt, viewport: surface.viewport,
+      failure: summary.imageProduced ? null : "job reported no image",
+      path: summary.imageProduced ? path : null, ...summary,
+      jobId, receiptSha256: evidence.receiptSha256, renderer: evidence.renderer, codes: evidence.codes,
+      receiptDocument: evidence.document,
+    };
   }
-  return { screenId, attempts: SNAP_ATTEMPTS, viewport: surface.viewport, failure, path: null, imageProduced: false, captureClean: false, productErrors: [], infraNoise: [], runtimeWarnings: [] };
+  return {
+    screenId, attempts: SNAP_ATTEMPTS, viewport: surface.viewport, failure, path: null,
+    imageProduced: false, captureClean: false, productErrors: [], infraNoise: [], runtimeWarnings: [],
+    jobId: null, receiptSha256: null, renderer: null, codes: [], receiptDocument: null,
+  };
 }
 
 /**
@@ -1218,20 +1322,33 @@ async function runSnap(args, flags, command = "snap") {
   catch (error) { throw new CliError(error.message); }
   await mkdir(outputDir, { recursive: true });
   const rows = [];
+  const receipts = [];
+  const wantReceipt = flags.receipt !== undefined;
   for (const surface of plan) {
-    const row = await snapScreen(id, surface.screenId, outputDir, surface);
+    const { receiptDocument, ...row } = await snapScreen(id, surface.screenId, outputDir, surface, wantReceipt);
     rows.push(row);
+    receipts.push({ screenId: surface.screenId, jobId: row.jobId, receiptSha256: row.receiptSha256, receipt: receiptDocument?.receipt ?? null });
     if (row.path) out(row.path);
     if (row.failure) console.error(`${surface.screenId}: ${row.failure}`);
     if (row.productErrors.length) console.error(`${surface.screenId} product errors:`, JSON.stringify(row.productErrors));
+    if (row.codes.length) console.error(`${surface.screenId} capture codes:`, JSON.stringify(row.codes));
     if (row.infraNoise.length && !jsonMode) console.error(`${surface.screenId} infra noise (ignored):`, JSON.stringify(row.infraNoise));
+  }
+  if (wantReceipt) {
+    // Один файл на команду: `snap` снимает все экраны прототипа, и receipt у каждого свой.
+    await writeReceiptFile(flags.receipt, { command, prototypeId: id, rev: draft.rev, receipts });
+    out(flags.receipt);
+    if (receipts.every((entry) => entry.receipt === null)) {
+      console.error(`receipt: server returned no capture receipt (${lastReceiptFailure ?? "receipts disabled, evicted, or a build older than the receipt contract"}); ${flags.receipt} carries nulls`);
+    }
   }
   const exitCode = snapExitCode(rows);
   if (jsonMode) {
     report(null, {
       command, prototypeId: id, outputDir, rev: draft.rev, exitCode,
       // Применённые значения: сервер по умолчанию снимает dsf 1 в светлой теме.
-      dsf: flags.dsf ?? 1, theme: flags.theme ?? "light", screens: rows,
+      dsf: flags.dsf ?? 1, theme: flags.theme ?? "light",
+      receipt: wantReceipt ? flags.receipt : null, screens: rows,
     });
   }
   if (exitCode === EXIT.productErrors) throw new CliError("screenshots produced with product errors", { exitCode: EXIT.productErrors });
@@ -1298,7 +1415,7 @@ async function readPropsArgument(path) {
  * Печатает те же строки rect'ов, что и прототипный `geometry`, и по `--out` кладёт сырой
  * результат джобы на диск — это готовый `actual.json` для `driver.mjs expect`.
  */
-async function finishPreviewProbe(id, result, { flags, viewport, deviceScaleFactor, queueRetries, system }) {
+async function finishPreviewProbe(id, result, { flags, viewport, deviceScaleFactor, queueRetries, system, evidence }) {
   const summary = summarizeCapture(result);
   if (flags.out !== undefined) {
     await mkdir(dirname(flags.out), { recursive: true });
@@ -1317,6 +1434,9 @@ async function finishPreviewProbe(id, result, { flags, viewport, deviceScaleFact
     report(null, {
       command: "preview", componentId: id, probe: "geometry",
       ...result, path: flags.out ?? null, queueRetries, exitCode,
+      // Receipt измерительной джобы существует, но `output` в нём `null`: кадра здесь нет (C-M8).
+      receiptSha256: evidence?.receiptSha256 ?? null, renderer: evidence?.renderer ?? null,
+      codes: evidence?.codes ?? [], receipt: flags.receipt ?? null,
       captureClean: summary.captureClean, productErrors: summary.productErrors,
       infraNoise: summary.infraNoise, runtimeWarnings: summary.runtimeWarnings,
     });
@@ -1381,7 +1501,20 @@ async function runPreview(args, flags) {
   if (state.status !== "done" || state.result?.kind !== (probe ? "geometry" : "image")) {
     throw new CliError(`preview ${state.status}: ${JSON.stringify(state.error ?? state)}`);
   }
-  if (probe) return finishPreviewProbe(id, state.result, { flags, viewport, deviceScaleFactor, queueRetries, system });
+  const wantReceipt = flags.receipt !== undefined;
+  const evidence = await captureEvidence(queued.jobId, state, wantReceipt || jsonMode);
+  if (wantReceipt) {
+    await writeReceiptFile(flags.receipt, {
+      command: "preview", componentId: id, jobId: queued.jobId,
+      receiptSha256: evidence.receiptSha256, receipt: evidence.document?.receipt ?? null,
+    });
+    out(flags.receipt);
+    if (evidence.document === null) {
+      console.error(`receipt: server returned no capture receipt (${lastReceiptFailure ?? "receipts disabled, evicted, or a build older than the receipt contract"}); ${flags.receipt} carries nulls`);
+    }
+  }
+  if (evidence.codes.length) console.error(`preview ${id} capture codes:`, JSON.stringify(evidence.codes));
+  if (probe) return finishPreviewProbe(id, state.result, { flags, viewport, deviceScaleFactor, queueRetries, system, evidence });
   const summary = summarizeCapture(state.result);
   const draftRev = draft ? state.result.draftRev : undefined;
   const variant = flags.example ?? (propsPath === undefined ? undefined : propsPath.replace(/\.json$/i, "").split("/").pop());
@@ -1392,7 +1525,7 @@ async function runPreview(args, flags) {
   }
   const exitCode = !summary.imageProduced ? EXIT.failed : summary.productErrors.length ? EXIT.productErrors : EXIT.ok;
   const theme = flags.theme ?? "light";
-  const pins = `preview ${id} ${draft ? `draft rev ${draftRev ?? "-"}` : `v${version}`} bundleHash=${state.result.bundleHash ?? "-"} designSystemMetaVersion=${system.latestMetaVersion ?? "-"} viewport=${viewport.width}x${viewport.height} dsf=${deviceScaleFactor} theme=${theme}${flags.example === undefined ? "" : ` example=${flags.example}`}`;
+  const pins = `preview ${id} ${draft ? `draft rev ${draftRev ?? "-"}` : `v${version}`} bundleHash=${state.result.bundleHash ?? "-"} designSystemMetaVersion=${system.latestMetaVersion ?? "-"} viewport=${viewport.width}x${viewport.height} dsf=${deviceScaleFactor} theme=${theme}${flags.example === undefined ? "" : ` example=${flags.example}`} receipt=${evidence.receiptSha256 ?? "-"}`;
   out(pins);
   if (summary.imageProduced) out(outputPath);
   if (summary.productErrors.length) console.error(`preview ${id} product errors:`, JSON.stringify(summary.productErrors));
@@ -1406,6 +1539,8 @@ async function runPreview(args, flags) {
       viewport, dsf: deviceScaleFactor, theme,
       ...(flags.example === undefined ? {} : { example: flags.example }),
       path: summary.imageProduced ? outputPath : null, queueRetries, exitCode, ...summary,
+      receiptSha256: evidence.receiptSha256, renderer: evidence.renderer, codes: evidence.codes,
+      receipt: wantReceipt ? flags.receipt : null,
     });
   }
   if (exitCode === EXIT.productErrors) throw new CliError("preview produced a PNG with product errors", { exitCode: EXIT.productErrors });

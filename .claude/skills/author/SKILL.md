@@ -579,7 +579,16 @@ node driver.mjs shoot my-flow ./shots                # deprecated: алиас `s
 | `2` | PNG создан, но прототип логировал ошибки (`productErrors`) | чинить прототип/компонент; PNG уже лежат в `./shots` |
 | `1` | PNG не создан (job error/timeout, 5xx, 501) | инфраструктура/окружение; драйвер уже сделал 2 попытки на экран |
 
-Инфраструктурный шум (favicon, расширения браузера, `ERR_NETWORK_CHANGED`, `ResizeObserver loop`, посторонние origin'ы) сервер отдаёт в `infraNoise` и он **не** влияет на exit code. `--json` печатает по экрану `{screenId, path, imageProduced, captureClean, productErrors, infraNoise, runtimeWarnings, attempts}`. Флаг `--json` есть у всех verb'ов; сессия кэшируется на диске между вызовами (`$XDG_STATE_HOME/easyui`, выключатель `EASYUI_SESSION_CACHE=0`, путь переопределяет `EASYUI_SESSION_FILE`), поэтому логин обычно один на серию вызовов; GET'ы и постановка job'а ретраятся на 5xx.
+Инфраструктурный шум (favicon, расширения браузера, `ERR_NETWORK_CHANGED`, `ResizeObserver loop`, посторонние origin'ы) сервер отдаёт в `infraNoise` и он **не** влияет на exit code. `--json` печатает по экрану `{screenId, path, imageProduced, captureClean, productErrors, infraNoise, runtimeWarnings, attempts, receiptSha256, renderer, codes}`.
+
+**Чем снят кадр (capture receipt).** `--json` у `snap`/`shoot`/`preview` несёт `receiptSha256` (адрес доказательства), `renderer.rendererFingerprint` (объявленный рендерер джобы) и `codes[]` — типизированные коды капчура (`font_face_missing`, `image_load_failed`, `layout_unstable`, `renderer_mismatch`, …). Сам документ скачивается флагом `--receipt <file.json>`:
+
+```bash
+node driver.mjs snap my-flow ./shots --receipt ./receipts/my-flow.json --json     # запись на каждый экран
+node driver.mjs preview rating-stars --receipt ./receipts/stars.json --json       # receipt одной джобы
+```
+
+В нём — рендерер и его отпечаток, манифест ресурсов (шрифты темы со статусом загрузки, декодированные картинки), консоль, идентичность PNG (`output.pngSha256`, `surfaceRect`), тайминги и вердикт readiness. Это первый инструмент при вопросе «почему кадр другой»: сравнивать receipt'ы дешевле, чем пиксели. Если receipt'ы на сервере выключены или вытеснены, файл честно пишет `null`, а причина уходит на stderr — exit code от этого не меняется. Флаг `--json` есть у всех verb'ов; сессия кэшируется на диске между вызовами (`$XDG_STATE_HOME/easyui`, выключатель `EASYUI_SESSION_CACHE=0`, путь переопределяет `EASYUI_SESSION_FILE`), поэтому логин обычно один на серию вызовов; GET'ы и постановка job'а ретраятся на 5xx.
 
 Серверные скриншоты также доступны сырым API (`POST /prototypes/:id/screens/:sid/screenshot {viewport,...}` → 202 `{jobId}` → `GET /screenshot-jobs/:jobId`; параметры theme/deviceScaleFactor/rev/version), включая скриншот одного компонента: `POST /components/:id/versions/:v/screenshot {props? | exampleName?, viewport}` — обёртка над ним: `driver.mjs preview` (см. «Приёмка атома»).
 

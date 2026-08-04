@@ -1480,9 +1480,9 @@ bump'ом `RENDERER_VERSION`: `--record` отказывается перепис
 
 | Метод и путь | Тело / ответ |
 |---|---|
-| `PUT /visual-baselines/prototypes/:id` | Атомарная замена полного baseline-set: `{rev,prototypeInstanceId,baseGeneration,members:[{screenId,viewport,deviceScaleFactor,theme,assetId}]}` → `{generation,rev,members:[{…,referenceId}]}` |
+| `PUT /visual-baselines/prototypes/:id` | Атомарная замена полного baseline-set: `{rev,prototypeInstanceId,baseGeneration,members:[{screenId,viewport,deviceScaleFactor,theme,assetId}],receipts?}` → `{generation,rev,members:[{…,referenceId}]}`. `receipts` — необязательная карта `assetId → receiptSha256` (R6, массовая пересъёмка). |
 | `GET /visual-baselines/prototypes/:id` | Последний set: `{generation,rev,prototypeInstanceId,createdAt,members:[{screenId,viewport,deviceScaleFactor,theme,referenceId}]}` |
-| `PUT /visual-references` | `{fingerprint, assetId, note?}` → `200 reference`; upsert по канону fingerprint. Ассет обязан существовать и быть `image/png` (иначе `422`). |
+| `PUT /visual-references` | `{fingerprint, assetId, note?, receiptSha256?}` → `200 reference`; upsert по канону fingerprint. Ассет обязан существовать и быть `image/png` (иначе `422`). `receiptSha256` — необязательный адрес receipt'а кадра (R6, массовая пересъёмка); рендерер эталона сервер резолвит сам. |
 | `GET /visual-references?scope=&prototypeId=&componentId=` | `{references:[reference]}` — каждая с `lastRun`. |
 | `GET /visual-references/:id` | `reference` + `runs:[report]` (полная история). |
 | `DELETE /visual-references/:id` | `204`; soft-delete активного reference без удаления runs. Повторный DELETE → `404 reference_not_found`. |
@@ -2017,6 +2017,91 @@ receipt'а.
 `.receipts` входит в периметр `du`-приёмки тома вместе с `assets/`, `.acceptance/cas` и
 `.candidates`.
 
+### Cross-renderer guard визуальных эталонов (волна R6, план 2026-08-03 renderer-contract-2)
+
+Кадры, нарисованные **разными рендерерами**, больше не сравниваются. До волны эталон и кандидат,
+снятые разными chromium/шрифтами/флагами, судились как обычная визуальная регрессия, и разница
+рендереров приезжала процентом — то есть числом, которое нечем интерпретировать.
+
+**Что хранится.** Миграция **v28** (единственная миграция пакета, только `ADD COLUMN`, без FK):
+`visual_references` += `renderer_fingerprint`, `renderer_json`, `font_manifest_hash`,
+`receipt_sha256`, `renderer_recorded_at`; `visual_runs` += `renderer_guard`, `outcome_code`,
+`candidate_receipt_sha256`, `reference_receipt_sha256`. Отпечаток **не входит** в
+`fingerprint_json` эталона: тот — content-addressed identity (PK, членство baseline-set'а,
+`z.strictObject`), и новое поле внутри него сменило бы id всех эталонов. `visual_runs.status`
+новых значений не получает (это был бы rebuild таблицы под CHECK): cross-renderer исход — пара
+`status:"error"` + `outcomeCode`.
+
+**Откуда берётся рендерер эталона.** Обе точки записи (baseline-коммит
+`PUT /visual-baselines/prototypes/:id` и generic `PUT /visual-references`) резолвят его сервером по
+индексу `assetId → receiptSha256` receipt-стора (R5) и пишут **инлайном**: `renderer_json`
+переживает TTL стора, `receipt_sha256` — только evidence-ссылка, дополнительно защищённая пином
+свипера (receipt, на который ссылается эталон, не вытесняется). PNG, залитый со стороны, честно
+получает `renderer: null` — это `unknown`, а не «совпало». Оба PUT принимают необязательный адрес
+receipt'а (`receiptSha256` / `receipts: {assetId: sha}`) — фолбэк массовой пересъёмки, когда
+клиент знает адрес из `JobStatus.result`; **факты** рендерера сервер всё равно читает из своего
+стора, подделать их этим полем нельзя.
+
+**Как судит guard.** Он живёт в `VisualService.drive()` между кадром кандидата и диффом и
+сравнивает три уровня: `rendererFingerprint`, `fontManifestHash`, `readinessPolicyHash`
+(`null` с любой стороны — «доказательства нет», а не «разошлось»). Guard считается **раньше**
+терминализации по продуктовым ошибкам кадра (console/pageErrors): диагнозы «переснимите эталон» и
+«почините компонент» лечатся по-разному, и первый не выводится из второго; сами консольные ошибки
+при этом остаются в `candidateMeta.browser` того же рана.
+
+| Исход | Условие | Что в отчёте рана |
+|---|---|---|
+| `matched` | обе стороны известны и сошлись | вердикт по метрикам, как до волны |
+| `mismatch` | известны и разошлись | `status:"error"`, `outcomeCode:"renderer_mismatch"`, `rendererGuard.differing[]`, **процента нет** |
+| `unknown`, флаги OFF | происхождение эталона неизвестно | вердикт по метрикам + advisory `warnings:["renderer_unknown"]` (нулевой регресс) |
+| `unknown` / чужая эпоха, `EASYUI_RENDERER_FLAGS=1` | то же при новых пикселях | `status:"error"`, `outcomeCode:"stale_renderer"`, **процента нет** |
+| `disabled` | `EASYUI_RENDERER_GUARD_DISABLED=1` | доволновое поведение; guard записан, но ни на что не влияет |
+
+Эпоха рендерера по умолчанию — `rendererVersion` объявления; `EASYUI_RENDERER_EPOCH` — только
+override, и без `EASYUI_RENDERER_FLAGS=1` он игнорируется (self-check пишет warning на старте).
+Снапшот флагов берётся на постановке проверки: ран, стартовавший до флипа флага, доигрывается по
+старой семантике. Приоритет кодов: разошлись и отпечаток, и эпоха ⇒ `renderer_mismatch`.
+
+Семантика `mismatch` шире буквального «другой браузер»: в сверку входят также `fontManifestHash`
+и `readinessPolicyHash`, поэтому легитимная продуктовая смена (тема добавила/убрала шрифт,
+профиль сменил политику readiness) на эталоне, записанном ПОСЛЕ этой волны, терминализует ран как
+`renderer_mismatch` без процента — вместо прежнего измеримого visual-fail. Это осознанно: кадр с
+другим шрифтовым манифестом несравним попиксельно; правильный ход — переснять эталон
+(`rebaseline-all.mjs` / baseline-путь), а не читать diff. Поле-виновник видно в `differing[]`.
+
+Отчёт рана (`GET /visual-runs/:runId`, `reference.lastRun`, `runs[]`) получил аддитивные поля
+`outcomeCode`, `rendererGuard`, `candidateReceiptSha256`, `referenceReceiptSha256`, `warnings`;
+`reference` — поле `renderer` (или `null`).
+
+**Приёмка.** Reuse `acceptance_case_results` дополнительно сверяет `renderer.fingerprint` в
+`receipt.json` кэшированного случая с рендерером текущего процесса. Расхождение — не ошибка рана,
+а промах кэша: случай снимается заново.
+
+**Массовая пересъёмка.** `node scripts/rebaseline-all.mjs --api <base> [--dry-run]` —
+инвентаризация эталонов обоих scope (`--dry-run` печатает `total/withRenderer/currentEpoch/unknown`
+по каждому) и пересъёмка: `prototype-screen` — через baseline-путь с CAS по поколению,
+`component` — через generic PUT. Капчуры идут строго последовательно с паузой (`--delay-ms`):
+конкуренция capture на сервере равна 1, а очередь делится с фоновой приёмкой. 409 не ретраится —
+прототип помечается `conflict`, повторный запуск доснимет пропущенное.
+
+**Rollback-политика (точка невозврата).** Первая запись эталона с `renderer_fingerprint` **при
+включённых** `EASYUI_RENDERER_FLAGS` — точка невозврата волны: с этого момента эталоны прода
+описывают новый растр, и откат образа/флага возвращает старый рендерер к новым эталонам, то есть
+массовый `stale_renderer`/`mismatch`, а не «как было». Отсюда порядок:
+
+1. **до** включения флагов — логический бэкап prod-тома (канон `/deploy`, `.backups/prod-*`);
+2. деплой образа с guard'ом при выключенных флагах (эталоны продолжают судиться метриками,
+   guard пишет `renderer_unknown` advisory) — это состояние откатывается свободно;
+3. инвентаризация `rebaseline-all.mjs --dry-run` — число эталонов известно заранее;
+4. включение `EASYUI_RENDERER_FLAGS=1` и массовая пересъёмка в maintenance-окно, **разнесённое** с
+   холодной пересъёмкой приёмки;
+5. после шага 4 откат — **только** восстановлением бэкапа шага 1 (канон surfaces). Аварийная
+   ручка на этот период — `EASYUI_RENDERER_GUARD_DISABLED=1`: она возвращает доволновое судейство
+   не трогая данные.
+
+Сама миграция v28 откат образа переживает: колонки аддитивны, потребители `SELECT *` не
+сериализуют строку наружу, поэтому предыдущий образ на базе v28 стартует и отдаёт эталоны.
+
 ### Один рендерер в харнесе: `shoot` → `snap`, офлайн-съёмка `docker run` (волна R8a, план 2026-08-03 renderer-contract-2)
 
 Локальный браузер из харнеса убран. `.claude/skills/author/driver.mjs` больше не импортирует
@@ -2049,4 +2134,143 @@ EASYUI_API=http://127.0.0.1:8787/api EASYUI_USERNAME='Offline Admin' \
 Отпечаток такого прогона — отпечаток образа (`docker run <image> cat /app/renderer-manifest.json`
 и `GET /api/capabilities` → `renderer.fingerprint`); кадры сопоставимы с прод-кадрами того же
 digest'а. Автоматическая проверка рецепта (корпус `docker run` против корпуса драйвера по
-`expected.json`) — волна R8b.
+`expected.json`) — ниже, § [Receipt в CLI и проверка офлайн-рецепта](#receipt-в-cli-и-проверка-офлайн-рецепта-волна-r8b-план-2026-08-03-renderer-contract-2).
+
+### Receipt в CLI и проверка офлайн-рецепта (волна R8b, план 2026-08-03 renderer-contract-2)
+
+Доказательства происхождения кадра (§ [Capture receipt](#capture-receipt-волна-r5-план-2026-08-03-renderer-contract-2))
+доступны прямо из харнеса: агент, который смотрит на PNG, обязан уметь ответить, **чем** этот
+PNG снят, не заходя в БД сервера.
+
+**`--json` у `snap`/`shoot`/`preview`** дополнительно несёт три поля на каждый снятый кадр:
+
+| Поле | Источник | Смысл |
+|---|---|---|
+| `receiptSha256` | `JobStatus.result.receiptSha256` | адрес receipt'а; читается ручкой `GET /screenshot-jobs/:jobId/receipt` |
+| `renderer` | `JobStatus.result.renderer` (R1) | `{rendererFingerprint, rendererVersion, source, browserVersion}` — объявление, замороженное на постановке джобы |
+| `codes[]` | `failure` джобы (R3) + `verdict.codes` и `renderer.drift` receipt'а (R5) | типизированные коды капчура, дедуплицированные по `code|severity|detail` |
+
+У `snap` эти поля лежат в каждом элементе `screens[]` (у каждого экрана свой капчур и свой
+receipt), у `preview` — на верхнем уровне отчёта, включая `--probe geometry` (у измерительной
+джобы receipt есть, но `output` в нём `null` — кадра не существует). В человекочитаемом режиме
+`preview` печатает `receipt=<sha>` в строке пинов, а непустые `codes[]` уходят на stderr.
+
+**`--receipt <file.json>`** дополнительно скачивает сам документ:
+
+```bash
+node .claude/skills/author/driver.mjs preview yp-button props.json --receipt ./receipts/button.json --json
+node .claude/skills/author/driver.mjs snap my-flow ./shots --receipt ./receipts/my-flow.json --json
+```
+
+| Верб | Форма файла |
+|---|---|
+| `preview` | `{command:"preview", componentId, jobId, receiptSha256, receipt}` — `receipt` дословно тот документ, что отдаёт job-scoped ручка |
+| `snap` | `{command:"snap"\|"shoot", prototypeId, rev, receipts:[{screenId, jobId, receiptSha256, receipt}]}` — один файл на команду, по записи на экран |
+
+Чтение receipt'а **мягкое**: kill-switch `EASYUI_CAPTURE_RECEIPTS_DISABLED=1`, вытеснение
+свипером и сборка старше волны R5 дают `receipt: null` в файле, строку-объяснение на stderr и
+**неизменный exit code** — кадр уже снят, и терять его из-за отсутствующего доказательства
+нельзя. Отпечаток рендерера при этом остаётся: он объявляется на постановке джобы и от receipt'ов
+не зависит.
+
+#### K2: проверка офлайн-рецепта (локальный харнес против сервера в образе)
+
+Метрика K2 плана распадается на две части; кросс-хост часть закрыта волной R2c, здесь — вторая:
+**кадр, снятый через `driver.mjs`, обязан быть байт-идентичен кадру, снятому корпусом по HTTP на
+том же образе**. После R8a у харнеса нет собственного браузера, поэтому обе ноги обязаны сойтись
+дословно; расхождение означало бы, что клиент влияет на растр (иной вьюпорт, dpr, тема или
+props), и это баг харнеса.
+
+Шаг 1 — поднять образ и снять корпус по HTTP (нога «сервер в контейнере»; она же публикует
+фикстурную ДС и компоненты в контейнер):
+
+```bash
+docker run -d --name easyui-k2 --shm-size=1g -p 127.0.0.1:8787:8787 \
+  -e EASYUI_RENDERER_FLAGS=1 -e REUSE_GATE=shadow \
+  -e ADMIN_NAME='Corpus Admin' -e ADMIN_PASSWORD='corpus-admin-password' \
+  -e PUBLIC_ORIGIN=http://127.0.0.1:8787 ghcr.io/vladprrs/easy-ui:<sha>
+node scripts/renderer-corpus.mjs --verify --bootstrap --truncated \
+  --server-url http://127.0.0.1:8787 --out corpus-image.json
+```
+
+Шаг 2 — снять ту же матрицу драйвером и сверить с `corpus-image.json` (нога «локальный харнес»).
+Скрипт ниже самодостаточен: он читает манифест корпуса, гонит `driver.mjs preview` по каждой паре
+фикстура×вариант и сравнивает **три** величины — sha скачанного PNG, `receipt.output.pngSha256` и
+ожидание из записи корпуса, плюс отпечаток рендерера:
+
+```bash
+export EASYUI_API=http://127.0.0.1:8787/api
+export EASYUI_USERNAME='Corpus Admin' EASYUI_PASSWORD='corpus-admin-password'
+export CORPUS_RECORD=corpus-image.json   # FULL=1 — полная матрица вместо усечённой
+node --input-type=module - <<'EOF'
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const run = promisify(execFile);
+const record = JSON.parse(await readFile(process.env.CORPUS_RECORD, "utf8"));
+const corpus = JSON.parse(await readFile("e2e/fixtures/renderer-corpus/corpus.json", "utf8"));
+const work = await mkdtemp(join(tmpdir(), "k2-cli-"));
+const variants = corpus.variants.filter((v) => process.env.FULL === "1" || v.truncated === true);
+const rows = [];
+for (const fixture of corpus.fixtures.filter((f) => f.subset === "pixel")) {
+  const props = join(work, `${fixture.id}.props.json`);
+  await writeFile(props, JSON.stringify(fixture.props ?? {}));
+  for (const variant of variants) {
+    const png = join(work, `${fixture.id}-${variant.id}.png`);
+    const receiptPath = join(work, `${fixture.id}-${variant.id}.receipt.json`);
+    const { stdout } = await run("node", [
+      ".claude/skills/author/driver.mjs", "preview", fixture.id, props,
+      "--viewport", `${variant.viewport.width}x${variant.viewport.height}`,
+      "--theme", variant.theme, "--dsf", String(variant.dsf),
+      "--out", png, "--receipt", receiptPath, "--json",
+    ], { env: process.env, maxBuffer: 64 * 1024 * 1024 });
+    const payload = JSON.parse(stdout);
+    const receipt = JSON.parse(await readFile(receiptPath, "utf8")).receipt;
+    const fileSha = createHash("sha256").update(await readFile(png)).digest("hex");
+    const want = record.pixel?.[fixture.id]?.[variant.id] ?? null;
+    rows.push({
+      key: `${fixture.id}/${variant.id}`, want, fileSha,
+      receiptSha: receipt?.output?.pngSha256 ?? null,
+      fingerprint: payload.renderer?.rendererFingerprint ?? null,
+      ok: want !== null && want === fileSha && receipt?.output?.pngSha256 === fileSha
+        && payload.renderer?.rendererFingerprint === record.renderer.fingerprint,
+    });
+  }
+}
+const bad = rows.filter((row) => !row.ok);
+process.stdout.write(`${JSON.stringify({ captures: rows.length, mismatches: bad.length, detail: bad.slice(0, 10) }, null, 2)}\n`);
+if (bad.length > 0) process.exitCode = 1;
+EOF
+docker rm -f easyui-k2
+```
+
+Вердикт: `mismatches: 0` ⇒ K2 (local-vs-server) выполнен байт-точно. Ненулевое число читается по
+полям `detail[]`: разошёлся `fileSha` с `want` — растр зависит от клиента (баг харнеса или разные
+входы); разошёлся `receiptSha` с `fileSha` — receipt описывает не тот кадр, который доехал до
+диска (баг доставки); разошёлся `fingerprint` — сравниваются **разные рендереры**, и сверка sha
+бессмысленна до устранения расхождения.
+
+**Где это выполнимо.** Обеим ногам нужен рабочий docker-демон. В dev-контейнере разработки его
+нет (`docker` CLI есть, сокета нет), поэтому полная проверка гоняется в CI (job `renderer-corpus`
+уже поднимает образ — вторая нога добавляется тем же скриптом) либо на хосте с docker. Без docker
+проверяется тот же инвариант против **локального** Bun-сервера (нужен собранный `dist` —
+`npm run build`):
+
+```bash
+rm -rf .measure-data/k2-dev && mkdir -p .measure-data/k2-dev
+EASYUI_RENDERER_FLAGS=1 REUSE_GATE=shadow SERVE_DIST=dist DATA_DIR=.measure-data/k2-dev \
+  PORT=4199 PUBLIC_ORIGIN=http://127.0.0.1:4199 \
+  ADMIN_NAME='Corpus Admin' ADMIN_PASSWORD='corpus-admin-password' \
+  ~/.bun/bin/bun server/main.ts &   # дождаться "ready" в логе
+node scripts/renderer-corpus.mjs --verify --report --bootstrap --truncated \
+  --server-url http://127.0.0.1:4199 --out /tmp/k2-http.json
+# шаг 2 (CLI-нога): EASYUI_API=http://127.0.0.1:4199/api driver.mjs snap … --receipt, сверка sha
+``` Результат такого прогона (dev-хост,
+`source: "fallback"`, усечённая матрица 9 pixel-фикстур × 3 варианта = **27 капчуров**):
+`mismatches: 0` — то есть CLI-нога и HTTP-нога сходятся байт-в-байт, а `receipt.output.pngSha256`
+совпадает с sha скачанного PNG. Отличие от docker-прогона — только отпечаток рендерера (`fallback`
+против `manifest`), сам инвариант от него не зависит.

@@ -323,6 +323,8 @@ node driver.mjs snap my-flow ./shots --dsf 2 --theme dark   # ретина-ма�
 
 Перед съёмкой драйвер сверяет `GET /api/capabilities` → секцию `renderer` и пишет на stderr предупреждение, если у сборки нет renderer-манифеста (`source: "fallback"` — dev-инстанс) или секции нет вовсе: кадры такого сервера несопоставимы с эталонами. Предупреждение съёмку не прерывает и на exit code не влияет.
 
+**Чем снят кадр (capture receipt).** `--json` у `snap`/`shoot`/`preview` несёт `receiptSha256`, `renderer.rendererFingerprint` и `codes[]` (типизированные коды капчура: `font_face_missing`, `image_load_failed`, `layout_unstable`, `renderer_mismatch`, …). Сам документ — флагом `--receipt <file.json>`: `node driver.mjs snap my-flow ./shots --receipt ./receipts/my-flow.json --json` (запись на экран) и `node driver.mjs preview rating-stars --receipt ./receipts/stars.json --json` (одна джоба). В receipt'е — рендерер и его отпечаток, шрифты темы со статусом загрузки, декодированные картинки, консоль, `output.pngSha256`, `surfaceRect`, тайминги и вердикт readiness; сравнивать receipt'ы дешевле, чем пиксели. Выключенные или вытесненные receipt'ы дают `null` в файле и строку на stderr, exit code не меняется.
+
 **Exit codes `snap`:**
 
 | Код | Значение | Что делать |

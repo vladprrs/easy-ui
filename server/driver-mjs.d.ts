@@ -134,6 +134,27 @@ declare module "*/author/driver.mjs" {
     runtimeWarnings: string[];
   }
   export function summarizeCapture(result: Record<string, unknown> | null | undefined): DriverCaptureSummary;
+  /** Типизированный код капчура (R3) в форме, которую печатает CLI. */
+  export interface DriverCaptureCode { code: string; severity: string; detail: string }
+  export interface DriverCaptureRenderer {
+    rendererFingerprint: string | null;
+    rendererVersion: string | null;
+    source: string | null;
+    browserVersion: string | null;
+  }
+  export interface DriverCaptureEvidence {
+    receiptSha256: string | null;
+    renderer: DriverCaptureRenderer | null;
+    codes: DriverCaptureCode[];
+  }
+  export function captureCodes(
+    state: Record<string, unknown> | null | undefined,
+    receipt: Record<string, unknown> | null | undefined,
+  ): DriverCaptureCode[];
+  export function captureReceiptEvidence(
+    state: Record<string, unknown> | null | undefined,
+    receiptDocument: Record<string, unknown> | null | undefined,
+  ): DriverCaptureEvidence;
   export function snapExitCode(rows: readonly { imageProduced: boolean; productErrors: readonly string[] }[]): 0 | 1 | 2;
   export const QUEUE_RETRY_DELAYS_MS: readonly number[];
   export function previewOutputPath(id: string, version: number, variant?: string): string;
