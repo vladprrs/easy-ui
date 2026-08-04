@@ -112,8 +112,9 @@ jobs:
           done
           echo "image did not become healthy in 240s"; docker logs corpus; exit 1
 
+      # /api/health открыт без сессии и несёт ту же секцию renderer (R1); capabilities — под auth.
       - name: Renderer declaration of the image
-        run: curl -fsS "$CORPUS_BASE/api/capabilities" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.stringify(JSON.parse(s).renderer,null,2)))'
+        run: curl -fsS "$CORPUS_BASE/api/health" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.stringify(JSON.parse(s).renderer,null,2)))'
 
       # --- обычный прогон (main / PR) --------------------------------------------------
       # `--bootstrap`: если для отпечатка ОБРАЗА ожиданий в expected.json ещё нет (а при первом
