@@ -595,7 +595,12 @@ export default function MoveRoleOwner() { return <div>move role owner</div>; }
     // и CLI врал «component/<id> not found» про существующий компонент.
     const component = await run(api, ["delete", "component", "retire-me", "--json"]);
     expect(component.exitCode).toBe(0);
-    expect(JSON.parse(component.stdout)).toEqual({ command: "delete", kind: "components", id: "retire-me", deleted: true, cache: CACHE_OFF });
+    // `existence` (W4): вывод о существовании ресурса всегда назван — мутация опирается на
+    // прямой сетевой ответ, а не на кэш.
+    expect(JSON.parse(component.stdout)).toEqual({
+      command: "delete", kind: "components", id: "retire-me", deleted: true, cache: CACHE_OFF,
+      existence: { source: "direct-network", refreshed: false, status: 200 },
+    });
     expect(db.query("SELECT deleted_at IS NOT NULL gone FROM components WHERE id='retire-me'").get()).toEqual({ gone: 1 });
 
     const system = await run(api, ["delete", "design-system", "yandex-pay"]);
@@ -2211,4 +2216,106 @@ describe("author driver planners", () => {
     expect(() => parseArgs(["preview", "pay-button", "--rev", "3"])).toThrow("--rev must be one of: head-draft");
     expect(() => parseArgs(["preview", "pay-button", "--rev", "draft"])).toThrow("--rev must be one of: head-draft");
   });
+});
+
+/**
+ * План 2026-08-04 §W4 (P1-5): происхождение вывода о существовании ресурса.
+ *
+ * Расследование шага 0 опровергло атрибуцию фидбэка («stale component-list cache»): `classify`
+ * (`cache.mjs`) не кэширует `GET /components/:id` вовсе, а `write()` не пишет ответы со статусом
+ * ≠ 200 — отрицательный ответ на диск не попадает ни при каких условиях, и списка компонентов
+ * драйвер для existence не читает. Поэтому тесты пинуют два инварианта:
+ *
+ *   1. тёплый `--cache-dir` не прячет свежий драфт от мутационного пути (кэш не участвует);
+ *   2. вывод «нет» из **кэшированного списка** (каталожный манифест, `fresh` 5 минут) не
+ *      терминален: ровно один принудительный сетевой перечит — и только его результат вердикт.
+ */
+describe("author driver existence provenance (W4)", () => {
+  function catalogRoutes(state: { components: Record<string, unknown>[] }) {
+    return {
+      "GET /api/capabilities": () => ({ json: { features: { acceptanceMatrix: true, acceptancePromote: true } } }),
+      "GET /api/catalog/manifest": () => ({ json: { components: state.components } }),
+      "GET /api/design-systems/yandex-pay": () => ({ json: { id: "yandex-pay", name: "Yandex Pay", components: [], hostPrimitives: [] } }),
+      "GET /api/components/fresh-card/versions/1": () => ({ json: { version: 1, name: "FreshCard", props: {} } }),
+    } as Record<string, (body: Record<string, unknown> | null) => StubReply>;
+  }
+
+  test("a fresh draft is visible to a mutating path under a warm cache, without --cache-refresh", async () => {
+    const state = { exists: false };
+    const routes = {
+      ...promoteStubRoutes(),
+      "GET /api/components/linked": () => (state.exists
+        ? { json: { id: "linked", headRev: 2, designSystem: "yandex-pay" } }
+        : { status: 404, json: { error: { code: "not_found", message: "Component not found" } } }),
+    } as Record<string, (body: Record<string, unknown> | null) => StubReply>;
+    const { api, calls, promotes } = await stubApi(routes);
+    const cacheDir = resolve(await testDirectory(), "cache");
+
+    // Прогрев тем же каталогом кэша: компонента ещё нет — путь обязан упасть, но без POST.
+    const cold = await run(api, ["promote", "linked", "--cache-dir", cacheDir]);
+    expect(cold.exitCode).toBe(1);
+    expect(cold.stderr).toContain("components/linked not found");
+    expect(promotes()).toHaveLength(0);
+    // Настоящий 404: ответ уже сетевой, второго round-trip за ним не следует.
+    expect(calls.filter((call) => call.method === "GET" && call.path === "/api/components/linked")).toHaveLength(1);
+
+    // Драфт появился после прогрева — тёплый кэш обязан его не заслонить.
+    state.exists = true;
+    const warm = await run(api, ["promote", "linked", "--cache-dir", cacheDir, "--json"]);
+    expect(warm.exitCode).toBe(0);
+    expect(JSON.parse(warm.stdout)).toMatchObject({
+      command: "promote", id: "linked",
+      existence: { source: "direct-network", refreshed: false, status: 200 },
+    });
+    expect(promotes()).toHaveLength(1);
+  }, 30_000);
+
+  test("case-set put refuses a missing component locally, before the PUT", async () => {
+    const routes = {
+      "GET /api/capabilities": () => ({ json: { features: { acceptanceMatrix: true } } }),
+      "GET /api/components/ghost": () => ({ status: 404, json: { error: { code: "not_found", message: "Component not found" } } }),
+    } as Record<string, (body: Record<string, unknown> | null) => StubReply>;
+    const { api, calls } = await stubApi(routes);
+    const manifestPath = resolve(await testDirectory(), "case-set.json");
+    await writeFile(manifestPath, JSON.stringify({ version: 1, componentId: "ghost", cases: [] }));
+    const result = await run(api, ["case-set", "put", "ghost", manifestPath]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("components/ghost not found");
+    expect(calls.some((call) => call.method === "PUT")).toBe(false);
+  }, 30_000);
+
+  test("a negative from the cached catalog list is re-checked directly before it becomes a verdict", async () => {
+    const state: { components: Record<string, unknown>[] } = { components: [] };
+    const { api, calls } = await stubApi(catalogRoutes(state));
+    const cacheDir = resolve(await testDirectory(), "cache");
+
+    // Прогрев: манифест без компонента уезжает в `fresh`-запись на 5 минут.
+    expect((await run(api, ["catalog", "list", "yandex-pay", "--cache-dir", cacheDir])).exitCode).toBe(0);
+    const warmed = calls.filter((call) => call.path === "/api/catalog/manifest").length;
+    expect(warmed).toBe(1);
+
+    // Компонент опубликован после прогрева: тёплый список о нём не знает, а вердикт — обязан.
+    state.components = [{ id: "fresh-card", name: "FreshCard", version: 1, description: "" }];
+    const found = await run(api, ["catalog", "get", "yandex-pay", "FreshCard", "--cache-dir", cacheDir, "--json"]);
+    expect(found.exitCode).toBe(0);
+    expect(JSON.parse(found.stdout)).toMatchObject({
+      command: "catalog get", designSystem: "yandex-pay",
+      existence: { source: "direct-network", refreshed: true, status: 200 },
+    });
+    // Ровно один принудительный сетевой перечит списка: не ноль (иначе ложное «нет») и не два.
+    expect(calls.filter((call) => call.path === "/api/catalog/manifest").length - warmed).toBe(1);
+  }, 30_000);
+
+  test("a genuinely absent artifact costs exactly one forced refresh", async () => {
+    const state: { components: Record<string, unknown>[] } = { components: [] };
+    const { api, calls } = await stubApi(catalogRoutes(state));
+    const cacheDir = resolve(await testDirectory(), "cache");
+    expect((await run(api, ["catalog", "list", "yandex-pay", "--cache-dir", cacheDir])).exitCode).toBe(0);
+    const warmed = calls.filter((call) => call.path === "/api/catalog/manifest").length;
+
+    const missing = await run(api, ["catalog", "get", "yandex-pay", "Ghost", "--cache-dir", cacheDir]);
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stderr).toContain("artifact Ghost not found");
+    expect(calls.filter((call) => call.path === "/api/catalog/manifest").length - warmed).toBe(1);
+  }, 30_000);
 });

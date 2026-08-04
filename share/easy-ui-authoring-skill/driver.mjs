@@ -434,7 +434,10 @@ async function call(method, path, body, options = {}) {
   // там, где ответ мутабелен и «свежий по TTL» ≠ «актуальный»: автовыбор связки promote читает
   // раны кандидата только с сервера (план 2026-08-04 §W2b, C22).
   const hit = options.noCache === true ? null : await cache.read(method, path, body);
-  if (hit) return { status: hit.status, json: hit.json ?? null };
+  // `cached: true` — ответ пришёл с диска, а не из сети. Флаг нужен вызывающему, который
+  // делает из ответа вывод о **существовании** ресурса: отрицательный вывод из кэша не
+  // авторитетен (план 2026-08-04 §W4, existence-provenance).
+  if (hit) return { status: hit.status, json: hit.json ?? null, cached: true };
   // Reads are retried by default; writes only when the caller opts in (snap enqueue).
   const retries = options.retries ?? (method === "GET" ? RETRY_BACKOFF_MS.length : 0);
   let lastError;
@@ -546,10 +549,66 @@ const DELETABLE = Object.freeze({
   "design-systems": { revisioned: false, verb: "retired" },
 });
 
-async function getMeta(kind, id) {
-  const response = await call("GET", `/${kind}/${encodeURIComponent(id)}`);
-  if (response.status === 404) return null;
-  return requireOk(`GET /${kind}/${id}`, response);
+/**
+ * Existence lookup и его происхождение (план 2026-08-04 §W4, P1-5).
+ *
+ * Отрицательный ответ о ресурсе стоит дороже положительного: из «не нашли» клиент делает
+ * вывод «не существует» и прекращает работу (`components/<id> not found` — терминальная
+ * ошибка до создания рана). Поэтому у каждого такого вывода есть происхождение:
+ *
+ *   `list-cache`     — вывод сделан из **агрегированного** ответа (каталожный манифест),
+ *                      к тому же кэшированного: отсутствие в списке ≠ 404 конкретного id
+ *                      (манифест перечисляет только опубликованные версии, драфта там нет
+ *                      никогда, а `fresh`-окно списка — 5 минут);
+ *   `direct-cache`   — прямой `GET /<kind>/<id>`, отданный клиентским кэшем;
+ *   `direct-network` — прямой `GET /<kind>/<id>`, полученный от сервера в этом вызове.
+ *
+ * Правило: **отрицательный** результат с провенансом ≠ `direct-network` не объявляется
+ * «not found» — сначала ровно один принудительный прямой сетевой запрос (`noCache`), и
+ * только его 404 терминален. Ровно один: второй 404 подряд — это ответ сервера, а не
+ * состояние кэша, и повторять запрос дальше бессмысленно.
+ *
+ * Мутационные пути (`accept`, `promote`, publish, save, delete, `case-set put`) дополнительно
+ * требуют `direct-*`: у них из этого же ответа берётся `headRev` для CAS, поэтому «свежий по
+ * TTL» их не устраивает — они читают ресурс `noCache` и получают `direct-network`.
+ */
+export const EXISTENCE_SOURCES = Object.freeze(["list-cache", "direct-cache", "direct-network"]);
+
+/** Провенанс последнего existence-вывода — попадает в `--json` (`existence`) команд. */
+let lastExistence = null;
+const recordExistence = (source, refreshed, status) => (lastExistence = { source, refreshed, status });
+/** `{existence}` для `--json`-отчёта: пусто, пока команда ничего не проверяла на существование. */
+export const existenceReport = () => (lastExistence === null ? {} : { existence: lastExistence });
+
+/**
+ * Прямой existence-lookup. Возвращает `{value, provenance, refreshed, status}`: `value` —
+ * метаданные или `null` (404), `provenance` — по таблице выше.
+ */
+async function lookupMeta(kind, id, { mutating = false } = {}) {
+  const path = `/${kind}/${encodeURIComponent(id)}`;
+  let response = await call("GET", path, undefined, mutating ? { noCache: true } : {});
+  let provenance = response.cached === true ? "direct-cache" : "direct-network";
+  let refreshed = false;
+  if (response.status === 404 && provenance !== "direct-network") {
+    response = await call("GET", path, undefined, { noCache: true });
+    provenance = "direct-network";
+    refreshed = true;
+  }
+  recordExistence(provenance, refreshed, response.status);
+  // Принудительный перезапрос виден в логе: читателю важно, что «not found» — ответ сервера,
+  // а не состояние кэша (и что за него заплачен один лишний round-trip).
+  if (refreshed) progress(`existence: ${kind}/${id} re-checked directly (the cached answer was negative)`);
+  const value = response.status === 404 ? null : await requireOk(`GET ${path}`, response);
+  return { value, provenance, refreshed, status: response.status };
+}
+
+/**
+ * Метаданные ресурса либо `null`. Тонкая обёртка над `lookupMeta`: провенанс вывода пишется
+ * в отчёт (`existence` в `--json`), а не растекается по четырнадцати вызывающим.
+ * `{mutating: true}` — путь, который после проверки мутирует ресурс: читает мимо кэша.
+ */
+async function getMeta(kind, id, options = {}) {
+  return (await lookupMeta(kind, id, options)).value;
 }
 
 /**
@@ -1455,7 +1514,7 @@ async function finishPreviewProbe(id, result, { flags, viewport, deviceScaleFact
   const exitCode = summary.productErrors.length ? EXIT.productErrors : EXIT.ok;
   if (jsonMode) {
     report(null, {
-      command: "preview", componentId: id, probe: "geometry",
+      command: "preview", componentId: id, probe: "geometry", ...existenceReport(),
       ...result, path: flags.out ?? null, queueRetries, exitCode,
       // Receipt измерительной джобы существует, но `output` в нём `null`: кадра здесь нет (C-M8).
       receiptSha256: evidence?.receiptSha256 ?? null, renderer: evidence?.renderer ?? null,
@@ -1528,7 +1587,7 @@ async function runPreview(args, flags) {
   const evidence = await captureEvidence(queued.jobId, state, wantReceipt || jsonMode);
   if (wantReceipt) {
     await writeReceiptFile(flags.receipt, {
-      command: "preview", componentId: id, jobId: queued.jobId,
+      command: "preview", componentId: id, jobId: queued.jobId, ...existenceReport(),
       receiptSha256: evidence.receiptSha256, receipt: evidence.document?.receipt ?? null,
     });
     out(flags.receipt);
@@ -1555,7 +1614,7 @@ async function runPreview(args, flags) {
   if (summary.infraNoise.length && !jsonMode) console.error(`preview ${id} infra noise (ignored):`, JSON.stringify(summary.infraNoise));
   if (jsonMode) {
     report(null, {
-      command: "preview", componentId: id,
+      command: "preview", componentId: id, ...existenceReport(),
       ...(draft ? { rev: "head-draft", draftRev: draftRev ?? null } : { version }),
       bundleHash: state.result.bundleHash ?? null,
       designSystemMetaVersion: system.latestMetaVersion ?? null,
@@ -1601,7 +1660,7 @@ async function publishComponent(id, rev, reuseOverride, command = "component") {
     failReuseConflict(command, "publish", published, id);
     await failRevisionConflict("publish", published, "components", id);
   }
-  const meta = await getMeta("components", id);
+  const meta = await getMeta("components", id, { mutating: true });
   if (!jsonMode) console.log(`published ${id} version ${published.json.version} in ${meta.designSystem}`, published.json.warnings?.length ? published.json.warnings : "");
   return { version: published.json.version, designSystem: meta.designSystem, warnings: published.json.warnings ?? [] };
 }
@@ -1631,15 +1690,21 @@ function failReuseConflict(command, step, response, id) {
 
 async function failRevisionConflict(step, response, kind, id) {
   if (response.status !== 409 || errorCode(response) !== "revision_conflict") requestFailed(step, response);
-  const current = await getMeta(kind, id);
+  const current = await getMeta(kind, id, { mutating: true });
   throw new CliError(`${step} failed (409 revision_conflict); current metadata:\n${JSON.stringify(current, null, 2)}\nnot retrying automatically; inspect the current revision and run the command again`);
 }
 
-async function loadCatalog(id) {
+/**
+ * Каталог дизайн-системы. `direct: true` — принудительно мимо клиентского кэша: манифест
+ * кэшируется на 5 минут (`cache.mjs` `fresh`), и вывод «такого артефакта нет» из тёплой
+ * записи — тот самый негатив из списка, который не считается ответом о конкретном id (§W4).
+ */
+async function loadCatalog(id, { direct = false } = {}) {
   const encoded = encodeURIComponent(id);
+  const options = direct ? { noCache: true } : {};
   const [manifest, system] = await Promise.all([
-    call("GET", `/catalog/manifest?designSystem=${encoded}`),
-    call("GET", `/design-systems/${encoded}`),
+    call("GET", `/catalog/manifest?designSystem=${encoded}`, undefined, options),
+    call("GET", `/design-systems/${encoded}`, undefined, options),
   ]);
   if (manifest.status === 404 || system.status === 404) {
     throw new CliError(`design system ${id} not found; hint: run 'driver.mjs get design-systems'`);
@@ -1647,6 +1712,7 @@ async function loadCatalog(id) {
   return {
     manifest: await requireOk(`GET /catalog/manifest?designSystem=${id}`, manifest),
     system: await requireOk(`GET /design-systems/${id}`, system),
+    cached: manifest.cached === true || system.cached === true,
   };
 }
 
@@ -1682,22 +1748,38 @@ async function runCatalog(args, flags) {
   if (subcommand === "get") {
     const id = args[1];
     const requested = args.slice(2);
-    const { manifest, system } = await loadCatalog(id);
+    let catalog = await loadCatalog(id);
+    let refreshed = false;
+    const findArtifact = (artifact) => {
+      const custom = (catalog.manifest.components ?? []).find((component) => component.id === artifact || component.name === artifact);
+      if (custom) return { kind: "custom", value: custom };
+      const builtin = (catalog.system.components ?? []).find((component) => component.name === artifact);
+      if (builtin) return { kind: "builtin", value: builtin };
+      const host = (catalog.system.hostPrimitives ?? []).find((component) => component.name === artifact);
+      if (host) return { kind: "host", value: host };
+      return null;
+    };
     const artifacts = [];
     for (const artifact of requested) {
-      const custom = (manifest.components ?? []).find((component) => component.id === artifact || component.name === artifact);
-      if (custom) {
+      let found = findArtifact(artifact);
+      // Негатив из **кэшированного списка** не авторитетен (§W4): ровно один принудительный
+      // сетевой перечит каталога, и только после него «не найдено» — вердикт.
+      if (!found && catalog.cached && !refreshed) {
+        catalog = await loadCatalog(id, { direct: true });
+        refreshed = true;
+        found = findArtifact(artifact);
+      }
+      recordExistence(catalog.cached ? "list-cache" : "direct-network", refreshed, found ? 200 : 404);
+      if (!found) throw new CliError(`catalog get ${id}: artifact ${artifact} not found; run 'catalog list ${id}' first`);
+      if (found.kind === "custom") {
+        const custom = found.value;
         const details = await requireOk(`catalog get ${artifact}`, await call("GET", `/components/${encodeURIComponent(custom.id)}/versions/${custom.version}`));
         artifacts.push({ kind: "custom", id: custom.id, name: custom.name, details });
         continue;
       }
-      const builtin = (system.components ?? []).find((component) => component.name === artifact);
-      if (builtin) { artifacts.push({ kind: "builtin", name: builtin.name, details: builtin }); continue; }
-      const host = (system.hostPrimitives ?? []).find((component) => component.name === artifact);
-      if (host) { artifacts.push({ kind: "host", name: host.name, details: host }); continue; }
-      throw new CliError(`catalog get ${id}: artifact ${artifact} not found; run 'catalog list ${id}' first`);
+      artifacts.push({ kind: found.kind, name: found.value.name, details: found.value });
     }
-    report(catalogGetLines(id, artifacts), { command: "catalog get", designSystem: id, artifacts });
+    report(catalogGetLines(id, artifacts), { command: "catalog get", designSystem: id, artifacts, ...existenceReport() });
     return;
   }
   const [id, output] = args;
@@ -2165,7 +2247,7 @@ async function runPromote(args, flags) {
   if (capabilities.features?.acceptancePromote !== true) {
     throw new CliError("server does not support promote (features.acceptancePromote is off); upgrade the server or publish with 'driver.mjs component ...' instead");
   }
-  const meta = await getMeta("components", id);
+  const meta = await getMeta("components", id, { mutating: true });
   if (!meta) throw new CliError(`components/${id} not found; hint: run 'driver.mjs get components'`);
   const receipt = await requireOk("validate", await call("POST", `/components/${encoded}/validate`));
   for (const warning of receipt.warnings ?? []) out(`warning: ${warning}`);
@@ -2217,7 +2299,7 @@ async function runPromote(args, flags) {
     ],
     // `acceptanceLinkSource` отвечает на вопрос «откуда взялась доказательная база версии»:
     // флаги агента, автовыбор по runs[] кандидата или её нет вовсе (W2b).
-    { command: "promote", id, designSystem: meta.designSystem, ...result, candidateId, acceptanceRunId, acceptanceLinkSource: link ? (link.auto ? "auto" : "flags") : "none" },
+    { command: "promote", id, designSystem: meta.designSystem, ...result, candidateId, acceptanceRunId, acceptanceLinkSource: link ? (link.auto ? "auto" : "flags") : "none", ...existenceReport() },
   );
 }
 
@@ -2367,7 +2449,7 @@ async function reportAcceptance(run, { command, componentId, candidateId, flags 
   });
   report(acceptLines(run, { componentId, evidencePath }), {
     command, componentId: componentId ?? run.componentId, candidateId: candidateId ?? run.candidateId,
-    exitCode, ...(evidencePath ? { evidence: evidencePath } : {}), ...run,
+    exitCode, ...(evidencePath ? { evidence: evidencePath } : {}), ...run, ...existenceReport(),
   });
   if (exitCode !== EXIT.ok) {
     throw new CliError(`acceptance run ${run.runId} finished as ${run.status}${run.failedCases?.length ? `: ${run.failedCases.map((item) => item.caseId).join(", ")}` : ""}`, { exitCode });
@@ -2399,13 +2481,18 @@ async function runCaseSet(args, flags) {
   if (subcommand === "put") {
     const [, componentId, manifestPath] = args;
     const manifest = await readJsonArgument(manifestPath, "case-set manifest");
+    // Мутация требует прямой проверки существования (§W4): иначе первым свидетельством
+    // «компонента нет» становится 404 самой мутации, а его легко списать на манифест.
+    if (await getMeta("components", componentId, { mutating: true }) === null) {
+      throw new CliError(`components/${componentId} not found; hint: run 'driver.mjs get components'`);
+    }
     const result = await requireOk("case-set put", await call("PUT", `/components/${encodeURIComponent(componentId)}/case-sets`, { manifest }));
     await cache.receipt("case-set", result.caseSetId, { componentId: result.componentId, caseSetId: result.caseSetId, cases: result.cases, cached: result.cached === true });
     report([
       `case-set ${result.caseSetId} for ${result.componentId} (${result.designSystem}): ${result.cases} cases${result.cached ? " (cached: identical manifest already published)" : ""}`,
       ...coverageLines(result.coverage ?? {}, { caseSetId: result.caseSetId }),
       ...(result.warnings ?? []).map((warning) => `warning: ${warning}`),
-    ], { command: "case-set put", ...result });
+    ], { command: "case-set put", ...result, ...existenceReport() });
     return;
   }
   const [, caseSetId] = args;
@@ -2426,7 +2513,7 @@ async function runAccept(args, flags) {
   const [id] = args;
   const encoded = encodeURIComponent(id);
   await requireAcceptanceMatrix();
-  const meta = await getMeta("components", id);
+  const meta = await getMeta("components", id, { mutating: true });
   if (!meta) throw new CliError(`components/${id} not found; hint: run 'driver.mjs get components'`);
   // Кандидат — тот же validate-префлайт: его предупреждения принадлежат приёмке, а не съёмке.
   const candidate = await requireOk("candidate", await call("POST", `/components/${encoded}/candidates`, {}));
@@ -2700,7 +2787,7 @@ async function runReuseAudit(flags) {
 async function runComposition(args, flags) {
   if (args[0] === "publish") {
     const id = args[1];
-    const meta = await getMeta("compositions", id);
+    const meta = await getMeta("compositions", id, { mutating: true });
     if (!meta) throw new CliError(`compositions/${id} not found`);
     const response = await call("POST", `/compositions/${encodeURIComponent(id)}/publish`, { baseRev: meta.headRev, message: "driver publish" });
     if (response.status !== 201) await failRevisionConflict("composition publish", response, "compositions", id);
@@ -2712,7 +2799,7 @@ async function runComposition(args, flags) {
   }
   const [id, documentPath] = args;
   const doc = JSON.parse(await readFile(documentPath, "utf8"));
-  const meta = await getMeta("compositions", id);
+  const meta = await getMeta("compositions", id, { mutating: true });
   if (meta && meta.designSystem !== flags.designSystem) {
     throw new CliError(`composition ${id} belongs to ${meta.designSystem}; compositions cannot move to ${flags.designSystem}`);
   }
@@ -2757,7 +2844,7 @@ export async function main(argv = process.argv.slice(2)) {
     // посреди публикации. Схему (fileKey/nodeIds/…) валидирует сервер.
     const figma = flags.figma === undefined ? undefined : await readFigmaProvenance(flags.figma);
     const source = await readFile(sourcePath, "utf8");
-    const meta = await getMeta("components", id);
+    const meta = await getMeta("components", id, { mutating: true });
     const systemBody = selectedSystem !== undefined && selectedSystem !== meta?.designSystem ? { designSystem: selectedSystem } : {};
     let discovery;
     let reuseOverride;
@@ -2786,25 +2873,25 @@ export async function main(argv = process.argv.slice(2)) {
       failReuseConflict("component", "save", saved, id);
       await failRevisionConflict("save", saved, "components", id);
     }
-    const savedMeta = await getMeta("components", id);
+    const savedMeta = await getMeta("components", id, { mutating: true });
     out(`saved ${id} rev ${saved.json.rev} in ${savedMeta.designSystem}`);
     const published = await publishComponent(id, saved.json.rev, reuseOverride);
     if (jsonMode) report(null, {
-      command: "component", id, rev: saved.json.rev, ...published,
+      command: "component", id, rev: saved.json.rev, ...published, ...existenceReport(),
       ...(figma === undefined ? {} : { figma: true }),
       ...(discovery === undefined ? {} : { discovery }),
       ...(flags.forceNew ? { forceNew: true, acknowledgedCandidateKeys } : {}),
     });
   } else if (cmd === "component-move") {
     const [id] = args;
-    const meta = await getMeta("components", id);
+    const meta = await getMeta("components", id, { mutating: true });
     if (!meta) throw new CliError(`components/${id} not found`);
     const saved = await call("PUT", `/components/${encodeURIComponent(id)}`, { designSystem: flags.designSystem, message: "driver move", baseRev: meta.headRev });
     if (saved.status !== 200) await failRevisionConflict("move", saved, "components", id);
-    const savedMeta = await getMeta("components", id);
+    const savedMeta = await getMeta("components", id, { mutating: true });
     out(`saved ${id} rev ${saved.json.rev} in ${savedMeta.designSystem}`);
     const published = await publishComponent(id, saved.json.rev, undefined, "component-move");
-    if (jsonMode) report(null, { command: "component-move", id, rev: saved.json.rev, ...published });
+    if (jsonMode) report(null, { command: "component-move", id, rev: saved.json.rev, ...published, ...existenceReport() });
   } else if (cmd === "composition") {
     await runComposition(args, flags);
   } else if (cmd === "design-system") {
@@ -2815,7 +2902,7 @@ export async function main(argv = process.argv.slice(2)) {
     else requestFailed("design-system", created);
   } else if (cmd === "prototype") {
     const doc = JSON.parse(await readFile(args[0], "utf8"));
-    const meta = await getMeta("prototypes", doc.id);
+    const meta = await getMeta("prototypes", doc.id, { mutating: true });
     const saved = meta === null
       ? await call("POST", "/prototypes", { doc, message: "driver save" })
       : await call("PUT", `/prototypes/${encodeURIComponent(doc.id)}`, { doc, message: "driver save", baseRev: meta.headRev });
@@ -2851,7 +2938,7 @@ export async function main(argv = process.argv.slice(2)) {
     const kind = resolveCollection(rawKind);
     const spec = DELETABLE[kind];
     if (!spec) throw new CliError(`cannot delete ${rawKind}; supported kinds: ${Object.keys(DELETABLE).join(", ")}`);
-    const meta = await getMeta(kind, id);
+    const meta = await getMeta(kind, id, { mutating: true });
     if (!meta) throw new CliError(`${kind}/${id} not found`);
     let body;
     if (spec.revisioned) {
@@ -2859,7 +2946,7 @@ export async function main(argv = process.argv.slice(2)) {
       body = { baseRev: meta.headRev };
     }
     await requireOk("delete", await call("DELETE", `/${kind}/${encodeURIComponent(id)}`, body), [204]);
-    report(`${spec.verb} ${kind}/${id}`, { command: "delete", kind, id, deleted: true });
+    report(`${spec.verb} ${kind}/${id}`, { command: "delete", kind, id, deleted: true, ...existenceReport() });
   } else if (cmd === "shoot") {
     // R8a: одна съёмочная дорога. Локальный playwright снимал другим браузером, другими
     // шрифтами и без readiness — кадры были несравнимы с эталонами и с приёмкой.

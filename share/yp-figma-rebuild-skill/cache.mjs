@@ -87,6 +87,13 @@ export function safeSegment(value, label = "segment") {
  * content-addressed, но строка живёт (`status`/`acceptanceRunId`/`runs[]`). Мутации, auth и нетерминальные раны
  * не кэшируются никогда: `classify` возвращает для них `null`, а `terminalOnly` дополнительно
  * запрещает **запись** нетерминального ответа.
+ *
+ * **Отрицательных ответов в кэше не бывает** (план 2026-08-04 §W4, расследование P1-5): `write()`
+ * пишет только `status === 200`, а `GET /components/:id` не кэшируется вовсе — «компонента нет»
+ * никогда не приезжает с диска. Единственный кэшируемый источник, из которого можно ошибочно
+ * вывести отсутствие, — агрегированный **список** (`/catalog/manifest`, `fresh` 5 минут; в нём и
+ * так только опубликованные версии, драфта там нет никогда). Поэтому вывод «нет» из списка в
+ * `driver.mjs` не терминален: см. existence-provenance (`lookupMeta`, `loadCatalog`).
  */
 export function classify(method, path) {
   if (method !== "GET") return null;

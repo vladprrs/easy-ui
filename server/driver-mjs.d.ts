@@ -256,4 +256,9 @@ declare module "*/author/driver.mjs" {
     unreviewed?: { total: number; artifacts: { kind: string; id: string; name: string; designSystem: string; createdAt: string; createdBeforeGate: boolean }[] };
   }
   export function reuseAuditLines(report: DriverReuseAuditReport): string[];
+  /** Происхождение вывода о существовании ресурса (план 2026-08-04 §W4). */
+  export type DriverExistenceSource = "list-cache" | "direct-cache" | "direct-network";
+  export interface DriverExistence { source: DriverExistenceSource; refreshed: boolean; status: number }
+  export const EXISTENCE_SOURCES: readonly DriverExistenceSource[];
+  export function existenceReport(): { existence?: DriverExistence };
 }
