@@ -1644,6 +1644,206 @@ describe("author driver promote verb", () => {
   });
 });
 
+/**
+ * План 2026-08-04 §W2a (P0-1 + D5): линковка promote с кандидатом/раном и CLI-половина алгебры
+ * refresh. Матричный стек здесь не нужен целиком — проверяется контракт **клиента**: какие поля
+ * уезжают в тело, что печатается до мутации и какие расхождения ловятся локально (без POST).
+ * Поэтому сервер — скриптованный stub, а не полный handler: он позволяет подсунуть кандидата
+ * «не той сборки» и ран чужого кандидата, чего живой оркестратор по построению не создаст.
+ */
+interface StubCall { method: string; path: string; body: Record<string, unknown> | null }
+type StubReply = { status?: number; json: unknown };
+
+async function stubApi(routes: Record<string, (body: Record<string, unknown> | null) => StubReply>) {
+  await testDirectory();
+  const calls: StubCall[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: async (request) => {
+      const url = new URL(request.url);
+      const raw = request.method === "GET" ? "" : await request.text();
+      let body: Record<string, unknown> | null = null;
+      try { body = raw ? JSON.parse(raw) as Record<string, unknown> : null; } catch { body = null; }
+      const headers = { "content-type": "application/json" };
+      if (url.pathname === "/api/auth/login") {
+        return new Response("{}", { headers: { ...headers, "set-cookie": "easyui_session=stub-session-token; Path=/" } });
+      }
+      calls.push({ method: request.method, path: url.pathname, body });
+      const route = routes[`${request.method} ${url.pathname}`];
+      if (!route) return new Response(JSON.stringify({ error: { code: "not_found", message: `stub has no route for ${request.method} ${url.pathname}` } }), { status: 404, headers });
+      const reply = route(body);
+      return new Response(JSON.stringify(reply.json), { status: reply.status ?? 200, headers });
+    },
+  });
+  servers.push(server);
+  return { api: `http://127.0.0.1:${server.port}/api`, calls, promotes: () => calls.filter((call) => call.path.endsWith("/promote")) };
+}
+
+const SOURCE_HASH = "a".repeat(64);
+const OTHER_HASH = "b".repeat(64);
+const CANDIDATE = "cand_00000000-0000-0000-0000-0000000000aa";
+const OTHER_CANDIDATE = "cand_00000000-0000-0000-0000-0000000000bb";
+const RUN = "acc_00000000-0000-0000-0000-000000000011";
+
+function promoteStubRoutes(overrides: { candidate?: Record<string, unknown>; run?: Record<string, unknown> } = {}) {
+  const candidate = { candidateId: CANDIDATE, componentId: "linked", rev: 2, sourceHash: SOURCE_HASH, status: "validated", ...overrides.candidate };
+  const acceptanceRun = { runId: RUN, componentId: "linked", candidateId: CANDIDATE, status: "pass", policy: { id: "default-v1" }, ...overrides.run };
+  return {
+    "GET /api/capabilities": () => ({ json: { features: { acceptancePromote: true, acceptanceMatrix: true } } }),
+    "GET /api/components/linked": () => ({ json: { id: "linked", headRev: 2, designSystem: "yandex-pay" } }),
+    "POST /api/components/linked/validate": () => ({ json: { sourceHash: SOURCE_HASH, bundleHash: "bundle", catalogRevision: "cat-1", warnings: [] } }),
+    [`GET /api/component-candidates/${CANDIDATE}`]: () => ({ json: candidate }),
+    [`GET /api/acceptance-runs/${RUN}`]: () => ({ json: acceptanceRun }),
+    "POST /api/components/linked/promote": (body: Record<string, unknown> | null) => ({
+      status: 201,
+      json: {
+        version: 3, rev: 2, sourceHash: SOURCE_HASH, bundleHash: "bundle", hostAbiVersion: 4, themeVersion: 7,
+        catalogRevision: "cat-1", superseded: [2], candidateId: body?.candidateId ?? null, acceptanceRunId: body?.acceptanceRunId ?? null,
+      },
+    }),
+  } as Record<string, (body: Record<string, unknown> | null) => StubReply>;
+}
+
+describe("author driver promote linking (W2a)", () => {
+  test("--candidate/--acceptance-run reach the promote body and both ids are reported", async () => {
+    const { api, calls, promotes } = await stubApi(promoteStubRoutes());
+    const human = await run(api, ["promote", "linked", "--candidate", CANDIDATE, "--acceptance-run", RUN]);
+    expect(human.exitCode).toBe(0);
+    // Связка печатается до мутации — и до строки о созданной версии.
+    expect(human.stdout).toContain(`acceptance link: candidate=${CANDIDATE} (rev 2, validated) run=${RUN} (pass, policy default-v1)`);
+    expect(human.stdout.indexOf("acceptance link:")).toBeLessThan(human.stdout.indexOf("promoted linked version"));
+    expect(human.stdout).toContain(`acceptance: candidate=${CANDIDATE} run=${RUN}`);
+    expect(promotes()[0]?.body).toMatchObject({ baseRev: 2, sourceHash: SOURCE_HASH, candidateId: CANDIDATE, acceptanceRunId: RUN });
+    expect(calls.some((call) => call.path === `/api/component-candidates/${CANDIDATE}`)).toBe(true);
+
+    const json = await run(api, ["promote", "linked", "--candidate", CANDIDATE, "--acceptance-run", RUN, "--json"]);
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.stdout)).toMatchObject({ command: "promote", id: "linked", version: 3, candidateId: CANDIDATE, acceptanceRunId: RUN });
+  }, 30_000);
+
+  test("promote without the flags stays unlinked and sends neither id", async () => {
+    const { api, promotes } = await stubApi(promoteStubRoutes());
+    const result = await run(api, ["promote", "linked"]);
+    expect(result.exitCode).toBe(0);
+    expect(Object.keys(promotes()[0]?.body ?? {})).not.toContain("candidateId");
+    expect(result.stdout).toContain("acceptance: candidate=- run=-");
+  }, 30_000);
+
+  test("a candidate of another build is refused locally, without the promote POST", async () => {
+    const { api, promotes } = await stubApi(promoteStubRoutes({ candidate: { sourceHash: OTHER_HASH } }));
+    const result = await run(api, ["promote", "linked", "--candidate", CANDIDATE]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("describes another build");
+    expect(promotes()).toHaveLength(0);
+  }, 30_000);
+
+  test("a candidate for an older revision is refused locally, without the promote POST", async () => {
+    const { api, promotes } = await stubApi(promoteStubRoutes({ candidate: { rev: 1 } }));
+    const result = await run(api, ["promote", "linked", "--candidate", CANDIDATE]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("is for rev 1, the head is rev 2");
+    expect(promotes()).toHaveLength(0);
+  }, 30_000);
+
+  test("a run of another candidate is refused locally, without the promote POST", async () => {
+    const { api, promotes } = await stubApi(promoteStubRoutes({ run: { candidateId: OTHER_CANDIDATE } }));
+    const result = await run(api, ["promote", "linked", "--candidate", CANDIDATE, "--acceptance-run", RUN]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(`belongs to candidate ${OTHER_CANDIDATE}`);
+    expect(promotes()).toHaveLength(0);
+  }, 30_000);
+
+  test("a run of another component is refused locally, without the promote POST", async () => {
+    const { api, promotes } = await stubApi(promoteStubRoutes({ run: { componentId: "other" } }));
+    const result = await run(api, ["promote", "linked", "--acceptance-run", RUN]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("belongs to component other");
+    expect(promotes()).toHaveLength(0);
+  }, 30_000);
+
+  test("two --acceptance-run values are refused locally (multi-run lands in W7)", async () => {
+    const { api, promotes } = await stubApi(promoteStubRoutes());
+    const result = await run(api, ["promote", "linked", "--acceptance-run", RUN, "--acceptance-run", "acc_00000000-0000-0000-0000-000000000022"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("multi-run promote is not supported by the server yet");
+    expect(promotes()).toHaveLength(0);
+    // Парсер уже копит значения — задел под W7 не ломает разбор.
+    expect(parseArgs(["promote", "linked", "--acceptance-run", "acc_1", "--acceptance-run", "acc_2"]))
+      .toMatchObject({ cmd: "promote", flags: { acceptanceRun: ["acc_1", "acc_2"] } });
+  }, 30_000);
+
+  test("linking without the matrix stack is refused before the mutation", async () => {
+    const routes = { ...promoteStubRoutes(), "GET /api/capabilities": () => ({ json: { features: { acceptancePromote: true, acceptanceMatrix: false } } }) };
+    const { api, promotes } = await stubApi(routes);
+    const result = await run(api, ["promote", "linked", "--candidate", CANDIDATE]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("features.acceptanceMatrix is off");
+    expect(promotes()).toHaveLength(0);
+  }, 30_000);
+
+  test("usage documents the linking flags and the refresh/recapture scopes", async () => {
+    const { api } = await stubApi(promoteStubRoutes());
+    const result = await run(api, []);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("[--candidate <candidateId>] [--acceptance-run <runId>]");
+    expect(result.stderr).toContain("[--recapture]");
+    expect(result.stderr).toContain("--refresh failed = re-evaluate the verdict only");
+    expect(result.stderr).toContain("--recapture = force a re-capture");
+  }, 30_000);
+});
+
+/** План 2026-08-04 §W2a (D5): `--recapture` — скоуп, `--refresh` — выбор случаев. */
+describe("author driver accept refresh algebra (W2a)", () => {
+  const acceptRoutes = (refresh: unknown) => ({
+    "GET /api/capabilities": () => ({ json: { features: { acceptanceMatrix: true } } }),
+    "GET /api/components/refreshed": () => ({ json: { id: "refreshed", headRev: 1, designSystem: "yandex-pay" } }),
+    "POST /api/components/refreshed/candidates": () => ({ json: { candidateId: CANDIDATE, rev: 1, warnings: [] } }),
+    "POST /api/acceptance-runs": () => ({ status: 202, json: { runId: RUN, cases: 3 } }),
+    [`GET /api/acceptance-runs/${RUN}`]: () => ({
+      json: {
+        runId: RUN, candidateId: CANDIDATE, componentId: "refreshed", status: "pass", policy: { id: "default-v1" },
+        progress: { completed: 3, total: 3, reused: 2, failed: 0 }, failedCases: [],
+        ...(refresh === undefined ? {} : { refresh }),
+      },
+    }),
+  } as Record<string, (body: Record<string, unknown> | null) => StubReply>);
+
+  test("--recapture escalates the refresh scope in the run body; without it the field is absent", async () => {
+    const { api, calls } = await stubApi(acceptRoutes(undefined));
+    const escalated = await run(api, ["accept", "refreshed", "--refresh", "failed", "--recapture"]);
+    expect(escalated.exitCode).toBe(0);
+    expect(calls.find((call) => call.path === "/api/acceptance-runs")?.body).toMatchObject({ refresh: "failed", refreshMode: "frame" });
+
+    const plain = await run(api, ["accept", "refreshed", "--refresh", "failed"]);
+    expect(plain.exitCode).toBe(0);
+    const bodies = calls.filter((call) => call.path === "/api/acceptance-runs");
+    expect(Object.keys(bodies[1]?.body ?? {})).not.toContain("refreshMode");
+  }, 30_000);
+
+  test("the run's refresh triple is printed and stays in --json; an older server just omits it", async () => {
+    const withTriple = await stubApi(acceptRoutes({ requested: { mode: "failed", scope: "verdict" }, impact: { mode: "none" }, effective: { mode: "failed", scope: "frame", caseIds: ["alpha", "beta"] } }));
+    const human = await run(withTriple.api, ["accept", "refreshed", "--refresh", "failed", "--recapture"]);
+    expect(human.exitCode).toBe(0);
+    expect(human.stdout).toContain("refresh: requested=failed:verdict impact=none effective=failed:frame [alpha,beta]");
+
+    const asJson = await run(withTriple.api, ["accept", "refreshed", "--refresh", "failed", "--json"]);
+    expect(JSON.parse(asJson.stdout)).toMatchObject({ refresh: { effective: { scope: "frame" } } });
+
+    // Обратная совместимость: сервер до W1 поля не отдаёт — строки просто нет.
+    const legacy = await stubApi(acceptRoutes(undefined));
+    const older = await run(legacy.api, ["accept", "refreshed", "--refresh", "failed"]);
+    expect(older.exitCode).toBe(0);
+    expect(older.stdout).not.toContain("refresh:");
+  }, 30_000);
+
+  test("--recapture contradicts --refresh none and is rejected by the parser", () => {
+    expect(parseArgs(["accept", "pay-card", "--refresh", "failed", "--recapture"]))
+      .toMatchObject({ cmd: "accept", flags: { refresh: "failed", recapture: true } });
+    expect(() => parseArgs(["accept", "pay-card", "--refresh", "none", "--recapture"])).toThrow(/--recapture contradicts --refresh none/);
+  });
+});
+
 describe("author driver audit --versions (KPI, RFC §9)", () => {
   test("sweeps public versions per component and exits 2 when a component has no active version", async () => {
     const { api, db } = await setup();

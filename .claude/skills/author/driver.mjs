@@ -19,7 +19,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -172,11 +172,17 @@ export const flagSpecs = Object.freeze({
   },
   geometry: { ...jsonFlag },
   // RFC candidate-acceptance R1: приёмка провалидированной head-ревизии одной командой.
+  // План 2026-08-04 §W2a (P0-1): явная линковка версии с durable-кандидатом и его раном.
+  // `--acceptance-run` объявлен повторяемым (задел под multi-run W7): парсер копит значения,
+  // а `runPromote` пока отправляет одиночное поле и локально отказывает на >1 значении —
+  // молча брать «первый» значило бы врать о доказательной базе версии.
   promote: {
     ...jsonFlag,
     "--supersede": { value: true, key: "supersede", enum: ["auto", "none"] },
     "--strict-catalog": { value: false, key: "strictCatalog" },
     "--message": { value: true, key: "message" },
+    "--candidate": { value: true, key: "candidate" },
+    "--acceptance-run": { value: true, key: "acceptanceRun", repeat: true },
   },
   // RFC candidate-acceptance R3a: правка provenance без новой ревизии и версии.
   provenance: {
@@ -199,6 +205,11 @@ export const flagSpecs = Object.freeze({
     "--case-set": { value: true, key: "caseSet" },
     "--policy": { value: true, key: "policy" },
     "--refresh": { value: true, key: "refresh", parse: parseRefreshFlag },
+    // План 2026-08-04 §W2a (D5) — CLI-половина алгебры refresh: `--refresh` выбирает **какие**
+    // случаи обновить, `--recapture` — **насколько глубоко**. Без него `--refresh failed` даёт
+    // verdict-scope (кадр может быть переиспользован, пересчитывается только вердикт), с ним
+    // скоуп поднимается до frame (принудительная пересъёмка).
+    "--recapture": { value: false, key: "recapture" },
     // План 2026-08-03 §5 W6: частичная пересъёмка относительно терминального рана.
     "--baseline-run": { value: true, key: "baselineRun" },
     "--timeout-sec": {
@@ -348,7 +359,9 @@ export function parseArgs(argv) {
       invalid("--local-browser is gone: every capture runs on the server renderer (GET /api/capabilities → renderer)");
     }
     if (!spec) invalid(`unknown flag for ${commandForm}: ${token}`);
-    if (seen.has(token)) invalid(`duplicate flag: ${token}`);
+    // `repeat` — единственное исключение из «повтор флага = опечатка»: у таких флагов значения
+    // копятся списком (`--acceptance-run` под multi-run W7).
+    if (seen.has(token) && !spec.repeat) invalid(`duplicate flag: ${token}`);
     seen.add(token);
     if (!spec.value) {
       flags[spec.key] = true;
@@ -357,7 +370,9 @@ export function parseArgs(argv) {
     const value = tokens[++i];
     if (value === undefined || value.startsWith("--")) invalid(`flag ${token} requires a value`);
     if (spec.enum && !spec.enum.includes(value)) invalid(`${token} must be one of: ${spec.enum.join(", ")}`);
-    flags[spec.key] = spec.parse ? spec.parse(value) : value;
+    const parsed = spec.parse ? spec.parse(value) : value;
+    if (spec.repeat) flags[spec.key] = [...(flags[spec.key] ?? []), parsed];
+    else flags[spec.key] = parsed;
   }
   if (positionals.length < range[0] || positionals.length > range[1]) invalid(`invalid arguments for ${commandForm}`);
   if (commandForm === "catalog list" && positionals.length !== 2) invalid("invalid arguments for catalog list");
@@ -390,6 +405,11 @@ export function parseArgs(argv) {
   // «импакт компонента» ничего не значит.
   if (command === "impact" && (flags.candidate === undefined || flags.baselineRun === undefined)) {
     invalid("usage: impact <componentId> --candidate <candidateId> --baseline-run <runId>");
+  }
+  // `--recapture` — эскалация скоупа уже выбранных случаев, поэтому с `--refresh none`
+  // («ничего не обновлять») он противоречив: два решения об одном ране не должны конфликтовать молча.
+  if (command === "accept" && flags.recapture && flags.refresh === "none") {
+    invalid("--recapture contradicts --refresh none: --refresh picks which cases to update, --recapture only deepens their scope to a re-capture");
   }
   if (command === "status" && positionals.length < 2 && !flags.allScreens) invalid("status requires <screenId> or --all-screens");
   if (command === "preview" && positionals.length === 2 && flags.example !== undefined) invalid("preview accepts either props.json or --example, not both");
@@ -1990,6 +2010,74 @@ async function runProvenance(args, flags) {
   );
 }
 
+/**
+ * Локальный pre-flight линковки promote (план 2026-08-04 §W2a, корневая причина P0-1).
+ *
+ * Сервер принимает `candidateId`/`acceptanceRunId` в теле promote, но драйвер обязан проверить
+ * связку **до** мутации: версия публикуется один раз, и «доказательная база» с чужим кандидатом
+ * или раном не того компонента — не ошибка сети, а ложь в provenance. Проверяются три вещи:
+ * кандидат описывает ту же сборку, что и validate-receipt (`sourceHash` + `rev` головы), ран
+ * принадлежит этому компоненту и именно этому кандидату. Любое расхождение — `CliError` до POST.
+ */
+async function resolvePromoteAcceptance(id, meta, receipt, flags, capabilities) {
+  const runIds = flags.acceptanceRun === undefined ? [] : [flags.acceptanceRun].flat();
+  const candidateId = flags.candidate ?? null;
+  if (candidateId === null && runIds.length === 0) return null;
+  // Задел под multi-run (W7) уже в парсере, но сервер сегодня знает одно поле: «взять первый»
+  // молча означало бы приписать версии не ту доказательную базу.
+  if (runIds.length > 1) {
+    throw new CliError(`multi-run promote is not supported by the server yet: ${runIds.length} --acceptance-run values given (${runIds.join(", ")}); pass exactly one`);
+  }
+  const runId = runIds[0] ?? null;
+  if (capabilities.features?.acceptanceMatrix !== true) {
+    throw new CliError("--candidate/--acceptance-run need the matrix acceptance stack (features.acceptanceMatrix is off; needs EASYUI_ACCEPTANCE_MATRIX=1); promote without them publishes the validated head unlinked");
+  }
+  const readCandidate = async (wanted) => {
+    const response = await call("GET", `/component-candidates/${encodeURIComponent(wanted)}`);
+    if (response.status === 404) throw new CliError(`candidate ${wanted} not found (expired or never created); re-run 'driver.mjs accept ${id}' to build a fresh one`);
+    return requireOk(`GET /component-candidates/${wanted}`, response);
+  };
+  let candidate = candidateId === null ? null : await readCandidate(candidateId);
+  let run = null;
+  if (runId !== null) {
+    const response = await call("GET", `/acceptance-runs/${encodeURIComponent(runId)}`);
+    if (response.status === 404) throw new CliError(`acceptance run ${runId} not found; list runs of the candidate with 'driver.mjs get components ${id}' evidence or re-run acceptance`);
+    run = await requireOk(`GET /acceptance-runs/${runId}`, response);
+    if (run.componentId !== id) {
+      throw new CliError(`acceptance run ${runId} belongs to component ${run.componentId}, not ${id}; promote refuses to link a foreign run`);
+    }
+    if (candidateId !== null && run.candidateId !== candidateId) {
+      throw new CliError(`acceptance run ${runId} belongs to candidate ${run.candidateId}, not ${candidateId}; pass the run of that candidate (or drop --candidate)`);
+    }
+    // Ран без явного `--candidate` всё равно сверяется через своего кандидата: связка «ран →
+    // сборка» проверяема, а линковать candidateId за агента — работа автовыбора (W2b).
+    if (candidate === null && typeof run.candidateId === "string") candidate = await readCandidate(run.candidateId);
+  }
+  if (candidate !== null) {
+    if (candidate.componentId !== id) {
+      throw new CliError(`candidate ${candidate.candidateId} belongs to component ${candidate.componentId}, not ${id}; promote refuses to link a foreign candidate`);
+    }
+    if (candidate.sourceHash !== receipt.sourceHash) {
+      throw new CliError(`candidate ${candidate.candidateId} describes another build: sourceHash ${candidate.sourceHash} vs validated head ${receipt.sourceHash}; accept the current head before promoting it`);
+    }
+    if (candidate.rev !== meta.headRev) {
+      throw new CliError(`candidate ${candidate.candidateId} is for rev ${candidate.rev}, the head is rev ${meta.headRev}; accept the current head before promoting it`);
+    }
+  }
+  return { candidateId, acceptanceRunId: runId, candidate, run };
+}
+
+/** Строка выбранной связки: что именно приписывается будущей версии (печатается до мутации). */
+export function promoteLinkLine(link) {
+  const candidate = link.candidate
+    ? `${link.candidate.candidateId} (rev ${link.candidate.rev}${link.candidate.status ? `, ${link.candidate.status}` : ""})`
+    : link.candidateId ?? "-";
+  const run = link.run
+    ? `${link.run.runId} (${link.run.status}${link.run.policy?.id ? `, policy ${link.run.policy.id}` : ""})`
+    : link.acceptanceRunId ?? "-";
+  return `acceptance link: candidate=${candidate} run=${run}`;
+}
+
 async function runPromote(args, flags) {
   const [id] = args;
   const encoded = encodeURIComponent(id);
@@ -2001,12 +2089,18 @@ async function runPromote(args, flags) {
   if (!meta) throw new CliError(`components/${id} not found; hint: run 'driver.mjs get components'`);
   const receipt = await requireOk("validate", await call("POST", `/components/${encoded}/validate`));
   for (const warning of receipt.warnings ?? []) out(`warning: ${warning}`);
+  const link = await resolvePromoteAcceptance(id, meta, receipt, flags, capabilities);
+  // Выбранная связка печатается **до** мутации: читатель лога видит, какой кандидат и какой ран
+  // приписываются версии, ещё до того, как версия появилась.
+  if (link) out(promoteLinkLine(link));
   const promoted = await call("POST", `/components/${encoded}/promote`, {
     baseRev: meta.headRev,
     sourceHash: receipt.sourceHash,
     ...(flags.supersede === undefined ? {} : { supersede: flags.supersede }),
     ...(flags.strictCatalog ? { expectedCatalogRevision: receipt.catalogRevision } : {}),
     ...(flags.message === undefined ? {} : { message: flags.message }),
+    ...(link?.candidateId ? { candidateId: link.candidateId } : {}),
+    ...(link?.acceptanceRunId ? { acceptanceRunId: link.acceptanceRunId } : {}),
   });
   if (promoted.status !== 201) {
     failReuseConflict("promote", "promote", promoted, id);
@@ -2026,14 +2120,19 @@ async function runPromote(args, flags) {
     await failRevisionConflict("promote", promoted, "components", id);
   }
   const result = promoted.json;
+  // Оба id в отчёте — от сервера, если он их вернул, иначе из проверенной связки: `--json`
+  // и человеческий вывод обязаны нести одну и ту же доказательную базу версии.
+  const candidateId = result.candidateId ?? link?.candidateId ?? null;
+  const acceptanceRunId = result.acceptanceRunId ?? link?.acceptanceRunId ?? null;
   report(
     [
       `promoted ${id} version ${result.version} (rev ${result.rev}) in ${meta.designSystem}`,
+      `acceptance: candidate=${candidateId ?? "-"} run=${acceptanceRunId ?? "-"}`,
       `fingerprints: sourceHash=${result.sourceHash} bundleHash=${result.bundleHash} hostAbi=${result.hostAbiVersion} themeVersion=${result.themeVersion ?? "-"} catalogRevision=${result.catalogRevision}`,
       `superseded: ${result.superseded?.length ? result.superseded.map((version) => `v${version}`).join(", ") : "-"}${result.cached ? " (warm candidate: no recompile)" : ""}`,
       ...(result.warnings ?? []).map((warning) => `warning: ${warning}`),
     ],
-    { command: "promote", id, designSystem: meta.designSystem, ...result },
+    { command: "promote", id, designSystem: meta.designSystem, ...result, candidateId, acceptanceRunId },
   );
 }
 
@@ -2067,12 +2166,44 @@ function failedCaseLines(failed) {
   });
 }
 
+/**
+ * Один элемент алгебры refresh (W1): либо строка режима (`none|failed|all`), либо скоуп-объект
+ * (`{mode|scope|caseIds}`). Форма читается защитно: старый сервер поля не отдаёт вовсе, и это
+ * не ошибка клиента, а отсутствие фичи.
+ */
+function refreshScopeText(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.length ? value.join(",") : "-";
+  if (typeof value !== "object") return String(value);
+  const caseIds = Array.isArray(value.caseIds) ? value.caseIds : null;
+  const mode = value.mode ?? value.refresh ?? (caseIds ? `${caseIds.length} case(s)` : null);
+  const scope = value.scope ?? null;
+  const head = mode ?? "-";
+  return `${head}${scope ? `:${scope}` : ""}${caseIds && caseIds.length <= 5 ? ` [${caseIds.join(",")}]` : ""}`;
+}
+
+/**
+ * Тройка `{requested, impact, effective}` рана (план 2026-08-04 §W2a, D5): что попросил агент,
+ * что добавил импакт и что сервер реально применил. Пустой результат означает «сервер поле не
+ * отдаёт» (сборка до W1) — строка тогда не печатается, а не врёт нулями.
+ */
+export function refreshLine(refresh) {
+  if (refresh === null || typeof refresh !== "object" || Array.isArray(refresh)) return null;
+  const parts = ["requested", "impact", "effective"]
+    .map((key) => [key, refreshScopeText(refresh[key])])
+    .filter(([, text]) => text !== null);
+  return parts.length ? `refresh: ${parts.map(([key, text]) => `${key}=${text}`).join(" ")}` : null;
+}
+
 function acceptLines(run, { componentId, evidencePath }) {
   const done = run.progress ?? {};
   const lines = [
     `acceptance ${componentId ?? run.componentId} run ${run.runId} verdict ${run.status}`,
     `cases: ${done.completed ?? 0}/${done.total ?? 0} reused=${done.reused ?? 0} failed=${done.failed ?? 0} policy=${run.policy?.id ?? "-"}`,
   ];
+  const refresh = refreshLine(run.refresh ?? null);
+  if (refresh) lines.push(refresh);
   if (run.failedCases?.length) lines.push("failed cases (worst first):", ...failedCaseLines(run.failedCases));
   lines.push(evidencePath
     ? `evidence: ${evidencePath}`
@@ -2223,6 +2354,10 @@ async function runAccept(args, flags) {
     ...(flags.caseSet === undefined ? {} : { caseSetId: flags.caseSet }),
     ...(flags.policy === undefined ? {} : { policy: flags.policy }),
     ...(flags.refresh === undefined ? {} : { refresh: flags.refresh }),
+    // `--recapture` (план 2026-08-04 §W2a, D5): скоуп обновления. Поле отправляется **только**
+    // под флагом — сервер без алгебры refresh (до W1) не должен получать незнакомое поле,
+    // а дефолтный скоуп выбирает он сам.
+    ...(flags.recapture ? { refreshMode: "frame" } : {}),
     // `--baseline-run` (W6): частичная пересъёмка. Сервер сам считает импакт и снимает только
     // затронутые случаи; недоказуемый импакт означает полный ран, а не тихую экономию.
     ...(flags.baselineRun === undefined ? {} : { baselineRunId: flags.baselineRun }),
@@ -2233,6 +2368,8 @@ async function runAccept(args, flags) {
   }
   const queued = await requireOk("acceptance run", started, [202]);
   progress(`run ${queued.runId} queued with ${queued.cases} cases`);
+  const queuedRefresh = refreshLine(queued.refresh ?? null);
+  if (queuedRefresh) progress(queuedRefresh);
   if (queued.impact) progress(impactLines(queued.impact, id)[0]);
   const run = await pollAcceptanceRun(queued.runId, { deadlineMs: (flags.timeoutSec ?? ACCEPT_DEFAULT_TIMEOUT_SEC) * 1000 });
   await reportAcceptance(run, { command: "accept", componentId: id, candidateId: candidate.candidateId, flags });

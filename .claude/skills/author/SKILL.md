@@ -419,16 +419,21 @@ node driver.mjs promote rating-stars                    # validate → promote, 
 node driver.mjs promote rating-stars --supersede none   # оставить прежние версии active
 node driver.mjs promote rating-stars --strict-catalog   # отказать, если каталог сдвинулся после validate
 node driver.mjs promote rating-stars --json
+# приёмочная линковка: версия получает provenance «кандидат + ран»
+node driver.mjs promote rating-stars --candidate cand_… --acceptance-run acc_…
 ```
 
 ```
+acceptance link: candidate=cand_… (rev 9, validated) run=acc_… (pass, policy default-v1)
 promoted rating-stars version 4 (rev 9) in yandex-pay
+acceptance: candidate=cand_… run=acc_…
 fingerprints: sourceHash=8c1f… bundleHash=1f9c… hostAbi=2 themeVersion=14 catalogRevision=cat-…
 superseded: v3 (warm candidate: no recompile)
 ```
 
 - Требует `features.acceptancePromote` в `/api/capabilities` (kill-switch `EASYUI_ACCEPTANCE_DISABLED=1`); на старом сервере верб падает читаемо, `publish` продолжает работать.
 - Терминальные отказы (не ретраить автоматически): `409 already_published` — голова уже опубликована, нужна новая ревизия; `409 revision_conflict`/`409 source_hash_mismatch` — голова изменилась между validate и promote, повторить верб целиком; `409 canonical_role_conflict`/`catalog_changed` — обычный reuse-STOP, решение человека; `422` — те же коды, что у publish (кроме компиляционных: их уже отсеял validate).
+- **Линковка с приёмкой (флаги верба):** `--candidate <candidateId>` и `--acceptance-run <runId>` уезжают в тело promote как `candidateId`/`acceptanceRunId` и записываются в строку версии как provenance. Драйвер сверяет связку **локально, до мутации**: кандидат обязан описывать ту же сборку, что и validate-receipt (`sourceHash` + `rev` головы), а ран — принадлежать этому компоненту и этому кандидату; расхождение = ошибка CLI без POST. Выбранная связка печатается строкой `acceptance link: …` **до** публикации, оба id есть и в человеческом выводе (`acceptance: candidate=… run=…`), и в `--json`. Флаги требуют `features.acceptanceMatrix`; без них promote публикует голову без линковки (как раньше). `--acceptance-run` синтаксически повторяем (задел под multi-run W7), но пока >1 значения — терминальная локальная ошибка, а не «взять первый». Автовыбор связки без флагов появится волной W2b.
 - Promote **не** обходит каталого-временные проверки: имя host-примитива, каноническая роль, атомарная политика и asset-refs перепрогоняются на публикации.
 - `publish` остаётся рабочим и не меняется — это путь для случаев, когда приёмка не нужна (или сервер её погасил).
 
@@ -456,8 +461,9 @@ node driver.mjs provenance rating-stars figma.json --json
 
 ```bash
 node driver.mjs accept pay-payment-card                       # кандидат → ран → poll → вердикт
-node driver.mjs accept pay-payment-card --refresh failed      # переснять только упавшие случаи
-node driver.mjs accept pay-payment-card --refresh alpha,beta  # переснять перечисленные case id
+node driver.mjs accept pay-payment-card --refresh failed      # обновить только упавшие случаи (вердикт, кадр может быть переиспользован)
+node driver.mjs accept pay-payment-card --refresh failed --recapture   # те же случаи, но с принудительной пересъёмкой
+node driver.mjs accept pay-payment-card --refresh alpha,beta  # обновить перечисленные case id
 node driver.mjs accept pay-payment-card --evidence run.zip    # + скачать evidence-архив
 node driver.mjs accept-status acc_…                           # вердикт уже поставленного рана
 node driver.mjs reject cand_… --reason "межстрочный интервал не по макету"  # отклонить сборку (терминально)
@@ -476,6 +482,7 @@ evidence: GET /api/acceptance-runs/acc_8f1c…/evidence (pass --evidence <file.z
 - Требует `features.acceptanceMatrix` в `/api/capabilities` (opt-in `EASYUI_ACCEPTANCE_MATRIX=1`); без него верб падает читаемо, а путь `promote` продолжает работать.
 - Прогресс (`completed/total`, `reused`, ETA) идёт в **stderr** — stdout принадлежит `--json`. Exit: 0 — `pass`/`pass_with_exceptions`, 2 — `fail`/`error`/`cancelled` и клиентский таймаут (`--timeout-sec`, дефолт 1800; ран на сервере продолжается, добирать вердикт — `accept-status <runId>`).
 - Байты evidence по умолчанию **не** качаются: печатается адрес архива; `--evidence <file.zip>` сохраняет zip (`manifest.json` + `SHA256SUMS` + артефакты).
+- **Алгебра refresh: `--refresh` выбирает случаи, `--recapture` — глубину.** `--refresh none|failed|all|id,id2` отвечает на вопрос «какие случаи обновить», и по умолчанию это **переоценка вердикта**: если сравнение и политика позволяют, сервер переиспользует уже снятый кадр и пересчитывает вердикт (смена только порога больше не стоит съёмки семьи). `--recapture` поднимает скоуп тех же случаев до **кадра** — принудительная пересъёмка (флейк рендера, подозрение на протухший кадр). `--refresh none --recapture` — противоречие и ошибка аргументов. Что именно применилось, видно строкой `refresh: requested=… impact=… effective=…` (и полем `refresh` в `--json`): агент просит скоуп, импакт может его расширить, решает сервер. Сервер без алгебры refresh строку не отдаёт — это не ошибка, а старая сборка.
 - `409 acceptance_run_in_flight` — у кандидата уже есть живой ран: не ставить второй, дождаться его через `accept-status`.
 - **Частичная пересъёмка (`--baseline-run <runId>`).** Правка одного ассета в семье из 49 состояний не обязана стоить 49 капчуров. `impact` считает это заранее и печатает **базис**:
   - `asset-only` — форма исходника побайтово та же (все литералы `asset_<sha256>` заменены плейсхолдером и хэш совпал), тема не менялась: пересъёмке подлежат случаи, чьи **наблюдённые** ресурсы (readiness-evidence кадра) содержат изменившийся ассет;
@@ -486,7 +493,7 @@ evidence: GET /api/acceptance-runs/acc_8f1c…/evidence (pass --evidence <file.z
   - **Решение терминально и снимается только новой ревизией.** `unreject` не существует. Отклонение блокирует promote **всей ревизии** (`409 candidate_rejected` — на обоих путях promote, с `candidateId` и без него), переживает TTL кандидата (свипер такого кандидата не удаляет) и не сбрасывается повторным `accept`: тот вернёт **того же** кандидата с `rejected: true`.
   - `409 candidate_already_rejected` — уже отклонён (в `details` — чьё и какое решение); `409 candidate_promoted` — сборка уже опубликована, отклонять нечего (не путать с `candidate_already_promoted` — это CAS саги promote).
   - Reject **не** отменяет живой ран приёмки и не освобождает in-flight-слот кандидата.
-- Ссылки приёмки на публикации: `promote` принимает `candidateId`/`acceptanceRunId` (тело запроса, не флаги верба) — ран обязан быть терминальным `pass`/`pass_with_exceptions` этого же кандидата, иначе `422 acceptance_run_mismatch`/`acceptance_run_not_passed`; при живом ране — `409 acceptance_run_in_flight`. Обе ссылки записываются в строку опубликованной версии как provenance.
+- Ссылки приёмки на публикации: `promote` принимает `candidateId`/`acceptanceRunId` — флагами верба (`--candidate`, `--acceptance-run`; см. «Приёмка головы: `promote`»), которые драйвер сверяет локально и кладёт в тело запроса. Ран обязан быть терминальным `pass`/`pass_with_exceptions` этого же кандидата, иначе `422 acceptance_run_mismatch`/`acceptance_run_not_passed`; при живом ране — `409 acceptance_run_in_flight`. Обе ссылки записываются в строку опубликованной версии как provenance.
 
 ### Набор случаев семьи: `case-set`
 
