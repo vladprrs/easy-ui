@@ -13,6 +13,8 @@ import { BOOTSTRAP_ADMIN_ID, ensureBootstrapAdmin, UserRepo } from "./users";
 import { routeComponents } from "./routes/components";
 import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
 import { AcceptanceRepo } from "./acceptance/repo";
+import { CaseSetRepo } from "./acceptance/caseSets";
+import { caseSetManifestSchema } from "../src/acceptance/caseSetSchema";
 import { ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, policyProfileHash } from "./acceptance/policies";
 import type { AcceptanceCaptureService } from "./acceptance/gates/types";
 
@@ -793,4 +795,219 @@ describe("promotion policy (план 2026-08-04 W3)", () => {
       promotionPolicyProfiles: ["default-v1", "pixel-strict-v1"],
     });
   }, 180_000);
+});
+
+/**
+ * Волна W7 плана 2026-08-04 (D-D): multi-run provenance. Семья, не влезающая в один ран,
+ * публикуется набором ранов; предмет проверки — предикаты когерентности набора и то, что версия
+ * несёт **всё** покрытие, а старые читатели продолжают видеть один детерминированный id.
+ *
+ * Раны создаются напрямую через repo (как и в W1c/W3): исполнение оркестратора здесь ни при чём,
+ * важны только строки, которые сага сверяет.
+ */
+describe("multi-run promote (план 2026-08-04 W7)", () => {
+  const POLICY_HASH = policyProfileHash(DEFAULT_POLICY);
+  const RENDERER = "r".repeat(64);
+
+  async function familyFixture(id: string, name: string) {
+    const context = await setup({ matrix: true });
+    const source = await fixture("rating-stars.tsx");
+    await createComponent(context.handler, id, name, source);
+    const created = await context.handler(req(`/components/${id}/candidates`, "POST"));
+    expect(created.status, await created.clone().text()).toBe(200);
+    const candidate = await created.json() as { candidateId: string; sourceHash: string };
+    return { ...context, orchestrator: context.orchestrator!, id, candidate };
+  }
+
+  /** Набор случаев на заданной поверхности; `case_set_id` рана — единственный источник surface. */
+  const putCaseSet = (db: Database, componentId: string, theme: "light" | "dark", cases: string[]) =>
+    new CaseSetRepo(db).put({
+      componentId, designSystem: "yandex-pay", createdBy: BOOTSTRAP_ADMIN_ID,
+      manifest: caseSetManifestSchema.parse({
+        manifestVersion: 1, componentId,
+        capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme },
+        cases: cases.map((key) => ({ id: key, props: { label: key } })),
+      }),
+    }).row;
+
+  /**
+   * Ран с явным покрытием. `propsHash`/`caseFingerprint` — литералы: предикаты W7 сравнивают
+   * строки, а как они посчитаны, проверяет `ids.test.ts`.
+   */
+  const shard = (
+    orchestrator: AcceptanceOrchestrator, candidateId: string, componentId: string,
+    options: {
+      caseSetId?: string | null; propsHashes: string[]; caseKeys?: string[];
+      status?: "pass" | "fail"; policyProfileId?: string; rendererFingerprint?: string | null;
+      evidenceManifestHash?: string;
+    },
+  ) => {
+    const run = orchestrator.repo.createRun({
+      candidateId, componentId, createdBy: BOOTSTRAP_ADMIN_ID,
+      policyProfileId: options.policyProfileId ?? DEFAULT_POLICY.id, policyProfileHash: POLICY_HASH,
+      caseSetId: options.caseSetId ?? null,
+      rendererFingerprint: options.rendererFingerprint === undefined ? RENDERER : options.rendererFingerprint,
+      cases: options.propsHashes.map((propsHash, index) => ({
+        caseId: `case_${propsHash}`, caseKey: options.caseKeys?.[index] ?? `key-${propsHash}`,
+        propsHash, caseFingerprint: `fp-${propsHash}-${index}`, casePolicyHash: "cp",
+      })),
+    }).run;
+    orchestrator.repo.terminalizeRun(run.run_id, {
+      status: options.status ?? "pass",
+      ...(options.evidenceManifestHash === undefined ? {} : { evidenceManifestHash: options.evidenceManifestHash }),
+    });
+    return run;
+  };
+
+  const publishRunIds = (db: Database, id: string) =>
+    db.query("SELECT acceptance_run_id one, acceptance_run_ids many FROM component_publishes WHERE component_id=? AND version=1")
+      .get(id) as { one: string | null; many: string | null };
+
+  const codeOf = async (response: Response) => (await response.json() as { error: { code: string } }).error.code;
+
+  test("два дизъюнктных шарда: версия несёт оба рана (отсортированно), оба манифест-хэша и легаси-скаляр = первый", async () => {
+    const { db, handler, orchestrator, id, candidate } = await familyFixture("promote-shards", "PromoteShards");
+    const setA = putCaseSet(db, id, "light", ["a1", "a2"]);
+    const setB = putCaseSet(db, id, "light", ["b1", "b2"]);
+    const runA = shard(orchestrator, candidate.candidateId, id, { caseSetId: setA.case_set_id, propsHashes: ["p1", "p2"], evidenceManifestHash: "m-a" });
+    const runB = shard(orchestrator, candidate.candidateId, id, { caseSetId: setB.case_set_id, propsHashes: ["p3", "p4"], evidenceManifestHash: "m-b" });
+    const sorted = orchestrator.repo.sortRunIds([runA.run_id, runB.run_id]);
+
+    // Порядок аргументов — обратный отсортированному: хранение обязано его игнорировать.
+    const promoted = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, candidateId: candidate.candidateId,
+      acceptanceRunIds: [...sorted].reverse(), expectedCases: 4,
+    }));
+    expect(promoted.status, await promoted.clone().text()).toBe(201);
+    const body = await promoted.json() as { acceptanceRunId: string; acceptanceRunIds: string[]; evidenceManifestHashes: string[] };
+    expect(body.acceptanceRunIds).toEqual(sorted);
+    expect(body.acceptanceRunId).toBe(sorted[0]);
+    expect(body.evidenceManifestHashes.sort()).toEqual(["m-a", "m-b"]);
+
+    // Строка версии: массив + легаси-скаляр, равный первому элементу.
+    expect(publishRunIds(db, id)).toEqual({ one: sorted[0]!, many: JSON.stringify(sorted) });
+    // DTO версий — и список, и одиночный.
+    const version = await (await handler(req(`/components/${id}/versions/1`))).json() as Record<string, unknown>;
+    expect(version).toMatchObject({ acceptanceRunId: sorted[0], acceptanceRunIds: sorted });
+    expect((version.evidenceManifestHashes as string[]).slice().sort()).toEqual(["m-a", "m-b"]);
+    const list = await (await handler(req(`/components/${id}`))).json() as { versions: Record<string, unknown>[] };
+    expect(list.versions[0]).toMatchObject({ acceptanceRunId: sorted[0], acceptanceRunIds: sorted });
+    // Аудит несёт весь набор.
+    const event = auditActions(db, id).find((entry) => entry.action === "component.promoted");
+    expect(JSON.parse(event!.detail!)).toMatchObject({ acceptanceRunId: sorted[0], acceptanceRunIds: sorted });
+  }, 180_000);
+
+  test("пересечение покрытия по (propsHash, surface) → 422 acceptance_coverage_overlap", async () => {
+    const { db, handler, orchestrator, id, candidate } = await familyFixture("promote-overlap", "PromoteOverlap");
+    const setA = putCaseSet(db, id, "light", ["a1"]);
+    const setB = putCaseSet(db, id, "light", ["b1"]);
+    const runA = shard(orchestrator, candidate.candidateId, id, { caseSetId: setA.case_set_id, propsHashes: ["p1", "p2"] });
+    const runB = shard(orchestrator, candidate.candidateId, id, { caseSetId: setB.case_set_id, propsHashes: ["p2", "p3"] });
+    const response = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, acceptanceRunIds: [runA.run_id, runB.run_id],
+    }));
+    expect(response.status).toBe(422);
+    const body = await response.json() as { error: { code: string; overlapCount: number } };
+    expect(body.error.code).toBe("acceptance_coverage_overlap");
+    expect(body.error.overlapCount).toBe(1);
+    expect(versionRows(db, id)).toEqual([]);
+  }, 180_000);
+
+  test("одинаковые props на РАЗНЫХ поверхностях промоутятся, а совпавшие caseKey дают warning (D12)", async () => {
+    const { db, handler, orchestrator, id, candidate } = await familyFixture("promote-themes", "PromoteThemes");
+    const light = putCaseSet(db, id, "light", ["c1"]);
+    const dark = putCaseSet(db, id, "dark", ["c1"]);
+    const keys = ["default", "pressed"];
+    const runLight = shard(orchestrator, candidate.candidateId, id, { caseSetId: light.case_set_id, propsHashes: ["p1", "p2"], caseKeys: keys });
+    const runDark = shard(orchestrator, candidate.candidateId, id, { caseSetId: dark.case_set_id, propsHashes: ["p1", "p2"], caseKeys: keys });
+    const promoted = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, acceptanceRunIds: [runLight.run_id, runDark.run_id], expectedCases: 4,
+    }));
+    expect(promoted.status, await promoted.clone().text()).toBe(201);
+    const body = await promoted.json() as { warnings: string[]; acceptanceRunIds: string[] };
+    expect(body.acceptanceRunIds).toHaveLength(2);
+    expect(body.warnings.some((warning) => warning.includes("share 2 case key(s)"))).toBe(true);
+  }, 180_000);
+
+  test("несогласованный набор: провальный ран, чужой ран, смешанные профили, разные рендереры", async () => {
+    const { db, handler, orchestrator, id, candidate } = await familyFixture("promote-incoherent", "PromoteIncoherent");
+    const promote = (runIds: string[]) => handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, candidateId: candidate.candidateId, acceptanceRunIds: runIds,
+    }));
+    const ok = shard(orchestrator, candidate.candidateId, id, { propsHashes: ["p1"] });
+
+    const failed = shard(orchestrator, candidate.candidateId, id, { propsHashes: ["p2"], status: "fail" });
+    expect(await codeOf(await promote([ok.run_id, failed.run_id]))).toBe("acceptance_run_not_passed");
+
+    const strict = shard(orchestrator, candidate.candidateId, id, { propsHashes: ["p3"], policyProfileId: "pixel-strict-v1" });
+    expect(await codeOf(await promote([ok.run_id, strict.run_id]))).toBe("acceptance_policy_mismatch");
+
+    const otherRenderer = shard(orchestrator, candidate.candidateId, id, { propsHashes: ["p4"], rendererFingerprint: "s".repeat(64) });
+    expect(await codeOf(await promote([ok.run_id, otherRenderer.run_id]))).toBe("acceptance_renderer_mismatch");
+
+    // Ран чужого кандидата того же компонента — принадлежность, а не политика.
+    const other = orchestrator.repo.createCandidate({
+      componentId: id, designSystem: "yandex-pay", rev: 42, sourceHash: "4".repeat(64), bundleHash: "5".repeat(64),
+      hostAbiVersion: 1, themeVersion: null, observedCatalogRevision: "catalog-z", policyProfileHash: POLICY_HASH,
+      createdBy: BOOTSTRAP_ADMIN_ID,
+    }).candidate;
+    const foreign = shard(orchestrator, other.candidate_id, id, { propsHashes: ["p5"] });
+    expect(await codeOf(await promote([ok.run_id, foreign.run_id]))).toBe("acceptance_run_mismatch");
+
+    expect(versionRows(db, id)).toEqual([]);
+  }, 180_000);
+
+  test("legacy-ран без renderer_fingerprint (до v30) промоутится с warning, а не отказом", async () => {
+    const { db, handler, orchestrator, id, candidate } = await familyFixture("promote-legacyrenderer", "PromoteLegacyrenderer");
+    const setA = putCaseSet(db, id, "light", ["a1"]);
+    const setB = putCaseSet(db, id, "light", ["b1"]);
+    const modern = shard(orchestrator, candidate.candidateId, id, { caseSetId: setA.case_set_id, propsHashes: ["p1"] });
+    const legacy = shard(orchestrator, candidate.candidateId, id, { caseSetId: setB.case_set_id, propsHashes: ["p2"], rendererFingerprint: null });
+    const promoted = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, acceptanceRunIds: [modern.run_id, legacy.run_id],
+    }));
+    expect(promoted.status, await promoted.clone().text()).toBe(201);
+    const body = await promoted.json() as { warnings: string[] };
+    expect(body.warnings.some((warning) => warning.includes(legacy.run_id) && warning.includes("renderer provenance"))).toBe(true);
+  }, 180_000);
+
+  test("expectedCases не сходится → 422 acceptance_coverage_incomplete", async () => {
+    const { db, handler, orchestrator, id, candidate } = await familyFixture("promote-incomplete", "PromoteIncomplete");
+    const setA = putCaseSet(db, id, "light", ["a1"]);
+    const setB = putCaseSet(db, id, "light", ["b1"]);
+    const runA = shard(orchestrator, candidate.candidateId, id, { caseSetId: setA.case_set_id, propsHashes: ["p1", "p2"] });
+    const runB = shard(orchestrator, candidate.candidateId, id, { caseSetId: setB.case_set_id, propsHashes: ["p3"] });
+    const response = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, acceptanceRunIds: [runA.run_id, runB.run_id], expectedCases: 4,
+    }));
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ error: { code: "acceptance_coverage_incomplete", expectedCases: 4, coveredCases: 3 } });
+    expect(versionRows(db, id)).toEqual([]);
+  }, 180_000);
+
+  test("оба поля сразу → 400; одиночный promote байтово совместим и всё равно пишет массив", async () => {
+    const { db, handler, orchestrator, id, candidate } = await familyFixture("promote-xor", "PromoteXor");
+    const run = shard(orchestrator, candidate.candidateId, id, { propsHashes: ["p1"] });
+    const both = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, acceptanceRunId: run.run_id, acceptanceRunIds: [run.run_id],
+    }));
+    expect(both.status).toBe(400);
+    expect(await codeOf(both)).toBe("invalid_request");
+
+    const promoted = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, acceptanceRunId: run.run_id,
+    }));
+    expect(promoted.status, await promoted.clone().text()).toBe(201);
+    expect(await promoted.json()).toMatchObject({ acceptanceRunId: run.run_id, acceptanceRunIds: [run.run_id] });
+    expect(publishRunIds(db, id)).toEqual({ one: run.run_id, many: JSON.stringify([run.run_id]) });
+  }, 180_000);
+
+  test("capabilities объявляют acceptanceMultiRunPromote вместе с матрицей", async () => {
+    const withMatrix = await setup({ matrix: true });
+    const on = await (await withMatrix.handler(req("/capabilities"))).json() as { features: Record<string, boolean> };
+    expect(on.features.acceptanceMultiRunPromote).toBe(true);
+    const withoutMatrix = await setup();
+    const off = await (await withoutMatrix.handler(req("/capabilities"))).json() as { features: Record<string, boolean> };
+    expect(off.features.acceptanceMultiRunPromote).toBe(false);
+  }, 120_000);
 });

@@ -28,7 +28,8 @@ import { writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./ev
 import type { RunInkBbox } from "./inkBbox";
 import type { RunNormalizedDiff } from "../visual/diff-runner";
 import type { CaseSetManifest } from "../../src/acceptance/caseSetSchema";
-import { CASE_POLICY_HASH_V0, verdictPolicySnapshotOf, type CaseSurface, type VerdictPolicySnapshot } from "./ids";
+import { CASE_POLICY_HASH_V0, readinessPolicyHashOf, verdictPolicySnapshotOf, type CaseSurface, type VerdictPolicySnapshot } from "./ids";
+import { rendererFingerprint } from "../capture/renderer";
 import type { AcceptanceCaptureService, CandidateSubject, GateContext } from "./gates/types";
 import {
   bySeverity, carryBaselineCase, caseFingerprintsFor, causesOfGates, executeCase, fingerprintOf, foldRunVerdict,
@@ -357,6 +358,10 @@ export class AcceptanceOrchestrator {
       idempotencyKey: input.idempotencyKey ?? null,
       caseSetId: caseSet?.case_set_id ?? null,
       createdBy: input.createdBy,
+      // v30 (W7): объявленный рендерер рана персистится на постановке — тем же значением, что
+      // входит в `frame_fingerprint` случаев. Multi-run promote сверяет его у всех ранов набора:
+      // покрытие, снятое разными рендерерами, склеивать в одну доказательную базу нельзя.
+      rendererFingerprint: rendererFingerprint(readinessPolicyHashOf(runPolicy.readiness)),
       progress: progressOf([], cases.length, null),
       // Роли гейтов рана — по эффективной политике (W5a): `requireVisual` набора видно в
       // `gates_json` сразу на постановке, а не только в свёртке.

@@ -3414,6 +3414,9 @@
                         "acceptanceMatrix": {
                           "type": "boolean"
                         },
+                        "acceptanceMultiRunPromote": {
+                          "type": "boolean"
+                        },
                         "acceptancePromote": {
                           "type": "boolean"
                         },
@@ -3553,7 +3556,8 @@
                         "acceptanceCandidates",
                         "acceptanceRuns",
                         "acceptanceProvenance",
-                        "caseSetValidate"
+                        "caseSetValidate",
+                        "acceptanceMultiRunPromote"
                       ],
                       "type": "object"
                     },
@@ -10367,12 +10371,23 @@
                     "maxLength": 256,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "__schema1": {
+                    "type": "string"
                   }
                 },
                 "additionalProperties": false,
                 "properties": {
                   "acceptanceRunId": {
                     "type": "string"
+                  },
+                  "acceptanceRunIds": {
+                    "items": {
+                      "$ref": "#/$defs/__schema1"
+                    },
+                    "maxItems": 8,
+                    "minItems": 1,
+                    "type": "array"
                   },
                   "baseRev": {
                     "exclusiveMinimum": 0,
@@ -10381,6 +10396,11 @@
                   },
                   "candidateId": {
                     "type": "string"
+                  },
+                  "expectedCases": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
                   },
                   "expectedCatalogRevision": {
                     "type": "string"
@@ -10493,6 +10513,12 @@
                         }
                       ]
                     },
+                    "acceptanceRunIds": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
                     "bundleHash": {
                       "type": "string"
                     },
@@ -10511,6 +10537,12 @@
                     },
                     "catalogRevision": {
                       "type": "string"
+                    },
+                    "evidenceManifestHashes": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
                     },
                     "hostAbiVersion": {
                       "type": "number"
@@ -10560,6 +10592,8 @@
                     "warnings",
                     "candidateId",
                     "acceptanceRunId",
+                    "acceptanceRunIds",
+                    "evidenceManifestHashes",
                     "acceptancePolicy"
                   ],
                   "type": "object"
@@ -10882,7 +10916,7 @@
                 }
               }
             },
-            "description": "validation_failed | asset_not_found | atomic_policy_violation | event_schema_not_serializable | acceptance_matrix_disabled (candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off) | acceptance_run_mismatch (the acceptance run belongs to another candidate (with EASYUI_PROMOTE_POLICY_STRICT=1 also: its policy profile hash differs from the candidate stamp)) | acceptance_policy_mismatch (the acceptance run ran under a policy profile that may not back a promotion; details carry {runPolicyProfileId, allowed}) | acceptance_run_not_passed (the acceptance run is not a terminal pass/pass_with_exceptions)"
+            "description": "validation_failed | asset_not_found | atomic_policy_violation | event_schema_not_serializable | acceptance_matrix_disabled (candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off) | acceptance_run_mismatch (the acceptance run belongs to another candidate (with EASYUI_PROMOTE_POLICY_STRICT=1 also: its policy profile hash differs from the candidate stamp)) | acceptance_policy_mismatch (the acceptance run ran under a policy profile that may not back a promotion; details carry {runPolicyProfileId, allowed}) | acceptance_run_not_passed (the acceptance run is not a terminal pass/pass_with_exceptions) | acceptance_renderer_mismatch (W7: the runs of a multi-run promote were captured by different renderers; details carry {runIds, rendererFingerprints}) | acceptance_coverage_overlap (W7: two runs of a multi-run promote cover the same (propsHash, surface) case; details carry {runIds, overlap, overlapCount}) | acceptance_coverage_incomplete (W7: the union coverage of the runs does not match the requested expectedCases; details carry {expectedCases, coveredCases, runs})"
           },
           "429": {
             "content": {
@@ -10895,7 +10929,7 @@
             "description": "validate_in_flight (a validate/promote build is already in flight for this user) | queue_full (global validate concurrency cap reached)"
           }
         },
-        "summary": "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate (422 acceptance_run_mismatch), must have been executed under a promotion policy profile (`capabilities.acceptance.promotionPolicyProfiles`, otherwise 422 acceptance_policy_mismatch with `{runPolicyProfileId, allowed}`) and must carry a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). The candidate's own `policyProfileHash` is an informational stamp and is NOT compared with the run: candidate identity excludes policy, so requiring equality made every pixel-strict-v1 run unpromotable (defect P0-2, fixed 2026-08-04; EASYUI_PROMOTE_POLICY_STRICT=1 restores the old equality as an emergency rollback). A run whose `policy_profile_hash` no longer matches the current definition of its profile is accepted with a warning and both hashes reported in `acceptancePolicy` and in the audit event. Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`.",
+        "summary": "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate (422 acceptance_run_mismatch), must have been executed under a promotion policy profile (`capabilities.acceptance.promotionPolicyProfiles`, otherwise 422 acceptance_policy_mismatch with `{runPolicyProfileId, allowed}`) and must carry a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). The candidate's own `policyProfileHash` is an informational stamp and is NOT compared with the run: candidate identity excludes policy, so requiring equality made every pixel-strict-v1 run unpromotable (defect P0-2, fixed 2026-08-04; EASYUI_PROMOTE_POLICY_STRICT=1 restores the old equality as an emergency rollback). A run whose `policy_profile_hash` no longer matches the current definition of its profile is accepted with a warning and both hashes reported in `acceptancePolicy` and in the audit event. Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`. MULTI-RUN (W7, `capabilities.features.acceptanceMultiRunPromote`): a family that does not fit one run is promoted with `acceptanceRunIds` (1..8, mutually exclusive with `acceptanceRunId` — sending both is 400). Every run must belong to the same candidate, be a terminal pass under the SAME promotion policy profile (otherwise 422 acceptance_policy_mismatch) and carry the same `renderer_fingerprint` (422 acceptance_renderer_mismatch; runs predating schema v30 have none and are skipped with a warning). Coverage must be PAIRWISE DISJOINT by (propsHash, surface) — the surface is the case-set `capture` (viewport/dsf/theme), so sharding light/dark legitimately repeats props and even case ids; an intersection is 422 acceptance_coverage_overlap, while a repeated caseKey across shards is only a warning. Optional `expectedCases` compares the union coverage (distinct (propsHash, surface) frames, so aliases count once) and answers 422 acceptance_coverage_incomplete on a mismatch. The stored array is sorted by (created_at, run_id) regardless of argument order and `acceptanceRunId` is its FIRST element; the response carries `acceptanceRunIds` and `evidenceManifestHashes` of the whole set.",
         "x-easyui-validated": false
       }
     },
@@ -12411,6 +12445,12 @@
                           }
                         ]
                       },
+                      "acceptanceRunIds": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
                       "candidateId": {
                         "anyOf": [
                           {
@@ -12423,6 +12463,12 @@
                       },
                       "designSystem": {
                         "type": "string"
+                      },
+                      "evidenceManifestHashes": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
                       },
                       "publishedAt": {
                         "type": "string"
@@ -12444,7 +12490,9 @@
                       "designSystem",
                       "publishedAt",
                       "candidateId",
-                      "acceptanceRunId"
+                      "acceptanceRunId",
+                      "acceptanceRunIds",
+                      "evidenceManifestHashes"
                     ],
                     "type": "object"
                   },
@@ -12465,7 +12513,7 @@
             "description": "not_found"
           }
         },
-        "summary": "List published versions with lifecycle status and their flat acceptance receipts: `acceptanceRunId`/`candidateId` are non-null only for versions published by `promote` with a durable candidate and a passing acceptance run (null on everything published before, or through the legacy publish path).",
+        "summary": "List published versions with lifecycle status and their flat acceptance receipts: `acceptanceRunId`/`candidateId` are non-null only for versions published by `promote` with a durable candidate and a passing acceptance run (null on everything published before, or through the legacy publish path). `acceptanceRunIds` is the full sorted set backing the version (W7 multi-run promote; rows written before schema v30 report `[acceptanceRunId]`, and `acceptanceRunId` always equals its first element), `evidenceManifestHashes` the evidence manifest hash of each of those runs.",
         "x-easyui-validated": false
       }
     },

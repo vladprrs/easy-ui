@@ -1693,12 +1693,16 @@ const OTHER_HASH = "b".repeat(64);
 const CANDIDATE = "cand_00000000-0000-0000-0000-0000000000aa";
 const OTHER_CANDIDATE = "cand_00000000-0000-0000-0000-0000000000bb";
 const RUN = "acc_00000000-0000-0000-0000-000000000011";
+const RUN_B = "acc_00000000-0000-0000-0000-000000000022";
 
-function promoteStubRoutes(overrides: { candidate?: Record<string, unknown>; run?: Record<string, unknown> } = {}) {
+function promoteStubRoutes(overrides: { candidate?: Record<string, unknown>; run?: Record<string, unknown>; secondRun?: Record<string, unknown>; features?: Record<string, boolean> } = {}) {
   const candidate = { candidateId: CANDIDATE, componentId: "linked", rev: 2, sourceHash: SOURCE_HASH, status: "validated", ...overrides.candidate };
   const acceptanceRun = { runId: RUN, componentId: "linked", candidateId: CANDIDATE, status: "pass", policy: { id: "default-v1" }, ...overrides.run };
+  // W7: второй шард той же семьи — тот же кандидат, другой ран.
+  const secondRun = { runId: RUN_B, componentId: "linked", candidateId: CANDIDATE, status: "pass", policy: { id: "default-v1" }, ...overrides.secondRun };
   return {
-    "GET /api/capabilities": () => ({ json: { features: { acceptancePromote: true, acceptanceMatrix: true } } }),
+    "GET /api/capabilities": () => ({ json: { features: { acceptancePromote: true, acceptanceMatrix: true, acceptanceMultiRunPromote: true, ...overrides.features } } }),
+    [`GET /api/acceptance-runs/${RUN_B}`]: () => ({ json: secondRun }),
     "GET /api/components/linked": () => ({ json: { id: "linked", headRev: 2, designSystem: "yandex-pay" } }),
     "POST /api/components/linked/validate": () => ({ json: { sourceHash: SOURCE_HASH, bundleHash: "bundle", catalogRevision: "cat-1", warnings: [] } }),
     [`GET /api/component-candidates/${CANDIDATE}`]: () => ({ json: candidate }),
@@ -1707,7 +1711,8 @@ function promoteStubRoutes(overrides: { candidate?: Record<string, unknown>; run
       status: 201,
       json: {
         version: 3, rev: 2, sourceHash: SOURCE_HASH, bundleHash: "bundle", hostAbiVersion: 4, themeVersion: 7,
-        catalogRevision: "cat-1", superseded: [2], candidateId: body?.candidateId ?? null, acceptanceRunId: body?.acceptanceRunId ?? null,
+        catalogRevision: "cat-1", superseded: [2], candidateId: body?.candidateId ?? null, acceptanceRunId: body?.acceptanceRunId ?? (body?.acceptanceRunIds as string[] | undefined)?.[0] ?? null,
+        acceptanceRunIds: body?.acceptanceRunIds ?? (body?.acceptanceRunId ? [body.acceptanceRunId] : []), evidenceManifestHashes: [],
       },
     }),
   } as Record<string, (body: Record<string, unknown> | null) => StubReply>;
@@ -1770,15 +1775,55 @@ describe("author driver promote linking (W2a)", () => {
     expect(promotes()).toHaveLength(0);
   }, 30_000);
 
-  test("two --acceptance-run values are refused locally (multi-run lands in W7)", async () => {
+  test("W7: two --acceptance-run values reach the body as acceptanceRunIds and both are pre-flighted", async () => {
+    const { api, calls, promotes } = await stubApi(promoteStubRoutes());
+    const result = await run(api, ["promote", "linked", "--acceptance-run", RUN, "--acceptance-run", RUN_B]);
+    expect(result.exitCode).toBe(0);
+    // Легаси-поле не отправляется: два утверждения о доказательной базе одной версии сервер
+    // отвергает `400`, поэтому ветка взаимоисключающая.
+    expect(promotes()[0]?.body).toMatchObject({ acceptanceRunIds: [RUN, RUN_B] });
+    expect(Object.keys(promotes()[0]?.body ?? {})).not.toContain("acceptanceRunId");
+    // Оба рана прочитаны до мутации, и оба напечатаны в строке связки.
+    expect(calls.some((call) => call.path === `/api/acceptance-runs/${RUN}`)).toBe(true);
+    expect(calls.some((call) => call.path === `/api/acceptance-runs/${RUN_B}`)).toBe(true);
+    expect(result.stdout).toContain(`acceptance link: candidate=${CANDIDATE} (rev 2, validated) run=2 runs [${RUN} (pass, policy default-v1); ${RUN_B} (pass, policy default-v1)]`);
+    // `--candidate` не передавали, поэтому в теле его нет — печатается прочерк (поведение W2a).
+    expect(result.stdout).toContain(`acceptance: candidate=- run=${RUN},${RUN_B}`);
+  }, 30_000);
+
+  test("W7: --acceptance-runs a,b is the same set, and --expected-cases rides along", async () => {
     const { api, promotes } = await stubApi(promoteStubRoutes());
-    const result = await run(api, ["promote", "linked", "--acceptance-run", RUN, "--acceptance-run", "acc_00000000-0000-0000-0000-000000000022"]);
+    const json = await run(api, ["promote", "linked", "--acceptance-runs", `${RUN},${RUN_B}`, "--expected-cases", "49", "--json"]);
+    expect(json.exitCode).toBe(0);
+    expect(promotes()[0]?.body).toMatchObject({ acceptanceRunIds: [RUN, RUN_B], expectedCases: 49 });
+    expect(JSON.parse(json.stdout)).toMatchObject({ command: "promote", acceptanceRunIds: [RUN, RUN_B], acceptanceRunId: RUN });
+  }, 30_000);
+
+  test("W7: a single run stays byte-compatible on the legacy field", async () => {
+    const { api, promotes } = await stubApi(promoteStubRoutes());
+    const result = await run(api, ["promote", "linked", "--acceptance-runs", RUN]);
+    expect(result.exitCode).toBe(0);
+    expect(promotes()[0]?.body).toMatchObject({ acceptanceRunId: RUN });
+    expect(Object.keys(promotes()[0]?.body ?? {})).not.toContain("acceptanceRunIds");
+  }, 30_000);
+
+  test("W7: a server without features.acceptanceMultiRunPromote refuses the set locally", async () => {
+    const { api, promotes } = await stubApi(promoteStubRoutes({ features: { acceptanceMultiRunPromote: false } }));
+    const result = await run(api, ["promote", "linked", "--acceptance-run", RUN, "--acceptance-run", RUN_B]);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("multi-run promote is not supported by the server yet");
+    expect(result.stderr).toContain("features.acceptanceMultiRunPromote is off");
     expect(promotes()).toHaveLength(0);
-    // Парсер уже копит значения — задел под W7 не ломает разбор.
-    expect(parseArgs(["promote", "linked", "--acceptance-run", "acc_1", "--acceptance-run", "acc_2"]))
-      .toMatchObject({ cmd: "promote", flags: { acceptanceRun: ["acc_1", "acc_2"] } });
+  }, 30_000);
+
+  test("W7: a shard of another candidate is refused locally, without the promote POST", async () => {
+    const { api, promotes } = await stubApi(promoteStubRoutes({ secondRun: { candidateId: OTHER_CANDIDATE } }));
+    const result = await run(api, ["promote", "linked", "--acceptance-run", RUN, "--acceptance-run", RUN_B]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain(`belongs to candidate ${OTHER_CANDIDATE}`);
+    expect(promotes()).toHaveLength(0);
+    // Парсер копит значения обоих флагов.
+    expect(parseArgs(["promote", "linked", "--acceptance-run", "acc_1", "--acceptance-runs", "acc_2,acc_3"]))
+      .toMatchObject({ cmd: "promote", flags: { acceptanceRun: ["acc_1"], acceptanceRuns: ["acc_2", "acc_3"] } });
   }, 30_000);
 
   test("linking without the matrix stack is refused before the mutation", async () => {
@@ -1794,7 +1839,7 @@ describe("author driver promote linking (W2a)", () => {
     const { api } = await stubApi(promoteStubRoutes());
     const result = await run(api, []);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("[--candidate <candidateId>] [--acceptance-run <runId>]");
+    expect(result.stderr).toContain("[--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>]");
     expect(result.stderr).toContain("[--recapture]");
     expect(result.stderr).toContain("--refresh failed = re-evaluate the verdict only");
     expect(result.stderr).toContain("--recapture = force a re-capture");

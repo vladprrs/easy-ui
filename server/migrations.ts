@@ -929,6 +929,34 @@ export const migrations = [
     // не 422 на асинхронной постановке, а исход рана, видимый в run-view и в CLI.
     db.run("ALTER TABLE acceptance_runs ADD COLUMN status_reason TEXT");
   },
+  (db: Database) => {
+    // v30: multi-run provenance публикации
+    // (план `docs/plans/2026-08-04-acceptance-pipeline-feedback.md`, решение D-D, волна W7).
+    //
+    // Семья, не влезающая в один ран (шардирование по props или по поверхности light/dark),
+    // публикуется набором ранов. Форма хранения — **плоская TEXT-колонка с JSON-массивом, без FK**
+    // (инвариант A9: receipts приёмки на строке версии ссылаются на раны, которые GC вправе
+    // унести; FK превратил бы TTL приёмки в отказ удаления, а не в потерю провенанса):
+    //
+    // 1. `component_publishes.acceptance_run_ids` — отсортированный (`created_at, run_id`) массив
+    //    ранов, которыми подтверждена версия. NULL — строка до этой миграции ИЛИ publish без
+    //    приёмки; читатель обязан трактовать NULL как `[acceptance_run_id]` (пусто, если и он
+    //    NULL). Backfill'а нет намеренно: он переписал бы историю значением, которое и так
+    //    вычислимо чтением.
+    // 2. **`acceptance_run_id` остаётся первым элементом отсортированного массива** (C7) — все
+    //    старые читатели (Library `accepted`, `audit --versions`, DTO версии) продолжают видеть
+    //    ровно один id, и он детерминирован, а не «какой пришёл первым в теле запроса».
+    // 3. `acceptance_runs.renderer_fingerprint` — объявленный рендерер рана (nullable; пишется
+    //    новыми ранами на постановке). Multi-run promote требует равенства у всех ранов набора:
+    //    склеивать покрытие, снятое разными рендерерами, значит выдавать за одну доказательную
+    //    базу кадры, несравнимые между собой. Для до-миграционных ранов с NULL проверка
+    //    пропускается с warning — «неизвестно» здесь не равно «разошлось».
+    //
+    // Откат образа переживается: v29-код читает обе таблицы `SELECT *` и собирает ответы по
+    // именованным полям, поэтому лишние колонки ему не мешают (тот же инвариант, что у v28/v29).
+    db.run("ALTER TABLE component_publishes ADD COLUMN acceptance_run_ids TEXT");
+    db.run("ALTER TABLE acceptance_runs ADD COLUMN renderer_fingerprint TEXT");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

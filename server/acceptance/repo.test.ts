@@ -45,7 +45,7 @@ function seedRun(repo: AcceptanceRepo, id: string, extra: Record<string, unknown
 
 test("v25 lands on a database migrated from scratch and leaves no foreign-key violations", () => {
   const db = dbForRepo();
-  expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(29);
+  expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(30);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   // Partial unique index — первый в проекте; его наличие и есть механизм «≤1 нетерминальный run».
   const index = db.query("SELECT sql FROM sqlite_master WHERE type='index' AND name='acceptance_runs_one_in_flight'").get() as { sql: string } | null;
@@ -335,6 +335,44 @@ test("the candidate sweeper skips promoted rows, live runs and anything a publis
   expect(repo.candidate(busy.candidate_id)).toBeDefined();
   expect(repo.candidate(provenance.candidate_id)).toBeDefined();
   expect(repo.isRunReferencedByPublish(provenanceRun.run_id)).toBe(true);
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  db.close();
+});
+
+/**
+ * W7/C27: версия, подтверждённая **набором** ранов, защищает от GC каждый ран набора. Свипер
+ * читает union скалярной колонки и `json_each(acceptance_run_ids)` — без второго слагаемого TTL
+ * унёс бы все шарды семьи, кроме первого, и provenance активной версии стал бы битым.
+ */
+test("a publish backed by two runs protects both of them from the candidate sweeper", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const { candidate } = repo.createCandidate(candidateInput({ componentId: "yp-family" }));
+  const runs = ["shard-a", "shard-b"].map((caseId) => {
+    const run = repo.createRun({
+      candidateId: candidate.candidate_id, componentId: candidate.component_id,
+      policyProfileId: policy.id, policyProfileHash: profileHash, createdBy: "user_a",
+      cases: [{ caseId, caseKey: caseId, propsHash: `props-${caseId}`, casePolicyHash: "case-policy-v0", caseFingerprint: `fp-${caseId}` }],
+    }).run;
+    repo.terminalizeRun(run.run_id, { status: "pass" });
+    return run;
+  });
+  db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('yp-family','YpFamily',1,'yandex-pay','now','now')");
+  db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('yp-family',1,'src','yandex-pay','now')");
+  db.query(`INSERT INTO component_publishes
+    (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at)
+    VALUES ('yp-family',1,1,'active','js','{}','src-hash','bundle-hash',4,'now')`).run();
+  repo.linkPublish("yp-family", 1, { candidateId: candidate.candidate_id, acceptanceRunIds: runs.map((run) => run.run_id) });
+  // Легаси-скаляр — первый элемент набора; второй ран виден только через массив.
+  expect((db.query("SELECT acceptance_run_id id FROM component_publishes WHERE component_id='yp-family'").get() as { id: string }).id)
+    .toBe(runs[0]!.run_id);
+  for (const run of runs) expect(repo.isRunReferencedByPublish(run.run_id)).toBe(true);
+  expect([...repo.runIdsReferencedByPublishes()].sort()).toEqual(runs.map((run) => run.run_id).sort());
+
+  // Кандидат протух — но свипер обязан пропустить его целиком: оба рана держат publish.
+  db.query("UPDATE component_candidates SET expires_at='2026-01-01T00:00:00.000Z'").run();
+  expect(repo.sweepExpiredCandidates()).toEqual({ deleted: 0, skipped: 1 });
+  for (const run of runs) expect(repo.run(run.run_id)).toBeDefined();
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   db.close();
 });

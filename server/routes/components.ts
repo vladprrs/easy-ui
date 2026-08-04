@@ -28,7 +28,7 @@ import {
 import { assertAtomicPolicy } from "../atomicPolicy";
 import { getCandidateBundle, readCandidate } from "../components/candidates";
 import { validateComponentHead } from "../components/validate";
-import { promoteComponent } from "../components/promote";
+import { promoteComponent, PROMOTE_MAX_ACCEPTANCE_RUNS } from "../components/promote";
 import type { AcceptanceRepo } from "../acceptance/repo";
 import { isCandidateId, isRunId } from "../acceptance/ids";
 
@@ -350,20 +350,35 @@ export async function routeComponents(request:Request,db:Database,segments:strin
   // `{baseRev, sourceHash}` из validate-receipt. Kill-switch EASYUI_ACCEPTANCE_DISABLED=1 →
   // ручки нет (404) и `features.acceptancePromote=false`.
   if(tail[0]==="promote"&&tail.length===1){if(acceptance.disabled)throw new ApiError(404,"not_found","Component promote is disabled");if(request.method!=="POST")throw new ApiError(405,"method_not_allowed","Method not allowed");const actor=requireResourceOwner(db,"components",id,principal);const systemId=repo.row(id).design_system;requireActiveDesignSystem(db,systemId,["designSystem"]);requireResourceOwner(db,"design_systems",systemId,principal);const b=body(await readJson(request));
-    for(const key of Object.keys(b))if(!["baseRev","sourceHash","expectedCatalogRevision","supersede","reuseOverride","message","candidateId","acceptanceRunId"].includes(key))throw new ApiError(400,"invalid_request",`Unknown field: ${key}`);
+    for(const key of Object.keys(b))if(!["baseRev","sourceHash","expectedCatalogRevision","supersede","reuseOverride","message","candidateId","acceptanceRunId","acceptanceRunIds","expectedCases"].includes(key))throw new ApiError(400,"invalid_request",`Unknown field: ${key}`);
     // A7/A9 (план 2026-08-03 §5 W1c): ссылки на durable-кандидата и его ран уезжают в сагу
     // (`components/promote.ts`), где сверяются и записываются в строку версии. Без матричного
     // стека отказ типизован (`acceptance_matrix_disabled`), а не «unknown field»: агент обязан
     // отличать «фича выключена в этой сборке» от «сервер не знает такого поля» — второе он чинил
     // бы удалением параметра.
     let acceptanceRefs;
-    if(b.candidateId!==undefined||b.acceptanceRunId!==undefined){
-      if(!acceptance.matrix||!acceptance.repo)throw new ApiError(422,"acceptance_matrix_disabled","candidateId/acceptanceRunId require EASYUI_ACCEPTANCE_MATRIX=1");
+    if(b.candidateId!==undefined||b.acceptanceRunId!==undefined||b.acceptanceRunIds!==undefined||b.expectedCases!==undefined){
+      if(!acceptance.matrix||!acceptance.repo)throw new ApiError(422,"acceptance_matrix_disabled","candidateId/acceptanceRunId(s) require EASYUI_ACCEPTANCE_MATRIX=1");
       // Форма id проверяется до lookup'а (канон `routes/acceptance.ts`): произвольная строка иначе
       // отличала бы «нет строки» от «не тот формат» и давала бы оракул по чужой приёмке.
       if(b.candidateId!==undefined&&(typeof b.candidateId!=="string"||!isCandidateId(b.candidateId)))throw new ApiError(400,"invalid_request","candidateId must be a candidate id");
       if(b.acceptanceRunId!==undefined&&(typeof b.acceptanceRunId!=="string"||!isRunId(b.acceptanceRunId)))throw new ApiError(400,"invalid_request","acceptanceRunId must be an acceptance run id");
-      acceptanceRefs={repo:acceptance.repo,...(b.candidateId===undefined?{}:{candidateId:b.candidateId as string}),...(b.acceptanceRunId===undefined?{}:{acceptanceRunId:b.acceptanceRunId as string})};
+      // W7 (D-D): набор ранов шардированной семьи. Взаимоисключим с одиночным полем — «оба сразу»
+      // это не удобство, а два разных утверждения о доказательной базе одной версии, и молчаливый
+      // выбор одного из них был бы ложью в provenance.
+      if(b.acceptanceRunIds!==undefined){
+        if(b.acceptanceRunId!==undefined)throw new ApiError(400,"invalid_request","acceptanceRunId and acceptanceRunIds are mutually exclusive; send one of them");
+        if(!Array.isArray(b.acceptanceRunIds)||b.acceptanceRunIds.length===0)throw new ApiError(400,"invalid_request","acceptanceRunIds must be a non-empty array of acceptance run ids");
+        if(b.acceptanceRunIds.length>PROMOTE_MAX_ACCEPTANCE_RUNS)throw new ApiError(400,"invalid_request",`acceptanceRunIds accepts at most ${PROMOTE_MAX_ACCEPTANCE_RUNS} runs`);
+        for(const value of b.acceptanceRunIds)if(typeof value!=="string"||!isRunId(value))throw new ApiError(400,"invalid_request","acceptanceRunIds must contain acceptance run ids");
+        if(new Set(b.acceptanceRunIds as string[]).size!==b.acceptanceRunIds.length)throw new ApiError(400,"invalid_request","acceptanceRunIds must not repeat a run");
+      }
+      if(b.expectedCases!==undefined&&(typeof b.expectedCases!=="number"||!Number.isInteger(b.expectedCases)||b.expectedCases<1))throw new ApiError(400,"invalid_request","expectedCases must be a positive integer");
+      acceptanceRefs={repo:acceptance.repo,
+        ...(b.candidateId===undefined?{}:{candidateId:b.candidateId as string}),
+        ...(b.acceptanceRunId===undefined?{}:{acceptanceRunId:b.acceptanceRunId as string}),
+        ...(b.acceptanceRunIds===undefined?{}:{acceptanceRunIds:b.acceptanceRunIds as string[]}),
+        ...(b.expectedCases===undefined?{}:{expectedCases:b.expectedCases as number})};
     }
     const sourceHash=text(b.sourceHash,"sourceHash")!;
     if(!/^[0-9a-f]{64}$/.test(sourceHash))throw new ApiError(400,"invalid_request","sourceHash must be a sha256 hex digest");
@@ -375,7 +390,7 @@ export async function routeComponents(request:Request,db:Database,segments:strin
     try { promoted=await promoteComponent(db,dataDir,{id,baseRev:base(b),sourceHash,supersede:(b.supersede as "auto"|"none"|undefined)??"auto",actor:{userId:actor.userId,isAdmin:actor.isAdmin},mode:reuseGateMode,...(expectedCatalogRevision===undefined?{}:{expectedCatalogRevision}),...(text(b.message,"message",false)===undefined?{}:{message:text(b.message,"message",false)!}),...(promoteOverride===undefined?{}:{override:promoteOverride}),...(acceptanceRefs===undefined?{}:{acceptance:acceptanceRefs})}); }
     catch(error){ if(error instanceof ReuseGateRejection) return reuseRejectionResponse(db,error); throw error; }
     // KPI §9: fingerprints промоушена — единственный источник измерения churn'а постфактум.
-    writeAuditEvent(db,{actorId:actor.userId,action:"component.promoted",subjectType:"component",subjectId:id,detail:{version:promoted.version,rev:promoted.rev,sourceHash:promoted.sourceHash,bundleHash:promoted.bundleHash,hostAbiVersion:promoted.hostAbiVersion,themeVersion:promoted.themeVersion,catalogRevision:promoted.catalogRevision,superseded:promoted.superseded,supersede:(b.supersede as string|undefined)??"auto",cached:promoted.cached,...(promoted.candidateId===null?{}:{candidateId:promoted.candidateId}),...(promoted.acceptanceRunId===null?{}:{acceptanceRunId:promoted.acceptanceRunId}),
+    writeAuditEvent(db,{actorId:actor.userId,action:"component.promoted",subjectType:"component",subjectId:id,detail:{version:promoted.version,rev:promoted.rev,sourceHash:promoted.sourceHash,bundleHash:promoted.bundleHash,hostAbiVersion:promoted.hostAbiVersion,themeVersion:promoted.themeVersion,catalogRevision:promoted.catalogRevision,superseded:promoted.superseded,supersede:(b.supersede as string|undefined)??"auto",cached:promoted.cached,...(promoted.candidateId===null?{}:{candidateId:promoted.candidateId}),...(promoted.acceptanceRunId===null?{}:{acceptanceRunId:promoted.acceptanceRunId}),...(promoted.acceptanceRunIds.length?{acceptanceRunIds:promoted.acceptanceRunIds}:{}),...(promoted.evidenceManifestHashes.length?{evidenceManifestHashes:promoted.evidenceManifestHashes}:{}),
       // W3 (C18): provenance политики публикации — профиль рана и оба его хэша (на момент рана и
       // текущий). Строка версии колонки под них не имеет (миграций волна не вводит), поэтому
       // durable-след живёт здесь, а клиент видит то же в `acceptancePolicy` ответа.

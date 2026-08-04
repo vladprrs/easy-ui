@@ -20,10 +20,12 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set validate <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set validate <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
+/** Потолок набора ранов одного promote (сервер: `PROMOTE_MAX_ACCEPTANCE_RUNS`, план W7). */
+const PROMOTE_MAX_ACCEPTANCE_RUNS = 8;
 
 class CliError extends Error {
   constructor(message, { usage = false, exitCode = EXIT.failed } = {}) {
@@ -174,9 +176,9 @@ export const flagSpecs = Object.freeze({
   geometry: { ...jsonFlag },
   // RFC candidate-acceptance R1: приёмка провалидированной head-ревизии одной командой.
   // План 2026-08-04 §W2a (P0-1): явная линковка версии с durable-кандидатом и его раном.
-  // `--acceptance-run` объявлен повторяемым (задел под multi-run W7): парсер копит значения,
-  // а `runPromote` пока отправляет одиночное поле и локально отказывает на >1 значении —
-  // молча брать «первый» значило бы врать о доказательной базе версии.
+  // План 2026-08-04 §W7 (P1-8): шардированная семья публикуется набором ранов —
+  // `--acceptance-run` повторяем, `--acceptance-runs a,b` — та же связка одним аргументом.
+  // Порядок значений на хранение не влияет: сервер сортирует набор по `(created_at, run_id)`.
   promote: {
     ...jsonFlag,
     "--supersede": { value: true, key: "supersede", enum: ["auto", "none"] },
@@ -184,6 +186,24 @@ export const flagSpecs = Object.freeze({
     "--message": { value: true, key: "message" },
     "--candidate": { value: true, key: "candidate" },
     "--acceptance-run": { value: true, key: "acceptanceRun", repeat: true },
+    "--acceptance-runs": {
+      value: true,
+      key: "acceptanceRuns",
+      parse(value) {
+        const ids = value.split(",").map((item) => item.trim()).filter((item) => item !== "");
+        if (ids.length === 0) invalid("--acceptance-runs needs a comma-separated list of run ids");
+        return ids;
+      },
+    },
+    "--expected-cases": {
+      value: true,
+      key: "expectedCases",
+      parse(value) {
+        const number = Number(value);
+        if (!Number.isInteger(number) || number < 1) invalid("--expected-cases must be a positive integer");
+        return number;
+      },
+    },
   },
   // RFC candidate-acceptance R3a: правка provenance без новой ревизии и версии.
   provenance: {
@@ -2109,17 +2129,27 @@ async function runProvenance(args, flags) {
  * принадлежит этому компоненту и именно этому кандидату. Любое расхождение — `CliError` до POST.
  */
 async function resolvePromoteAcceptance(id, meta, receipt, flags, capabilities) {
-  const runIds = flags.acceptanceRun === undefined ? [] : [flags.acceptanceRun].flat();
+  const listed = [
+    ...(flags.acceptanceRun === undefined ? [] : [flags.acceptanceRun].flat()),
+    ...(flags.acceptanceRuns === undefined ? [] : [flags.acceptanceRuns].flat(2)),
+  ];
+  const runIds = [...new Set(listed)];
+  if (runIds.length !== listed.length) {
+    throw new CliError(`the same acceptance run is listed twice (${listed.join(", ")}); each shard of the family is one run`);
+  }
   const candidateId = flags.candidate ?? null;
   if (candidateId === null && runIds.length === 0) return null;
-  // Задел под multi-run (W7) уже в парсере, но сервер сегодня знает одно поле: «взять первый»
-  // молча означало бы приписать версии не ту доказательную базу.
-  if (runIds.length > 1) {
-    throw new CliError(`multi-run promote is not supported by the server yet: ${runIds.length} --acceptance-run values given (${runIds.join(", ")}); pass exactly one`);
+  if (runIds.length > PROMOTE_MAX_ACCEPTANCE_RUNS) {
+    throw new CliError(`promote accepts at most ${PROMOTE_MAX_ACCEPTANCE_RUNS} acceptance runs, got ${runIds.length}; a family that needs more shards should be split into components`);
   }
   const runId = runIds[0] ?? null;
   if (capabilities.features?.acceptanceMatrix !== true) {
     throw new CliError("--candidate/--acceptance-run need the matrix acceptance stack (features.acceptanceMatrix is off; needs EASYUI_ACCEPTANCE_MATRIX=1); promote without them publishes the validated head unlinked");
+  }
+  // Гейт возможности (C23): старый сервер отвергнет массив как unknown field уже после validate.
+  // Узнать это до мутации — дешевле и честнее, чем читать код ошибки промаха.
+  if (runIds.length > 1 && capabilities.features?.acceptanceMultiRunPromote !== true) {
+    throw new CliError(`this server does not support multi-run promote (features.acceptanceMultiRunPromote is off): ${runIds.length} runs given (${runIds.join(", ")}); upgrade the server or promote a family that fits one run`);
   }
   const readCandidate = async (wanted) => {
     const response = await call("GET", `/component-candidates/${encodeURIComponent(wanted)}`);
@@ -2127,21 +2157,27 @@ async function resolvePromoteAcceptance(id, meta, receipt, flags, capabilities) 
     return requireOk(`GET /component-candidates/${wanted}`, response);
   };
   let candidate = candidateId === null ? null : await readCandidate(candidateId);
-  let run = null;
-  if (runId !== null) {
-    const response = await call("GET", `/acceptance-runs/${encodeURIComponent(runId)}`);
-    if (response.status === 404) throw new CliError(`acceptance run ${runId} not found; list runs of the candidate with 'driver.mjs get components ${id}' evidence or re-run acceptance`);
-    run = await requireOk(`GET /acceptance-runs/${runId}`, response);
-    if (run.componentId !== id) {
-      throw new CliError(`acceptance run ${runId} belongs to component ${run.componentId}, not ${id}; promote refuses to link a foreign run`);
+  const runs = [];
+  // Набор проверяется поштучно и целиком: каждый ран — про этот компонент, и все раны — про
+  // одного кандидата. Сервер проверит то же самое, но версия публикуется один раз, и «половина
+  // семьи от чужой сборки» обязана останавливаться до POST.
+  for (const wanted of runIds) {
+    const response = await call("GET", `/acceptance-runs/${encodeURIComponent(wanted)}`);
+    if (response.status === 404) throw new CliError(`acceptance run ${wanted} not found; list runs of the candidate with 'driver.mjs get components ${id}' evidence or re-run acceptance`);
+    const row = await requireOk(`GET /acceptance-runs/${wanted}`, response);
+    if (row.componentId !== id) {
+      throw new CliError(`acceptance run ${wanted} belongs to component ${row.componentId}, not ${id}; promote refuses to link a foreign run`);
     }
-    if (candidateId !== null && run.candidateId !== candidateId) {
-      throw new CliError(`acceptance run ${runId} belongs to candidate ${run.candidateId}, not ${candidateId}; pass the run of that candidate (or drop --candidate)`);
+    const owner = candidateId ?? runs[0]?.candidateId ?? null;
+    if (owner !== null && row.candidateId !== owner) {
+      throw new CliError(`acceptance run ${wanted} belongs to candidate ${row.candidateId}, not ${owner}; pass the run of that candidate (or drop --candidate)`);
     }
-    // Ран без явного `--candidate` всё равно сверяется через своего кандидата: связка «ран →
-    // сборка» проверяема, а линковать candidateId за агента — работа автовыбора (W2b).
-    if (candidate === null && typeof run.candidateId === "string") candidate = await readCandidate(run.candidateId);
+    runs.push(row);
   }
+  const run = runs[0] ?? null;
+  // Ран без явного `--candidate` всё равно сверяется через своего кандидата: связка «ран →
+  // сборка» проверяема, а линковать candidateId за агента — работа автовыбора (W2b).
+  if (candidate === null && typeof run?.candidateId === "string") candidate = await readCandidate(run.candidateId);
   if (candidate !== null) {
     if (candidate.componentId !== id) {
       throw new CliError(`candidate ${candidate.candidateId} belongs to component ${candidate.componentId}, not ${id}; promote refuses to link a foreign candidate`);
@@ -2153,7 +2189,7 @@ async function resolvePromoteAcceptance(id, meta, receipt, flags, capabilities) 
       throw new CliError(`candidate ${candidate.candidateId} is for rev ${candidate.rev}, the head is rev ${meta.headRev}; accept the current head before promoting it`);
     }
   }
-  return { candidateId, acceptanceRunId: runId, candidate, run };
+  return { candidateId, acceptanceRunId: runId, acceptanceRunIds: runIds, candidate, run, runs };
 }
 
 /**
@@ -2238,9 +2274,15 @@ export function promoteLinkLine(link) {
   const candidate = link.candidate
     ? `${link.candidate.candidateId} (rev ${link.candidate.rev}${link.candidate.status ? `, ${link.candidate.status}` : ""})`
     : link.candidateId ?? "-";
-  const run = link.run
-    ? `${link.run.runId} (${link.run.status}${link.run.policy?.id ? `, policy ${link.run.policy.id}` : ""})`
-    : link.acceptanceRunId ?? "-";
+  const describe = (row, fallback) => (row
+    ? `${row.runId} (${row.status}${row.policy?.id ? `, policy ${row.policy.id}` : ""})`
+    : fallback ?? "-");
+  // Набор печатается целиком: читатель лога обязан видеть все шарды доказательной базы, а не
+  // первый из них (W7).
+  const rows = Array.isArray(link.runs) && link.runs.length > 1 ? link.runs : null;
+  const run = rows
+    ? `${rows.length} runs [${rows.map((row) => describe(row)).join("; ")}]`
+    : describe(link.run, link.acceptanceRunId);
   return `acceptance link: candidate=${candidate} run=${run}${link.auto ? " (auto-selected from the candidate runs)" : ""}`;
 }
 
@@ -2269,7 +2311,13 @@ async function runPromote(args, flags) {
     ...(flags.strictCatalog ? { expectedCatalogRevision: receipt.catalogRevision } : {}),
     ...(flags.message === undefined ? {} : { message: flags.message }),
     ...(link?.candidateId ? { candidateId: link.candidateId } : {}),
-    ...(link?.acceptanceRunId ? { acceptanceRunId: link.acceptanceRunId } : {}),
+    // Один ран — легаси-поле (байтовая совместимость с сервером до W7); набор — `acceptanceRunIds`.
+    // Оба поля сразу сервер отвергает `400`, поэтому ветка именно взаимоисключающая.
+    ...(link?.acceptanceRunIds?.length > 1
+      ? { acceptanceRunIds: link.acceptanceRunIds }
+      : (link?.acceptanceRunId ? { acceptanceRunId: link.acceptanceRunId } : {})),
+    // `--expected-cases` без связки бессмысленно (сверять нечего) и уехало бы в 404 «нет кандидата».
+    ...(flags.expectedCases === undefined || !link ? {} : { expectedCases: flags.expectedCases }),
   });
   if (promoted.status !== 201) {
     failReuseConflict("promote", "promote", promoted, id);
@@ -2293,17 +2341,22 @@ async function runPromote(args, flags) {
   // и человеческий вывод обязаны нести одну и ту же доказательную базу версии.
   const candidateId = result.candidateId ?? link?.candidateId ?? null;
   const acceptanceRunId = result.acceptanceRunId ?? link?.acceptanceRunId ?? null;
+  // Набор ранов версии — от сервера (он же его отсортировал); фолбэк на проверенную связку
+  // нужен только для сборок до W7, которые поля не вернут.
+  const acceptanceRunIds = Array.isArray(result.acceptanceRunIds) && result.acceptanceRunIds.length
+    ? result.acceptanceRunIds
+    : (link?.acceptanceRunIds?.length ? link.acceptanceRunIds : (acceptanceRunId ? [acceptanceRunId] : []));
   report(
     [
       `promoted ${id} version ${result.version} (rev ${result.rev}) in ${meta.designSystem}`,
-      `acceptance: candidate=${candidateId ?? "-"} run=${acceptanceRunId ?? "-"}`,
+      `acceptance: candidate=${candidateId ?? "-"} run=${acceptanceRunIds.length > 1 ? acceptanceRunIds.join(",") : (acceptanceRunId ?? "-")}`,
       `fingerprints: sourceHash=${result.sourceHash} bundleHash=${result.bundleHash} hostAbi=${result.hostAbiVersion} themeVersion=${result.themeVersion ?? "-"} catalogRevision=${result.catalogRevision}`,
       `superseded: ${result.superseded?.length ? result.superseded.map((version) => `v${version}`).join(", ") : "-"}${result.cached ? " (warm candidate: no recompile)" : ""}`,
       ...(result.warnings ?? []).map((warning) => `warning: ${warning}`),
     ],
     // `acceptanceLinkSource` отвечает на вопрос «откуда взялась доказательная база версии»:
     // флаги агента, автовыбор по runs[] кандидата или её нет вовсе (W2b).
-    { command: "promote", id, designSystem: meta.designSystem, ...result, candidateId, acceptanceRunId, acceptanceLinkSource: link ? (link.auto ? "auto" : "flags") : "none", ...existenceReport() },
+    { command: "promote", id, designSystem: meta.designSystem, ...result, candidateId, acceptanceRunId, acceptanceRunIds, acceptanceLinkSource: link ? (link.auto ? "auto" : "flags") : "none", ...existenceReport() },
   );
 }
 

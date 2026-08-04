@@ -10,7 +10,7 @@ import { assertPublishRoleAvailable, duplicateWarnings, type ReuseGateMode, type
 import { importPublished, materializeSource, sha256 } from "./pipeline";
 import { ensureDraftCandidate } from "./validate";
 import { getCandidateBundle } from "./candidates";
-import type { AcceptanceRepo, CandidateRow } from "../acceptance/repo";
+import type { AcceptanceRepo, AcceptanceRunRow, CandidateRow } from "../acceptance/repo";
 import { isTerminalRunStatus } from "../acceptance/repo";
 import {
   ACCEPTANCE_POLICIES, PROMOTABLE_RUN_STATUSES, PROMOTION_POLICY_PROFILES,
@@ -54,7 +54,17 @@ export type PromoteAcceptance = {
   repo: AcceptanceRepo;
   candidateId?: string;
   acceptanceRunId?: string;
+  /**
+   * Набор ранов шардированной семьи (W7, D-D). Взаимоисключим с `acceptanceRunId` — роут отвергает
+   * оба поля сразу `400 invalid_request`. Хранится отсортированным (`created_at, run_id`).
+   */
+  acceptanceRunIds?: string[];
+  /** Опциональная сверка суммарного покрытия набора (`422 acceptance_coverage_incomplete`). */
+  expectedCases?: number;
 };
+
+/** Потолок набора ранов одного promote (D-D): больше — признак того, что семью пора делить. */
+export const PROMOTE_MAX_ACCEPTANCE_RUNS = 8;
 
 export type PromoteInput = {
   id: string;
@@ -86,6 +96,13 @@ export type PromoteResult = {
   /** A9-receipts, записанные в строку версии (null — promote без матричной приёмки). */
   candidateId: string | null;
   acceptanceRunId: string | null;
+  /**
+   * Полный набор ранов версии (W7), отсортированный `created_at, run_id`; `[]` — promote без
+   * матричной приёмки. `acceptanceRunId` — **первый элемент** этого массива (контракт C7).
+   */
+  acceptanceRunIds: string[];
+  /** Манифест-хэши evidence всех ранов набора (в том же порядке; раны без evidence пропущены). */
+  evidenceManifestHashes: string[];
   /**
    * Provenance политики публикации (план 2026-08-04 W3, C18): под каким профилем получен вердикт,
    * каким хэшем профиль был на момент рана и каков он сейчас. `stale: true` — определение профиля
@@ -144,12 +161,29 @@ function resolveAcceptanceRefs(
   acceptance: PromoteAcceptance,
   input: { id: string; baseRev: number; sourceHash: string },
   headRev: number,
-): { candidate: CandidateRow; runId: string | null; policy: PromoteAcceptancePolicy | null; warnings: string[] } {
+): {
+  candidate: CandidateRow; runId: string | null; runIds: string[]; evidenceManifestHashes: string[];
+  policy: PromoteAcceptancePolicy | null; warnings: string[];
+} {
   const { repo } = acceptance;
-  const run = acceptance.acceptanceRunId === undefined ? null : repo.requireRun(acceptance.acceptanceRunId);
-  if (run !== null && run.component_id !== input.id) throw new ApiError(404, "not_found", "Acceptance run not found");
-  // Кандидат берётся из запроса; при одиноком `acceptanceRunId` — из самого рана (ран без
-  // кандидата не существует по схеме v25).
+  if (acceptance.acceptanceRunId !== undefined && acceptance.acceptanceRunIds !== undefined) {
+    throw new ApiError(400, "invalid_request", "acceptanceRunId and acceptanceRunIds are mutually exclusive");
+  }
+  const requestedRunIds = acceptance.acceptanceRunIds
+    ?? (acceptance.acceptanceRunId === undefined ? [] : [acceptance.acceptanceRunId]);
+  if (requestedRunIds.length > PROMOTE_MAX_ACCEPTANCE_RUNS) {
+    throw new ApiError(400, "invalid_request",
+      `acceptanceRunIds accepts at most ${PROMOTE_MAX_ACCEPTANCE_RUNS} runs, got ${requestedRunIds.length}`);
+  }
+  // Порядок хранения — серверный (C7): аргументы запроса на `acceptance_run_ids` не влияют.
+  const runIds = repo.sortRunIds(requestedRunIds);
+  const runs = runIds.map((id) => repo.requireRun(id));
+  // Чужой компонент невидим (404) — как и раньше, отказ не типизуется по причине: адрес рана не
+  // несёт владельца, и «этот ран не про вас» было бы оракулом по чужой приёмке.
+  for (const row of runs) if (row.component_id !== input.id) throw new ApiError(404, "not_found", "Acceptance run not found");
+  const run = runs[0] ?? null;
+  // Кандидат берётся из запроса; при одних лишь ранах — из первого (ран без кандидата не
+  // существует по схеме v25); принадлежность **всех** ранов кандидату проверяется ниже.
   const candidateId = acceptance.candidateId ?? run?.candidate_id;
   if (candidateId === undefined) throw new ApiError(404, "not_found", "Candidate not found");
   const candidate = repo.requireCandidate(candidateId);
@@ -161,24 +195,30 @@ function resolveAcceptanceRefs(
   if (inFlight) {
     throw new ApiError(409, "acceptance_run_in_flight", "Candidate has a non-terminal acceptance run; wait for it to finish before promoting", { runId: inFlight.run_id });
   }
-  if (run === null) return { candidate, runId: null, policy: null, warnings: [] };
-  if (run.candidate_id !== candidate.candidate_id) {
-    throw new ApiError(422, "acceptance_run_mismatch", `Acceptance run belongs to another candidate, not ${candidate.candidate_id}`, { runId: run.run_id });
-  }
+  if (run === null) return { candidate, runId: null, runIds: [], evidenceManifestHashes: [], policy: null, warnings: [] };
   const strict = promotePolicyStrictEnabled();
-  if (strict) {
-    // Аварийный откат: докритическое равенство хэшей (см. `promotePolicyStrictEnabled`).
-    if (run.policy_profile_hash !== candidate.policy_profile_hash) {
-      throw new ApiError(422, "acceptance_run_mismatch", `Acceptance run was executed under another policy profile than candidate ${candidate.candidate_id}`, { runId: run.run_id });
+  const warnings: string[] = [];
+  for (const row of runs) {
+    if (row.candidate_id !== candidate.candidate_id) {
+      throw new ApiError(422, "acceptance_run_mismatch", `Acceptance run belongs to another candidate, not ${candidate.candidate_id}`, { runId: row.run_id });
     }
-  } else if (!isPromotionPolicyProfile(run.policy_profile_id)) {
-    throw new ApiError(422, "acceptance_policy_mismatch",
-      `Acceptance run was executed under policy profile ${run.policy_profile_id}, which is not allowed to back a promotion`,
-      { runId: run.run_id, runPolicyProfileId: run.policy_profile_id, allowed: [...PROMOTION_POLICY_PROFILES] });
+    if (strict) {
+      // Аварийный откат: докритическое равенство хэшей (см. `promotePolicyStrictEnabled`).
+      if (row.policy_profile_hash !== candidate.policy_profile_hash) {
+        throw new ApiError(422, "acceptance_run_mismatch", `Acceptance run was executed under another policy profile than candidate ${candidate.candidate_id}`, { runId: row.run_id });
+      }
+    } else if (!isPromotionPolicyProfile(row.policy_profile_id)) {
+      throw new ApiError(422, "acceptance_policy_mismatch",
+        `Acceptance run was executed under policy profile ${row.policy_profile_id}, which is not allowed to back a promotion`,
+        { runId: row.run_id, runPolicyProfileId: row.policy_profile_id, allowed: [...PROMOTION_POLICY_PROFILES] });
+    }
+    if (!isTerminalRunStatus(row.status) || !PROMOTABLE_RUN_STATUSES.has(row.status)) {
+      throw new ApiError(422, "acceptance_run_not_passed", `Acceptance run is ${row.status}; only pass or pass_with_exceptions may back a promote`, { runId: row.run_id });
+    }
   }
-  if (!isTerminalRunStatus(run.status) || !PROMOTABLE_RUN_STATUSES.has(run.status)) {
-    throw new ApiError(422, "acceptance_run_not_passed", `Acceptance run is ${run.status}; only pass or pass_with_exceptions may back a promote`, { runId: run.run_id });
-  }
+  // Когерентность набора (W7): единый профиль, единый рендерер, дизъюнктное покрытие и — при
+  // явном `expectedCases` — полнота. Для одиночного рана остаётся только проверка полноты.
+  warnings.push(...assertRunSetCoherent(repo, runs, acceptance.expectedCases));
   // C18: сверка хэша рана с **текущим** определением профиля. Профиль неизвестен коду только на
   // strict-пути (иначе предикат выше уже отказал) — тогда текущего хэша нет, и `stale` не
   // утверждается: «сравнить не с чем» ≠ «разошлось».
@@ -192,10 +232,84 @@ function resolveAcceptanceRefs(
     currentPolicyProfileHash: current,
     stale,
   };
-  const warnings = stale
-    ? [`Acceptance policy profile ${run.policy_profile_id} changed after run ${run.run_id} was executed (run hash ${run.policy_profile_hash}, current ${current}); the verdict is accepted under the policy that was in force then`]
-    : [];
-  return { candidate, runId: run.run_id, policy, warnings };
+  if (stale) {
+    warnings.push(`Acceptance policy profile ${run.policy_profile_id} changed after run ${run.run_id} was executed (run hash ${run.policy_profile_hash}, current ${current}); the verdict is accepted under the policy that was in force then`);
+  }
+  const evidenceManifestHashes = runs
+    .map((row) => row.evidence_manifest_hash)
+    .filter((hash): hash is string => typeof hash === "string" && hash !== "");
+  // Легаси-скаляр — **первый элемент отсортированного** набора (контракт C7): старые читатели
+  // (Library `accepted`, `audit --versions`) продолжают видеть один детерминированный id.
+  return { candidate, runId: runIds[0]!, runIds, evidenceManifestHashes, policy, warnings };
+}
+
+/**
+ * Когерентность набора ранов (W7, D-D). Отвечает на единственный вопрос: можно ли считать
+ * перечисленные раны **одной** доказательной базой одной версии.
+ *
+ * - **Единый `policy_profile_id`.** Профиль — это пороги вердикта; половина семьи, принятая
+ *   `default-v1`, и половина, принятая `pixel-strict-v1`, — не одна приёмка, а две разных, и
+ *   склеенное покрытие врало бы о строгости.
+ * - **Единый `renderer_fingerprint`** (C7). Кадры разных рендереров несравнимы между собой;
+ *   склейка выдавала бы за общее покрытие то, что снято в двух разных средах. Раны с NULL —
+ *   до-миграционные (v30): «неизвестно» ≠ «разошлось», поэтому проверка для них пропускается с
+ *   warning, а не превращается в отказ, который агент не сможет починить.
+ * - **Дизъюнктность по (propsHash, surface)** (D12). Поверхность — свойство набора, поэтому
+ *   шардирование light/dark законно даёт одинаковые props и даже одинаковые `caseId`. Пересечение
+ *   ключей означает, что один и тот же кадр принят дважды — с потенциально разными вердиктами;
+ *   какой из них «настоящий», решить нельзя, поэтому `422 acceptance_coverage_overlap`.
+ * - **Совпадение `caseKey` между наборами — warning, не ошибка** (D12): это ровно тот случай,
+ *   ради которого дизъюнктность считается по (propsHash, surface), а не по имени случая.
+ * - **`expectedCases`** — опциональная сверка суммарного покрытия: считаются **кадры** (различные
+ *   пары (propsHash, surface)), а не строки случаев, поэтому алиасы дублей учтены один раз.
+ */
+function assertRunSetCoherent(repo: AcceptanceRepo, runs: AcceptanceRunRow[], expectedCases?: number): string[] {
+  const warnings: string[] = [];
+  if (runs.length === 0) return warnings;
+  const profiles = [...new Set(runs.map((row) => row.policy_profile_id))];
+  if (profiles.length > 1) {
+    throw new ApiError(422, "acceptance_policy_mismatch",
+      `Acceptance runs of this promote were executed under different policy profiles (${profiles.join(", ")}); one promotion carries one verdict policy`,
+      { runIds: runs.map((row) => row.run_id), policyProfileIds: profiles });
+  }
+  const renderers = [...new Set(runs.map((row) => row.renderer_fingerprint).filter((value): value is string => typeof value === "string" && value !== ""))];
+  if (renderers.length > 1) {
+    throw new ApiError(422, "acceptance_renderer_mismatch",
+      `Acceptance runs of this promote were captured by different renderers (${renderers.join(", ")}); re-run acceptance for the whole family on one renderer`,
+      { runIds: runs.map((row) => row.run_id), rendererFingerprints: renderers });
+  }
+  const legacy = runs.filter((row) => row.renderer_fingerprint === null || row.renderer_fingerprint === "");
+  if (legacy.length > 0 && runs.length > 1) {
+    warnings.push(`Acceptance run(s) ${legacy.map((row) => row.run_id).join(", ")} predate renderer provenance (schema v30); the single-renderer check was skipped for them`);
+  }
+  const coverages = runs.map((row) => ({ runId: row.run_id, ...repo.runCoverage(row) }));
+  for (let i = 0; i < coverages.length; i += 1) {
+    for (let j = i + 1; j < coverages.length; j += 1) {
+      const left = coverages[i]!, right = coverages[j]!;
+      const overlap = [...left.keys].filter((key) => right.keys.has(key));
+      if (overlap.length > 0) {
+        throw new ApiError(422, "acceptance_coverage_overlap",
+          `Acceptance runs ${left.runId} and ${right.runId} cover the same ${overlap.length} case(s) of this component; shards of one family must be disjoint by (propsHash, surface)`,
+          { runIds: [left.runId, right.runId], overlap: overlap.slice(0, 20), overlapCount: overlap.length });
+      }
+      const sharedKeys = [...left.caseKeys].filter((key) => right.caseKeys.has(key));
+      if (sharedKeys.length > 0) {
+        warnings.push(`Acceptance runs ${left.runId} and ${right.runId} share ${sharedKeys.length} case key(s) (${sharedKeys.slice(0, 5).join(", ")}) on different surfaces; coverage stays disjoint, the ids merely repeat`);
+      }
+    }
+  }
+  if (expectedCases !== undefined) {
+    const covered = new Set(coverages.flatMap((item) => [...item.keys])).size;
+    if (covered !== expectedCases) {
+      throw new ApiError(422, "acceptance_coverage_incomplete",
+        `Acceptance runs of this promote cover ${covered} case(s), not the expected ${expectedCases}`,
+        {
+          expectedCases, coveredCases: covered,
+          runs: coverages.map((item) => ({ runId: item.runId, coveredCases: item.keys.size, cases: item.cases, surface: item.surfaceKey })),
+        });
+    }
+  }
+  return warnings;
 }
 
 /**
@@ -323,6 +437,7 @@ export async function promoteComponent(db: Database, dataDir: string, input: Pro
         input.acceptance!.repo.linkPublish(input.id, staged.version, {
           candidateId: acceptanceRefs.candidate.candidate_id,
           acceptanceRunId: acceptanceRefs.runId,
+          acceptanceRunIds: acceptanceRefs.runIds,
         });
         input.acceptance!.repo.markPromoted(acceptanceRefs.candidate.candidate_id, staged.version, acceptanceRefs.runId);
       }
@@ -362,6 +477,8 @@ export async function promoteComponent(db: Database, dataDir: string, input: Pro
     superseded, cached: candidate.cached, warnings,
     candidateId: acceptanceRefs?.candidate.candidate_id ?? null,
     acceptanceRunId: acceptanceRefs?.runId ?? null,
+    acceptanceRunIds: acceptanceRefs?.runIds ?? [],
+    evidenceManifestHashes: acceptanceRefs?.evidenceManifestHashes ?? [],
     acceptancePolicy: acceptanceRefs?.policy ?? null,
   };
 }

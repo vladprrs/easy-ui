@@ -203,6 +203,11 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // проверять именно ту ручку, которую зовёт, — старая сборка с включённой матрицей ответит
       // на неё 404, и молчаливый фолбэк на мутирующий PUT был бы худшим из возможных исходов.
       caseSetValidate: options.acceptanceMatrix === true,
+      // План 2026-08-04 §W7 (C23): promote принимает `acceptanceRunIds[]` — набор ранов
+      // шардированной семьи. Отдельный флаг: старая сборка с включённой матрицей ответит на
+      // массив `400 Unknown field: acceptanceRunIds`, и клиент обязан узнать это до мутации, а
+      // не по коду ошибки уже отправленного promote.
+      acceptanceMultiRunPromote: options.acceptanceMatrix === true,
       // План 2026-08-02 (computed-state): top-level `doc.computed` — производные значения
       // стейта, read-only, читаются обычным `$state` по bare-ключу. Набор операций —
       // в `computedOps`, лимиты — в `limits.computed*`.

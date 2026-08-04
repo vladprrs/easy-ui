@@ -30,6 +30,10 @@ import type { Database } from "bun:sqlite";
 import { ApiError } from "../http";
 import { buildFingerprint, candidateId as computeCandidateId, runId as newRunId } from "./ids";
 import { acceptanceCandidateTtlHours } from "./policies";
+// Поверхность набора нужна GC-соседям только косвенно, а multi-run promote (W7) — прямо:
+// `runCoverage` обязан нормализовать (propsHash, surface) одной и той же функцией, что и раннер.
+import { CaseSetRepo, manifestOfRow, surfaceOfManifest } from "./caseSets";
+import { DEFAULT_CASE_SURFACE } from "./cases";
 
 const now = (): string => new Date().toISOString();
 
@@ -92,6 +96,12 @@ export interface AcceptanceRunRow {
   policy_profile_hash: string;
   case_set_id: string | null;
   policy_profile_id: string;
+  /**
+   * Объявленный рендерер рана (v30, W7): `rendererFingerprint(readinessPolicyHash)` политики, под
+   * которой ран поставлен. NULL — ран до миграции v30: «неизвестно», а не «другой» (multi-run
+   * promote в этом случае пропускает сверку рендерера с warning).
+   */
+  renderer_fingerprint: string | null;
   progress_json: string;
   impact_json: string | null;
   gates_json: string;
@@ -173,6 +183,8 @@ export interface CreateRunInput {
   cases?: NewCaseInput[];
   /** Алгебра refresh рана (C1): `{requested, impact, effective}`. */
   refresh?: unknown;
+  /** Объявленный рендерер рана (v30, W7); опущен — колонка остаётся NULL («неизвестно»). */
+  rendererFingerprint?: string | null;
 }
 
 export interface NewCaseInput {
@@ -401,11 +413,12 @@ export class AcceptanceRepo {
           { runId: inFlight.run_id });
         this.db.query(`INSERT INTO acceptance_runs
           (run_id,candidate_id,component_id,idempotency_key,status,policy_profile_hash,case_set_id,policy_profile_id,
-           progress_json,impact_json,gates_json,evidence_manifest_hash,started_at,finished_at,created_by,created_at,refresh_json)
-          VALUES (?,?,?,?,'queued',?,?,?,?,NULL,?,NULL,NULL,NULL,?,?,?)`)
+           progress_json,impact_json,gates_json,evidence_manifest_hash,started_at,finished_at,created_by,created_at,refresh_json,
+           renderer_fingerprint)
+          VALUES (?,?,?,?,'queued',?,?,?,?,NULL,?,NULL,NULL,NULL,?,?,?,?)`)
           .run(id, input.candidateId, input.componentId, key, input.policyProfileHash, input.caseSetId ?? null,
             input.policyProfileId, json(input.progress ?? {}), json(input.gates ?? {}), input.createdBy, createdAt,
-            jsonOrNull(input.refresh));
+            jsonOrNull(input.refresh), input.rendererFingerprint ?? null);
         for (const item of input.cases ?? []) this.insertCase(id, item);
         this.attachRun(input.candidateId, id);
         return { run: this.requireRun(id), cached: false };
@@ -677,15 +690,61 @@ export class AcceptanceRepo {
   /**
    * Раны, на которые ссылается опубликованная версия. FK тут нет by design (A9), поэтому GC ранов
    * **обязан** спрашивать это сам — иначе TTL молча снесёт provenance активной версии.
+   *
+   * Union двух колонок (v30, C27): скалярный legacy-`acceptance_run_id` (первый элемент набора —
+   * его же видят старые читатели) **и** весь массив `acceptance_run_ids` через `json_each`. Без
+   * второго слагаемого свипер уносил бы все раны шардированной семьи кроме первого, и версия
+   * оставалась бы с провенансом, половина которого больше не существует.
    */
   runIdsReferencedByPublishes(): Set<string> {
-    const rows = this.db.query("SELECT DISTINCT acceptance_run_id id FROM component_publishes WHERE acceptance_run_id IS NOT NULL")
+    const rows = this.db.query(`SELECT acceptance_run_id id FROM component_publishes WHERE acceptance_run_id IS NOT NULL
+      UNION
+      SELECT j.value id FROM component_publishes p, json_each(p.acceptance_run_ids) j
+      WHERE p.acceptance_run_ids IS NOT NULL AND json_valid(p.acceptance_run_ids) AND j.value IS NOT NULL`)
       .all() as { id: string }[];
     return new Set(rows.map(row => row.id));
   }
 
   isRunReferencedByPublish(runId: string): boolean {
-    return this.db.query("SELECT 1 FROM component_publishes WHERE acceptance_run_id=? LIMIT 1").get(runId) !== null;
+    return this.db.query(`SELECT 1 FROM component_publishes p
+      WHERE p.acceptance_run_id=?
+         OR (p.acceptance_run_ids IS NOT NULL AND json_valid(p.acceptance_run_ids)
+             AND EXISTS (SELECT 1 FROM json_each(p.acceptance_run_ids) j WHERE j.value=?))
+      LIMIT 1`).get(runId, runId) !== null;
+  }
+
+  /**
+   * Покрытие рана для multi-run promote (W7, D12): множество ключей **(propsHash, surface)** и
+   * `caseKey` его случаев.
+   *
+   * Поверхность — свойство **набора**, а не случая (`capture` манифеста: viewport/dsf/theme),
+   * поэтому она читается один раз из `component_case_sets` и приклеивается ко всем props рана.
+   * Именно поэтому шардирование light/dark законно даёт одинаковые props и даже одинаковые
+   * `caseId` в разных наборах: ключ покрытия у них разный. Ран без набора (examples-путь) снят на
+   * дефолтной поверхности — та же нормализация.
+   *
+   * Алиасы (`alias_of_case_id`) повторяют props своей цели, поэтому в множество ключей они
+   * попадают тем же элементом: покрытие считается кадрами, а не строками.
+   */
+  runCoverage(run: AcceptanceRunRow): { surfaceKey: string; keys: Set<string>; caseKeys: Set<string>; cases: number } {
+    const surfaceKey = this.surfaceKeyOf(run);
+    const rows = this.cases(run.run_id);
+    const keys = new Set<string>();
+    const caseKeys = new Set<string>();
+    for (const row of rows) {
+      keys.add(`${row.props_hash}@${surfaceKey}`);
+      caseKeys.add(row.case_key);
+    }
+    return { surfaceKey, keys, caseKeys, cases: rows.length };
+  }
+
+  /** Канонический ключ поверхности рана: `WxH@dsf/theme`. */
+  private surfaceKeyOf(run: AcceptanceRunRow): string {
+    const surface = run.case_set_id === null ? DEFAULT_CASE_SURFACE : (() => {
+      const row = new CaseSetRepo(this.db).get(run.case_set_id!);
+      return row ? surfaceOfManifest(manifestOfRow(row)) : DEFAULT_CASE_SURFACE;
+    })();
+    return `${surface.viewport.width}x${surface.viewport.height}@${surface.dsf}/${surface.theme}`;
   }
 
   /**
@@ -695,9 +754,27 @@ export class AcceptanceRepo {
    * provenance. `COALESCE` не используется — сага пишет обе ссылки один раз, за атомарность
    * отвечает вызывающая транзакция.
    */
-  linkPublish(componentId: string, version: number, refs: { candidateId?: string | null; acceptanceRunId?: string | null }): void {
-    this.db.query("UPDATE component_publishes SET candidate_id=?, acceptance_run_id=? WHERE component_id=? AND version=?")
-      .run(refs.candidateId ?? null, refs.acceptanceRunId ?? null, componentId, version);
+  linkPublish(componentId: string, version: number, refs: { candidateId?: string | null; acceptanceRunId?: string | null; acceptanceRunIds?: string[] | null }): void {
+    // v30 (W7): массив пишется **всегда**, когда ран(ы) есть — в том числе для одиночного promote
+    // (`[run]`). Легаси-скаляр при этом остаётся первым элементом, поэтому байтовая совместимость
+    // старых читателей сохранена, а новым не нужно различать «одиночная версия» и «набор».
+    const ids = refs.acceptanceRunIds ?? (refs.acceptanceRunId ? [refs.acceptanceRunId] : []);
+    this.db.query("UPDATE component_publishes SET candidate_id=?, acceptance_run_id=?, acceptance_run_ids=? WHERE component_id=? AND version=?")
+      .run(refs.candidateId ?? null, ids[0] ?? refs.acceptanceRunId ?? null, ids.length ? JSON.stringify(ids) : null, componentId, version);
+  }
+
+  /**
+   * Детерминированный порядок набора ранов (C7): `created_at, run_id`. Порядок аргументов запроса
+   * на хранение не влияет — иначе один и тот же набор давал бы разные `acceptance_run_id`
+   * (первый элемент — легаси-скаляр) в зависимости от того, как агент перечислил флаги.
+   */
+  sortRunIds(runIds: readonly string[]): string[] {
+    const order = new Map<string, string>();
+    for (const id of runIds) order.set(id, this.run(id)?.created_at ?? "");
+    return [...new Set(runIds)].sort((a, b) => {
+      const byCreated = (order.get(a) ?? "").localeCompare(order.get(b) ?? "");
+      return byCreated !== 0 ? byCreated : a.localeCompare(b);
+    });
   }
 
   candidateIdsReferencedByPublishes(): Set<string> {

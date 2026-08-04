@@ -349,8 +349,8 @@ Meta-ответы прототипов и компонентов additively не
 | `PUT /components/:id/provenance` | `{rev?,figma}` → `{rev,seq,unchanged,figma}`; правка Figma-ссылки **без** новой ревизии и версии, см. [Provenance компонентов](#provenance-компонентов-без-новых-версий) |
 | `POST /components/:id/validate` | Тело не читается → 200 receipt префлайта head-ревизии; см. [Validate-префлайт](#validate-префлайт-публикации) |
 | `POST /components/:id/publish` | `{message?,baseRev,reuseOverride?}` → 201 `{version,hostAbiVersion,warnings}` и `Location`; `reuseOverride` — только для администратора (`403 admin_required`), конфликты роли — терминальные `409 catalog_changed\|canonical_role_conflict` |
-| `POST /components/:id/promote` | `{baseRev,sourceHash,expectedCatalogRevision?,supersede?,reuseOverride?,message?}` → 201 `{version,rev,hostAbiVersion,sourceHash,bundleHash,themeVersion,catalogRevision,superseded[],cached,warnings}` и `Location`; см. [Promote](#promote-приёмка-провалидированной-головы) |
-| `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,statusReason:string\|null,supersededBy:number\|null,statusRev,designSystem,publishedAt,candidateId:string\|null,acceptanceRunId:string\|null}`; receipt-ссылки приёмки непусты только у версий, опубликованных `promote` с кандидатом и пройденным acceptance-раном |
+| `POST /components/:id/promote` | `{baseRev,sourceHash,expectedCatalogRevision?,supersede?,reuseOverride?,message?,candidateId?,acceptanceRunId?\|acceptanceRunIds?,expectedCases?}` → 201 `{version,rev,hostAbiVersion,sourceHash,bundleHash,themeVersion,catalogRevision,superseded[],cached,warnings}` и `Location`; см. [Promote](#promote-приёмка-провалидированной-головы) |
+| `GET /components/:id/versions` | `ComponentVersion[]`: `{version,rev,status,statusReason:string\|null,supersededBy:number\|null,statusRev,designSystem,publishedAt,candidateId:string\|null,acceptanceRunId:string\|null,acceptanceRunIds:string[],evidenceManifestHashes:string[]}`; receipt-ссылки приёмки непусты только у версий, опубликованных `promote` с кандидатом и пройденным acceptance-раном; `acceptanceRunIds` — весь набор ранов версии ([multi-run promote](#multi-run-promote-шардированная-семья-волна-w7-план-2026-08-04)), `acceptanceRunId` всегда равен его первому элементу |
 | `GET /components/:id/versions/:version` | Метадата версии **любого статуса**: `{version,rev,status,statusReason,supersededBy,statusRev,source,designSystem,events,eventPayloads?,capabilities?,slots,description,example?,examples?,propsJsonSchema?,atomicLevel?,layoutNeutral?,layout?,scope?,allowedAsRoot?,canonicalFor?,sourceBounded?,ownership?,replacement?,bundleHash,hostAbiVersion,assets:AssetPin[],publishedAt}`; `propsJsonSchema` описывает input (до Zod defaults/transforms); immutable |
 | `GET /components/:id/versions/:version/bundle.js` | Скомпилированный ESM (`text/javascript`); отдаётся при статусе `active\|deprecated\|superseded`, иначе `404 bundle_unavailable`; immutable |
 | `POST /components/:id/versions/:version/status` | `{status, reason?, supersededBy?, baseStatusRev}` → 200 `{status, statusRev}`; см. [Статусы версий](#статусы-версий-компонентов) |
@@ -423,7 +423,28 @@ Meta-ответы прототипов и компонентов additively не
 
 **Kill-switch `EASYUI_PROMOTE_POLICY_STRICT`** (объявлен в `docker-compose.yml`, по умолчанию **выключен**). `1` возвращает докритическое равенство хэшей профиля рана и кандидата, то есть **возврат дефекта P0-2** — только аварийный откат до отката образа.
 
-**DTO версий.** `candidateId`/`acceptanceRunId` отдаёт и список версий (`GET /components/:id`, `no-store`), и одиночный `GET /components/:id/versions/:version`, и 201-ответ promote. Ограничение (C30): одиночный DTO версии клиентский кэш держит как `immutable` (адрес несёт версию), а receipts — мутабельная часть строки, их проставляет фаза B саги. Свежую связку читать по 201-ответу promote или по списку версий, а не из тёплого кэша ручки версии.
+**DTO версий.** `candidateId`/`acceptanceRunId`, а с волны W7 — ещё `acceptanceRunIds[]` и `evidenceManifestHashes[]`, отдаёт и список версий (`GET /components/:id`, `no-store`), и одиночный `GET /components/:id/versions/:version`, и 201-ответ promote. Ограничение (C30): одиночный DTO версии клиентский кэш держит как `immutable` (адрес несёт версию), а receipts — мутабельная часть строки, их проставляет фаза B саги. Свежую связку читать по 201-ответу promote или по списку версий, а не из тёплого кэша ручки версии.
+
+
+#### Multi-run promote: шардированная семья (волна W7, план 2026-08-04)
+
+Семья, которая не влезает в один ран (лимит `limits.acceptanceMaxCasesPerRun` или осознанное шардирование light/dark), принимается **набором** ранов и публикуется одним promote. Гейт возможности — `capabilities.features.acceptanceMultiRunPromote` (тот же `EASYUI_ACCEPTANCE_MATRIX=1`); клиент обязан проверить флаг **до** вызова: сервер до W7 отвечает на массив `400 invalid_request: Unknown field: acceptanceRunIds`.
+
+**Тело.** `acceptanceRunIds: string[]` (1..8) — **взаимоисключимо** с `acceptanceRunId`; оба поля сразу → `400 invalid_request`. Опциональный `expectedCases: number` включает сверку суммарного покрытия.
+
+**Предикаты набора** (в дополнение к одиночным — кандидат, terminal pass, promotion-профиль):
+
+- **один кандидат**: каждый ран принадлежит указанному (или выведенному из первого рана) кандидату — иначе `422 acceptance_run_mismatch`;
+- **единый `policy_profile_id`** у всех ранов — иначе `422 acceptance_policy_mismatch` с `{runIds, policyProfileIds}`. Половина семьи под `default-v1` и половина под `pixel-strict-v1` — не одна приёмка, а две;
+- **единый `renderer_fingerprint`** (колонка `acceptance_runs.renderer_fingerprint`, v30; пишется на постановке рана) — иначе `422 acceptance_renderer_mismatch` с `{runIds, rendererFingerprints}`. Раны до v30 несут `NULL`: «неизвестно» ≠ «разошлось», поэтому для них проверка пропускается с warning;
+- **дизъюнктность покрытия по `(propsHash, surface)`** — иначе `422 acceptance_coverage_overlap` с `{runIds, overlap, overlapCount}`. Поверхность — `capture` (viewport/dsf/theme) **набора**, а не случая, поэтому шардирование light/dark законно даёт одинаковые props и даже одинаковые `caseId` в разных наборах; совпадение `caseKey` между наборами — **warning, не ошибка**;
+- **полнота** (только при `expectedCases`): суммарное покрытие считается **кадрами** — различными парами `(propsHash, surface)`, поэтому алиасы дублей учитываются один раз. Несовпадение → `422 acceptance_coverage_incomplete` с `{expectedCases, coveredCases, runs[]}`.
+
+**Хранение и порядок (v30).** `component_publishes.acceptance_run_ids` — плоская TEXT-колонка с JSON-массивом **без FK** (инвариант A9). Сервер сортирует набор по `(created_at, run_id)`, поэтому порядок аргументов запроса на хранение не влияет, а легаси-скаляр `acceptance_run_id` — **первый элемент отсортированного массива**. Массив пишется всегда, когда ран есть (одиночный promote даёт `[run]`), поэтому новым читателям не нужно различать «одиночная версия» и «набор». Чтение до-миграционных строк: `acceptance_run_ids IS NULL` ⇒ `[acceptance_run_id]` (пусто, если и он `NULL`) — backfill'а нет намеренно.
+
+**GC.** Свипер кандидатов защищает раны, упомянутые в `component_publishes`, union'ом скалярной колонки и `json_each(acceptance_run_ids)` (`runIdsReferencedByPublishes()`/`isRunReferencedByPublish()`). Без второго слагаемого TTL унёс бы все шарды семьи, кроме первого.
+
+**CLI.** `driver.mjs promote <id> --acceptance-run a --acceptance-run b` (флаг повторяем) либо `--acceptance-runs a,b`; `--expected-cases N` — та же сверка покрытия. Драйвер сверяет принадлежность **каждого** рана компоненту и кандидату до POST и печатает весь набор строкой связки.
 
 ### Acceptance: кандидаты и матричные раны
 
@@ -1773,6 +1794,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 | `acceptanceMatrix` | доступна [матричная приёмка](#acceptance-кандидаты-и-матричные-раны) целиком, включая ссылки `candidateId`/`acceptanceRunId` в promote | без `EASYUI_ACCEPTANCE_MATRIX=1` — `false`, все ручки набора `404`, promote со ссылками — `422 acceptance_matrix_disabled` |
 | `acceptanceCandidates` | доступны `POST /components/:id/candidates` и `GET /component-candidates/:id` | тот же флаг |
 | `acceptanceRuns` | доступны `/acceptance-runs*` (постановка, poll, cases, evidence, cancel) | тот же флаг |
+| `acceptanceMultiRunPromote` | promote принимает `acceptanceRunIds[]` — [набор ранов шардированной семьи](#multi-run-promote-шардированная-семья-волна-w7-план-2026-08-04) | тот же флаг; сборка до W7 отвечает на массив `400 invalid_request` |
 
 `EASYUI_SURFACES` — единственный switch с **обратной** полярностью: пустое значение означает «запись выключена» (`surfacesWrite: false`), а не «разрешено». Он читается на запросе, поэтому discovery и поведение ручки совпадают по определению. Остальные kill-switch'и (`EASYUI_VALIDATE_DISABLED`, `EASYUI_ACCEPTANCE_DISABLED`, `EASYUI_ACCEPTANCE_MATRIX`, `EASYUI_THEME_RESOLVER_V2_DISABLED`), как и `REUSE_GATE`, читаются один раз на входе процесса, поэтому discovery и поведение ручек не могут разойтись. Флаг `false` означает «выключено на этом инстансе», а отсутствие ключа — «образ старше этой волны»; клиент обязан различать эти случаи. Лимиты `validateUserConcurrent`/`validateGlobalConcurrent` описывают, когда прилетит `429 validate_in_flight`/`429 queue_full`, а `validateCacheTtlHours`/`validateCacheMiB` — срок жизни и потолок candidate-кэша (после вытеснения следующий draft-preview просто пересоберёт кандидата).
 

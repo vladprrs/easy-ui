@@ -1449,7 +1449,7 @@ const componentPromoteConflictEnvelopeSchema = z.strictObject({
  */
 export const promoteComponentContract = registerContract({
   method: "POST", path: "/api/components/{id}/promote",
-  summary: "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate (422 acceptance_run_mismatch), must have been executed under a promotion policy profile (`capabilities.acceptance.promotionPolicyProfiles`, otherwise 422 acceptance_policy_mismatch with `{runPolicyProfileId, allowed}`) and must carry a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). The candidate's own `policyProfileHash` is an informational stamp and is NOT compared with the run: candidate identity excludes policy, so requiring equality made every pixel-strict-v1 run unpromotable (defect P0-2, fixed 2026-08-04; EASYUI_PROMOTE_POLICY_STRICT=1 restores the old equality as an emergency rollback). A run whose `policy_profile_hash` no longer matches the current definition of its profile is accepted with a warning and both hashes reported in `acceptancePolicy` and in the audit event. Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`.",
+  summary: "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate (422 acceptance_run_mismatch), must have been executed under a promotion policy profile (`capabilities.acceptance.promotionPolicyProfiles`, otherwise 422 acceptance_policy_mismatch with `{runPolicyProfileId, allowed}`) and must carry a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). The candidate's own `policyProfileHash` is an informational stamp and is NOT compared with the run: candidate identity excludes policy, so requiring equality made every pixel-strict-v1 run unpromotable (defect P0-2, fixed 2026-08-04; EASYUI_PROMOTE_POLICY_STRICT=1 restores the old equality as an emergency rollback). A run whose `policy_profile_hash` no longer matches the current definition of its profile is accepted with a warning and both hashes reported in `acceptancePolicy` and in the audit event. Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`. MULTI-RUN (W7, `capabilities.features.acceptanceMultiRunPromote`): a family that does not fit one run is promoted with `acceptanceRunIds` (1..8, mutually exclusive with `acceptanceRunId` — sending both is 400). Every run must belong to the same candidate, be a terminal pass under the SAME promotion policy profile (otherwise 422 acceptance_policy_mismatch) and carry the same `renderer_fingerprint` (422 acceptance_renderer_mismatch; runs predating schema v30 have none and are skipped with a warning). Coverage must be PAIRWISE DISJOINT by (propsHash, surface) — the surface is the case-set `capture` (viewport/dsf/theme), so sharding light/dark legitimately repeats props and even case ids; an intersection is 422 acceptance_coverage_overlap, while a repeated caseKey across shards is only a warning. Optional `expectedCases` compares the union coverage (distinct (propsHash, surface) frames, so aliases count once) and answers 422 acceptance_coverage_incomplete on a mismatch. The stored array is sorted by (created_at, run_id) regardless of argument order and `acceptanceRunId` is its FIRST element; the response carries `acceptanceRunIds` and `evidenceManifestHashes` of the whole set.",
   status: 201,
   requestSchema: z.strictObject({
     ...casBody,
@@ -1460,6 +1460,14 @@ export const promoteComponentContract = registerContract({
     /** A9 (W1c): ссылки на durable-приёмку; требуют EASYUI_ACCEPTANCE_MATRIX=1. */
     candidateId: z.string().optional(),
     acceptanceRunId: z.string().optional(),
+    /**
+     * W7 (D-D): набор ранов шардированной семьи, 1..8, **взаимоисключим** с `acceptanceRunId`
+     * (оба сразу — `400 invalid_request`). Порядок аргументов на хранение не влияет: сервер
+     * сортирует набор по `(created_at, run_id)`.
+     */
+    acceptanceRunIds: z.array(z.string()).min(1).max(8).optional(),
+    /** Опциональная сверка суммарного покрытия набора (`422 acceptance_coverage_incomplete`). */
+    expectedCases: z.number().int().positive().optional(),
   }),
   responseSchema: z.looseObject({
     version: z.number(), rev: z.number(), hostAbiVersion: z.number(),
@@ -1467,6 +1475,13 @@ export const promoteComponentContract = registerContract({
     themeVersion: z.number().nullable(), catalogRevision: z.string(),
     superseded: z.array(z.number()), cached: z.boolean(), warnings: z.array(z.string()),
     candidateId: z.string().nullable(), acceptanceRunId: z.string().nullable(),
+    /**
+     * W7: весь набор ранов версии, отсортированный `(created_at, run_id)`; `[]` — promote без
+     * матричной приёмки. `acceptanceRunId` — **первый элемент** этого массива (контракт C7).
+     */
+    acceptanceRunIds: z.array(z.string()),
+    /** Манифест-хэши evidence ранов набора (раны без evidence пропущены). */
+    evidenceManifestHashes: z.array(z.string()),
     /**
      * Provenance политики публикации (план 2026-08-04 W3, C18): профиль рана и оба хэша его
      * определения — на момент рана и текущий. `stale: true` — профиль правили после рана; это
@@ -1495,6 +1510,9 @@ export const promoteComponentContract = registerContract({
     { status: 422, code: "acceptance_run_mismatch", description: "the acceptance run belongs to another candidate (with EASYUI_PROMOTE_POLICY_STRICT=1 also: its policy profile hash differs from the candidate stamp)" },
     { status: 422, code: "acceptance_policy_mismatch", description: "the acceptance run ran under a policy profile that may not back a promotion; details carry {runPolicyProfileId, allowed}" },
     { status: 422, code: "acceptance_run_not_passed", description: "the acceptance run is not a terminal pass/pass_with_exceptions" },
+    { status: 422, code: "acceptance_renderer_mismatch", description: "W7: the runs of a multi-run promote were captured by different renderers; details carry {runIds, rendererFingerprints}" },
+    { status: 422, code: "acceptance_coverage_overlap", description: "W7: two runs of a multi-run promote cover the same (propsHash, surface) case; details carry {runIds, overlap, overlapCount}" },
+    { status: 422, code: "acceptance_coverage_incomplete", description: "W7: the union coverage of the runs does not match the requested expectedCases; details carry {expectedCases, coveredCases, runs}" },
     { status: 429, code: "validate_in_flight", description: "a validate/promote build is already in flight for this user" },
     { status: 429, code: "queue_full", description: "global validate concurrency cap reached" },
   ],
@@ -1896,10 +1914,12 @@ export const getCaseSetCoverageContract = registerContract({
 
 export const listComponentVersionsContract = registerContract({
   method: "GET", path: "/api/components/{id}/versions",
-  summary: "List published versions with lifecycle status and their flat acceptance receipts: `acceptanceRunId`/`candidateId` are non-null only for versions published by `promote` with a durable candidate and a passing acceptance run (null on everything published before, or through the legacy publish path).",
+  summary: "List published versions with lifecycle status and their flat acceptance receipts: `acceptanceRunId`/`candidateId` are non-null only for versions published by `promote` with a durable candidate and a passing acceptance run (null on everything published before, or through the legacy publish path). `acceptanceRunIds` is the full sorted set backing the version (W7 multi-run promote; rows written before schema v30 report `[acceptanceRunId]`, and `acceptanceRunId` always equals its first element), `evidenceManifestHashes` the evidence manifest hash of each of those runs.",
   responseSchema: z.array(z.looseObject({
     version: z.number(), rev: z.number(), status: z.string(), designSystem: z.string(), publishedAt: isoDate,
     candidateId: z.string().nullable(), acceptanceRunId: z.string().nullable(),
+    /** W7: весь набор ранов версии (legacy-строки читаются как `[acceptanceRunId]`) и манифест-хэши их evidence. */
+    acceptanceRunIds: z.array(z.string()), evidenceManifestHashes: z.array(z.string()),
   })),
   errors: [errorCatalog.notFound],
 });
@@ -2809,6 +2829,8 @@ export const capabilitiesResponseSchema = z.object({
     acceptanceProvenance: z.boolean(),
     /** `POST /api/components/:id/case-sets/validate` — dry-run манифеста без записи (план 2026-08-04 §W6, C23). */
     caseSetValidate: z.boolean(),
+    /** `promote` принимает `acceptanceRunIds[]` — набор ранов шардированной семьи (план 2026-08-04 §W7, C23). */
+    acceptanceMultiRunPromote: z.boolean(),
   }),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`

@@ -32,7 +32,8 @@ function v14():Database {
   // v25 завела durable-слой acceptance и колонки-свидетельства — снимаем таблицы и колонки,
   // иначе повторный migrate() упрётся в "table already exists"/duplicate column.
   for(const table of ["acceptance_case_results","acceptance_cases","acceptance_runs","component_candidates"] as const) db.run(`DROP TABLE IF EXISTS ${table}`);
-  for(const column of ["candidate_id","acceptance_run_id"] as const) db.run(`ALTER TABLE component_publishes DROP COLUMN ${column}`);
+  // v30 добавила туда же массив ранов приёмки (`acceptance_run_ids`, multi-run promote).
+  for(const column of ["candidate_id","acceptance_run_id","acceptance_run_ids"] as const) db.run(`ALTER TABLE component_publishes DROP COLUMN ${column}`);
   db.run("ALTER TABLE design_systems DROP COLUMN acceptance");
   // v26 завела case-set-манифесты — тот же приём.
   db.run("DROP TABLE IF EXISTS component_case_sets");

@@ -12,7 +12,16 @@ export type ErrorDetails = { issues?: unknown[]; warnings?: unknown[]; currentRe
    * План 2026-08-04 W3: `422 acceptance_policy_mismatch` — под каким профилем исполнен ран и
    * какие профили допускают публикацию (`capabilities.acceptance.promotionPolicyProfiles`).
    */
-  runPolicyProfileId?: string; allowed?: string[] };
+  runPolicyProfileId?: string; allowed?: string[];
+  /**
+   * План 2026-08-04 W7 (multi-run promote): состав набора ранов и то, чем он несогласован —
+   * разные профили (`policyProfileIds`), разные рендереры (`rendererFingerprints`), пересечение
+   * покрытия (`overlap`/`overlapCount`) или несходящееся суммарное покрытие
+   * (`expectedCases`/`coveredCases`/`runs`).
+   */
+  runIds?: string[]; policyProfileIds?: string[]; rendererFingerprints?: string[];
+  overlap?: string[]; overlapCount?: number;
+  expectedCases?: number; coveredCases?: number; runs?: unknown[] };
 
 export class ApiError extends Error {
   constructor(public status: 400|401|403|404|405|409|413|415|422|429|501|503, public code: string, message: string, public details: ErrorDetails = {}) { super(message); }

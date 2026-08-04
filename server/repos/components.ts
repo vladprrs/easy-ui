@@ -10,6 +10,25 @@ const RENDERABLE_STATUS=new Set(["active","deprecated","superseded"]);
 // Manual transition matrix (K.2). staging/failed are lifecycle-internal and cannot be set by hand.
 const TRANSITIONS:Record<string,string[]>={active:["rejected","deprecated","superseded","archived"],deprecated:["archived","active"],superseded:["archived","active"],rejected:["archived"],archived:[],staging:[],failed:[]};
 export type StatusChange={status:string;reason?:string;supersededBy?:number;baseStatusRev:number};
+/**
+ * Receipts приёмки версии в форме DTO (v30, план 2026-08-04 W7).
+ *
+ * Чтение легаси-строк — часть контракта: `acceptance_run_ids IS NULL` ⇒ `[acceptance_run_id]`
+ * (пусто, если и он NULL). Обратное направление гарантирует `linkPublish`: скаляр всегда равен
+ * первому элементу отсортированного массива, поэтому старые читатели видят детерминированный id,
+ * а новые — всё покрытие. `evidenceManifestHashes` собираются по тем же ранам: это единственный
+ * способ узнать, какими архивами доказана версия, не запрашивая каждый ран отдельно.
+ */
+function acceptanceReceipts(db:Database,runIdsJson:string|null,legacyRunId:string|null):{acceptanceRunIds:string[];evidenceManifestHashes:string[]}{
+  let ids:string[]=[];
+  if(runIdsJson){
+    try { const parsed=JSON.parse(runIdsJson) as unknown; if(Array.isArray(parsed)) ids=parsed.filter((value):value is string=>typeof value==="string"&&value!==""); } catch { ids=[]; }
+  }
+  if(ids.length===0&&legacyRunId) ids=[legacyRunId];
+  const hashes=ids.map(runId=>(db.query("SELECT evidence_manifest_hash hash FROM acceptance_runs WHERE run_id=?").get(runId) as {hash:string|null}|null)?.hash??null)
+    .filter((hash):hash is string=>typeof hash==="string"&&hash!=="");
+  return {acceptanceRunIds:ids,evidenceManifestHashes:hashes};
+}
 type Row={id:string;name:string;head_rev:number;design_system:string;owner_id:string;deleted_at:string|null;delete_reason:string|null;replacement_component_id:string|null;created_at:string;updated_at:string};
 /** Надгробие мягко удалённого компонента (волна 3 §3.2). Отдаётся только под `?includeDeleted=1`. */
 export type ComponentTombstone={deleted:true;deletedAt:string;reason:string|null;replacement:string|null};
@@ -105,7 +124,7 @@ export class ComponentRepo {
    * Library-признака `accepted` (RFC §7, волна R3c) и колонки acceptance-evidence в
    * `driver.mjs audit --versions`. Пустая строка нормализуется в `null`: колонка — TEXT без FK.
    */
-  versions(id:string,includeDeleted=false){this.row(id,includeDeleted);return (this.db.query("SELECT p.version,p.rev,p.status,p.status_reason,p.superseded_by,p.status_rev,p.published_at,p.candidate_id,p.acceptance_run_id,r.design_system FROM component_publishes p JOIN component_revisions r ON r.component_id=p.component_id AND r.rev=p.rev WHERE p.component_id=? ORDER BY p.version").all(id) as {version:number;rev:number;status:string;status_reason:string|null;superseded_by:number|null;status_rev:number;published_at:string;candidate_id:string|null;acceptance_run_id:string|null;design_system:string}[]).map(x=>({version:x.version,rev:x.rev,status:x.status,statusReason:x.status_reason,supersededBy:x.superseded_by,statusRev:x.status_rev,designSystem:x.design_system,publishedAt:x.published_at,candidateId:x.candidate_id||null,acceptanceRunId:x.acceptance_run_id||null}));}
+  versions(id:string,includeDeleted=false){this.row(id,includeDeleted);return (this.db.query("SELECT p.version,p.rev,p.status,p.status_reason,p.superseded_by,p.status_rev,p.published_at,p.candidate_id,p.acceptance_run_id,p.acceptance_run_ids,r.design_system FROM component_publishes p JOIN component_revisions r ON r.component_id=p.component_id AND r.rev=p.rev WHERE p.component_id=? ORDER BY p.version").all(id) as {version:number;rev:number;status:string;status_reason:string|null;superseded_by:number|null;status_rev:number;published_at:string;candidate_id:string|null;acceptance_run_id:string|null;acceptance_run_ids:string|null;design_system:string}[]).map(x=>({version:x.version,rev:x.rev,status:x.status,statusReason:x.status_reason,supersededBy:x.superseded_by,statusRev:x.status_rev,designSystem:x.design_system,publishedAt:x.published_at,candidateId:x.candidate_id||null,acceptanceRunId:x.acceptance_run_id||null,...acceptanceReceipts(this.db,x.acceptance_run_ids,x.acceptance_run_id)}));}
   // Bundle bytes for a pinned version. Serves active|deprecated|superseded (K.3); other statuses 404 bundle_unavailable.
   bundle(id:string,version:number){const x=this.db.query("SELECT compiled_js js,bundle_hash hash,status,status_reason reason FROM component_publishes WHERE component_id=? AND version=?").get(id,version) as {js:string;hash:string;status:string;reason:string|null}|null;if(!x)throw new ApiError(404,"not_found","Component version not found");if(!RENDERABLE_STATUS.has(x.status))throw new ApiError(404,"bundle_unavailable",`Component version bundle is unavailable (status ${x.status}${x.reason?`: ${x.reason}`:""})`);return {js:x.js,hash:x.hash};}
   // Metadata of any version stays readable regardless of status (K.3).
@@ -116,7 +135,7 @@ export class ComponentRepo {
   // C30: этот ответ кэшируется клиентом как `immutable` (адрес несёт версию), а receipts —
   // мутабельная часть строки (их проставляет фаза B саги promote). Свежую связку читать по
   // 201-ответу promote или по списку версий (`noStore`), а не из тёплого кэша этой ручки.
-  version(id:string,version:number){const x=this.db.query(`SELECT p.version,p.rev,p.status,p.status_reason,p.superseded_by,p.status_rev,p.definition_meta,p.bundle_hash,p.host_abi_version,p.published_at,p.candidate_id,p.acceptance_run_id,r.source,r.design_system FROM component_publishes p JOIN component_revisions r ON r.component_id=p.component_id AND r.rev=p.rev WHERE p.component_id=? AND p.version=?`).get(id,version) as {version:number;rev:number;status:string;status_reason:string|null;superseded_by:number|null;status_rev:number;definition_meta:string;bundle_hash:string;host_abi_version:number;published_at:string;candidate_id:string|null;acceptance_run_id:string|null;source:string;design_system:string}|null;if(!x)throw new ApiError(404,"not_found","Component version not found");return {version:x.version,rev:x.rev,status:x.status,statusReason:x.status_reason,supersededBy:x.superseded_by,statusRev:x.status_rev,source:x.source,designSystem:x.design_system,...JSON.parse(x.definition_meta),bundleHash:x.bundle_hash,hostAbiVersion:x.host_abi_version,assets:this.assets(id,version),figma:resolveProvenance(this.db,id,x.rev),publishedAt:x.published_at,candidateId:x.candidate_id||null,acceptanceRunId:x.acceptance_run_id||null};}
+  version(id:string,version:number){const x=this.db.query(`SELECT p.version,p.rev,p.status,p.status_reason,p.superseded_by,p.status_rev,p.definition_meta,p.bundle_hash,p.host_abi_version,p.published_at,p.candidate_id,p.acceptance_run_id,p.acceptance_run_ids,r.source,r.design_system FROM component_publishes p JOIN component_revisions r ON r.component_id=p.component_id AND r.rev=p.rev WHERE p.component_id=? AND p.version=?`).get(id,version) as {version:number;rev:number;status:string;status_reason:string|null;superseded_by:number|null;status_rev:number;definition_meta:string;bundle_hash:string;host_abi_version:number;published_at:string;candidate_id:string|null;acceptance_run_id:string|null;acceptance_run_ids:string|null;source:string;design_system:string}|null;if(!x)throw new ApiError(404,"not_found","Component version not found");return {version:x.version,rev:x.rev,status:x.status,statusReason:x.status_reason,supersededBy:x.superseded_by,statusRev:x.status_rev,source:x.source,designSystem:x.design_system,...JSON.parse(x.definition_meta),bundleHash:x.bundle_hash,hostAbiVersion:x.host_abi_version,assets:this.assets(id,version),figma:resolveProvenance(this.db,id,x.rev),publishedAt:x.published_at,candidateId:x.candidate_id||null,acceptanceRunId:x.acceptance_run_id||null,...acceptanceReceipts(this.db,x.acceptance_run_ids,x.acceptance_run_id)};}
   // Manual status transition with CAS on status_rev (K.2). Returns the new {status,statusRev}.
   setStatus(id:string,version:number,change:StatusChange){return this.db.transaction(()=>{
     this.row(id);
