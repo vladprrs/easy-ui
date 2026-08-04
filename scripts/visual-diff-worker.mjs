@@ -4,10 +4,13 @@
 // pixels, and both honest metrics (exact-rgba + pixelmatch-v1) are returned from
 // the same buffers so the caller can build a full evidence report.
 //
-// Два режима, оба через тот же stdin-контракт:
+// Три режима, все через тот же stdin-контракт:
 //   * по умолчанию (`compare`) — сравнение кадр-в-кадр, историческая семантика VDC v1;
 //   * `mode: "normalize"` (`normalizeAndCompare`, план 2026-08-03 §5 W5a) — crop эталона по
-//     `cropLineage`, pad до общего холста и полный набор метрик случая приёмки.
+//     `cropLineage`, pad до общего холста и полный набор метрик случая приёмки;
+//   * `mode: "signals"` (`compareWithSignals`, план 2026-08-03-renderer-contract-2 §3 E6, §5 R7a) —
+//     четыре сигнала визуального рана (`dims`/`exact`/`perceptual`/`edgeResidual`) плюс метрики,
+//     которых требует классификатор причин. Включается флагом `EASYUI_VISUAL_SIGNALS_V2=1`.
 /* global process, Buffer */
 import pixelmatch from "pixelmatch";
 import pngjs from "pngjs";
@@ -217,6 +220,126 @@ export function channelStatsOf(refData, candData, mask, total) {
   };
 }
 
+// ------------------------------------------------------------------ edge-маска (R7a, E6)
+//
+// Зачем. Расхождение «на границе того, что нарисовано» и расхождение «внутри залитой области» —
+// разные события: первое производит растеризатор (хинтинг глифа, субпиксельный origin, скругление
+// антиалиасом), второе — изменившийся макет, цвет или ассет. Отличать их «по проценту» нельзя:
+// 0,3 % могут быть и тем, и другим. Отличать можно по геометрии остатка: растровый шум **лежит на
+// контурах эталона**, регрессия — нет.
+//
+// Как. Маска считается **по эталону** (кандидат в ней не участвует — иначе кандидат сам себе
+// назначал бы допустимую зону): яркость с учётом альфы → Sobel → порог по модулю градиента →
+// дилатация на `EDGE_DILATION_PX` пикселей. Дилатация обязательна: сдвиг растра на 1 px уводит
+// пиксель ровно на соседний, и без расширения контур не покрывал бы собственный остаток.
+//
+// Один механизм (T-M9). Эта же маска — вход классификатора `text-raster-residual`
+// (`server/visual/causes.ts`): двух детекторов одного явления не существует.
+
+/** Порог модуля градиента Sobel (0..~1020) для признания пикселя контуром эталона. */
+export const EDGE_SOBEL_THRESHOLD = 24;
+/** Радиус дилатации контура, px: остаток сдвига на 1 px обязан попадать внутрь маски. */
+export const EDGE_DILATION_PX = 1;
+/**
+ * T из E6: доля остатка внутри edge-маски, с которой расхождение объявляется растровым.
+ * Калибровка на реальных парах (playwright, DPR 2) — план §4, факт R7a: сдвиг текста на 1 px даёт
+ * 99–100 %, сдвиг плашки на 4 px — 55–70 %, смена заливки — единицы процентов.
+ */
+export const EDGE_RESIDUAL_MIN_PCT = 95;
+
+/** Яркость с учётом альфы: прозрачное поле — ноль, поэтому граница контента тоже даёт градиент. */
+export function luminanceOf(data, total) {
+  const lum = new Float32Array(total);
+  for (let index = 0; index < total; index += 1) {
+    const offset = index * 4;
+    const alpha = data[offset + 3] / 255;
+    lum[index] = (0.299 * data[offset] + 0.587 * data[offset + 1] + 0.114 * data[offset + 2]) * alpha;
+  }
+  return lum;
+}
+
+/**
+ * Контурная маска кадра: Sobel по яркости, порог, дилатация 3×3 (`dilation` итераций).
+ * Края холста обрабатываются повтором крайнего пикселя — «рамки» из-за границы кадра не возникает.
+ */
+export function edgeMaskOf(data, width, height, options = {}) {
+  const threshold = options.sobelThreshold ?? EDGE_SOBEL_THRESHOLD;
+  const dilation = options.dilation ?? EDGE_DILATION_PX;
+  const total = width * height;
+  const lum = luminanceOf(data, total);
+  const at = (x, y) => lum[Math.min(height - 1, Math.max(0, y)) * width + Math.min(width - 1, Math.max(0, x))];
+  let mask = new Uint8Array(total);
+  let edgePixels = 0;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const tl = at(x - 1, y - 1); const tc = at(x, y - 1); const tr = at(x + 1, y - 1);
+      const ml = at(x - 1, y); const mr = at(x + 1, y);
+      const bl = at(x - 1, y + 1); const bc = at(x, y + 1); const br = at(x + 1, y + 1);
+      const gx = (tr + 2 * mr + br) - (tl + 2 * ml + bl);
+      const gy = (bl + 2 * bc + br) - (tl + 2 * tc + tr);
+      if (Math.sqrt(gx * gx + gy * gy) >= threshold) { mask[y * width + x] = 1; edgePixels += 1; }
+    }
+  }
+  for (let pass = 0; pass < dilation; pass += 1) {
+    const grown = new Uint8Array(total);
+    edgePixels = 0;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        let hit = 0;
+        for (let dy = -1; dy <= 1 && hit === 0; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            const sx = x + dx; const sy = y + dy;
+            if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
+            if (mask[sy * width + sx] === 1) { hit = 1; break; }
+          }
+        }
+        if (hit === 1) { grown[y * width + x] = 1; edgePixels += 1; }
+      }
+    }
+    mask = grown;
+  }
+  return { mask, edgePixels, sobelThreshold: threshold, dilationPx: dilation };
+}
+
+/** Маска «пиксель отличается хоть чем-то» (exact-rgba): честный остаток без порогов и допусков. */
+export function exactDiffMaskOf(refData, candData, total) {
+  const mask = new Uint8Array(total);
+  let diffPixels = 0;
+  for (let index = 0; index < total; index += 1) {
+    const offset = index * 4;
+    if (refData[offset] !== candData[offset] || refData[offset + 1] !== candData[offset + 1]
+      || refData[offset + 2] !== candData[offset + 2] || refData[offset + 3] !== candData[offset + 3]) {
+      mask[index] = 1; diffPixels += 1;
+    }
+  }
+  return { mask, diffPixels };
+}
+
+/**
+ * Разбиение остатка на «внутри контура эталона» и «вне». Остаток берётся exact-rgba: любой другой
+ * набор (например, переживший порог pixelmatch) уже отфильтрован и не описывает растровый шум,
+ * ради которого сигнал существует.
+ *
+ * `insidePct === null` при пустом остатке: доли у несуществующего множества нет, и «100 %» здесь
+ * было бы выдумкой.
+ */
+export function edgeResidualOf(diffMask, edge, total, canvasPixels) {
+  let inside = 0; let outside = 0;
+  for (let index = 0; index < total; index += 1) {
+    if (diffMask[index] === 0) continue;
+    if (edge.mask[index] === 1) inside += 1; else outside += 1;
+  }
+  const residualPixels = inside + outside;
+  return {
+    residualPixels, insidePixels: inside, outsidePixels: outside,
+    insidePct: residualPixels === 0 ? null : round4((inside / residualPixels) * 100),
+    edgePixels: edge.edgePixels,
+    edgeCoveragePct: canvasPixels === 0 ? 0 : round4((edge.edgePixels / canvasPixels) * 100),
+    sobelThreshold: edge.sobelThreshold,
+    dilationPx: edge.dilationPx,
+  };
+}
+
 /**
  * Лучшее целочисленное смещение кандидата относительно эталона в окне ±`window` px.
  *
@@ -327,6 +450,17 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
   }
   const { regions, totalRegions } = diffRegions(mask, width, height, deltas, total, options.maxRegions ?? MAX_REGIONS);
 
+  // Edge-сигнал в режиме нормализации — **только** под флагом волны (R7a, opt-in): при
+  // выключенном флаге результат воркера обязан быть доволновым байт-в-байт, иначе evidence
+  // приёмки менялся бы без решения о включении.
+  const edgeResidual = signalsV2Requested(options)
+    ? edgeResidualOf(
+      exactDiffMaskOf(paddedRef.data, paddedCand.data, total).mask,
+      edgeMaskOf(paddedRef.data, width, height, options.edgeOptions),
+      total, total,
+    )
+    : null;
+
   return {
     ok: true,
     mode: "normalize",
@@ -351,11 +485,124 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
         ...(options.offsetWindow === undefined ? {} : { window: options.offsetWindow }),
       }),
       thresholds: { raw: rawThreshold, aa: aaThreshold },
+      ...(edgeResidual === null ? {} : { edgeResidual }),
     },
     diffPngBase64: PNG.sync.write(diff).toString("base64"),
     normalizedCandidatePngBase64: PNG.sync.write(paddedCand).toString("base64"),
   };
 }
+
+/** Запрошен ли edge-сигнал: явная опция задания сильнее env-флага процесса. */
+function signalsV2Requested(options) {
+  if (options?.edge === true) return true;
+  if (options?.edge === false) return false;
+  return process.env.EASYUI_VISUAL_SIGNALS_V2 === "1";
+}
+
+// ---------------------------------------------------------------------------
+// Режим `signals` (план renderer-contract-2 §3 **E6**, §5 **R7a**).
+//
+// Разделение метрик. До волны визуальный ран судился одним числом — процентом pixelmatch, — и
+// это число отвечало сразу на два вопроса («изменился ли рендер» и «изменился ли продукт»),
+// то есть ни на один. Здесь их четыре, и каждый отвечает за своё:
+//
+//   dims       — сводимы ли кадры вообще (`equal` / `normalized` / `irreconcilable`);
+//   exact      — отличается ли хоть один байт (exact-rgba, без порогов);
+//   perceptual — pixelmatch с порогом рана (историческая метрика, она же вердикт бюджета);
+//   edge       — где лежит остаток: на контурах эталона или вне их.
+//
+// Нормализация размеров переиспользует `padPng` из W5a: кадры разных габаритов в пределах
+// допуска сводятся к общему холсту (`dims: "normalized"`), за допуском — `irreconcilable`
+// **без метрик** (у `indeterminate` не бывает процента).
+//
+// Метрики для классификатора причин (`regions`/`channelStats`/`bestOffset`) считаются здесь же и
+// по тем же порогам, что в режиме `normalize`: иначе одна и та же причина называлась бы
+// по-разному на двух путях.
+// ---------------------------------------------------------------------------
+export function compareWithSignals(referencePng, candidatePng, options = {}) {
+  const reference = PNG.sync.read(referencePng);
+  const candidate = PNG.sync.read(candidatePng);
+  const refDims = { width: reference.width, height: reference.height };
+  const candDims = { width: candidate.width, height: candidate.height };
+  const equal = refDims.width === candDims.width && refDims.height === candDims.height;
+
+  if (!equal) {
+    const tolerance = options.maxDimensionDeltaPx ?? DEFAULT_MAX_DIMENSION_DELTA_PX;
+    const deltaWidth = Math.abs(refDims.width - candDims.width);
+    const deltaHeight = Math.abs(refDims.height - candDims.height);
+    if (deltaWidth > tolerance || deltaHeight > tolerance) {
+      return {
+        ok: true, mode: "signals", dims: "irreconcilable", indeterminate: true,
+        reason: `reference ${refDims.width}×${refDims.height} and candidate ${candDims.width}×${candDims.height} differ by ${deltaWidth}×${deltaHeight}px, beyond the ${tolerance}px pad tolerance`,
+        refDims, candDims,
+        dimensionDelta: { width: deltaWidth, height: deltaHeight, tolerancePx: tolerance },
+      };
+    }
+  }
+
+  const width = Math.max(refDims.width, candDims.width);
+  const height = Math.max(refDims.height, candDims.height);
+  const paddedRef = padPng(reference, width, height);
+  const paddedCand = padPng(candidate, width, height);
+  const total = width * height;
+
+  const threshold = typeof options.threshold === "number" ? options.threshold : 0.1;
+  const includeAA = options.includeAA === true;
+
+  const diffPng = new PNG({ width, height });
+  const perceptualPixels = pixelmatch(paddedRef.data, paddedCand.data, diffPng.data, width, height, { threshold, includeAA });
+  const exact = exactDiffMaskOf(paddedRef.data, paddedCand.data, total);
+
+  // Маска причин здесь — **exact-rgba**, а не порог pixelmatch (в отличие от режима `normalize`,
+  // где опорной метрикой случая объявлен `rawDiffPct`). Причина — факт калибровки R7a: смена
+  // заливки `#f2f1f0 → #e8f0ff` на половине холста даёт `rawDiffPct` **0 %** по pixelmatch и
+  // 52 % по exact. Судить такой ран порогом pixelmatch значило бы не увидеть регрессию вовсе,
+  // а объяснять причину по пустой маске — молчать о ней. `aaDiffPct` при этом остаётся
+  // перцептивной метрикой рана, поэтому пара (raw, aa) сохраняет смысл «весь остаток / то, что
+  // от него видно глазу».
+  const mask = exact.mask;
+  const deltas = new Uint16Array(total);
+  let maxChannelDelta = 0;
+  for (let index = 0; index < total; index += 1) {
+    const delta = pixelDelta(paddedRef.data, paddedCand.data, index * 4);
+    deltas[index] = delta;
+    if (delta > maxChannelDelta) maxChannelDelta = delta;
+  }
+  const { regions, totalRegions } = diffRegions(mask, width, height, deltas, total, options.maxRegions ?? MAX_REGIONS);
+  const edge = edgeMaskOf(paddedRef.data, width, height, options.edgeOptions);
+
+  return {
+    ok: true,
+    mode: "signals",
+    dims: equal ? "equal" : "normalized",
+    indeterminate: false,
+    refDims, candDims,
+    canvas: { width, height },
+    padded: { reference: refDims.width !== width || refDims.height !== height, candidate: candDims.width !== width || candDims.height !== height },
+    exact: { diffPixels: exact.diffPixels, totalPixels: total },
+    pixelmatch: { diffPixels: perceptualPixels, totalPixels: total, options: { threshold, includeAA } },
+    edgeResidual: edgeResidualOf(exact.mask, edge, total, total),
+    metrics: {
+      rawDiffPct: round4((exact.diffPixels / total) * 100),
+      aaDiffPct: round4((perceptualPixels / total) * 100),
+      rawDiffPixels: exact.diffPixels,
+      aaDiffPixels: perceptualPixels,
+      totalPixels: total,
+      maxChannelDelta,
+      channelStats: channelStatsOf(paddedRef.data, paddedCand.data, mask, total),
+      regions,
+      totalRegions,
+      bestOffset: bestOffsetOf(paddedRef.data, paddedCand.data, width, height, {
+        ...(options.offsetWindow === undefined ? {} : { window: options.offsetWindow }),
+      }),
+      // `raw: 0` — у exact-rgba порога нет вовсе (маска «отличается хоть чем-то»).
+      thresholds: { raw: 0, aa: threshold },
+    },
+    diffPngBase64: PNG.sync.write(diffPng).toString("base64"),
+  };
+}
+
+const MODES = { normalize: normalizeAndCompare, signals: compareWithSignals };
 
 async function readStdin() {
   const chunks = [];
@@ -366,7 +613,7 @@ async function readStdin() {
 const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
   readStdin()
-    .then((job) => (job.mode === "normalize" ? normalizeAndCompare : compare)(
+    .then((job) => (MODES[job.mode] ?? compare)(
       Buffer.from(job.referencePngBase64, "base64"), Buffer.from(job.candidatePngBase64, "base64"), job.options))
     .then((result) => { process.stdout.write(JSON.stringify(result) + "\n"); process.exit(0); })
     .catch((error) => { process.stdout.write(JSON.stringify({ ok: false, error: error?.message ?? String(error) }) + "\n"); process.exit(1); });

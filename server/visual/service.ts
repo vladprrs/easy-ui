@@ -2,21 +2,29 @@ import type { Database } from "bun:sqlite";
 import { ApiError } from "../http";
 import type { ScreenshotService } from "../screenshot/service";
 import type { CaptureExpected } from "../../src/capture/protocol";
-import { spawnDiffWorker, type RunDiff } from "./diff-runner";
+import {
+  spawnDiffWorker, spawnSignalsDiffWorker,
+  type RunDiff, type RunSignalsDiff, type SignalsDiffIndeterminate, type SignalsDiffMeasured,
+} from "./diff-runner";
 import { parseFingerprint, type Fingerprint } from "./fingerprint";
 import {
   parseReferenceRenderer, rendererRecordFromReceipt, VisualRepo,
   type CandidateMeta, type MetricResult, type ReferenceRendererRecord, type RendererGuardRecord,
-  type RunOutcomeCode, type RunReport, type VisualReferenceRow, type VisualRunRow,
+  type RunClass, type RunOutcomeCode, type RunReport, type RunSignals, type VisualReferenceRow, type VisualRunRow,
 } from "./repo";
+import { CAUSE_THRESHOLDS, classifyVisualCauses } from "./causes";
 import { rendererDeclaration, rendererFlagsEnabled } from "../capture/renderer";
 import { readReceipt } from "../capture/receiptStore";
+import { sanitizeEvidenceName } from "../acceptance/evidence";
+import { evidenceMaxBytes } from "../acceptance/policies";
 
 export interface VisualServiceDeps {
   db: Database;
   dataDir: string;
   screenshots?: ScreenshotService;
   runDiff?: RunDiff;
+  /** R7a: воркер в режиме `signals`. Используется только при `EASYUI_VISUAL_SIGNALS_V2=1`. */
+  runSignalsDiff?: RunSignalsDiff;
   now?: () => number;
 }
 
@@ -47,6 +55,89 @@ export const currentRendererEpoch = (): string =>
 export interface RendererGuardFlags { rendererFlags: boolean; epoch: string; disabled: boolean }
 export const rendererGuardFlags = (): RendererGuardFlags =>
   ({ rendererFlags: rendererFlagsEnabled(), epoch: currentRendererEpoch(), disabled: rendererGuardDisabled() });
+
+/**
+ * Разделение метрик (§3 **E6**, §5 **R7a**) — opt-in. Выключенный флаг даёт доволновое поведение
+ * буквально: тот же `compare`-режим воркера, тот же вердикт по проценту pixelmatch, `class`/
+ * `signals` в отчёте — `null`.
+ */
+export const visualSignalsV2Enabled = (): boolean => process.env.EASYUI_VISUAL_SIGNALS_V2 === "1";
+
+/** Снапшот всех флагов рана, взятый на `beginCheck` (N11) — включая R7a. */
+export interface VisualRunFlags extends RendererGuardFlags { signalsV2: boolean }
+export const visualRunFlags = (): VisualRunFlags => ({ ...rendererGuardFlags(), signalsV2: visualSignalsV2Enabled() });
+
+/** Вердикт E6: статус, класс, типизированный исход и сигналы, из которых всё это получено. */
+export interface SignalsVerdict {
+  status: VisualRunRow["status"];
+  runClass: RunClass;
+  outcomeCode: RunOutcomeCode | null;
+  signals: RunSignals;
+}
+
+/**
+ * Вердикт визуального рана из четырёх сигналов (**E6**). Чистая функция: вход — то, что измерил
+ * воркер, выход — статус и его объяснение. Порядок решений и причина каждого:
+ *
+ * 1. **`irreconcilable` → `indeterminate`.** Кадры несводимы даже нормализацией; процент здесь
+ *    был бы мерой разного холста, а не разницы. Типизированный исход `dimensions_irreconcilable`
+ *    делает диагноз выводимым из ответа («эталон снят в другом масштабе»), а не из догадок.
+ * 2. **`exact = 0` → `pass, identical`.** Ни одного отличающегося байта — сравнивать нечего.
+ * 3. **`exact > 0` ∧ перцептивная метрика в бюджете ∧ доля остатка внутри edge-маски ≥ T →
+ *    `pass, renderer_residual`.** Остаток лежит на контурах самого эталона: так выглядит другой
+ *    растеризатор, а не другой продукт. Оба условия обязательны: без бюджета «растровым» стал бы
+ *    любой сдвиг на 1 px (факт калибровки: плашка, сдвинутая на 1 px, даёт 100 % остатка внутри
+ *    маски — её ловит именно перцептивный порог).
+ * 4. **иначе `fail, regression`** с названными причинами (`causes.ts`). Сюда попадает и случай,
+ *    который доволновая семантика пропускала: перцептивная метрика в бюджете, но остаток лежит
+ *    **вне** контуров (факт калибровки: смена заливки половины холста даёт 0 % по pixelmatch и
+ *    52 % по exact-rgba). Это и есть смысл волны — и ровно поэтому она opt-in.
+ */
+export function evaluateSignalsVerdict(
+  diff: SignalsDiffMeasured | SignalsDiffIndeterminate,
+  passThreshold: number,
+  deviceScaleFactor: number,
+): SignalsVerdict {
+  const thresholds = { passPct: passThreshold, edgeInsidePct: CAUSE_THRESHOLDS.edgeResidualInsidePct };
+  if (diff.indeterminate) {
+    return {
+      status: "error", runClass: "indeterminate", outcomeCode: "dimensions_irreconcilable",
+      signals: { dims: "irreconcilable", exact: null, perceptual: null, edgeResidual: null, thresholds, reason: diff.reason },
+    };
+  }
+  const exact: MetricResult = {
+    diffPixels: diff.exact.diffPixels, totalPixels: diff.exact.totalPixels,
+    diffPercent: diff.exact.totalPixels ? (diff.exact.diffPixels / diff.exact.totalPixels) * 100 : 0,
+  };
+  const perceptual: MetricResult = {
+    diffPixels: diff.pixelmatch.diffPixels, totalPixels: diff.pixelmatch.totalPixels,
+    diffPercent: diff.pixelmatch.totalPixels ? (diff.pixelmatch.diffPixels / diff.pixelmatch.totalPixels) * 100 : 0,
+  };
+  const base = { dims: diff.dims, exact, perceptual, edgeResidual: diff.edgeResidual, thresholds };
+
+  if (exact.diffPixels === 0) return { status: "pass", runClass: "identical", outcomeCode: null, signals: base };
+
+  const insidePct = diff.edgeResidual.insidePct;
+  if (perceptual.diffPercent <= passThreshold && insidePct !== null && insidePct >= thresholds.edgeInsidePct) {
+    return { status: "pass", runClass: "renderer_residual", outcomeCode: null, signals: base };
+  }
+
+  const causes = classifyVisualCauses({
+    visual: {
+      rawDiffPct: diff.metrics.rawDiffPct,
+      aaDiffPct: diff.metrics.aaDiffPct,
+      maxChannelDelta: diff.metrics.maxChannelDelta,
+      regions: diff.metrics.regions,
+      totalRegions: diff.metrics.totalRegions,
+      bestOffset: diff.metrics.bestOffset,
+      canvas: diff.canvas,
+      channelStats: diff.metrics.channelStats ?? null,
+      edgeResidual: diff.edgeResidual,
+    },
+    deviceScaleFactor,
+  });
+  return { status: "fail", runClass: "regression", outcomeCode: null, signals: { ...base, causes } };
+}
 
 /** Сторона сравнения: рендерер, которым нарисован кадр (эталона или кандидата). */
 export type GuardSide = Pick<ReferenceRendererRecord, "fingerprint" | "fontManifestHash" | "readinessPolicyHash" | "epoch"> | null;
@@ -132,10 +223,12 @@ interface MemoryRun { runId: string; referenceId: string; status: "running" | Ru
 export class VisualService {
   private readonly runs = new Map<string, MemoryRun>();
   private readonly runDiff: RunDiff;
+  private readonly runSignalsDiff: RunSignalsDiff;
   private readonly now: () => number;
 
   constructor(private readonly deps: VisualServiceDeps) {
     this.runDiff = deps.runDiff ?? spawnDiffWorker;
+    this.runSignalsDiff = deps.runSignalsDiff ?? spawnSignalsDiffWorker;
     this.now = deps.now ?? Date.now;
   }
 
@@ -180,7 +273,7 @@ export class VisualService {
     this.runs.set(runId, { runId, referenceId: reference.id, status: "running", jobId });
     // Снапшот флагов берётся здесь, на постановке (N11): ран, стартовавший до флипа
     // `EASYUI_RENDERER_FLAGS`, доигрывается по семантике своего старта.
-    void this.drive(runId, reference, fingerprint, passThreshold, jobId, refAsset.sha256,context,rendererGuardFlags());
+    void this.drive(runId, reference, fingerprint, passThreshold, jobId, refAsset.sha256,context,visualRunFlags());
     return { runId, jobId };
   }
 
@@ -197,7 +290,7 @@ export class VisualService {
       : {kind:"component" as const,requestedTarget:{version:candidate.version??fp.refVersion},resolvedTarget:{version:expected.kind==="component"?expected.version:candidate.version??fp.refVersion},expected};
   }
 
-  private async drive(runId: string, reference: VisualReferenceRow, fingerprint: Fingerprint, passThreshold: number, jobId: string, refSha: string,context:ReturnType<VisualService["metaContext"]>,flags:RendererGuardFlags): Promise<void> {
+  private async drive(runId: string, reference: VisualReferenceRow, fingerprint: Fingerprint, passThreshold: number, jobId: string, refSha: string,context:ReturnType<VisualService["metaContext"]>,flags:VisualRunFlags): Promise<void> {
     const screenshots = this.deps.screenshots!;
     const repo = this.repo();
     const deadline = this.now() + CHECK_DEADLINE_MS;
@@ -250,6 +343,10 @@ export class VisualService {
 
       const refBytes = Buffer.from(await Bun.file(repo.assetRepo().bytesPath(refSha)).arrayBuffer());
       const candBytes = Buffer.from(await Bun.file(repo.assetRepo().bytesPath(candAsset.sha256)).arrayBuffer());
+      if (flags.signalsV2) {
+        await this.finalizeSignals(repo, runId, reference, fingerprint, passThreshold, candidateAssetId, candidateMeta, trailer, refBytes, candBytes);
+        return;
+      }
       const diff = await this.runDiff({ referencePngBase64: refBytes.toString("base64"), candidatePngBase64: candBytes.toString("base64"), options: { threshold: PIXELMATCH_THRESHOLD, includeAA: false } });
 
       if (!diff.ok) { this.finalizeCaptured(repo, runId, reference, "error", candidateAssetId, candidateMeta, null, null, trailer); return; }
@@ -270,6 +367,43 @@ export class VisualService {
       if(capturedMeta) this.finalizeCaptured(repo,runId,reference,"error",capturedAssetId,{...capturedMeta,error:message},null,null);
       else this.finalizeError(repo, runId, reference, message,context,capturedBrowser);
     }
+  }
+
+  /**
+   * Ветка R7a: тот же подпроцесс в режиме `signals`, вердикт — {@link evaluateSignalsVerdict}.
+   *
+   * Строка рана остаётся прежней формы: `metric`/`diff_percent` продолжают нести **перцептивную**
+   * метрику (`pixelmatch-v1`), потому что её читают существующие потребители и сравнивают между
+   * ранами. Новое — `class` и `signals`, и они едут в той же колонке `candidate_meta_json`, что и
+   * `exactRgba`: миграции у этой волны нет (единственная миграция пакета была в R6), а честный
+   * отчёт важнее красивой схемы. `indeterminate` не получает процента вовсе.
+   */
+  private async finalizeSignals(
+    repo: VisualRepo, runId: string, reference: VisualReferenceRow, fingerprint: Fingerprint, passThreshold: number,
+    candidateAssetId: string, candidateMeta: CandidateMeta, trailer: RendererTrailer,
+    refBytes: Buffer, candBytes: Buffer,
+  ): Promise<void> {
+    const diff = await this.runSignalsDiff({
+      mode: "signals",
+      referencePngBase64: refBytes.toString("base64"),
+      candidatePngBase64: candBytes.toString("base64"),
+      options: { threshold: PIXELMATCH_THRESHOLD, includeAA: false },
+    });
+    if (diff.ok === false) { this.finalizeCaptured(repo, runId, reference, "error", candidateAssetId, candidateMeta, null, null, trailer); return; }
+
+    const verdict = evaluateSignalsVerdict(diff, passThreshold, fingerprint.deviceScaleFactor);
+    const meta = { ...candidateMeta, signalsV2: { class: verdict.runClass, signals: verdict.signals } } as CandidateMeta;
+    if (diff.indeterminate) {
+      this.finalizeCaptured(repo, runId, reference, verdict.status, candidateAssetId, meta, null, null, { ...trailer, outcomeCode: verdict.outcomeCode });
+      return;
+    }
+    const withExact = { ...meta, exactRgba: verdict.signals.exact } as CandidateMeta & { exactRgba: MetricResult };
+    const ingest = diff.diffPngBase64 ? await repo.assetRepo().ingest(new Uint8Array(Buffer.from(diff.diffPngBase64, "base64")), "image/png", "diff.png") : null;
+    this.finalizeCaptured(repo, runId, reference, verdict.status, candidateAssetId, withExact, ingest?.asset.id ?? null, {
+      metric: "pixelmatch-v1", options: diff.pixelmatch.options,
+      diffPixels: diff.pixelmatch.diffPixels, totalPixels: diff.pixelmatch.totalPixels,
+      diffPercent: verdict.signals.perceptual!.diffPercent,
+    }, trailer);
   }
 
   private candidateMeta(fp: Fingerprint, result: Extract<NonNullable<ReturnType<ScreenshotService["get"]>["result"]>, {kind:"image"}>,context:ReturnType<VisualService["metaContext"]>,browser:NonNullable<CandidateMeta["browser"]>): CandidateMeta {
@@ -374,3 +508,194 @@ function normalizeThreshold(value: number | undefined): number {
 
 const bounded=(value:string)=>value.length<=500?value:`${value.slice(0,497)}...`;
 const boundDiagnostics=(values:string[])=>values.slice(0,20).map(bounded);
+
+// ---------------------------------------------------------------------------
+// R7b — Diagnostic bundle визуального рана (§5 R7b, P1.5).
+//
+// Один архив на ран: оба кадра, три производных картинки, оба receipt'а, отчёт и `SHA256SUMS`.
+// Смысл — снять с человека сборку доказательств руками: сегодня, чтобы понять «почему fail»,
+// нужно вручную вытащить три ассета по трём URL, найти receipt'ы по двум sha и сопоставить их с
+// отчётом рана. Bundle делает это одним GET и — главное — **самопроверяемым**: `sha256sum -c
+// SHA256SUMS` снаружи говорит, что архив не подменён и не обрезан.
+//
+// Три решения, которые видно в коде:
+//
+// 1. **`diff-exact.png` и `edge-mask.png` пересчитываются на запросе, а не хранятся.** Хранение
+//    потребовало бы двух новых ассетов на каждый ран в сторе, у которого **нет GC** (§4: `assets/`
+//    копит orphan-PNG), — за диагностику, которую смотрят у единиц ранов. Пересчёт детерминирован:
+//    те же чистые функции того же воркера (`padPng`/`exactDiffMaskOf`/`edgeMaskOf`), которыми ран
+//    судился, и происхождение каждого файла названо в `report.json` (`source`).
+// 2. **`diff-perceptual.png` не пересчитывается никогда.** Это артефакт, произведённый самим раном
+//    (ассет `diff_asset_id`); подменять его свежим рендером значило бы показывать не то, по чему
+//    вынесен вердикт. Нет ассета — файла в архиве нет, а в `report.json` честное `null` с причиной.
+// 3. **Отсутствующее не выдумывается.** Вытесненный receipt эталона, удалённый кадр кандидата,
+//    несводимые размеры — всё это записывается в `report.json` как `null` + `reason` (канон
+//    acceptance-evidence: манифест остаётся полным, отсутствие видно). Пин receipt'ов эталона
+//    (R6) делает первый случай редким, но не невозможным — врать об этом нельзя.
+// ---------------------------------------------------------------------------
+
+/** Версия формата архива. Читатель обязан уметь отличить будущий формат от этого. */
+export const VISUAL_BUNDLE_VERSION = 1;
+
+/** Файл архива: имя (санитизировано), байты и их адрес. */
+export interface VisualBundleEntry { name: string; bytes: Uint8Array; sha256: string; compress: boolean }
+
+/** Строка `report.json` про один файл: либо он есть (с адресом и происхождением), либо его нет — и почему. */
+type BundleArtifactNote =
+  | { name: string; present: true; sha256: string; bytes: number; source: string }
+  | { name: string; present: false; reason: string };
+
+const sha256Hex = (bytes: Uint8Array): string => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+
+async function readAssetBytes(repo: VisualRepo, assetId: string | null | undefined, sha256: string | null): Promise<Uint8Array | null> {
+  if (!assetId) return null;
+  const sha = sha256 ?? repo.assetRepo().get(assetId)?.sha256 ?? null;
+  if (!sha) return null;
+  const file = Bun.file(repo.assetRepo().bytesPath(sha));
+  if (!(await file.exists()) || file.size === 0) return null;
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+/**
+ * Две однобитные картинки поверх общего холста: «где кадры отличаются хоть чем-то» (exact-rgba) и
+ * «где у эталона контур» (Sobel + дилатация 1 px — ровно та маска, по которой считается сигнал
+ * `edgeResidual`). Цвета выбраны за читаемость глазом, а не за смысл: чёрное на белом.
+ *
+ * Кадры разных габаритов сводятся тем же `padPng`, что и в воркере; за допуском — `null`, потому
+ * что маска разного холста описывала бы не разницу кадров, а разницу их размеров.
+ */
+/**
+ * Пиксельная работа bundle'а идёт синхронно в процессе API (сам ран судит кадры в подпроцессе —
+ * канон spawnDiffWorker; здесь подпроцесс не заводим ради простоты read-only ручки). На кадрах у
+ * потолка MAX_ASSET_PIXELS один вызов держит event loop ~секунды, поэтому конкуренция — 1:
+ * параллельные bundle-запросы выстраиваются в очередь, а не душат API хором (приёмка R7b).
+ */
+let derivedMasksChain: Promise<unknown> = Promise.resolve();
+
+async function derivedMasks(referencePng: Uint8Array, candidatePng: Uint8Array): Promise<{ exact: Uint8Array; edge: Uint8Array } | { reason: string }> {
+  const run = derivedMasksChain.then(() => derivedMasksInner(referencePng, candidatePng));
+  derivedMasksChain = run.catch(() => undefined);
+  return run;
+}
+
+async function derivedMasksInner(referencePng: Uint8Array, candidatePng: Uint8Array): Promise<{ exact: Uint8Array; edge: Uint8Array } | { reason: string }> {
+  const worker = await import("../../scripts/visual-diff-worker.mjs");
+  const { PNG } = await import("pngjs");
+  const padded = (png: unknown, width: number, height: number): { data: Buffer } => worker.padPng(png, width, height) as { data: Buffer };
+  const reference = PNG.sync.read(Buffer.from(referencePng));
+  const candidate = PNG.sync.read(Buffer.from(candidatePng));
+  const tolerance = worker.DEFAULT_MAX_DIMENSION_DELTA_PX;
+  const deltaWidth = Math.abs(reference.width - candidate.width);
+  const deltaHeight = Math.abs(reference.height - candidate.height);
+  if (deltaWidth > tolerance || deltaHeight > tolerance) {
+    return { reason: `dimensions_irreconcilable: ${reference.width}×${reference.height} vs ${candidate.width}×${candidate.height}, beyond the ${tolerance}px pad tolerance` };
+  }
+  const width = Math.max(reference.width, candidate.width);
+  const height = Math.max(reference.height, candidate.height);
+  const paddedRef = padded(reference, width, height);
+  const paddedCand = padded(candidate, width, height);
+  const total = width * height;
+  const exactMask = worker.exactDiffMaskOf(paddedRef.data, paddedCand.data, total).mask;
+  const edgeMask = worker.edgeMaskOf(paddedRef.data, width, height).mask;
+  const paint = (mask: Uint8Array): Uint8Array => {
+    const png = new PNG({ width, height });
+    for (let index = 0; index < total; index += 1) {
+      const offset = index * 4;
+      const value = mask[index] === 1 ? 0 : 255;
+      png.data[offset] = value; png.data[offset + 1] = value; png.data[offset + 2] = value; png.data[offset + 3] = 255;
+    }
+    return new Uint8Array(PNG.sync.write(png));
+  };
+  return { exact: paint(exactMask), edge: paint(edgeMask) };
+}
+
+/**
+ * Собирает содержимое `bundle.zip` терминального рана. Возвращает файлы в порядке записи; zip'ует
+ * и отдаёт вызывающий роут (канон acceptance-evidence: сборка — в домене, транспорт — в роуте).
+ *
+ * Потолок `evidenceMaxBytes` проверяется по размерам ассетов **до** чтения байтов — канон
+ * `BundleClosure.buildZip`/`runEvidence`: 413 обязан приходить раньше материализации архива.
+ */
+export async function buildVisualRunBundle(db: Database, dataDir: string, report: RunReport): Promise<VisualBundleEntry[]> {
+  const repo = new VisualRepo(db, dataDir);
+  const assets = repo.assetRepo();
+  const diffAssetId = report.diff?.assetId ?? null;
+  const diffSha = diffAssetId ? assets.get(diffAssetId)?.sha256 ?? null : null;
+  const sources: { name: string; assetId: string | null; sha256: string | null }[] = [
+    { name: "reference.png", assetId: report.reference?.assetId ?? null, sha256: report.reference?.sha256 ?? null },
+    { name: "candidate.png", assetId: report.candidate?.assetId ?? null, sha256: report.candidate?.sha256 ?? null },
+    { name: "diff-perceptual.png", assetId: diffAssetId, sha256: diffSha },
+  ];
+  const declaredBytes = sources.reduce((sum, item) => sum + (item.sha256 ? Bun.file(assets.bytesPath(item.sha256)).size : 0), 0);
+  // Производные маски ограничены тем же холстом, что и кадры, поэтому потолок по входам —
+  // достаточная (и единственная дешёвая) оценка до чтения байтов.
+  if (declaredBytes * 2 > evidenceMaxBytes) {
+    throw new ApiError(413, "evidence_too_large", `Bundle exceeds ${evidenceMaxBytes} bytes of raw content`);
+  }
+
+  const entries: VisualBundleEntry[] = [];
+  const notes: BundleArtifactNote[] = [];
+  const push = (name: string, bytes: Uint8Array, source: string, compress: boolean): void => {
+    const entryName = sanitizeEvidenceName(name);
+    const sha = sha256Hex(bytes);
+    entries.push({ name: entryName, bytes, sha256: sha, compress });
+    notes.push({ name: entryName, present: true, sha256: sha, bytes: bytes.byteLength, source });
+  };
+  const skip = (name: string, reason: string): void => { notes.push({ name: sanitizeEvidenceName(name), present: false, reason }); };
+
+  const frames: Record<string, Uint8Array | null> = {};
+  for (const item of sources) {
+    const bytes = await readAssetBytes(repo, item.assetId, item.sha256);
+    frames[item.name] = bytes;
+    if (bytes) push(item.name, bytes, `asset:${item.assetId}`, false);
+    else skip(item.name, item.assetId ? `asset_bytes_missing:${item.assetId}` : "asset_not_recorded");
+  }
+
+  const referenceBytes = frames["reference.png"];
+  const candidateBytes = frames["candidate.png"];
+  if (referenceBytes && candidateBytes) {
+    const derived = await derivedMasks(referenceBytes, candidateBytes);
+    if ("reason" in derived) { skip("diff-exact.png", derived.reason); skip("edge-mask.png", derived.reason); }
+    else {
+      push("diff-exact.png", derived.exact, "derived:exact-rgba", true);
+      push("edge-mask.png", derived.edge, "derived:sobel-edge-mask", true);
+    }
+  } else {
+    const reason = "requires both reference.png and candidate.png";
+    skip("diff-exact.png", reason); skip("edge-mask.png", reason);
+  }
+
+  const receipts: Record<string, { sha256: string; present: boolean; reason?: string } | null> = {};
+  for (const [name, sha] of [["reference-receipt.json", report.referenceReceiptSha256], ["candidate-receipt.json", report.candidateReceiptSha256]] as const) {
+    if (!sha) {
+      // Честный `null` (§5 R7b): у эталона, снятого до R5/R6 или залитого извне, receipt'а нет вовсе.
+      receipts[name] = null; skip(name, "no_receipt_recorded"); continue;
+    }
+    const receipt = await readReceipt(dataDir, sha);
+    if (!receipt) {
+      // Пин R6 держит receipt'ы эталонов, но TTL/вытеснение кандидатского — возможны.
+      receipts[name] = { sha256: sha, present: false, reason: "receipt_unavailable" };
+      skip(name, `receipt_unavailable:${sha}`); continue;
+    }
+    receipts[name] = { sha256: sha, present: true };
+    push(name, new TextEncoder().encode(`${JSON.stringify(receipt, null, 2)}\n`), `receipt:${sha}`, true);
+  }
+
+  const reportJson = {
+    bundleVersion: VISUAL_BUNDLE_VERSION,
+    runId: report.runId,
+    referenceId: report.referenceId,
+    status: report.status,
+    outcomeCode: report.outcomeCode,
+    class: report.class,
+    run: report,
+    receipts,
+    artifacts: notes,
+  };
+  push("report.json", new TextEncoder().encode(`${JSON.stringify(reportJson, null, 2)}\n`), "generated", true);
+
+  const sums = entries.map((entry) => `${entry.sha256}  ${entry.name}`).join("\n");
+  const sumsBytes = new TextEncoder().encode(entries.length === 0 ? "" : `${sums}\n`);
+  entries.push({ name: "SHA256SUMS", bytes: sumsBytes, sha256: sha256Hex(sumsBytes), compress: true });
+  return entries;
+}

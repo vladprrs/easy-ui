@@ -59,6 +59,8 @@ export interface DiffChannelStats {
 }
 export interface NormalizedDiffMetrics {
   rawDiffPct: number; aaDiffPct: number;
+  /** R7a: остаток относительно edge-маски эталона. Аддитивно и **только** под `EASYUI_VISUAL_SIGNALS_V2=1`. */
+  edgeResidual?: EdgeResidual;
   rawDiffPixels: number; aaDiffPixels: number; totalPixels: number;
   maxChannelDelta: number;
   channelStats?: DiffChannelStats;
@@ -82,6 +84,57 @@ export type NormalizedDiffMeasured = {
 };
 export type NormalizedDiffResult = NormalizedDiffIndeterminate | NormalizedDiffMeasured | DiffErr;
 export type RunNormalizedDiff = (job: NormalizedDiffJob) => Promise<NormalizedDiffResult>;
+
+// ---------------------------------------------------------------------------
+// Режим `signals` (план renderer-contract-2 §3 **E6**, §5 **R7a**) — третий контракт того же
+// воркера. Отдельный тип, а не расширение `DiffOk`, по той же причине, что и у `normalize`:
+// вызывающий обязан видеть на месте вызова, что метрик может не быть вовсе (`irreconcilable`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Разбиение остатка по edge-маске эталона. `insidePct === null` — остатка нет вовсе (кадры
+ * совпали побайтно): доли у пустого множества не бывает, и «100 %» здесь было бы выдумкой.
+ */
+export interface EdgeResidual {
+  residualPixels: number;
+  insidePixels: number;
+  outsidePixels: number;
+  insidePct: number | null;
+  edgePixels: number;
+  edgeCoveragePct: number;
+  sobelThreshold: number;
+  dilationPx: number;
+}
+export interface SignalsDiffJob {
+  mode: "signals";
+  referencePngBase64: string;
+  candidatePngBase64: string;
+  options?: {
+    threshold?: number;
+    includeAA?: boolean;
+    maxDimensionDeltaPx?: number;
+    maxRegions?: number;
+    offsetWindow?: number;
+    edgeOptions?: { sobelThreshold?: number; dilation?: number };
+  };
+}
+export type SignalsDiffIndeterminate = {
+  ok: true; mode: "signals"; dims: "irreconcilable"; indeterminate: true; reason: string;
+  refDims: Dims; candDims: Dims;
+  dimensionDelta: { width: number; height: number; tolerancePx: number };
+};
+export type SignalsDiffMeasured = {
+  ok: true; mode: "signals"; dims: "equal" | "normalized"; indeterminate: false;
+  refDims: Dims; candDims: Dims; canvas: Dims; padded: { reference: boolean; candidate: boolean };
+  exact: { diffPixels: number; totalPixels: number };
+  pixelmatch: { diffPixels: number; totalPixels: number; options: { threshold: number; includeAA: boolean } };
+  edgeResidual: EdgeResidual;
+  /** Метрики для классификатора причин; маска здесь — exact-rgba (см. воркер). */
+  metrics: NormalizedDiffMetrics;
+  diffPngBase64: string;
+};
+export type SignalsDiffResult = SignalsDiffIndeterminate | SignalsDiffMeasured | DiffErr;
+export type RunSignalsDiff = (job: SignalsDiffJob) => Promise<SignalsDiffResult>;
 
 const DIFF_DEADLINE_MS = 30_000;
 
@@ -127,3 +180,10 @@ export const spawnDiffWorker: RunDiff = (job: DiffJob): Promise<DiffResult> => s
  */
 export const spawnNormalizedDiffWorker: RunNormalizedDiff = (job: NormalizedDiffJob): Promise<NormalizedDiffResult> =>
   spawnWorker<NormalizedDiffIndeterminate | NormalizedDiffMeasured>(job);
+
+/**
+ * Production {@link RunSignalsDiff} (R7a): четыре сигнала визуального рана в том же подпроцессе.
+ * Отдельная функция по канону выше — тип результата точен на месте вызова.
+ */
+export const spawnSignalsDiffWorker: RunSignalsDiff = (job: SignalsDiffJob): Promise<SignalsDiffResult> =>
+  spawnWorker<SignalsDiffIndeterminate | SignalsDiffMeasured>(job);

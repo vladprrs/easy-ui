@@ -63,6 +63,20 @@ export interface CauseVisualMetrics {
   totalRegions: number;
   bestOffset: { dx: number; dy: number; residualPct: number };
   canvas?: { width: number; height: number } | null;
+  /**
+   * Остаток относительно edge-маски эталона (R7a, план renderer-contract-2 §3 E6). Приходит из
+   * того же подпроцесса, который маску построил, и **заменяет** собственную эвристику
+   * `text-raster-residual`: два детектора одного явления не сосуществуют (T-M9).
+   *
+   * Поле опционально, потому что сигнал живёт под флагом `EASYUI_VISUAL_SIGNALS_V2=1`: без него
+   * классификатор работает по доволновой AA-эвристике, а не молчит.
+   */
+  edgeResidual?: {
+    residualPixels: number;
+    insidePixels: number;
+    outsidePixels: number;
+    insidePct: number | null;
+  } | null;
   channelStats?: {
     pixels: number;
     meanDelta: { r: number; g: number; b: number; a: number };
@@ -115,6 +129,15 @@ export const CAUSE_THRESHOLDS = {
   shiftResidualRatio: 0.35,
   /** `aaDiffPct` как доля `rawDiffPct`, ниже которой расхождение объясняется растеризацией. */
   textAaRatio: 0.25,
+  /**
+   * T (E6): доля остатка внутри edge-маски эталона, с которой расхождение считается растровым.
+   * Калиброван на реальных парах (chromium, DPR 1 и 2 — план §4, факт R7a): сдвиг текста на
+   * 0,5–1 px даёт 98,7–100 %, сдвиг плашки на 4 px — 50,6–79,4 %, перекраска — 0,96–26,3 %.
+   * Зазор между классами — (79,4; 98,7); 95 выбран внутри него ближе к верхней границе, потому
+   * что цена ошибки несимметрична: ложный `renderer_residual` прячет регрессию, ложная
+   * регрессия всего лишь требует взгляда человека.
+   */
+  edgeResidualInsidePct: 95,
   /** Ниже этого `rawDiffPct` растровый остаток не обсуждается — сравнивать нечего, %. */
   textMinRawDiffPct: 0.02,
   /** Растровый остаток фрагментарен: не меньше стольких связных областей. */
@@ -331,10 +354,38 @@ export function classifyEdgeRadiusStroke(input: CauseInput): VisualCause | null 
   };
 }
 
-/** Растровый остаток текста: строгая метрика значима, AA-терпимая — почти нулевая. */
+/**
+ * Растровый остаток текста.
+ *
+ * **Основной сигнал — edge-маска эталона** (R7a): остаток растеризатора лежит на контурах того,
+ * что нарисовано, а регрессия — нет. Этот критерий геометрический, а не пороговый, поэтому он
+ * ловит и то, чего AA-эвристика не видела: сдвиг глифа на 1 px даёт `aaDiffPct/rawDiffPct ≈ 0,6`
+ * (эвристика молчала бы) и 98,7–100 % остатка внутри маски.
+ *
+ * Доволновая AA-эвристика остаётся **фолбэком на отсутствие сигнала** (флаг выключен или метрики
+ * сняты до волны) — молчать там, где раньше причина называлась, было бы регрессом диагностики.
+ * Двух детекторов одновременно не бывает: при наличии маски решает только она (T-M9).
+ */
 export function classifyTextRasterResidual(input: CauseInput): VisualCause | null {
   const visual = input.visual;
   if (!visual || visual.rawDiffPct < CAUSE_THRESHOLDS.textMinRawDiffPct) return null;
+
+  const edge = visual.edgeResidual ?? null;
+  if (edge) {
+    // Пустой остаток — сравнивать нечего; ниже T — расхождение лежит не на контурах эталона,
+    // и называть его растровым нельзя (инвариант «остаток вне маски ≠ renderer_residual»).
+    if (edge.insidePct === null || edge.insidePct < CAUSE_THRESHOLDS.edgeResidualInsidePct) return null;
+    const bboxOnEdge = unionBbox(visual.regions.map((region) => region.bbox));
+    const margin = (edge.insidePct - CAUSE_THRESHOLDS.edgeResidualInsidePct) / (100 - CAUSE_THRESHOLDS.edgeResidualInsidePct);
+    return {
+      code: "text-raster-residual",
+      confidence: round2(clamp01(0.6 + clamp01(margin) * 0.35)),
+      detail: `${edge.insidePct}% of the ${edge.residualPixels} differing pixel(s) lie on the reference's own edges`
+        + ` (${edge.outsidePixels} outside) — a rasterisation residual along existing contours, not a layout or colour change`,
+      ...(bboxOnEdge ? { region: regionRefOf(bboxOnEdge, input) } : {}),
+    };
+  }
+
   if (visual.aaDiffPct > visual.rawDiffPct * CAUSE_THRESHOLDS.textAaRatio) return null;
   if (visual.totalRegions < CAUSE_THRESHOLDS.textMinRegions) return null;
   const largest = visual.regions.reduce((max, region) => Math.max(max, region.areaPct), 0);

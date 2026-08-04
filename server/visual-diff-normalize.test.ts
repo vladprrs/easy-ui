@@ -152,6 +152,20 @@ test("a recoloured region is a raw difference: aa-tolerant metric sees it too", 
   expect(result.metrics.thresholds).toEqual({ raw: 0.1, aa: 0.25 });
 });
 
+test("edge-сигнал в режиме normalize строго opt-in (R7a): без флага результат доволновой", () => {
+  const reference = framePng(24, 24, { x: 4, y: 4, width: 8, height: 8, color: INK });
+  const candidate = framePng(24, 24, { x: 5, y: 4, width: 8, height: 8, color: INK });
+  const off = normalizeAndCompare(reference, candidate, { edge: false });
+  if (off.indeterminate) throw new Error(off.reason);
+  expect(off.metrics.edgeResidual).toBeUndefined();
+
+  const on = normalizeAndCompare(reference, candidate, { edge: true });
+  if (on.indeterminate) throw new Error(on.reason);
+  // Сдвиг фигуры на 1 px: остаток обязан лежать на её собственных контурах.
+  expect(on.metrics.edgeResidual!.insidePct).toBe(100);
+  expect(on.metrics.edgeResidual!.outsidePixels).toBe(0);
+});
+
 test("the spawned node worker returns the same normalized verdict over stdin/stdout", async () => {
   const reference = framePng(24, 24, { x: 4, y: 4, width: 8, height: 8, color: INK });
   const candidate = framePng(24, 24, { x: 4, y: 4, width: 8, height: 8, color: INK });

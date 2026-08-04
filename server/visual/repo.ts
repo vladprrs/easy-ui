@@ -4,6 +4,8 @@ import { fingerprintId, fingerprintJson, type Fingerprint } from "./fingerprint"
 import { ApiError } from "../http";
 import { getAssetReceipt, readReceipt } from "../capture/receiptStore";
 import type { CaptureReceipt } from "../../src/capture/receipt";
+import type { EdgeResidual } from "./diff-runner";
+import type { VisualCause } from "./causes";
 
 export interface VisualReferenceRow {
   id: string;
@@ -134,7 +136,35 @@ export interface VisualRunRow {
  * (или его происхождение неизвестно) при включённых детерминизм-флагах. В обоих случаях процента
  * нет вовсе: сравнивать эти кадры нельзя, и «0,3 %» было бы враньём.
  */
-export type RunOutcomeCode = "renderer_mismatch" | "stale_renderer";
+export type RunOutcomeCode = "renderer_mismatch" | "stale_renderer" | "dimensions_irreconcilable";
+
+/**
+ * Класс визуального рана (R7a, E6) — ответ на вопрос «что это было», которого у одного процента
+ * не было: `identical` (кадры совпали побайтно), `renderer_residual` (остаток лежит на контурах
+ * эталона — рисовал другой растеризатор, а не другой продукт), `regression` (остаток вне контуров
+ * либо бюджет перцептивной метрики превышен), `indeterminate` (кадры несводимы, метрик нет вовсе).
+ *
+ * `class` **не заменяет** `status`: статус остаётся тем же множеством значений (N7), класс лишь
+ * объясняет его. `null` — ран судился доволновой семантикой (флаг `EASYUI_VISUAL_SIGNALS_V2` выключен).
+ */
+export type RunClass = "identical" | "renderer_residual" | "regression" | "indeterminate";
+
+/**
+ * Четыре сигнала рана (E6). Каждый отвечает за своё, и ни один не подменяет остальные:
+ * `dims` — сводимость кадров, `exact` — «отличается ли хоть байт», `perceptual` — историческая
+ * метрика бюджета, `edgeResidual` — **где** лежит остаток.
+ */
+export interface RunSignals {
+  dims: "equal" | "normalized" | "irreconcilable";
+  exact: MetricResult | null;
+  perceptual: MetricResult | null;
+  edgeResidual: EdgeResidual | null;
+  thresholds: { passPct: number; edgeInsidePct: number };
+  /** Причина `indeterminate`: почему кадры не сведены. */
+  reason?: string;
+  /** Причины провала (`regression`) — та же таксономия, что у приёмки (`causes.ts`). */
+  causes?: VisualCause[];
+}
 
 /** Состояние guard'а на ране. `disabled` — аварийный `EASYUI_RENDERER_GUARD_DISABLED=1`. */
 export type RendererGuardState = "matched" | "mismatch" | "unknown" | "disabled";
@@ -188,6 +218,12 @@ export interface RunReport {
   rendererGuard: RendererGuardRecord | null;
   candidateReceiptSha256: string | null;
   referenceReceiptSha256: string | null;
+  /**
+   * R7a: класс рана и четыре сигнала, из которых он получен. `null` у ранов, судимых доволновой
+   * семантикой (флаг выключен), — отсутствие сигналов видимо, а не замаскировано нулями.
+   */
+  class: RunClass | null;
+  signals: RunSignals | null;
   /**
    * Advisory-предупреждения рана. Сегодня единственное — `renderer_unknown`: происхождение
    * эталона неизвестно, вердикт всё равно вынесен по метрикам (нулевой регресс до включения
@@ -345,7 +381,7 @@ export class VisualRepo {
   /** Assemble the honest evidence report for a run row (evidence guard §E.6). */
   runReport(row: VisualRunRow): RunReport {
     const referenceKnown = row.reference_asset_id !== null;
-    const meta: (Record<string, unknown> & { exactRgba?: MetricResult }) | null = row.candidate_meta_json ? JSON.parse(row.candidate_meta_json) : null;
+    const meta: (Record<string, unknown> & { exactRgba?: MetricResult; signalsV2?: { class: RunClass; signals: RunSignals } }) | null = row.candidate_meta_json ? JSON.parse(row.candidate_meta_json) : null;
     const options = row.metric_options_json ? JSON.parse(row.metric_options_json) as Record<string, unknown> : null;
     const metrics: RunReport["metrics"] = {};
     if (referenceKnown && meta?.exactRgba) metrics["exact-rgba"] = meta.exactRgba;
@@ -353,7 +389,14 @@ export class VisualRepo {
       metrics["pixelmatch-v1"] = { diffPixels: row.diff_pixels, totalPixels: row.total_pixels, diffPercent: row.diff_percent };
     }
     const candidateMeta: CandidateMeta | null = meta ? { ...meta } as CandidateMeta : null;
-    if (candidateMeta) delete (candidateMeta as { exactRgba?: unknown }).exactRgba;
+    if (candidateMeta) {
+      // `exactRgba` и `signalsV2` едут в той же колонке (миграции у волны нет — единственная
+      // миграция пакета была в R6), но наружу отдаются собственными полями отчёта, а не
+      // подмешиваются в `candidateMeta`: его форма строго описана контрактом.
+      delete (candidateMeta as { exactRgba?: unknown }).exactRgba;
+      delete (candidateMeta as { signalsV2?: unknown }).signalsV2;
+    }
+    const signalsV2 = referenceKnown ? meta?.signalsV2 ?? null : null;
     const guard = parseGuardRecord(row.renderer_guard);
     return {
       runId: row.id,
@@ -375,6 +418,8 @@ export class VisualRepo {
       rendererGuard: guard,
       candidateReceiptSha256: row.candidate_receipt_sha256 ?? null,
       referenceReceiptSha256: row.reference_receipt_sha256 ?? null,
+      class: signalsV2?.class ?? null,
+      signals: signalsV2?.signals ?? null,
       warnings: guard?.state === "unknown" && row.outcome_code === null ? ["renderer_unknown"] : [],
     };
   }

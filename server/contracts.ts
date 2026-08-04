@@ -539,6 +539,35 @@ export const rendererGuardSchema = z.object({
   flags: z.object({ rendererFlags: z.boolean(), epoch: z.string().nullable() }),
 });
 
+/**
+ * Четыре сигнала визуального рана (R7a, E6). `edgeResidual.insidePct` — доля остатка, лежащая на
+ * контурах самого эталона: `null`, когда остатка нет вовсе (доли у пустого множества не бывает).
+ */
+const edgeResidualSchema = z.object({
+  residualPixels: z.number(), insidePixels: z.number(), outsidePixels: z.number(),
+  insidePct: z.number().nullable(),
+  edgePixels: z.number(), edgeCoveragePct: z.number(),
+  sobelThreshold: z.number(), dilationPx: z.number(),
+});
+const visualCauseSchema = z.object({
+  code: z.string(), confidence: z.number(), detail: z.string(),
+  elementKey: z.string().optional(),
+  region: z.object({
+    bbox: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }),
+    norm: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }),
+    basis: z.enum(["layoutBounds", "canvas"]),
+  }).optional(),
+});
+export const runSignalsSchema = z.object({
+  dims: z.enum(["equal", "normalized", "irreconcilable"]),
+  exact: metricResultSchema.nullable(),
+  perceptual: metricResultSchema.nullable(),
+  edgeResidual: edgeResidualSchema.nullable(),
+  thresholds: z.object({ passPct: z.number(), edgeInsidePct: z.number() }),
+  reason: z.string().optional(),
+  causes: z.array(visualCauseSchema).optional(),
+});
+
 export const runReportSchema = z.object({
   runId: z.string(), referenceId: z.string(),
   status: z.enum(["pass", "fail", "error", "reference_missing", "reference_unknown"]),
@@ -552,10 +581,14 @@ export const runReportSchema = z.object({
   candidateMeta: candidateMetaSchema.nullable(),
   // R6 (cross-renderer guard): типизированный исход поверх `status` (N7 — новых значений `status`
   // не появилось) и обе evidence-ссылки на receipt'ы сравнивавшихся кадров.
-  outcomeCode: z.enum(["renderer_mismatch", "stale_renderer"]).nullable(),
+  outcomeCode: z.enum(["renderer_mismatch", "stale_renderer", "dimensions_irreconcilable"]).nullable(),
   rendererGuard: rendererGuardSchema.nullable(),
   candidateReceiptSha256: z.string().nullable(),
   referenceReceiptSha256: z.string().nullable(),
+  // R7a (разделение метрик): класс рана и четыре сигнала, из которых он получен. `null` — ран
+  // судился доволновой семантикой (`EASYUI_VISUAL_SIGNALS_V2` выключен), и это видимое состояние.
+  class: z.enum(["identical", "renderer_residual", "regression", "indeterminate"]).nullable(),
+  signals: runSignalsSchema.nullable(),
   warnings: z.array(z.string()),
 });
 
@@ -720,6 +753,18 @@ export const getVisualRunContract = registerContract({
   summary: "Poll a visual run: a running placeholder, or the terminal evidence report.",
   responseSchema: z.union([runReportSchema, z.object({ runId: z.string(), referenceId: z.string(), status: z.literal("running"), jobId: z.string() })]),
   errors: [{ status: 404, code: "run_not_found" }],
+});
+
+export const getVisualRunBundleContract = registerContract({
+  method: "GET",
+  path: "/api/visual-runs/{runId}/bundle.zip",
+  summary: "Download the diagnostic bundle of a terminal visual run (ZIP): reference.png, candidate.png, diff-perceptual.png (the diff asset the run produced — never re-rendered), diff-exact.png and edge-mask.png (recomputed on request from both frames with the same pure helpers the run was judged with), reference-receipt.json, candidate-receipt.json, report.json (bundleVersion, the full run report, receipt presence and a per-file note with sha256 and provenance) and SHA256SUMS over every file in the archive. Missing pieces are never invented: an evicted receipt, a reclaimed frame or irreconcilable dimensions come back as an absent file plus a reason in report.json. Entries use a fixed mtime so the same run yields the same archive. Same read authorization as the run report; 409 bundle_not_ready while the run is still running.",
+  contentType: "application/zip",
+  errors: [
+    { status: 404, code: "run_not_found" },
+    { status: 409, code: "bundle_not_ready", description: "the run has not terminalized yet" },
+    { status: 413, code: "evidence_too_large", description: "raw run evidence exceeds limits.evidenceMaxBytes" },
+  ],
 });
 
 // --- T9: remaining endpoints. These contracts are documentation-first (validated: false):

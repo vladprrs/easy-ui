@@ -34504,6 +34504,22 @@
                                       }
                                     ]
                                   },
+                                  "class": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "identical",
+                                          "renderer_residual",
+                                          "regression",
+                                          "indeterminate"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "createdAt": {
                                     "type": "string"
                                   },
@@ -34591,7 +34607,8 @@
                                       {
                                         "enum": [
                                           "renderer_mismatch",
-                                          "stale_renderer"
+                                          "stale_renderer",
+                                          "dimensions_irreconcilable"
                                         ],
                                         "type": "string"
                                       },
@@ -34697,6 +34714,219 @@
                                   "runId": {
                                     "type": "string"
                                   },
+                                  "signals": {
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "causes": {
+                                            "items": {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "code": {
+                                                  "type": "string"
+                                                },
+                                                "confidence": {
+                                                  "type": "number"
+                                                },
+                                                "detail": {
+                                                  "type": "string"
+                                                },
+                                                "elementKey": {
+                                                  "type": "string"
+                                                },
+                                                "region": {
+                                                  "additionalProperties": false,
+                                                  "properties": {
+                                                    "basis": {
+                                                      "enum": [
+                                                        "layoutBounds",
+                                                        "canvas"
+                                                      ],
+                                                      "type": "string"
+                                                    },
+                                                    "bbox": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "height": {
+                                                          "type": "number"
+                                                        },
+                                                        "width": {
+                                                          "type": "number"
+                                                        },
+                                                        "x": {
+                                                          "type": "number"
+                                                        },
+                                                        "y": {
+                                                          "type": "number"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "x",
+                                                        "y",
+                                                        "width",
+                                                        "height"
+                                                      ],
+                                                      "type": "object"
+                                                    },
+                                                    "norm": {
+                                                      "additionalProperties": false,
+                                                      "properties": {
+                                                        "height": {
+                                                          "type": "number"
+                                                        },
+                                                        "width": {
+                                                          "type": "number"
+                                                        },
+                                                        "x": {
+                                                          "type": "number"
+                                                        },
+                                                        "y": {
+                                                          "type": "number"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "x",
+                                                        "y",
+                                                        "width",
+                                                        "height"
+                                                      ],
+                                                      "type": "object"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "bbox",
+                                                    "norm",
+                                                    "basis"
+                                                  ],
+                                                  "type": "object"
+                                                }
+                                              },
+                                              "required": [
+                                                "code",
+                                                "confidence",
+                                                "detail"
+                                              ],
+                                              "type": "object"
+                                            },
+                                            "type": "array"
+                                          },
+                                          "dims": {
+                                            "enum": [
+                                              "equal",
+                                              "normalized",
+                                              "irreconcilable"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "edgeResidual": {
+                                            "anyOf": [
+                                              {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "dilationPx": {
+                                                    "type": "number"
+                                                  },
+                                                  "edgeCoveragePct": {
+                                                    "type": "number"
+                                                  },
+                                                  "edgePixels": {
+                                                    "type": "number"
+                                                  },
+                                                  "insidePct": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "number"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "insidePixels": {
+                                                    "type": "number"
+                                                  },
+                                                  "outsidePixels": {
+                                                    "type": "number"
+                                                  },
+                                                  "residualPixels": {
+                                                    "type": "number"
+                                                  },
+                                                  "sobelThreshold": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "residualPixels",
+                                                  "insidePixels",
+                                                  "outsidePixels",
+                                                  "insidePct",
+                                                  "edgePixels",
+                                                  "edgeCoveragePct",
+                                                  "sobelThreshold",
+                                                  "dilationPx"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "exact": {
+                                            "anyOf": [
+                                              {
+                                                "$ref": "#/$defs/__schema0"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "perceptual": {
+                                            "anyOf": [
+                                              {
+                                                "$ref": "#/$defs/__schema0"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "reason": {
+                                            "type": "string"
+                                          },
+                                          "thresholds": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "edgeInsidePct": {
+                                                "type": "number"
+                                              },
+                                              "passPct": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "passPct",
+                                              "edgeInsidePct"
+                                            ],
+                                            "type": "object"
+                                          }
+                                        },
+                                        "required": [
+                                          "dims",
+                                          "exact",
+                                          "perceptual",
+                                          "edgeResidual",
+                                          "thresholds"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "status": {
                                     "enum": [
                                       "pass",
@@ -34744,6 +34974,8 @@
                                   "rendererGuard",
                                   "candidateReceiptSha256",
                                   "referenceReceiptSha256",
+                                  "class",
+                                  "signals",
                                   "warnings"
                                 ],
                                 "type": "object"
@@ -35607,6 +35839,22 @@
                                 }
                               ]
                             },
+                            "class": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "identical",
+                                    "renderer_residual",
+                                    "regression",
+                                    "indeterminate"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "createdAt": {
                               "type": "string"
                             },
@@ -35694,7 +35942,8 @@
                                 {
                                   "enum": [
                                     "renderer_mismatch",
-                                    "stale_renderer"
+                                    "stale_renderer",
+                                    "dimensions_irreconcilable"
                                   ],
                                   "type": "string"
                                 },
@@ -35800,6 +36049,219 @@
                             "runId": {
                               "type": "string"
                             },
+                            "signals": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "causes": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "code": {
+                                            "type": "string"
+                                          },
+                                          "confidence": {
+                                            "type": "number"
+                                          },
+                                          "detail": {
+                                            "type": "string"
+                                          },
+                                          "elementKey": {
+                                            "type": "string"
+                                          },
+                                          "region": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "basis": {
+                                                "enum": [
+                                                  "layoutBounds",
+                                                  "canvas"
+                                                ],
+                                                "type": "string"
+                                              },
+                                              "bbox": {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "height": {
+                                                    "type": "number"
+                                                  },
+                                                  "width": {
+                                                    "type": "number"
+                                                  },
+                                                  "x": {
+                                                    "type": "number"
+                                                  },
+                                                  "y": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "x",
+                                                  "y",
+                                                  "width",
+                                                  "height"
+                                                ],
+                                                "type": "object"
+                                              },
+                                              "norm": {
+                                                "additionalProperties": false,
+                                                "properties": {
+                                                  "height": {
+                                                    "type": "number"
+                                                  },
+                                                  "width": {
+                                                    "type": "number"
+                                                  },
+                                                  "x": {
+                                                    "type": "number"
+                                                  },
+                                                  "y": {
+                                                    "type": "number"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "x",
+                                                  "y",
+                                                  "width",
+                                                  "height"
+                                                ],
+                                                "type": "object"
+                                              }
+                                            },
+                                            "required": [
+                                              "bbox",
+                                              "norm",
+                                              "basis"
+                                            ],
+                                            "type": "object"
+                                          }
+                                        },
+                                        "required": [
+                                          "code",
+                                          "confidence",
+                                          "detail"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "dims": {
+                                      "enum": [
+                                        "equal",
+                                        "normalized",
+                                        "irreconcilable"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "edgeResidual": {
+                                      "anyOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "dilationPx": {
+                                              "type": "number"
+                                            },
+                                            "edgeCoveragePct": {
+                                              "type": "number"
+                                            },
+                                            "edgePixels": {
+                                              "type": "number"
+                                            },
+                                            "insidePct": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "number"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "insidePixels": {
+                                              "type": "number"
+                                            },
+                                            "outsidePixels": {
+                                              "type": "number"
+                                            },
+                                            "residualPixels": {
+                                              "type": "number"
+                                            },
+                                            "sobelThreshold": {
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": [
+                                            "residualPixels",
+                                            "insidePixels",
+                                            "outsidePixels",
+                                            "insidePct",
+                                            "edgePixels",
+                                            "edgeCoveragePct",
+                                            "sobelThreshold",
+                                            "dilationPx"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "exact": {
+                                      "anyOf": [
+                                        {
+                                          "$ref": "#/$defs/__schema0"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "perceptual": {
+                                      "anyOf": [
+                                        {
+                                          "$ref": "#/$defs/__schema0"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "reason": {
+                                      "type": "string"
+                                    },
+                                    "thresholds": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "edgeInsidePct": {
+                                          "type": "number"
+                                        },
+                                        "passPct": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "passPct",
+                                        "edgeInsidePct"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": [
+                                    "dims",
+                                    "exact",
+                                    "perceptual",
+                                    "edgeResidual",
+                                    "thresholds"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "status": {
                               "enum": [
                                 "pass",
@@ -35847,6 +36309,8 @@
                             "rendererGuard",
                             "candidateReceiptSha256",
                             "referenceReceiptSha256",
+                            "class",
+                            "signals",
                             "warnings"
                           ],
                           "type": "object"
@@ -36401,6 +36865,22 @@
                             }
                           ]
                         },
+                        "class": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "identical",
+                                "renderer_residual",
+                                "regression",
+                                "indeterminate"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "createdAt": {
                           "type": "string"
                         },
@@ -36488,7 +36968,8 @@
                             {
                               "enum": [
                                 "renderer_mismatch",
-                                "stale_renderer"
+                                "stale_renderer",
+                                "dimensions_irreconcilable"
                               ],
                               "type": "string"
                             },
@@ -36594,6 +37075,219 @@
                         "runId": {
                           "type": "string"
                         },
+                        "signals": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "causes": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "code": {
+                                        "type": "string"
+                                      },
+                                      "confidence": {
+                                        "type": "number"
+                                      },
+                                      "detail": {
+                                        "type": "string"
+                                      },
+                                      "elementKey": {
+                                        "type": "string"
+                                      },
+                                      "region": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "basis": {
+                                            "enum": [
+                                              "layoutBounds",
+                                              "canvas"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "bbox": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "height": {
+                                                "type": "number"
+                                              },
+                                              "width": {
+                                                "type": "number"
+                                              },
+                                              "x": {
+                                                "type": "number"
+                                              },
+                                              "y": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "x",
+                                              "y",
+                                              "width",
+                                              "height"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "norm": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "height": {
+                                                "type": "number"
+                                              },
+                                              "width": {
+                                                "type": "number"
+                                              },
+                                              "x": {
+                                                "type": "number"
+                                              },
+                                              "y": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "x",
+                                              "y",
+                                              "width",
+                                              "height"
+                                            ],
+                                            "type": "object"
+                                          }
+                                        },
+                                        "required": [
+                                          "bbox",
+                                          "norm",
+                                          "basis"
+                                        ],
+                                        "type": "object"
+                                      }
+                                    },
+                                    "required": [
+                                      "code",
+                                      "confidence",
+                                      "detail"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                },
+                                "dims": {
+                                  "enum": [
+                                    "equal",
+                                    "normalized",
+                                    "irreconcilable"
+                                  ],
+                                  "type": "string"
+                                },
+                                "edgeResidual": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "dilationPx": {
+                                          "type": "number"
+                                        },
+                                        "edgeCoveragePct": {
+                                          "type": "number"
+                                        },
+                                        "edgePixels": {
+                                          "type": "number"
+                                        },
+                                        "insidePct": {
+                                          "anyOf": [
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "insidePixels": {
+                                          "type": "number"
+                                        },
+                                        "outsidePixels": {
+                                          "type": "number"
+                                        },
+                                        "residualPixels": {
+                                          "type": "number"
+                                        },
+                                        "sobelThreshold": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "residualPixels",
+                                        "insidePixels",
+                                        "outsidePixels",
+                                        "insidePct",
+                                        "edgePixels",
+                                        "edgeCoveragePct",
+                                        "sobelThreshold",
+                                        "dilationPx"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "exact": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/__schema1"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "perceptual": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/__schema1"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "reason": {
+                                  "type": "string"
+                                },
+                                "thresholds": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "edgeInsidePct": {
+                                      "type": "number"
+                                    },
+                                    "passPct": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "passPct",
+                                    "edgeInsidePct"
+                                  ],
+                                  "type": "object"
+                                }
+                              },
+                              "required": [
+                                "dims",
+                                "exact",
+                                "perceptual",
+                                "edgeResidual",
+                                "thresholds"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "enum": [
                             "pass",
@@ -36641,6 +37335,8 @@
                         "rendererGuard",
                         "candidateReceiptSha256",
                         "referenceReceiptSha256",
+                        "class",
+                        "signals",
                         "warnings"
                       ],
                       "type": "object"
@@ -37639,6 +38335,22 @@
                             }
                           ]
                         },
+                        "class": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "identical",
+                                "renderer_residual",
+                                "regression",
+                                "indeterminate"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "createdAt": {
                           "type": "string"
                         },
@@ -37726,7 +38438,8 @@
                             {
                               "enum": [
                                 "renderer_mismatch",
-                                "stale_renderer"
+                                "stale_renderer",
+                                "dimensions_irreconcilable"
                               ],
                               "type": "string"
                             },
@@ -37832,6 +38545,219 @@
                         "runId": {
                           "type": "string"
                         },
+                        "signals": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "causes": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "code": {
+                                        "type": "string"
+                                      },
+                                      "confidence": {
+                                        "type": "number"
+                                      },
+                                      "detail": {
+                                        "type": "string"
+                                      },
+                                      "elementKey": {
+                                        "type": "string"
+                                      },
+                                      "region": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "basis": {
+                                            "enum": [
+                                              "layoutBounds",
+                                              "canvas"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "bbox": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "height": {
+                                                "type": "number"
+                                              },
+                                              "width": {
+                                                "type": "number"
+                                              },
+                                              "x": {
+                                                "type": "number"
+                                              },
+                                              "y": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "x",
+                                              "y",
+                                              "width",
+                                              "height"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "norm": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "height": {
+                                                "type": "number"
+                                              },
+                                              "width": {
+                                                "type": "number"
+                                              },
+                                              "x": {
+                                                "type": "number"
+                                              },
+                                              "y": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "x",
+                                              "y",
+                                              "width",
+                                              "height"
+                                            ],
+                                            "type": "object"
+                                          }
+                                        },
+                                        "required": [
+                                          "bbox",
+                                          "norm",
+                                          "basis"
+                                        ],
+                                        "type": "object"
+                                      }
+                                    },
+                                    "required": [
+                                      "code",
+                                      "confidence",
+                                      "detail"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                },
+                                "dims": {
+                                  "enum": [
+                                    "equal",
+                                    "normalized",
+                                    "irreconcilable"
+                                  ],
+                                  "type": "string"
+                                },
+                                "edgeResidual": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "dilationPx": {
+                                          "type": "number"
+                                        },
+                                        "edgeCoveragePct": {
+                                          "type": "number"
+                                        },
+                                        "edgePixels": {
+                                          "type": "number"
+                                        },
+                                        "insidePct": {
+                                          "anyOf": [
+                                            {
+                                              "type": "number"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "insidePixels": {
+                                          "type": "number"
+                                        },
+                                        "outsidePixels": {
+                                          "type": "number"
+                                        },
+                                        "residualPixels": {
+                                          "type": "number"
+                                        },
+                                        "sobelThreshold": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "required": [
+                                        "residualPixels",
+                                        "insidePixels",
+                                        "outsidePixels",
+                                        "insidePct",
+                                        "edgePixels",
+                                        "edgeCoveragePct",
+                                        "sobelThreshold",
+                                        "dilationPx"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "exact": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/__schema0"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "perceptual": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/__schema0"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "reason": {
+                                  "type": "string"
+                                },
+                                "thresholds": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "edgeInsidePct": {
+                                      "type": "number"
+                                    },
+                                    "passPct": {
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "passPct",
+                                    "edgeInsidePct"
+                                  ],
+                                  "type": "object"
+                                }
+                              },
+                              "required": [
+                                "dims",
+                                "exact",
+                                "perceptual",
+                                "edgeResidual",
+                                "thresholds"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "status": {
                           "enum": [
                             "pass",
@@ -37879,6 +38805,8 @@
                         "rendererGuard",
                         "candidateReceiptSha256",
                         "referenceReceiptSha256",
+                        "class",
+                        "signals",
                         "warnings"
                       ],
                       "type": "object"
@@ -37926,6 +38854,61 @@
           }
         },
         "summary": "Poll a visual run: a running placeholder, or the terminal evidence report.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/visual-runs/{runId}/bundle.zip": {
+      "get": {
+        "operationId": "get_visual_runs_runId_bundle_zip",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {}
+            },
+            "description": "Success"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "run_not_found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "bundle_not_ready (the run has not terminalized yet)"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "evidence_too_large (raw run evidence exceeds limits.evidenceMaxBytes)"
+          }
+        },
+        "summary": "Download the diagnostic bundle of a terminal visual run (ZIP): reference.png, candidate.png, diff-perceptual.png (the diff asset the run produced — never re-rendered), diff-exact.png and edge-mask.png (recomputed on request from both frames with the same pure helpers the run was judged with), reference-receipt.json, candidate-receipt.json, report.json (bundleVersion, the full run report, receipt presence and a per-file note with sha256 and provenance) and SHA256SUMS over every file in the archive. Missing pieces are never invented: an evicted receipt, a reclaimed frame or irreconcilable dimensions come back as an absent file plus a reason in report.json. Entries use a fixed mtime so the same run yields the same archive. Same read authorization as the run report; 409 bundle_not_ready while the run is still running.",
         "x-easyui-validated": false
       }
     }

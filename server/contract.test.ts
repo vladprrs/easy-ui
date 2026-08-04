@@ -244,6 +244,7 @@ function orderedCases(): [string, Case][] {
     ["GET /api/visual-references/{id}", { run: () => call("GET", `/api/visual-references/${state.referenceId}`), expected: ok() }],
     ["POST /api/visual-references/{id}/check", { run: () => call("POST", `/api/visual-references/${state.referenceId}/check`, {}), expected: err(501, "screenshot_unavailable") }],
     ["GET /api/visual-runs/{runId}", { run: () => call("GET", "/api/visual-runs/nope"), expected: err(404, "run_not_found") }],
+    ["GET /api/visual-runs/{runId}/bundle.zip", { run: () => call("GET", "/api/visual-runs/nope/bundle.zip"), expected: err(404, "run_not_found") }],
     // Components: create/save/read happy paths; publish is exercised as its CAS error
     // envelope (activation runs typecheck + import — out of scope for a contract test)
     ["POST /api/components", { run: () => call("POST", "/api/components", { id: "contract-stars", name: "ContractStars", source: componentSource, designSystem:"contract-ds", intent: "Interactive rating stars for product cards" }), expected: ok(201) }],

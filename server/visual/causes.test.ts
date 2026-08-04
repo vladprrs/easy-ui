@@ -123,7 +123,34 @@ test("edge-radius-stroke: тонкие полосы по периметру ко
   }))).toBeNull();
 });
 
-test("text-raster-residual: строгая метрика значима, AA-терпимая почти нулевая", () => {
+test("text-raster-residual: edge-маска решает одна — AA-эвристика в этом случае не голосует (R7a, T-M9)", () => {
+  // Остаток лежит на контурах эталона ⇒ растровый, даже когда AA-метрика **не** схлопывается
+  // (сдвиг глифа на 1 px даёт aa/raw ≈ 0,6 — доволновая эвристика здесь молчала бы).
+  const onEdges = classifyTextRasterResidual(input({
+    visual: visual({
+      rawDiffPct: 4.35, aaDiffPct: 2.57, totalRegions: 38,
+      edgeResidual: { residualPixels: 11138, insidePixels: 10995, outsidePixels: 143, insidePct: 98.72 },
+    }),
+  }));
+  expect(onEdges?.code).toBe("text-raster-residual");
+  expect(onEdges!.detail).toContain("reference's own edges");
+
+  // Остаток вне контуров ⇒ не растровый, сколь угодно «текстовые» AA-метрики его не спасают:
+  // это и есть инвариант волны, перенесённый на уровень классификатора.
+  expect(classifyTextRasterResidual(input({
+    visual: visual({
+      rawDiffPct: 1.4, aaDiffPct: 0.05, totalRegions: 6,
+      edgeResidual: { residualPixels: 948, insidePixels: 481, outsidePixels: 467, insidePct: 50.74 },
+    }),
+  }))).toBeNull();
+
+  // Пустой остаток — сравнивать нечего.
+  expect(classifyTextRasterResidual(input({
+    visual: visual({ rawDiffPct: 1.4, aaDiffPct: 0.05, totalRegions: 6, edgeResidual: { residualPixels: 0, insidePixels: 0, outsidePixels: 0, insidePct: null } }),
+  }))).toBeNull();
+});
+
+test("text-raster-residual (фолбэк без edge-маски): строгая метрика значима, AA-терпимая почти нулевая", () => {
   const text = classifyTextRasterResidual(input({
     visual: visual({
       rawDiffPct: 1.4, aaDiffPct: 0.05,

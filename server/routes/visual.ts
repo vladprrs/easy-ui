@@ -1,9 +1,13 @@
 import type { Database } from "bun:sqlite";
+import { zipSync, type Zippable } from "fflate";
 import { ApiError, json, noStore, readJson } from "../http";
 import { parseWith } from "../contracts";
 import { fingerprintSchema } from "../visual/fingerprint";
 import { resolveReferenceRenderer, VisualRepo } from "../visual/repo";
+import type { RunReport } from "../visual/repo";
+import { buildVisualRunBundle } from "../visual/service";
 import type { VisualService } from "../visual/service";
+import { zipResponse } from "./bundles";
 import { routeVisualBaselines } from "./visualBaselines";
 import type {Principal} from "../auth";
 import {requirePrototypeOwner,requirePrototypeRead,requireResourceOwner} from "../authorization";
@@ -40,6 +44,10 @@ export async function routeVisual(request: Request, db: Database, dataDir: strin
   if (segments[0] === "visual-runs" && segments.length === 2) {
     if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
     return getRun(db, dataDir, segments[1]!, principal,service);
+  }
+  if (segments[0] === "visual-runs" && segments.length === 3 && segments[2] === "bundle.zip") {
+    if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+    return await runBundle(db, dataDir, segments[1]!, principal, service);
   }
   return null;
 }
@@ -108,6 +116,41 @@ async function checkReference(request: Request, id: string, service?: VisualServ
   const result = service.check(id, { threshold,rev,version });
   return json(result, 202, noStore);
 }
+
+/**
+ * R7b: `GET /api/visual-runs/:runId/bundle.zip` — diagnostic bundle одного рана.
+ *
+ * Авторизация — та же, что у `GET /api/visual-runs/:runId` (чтение эталона, из которого ран
+ * рождён): архив не показывает ничего, чего не показывает отчёт, — он показывает то же **вместе**
+ * и самопроверяемо (`SHA256SUMS`). Нетерминальный ран — `409 bundle_not_ready`: у бегущего рана нет
+ * ни кадра кандидата, ни вердикта, и «пустой архив» был бы хуже честного отказа (канон
+ * `evidence_not_ready` acceptance-приёмки).
+ */
+async function runBundle(db: Database, dataDir: string, runId: string, principal: Principal, service?: VisualService): Promise<Response> {
+  const repo = new VisualRepo(db, dataDir);
+  let report: RunReport | null = null;
+  if (service) {
+    const view = service.get(runId);
+    if (!view) throw new ApiError(404, "run_not_found", "Visual run not found");
+    if (view.kind === "running") {
+      assertFingerprintRead(db, referenceFingerprint(repo, view.referenceId), principal);
+      throw new ApiError(409, "bundle_not_ready", "Visual run is still running; the bundle exists once the run terminalizes");
+    }
+    report = view.report;
+  } else {
+    const row = repo.getRun(runId);
+    if (!row) throw new ApiError(404, "run_not_found", "Visual run not found");
+    report = repo.runReport(row);
+  }
+  assertFingerprintRead(db, referenceFingerprint(repo, report.referenceId), principal);
+  const entries = await buildVisualRunBundle(db, dataDir, report);
+  const files: Zippable = {};
+  for (const entry of entries) files[entry.name] = [entry.bytes, { level: entry.compress ? 6 : 0 }];
+  return zipResponse(zipSync(files, { mtime: BUNDLE_MTIME }), `easy-ui-visual-run-${runId}.zip`);
+}
+
+/** Фиксированный mtime (канон acceptance-evidence): архив одного рана обязан быть воспроизводим побайтно. */
+const BUNDLE_MTIME = new Date("2020-01-01T00:00:00Z");
 
 function getRun(db: Database, dataDir: string, runId: string, principal:Principal,service?: VisualService): Response {
   if (service) {

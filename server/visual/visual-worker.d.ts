@@ -16,8 +16,16 @@ declare module "*/visual-diff-worker.mjs" {
   /** Режим `normalize` (план 2026-08-03 §5 W5a): crop эталона, pad до общего холста, метрики случая. */
   interface Dims { width: number; height: number }
   interface DiffRegion { bbox: { x: number; y: number; width: number; height: number }; areaPct: number; meanDelta: number }
+  /** Разбиение остатка по edge-маске эталона (R7a). */
+  interface EdgeResidualStats {
+    residualPixels: number; insidePixels: number; outsidePixels: number;
+    insidePct: number | null;
+    edgePixels: number; edgeCoveragePct: number;
+    sobelThreshold: number; dilationPx: number;
+  }
   interface NormalizedMetrics {
     rawDiffPct: number; aaDiffPct: number;
+    edgeResidual?: EdgeResidualStats;
     rawDiffPixels: number; aaDiffPixels: number; totalPixels: number;
     maxChannelDelta: number;
     channelStats: {
@@ -50,8 +58,50 @@ declare module "*/visual-diff-worker.mjs" {
       cropRect?: [number, number, number, number] | number[];
       maxDimensionDeltaPx?: number; rawThreshold?: number; aaThreshold?: number;
       maxRegions?: number; offsetWindow?: number;
+      /** R7a: считать edge-сигнал явно (`true`/`false` сильнее env-флага `EASYUI_VISUAL_SIGNALS_V2`). */
+      edge?: boolean;
+      edgeOptions?: { sobelThreshold?: number; dilation?: number };
     },
   ): NormalizeIndeterminate | NormalizeMeasured;
+  /** Режим `signals` (план renderer-contract-2 §3 E6, §5 R7a). */
+  interface SignalsIndeterminate {
+    ok: true; mode: "signals"; dims: "irreconcilable"; indeterminate: true; reason: string;
+    refDims: Dims; candDims: Dims;
+    dimensionDelta: { width: number; height: number; tolerancePx: number };
+  }
+  interface SignalsMeasured {
+    ok: true; mode: "signals"; dims: "equal" | "normalized"; indeterminate: false;
+    refDims: Dims; candDims: Dims; canvas: Dims; padded: { reference: boolean; candidate: boolean };
+    exact: { diffPixels: number; totalPixels: number };
+    pixelmatch: { diffPixels: number; totalPixels: number; options: { threshold: number; includeAA: boolean } };
+    edgeResidual: EdgeResidualStats;
+    metrics: NormalizedMetrics;
+    diffPngBase64: string;
+  }
+  export function compareWithSignals(
+    referencePng: Uint8Array | Buffer,
+    candidatePng: Uint8Array | Buffer,
+    options?: {
+      threshold?: number; includeAA?: boolean; maxDimensionDeltaPx?: number;
+      maxRegions?: number; offsetWindow?: number;
+      edgeOptions?: { sobelThreshold?: number; dilation?: number };
+    },
+  ): SignalsIndeterminate | SignalsMeasured;
+  export function edgeMaskOf(
+    data: Uint8Array | Buffer, width: number, height: number,
+    options?: { sobelThreshold?: number; dilation?: number },
+  ): { mask: Uint8Array; edgePixels: number; sobelThreshold: number; dilationPx: number };
+  export function exactDiffMaskOf(
+    refData: Uint8Array | Buffer, candData: Uint8Array | Buffer, total: number,
+  ): { mask: Uint8Array; diffPixels: number };
+  export function edgeResidualOf(
+    diffMask: Uint8Array, edge: { mask: Uint8Array; edgePixels: number; sobelThreshold: number; dilationPx: number },
+    total: number, canvasPixels: number,
+  ): EdgeResidualStats;
+  export function luminanceOf(data: Uint8Array | Buffer, total: number): Float32Array;
+  export const EDGE_SOBEL_THRESHOLD: number;
+  export const EDGE_DILATION_PX: number;
+  export const EDGE_RESIDUAL_MIN_PCT: number;
   export const RAW_THRESHOLD: number;
   export const AA_THRESHOLD: number;
   export const DEFAULT_MAX_DIMENSION_DELTA_PX: number;
