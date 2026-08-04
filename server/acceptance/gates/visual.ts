@@ -215,3 +215,21 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
 }
 
 export const visualGate: Gate = createVisualGate();
+
+/**
+ * Вход **re-diff** (план 2026-08-04, D-B): пересравнение уже снятого кадра с новым эталоном.
+ *
+ * Кадр не снимается: `paintSha` — адрес `paint.png` строки кэша, чей `frameFingerprint` совпал с
+ * отпечатком кадра нового случая. Физическое существование артефакта проверяет вызывающий
+ * (`artifactPresent`) — отсутствующий кадр означает пересъёмку с причиной
+ * `recapture:frame_missing`, а не «сравним с чем-нибудь» (D10/D15).
+ *
+ * Гейт при этом исполняется **обычным путём**: тот же код, тот же воркер, те же артефакты и
+ * метрики. Разница ровно одна — источник кандидатского кадра. Именно поэтому re-diff даёт честный
+ * новый `rawDiffPct`, а не пересчитанный старый (анти-репро C0: смена эталона обязана мерить
+ * заново, а не арифметически переоценивать прошлое измерение).
+ */
+export async function rediffCase(ctx: GateContext, paintSha: string, gate: Gate = visualGate): Promise<GateResult> {
+  ctx.shared.set(paintShaKey(ctx.case.caseId), paintSha);
+  return gate.run(ctx);
+}

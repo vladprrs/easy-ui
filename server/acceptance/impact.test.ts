@@ -406,6 +406,58 @@ test("вычищенные артефакты baseline отменяют пере
   harness.db.close();
 });
 
+/**
+ * Перенос вердикта baseline **через границу вердиктной политики** (план 2026-08-04, D-B/D14).
+ *
+ * До этой волны `carryBaselineCase` переносил вердикт, не сравнивая политику вовсе: ран под
+ * `pixel-strict-v1` наследовал вердикты, посчитанные мягким профилем, и матрица выглядела
+ * пройденной. Теперь перенос проходит тот же каскад, что и обычный reuse.
+ */
+test("перенос baseline через смену профиля идёт каскадом, а не наследованием", async () => {
+  const harness = await setup();
+  const baseCandidate = await harness.candidateFor({ rev: 1, source: SOURCE_A });
+  const first = await runFor(harness, baseCandidate);
+  expect(first.run.status).toBe("pass");
+
+  const next = await harness.candidateFor({ rev: 2, source: SOURCE_A_SWAPPED });
+  const started = await harness.orchestrator.startRun({
+    candidateId: next.candidate_id, createdBy: "user_a", cases: CASES,
+    baselineRunId: first.run.run_id, policyId: "pixel-strict-v1",
+  });
+  const run = await harness.orchestrator.executeRun(started.run.run_id);
+
+  // Незатронутые случаи не сняты заново — но и не унаследованы молча. `pixel-strict-v1` меняет и
+  // допуск сводимости размеров (слой сравнения), и пороги (слой вердикта), поэтому каскад выбирает
+  // самый дешёвый **достаточный** путь — re-diff кадра baseline, — и называет обе половины
+  // основания в `reuse_reason`. Полного reuse тут нет ни у одного случая.
+  expect(reuseReasons(harness, run.run_id).b1).toBe("impact:asset-only+rediff:comparison");
+  const progress = JSON.parse(run.progress_json) as { reused: number; frameReused: number; rediffed: number };
+  expect(progress.reused).toBe(0);
+  expect(progress.rediffed).toBeGreaterThan(0);
+  expect(progress.frameReused).toBeGreaterThan(0);
+  // `pixel-strict-v1` требует визуального вердикта, а у examples-случая эталона нет: перенесённый
+  // `pass` превращается в честный `indeterminate` (D10), а не остаётся зелёным.
+  expect(harness.repo.cases(run.run_id).find((row) => row.case_id === "b1")!.verdict).toBe("indeterminate");
+  harness.db.close();
+});
+
+test("перенос отказан, если вердиктную политику baseline нечем проверить (D0/D14)", async () => {
+  const harness = await setup();
+  const baseCandidate = await harness.candidateFor({ rev: 1, source: SOURCE_A });
+  const first = await runFor(harness, baseCandidate);
+  // Строка baseline без слоёв — форма до миграции v29 (или откат образа): «по какой политике
+  // считался этот вердикт» неизвестно, и перенос обязан уступить съёмке.
+  harness.db.run("UPDATE acceptance_cases SET verdict_policy_hash=NULL WHERE run_id=?", [first.run.run_id]);
+  const before = harness.service.calls.length;
+
+  const next = await harness.candidateFor({ rev: 2, source: SOURCE_A_SWAPPED });
+  const second = await runFor(harness, next, first.run.run_id);
+  expect(second.impact?.basis).toBe("asset-only");
+  expect(Object.values(reuseReasons(harness, second.run.run_id)).every((reason) => reason === null)).toBe(true);
+  expect(harness.service.calls.length).toBeGreaterThan(before);
+  harness.db.close();
+});
+
 test("refresh перебивает импакт: явный форс дороже, но он — прямое указание автора", async () => {
   const harness = await setup();
   const baseCandidate = await harness.candidateFor({ rev: 1, source: SOURCE_A });

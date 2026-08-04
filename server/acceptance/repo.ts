@@ -85,6 +85,10 @@ export interface AcceptanceRunRow {
   component_id: string;
   idempotency_key: string | null;
   status: AcceptanceRunStatus;
+  /** Алгебра refresh рана (v29): `{requested, impact, effective}`; NULL — ран до-миграционный. */
+  refresh_json: string | null;
+  /** Причина терминального статуса (`refresh_scope_empty`, D2). */
+  status_reason: string | null;
   policy_profile_hash: string;
   case_set_id: string | null;
   policy_profile_id: string;
@@ -116,6 +120,12 @@ export interface AcceptanceCaseRow {
   reuse_reason: string | null;
   started_at: string | null;
   finished_at: string | null;
+  /** Слои отпечатка (v29). NULL — строка до-миграционная: слой неизвестен, carry запрещён (D17). */
+  frame_fingerprint: string | null;
+  comparison_fingerprint: string | null;
+  verdict_policy_hash: string | null;
+  /** Квитанция reuse (форма W8); пишется с W1, читается evidence'ом с W8. */
+  reuse_receipt_json: string | null;
 }
 
 export interface AcceptanceCaseResultRow {
@@ -127,6 +137,12 @@ export interface AcceptanceCaseResultRow {
   produced_run_id: string;
   created_at: string;
   last_used_at: string;
+  /** Слои отпечатка (v29); NULL — legacy-строка, кандидатом на recompute/re-diff не является. */
+  frame_fingerprint: string | null;
+  comparison_fingerprint: string | null;
+  verdict_policy_hash: string | null;
+  /** Снимок эффективной вердиктной политики случая (D0/D14); NULL ⇒ дельта невычислима ⇒ recapture. */
+  verdict_policy_json: string | null;
 }
 
 export interface CreateCandidateInput {
@@ -155,6 +171,8 @@ export interface CreateRunInput {
   progress?: unknown;
   gates?: unknown;
   cases?: NewCaseInput[];
+  /** Алгебра refresh рана (C1): `{requested, impact, effective}`. */
+  refresh?: unknown;
 }
 
 export interface NewCaseInput {
@@ -166,6 +184,10 @@ export interface NewCaseInput {
   referenceAssetId?: string | null;
   expectedGeometry?: unknown;
   aliasOfCaseId?: string | null;
+  /** Слои отпечатка (v29): считаются на постановке той же функцией, что и в раннере (D7). */
+  frameFingerprint?: string | null;
+  comparisonFingerprint?: string | null;
+  verdictPolicyHash?: string | null;
 }
 
 export interface CasePatch {
@@ -177,6 +199,8 @@ export interface CasePatch {
   reuseReason?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
+  /** Квитанция reuse случая (W8-форма, пишется с W1). */
+  reuseReceipt?: unknown;
 }
 
 export interface TerminalizeRunInput {
@@ -186,6 +210,8 @@ export interface TerminalizeRunInput {
   impact?: unknown;
   evidenceManifestHash?: string | null;
   finishedAt?: string;
+  /** Названная причина терминального статуса (`refresh_scope_empty`, D2). */
+  statusReason?: string | null;
 }
 
 export interface PutCaseResultInput {
@@ -195,6 +221,11 @@ export interface PutCaseResultInput {
   metrics: unknown;
   verdict: string;
   producedRunId: string;
+  /** Слои отпечатка и снимок вердиктной политики (v29); без них строка не годна для reuse-каскада. */
+  frameFingerprint?: string | null;
+  comparisonFingerprint?: string | null;
+  verdictPolicyHash?: string | null;
+  verdictPolicy?: unknown;
 }
 
 const json = (value: unknown): string => JSON.stringify(value ?? null);
@@ -370,10 +401,11 @@ export class AcceptanceRepo {
           { runId: inFlight.run_id });
         this.db.query(`INSERT INTO acceptance_runs
           (run_id,candidate_id,component_id,idempotency_key,status,policy_profile_hash,case_set_id,policy_profile_id,
-           progress_json,impact_json,gates_json,evidence_manifest_hash,started_at,finished_at,created_by,created_at)
-          VALUES (?,?,?,?,'queued',?,?,?,?,NULL,?,NULL,NULL,NULL,?,?)`)
+           progress_json,impact_json,gates_json,evidence_manifest_hash,started_at,finished_at,created_by,created_at,refresh_json)
+          VALUES (?,?,?,?,'queued',?,?,?,?,NULL,?,NULL,NULL,NULL,?,?,?)`)
           .run(id, input.candidateId, input.componentId, key, input.policyProfileHash, input.caseSetId ?? null,
-            input.policyProfileId, json(input.progress ?? {}), json(input.gates ?? {}), input.createdBy, createdAt);
+            input.policyProfileId, json(input.progress ?? {}), json(input.gates ?? {}), input.createdBy, createdAt,
+            jsonOrNull(input.refresh));
         for (const item of input.cases ?? []) this.insertCase(id, item);
         this.attachRun(input.candidateId, id);
         return { run: this.requireRun(id), cached: false };
@@ -430,10 +462,11 @@ export class AcceptanceRepo {
       if (isTerminalRunStatus(row.status)) return row;
       this.db.query(`UPDATE acceptance_runs SET status=?, finished_at=?,
           gates_json=COALESCE(?,gates_json), progress_json=COALESCE(?,progress_json),
-          impact_json=COALESCE(?,impact_json), evidence_manifest_hash=COALESCE(?,evidence_manifest_hash)
+          impact_json=COALESCE(?,impact_json), evidence_manifest_hash=COALESCE(?,evidence_manifest_hash),
+          status_reason=COALESCE(?,status_reason)
         WHERE run_id=? AND status IN ('queued','running')`)
         .run(input.status, input.finishedAt ?? now(), jsonOrNull(input.gates), jsonOrNull(input.progress),
-          jsonOrNull(input.impact), input.evidenceManifestHash ?? null, id);
+          jsonOrNull(input.impact), input.evidenceManifestHash ?? null, input.statusReason ?? null, id);
       return this.requireRun(id);
     })();
   }
@@ -463,10 +496,12 @@ export class AcceptanceRepo {
   insertCase(runId: string, item: NewCaseInput): void {
     this.db.query(`INSERT INTO acceptance_cases
       (run_id,case_id,case_key,props_hash,case_fingerprint,case_policy_hash,reference_asset_id,expected_geometry_json,
-       status,verdict,gates_json,severity_json,capture_quality_json,alias_of_case_id,reuse_reason,started_at,finished_at)
-      VALUES (?,?,?,?,?,?,?,?,'pending',NULL,NULL,NULL,NULL,?,NULL,NULL,NULL)`)
+       status,verdict,gates_json,severity_json,capture_quality_json,alias_of_case_id,reuse_reason,started_at,finished_at,
+       frame_fingerprint,comparison_fingerprint,verdict_policy_hash,reuse_receipt_json)
+      VALUES (?,?,?,?,?,?,?,?,'pending',NULL,NULL,NULL,NULL,?,NULL,NULL,NULL,?,?,?,NULL)`)
       .run(runId, item.caseId, item.caseKey, item.propsHash, item.caseFingerprint, item.casePolicyHash,
-        item.referenceAssetId ?? null, jsonOrNull(item.expectedGeometry), item.aliasOfCaseId ?? null);
+        item.referenceAssetId ?? null, jsonOrNull(item.expectedGeometry), item.aliasOfCaseId ?? null,
+        item.frameFingerprint ?? null, item.comparisonFingerprint ?? null, item.verdictPolicyHash ?? null);
   }
 
   cases(runId: string): AcceptanceCaseRow[] {
@@ -488,6 +523,7 @@ export class AcceptanceRepo {
     if (patch.severity !== undefined) push("severity_json", jsonOrNull(patch.severity));
     if (patch.captureQuality !== undefined) push("capture_quality_json", jsonOrNull(patch.captureQuality));
     if (patch.reuseReason !== undefined) push("reuse_reason", patch.reuseReason);
+    if (patch.reuseReceipt !== undefined) push("reuse_receipt_json", jsonOrNull(patch.reuseReceipt));
     if (patch.startedAt !== undefined) push("started_at", patch.startedAt);
     if (patch.finishedAt !== undefined) push("finished_at", patch.finishedAt);
     if (sets.length) {
@@ -507,13 +543,46 @@ export class AcceptanceRepo {
    */
   putCaseResult(input: PutCaseResultInput, at = now()): void {
     this.db.query(`INSERT INTO acceptance_case_results
-      (case_fingerprint,component_id,artifacts_json,metrics_json,verdict,produced_run_id,created_at,last_used_at)
-      VALUES (?,?,?,?,?,?,?,?)
+      (case_fingerprint,component_id,artifacts_json,metrics_json,verdict,produced_run_id,created_at,last_used_at,
+       frame_fingerprint,comparison_fingerprint,verdict_policy_hash,verdict_policy_json)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT (case_fingerprint) DO UPDATE SET
         artifacts_json=excluded.artifacts_json, metrics_json=excluded.metrics_json,
-        verdict=excluded.verdict, produced_run_id=excluded.produced_run_id, last_used_at=excluded.last_used_at`)
+        verdict=excluded.verdict, produced_run_id=excluded.produced_run_id, last_used_at=excluded.last_used_at,
+        frame_fingerprint=excluded.frame_fingerprint, comparison_fingerprint=excluded.comparison_fingerprint,
+        verdict_policy_hash=excluded.verdict_policy_hash, verdict_policy_json=excluded.verdict_policy_json`)
       .run(input.caseFingerprint, input.componentId, json(input.artifacts), json(input.metrics),
-        input.verdict, input.producedRunId, at, at);
+        input.verdict, input.producedRunId, at, at,
+        input.frameFingerprint ?? null, input.comparisonFingerprint ?? null,
+        input.verdictPolicyHash ?? null, jsonOrNull(input.verdictPolicy));
+  }
+
+  /**
+   * Кандидат на **recompute** (D6/D15): совпали кадр и сравнение, разошёлся вердиктный слой.
+   * Точный lookup: пересчитывать вердикт по метрикам, снятым с другим эталоном или другой
+   * нормализацией, нельзя ни при каких обстоятельствах — это и есть анти-репро C0.
+   *
+   * NULL-слои не находятся by construction: сравнение с NULL в SQL ложно, поэтому legacy-строка
+   * (v28) уводит в пересъёмку молча и безопасно (D17).
+   */
+  caseResultForFrameComparison(frame: string, comparison: string, componentId: string): AcceptanceCaseResultRow | undefined {
+    return (this.db.query(`SELECT * FROM acceptance_case_results
+      WHERE component_id=? AND frame_fingerprint=? AND comparison_fingerprint=?
+      ORDER BY last_used_at DESC LIMIT 1`)
+      .get(componentId, frame, comparison) as AcceptanceCaseResultRow | null) ?? undefined;
+  }
+
+  /**
+   * Кандидат на **re-diff** и источник вердикта для `forceOf("failed")` (C19/C29/D15): совпал
+   * только кадр. Сортировка по `last_used_at DESC` — не косметика: под один кадр могут лежать
+   * несколько строк (разные эталоны/политики), и брать надо последнюю использованную, а не
+   * произвольную строку выборки.
+   */
+  caseResultForFrame(frame: string, componentId: string): AcceptanceCaseResultRow | undefined {
+    return (this.db.query(`SELECT * FROM acceptance_case_results
+      WHERE component_id=? AND frame_fingerprint=?
+      ORDER BY last_used_at DESC LIMIT 1`)
+      .get(componentId, frame) as AcceptanceCaseResultRow | null) ?? undefined;
   }
 
   caseResult(caseFingerprint: string): AcceptanceCaseResultRow | undefined {

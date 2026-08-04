@@ -1536,9 +1536,39 @@ const acceptanceCandidateFields = {
 };
 
 const acceptanceRunStatusSchema = z.enum(["queued", "running", "pass", "pass_with_exceptions", "fail", "error", "cancelled"]);
+/**
+ * Прогресс рана. Счётчики reuse разведены планом 2026-08-04 (D9), потому что одно поле `reused`
+ * было двусмысленным (P2-10 фидбэка): `reused` — только полный reuse по `case_fingerprint`;
+ * `frameReused` — кадр взят из CAS (надмножество: сюда попадают recompute и re-diff);
+ * `verdictRecomputed` — вердикт пересчитан по сохранённым метрикам под новой политикой;
+ * `rediffed` — кадр пересравнён с новым эталоном без съёмки.
+ */
 const acceptanceProgressSchema = z.looseObject({
   total: z.number(), completed: z.number(), reused: z.number(), failed: z.number(), running: z.number(),
+  frameReused: z.number().optional(), verdictRecomputed: z.number().optional(), rediffed: z.number().optional(),
   eta: z.looseObject({ secondsRemaining: z.number(), basis: z.enum(["measured", "estimate"]) }).optional(),
+});
+
+/** Кого форсит один скоуп refresh: всех, только упавших, либо перечисленные случаи. */
+const acceptanceRefreshTargetSchema = z.looseObject({
+  all: z.boolean(), failed: z.boolean(), caseIds: z.array(z.string()),
+});
+/**
+ * План refresh со скоупами (план 2026-08-04, C1). `frame` — пересъёмка кадра, `verdict` —
+ * переоценка вердикта над переиспользованным кадром: `--refresh failed` по умолчанию именно
+ * verdict-скоуп, а `--recapture` поднимает его до frame.
+ */
+const acceptanceRefreshPlanSchema = z.looseObject({
+  frame: acceptanceRefreshTargetSchema, verdict: acceptanceRefreshTargetSchema,
+});
+/**
+ * Алгебра рана: `effective = requested ∪ impact`. Импакт-часть **не форсит** пересъёмку — она
+ * запрещает перенос вердикта baseline; отпечаток доказывает строго больше, чем импакт.
+ */
+const acceptanceRefreshAlgebraSchema = z.looseObject({
+  requested: acceptanceRefreshPlanSchema,
+  impact: acceptanceRefreshPlanSchema,
+  effective: acceptanceRefreshPlanSchema,
 });
 /**
  * Результат одного гейта случая. `metrics` — свободный мешок измерений гейта (форма зависит от
@@ -1605,6 +1635,10 @@ const acceptanceRunViewSchema = z.looseObject({
   gates: z.unknown(), evidenceManifestHash: z.string().nullable(),
   /** W6: план частичной пересъёмки, применённый к рану; `null` — импакт не считался. */
   impact: acceptanceImpactSchema.nullable(),
+  /** Алгебра refresh (C1); `null` — ран поставлен до миграции v29. */
+  refresh: acceptanceRefreshAlgebraSchema.nullable(),
+  /** Причина терминального статуса (`refresh_scope_empty`, D2); `null` у обычного исхода. */
+  statusReason: z.string().nullable(),
   remediationGroups: z.array(acceptanceRemediationGroupSchema),
   createdAt: isoDate, startedAt: isoDate.nullable(), finishedAt: isoDate.nullable(),
   failedCases: z.array(z.looseObject({
@@ -1672,7 +1706,7 @@ export const rejectComponentCandidateContract = registerContract({
 
 export const createAcceptanceRunContract = registerContract({
   method: "POST", path: "/api/acceptance-runs",
-  summary: "Queue a matrix acceptance run over the candidate's cases. The case set comes either from a published case-set manifest (`caseSetId`, wave W2 — it also supplies the capture surface, per-case reference assets, expected geometry and per-case policy) or, by default, from the candidate's named examples; `cases` and `caseSetId` are mutually exclusive. The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh` controls reuse: `\"none\"` (default) reuses every cached case result, `\"failed\"` recaptures only the cases whose previous result for the same fingerprint was fail/indeterminate, `\"all\"` recaptures everything, and `{caseIds:[…]}` recaptures the listed cases (unknown id → 422 unknown_case_id; a listed alias forces its target). The forcing reason is recorded per case in `reuseReason` (`refresh:<mode>`) and in the evidence manifest. `baselineRunId` (wave W6) turns the run into a PARTIAL recapture: the impact of the candidate against that terminal run of the same component (see POST /api/components/{id}/impact) is computed before the run is created and returned in `impact`; cases proven unaffected inherit the baseline verdict and artifacts without a capture (`reuseReason: \"impact:<basis>\"`, upserted under the new case fingerprint so later runs reuse them normally), affected cases are captured as usual, and an unprovable impact (`conservative`) simply runs everything. An explicit `refresh` always wins over the impact plan. 422 baseline_run_mismatch when the baseline belongs to another component. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  summary: "Queue a matrix acceptance run over the candidate's cases. The case set comes either from a published case-set manifest (`caseSetId`, wave W2 — it also supplies the capture surface, per-case reference assets, expected geometry and per-case policy) or, by default, from the candidate's named examples; `cases` and `caseSetId` are mutually exclusive. The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh` controls reuse AND carries a scope (wave 2026-08-04 W1): `\"none\"` (default) runs the full reuse cascade, `\"failed\"` is a VERDICT-scope force over the cases that previously failed (the frame is reused from CAS whenever its frameFingerprint still matches, so `recapture: 0` is a legitimate outcome — pass `recapture: true` to escalate it to a full re-capture), `\"all\"` and `{caseIds:[…]}` are FRAME-scope forces, i.e. real re-captures (unknown id → 422 unknown_case_id; a listed alias forces its target). The forcing reason is recorded per case in `reuseReason` (`refresh:<mode>`) and in the evidence manifest, and the run carries the whole algebra in `refresh {requested, impact, effective}` (`effective = requested ∪ impact`). A run whose explicit scope re-evaluated nothing terminalizes as `error` with `statusReason: \"refresh_scope_empty\"` rather than silently passing. `baselineRunId` (wave W6) turns the run into a PARTIAL recapture: the impact of the candidate against that terminal run of the same component (see POST /api/components/{id}/impact) is computed before the run is created and returned in `impact`; cases proven unaffected inherit the baseline verdict and artifacts without a capture (`reuseReason: \"impact:<basis>\"`, upserted under the new case fingerprint so later runs reuse them normally), affected cases are captured as usual, and an unprovable impact (`conservative`) simply runs everything. An explicit `refresh` always wins over the impact plan. 422 baseline_run_mismatch when the baseline belongs to another component. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
   status: 202,
   requestSchema: z.strictObject({
     candidateId: z.string(),
@@ -1684,6 +1718,8 @@ export const createAcceptanceRunContract = registerContract({
       z.enum(["none", "failed", "all"]),
       z.strictObject({ caseIds: z.array(z.string()).min(1).max(64) }),
     ]).optional(),
+    /** Эскалация `refresh:"failed"` из verdict-скоупа в frame-скоуп (CLI `--recapture`, D5). */
+    recapture: z.boolean().optional(),
     baselineRunId: z.string().optional(),
   }),
   responseSchema: z.looseObject({
@@ -1691,6 +1727,8 @@ export const createAcceptanceRunContract = registerContract({
     policy: z.looseObject({ id: z.string(), hash: z.string() }),
     progress: acceptanceProgressSchema, cases: z.number(), cached: z.boolean(),
     impact: acceptanceImpactSchema.optional(),
+    /** Алгебра refresh рана, посчитанная на постановке (C1). */
+    refresh: acceptanceRefreshAlgebraSchema.optional(),
   }),
   errors: [
     ...acceptanceAuthErrors, errorCatalog.invalidRequest,

@@ -118,6 +118,9 @@
                     ],
                     "type": "string"
                   },
+                  "recapture": {
+                    "type": "boolean"
+                  },
                   "refresh": {
                     "anyOf": [
                       {
@@ -162,6 +165,47 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "frame": {
+                          "$ref": "#/$defs/__schema1"
+                        },
+                        "verdict": {
+                          "$ref": "#/$defs/__schema1"
+                        }
+                      },
+                      "required": [
+                        "frame",
+                        "verdict"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema1": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "all": {
+                          "type": "boolean"
+                        },
+                        "caseIds": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "failed": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "all",
+                        "failed",
+                        "caseIds"
+                      ],
+                      "type": "object"
+                    }
+                  },
                   "additionalProperties": {},
                   "properties": {
                     "cached": {
@@ -286,6 +330,12 @@
                         "failed": {
                           "type": "number"
                         },
+                        "frameReused": {
+                          "type": "number"
+                        },
+                        "rediffed": {
+                          "type": "number"
+                        },
                         "reused": {
                           "type": "number"
                         },
@@ -293,6 +343,9 @@
                           "type": "number"
                         },
                         "total": {
+                          "type": "number"
+                        },
+                        "verdictRecomputed": {
                           "type": "number"
                         }
                       },
@@ -302,6 +355,26 @@
                         "reused",
                         "failed",
                         "running"
+                      ],
+                      "type": "object"
+                    },
+                    "refresh": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "effective": {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        "impact": {
+                          "$ref": "#/$defs/__schema0"
+                        },
+                        "requested": {
+                          "$ref": "#/$defs/__schema0"
+                        }
+                      },
+                      "required": [
+                        "requested",
+                        "impact",
+                        "effective"
                       ],
                       "type": "object"
                     },
@@ -418,7 +491,7 @@
             "description": "maintenance_in_progress (a catalog migration holds the maintenance lock)"
           }
         },
-        "summary": "Queue a matrix acceptance run over the candidate's cases. The case set comes either from a published case-set manifest (`caseSetId`, wave W2 — it also supplies the capture surface, per-case reference assets, expected geometry and per-case policy) or, by default, from the candidate's named examples; `cases` and `caseSetId` are mutually exclusive. The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh` controls reuse: `\"none\"` (default) reuses every cached case result, `\"failed\"` recaptures only the cases whose previous result for the same fingerprint was fail/indeterminate, `\"all\"` recaptures everything, and `{caseIds:[…]}` recaptures the listed cases (unknown id → 422 unknown_case_id; a listed alias forces its target). The forcing reason is recorded per case in `reuseReason` (`refresh:<mode>`) and in the evidence manifest. `baselineRunId` (wave W6) turns the run into a PARTIAL recapture: the impact of the candidate against that terminal run of the same component (see POST /api/components/{id}/impact) is computed before the run is created and returned in `impact`; cases proven unaffected inherit the baseline verdict and artifacts without a capture (`reuseReason: \"impact:<basis>\"`, upserted under the new case fingerprint so later runs reuse them normally), affected cases are captured as usual, and an unprovable impact (`conservative`) simply runs everything. An explicit `refresh` always wins over the impact plan. 422 baseline_run_mismatch when the baseline belongs to another component. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "summary": "Queue a matrix acceptance run over the candidate's cases. The case set comes either from a published case-set manifest (`caseSetId`, wave W2 — it also supplies the capture surface, per-case reference assets, expected geometry and per-case policy) or, by default, from the candidate's named examples; `cases` and `caseSetId` are mutually exclusive. The run executes outside the screenshot pump, one capture job at a time, with per-case verdicts folded into pass/fail/error/cancelled. `idempotencyKey` deduplicates the queueing itself ((candidate_id, idempotency_key) is unique); a candidate may hold at most one non-terminal run (409 acceptance_run_in_flight). `refresh` controls reuse AND carries a scope (wave 2026-08-04 W1): `\"none\"` (default) runs the full reuse cascade, `\"failed\"` is a VERDICT-scope force over the cases that previously failed (the frame is reused from CAS whenever its frameFingerprint still matches, so `recapture: 0` is a legitimate outcome — pass `recapture: true` to escalate it to a full re-capture), `\"all\"` and `{caseIds:[…]}` are FRAME-scope forces, i.e. real re-captures (unknown id → 422 unknown_case_id; a listed alias forces its target). The forcing reason is recorded per case in `reuseReason` (`refresh:<mode>`) and in the evidence manifest, and the run carries the whole algebra in `refresh {requested, impact, effective}` (`effective = requested ∪ impact`). A run whose explicit scope re-evaluated nothing terminalizes as `error` with `statusReason: \"refresh_scope_empty\"` rather than silently passing. `baselineRunId` (wave W6) turns the run into a PARTIAL recapture: the impact of the candidate against that terminal run of the same component (see POST /api/components/{id}/impact) is computed before the run is created and returned in `impact`; cases proven unaffected inherit the baseline verdict and artifacts without a capture (`reuseReason: \"impact:<basis>\"`, upserted under the new case fingerprint so later runs reuse them normally), affected cases are captured as usual, and an unprovable impact (`conservative`) simply runs everything. An explicit `refresh` always wins over the impact plan. 422 baseline_run_mismatch when the baseline belongs to another component. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
         "x-easyui-validated": false
       }
     },
@@ -442,9 +515,48 @@
                 "schema": {
                   "$defs": {
                     "__schema0": {
-                      "type": "string"
+                      "additionalProperties": {},
+                      "properties": {
+                        "frame": {
+                          "$ref": "#/$defs/__schema1"
+                        },
+                        "verdict": {
+                          "$ref": "#/$defs/__schema1"
+                        }
+                      },
+                      "required": [
+                        "frame",
+                        "verdict"
+                      ],
+                      "type": "object"
                     },
                     "__schema1": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "all": {
+                          "type": "boolean"
+                        },
+                        "caseIds": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "failed": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "all",
+                        "failed",
+                        "caseIds"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema2": {
+                      "type": "string"
+                    },
+                    "__schema3": {
                       "additionalProperties": {},
                       "properties": {
                         "code": {
@@ -564,7 +676,7 @@
                       "type": "string"
                     },
                     "createdAt": {
-                      "$ref": "#/$defs/__schema0"
+                      "$ref": "#/$defs/__schema2"
                     },
                     "eta": {
                       "anyOf": [
@@ -600,7 +712,7 @@
                           },
                           "causes": {
                             "items": {
-                              "$ref": "#/$defs/__schema1"
+                              "$ref": "#/$defs/__schema3"
                             },
                             "type": "array"
                           },
@@ -610,7 +722,7 @@
                               "properties": {
                                 "causes": {
                                   "items": {
-                                    "$ref": "#/$defs/__schema1"
+                                    "$ref": "#/$defs/__schema3"
                                   },
                                   "type": "array"
                                 },
@@ -696,7 +808,7 @@
                     "finishedAt": {
                       "anyOf": [
                         {
-                          "$ref": "#/$defs/__schema0"
+                          "$ref": "#/$defs/__schema2"
                         },
                         {
                           "type": "null"
@@ -831,6 +943,12 @@
                         "failed": {
                           "type": "number"
                         },
+                        "frameReused": {
+                          "type": "number"
+                        },
+                        "rediffed": {
+                          "type": "number"
+                        },
                         "reused": {
                           "type": "number"
                         },
@@ -838,6 +956,9 @@
                           "type": "number"
                         },
                         "total": {
+                          "type": "number"
+                        },
+                        "verdictRecomputed": {
                           "type": "number"
                         }
                       },
@@ -849,6 +970,33 @@
                         "running"
                       ],
                       "type": "object"
+                    },
+                    "refresh": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "effective": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "impact": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "requested": {
+                              "$ref": "#/$defs/__schema0"
+                            }
+                          },
+                          "required": [
+                            "requested",
+                            "impact",
+                            "effective"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "remediationGroups": {
                       "items": {
@@ -971,7 +1119,7 @@
                     "startedAt": {
                       "anyOf": [
                         {
-                          "$ref": "#/$defs/__schema0"
+                          "$ref": "#/$defs/__schema2"
                         },
                         {
                           "type": "null"
@@ -989,6 +1137,16 @@
                         "cancelled"
                       ],
                       "type": "string"
+                    },
+                    "statusReason": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -1004,6 +1162,8 @@
                     "gates",
                     "evidenceManifestHash",
                     "impact",
+                    "refresh",
+                    "statusReason",
                     "remediationGroups",
                     "createdAt",
                     "startedAt",
@@ -1071,9 +1231,48 @@
                 "schema": {
                   "$defs": {
                     "__schema0": {
-                      "type": "string"
+                      "additionalProperties": {},
+                      "properties": {
+                        "frame": {
+                          "$ref": "#/$defs/__schema1"
+                        },
+                        "verdict": {
+                          "$ref": "#/$defs/__schema1"
+                        }
+                      },
+                      "required": [
+                        "frame",
+                        "verdict"
+                      ],
+                      "type": "object"
                     },
                     "__schema1": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "all": {
+                          "type": "boolean"
+                        },
+                        "caseIds": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "failed": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "all",
+                        "failed",
+                        "caseIds"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema2": {
+                      "type": "string"
+                    },
+                    "__schema3": {
                       "additionalProperties": {},
                       "properties": {
                         "code": {
@@ -1193,7 +1392,7 @@
                       "type": "string"
                     },
                     "createdAt": {
-                      "$ref": "#/$defs/__schema0"
+                      "$ref": "#/$defs/__schema2"
                     },
                     "eta": {
                       "anyOf": [
@@ -1229,7 +1428,7 @@
                           },
                           "causes": {
                             "items": {
-                              "$ref": "#/$defs/__schema1"
+                              "$ref": "#/$defs/__schema3"
                             },
                             "type": "array"
                           },
@@ -1239,7 +1438,7 @@
                               "properties": {
                                 "causes": {
                                   "items": {
-                                    "$ref": "#/$defs/__schema1"
+                                    "$ref": "#/$defs/__schema3"
                                   },
                                   "type": "array"
                                 },
@@ -1325,7 +1524,7 @@
                     "finishedAt": {
                       "anyOf": [
                         {
-                          "$ref": "#/$defs/__schema0"
+                          "$ref": "#/$defs/__schema2"
                         },
                         {
                           "type": "null"
@@ -1460,6 +1659,12 @@
                         "failed": {
                           "type": "number"
                         },
+                        "frameReused": {
+                          "type": "number"
+                        },
+                        "rediffed": {
+                          "type": "number"
+                        },
                         "reused": {
                           "type": "number"
                         },
@@ -1467,6 +1672,9 @@
                           "type": "number"
                         },
                         "total": {
+                          "type": "number"
+                        },
+                        "verdictRecomputed": {
                           "type": "number"
                         }
                       },
@@ -1478,6 +1686,33 @@
                         "running"
                       ],
                       "type": "object"
+                    },
+                    "refresh": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "effective": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "impact": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "requested": {
+                              "$ref": "#/$defs/__schema0"
+                            }
+                          },
+                          "required": [
+                            "requested",
+                            "impact",
+                            "effective"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "remediationGroups": {
                       "items": {
@@ -1600,7 +1835,7 @@
                     "startedAt": {
                       "anyOf": [
                         {
-                          "$ref": "#/$defs/__schema0"
+                          "$ref": "#/$defs/__schema2"
                         },
                         {
                           "type": "null"
@@ -1618,6 +1853,16 @@
                         "cancelled"
                       ],
                       "type": "string"
+                    },
+                    "statusReason": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -1633,6 +1878,8 @@
                     "gates",
                     "evidenceManifestHash",
                     "impact",
+                    "refresh",
+                    "statusReason",
                     "remediationGroups",
                     "createdAt",
                     "startedAt",

@@ -21,6 +21,8 @@
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import { canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 import { rendererFingerprint } from "../capture/renderer";
+import type { AcceptanceCase } from "./cases";
+import type { AcceptancePolicy, GateMode, GateName, GeometryTolerances, VisualTolerances } from "./policies";
 
 const sha256 = (value: string): string => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 
@@ -32,17 +34,24 @@ const hashOf = (payload: unknown): string => sha256(canonicalStringify(payload))
  * единственный механизм автоматической инвалидации накопленного reuse. Признанная плата за
  * поэтапность (план §3 D1).
  *
- * **Версия 5 — последняя запланированная (W5a).** С неё отпечатки стабильны, и reuse-KPI §1
- * замеряется на сценарии W6 уже без принудительной инвалидации.
+ * **История номера — честная, без задним числом переписанных обещаний.**
  *
- * Пакет renderer-contract-2 (§2.2 N5) объявляет **ровно один** bump — в R1, где меняется схема
- * входа: `captureEnvFingerprint` → `rendererFingerprint`. К моменту исполнения R1 значение уже
- * было 5 (его подняла W5a family-плана, план же исходил из 4), поэтому номер не двигается:
- * инвалидация накопленного reuse всё равно происходит — сам вход поменял и имя ключа, и
- * значение (chromium/шрифты/флаги теперь внутри). Инвариант «bump'ов в пакете больше нет»
- * закреплён тестом `server/capture/renderer.test.ts`.
+ * - Версия 5 объявлялась «последней запланированной» (W5a family-плана), и пакет
+ *   renderer-contract-2 (§2.2 N5) объявлял **ровно один** bump — в R1, где менялась схема входа
+ *   (`captureEnvFingerprint` → `rendererFingerprint`). К моменту R1 значение уже было 5, поэтому
+ *   номер тогда не двигался: вход поменял и имя ключа, и значение.
+ * - **Версия 6 — санкционированный вторый bump** (план `docs/plans/2026-08-04-acceptance-pipeline-feedback.md`,
+ *   решение D-B). Отпечаток случая перестал быть плоским: он расслоён на `frameFingerprint`
+ *   (входы съёмки), `comparisonFingerprint` (входы сравнения) и `verdictPolicyHash` (входы
+ *   вердикта), а examples-путь перестал хэшировать заглушку `CASE_POLICY_HASH_V0` вместо реального
+ *   профиля рана. Это другая модель случая, а не другие значения внутри прежней, поэтому
+ *   накопленный прод-кэш обязан быть инвалидирован — плата признана планом (D-B, §W1).
+ *
+ * Инвариант «в пакете renderer-contract-2 bump ровно один» остался верен для **того** пакета;
+ * этот bump принадлежит другому плану и закреплён тестами `server/capture/renderer.test.ts` и
+ * `server/acceptance/ids.test.ts` уже как «версия === 6».
  */
-export const CASE_FINGERPRINT_ALGO_VERSION = 5;
+export const CASE_FINGERPRINT_ALGO_VERSION = 6;
 
 /**
  * Хэш readiness-политики (W4) — тот же алгоритм, что у клиента
@@ -73,9 +82,24 @@ export const DEFAULT_RENDERER_FINGERPRINT = rendererFingerprint(DEFAULT_READINES
 /**
  * Заглушка per-case политики для examples-пути: у именованного example манифеста нет, а значит
  * нет ни профиля, ни допусков. Case-set-путь (W2) подставляет вместо неё `casePolicyHashOf`
- * (`caseSets.ts`), поэтому смена допуска одного случая инвалидирует reuse ровно его.
+ * (`caseSets.ts`).
+ *
+ * **С ALGO 6 она больше не входит в отпечаток случая** (план 2026-08-04, D-B): вердиктный слой
+ * хэширует реальную эффективную политику рана по значениям, поэтому examples-ран под
+ * `--policy pixel-strict-v1` инвалидирует reuse честно, а не притворяется, что политики нет.
+ * Константа осталась значением колонки `acceptance_cases.case_policy_hash` (она NOT NULL и
+ * читается отчётами), но ключом reuse — нет.
  */
 export const CASE_POLICY_HASH_V0 = "case-policy-v0";
+
+/**
+ * Поле вокруг компонента в кадре `probe:"paint"` — вход **нормализации канвы** сравнения
+ * (`DEFAULT_PAINT_MARGIN_PX`, `server/screenshot/service.ts:120`). Продублировано здесь константой,
+ * а не импортом: `ids.ts` — фундамент идентичности, и тянуть в него капчур-помпу ради одного
+ * числа значило бы завести цикл импорта ради читаемости. Расхождение поймал бы тест
+ * `ids.test.ts` («канва сравнения = layout + 2×margin×dsf»).
+ */
+export const COMPARISON_PAINT_MARGIN_PX = 64;
 
 export interface BuildFingerprintInput {
   sourceHash: string;
@@ -119,62 +143,283 @@ export interface CaseSurface {
   theme: string;
 }
 
-export interface CaseFingerprintInput {
-  algoVersion: number;
+// ------------------------------------------------ три слоя отпечатка (D-B)
+
+/**
+ * **Слой 1 — кадр.** Ровно те входы, от которых зависят сами пиксели: кто снимается, что
+ * снимается, на какой поверхности, по какой политике готовности и каким рендерером. Совпал
+ * frameFingerprint — значит, пересъёмка ничего нового не даст, и кадр из CAS законно
+ * переиспользуется (re-diff/recompute).
+ */
+export interface FrameFingerprintInput {
   candidateId: string;
   caseKey: string;
   propsHash: string;
   surface: CaseSurface;
   readinessPolicyHash: string;
   rendererFingerprint: string;
-  casePolicyHash: string;
-  referenceAssetId: string | null;
 }
 
-export function caseFingerprint(input: CaseFingerprintInput): string {
+export function frameFingerprint(input: FrameFingerprintInput): string {
   return hashOf({
-    algoVersion: input.algoVersion,
     candidateId: input.candidateId,
     caseKey: input.caseKey,
     propsHash: input.propsHash,
     surface: input.surface,
     readinessPolicyHash: input.readinessPolicyHash,
     rendererFingerprint: input.rendererFingerprint,
-    casePolicyHash: input.casePolicyHash,
-    referenceAssetId: input.referenceAssetId,
   });
 }
 
 /**
- * Значения readiness/env и заглушка case-политики подставляются здесь, а не у вызывающих: смысл
- * входов меняется ровно в одном месте вместе с bump'ом `CASE_FINGERPRINT_ALGO_VERSION`.
+ * **Слой 2 — сравнение.** Входы, которые меняют **метрики** расхождения, не трогая кадр: эталон,
+ * его нормализация и допуск сводимости размеров. Инвариант D1: любое поле, участвующее в
+ * построении нормализованного эталона (`padTo`/placement/crop), обязано быть здесь — иначе его
+ * смену «пересчитали» бы по старым метрикам, что и есть тихий stale-вердикт.
+ *
+ * `referenceSurface`/`referencePlacement`/`cropLineage.sourceSurface` — слоты под W5 (content-hug
+ * reference). Сегодня их никто не заполняет; `undefined` канонизуется отсутствием ключа, поэтому
+ * появление полей в W5 не меняет отпечатки уже снятых legacy-манифестов.
  */
-export function caseFingerprintV0(input: {
-  candidateId: string;
+export interface ComparisonFingerprintInput {
+  referenceAssetId: string | null;
+  /** W5-слот: `"content-hug" | "paint"`. */
+  referenceSurface?: string | null;
+  /** W5-слот: смещение эталона внутри канонической канвы. */
+  referencePlacement?: { x: number; y: number } | null;
+  cropLineage?: { parentNodeId?: string; rect: readonly number[]; sourceSurface?: string } | null;
+  /** Ожидаемые габариты layout-корня: они же определяют `padTo` нормализации (D1). */
+  expectedGeometry?: { width: number; height: number } | null;
+  /** Допуск сводимости размеров профиля (`policy.visual.maxDimensionDeltaPx`). */
+  maxDimensionDeltaPx: number;
+  /** Параметры канвы кадра: поле вокруг компонента и плотность пикселей. */
+  paintMarginPx: number;
+  deviceScaleFactor: number;
+}
+
+const definedOnly = <T extends Record<string, unknown>>(value: T): Partial<T> =>
+  Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as Partial<T>;
+
+export function comparisonFingerprintOf(input: ComparisonFingerprintInput): string {
+  return hashOf(definedOnly({
+    referenceAssetId: input.referenceAssetId,
+    referenceSurface: input.referenceSurface ?? undefined,
+    referencePlacement: input.referencePlacement ?? undefined,
+    cropLineage: input.cropLineage === null || input.cropLineage === undefined
+      ? undefined
+      : definedOnly({
+        parentNodeId: input.cropLineage.parentNodeId,
+        rect: [...input.cropLineage.rect],
+        sourceSurface: input.cropLineage.sourceSurface,
+      }),
+    expectedGeometry: input.expectedGeometry ?? undefined,
+    maxDimensionDeltaPx: input.maxDimensionDeltaPx,
+    paintMarginPx: input.paintMarginPx,
+    deviceScaleFactor: input.deviceScaleFactor,
+  }));
+}
+
+/**
+ * **Слой 3 — вердикт.** Снимок эффективной политики случая **по значениям**, а не по хэшу: без
+ * значений дельта старой и новой политики невычислима, а без дельты пересчёт вердикта пришлось бы
+ * заменять слепым переносом (D0/D14). Именно этот объект пишется в
+ * `acceptance_case_results.verdict_policy_json`, а его хэш — в `verdict_policy_hash` (валидатор
+ * снимка: не сошёлся ⇒ снимок не наш ⇒ recapture).
+ */
+export interface VerdictPolicySnapshot {
+  policyProfileId: string;
+  /** Роли гейтов эффективной политики рана (`requireVisual` набора уже применён). */
+  gates: Record<GateName, GateMode>;
+  requireVisual: boolean;
+  allowExceptions: boolean;
+  /** Профильный потолок визуального расхождения. */
+  maxRawDiffPct: number;
+  geometry: { overflowPx: number; sizeDeltaPx: number; offsetPx: number };
+  /** Per-case допуски манифеста (W2) — они же перекрывают профильные. */
+  perCase: { maxRawDiffPct?: number; allowPaintOverflow?: boolean; expectedClip?: boolean } | null;
+  /** Ожидаемые габариты: вход допусков геометрии (и, в W5, нормализации эталона — D1). */
+  expectedGeometry: { width: number; height: number } | null;
+  /** `policy.profile` манифеста: декларация набора, влияющая на смысл вердикта. */
+  declaredPolicyProfile: string | null;
+}
+
+export function verdictPolicyHashOf(snapshot: VerdictPolicySnapshot): string {
+  return hashOf(snapshot);
+}
+
+/** Структурный минимум случая, нужный отпечаткам. Полный тип — `AcceptanceCase` (`cases.ts`). */
+export interface CaseFingerprintCase {
   caseKey: string;
   propsHash: string;
-  surface: CaseSurface;
   referenceAssetId?: string | null;
-  /** Case-set-путь (W2) передаёт реальный хэш политики случая; examples-путь — заглушку. */
-  casePolicyHash?: string;
-  /** Политика readiness случая (W4); по умолчанию — дефолтная политика профиля. */
-  readinessPolicy?: ReadinessPolicy;
-}): string {
-  const readinessHash = input.readinessPolicy === undefined
-    ? DEFAULT_READINESS_POLICY_HASH
-    : readinessPolicyHashOf(input.readinessPolicy);
-  return caseFingerprint({
-    algoVersion: CASE_FINGERPRINT_ALGO_VERSION,
+  expectedGeometry?: { width: number; height: number } | null;
+  cropLineage?: { parentNodeId?: string; rect: readonly number[]; sourceSurface?: string } | null;
+  casePolicy?: { maxRawDiffPct?: number; allowPaintOverflow?: boolean; expectedClip?: boolean };
+  declaredPolicyProfile?: string | null;
+  /** W5-слоты (см. `ComparisonFingerprintInput`). */
+  referenceSurface?: string | null;
+  referencePlacement?: { x: number; y: number } | null;
+}
+
+export function verdictPolicySnapshotOf(policy: AcceptancePolicy, item: CaseFingerprintCase): VerdictPolicySnapshot {
+  return {
+    policyProfileId: policy.id,
+    gates: { ...policy.gates },
+    requireVisual: policy.requireVisual,
+    allowExceptions: policy.allowExceptions,
+    maxRawDiffPct: policy.visual.maxRawDiffPct,
+    geometry: { ...policy.geometry },
+    perCase: item.casePolicy ? { ...item.casePolicy } : null,
+    expectedGeometry: item.expectedGeometry ?? null,
+    declaredPolicyProfile: item.declaredPolicyProfile ?? null,
+  };
+}
+
+export interface CaseFingerprintInput {
+  algoVersion: number;
+  frame: string;
+  comparison: string;
+  verdictPolicy: string;
+}
+
+/** Итоговый ключ полного reuse: совпали все три слоя — совпал и вердикт. */
+export function caseFingerprint(input: CaseFingerprintInput): string {
+  return hashOf({
+    algoVersion: input.algoVersion,
+    frame: input.frame,
+    comparison: input.comparison,
+    verdictPolicy: input.verdictPolicy,
+  });
+}
+
+export interface CaseFingerprints {
+  frame: string;
+  comparison: string;
+  verdictPolicy: string;
+  case: string;
+  verdictPolicySnapshot: VerdictPolicySnapshot;
+}
+
+export interface CaseFingerprintsInput {
+  candidateId: string;
+  surface: CaseSurface;
+  /** **Эффективная** политика рана (`requireVisual` набора уже применён `effectivePolicy`). */
+  policy: AcceptancePolicy;
+  case: CaseFingerprintCase;
+}
+
+/**
+ * Единственный расчёт отпечатков случая (D7): его зовёт и постановка (`createRun`), и раннер.
+ * Двух реализаций быть не должно — расхождение между ними означало бы, что `case_fingerprint`
+ * строки рана и строки результата разные, и reuse промахивался бы всегда (тест «case_fingerprint
+ * строки рана == строки результата»).
+ */
+export function caseFingerprintsOf(input: CaseFingerprintsInput): CaseFingerprints {
+  const readinessHash = readinessPolicyHashOf(input.policy.readiness);
+  const frame = frameFingerprint({
     candidateId: input.candidateId,
-    caseKey: input.caseKey,
-    propsHash: input.propsHash,
+    caseKey: input.case.caseKey,
+    propsHash: input.case.propsHash,
     surface: input.surface,
     readinessPolicyHash: readinessHash,
     rendererFingerprint: rendererFingerprint(readinessHash),
-    casePolicyHash: input.casePolicyHash ?? CASE_POLICY_HASH_V0,
-    referenceAssetId: input.referenceAssetId ?? null,
   });
+  const comparison = comparisonFingerprintOf({
+    referenceAssetId: input.case.referenceAssetId ?? null,
+    ...(input.case.referenceSurface === undefined ? {} : { referenceSurface: input.case.referenceSurface }),
+    ...(input.case.referencePlacement === undefined ? {} : { referencePlacement: input.case.referencePlacement }),
+    ...(input.case.cropLineage === undefined ? {} : { cropLineage: input.case.cropLineage }),
+    expectedGeometry: input.case.expectedGeometry ?? null,
+    maxDimensionDeltaPx: input.policy.visual.maxDimensionDeltaPx,
+    paintMarginPx: COMPARISON_PAINT_MARGIN_PX,
+    deviceScaleFactor: input.surface.dsf,
+  });
+  const snapshot = verdictPolicySnapshotOf(input.policy, input.case);
+  const verdictPolicy = verdictPolicyHashOf(snapshot);
+  return {
+    frame,
+    comparison,
+    verdictPolicy,
+    case: caseFingerprint({ algoVersion: CASE_FINGERPRINT_ALGO_VERSION, frame, comparison, verdictPolicy }),
+    verdictPolicySnapshot: snapshot,
+  };
 }
+
+// ------------------------------------- тотальность разбиения полей по слоям (D3)
+
+/**
+ * Слой, в который поле входит. `report-only` — единственное значение, означающее «в отпечатки не
+ * входит вовсе», и оно требует **письменного** обоснования у каждого поля: молчаливое «нигде» —
+ * ровно та дыра, из-за которой смена `expectedGeometry`/`cropLineage` давала полный stale reuse.
+ */
+export type FieldLayer = "frame" | "comparison" | "verdict" | "report-only";
+
+type PolicyLeaf =
+  | Exclude<keyof AcceptancePolicy, "visual" | "geometry">
+  | `visual.${keyof VisualTolerances}`
+  | `geometry.${keyof GeometryTolerances}`;
+type CaseLeaf = keyof AcceptanceCase;
+type SurfaceLeaf = `surface.${keyof CaseSurface}`;
+
+/** Все поля, влияющие на случай приёмки. Новое поле обязано появиться здесь — иначе не соберётся. */
+export type LayeredField = PolicyLeaf | CaseLeaf | SurfaceLeaf;
+
+/**
+ * Разбиение полей политики и случая по слоям отпечатка (D3).
+ *
+ * Тотальность держится **типом**: `satisfies Record<LayeredField, …>` не даст добавить поле в
+ * `AcceptancePolicy`/`AcceptanceCase`/`CaseSurface`, не назвав его слой. Дефолт для нового поля —
+ * `"frame"` (перестраховка: лишняя пересъёмка дешевле тихого stale-вердикта), но выбирается он
+ * человеком осознанно, а не выводится молчанием.
+ */
+export const FIELD_LAYERS = {
+  // --- политика профиля
+  id: ["verdict"],
+  gates: ["verdict"],
+  requireVisual: ["verdict"],
+  allowExceptions: ["verdict"],
+  "visual.maxRawDiffPct": ["verdict"],
+  // Допуск сводимости размеров решает, состоится ли сравнение вообще, — это вход нормализации.
+  "visual.maxDimensionDeltaPx": ["comparison"],
+  "geometry.overflowPx": ["verdict"],
+  "geometry.sizeDeltaPx": ["verdict"],
+  "geometry.offsetPx": ["verdict"],
+  // Политика readiness исполняется поверхностью **во время съёмки**: её смена меняет кадр.
+  readiness: ["frame"],
+  // Выборка determinism решает, снимается ли случай дважды.
+  determinismSampleSize: ["frame"],
+  maxInfraRetries: ["frame"],
+  // Ёмкость и дедлайн рана: ни кадра, ни метрик, ни вердикта случая не меняют.
+  maxJobsPerRun: ["report-only"],
+  runDeadlineMs: ["report-only"],
+
+  // --- случай
+  caseKey: ["frame"],
+  propsHash: ["frame"],
+  props: ["frame"],
+  geometryDetailKeys: ["frame"],
+  referenceAssetId: ["comparison"],
+  cropLineage: ["comparison"],
+  // D1: `expectedGeometry` — двухслойное поле. Оно и допуск вердикта геометрии, и (с W5) `padTo`
+  // нормализации content-hug эталона, поэтому его смена обязана давать re-diff, а не recompute.
+  expectedGeometry: ["comparison", "verdict"],
+  casePolicy: ["verdict"],
+  // Хэш per-case политики манифеста — производная `casePolicy`/`requireVisual`, уже учтённых по
+  // значениям; с ALGO 6 он в отпечатки не входит (см. `CASE_POLICY_HASH_V0`).
+  casePolicyHash: ["report-only"],
+  // Идентичность строки, не вход вердикта: `caseId` адресует случай, `aliasOfCaseId` говорит, что
+  // своей съёмки у него нет (вердикт наследуется от цели один-в-один).
+  caseId: ["report-only"],
+  aliasOfCaseId: ["report-only"],
+  // Координата случая в семье — ярлык отчёта (§W5b): ни кадра, ни метрик, ни вердикта.
+  dims: ["report-only"],
+  declaredPolicyProfile: ["verdict"],
+
+  // --- поверхность
+  "surface.viewport": ["frame"],
+  "surface.dsf": ["frame", "comparison"],
+  "surface.theme": ["frame"],
+} as const satisfies Record<LayeredField, readonly FieldLayer[]>;
 
 /** `"acc_" + uuid` (RFC §3.3). Формат валидируется на чтении — из `runId` выводится путь evidence (D4). */
 export const runId = (): string => `acc_${crypto.randomUUID()}`;

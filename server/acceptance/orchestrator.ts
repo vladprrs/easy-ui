@@ -28,10 +28,11 @@ import { writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./ev
 import type { RunInkBbox } from "./inkBbox";
 import type { RunNormalizedDiff } from "../visual/diff-runner";
 import type { CaseSetManifest } from "../../src/acceptance/caseSetSchema";
-import { CASE_POLICY_HASH_V0, type CaseSurface } from "./ids";
+import { CASE_POLICY_HASH_V0, verdictPolicySnapshotOf, type CaseSurface, type VerdictPolicySnapshot } from "./ids";
 import type { AcceptanceCaptureService, CandidateSubject, GateContext } from "./gates/types";
 import {
-  bySeverity, carryBaselineCase, causesOfGates, executeCase, fingerprintOf, foldRunVerdict, progressOf,
+  bySeverity, carryBaselineCase, caseFingerprintsFor, causesOfGates, executeCase, fingerprintOf, foldRunVerdict,
+  progressOf, reuseReceiptOf,
   type CaseExecution, type CaseRunnerDeps,
 } from "./runner";
 import { baselineCaseIndex, computeImpact, type ImpactReport } from "./impact";
@@ -78,6 +79,97 @@ export interface AcceptanceOrchestratorDeps {
  */
 export type RefreshSpec = "none" | "failed" | "all" | { caseIds: string[] };
 
+/**
+ * Скоуп форса (C1). Различие — не косметика, а ответ на вопрос «сколько стоит переоценка»:
+ * `verdict` требует пересмотреть вердикт (кадр при совпавшем `frameFingerprint` берётся из CAS),
+ * `frame` требует новых пикселей.
+ */
+export type RefreshScope = "frame" | "verdict";
+
+/** Кого форсим внутри одного скоупа. Объединение — покомпонентное «или»/конкатенация. */
+export interface RefreshTarget { all: boolean; failed: boolean; caseIds: string[] }
+export interface RefreshPlan { frame: RefreshTarget; verdict: RefreshTarget }
+/** Тройка алгебры: что попросил автор, что потребовал импакт, что применяется (C1). */
+export interface RefreshAlgebra { requested: RefreshPlan; impact: RefreshPlan; effective: RefreshPlan }
+
+const emptyTarget = (): RefreshTarget => ({ all: false, failed: false, caseIds: [] });
+export const emptyRefreshPlan = (): RefreshPlan => ({ frame: emptyTarget(), verdict: emptyTarget() });
+export const refreshTargetEmpty = (target: RefreshTarget): boolean =>
+  !target.all && !target.failed && target.caseIds.length === 0;
+export const refreshPlanEmpty = (plan: RefreshPlan): boolean =>
+  refreshTargetEmpty(plan.frame) && refreshTargetEmpty(plan.verdict);
+
+const unionTarget = (left: RefreshTarget, right: RefreshTarget): RefreshTarget => ({
+  all: left.all || right.all,
+  failed: left.failed || right.failed,
+  caseIds: [...new Set([...left.caseIds, ...right.caseIds])].sort(),
+});
+export const unionRefreshPlans = (left: RefreshPlan, right: RefreshPlan): RefreshPlan => ({
+  frame: unionTarget(left.frame, right.frame),
+  verdict: unionTarget(left.verdict, right.verdict),
+});
+
+/**
+ * Запрошенный план (D5, половина CLI — в W2a).
+ *
+ * `--refresh failed` — **verdict-скоуп**: автор говорит «пересмотри упавшее», а не «пересними
+ * упавшее». Кадр при совпавшем `frameFingerprint` переиспользуется, и именно это делает
+ * достижимым `recapture = 0` из AC фидбэка. Пересъёмка возвращается флагом `--recapture`
+ * (`recapture: true` в теле) — эскалация до frame-скоупа.
+ *
+ * `--refresh all` и `--refresh <ids>` остаются frame-скоупом: их смысл всегда был «переснять».
+ */
+export function requestedRefreshPlan(refresh: RefreshSpec, recapture = false): RefreshPlan {
+  const plan = emptyRefreshPlan();
+  if (refresh === "none") return plan;
+  if (refresh === "all") { plan.frame.all = true; return plan; }
+  if (refresh === "failed") {
+    if (recapture) plan.frame.failed = true; else plan.verdict.failed = true;
+    return plan;
+  }
+  plan.frame.caseIds = [...new Set(refresh.caseIds)].sort();
+  return plan;
+}
+
+/**
+ * Алгебра рана из персистентного `refresh_json`. До-миграционный ран (NULL) читается как пустой
+ * план — это честно: он и не мог быть поставлен с гранулярным скоупом.
+ */
+export function refreshAlgebraOfRun(run: AcceptanceRunRow): RefreshAlgebra {
+  const empty: RefreshAlgebra = { requested: emptyRefreshPlan(), impact: emptyRefreshPlan(), effective: emptyRefreshPlan() };
+  if (run.refresh_json === null) return empty;
+  try {
+    const parsed = JSON.parse(run.refresh_json) as Partial<RefreshAlgebra>;
+    if (parsed === null || typeof parsed !== "object") return empty;
+    const plan = (value: RefreshPlan | undefined): RefreshPlan => {
+      if (!value || typeof value !== "object") return emptyRefreshPlan();
+      const target = (item: RefreshTarget | undefined): RefreshTarget => ({
+        all: item?.all === true,
+        failed: item?.failed === true,
+        caseIds: Array.isArray(item?.caseIds) ? item.caseIds : [],
+      });
+      return { frame: target(value.frame), verdict: target(value.verdict) };
+    };
+    return { requested: plan(parsed.requested), impact: plan(parsed.impact), effective: plan(parsed.effective) };
+  } catch { return empty; }
+}
+
+/**
+ * План, вытекающий из импакта: случаи, про которые доказано, что они могли измениться.
+ *
+ * **Он не форсит пересъёмку** — он запрещает перенос вердикта baseline. Разница принципиальна:
+ * отпечаток доказывает строго больше, чем импакт («входы случая те же»), поэтому reuse по
+ * совпавшим слоям остаётся законным даже для затронутого случая, а вот перенос чужого вердикта —
+ * нет. Печатается план всё равно: «почему ран стоил столько» обязано читаться из тройки.
+ */
+export function impactRefreshPlan(impact: ImpactReport | null): RefreshPlan {
+  const plan = emptyRefreshPlan();
+  if (impact === null) return plan;
+  if (impact.basis === "conservative") { plan.frame.all = true; return plan; }
+  plan.frame.caseIds = [...impact.affectedCases].sort();
+  return plan;
+}
+
 export interface StartRunInput {
   candidateId: string;
   createdBy: string;
@@ -93,6 +185,11 @@ export interface StartRunInput {
   cases?: { key: string; props: Record<string, unknown> }[];
   /** Пересъёмка вместо reuse (A3); `true` — синоним `"all"` (совместимость W1a). */
   refresh?: RefreshSpec | boolean;
+  /**
+   * Эскалация `--refresh failed` до пересъёмки (`--recapture` CLI, D5). На `all`/`{caseIds}` не
+   * влияет — они и так frame-скоуп.
+   */
+  recapture?: boolean;
   /**
    * Частичная пересъёмка (W6, D6): терминальный ран того же компонента, относительно которого
    * считается импакт. Незатронутые случаи получают вердикт baseline без съёмки, затронутые
@@ -114,6 +211,8 @@ export interface StartRunResult {
   cached: boolean;
   /** Отчёт импакта, если ран поставлен с `baselineRunId` (W6). */
   impact?: ImpactReport;
+  /** Алгебра refresh рана (C1): `{requested, impact, effective}`. */
+  refresh: RefreshAlgebra;
 }
 
 /**
@@ -168,7 +267,6 @@ export class AcceptanceOrchestrator {
   private readonly resolve: (row: CandidateRow) => Promise<CandidateSubject>;
   private readonly caseSets = new Map<string, AcceptanceCase[]>();
   private readonly surfaces = new Map<string, CaseSurface>();
-  private readonly refreshes = new Map<string, RefreshSpec>();
   /**
    * Планы частичной пересъёмки (W6), по `runId`. Живут в памяти процесса — как и props случаев:
    * ран, переживший рестарт, всё равно убивает стартовая уборка, а потеря плана деградирует
@@ -239,6 +337,18 @@ export class AcceptanceOrchestrator {
         candidate: candidateRow,
         baselineRun: this.repo.requireRun(input.baselineRunId),
       });
+    // Алгебра refresh (C1) считается **на старте** и персистится: без неё «почему этот ран ничего
+    // не переснял» невосстановимо, а после рестарта процесса — тем более.
+    const requested = requestedRefreshPlan(refresh, input.recapture === true);
+    const impactPlan = impactRefreshPlan(impact);
+    const algebra: RefreshAlgebra = {
+      requested,
+      impact: impactPlan,
+      effective: unionRefreshPlans(requested, impactPlan),
+    };
+    // D7: отпечатки случая считает одна функция — та же, что в раннере. Политика — эффективная
+    // (с `requireVisual` набора), иначе слой вердикта разошёлся бы между постановкой и съёмкой.
+    const runPolicy = effectivePolicy(policy, manifest);
     const created = this.repo.createRun({
       candidateId: candidateRow.candidate_id,
       componentId: candidateRow.component_id,
@@ -250,26 +360,32 @@ export class AcceptanceOrchestrator {
       progress: progressOf([], cases.length, null),
       // Роли гейтов рана — по эффективной политике (W5a): `requireVisual` набора видно в
       // `gates_json` сразу на постановке, а не только в свёртке.
-      gates: effectivePolicy(policy, manifest).gates,
-      cases: cases.map((item) => ({
-        caseId: item.caseId,
-        caseKey: item.caseKey,
-        propsHash: item.propsHash,
-        caseFingerprint: fingerprintOf({ candidate: subject, surface }, item),
-        casePolicyHash: item.casePolicyHash ?? CASE_POLICY_HASH_V0,
-        referenceAssetId: item.referenceAssetId ?? null,
-        expectedGeometry: item.expectedGeometry ?? null,
-        aliasOfCaseId: item.aliasOfCaseId,
-      })),
+      gates: runPolicy.gates,
+      refresh: algebra,
+      cases: cases.map((item) => {
+        const fps = caseFingerprintsFor({ candidate: subject, surface, policy: runPolicy }, item);
+        return {
+          caseId: item.caseId,
+          caseKey: item.caseKey,
+          propsHash: item.propsHash,
+          caseFingerprint: fps.case,
+          frameFingerprint: fps.frame,
+          comparisonFingerprint: fps.comparison,
+          verdictPolicyHash: fps.verdictPolicy,
+          casePolicyHash: item.casePolicyHash ?? CASE_POLICY_HASH_V0,
+          referenceAssetId: item.referenceAssetId ?? null,
+          expectedGeometry: item.expectedGeometry ?? null,
+          aliasOfCaseId: item.aliasOfCaseId,
+        };
+      }),
     });
     if (!created.cached) {
       this.caseSets.set(created.run.run_id, cases);
       this.surfaces.set(created.run.run_id, surface);
-      if (refresh !== "none") this.refreshes.set(created.run.run_id, refresh);
       if (impact) this.impacts.set(created.run.run_id, impact);
       if (this.autoDrain) void this.drain();
     }
-    return { run: created.run, cases, cached: created.cached, ...(impact ? { impact } : {}) };
+    return { run: created.run, cases, cached: created.cached, refresh: algebra, ...(impact ? { impact } : {}) };
   }
 
   /** Cancel допустим только из `queued` (триаж A6): бегущий ран не отменяется. */
@@ -343,7 +459,6 @@ export class AcceptanceOrchestrator {
       this.active = null;
       this.caseSets.delete(runId);
       this.surfaces.delete(runId);
-      this.refreshes.delete(runId);
       this.impacts.delete(runId);
     }
   }
@@ -360,14 +475,25 @@ export class AcceptanceOrchestrator {
     const surface = this.surfaces.get(run.run_id) ?? (storedManifest ? surfaceOfManifest(storedManifest) : DEFAULT_CASE_SURFACE);
     const cases = this.caseSets.get(run.run_id)
       ?? (storedManifest ? buildCasesFromManifest(storedManifest) : buildCases(subject.entry));
-    const refresh = this.refreshes.get(run.run_id) ?? "none";
+    // Алгебра refresh персистентна (v29): план рана переживает рестарт процесса и читается
+    // отчётом, а не восстанавливается из памяти «как получится».
+    const algebra = refreshAlgebraOfRun(run);
     // План частичной пересъёмки (W6). Он же — источник `impact_json` рана; `conservative`-план
     // пишется в ран наравне с узким, потому что «доказать сужение не удалось» — это тоже отчёт.
     const impact = this.impacts.get(run.run_id) ?? null;
     const carryable = impact === null || impact.basis === "conservative"
       ? new Set<string>()
       : new Set(impact.unaffectedCases);
-    const baselineCases = impact === null ? new Map() : baselineCaseIndex(this.repo.cases(impact.baselineRunId));
+    const baselineRows = impact === null ? [] : this.repo.cases(impact.baselineRunId);
+    const baselineCases = baselineCaseIndex(baselineRows);
+    // Вердикты baseline — первый источник для `forceOf("failed")` (C19): именно они, а не кэш по
+    // новому отпечатку, знают, какие случаи падали в прошлый раз.
+    const baselineVerdicts = new Map(baselineRows.map((row) => [row.case_id, row.verdict]));
+    // Реконструкция вердиктной политики baseline-рана (D0/D14): профиль его строки + манифест его
+    // набора. Валидацию по `verdict_policy_hash` делает сам `carryBaselineCase`.
+    const baselinePolicies = impact === null
+      ? new Map<string, VerdictPolicySnapshot>()
+      : this.baselineVerdictPolicies(impact.baselineRunId);
 
     const shared = new Map<string, unknown>();
     const context: CaseRunnerDeps["context"] = {
@@ -382,10 +508,14 @@ export class AcceptanceOrchestrator {
     const deps: CaseRunnerDeps = { repo: this.repo, policy, runId: run.run_id, candidate: subject, surface, shared, context };
 
     const targets = cases.filter((item) => item.aliasOfCaseId === null);
-    // `{caseIds}`: алиас не снимается — форс уезжает на его цель (D10).
-    const forced = typeof refresh === "object"
-      ? new Set(refresh.caseIds.map((caseId) => cases.find((item) => item.caseId === caseId)?.aliasOfCaseId ?? caseId))
-      : null;
+    // Алиас не снимается — форс уезжает на его цель (D10). Разворот делается один раз, для обоих
+    // скоупов сразу: список случаев в плане может прийти и из `--refresh <ids>`, и из импакта.
+    const resolveTargets = (caseIds: string[]): Set<string> =>
+      new Set(caseIds.map((caseId) => cases.find((item) => item.caseId === caseId)?.aliasOfCaseId ?? caseId));
+    // Разворачивается **запрошенный** план: импакт-часть `effective` печатается в отчёте, но
+    // форсом не является (см. `impactRefreshPlan`).
+    const forcedFrame = resolveTargets(algebra.requested.frame.caseIds);
+    const forcedVerdict = resolveTargets(algebra.requested.verdict.caseIds);
     const aliases = cases.filter((item) => item.aliasOfCaseId !== null);
     // Выборка determinism: первые N целевых случаев (плюс fail-случаи — они добираются ниже).
     const sampled = new Set(targets.slice(0, policy.determinismSampleSize).map((item) => item.caseId));
@@ -399,22 +529,35 @@ export class AcceptanceOrchestrator {
       const current = this.repo.run(run.run_id);
       if (!current || isTerminalRunStatus(current.status)) return this.repo.requireRun(run.run_id);
       this.repo.updateCase(run.run_id, item.caseId, { status: "running", startedAt: new Date(this.now()).toISOString() });
-      const force = this.forceOf(refresh, forced, item.caseId, fingerprintOf(deps, item), subject.componentId);
+      const fps = caseFingerprintsFor(deps, item);
+      // Форс применяется по **запрошенному** плану: импакт-часть алгебры запрещает перенос
+      // вердикта baseline (ниже), но не форсит пересъёмку — отпечаток доказывает строго больше.
+      const force = this.forceOf(algebra.requested, { frame: forcedFrame, verdict: forcedVerdict }, item.caseId, fps.frame, subject.componentId, baselineVerdicts);
       // Приоритет за `refresh`: явный форс дороже, но он — прямое указание автора, и импакт не
       // вправе его отменить. Перенос вердикта baseline пробуется только для незатронутых случаев
       // и молча уступает съёмке, если доказательства baseline больше нет (артефакт вычищен).
       const carried = force !== null || !carryable.has(item.caseId)
         ? null
-        : await carryBaselineCase(deps, item, baselineCases.get(item.caseId) ?? { verdict: null, status: "pending", gates_json: null, capture_quality_json: null }, impact!.basis);
+        : await carryBaselineCase(
+          deps, item,
+          baselineCases.get(item.caseId) ?? {
+            verdict: null, status: "pending", gates_json: null, capture_quality_json: null,
+            frame_fingerprint: null, comparison_fingerprint: null, verdict_policy_hash: null,
+          },
+          impact!.basis,
+          { baselinePolicy: baselinePolicies.get(item.caseId) ?? null },
+        );
       const execution = carried ?? await executeCase(deps, item, {
         determinismSampled: sampled.has(item.caseId),
-        refresh: force !== null,
-        ...(force === null ? {} : { refreshReason: force }),
+        ...(force === null ? {} : { scope: force.scope, refreshReason: force.reason }),
       });
       this.persistCase(run.run_id, execution);
       executions.push(execution);
       byCaseId.set(item.caseId, execution);
-      if (!execution.reused) ema = ema === null ? execution.durationMs : Math.round(ema * 0.7 + execution.durationMs * 0.3);
+      // EMA считает **оплаченную** работу (D9): съёмка и re-diff стоят времени, полный reuse и
+      // чистый пересчёт по метрикам — нет, и включать их значило бы занижать ETA остатка.
+      const paid = !execution.reused && (execution.rediffed === true || execution.frameReused !== true);
+      if (paid) ema = ema === null ? execution.durationMs : Math.round(ema * 0.7 + execution.durationMs * 0.3);
       this.repo.updateRunProgress(run.run_id, progressOf(executions, cases.length, ema));
     }
 
@@ -429,11 +572,20 @@ export class AcceptanceOrchestrator {
       this.repo.updateRunProgress(run.run_id, progressOf(executions, cases.length, ema));
     }
 
-    const verdict = foldRunVerdict(executions, policy);
+    // `refresh_scope_empty` (C10/D2): предикат **по факту reuse**, а не по форме запроса. Явный
+    // непустой скоуп, хотя бы один случай отдан из кэша/переносом — и при этом ни один не был
+    // переснят, пере-диффнут или пересчитан: форс не сделал ничего, и молча отдать «pass» здесь
+    // значило бы соврать про стоимость приёмки. Первый ран с пустым кэшем через предикат проходит:
+    // там всё снято заново, `reused` пуст.
+    const scopeEmpty = !refreshPlanEmpty(algebra.requested)
+      && executions.some((item) => item.reused)
+      && !executions.some((item) => item.frameReused !== true || item.rediffed === true || item.verdictRecomputed === true);
+    const verdict = scopeEmpty ? "error" as const : foldRunVerdict(executions, policy);
     const manifest = this.manifestOf(run, subject, verdict, executions);
     const { manifestHash } = await writeRunManifest(this.deps.dataDir, run.run_id, manifest);
     return this.repo.terminalizeRun(run.run_id, {
       status: verdict,
+      ...(scopeEmpty ? { statusReason: "refresh_scope_empty" } : {}),
       gates: this.gatesSummary(executions),
       // Группы ремедиаций живут в `progress_json` рядом с прогрессом: это run-level **отчёт**, а
       // `gates_json` — сводка статусов по гейтам, и смешивать в ней счётчики с диагностикой значило
@@ -448,25 +600,76 @@ export class AcceptanceOrchestrator {
   }
 
   /**
-   * Решение по одному целевому случаю: форсить съёмку или дать раннеру попробовать reuse.
-   * Возвращает причину форса (`refresh:<mode>` — она уедет в `reuse_reason` и в evidence) либо
-   * `null`. `"failed"` смотрит **тот же кэш результатов**, что и reuse: провальный прошлый
-   * вердикт по этому же отпечатку — единственный признак «этот случай надо переснять».
+   * Решение по одному целевому случаю: форсить — и в каком скоупе — или дать раннеру попробовать
+   * полный каскад reuse.
+   *
+   * `"failed"` — тот самый узел P0-3/P0-4. Раньше он искал провальный вердикт по **новому**
+   * `case_fingerprint`: после смены порога кэш по этому ключу пуст, форс молча снимался, и следом
+   * переносился вердикт baseline, посчитанный по старой политике. Теперь источников два, в
+   * порядке доказательности:
+   *
+   * 1. **вердикты baseline-рана** (C19) — прямой ответ «что падало в прошлый раз», не зависящий
+   *    ни от какой политики;
+   * 2. **frame-lookup** (`caseResultForFrame`) — «этот кадр в прошлый раз давал провал»; он
+   *    переживает смену порога и эталона, потому что кадровый слой их не содержит.
    */
   private forceOf(
-    refresh: RefreshSpec,
-    forced: Set<string> | null,
+    requested: RefreshPlan,
+    forced: { frame: Set<string>; verdict: Set<string> },
     caseId: string,
-    fingerprint: string,
+    frameFingerprint: string,
     componentId: string,
-  ): string | null {
-    if (refresh === "none") return null;
-    if (refresh === "all") return "refresh:all";
-    if (refresh === "failed") {
-      const row = this.repo.caseResultForComponent(fingerprint, componentId);
-      return row && (row.verdict === "fail" || row.verdict === "indeterminate") ? "refresh:failed" : null;
+    baselineVerdicts: Map<string, string | null>,
+  ): { scope: RefreshScope; reason: string } | null {
+    if (requested.frame.all) return { scope: "frame", reason: "refresh:all" };
+    if (forced.frame.has(caseId)) return { scope: "frame", reason: "refresh:cases" };
+    const failedScope: RefreshScope | null = requested.frame.failed ? "frame" : requested.verdict.failed ? "verdict" : null;
+    if (failedScope !== null && this.previouslyFailed(caseId, frameFingerprint, componentId, baselineVerdicts)) {
+      return { scope: failedScope, reason: "refresh:failed" };
     }
-    return forced?.has(caseId) ? "refresh:cases" : null;
+    if (forced.verdict.has(caseId)) return { scope: "verdict", reason: "refresh:cases" };
+    return null;
+  }
+
+  private previouslyFailed(
+    caseId: string,
+    frameFingerprint: string,
+    componentId: string,
+    baselineVerdicts: Map<string, string | null>,
+  ): boolean {
+    const baseline = baselineVerdicts.get(caseId);
+    if (baseline === "fail" || baseline === "indeterminate") return true;
+    if (baseline === "pass" || baseline === "skipped") return false;
+    const row = this.repo.caseResultForFrame(frameFingerprint, componentId);
+    return row !== undefined && (row.verdict === "fail" || row.verdict === "indeterminate");
+  }
+
+  /**
+   * Вердиктные политики случаев baseline-рана, реконструированные из **живого** рана: его профиль
+   * (`policy_profile_id`) и манифест его набора (`case_set_id`). Реконструкция, а не хранение:
+   * снимок политики лежит на строке кэша результатов, а строка `acceptance_cases` несёт только
+   * хэш — им и проверяется, что реконструкция попала (`carryBaselineCase`).
+   */
+  private baselineVerdictPolicies(baselineRunId: string): Map<string, VerdictPolicySnapshot> {
+    const out = new Map<string, VerdictPolicySnapshot>();
+    const run = this.repo.run(baselineRunId);
+    if (!run) return out;
+    const profile = acceptancePolicy(run.policy_profile_id);
+    if (!profile) return out;
+    const manifest = run.case_set_id === null
+      ? null
+      : manifestOfRow(new CaseSetRepo(this.deps.db).require(run.case_set_id));
+    const policy = effectivePolicy(profile, manifest);
+    const cases = manifest ? buildCasesFromManifest(manifest) : null;
+    if (cases === null) {
+      // Examples-путь: у случая нет ни эталона, ни допусков — снимок политики одинаков для всех.
+      for (const row of this.repo.cases(baselineRunId)) {
+        out.set(row.case_id, verdictPolicySnapshotOf(policy, { caseKey: row.case_key, propsHash: row.props_hash }));
+      }
+      return out;
+    }
+    for (const item of cases) out.set(item.caseId, verdictPolicySnapshotOf(policy, item));
+    return out;
   }
 
   private persistCase(runId: string, execution: CaseExecution): void {
@@ -477,6 +680,9 @@ export class AcceptanceOrchestrator {
       severity: execution.severity,
       captureQuality: execution.captureQuality,
       reuseReason: execution.reuseReason,
+      // Квитанция reuse (W8-форма): собирается уже сейчас — данные, которых не собрали во время
+      // рана, задним числом не появятся, а выдача в evidence приезжает волной W8.
+      reuseReceipt: reuseReceiptOf(execution),
       finishedAt: new Date(this.now()).toISOString(),
     });
   }

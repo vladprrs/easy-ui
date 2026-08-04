@@ -23,14 +23,21 @@ import {
 import type { AcceptanceCase } from "./cases";
 import { artifactPresent, readArtifact } from "./evidence";
 import { rendererFingerprint } from "../capture/renderer";
-import { caseFingerprintV0, readinessPolicyHashOf, type CaseSurface } from "./ids";
+import {
+  caseFingerprintsOf, readinessPolicyHashOf, verdictPolicyHashOf,
+  type CaseFingerprints, type CaseSurface, type VerdictPolicySnapshot,
+} from "./ids";
+import { reevaluateGates, rewriteDerivedArtifacts, verdictRecomputeEnabled } from "./recompute";
 import { CaptureInfraError } from "./gates/capture";
 import { GATE_ORDER, IMPLEMENTED_GATES } from "./gates";
 import { readinessBlocksVisual } from "./gates/readiness";
 import { renderQualityKey } from "./gates/render";
+import { rediffCase } from "./gates/visual";
 import type { CandidateSubject, GateArtifactRef, GateContext, GateResult } from "./gates/types";
 import { requiredGates, type AcceptancePolicy, type GateName } from "./policies";
-import type { AcceptanceCaseStatus, AcceptanceCaseVerdict, AcceptanceRepo, TerminalRunStatus } from "./repo";
+import type {
+  AcceptanceCaseResultRow, AcceptanceCaseRow, AcceptanceCaseStatus, AcceptanceCaseVerdict, AcceptanceRepo, TerminalRunStatus,
+} from "./repo";
 
 export type SeverityClass = "structural" | "geometry" | "aa" | "raw" | "indeterminate";
 export interface CaseSeverity { rank: number; class: SeverityClass; score: number }
@@ -46,6 +53,10 @@ export interface CaseExecution {
   caseId: string;
   caseKey: string;
   caseFingerprint: string;
+  /** Слои отпечатка (D-B): их же пишет `acceptance_cases` и квитанция reuse. */
+  frameFingerprint?: string;
+  comparisonFingerprint?: string;
+  verdictPolicyHash?: string;
   status: AcceptanceCaseStatus;
   verdict: AcceptanceCaseVerdict | null;
   gates: GateResult[];
@@ -53,7 +64,14 @@ export interface CaseExecution {
   captureQuality: CaptureQualityRecord | null;
   artifacts: GateArtifactRef[];
   aliasOfCaseId: string | null;
+  /** **Полный** reuse по `case_fingerprint` (или перенос baseline без дельты) — и только он. */
   reused: boolean;
+  /** Кадр не снимался: он пришёл из CAS (полный reuse, recompute или re-diff). */
+  frameReused?: boolean;
+  /** Вердикт пересчитан по сохранённым метрикам под новой политикой. */
+  verdictRecomputed?: boolean;
+  /** Кадр пересравнён с новым эталоном без съёмки. */
+  rediffed?: boolean;
   reuseReason: string | null;
   durationMs: number;
   error?: { outcome: string; message: string };
@@ -70,18 +88,33 @@ export interface CaseRunnerDeps {
   context: Omit<GateContext, "case" | "determinismSampled" | "shared" | "policy" | "runId" | "candidate" | "surface">;
 }
 
-/** Отпечаток случая (D1): единственный ключ reuse и дедупа. */
-export function fingerprintOf(deps: Pick<CaseRunnerDeps, "candidate" | "surface">, item: AcceptanceCase): string {
-  return caseFingerprintV0({
+/**
+ * Отпечатки случая — все четыре сразу (D-B, D7).
+ *
+ * Один вызов на обоих сторонах контракта: постановка (`createRun`) и раннер считают их **этой**
+ * функцией, поэтому `case_fingerprint` строки рана и строки результата совпадают по построению, а
+ * не по совпадению (тест на это есть). Политика приходит из `deps.policy` — эффективной политики
+ * рана, а не из дефолтов: до этой волны strict-ран получал `DEFAULT_READINESS_POLICY_HASH` и
+ * переиспользовал кадры, снятые по мягкой readiness.
+ */
+export function caseFingerprintsFor(
+  deps: Pick<CaseRunnerDeps, "candidate" | "surface" | "policy">,
+  item: AcceptanceCase,
+): CaseFingerprints {
+  return caseFingerprintsOf({
     candidateId: deps.candidate.candidateId,
-    caseKey: item.caseKey,
-    propsHash: item.propsHash,
     surface: deps.surface,
-    // Case-set-путь (W2): эталон и per-case политика — входы вердикта, поэтому их смена обязана
-    // инвалидировать reuse. Examples-путь оставляет заглушки `ids.ts`.
-    referenceAssetId: item.referenceAssetId ?? null,
-    ...(item.casePolicyHash === undefined ? {} : { casePolicyHash: item.casePolicyHash }),
+    policy: deps.policy,
+    case: item,
   });
+}
+
+/** Итоговый отпечаток случая: ключ полного reuse и дедупа. */
+export function fingerprintOf(
+  deps: Pick<CaseRunnerDeps, "candidate" | "surface" | "policy">,
+  item: AcceptanceCase,
+): string {
+  return caseFingerprintsFor(deps, item).case;
 }
 
 /**
@@ -153,10 +186,26 @@ export function foldRunVerdict(executions: CaseExecution[], policy: AcceptancePo
   return "pass";
 }
 
+/**
+ * Прогресс рана (D9). Контракт счётчиков — не косметика, он и был предметом P2-10 фидбэка
+ * («`reused` двусмысленен»):
+ *
+ * - `reused` — **только полный** reuse по `case_fingerprint` (плюс перенос baseline без дельты):
+ *   вердикт не пересчитывался вовсе;
+ * - `frameReused` — кадр не снимался (надмножество `reused`: сюда входят recompute и re-diff);
+ * - `verdictRecomputed` — вердикт пересчитан по сохранённым метрикам;
+ * - `rediffed` — кадр пересравнён с новым эталоном без съёмки.
+ *
+ * Случай может считаться и в `verdictRecomputed`, и в `rediffed` (сменился и эталон, и порог) —
+ * счётчики независимы и в сумме не обязаны давать `completed`.
+ */
 export interface RunProgress {
   total: number;
   completed: number;
   reused: number;
+  frameReused: number;
+  verdictRecomputed: number;
+  rediffed: number;
   failed: number;
   running: number;
   eta: { secondsRemaining: number; basis: "measured" | "estimate" };
@@ -173,6 +222,9 @@ export function progressOf(executions: CaseExecution[], total: number, emaMs: nu
     total,
     completed,
     reused: executions.filter((item) => item.reused).length,
+    frameReused: executions.filter((item) => item.frameReused === true).length,
+    verdictRecomputed: executions.filter((item) => item.verdictRecomputed === true).length,
+    rediffed: executions.filter((item) => item.rediffed === true).length,
     failed: executions.filter((item) => item.verdict === "fail" || item.verdict === "indeterminate" || item.status === "error").length,
     running,
     eta: {
@@ -294,10 +346,15 @@ export async function reusableRendererMatches(deps: CaseRunnerDeps, artifacts: G
   } catch { return false; }
 }
 
-/** Reuse: тот же отпечаток, тот же компонент и **физически существующие** артефакты (A4). */
-async function reusableResult(deps: CaseRunnerDeps, fingerprint: string): Promise<{ verdict: AcceptanceCaseVerdict; stored: StoredResult } | null> {
-  const row = deps.repo.caseResultForComponent(fingerprint, deps.candidate.componentId);
-  if (!row) return null;
+/** Разобранная строка кэша: гейты, качество съёмки и **физически существующие** артефакты (A4). */
+interface CachedResult {
+  row: AcceptanceCaseResultRow;
+  gates: GateResult[];
+  captureQuality: CaptureQualityRecord | null;
+  artifacts: GateArtifactRef[];
+}
+
+async function loadCached(deps: CaseRunnerDeps, row: AcceptanceCaseResultRow): Promise<CachedResult | null> {
   let artifacts: GateArtifactRef[];
   let stored: StoredResult;
   try {
@@ -309,19 +366,257 @@ async function reusableResult(deps: CaseRunnerDeps, fingerprint: string): Promis
     if (!(await artifactPresent(deps.context.dataDir, artifact.sha256))) return null;
   }
   if (!(await reusableRendererMatches(deps, artifacts))) return null;
-  return { verdict: row.verdict as AcceptanceCaseVerdict, stored };
+  return { row, gates: stored.gates, captureQuality: stored.captureQuality ?? null, artifacts };
 }
+
+/** Reuse: тот же отпечаток, тот же компонент и физически существующие артефакты (A4). */
+async function reusableResult(deps: CaseRunnerDeps, fingerprint: string): Promise<{ verdict: AcceptanceCaseVerdict; stored: StoredResult } | null> {
+  const row = deps.repo.caseResultForComponent(fingerprint, deps.candidate.componentId);
+  if (!row) return null;
+  const cached = await loadCached(deps, row);
+  return cached ? { verdict: row.verdict as AcceptanceCaseVerdict, stored: { gates: cached.gates, captureQuality: cached.captureQuality } } : null;
+}
+
+/**
+ * Снимок вердиктной политики строки кэша — **только валидный** (D0/D14).
+ *
+ * `verdict_policy_hash` здесь не украшение: снимок и хэш пишутся вместе, поэтому расхождение
+ * означает либо ручную правку БД, либо смену алгоритма канонизации, — и в обоих случаях дельту
+ * считать не по чему. `null` у вызывающего значит ровно одно: переснять.
+ */
+export function verdictPolicyOfRow(row: Pick<AcceptanceCaseResultRow, "verdict_policy_json" | "verdict_policy_hash">): VerdictPolicySnapshot | null {
+  if (row.verdict_policy_json === null || row.verdict_policy_hash === null) return null;
+  let snapshot: VerdictPolicySnapshot;
+  try { snapshot = JSON.parse(row.verdict_policy_json) as VerdictPolicySnapshot; }
+  catch { return null; }
+  if (snapshot === null || typeof snapshot !== "object") return null;
+  return verdictPolicyHashOf(snapshot) === row.verdict_policy_hash ? snapshot : null;
+}
+
+/** Скоуп форса (C1): «переоценить вердикт» и «переснять кадр» — разные по цене вещи. */
+export type RefreshScope = "frame" | "verdict";
 
 export interface ExecuteCaseOptions {
   /** Случай попал в выборку гейта `determinism` (план §4.2). */
   determinismSampled?: boolean;
-  /** `refresh` (A3): пересъёмка даже при годном кэше. */
-  refresh?: boolean;
+  /**
+   * Скоуп форса (C1). `undefined` — форса нет, работает полный каскад reuse.
+   * `"verdict"` запрещает **полный** reuse (вердикт обязан быть переоценён), но кадр из CAS
+   * переиспользовать разрешает — ровно это делает достижимым «recapture = 0» из фидбэка.
+   * `"frame"` — безусловная пересъёмка.
+   */
+  scope?: RefreshScope | null;
   /**
    * Причина форса (`refresh:all|failed|cases`, A3): пишется в `reuse_reason` случая и в evidence —
    * иначе «снят заново» неотличим от «кэша не было», и стоимость рана нечем объяснить.
    */
   refreshReason?: string | null;
+}
+
+/** Часть исполнения, которую отдаёт каскад reuse (остальное дописывает `executeCase`). */
+type ReusedExecution = Pick<CaseExecution,
+  "status" | "verdict" | "gates" | "severity" | "captureQuality" | "artifacts" | "reused"
+  | "frameReused" | "verdictRecomputed" | "rediffed" | "reuseReason">;
+
+interface CascadeOutcome {
+  execution?: ReusedExecution;
+  /** Причина пересъёмки, если каскад её выбрал осознанно (а не «кэша просто не было»). */
+  recaptureReason?: string;
+}
+
+/** Кадр случая в строке кэша — вход re-diff (D10/D15). */
+const paintArtifactOf = (artifacts: GateArtifactRef[]): GateArtifactRef | undefined =>
+  artifacts.find((artifact) => artifact.name === "paint.png");
+
+/**
+ * Кадр, не прошедший readiness, визуального вердикта не получает **никогда** (инвариант D5) —
+ * в том числе и на re-diff: сравнить с новым эталоном можно только кадр, про который доказано,
+ * что он готов. Такой случай уходит в пересъёмку.
+ */
+function frameCarriesVisualVerdict(gates: GateResult[]): boolean {
+  const readiness = gates.find((gate) => gate.gate === "readiness");
+  if (readiness && readiness.status !== "pass" && readiness.status !== "skipped" && readiness.status !== "not-implemented") return false;
+  return gates.every((gate) => gate.metrics?.skippedByReadiness !== true);
+}
+
+/**
+ * Каскад reuse (D-B) — четыре пути, по месту первого промаха:
+ *
+ * 1. совпал `case_fingerprint` → **полный reuse**;
+ * 2. совпали кадр и сравнение, разошёлся вердикт → **recompute** по сохранённым метрикам;
+ * 3. совпал кадр → **re-diff**: новое сравнение того же кадра с новым эталоном, без chromium;
+ * 4. иначе → **recapture**.
+ *
+ * Каждый шаг вниз честно дороже предыдущего и честно дешевле пересъёмки. Ни один из них не
+ * переносит вердикт «на глаз»: отсутствие доказательства (снимка политики, кадра в CAS,
+ * пересчитываемости гейта) — всегда пересъёмка, никогда stale-carry.
+ */
+async function attemptReuse(
+  deps: CaseRunnerDeps,
+  item: AcceptanceCase,
+  fps: CaseFingerprints,
+  scope: RefreshScope | null,
+  determinismSampled: boolean,
+): Promise<CascadeOutcome> {
+  const componentId = deps.candidate.componentId;
+
+  // 1. Полный reuse. Verdict-скоуп его запрещает: «переоценить» и «оставить как было» — не одно
+  //    и то же (D4 — сохранение флейк-ретрая: пересчитывать нечего ⇒ снимаем заново).
+  if (scope === null) {
+    const reused = await reusableResult(deps, fps.case);
+    if (reused) {
+      deps.repo.touchCaseResult(fps.case);
+      return {
+        execution: {
+          status: "done",
+          verdict: reused.verdict,
+          gates: reused.stored.gates,
+          severity: severityOf(reused.stored.gates, deps.policy),
+          captureQuality: reused.stored.captureQuality,
+          artifacts: artifactsOf(reused.stored.gates),
+          reused: true,
+          frameReused: true,
+          reuseReason: "case_fingerprint",
+        },
+      };
+    }
+  }
+
+  if (!verdictRecomputeEnabled()) return {};
+
+  // 2. Recompute: кадр и сравнение те же, политика другая.
+  const comparisonRow = deps.repo.caseResultForFrameComparison(fps.frame, fps.comparison, componentId);
+  if (comparisonRow && comparisonRow.case_fingerprint !== fps.case) {
+    const oldPolicy = verdictPolicyOfRow(comparisonRow);
+    // D0: снимка нет или он не про эту строку — дельта неизвестна. Переснять, не переносить.
+    if (oldPolicy === null) return { recaptureReason: "recapture:policy_snapshot_missing" };
+    const cached = await loadCached(deps, comparisonRow);
+    if (cached) {
+      const result = reevaluateGates(cached.gates, oldPolicy, fps.verdictPolicySnapshot);
+      if (!result.reevaluable) return { recaptureReason: "recapture:policy_delta" };
+      // Verdict-скоуп без дельты — эскалация до пересъёмки (D4).
+      if (scope === "verdict" && result.delta.length === 0) return { recaptureReason: "recapture:no_verdict_delta" };
+      const gates = result.changed
+        ? await rewriteDerivedArtifacts(deps.context.dataDir, result.gates, result.recomputedGates)
+        : result.gates;
+      return { execution: finishReused(deps, item, fps, gates, cached.captureQuality, { verdictRecomputed: true, reuseReason: "recompute:policy" }) };
+    }
+  }
+
+  // 3. Re-diff: кадр тот же, сравнение другое.
+  const frameRow = deps.repo.caseResultForFrame(fps.frame, componentId);
+  if (!frameRow || frameRow.case_fingerprint === fps.case) return {};
+  const oldPolicy = verdictPolicyOfRow(frameRow);
+  if (oldPolicy === null) return { recaptureReason: "recapture:policy_snapshot_missing" };
+  const cached = await loadCached(deps, frameRow);
+  if (!cached) return { recaptureReason: "recapture:frame_missing" };
+  const paint = paintArtifactOf(cached.artifacts);
+  if (!paint || !(await artifactPresent(deps.context.dataDir, paint.sha256))) {
+    return { recaptureReason: "recapture:frame_missing" };
+  }
+  if (!frameCarriesVisualVerdict(cached.gates)) return { recaptureReason: "recapture:frame_not_ready" };
+
+  // Остальные гейты переезжают через ту же дельта-карту: сменившийся `expectedGeometry` — это и
+  // comparison-промах (re-diff), и вердиктная дельта геометрии (пересчёт), и оба обязаны сойтись.
+  const carried = reevaluateGates(cached.gates.filter((gate) => gate.gate !== "visual"), oldPolicy, fps.verdictPolicySnapshot);
+  if (!carried.reevaluable) return { recaptureReason: "recapture:policy_delta" };
+
+  const ctx = gateContextOf(deps, item, determinismSampled);
+  const visual = await rediffCase(ctx, paint.sha256);
+  const gates = [...carried.gates, visual].sort((left, right) => GATE_ORDER.indexOf(left.gate) - GATE_ORDER.indexOf(right.gate));
+  const rewritten = carried.changed
+    ? await rewriteDerivedArtifacts(deps.context.dataDir, gates, carried.recomputedGates)
+    : gates;
+  return {
+    execution: finishReused(deps, item, fps, rewritten, cached.captureQuality, {
+      rediffed: true,
+      ...(carried.changed ? { verdictRecomputed: true } : {}),
+      reuseReason: "rediff:comparison",
+    }),
+  };
+}
+
+/**
+ * Общий хвост recompute/re-diff: вердикт по новой политике, причины, запись результата под
+ * **новым** `case_fingerprint`. Побочный эффект намеренный (тот же, что у переноса baseline):
+ * следующий ран той же политики переиспользует случай уже обычным путём, за один lookup.
+ */
+function finishReused(
+  deps: CaseRunnerDeps,
+  item: AcceptanceCase,
+  fps: CaseFingerprints,
+  gates: GateResult[],
+  captureQuality: CaptureQualityRecord | null,
+  marks: { verdictRecomputed?: boolean; rediffed?: boolean; reuseReason: string },
+): ReusedExecution {
+  // Классификация причин относится к вердикту, а не к строке кэша: старые причины снимаются, новые
+  // считаются от новых метрик (иначе прошедший после пересчёта случай унёс бы объяснение провала).
+  for (const gate of gates) delete gate.causes;
+  const verdict = caseVerdictOf(gates, deps.policy);
+  annotateCauses(gates, deps.surface.dsf);
+  const stored: StoredResult = { gates, captureQuality };
+  deps.repo.putCaseResult({
+    caseFingerprint: fps.case,
+    componentId: deps.candidate.componentId,
+    artifacts: artifactsOf(gates),
+    metrics: JSON.parse(canonicalStringify(stored)) as StoredResult,
+    verdict,
+    producedRunId: deps.runId,
+    frameFingerprint: fps.frame,
+    comparisonFingerprint: fps.comparison,
+    verdictPolicyHash: fps.verdictPolicy,
+    verdictPolicy: fps.verdictPolicySnapshot,
+  });
+  return {
+    status: "done",
+    verdict,
+    gates,
+    severity: severityOf(gates, deps.policy),
+    captureQuality,
+    artifacts: artifactsOf(gates),
+    reused: false,
+    frameReused: true,
+    ...marks,
+  };
+}
+
+/** Контекст гейтов случая — общий для съёмки и для re-diff. */
+function gateContextOf(deps: CaseRunnerDeps, item: AcceptanceCase, determinismSampled: boolean): GateContext {
+  return {
+    ...deps.context,
+    policy: deps.policy,
+    runId: deps.runId,
+    candidate: deps.candidate,
+    case: item,
+    surface: deps.surface,
+    determinismSampled,
+    shared: deps.shared,
+  };
+}
+
+/**
+ * Квитанция reuse случая (форма W8, пишется с W1): что именно переиспользовано и на каких
+ * отпечатках. `reuseReason` остаётся производной сводкой — квитанция отвечает на вопрос «почему
+ * ран стоил столько» полем за полем, а не одной строкой.
+ */
+export function reuseReceiptOf(execution: CaseExecution): Record<string, unknown> {
+  return {
+    reuse: {
+      candidate: execution.frameReused === true,
+      frame: execution.frameReused === true,
+      readiness: execution.frameReused === true,
+      geometry: execution.frameReused === true && execution.verdictRecomputed !== true,
+      visualMetrics: execution.frameReused === true && execution.rediffed !== true,
+      verdict: execution.reused,
+    },
+    fingerprints: {
+      frame: execution.frameFingerprint ?? null,
+      comparison: execution.comparisonFingerprint ?? null,
+      verdictPolicy: execution.verdictPolicyHash ?? null,
+      case: execution.caseFingerprint,
+    },
+    ...(execution.reuseReason === null ? {} : { reuseReason: execution.reuseReason }),
+  };
 }
 
 /**
@@ -331,43 +626,24 @@ export interface ExecuteCaseOptions {
  */
 export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, options: ExecuteCaseOptions = {}): Promise<CaseExecution> {
   const startedAt = deps.context.now();
-  const fingerprint = fingerprintOf(deps, item);
+  const fps = caseFingerprintsFor(deps, item);
   const base = {
-    caseId: item.caseId, caseKey: item.caseKey, caseFingerprint: fingerprint,
+    caseId: item.caseId, caseKey: item.caseKey, caseFingerprint: fps.case,
+    frameFingerprint: fps.frame, comparisonFingerprint: fps.comparison, verdictPolicyHash: fps.verdictPolicy,
     aliasOfCaseId: item.aliasOfCaseId,
   };
 
-  const refreshReason = options.refresh === true ? options.refreshReason ?? "refresh" : null;
+  const scope = options.scope ?? null;
+  const forcedReason = scope === null ? null : options.refreshReason ?? `refresh:${scope}`;
 
-  if (options.refresh !== true) {
-    const reused = await reusableResult(deps, fingerprint);
-    if (reused) {
-      deps.repo.touchCaseResult(fingerprint);
-      return {
-        ...base,
-        status: "done",
-        verdict: reused.verdict,
-        gates: reused.stored.gates,
-        severity: severityOf(reused.stored.gates, deps.policy),
-        captureQuality: reused.stored.captureQuality,
-        artifacts: artifactsOf(reused.stored.gates),
-        reused: true,
-        reuseReason: "case_fingerprint",
-        durationMs: deps.context.now() - startedAt,
-      };
-    }
+  // Frame-скоуп минует каскад целиком: пересъёмка — это и есть прямое указание автора.
+  const cascade = scope === "frame" ? {} as CascadeOutcome : await attemptReuse(deps, item, fps, scope, options.determinismSampled === true);
+  if (cascade.execution) {
+    return { ...base, ...cascade.execution, durationMs: deps.context.now() - startedAt };
   }
+  const refreshReason = forcedReason ?? cascade.recaptureReason ?? null;
 
-  const ctx: GateContext = {
-    ...deps.context,
-    policy: deps.policy,
-    runId: deps.runId,
-    candidate: deps.candidate,
-    case: item,
-    surface: deps.surface,
-    determinismSampled: options.determinismSampled === true,
-    shared: deps.shared,
-  };
+  const ctx: GateContext = gateContextOf(deps, item, options.determinismSampled === true);
   const gates: GateResult[] = [];
   const modes = deps.policy.gates;
   for (const name of GATE_ORDER) {
@@ -418,12 +694,16 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
   const captureQuality =(deps.shared.get(renderQualityKey(item.caseId)) as CaptureQualityRecord | undefined) ?? null;
   const stored: StoredResult = { gates, captureQuality };
   deps.repo.putCaseResult({
-    caseFingerprint: fingerprint,
+    caseFingerprint: fps.case,
     componentId: deps.candidate.componentId,
     artifacts: artifactsOf(gates),
     metrics: JSON.parse(canonicalStringify(stored)) as StoredResult,
     verdict,
     producedRunId: deps.runId,
+    frameFingerprint: fps.frame,
+    comparisonFingerprint: fps.comparison,
+    verdictPolicyHash: fps.verdictPolicy,
+    verdictPolicy: fps.verdictPolicySnapshot,
   });
   return {
     ...base,
@@ -458,11 +738,26 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
  * импакта. Артефакты при этом не осиротеют — union-refcount GC (`artifactStillReferenced`) видит
  * и строки `acceptance_cases` нового рана, и строку кэша.
  */
+export type BaselineCaseSnapshot = Pick<AcceptanceCaseRow,
+  "verdict" | "status" | "gates_json" | "capture_quality_json"
+  | "frame_fingerprint" | "comparison_fingerprint" | "verdict_policy_hash">;
+
+export interface CarryBaselineOptions {
+  /**
+   * Вердиктная политика **baseline-случая**, реконструированная из живого baseline-рана
+   * (`policy_profile_id` + манифест его набора) и провалидированная по `verdict_policy_hash`
+   * строки случая. `null` — реконструкция недоступна или хэш не сошёлся: перенос через границу
+   * политики запрещён (D0/D14), случай снимается заново.
+   */
+  baselinePolicy?: VerdictPolicySnapshot | null;
+}
+
 export async function carryBaselineCase(
   deps: CaseRunnerDeps,
   item: AcceptanceCase,
-  baseline: { verdict: AcceptanceCaseVerdict | null; status: AcceptanceCaseStatus; gates_json: string | null; capture_quality_json: string | null },
+  baseline: BaselineCaseSnapshot,
   basis: string,
+  options: CarryBaselineOptions = {},
 ): Promise<CaseExecution | null> {
   if (baseline.verdict === null || baseline.status !== "done") return null;
   let gates: GateResult[];
@@ -477,30 +772,98 @@ export async function carryBaselineCase(
   try { captureQuality = JSON.parse(baseline.capture_quality_json ?? "null") as CaptureQualityRecord | null; }
   catch { captureQuality = null; }
 
-  const fingerprint = fingerprintOf(deps, item);
-  const stored: StoredResult = { gates, captureQuality };
-  deps.repo.putCaseResult({
-    caseFingerprint: fingerprint,
-    componentId: deps.candidate.componentId,
-    artifacts,
-    metrics: JSON.parse(canonicalStringify(stored)) as StoredResult,
-    verdict: baseline.verdict,
-    producedRunId: deps.runId,
-  });
-  return {
+  const fps = caseFingerprintsFor(deps, item);
+  const base = {
     caseId: item.caseId,
     caseKey: item.caseKey,
-    caseFingerprint: fingerprint,
+    caseFingerprint: fps.case,
+    frameFingerprint: fps.frame,
+    comparisonFingerprint: fps.comparison,
+    verdictPolicyHash: fps.verdictPolicy,
     aliasOfCaseId: item.aliasOfCaseId,
-    status: "done",
-    verdict: baseline.verdict,
-    gates,
-    severity: severityOf(gates, deps.policy),
-    captureQuality,
-    artifacts,
-    reused: true,
-    reuseReason: `impact:${basis}`,
     durationMs: 0,
+  };
+
+  // NULL-слой = «неизвестно» (D17): до-миграционная строка не доказывает ни сравнения, ни
+  // политики, под которыми считался её вердикт. Такой случай снимается, а не переносится.
+  if (baseline.frame_fingerprint === null || baseline.comparison_fingerprint === null || baseline.verdict_policy_hash === null) {
+    return null;
+  }
+  // Кадровый слой здесь **намеренно не сравнивается**: он содержит `candidateId`, а перенос
+  // существует ровно потому, что кандидат сменился (D6). Доказательством эквивалентности кадра
+  // тут служит импакт-анализ («этот случай не мог измениться»), а не отпечаток; сравниваются
+  // те слои, про которые импакт ничего не знает, — сравнение и вердиктная политика.
+  const sameComparison = baseline.comparison_fingerprint === fps.comparison;
+  const samePolicy = baseline.verdict_policy_hash === fps.verdictPolicy;
+
+  // 1. Все три слоя совпали — перенос как есть (исторический путь W6).
+  if (sameComparison && samePolicy) {
+    const stored: StoredResult = { gates, captureQuality };
+    deps.repo.putCaseResult({
+      caseFingerprint: fps.case,
+      componentId: deps.candidate.componentId,
+      artifacts,
+      metrics: JSON.parse(canonicalStringify(stored)) as StoredResult,
+      verdict: baseline.verdict,
+      producedRunId: deps.runId,
+      frameFingerprint: fps.frame,
+      comparisonFingerprint: fps.comparison,
+      verdictPolicyHash: fps.verdictPolicy,
+      verdictPolicy: fps.verdictPolicySnapshot,
+    });
+    return {
+      ...base,
+      status: "done",
+      verdict: baseline.verdict,
+      gates,
+      severity: severityOf(gates, deps.policy),
+      captureQuality,
+      artifacts,
+      reused: true,
+      frameReused: true,
+      reuseReason: `impact:${basis}`,
+    };
+  }
+
+  if (!verdictRecomputeEnabled()) return null;
+  // Дельта считается только по снимку политики baseline-рана; его нет — переснять (D0/D14).
+  const oldPolicy = options.baselinePolicy ?? null;
+  if (oldPolicy === null || verdictPolicyHashOf(oldPolicy) !== baseline.verdict_policy_hash) return null;
+
+  // 2. Кадр и сравнение те же, политика другая — пересчёт по сохранённым метрикам.
+  if (sameComparison) {
+    const result = reevaluateGates(gates, oldPolicy, fps.verdictPolicySnapshot);
+    if (!result.reevaluable) return null;
+    const next = result.changed
+      ? await rewriteDerivedArtifacts(deps.context.dataDir, result.gates, result.recomputedGates)
+      : result.gates;
+    return {
+      ...base,
+      ...finishReused(deps, item, fps, next, captureQuality, {
+        verdictRecomputed: true,
+        reuseReason: `impact:${basis}+recompute:policy`,
+      }),
+    };
+  }
+
+  // 3. Сменилось сравнение — re-diff кадра baseline с новым эталоном.
+  const paint = paintArtifactOf(artifacts);
+  if (!paint || !frameCarriesVisualVerdict(gates)) return null;
+  const carried = reevaluateGates(gates.filter((gate) => gate.gate !== "visual"), oldPolicy, fps.verdictPolicySnapshot);
+  if (!carried.reevaluable) return null;
+  const ctx = gateContextOf(deps, item, false);
+  const visual = await rediffCase(ctx, paint.sha256);
+  const merged = [...carried.gates, visual].sort((left, right) => GATE_ORDER.indexOf(left.gate) - GATE_ORDER.indexOf(right.gate));
+  const rewritten = carried.changed
+    ? await rewriteDerivedArtifacts(deps.context.dataDir, merged, carried.recomputedGates)
+    : merged;
+  return {
+    ...base,
+    ...finishReused(deps, item, fps, rewritten, captureQuality, {
+      rediffed: true,
+      ...(carried.changed ? { verdictRecomputed: true } : {}),
+      reuseReason: `impact:${basis}+rediff:comparison`,
+    }),
   };
 }
 

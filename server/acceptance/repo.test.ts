@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { migrate } from "../migrations";
 import { AcceptanceRepo, isTerminalRunStatus } from "./repo";
 import { ApiError } from "../http";
-import { buildFingerprint, candidateId, caseFingerprintV0, isRunId, runId } from "./ids";
+import { buildFingerprint, candidateId, caseFingerprintsOf, isRunId, runId } from "./ids";
 import { ACCEPTANCE_POLICIES, policyProfileHash, requiredGates } from "./policies";
 
 const policy = ACCEPTANCE_POLICIES["default-v1"];
@@ -45,7 +45,7 @@ function seedRun(repo: AcceptanceRepo, id: string, extra: Record<string, unknown
 
 test("v25 lands on a database migrated from scratch and leaves no foreign-key violations", () => {
   const db = dbForRepo();
-  expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(28);
+  expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(29);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   // Partial unique index — первый в проекте; его наличие и есть механизм «≤1 нетерминальный run».
   const index = db.query("SELECT sql FROM sqlite_master WHERE type='index' AND name='acceptance_runs_one_in_flight'").get() as { sql: string } | null;
@@ -87,10 +87,14 @@ test("identity is component-scoped: one sourceHash shared by two components neve
   }));
 
   // …и case-отпечатки разные при полностью одинаковых случае/поверхности — иначе cross-owner reuse.
-  const caseA = caseFingerprintV0({ candidateId: first.candidate_id, caseKey: "default", propsHash: "p", surface });
-  const caseB = caseFingerprintV0({ candidateId: second.candidate_id, caseKey: "default", propsHash: "p", surface });
+  const fingerprintFor = (candidate: string): string => caseFingerprintsOf({
+    candidateId: candidate, surface, policy: ACCEPTANCE_POLICIES["default-v1"],
+    case: { caseKey: "default", propsHash: "p" },
+  }).case;
+  const caseA = fingerprintFor(first.candidate_id);
+  const caseB = fingerprintFor(second.candidate_id);
   expect(caseA).not.toBe(caseB);
-  expect(caseA).toBe(caseFingerprintV0({ candidateId: first.candidate_id, caseKey: "default", propsHash: "p", surface }));
+  expect(caseA).toBe(fingerprintFor(first.candidate_id));
   db.close();
 });
 

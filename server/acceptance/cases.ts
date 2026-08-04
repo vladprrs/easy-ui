@@ -60,6 +60,12 @@ export interface AcceptanceCase {
   expectedGeometry?: { width: number; height: number } | null;
   casePolicyHash?: string;
   /**
+   * `policy.profile` case-set-манифеста — **декларация** набора о том, по какому профилю он
+   * задуман. Ран исполняется профилем запроса (`policyId`), но декларация входит в вердиктный слой
+   * отпечатка (D-B): её смена меняет смысл вердикта, и переиспользовать старый нельзя.
+   */
+  declaredPolicyProfile?: string | null;
+  /**
    * Сами per-case допуски манифеста (W2), а не только их хэш: гейт `geometry` v2 (W3) читает
    * `allowPaintOverflow`/`expectedClip` как вход вердикта. Хэш остаётся ключом инвалидации reuse,
    * значения — входом политики; дублирования нет, это две разные роли одного объекта.

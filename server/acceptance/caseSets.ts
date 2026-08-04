@@ -171,6 +171,18 @@ export function validateManifest(db: Database, componentId: string, raw: unknown
     }
   }
 
+  // Per-case политика на алиасе (D16, план 2026-08-04): вердикт алиаса **всегда** идентичен
+  // вердикту цели (D10), своей съёмки и своего сравнения у него нет. Допуск, адресованный алиасу,
+  // не может быть исполнен ничем — это не «мягкое игнорирование», а объявленное намерение, которое
+  // никогда не сбудется, поэтому отказ, а не warning.
+  for (const caseId of Object.keys(manifest.policy?.perCase ?? {})) {
+    const target = byId.get(caseId);
+    if (target?.aliasOf !== undefined) {
+      throw new ApiError(422, "per_case_policy_on_alias",
+        `Case ${caseId} is an alias of ${target.aliasOf}; per-case policy must be declared on the alias target, not on the alias`);
+    }
+  }
+
   // Дубли props без `aliasOf`: явный отказ. Матрица обязана платить за каждый кадр осознанно.
   const firstByPropsHash = new Map<string, string>();
   for (const item of manifest.cases) {
@@ -335,6 +347,7 @@ export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCas
       referenceAssetId: item.referenceAssetId ?? null,
       expectedGeometry: item.expectedGeometry ?? null,
       casePolicyHash: casePolicyHashOf(manifest, item.id),
+      declaredPolicyProfile: manifest.policy?.profile ?? null,
       // W3: допуски геометрии (`allowPaintOverflow`/`expectedClip`) — вход вердикта гейта, а не
       // только материал хэша; без них манифест объявлял бы намерение, которого никто не читает.
       ...(manifest.policy?.perCase?.[item.id] ? { casePolicy: manifest.policy.perCase[item.id] } : {}),

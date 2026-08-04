@@ -22,6 +22,11 @@ services:
       EASYUI_ACCEPTANCE_DISABLED: ${EASYUI_ACCEPTANCE_DISABLED:-}
       EASYUI_THEME_RESOLVER_V2_DISABLED: ${EASYUI_THEME_RESOLVER_V2_DISABLED:-}
       EASYUI_ACCEPTANCE_MATRIX: ${EASYUI_ACCEPTANCE_MATRIX:-1}
+      # Пересчёт вердикта и re-diff по сохранённым кадрам (план 2026-08-04, W1). Default on;
+      # `0` выключает **обе** ветки сразу — любой промах `case_fingerprint` уводит в пересъёмку,
+      # но никогда в перенос устаревшего вердикта. Откат флага не ретроактивен: уже записанные
+      # пересчитанные строки остаются годными (их чистка — bump CASE_FINGERPRINT_ALGO_VERSION).
+      EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE: ${EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE:-1}
       EASYUI_COMPOSITION_V3: ${EASYUI_COMPOSITION_V3:-1}
       EASYUI_RENDERER_FLAGS: ${EASYUI_RENDERER_FLAGS:-}
       EASYUI_RENDERER_EPOCH: ${EASYUI_RENDERER_EPOCH:-}

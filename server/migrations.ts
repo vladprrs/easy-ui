@@ -874,6 +874,55 @@ export const migrations = [
       "reference_receipt_sha256 TEXT",
     ]) db.run(`ALTER TABLE visual_runs ADD COLUMN ${column}`);
   },
+  (db: Database) => {
+    // v29: расслоение отпечатка случая приёмки на три слоя
+    // (план `docs/plans/2026-08-04-acceptance-pipeline-feedback.md`, решение D-B, волна W1).
+    //
+    // Форма миграции — **только `ADD COLUMN` + один индекс, всё nullable, без backfill**, и это
+    // не осторожность ради осторожности, а требование семантики:
+    //
+    // 1. **NULL-слой = «неизвестно» = recapture.** Строка, записанная до этой миграции, знает
+    //    только плоский `case_fingerprint`; из чего он сложился — из какого кадра, какого эталона
+    //    и какой политики — не знает никто. Вычислить слои задним числом нельзя (для этого нужны
+    //    и профиль рана, и манифест набора на момент съёмки), а угадать — значит переиспользовать
+    //    вердикт, посчитанный по неизвестной политике. Поэтому backfill'а нет, а lookup'ы по
+    //    слоям (`frame_fingerprint=?`) NULL-строку просто не находят: SQL-сравнение с NULL
+    //    ложно, и legacy-строка честно уводит в пересъёмку (D17).
+    // 2. **`verdict_policy_json` — снимок, `verdict_policy_hash` — его валидатор** (D0/D14).
+    //    Дельта старой и новой политики вычислима только по значениям; хэш отвечает на вопрос
+    //    «этот ли снимок относится к этой строке». Снимка нет или хэш не сошёлся ⇒ recapture,
+    //    никогда перенос.
+    // 3. **ALGO 5→6 обнуляет старый кэш и без миграции.** Строки v28 не удаляются: они остаются
+    //    материалом GC (`unreferencedCaseResults`) и refcount'а артефактов, просто перестают
+    //    быть кандидатами на reuse.
+    //
+    // Откат образа переживается: v28-код читает эти таблицы `SELECT *` и собирает ответы по
+    // именованным полям, поэтому лишние колонки ему не мешают (тот же инвариант, что у v28).
+    for (const column of [
+      "frame_fingerprint TEXT",
+      "comparison_fingerprint TEXT",
+      "verdict_policy_hash TEXT",
+      "verdict_policy_json TEXT",
+    ]) db.run(`ALTER TABLE acceptance_case_results ADD COLUMN ${column}`);
+    // Индекс покрывает оба новых lookup'а: re-diff/`forceOf` ищут по (component_id, frame),
+    // recompute — по (component_id, frame, comparison) и доотсеивает comparison строкой-фильтром.
+    db.run("CREATE INDEX IF NOT EXISTS acceptance_case_results_frame ON acceptance_case_results (component_id, frame_fingerprint)");
+    for (const column of [
+      "frame_fingerprint TEXT",
+      "comparison_fingerprint TEXT",
+      "verdict_policy_hash TEXT",
+      // Форма квитанции reuse (W8): `{reuse:{…}, fingerprints:{frame,comparison,verdictPolicy,case}}`.
+      // Пишется уже сейчас — выдача в evidence приезжает волной W8, но данные, которых не собрали,
+      // задним числом не появятся.
+      "reuse_receipt_json TEXT",
+    ]) db.run(`ALTER TABLE acceptance_cases ADD COLUMN ${column}`);
+    // Алгебра refresh (C1): `{requested, impact, effective}` со скоупами, посчитанная на старте и
+    // персистентная — иначе «почему этот ран ничего не переснял» невосстановимо после рестарта.
+    db.run("ALTER TABLE acceptance_runs ADD COLUMN refresh_json TEXT");
+    // Терминальный статус `error` требует названной причины: `refresh_scope_empty` (D2) —
+    // не 422 на асинхронной постановке, а исход рана, видимый в run-view и в CLI.
+    db.run("ALTER TABLE acceptance_runs ADD COLUMN status_reason TEXT");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

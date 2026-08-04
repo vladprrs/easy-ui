@@ -18,7 +18,7 @@ import {
   strictManifestEnabled,
   type RendererDeclaration,
 } from "./renderer";
-import { CASE_FINGERPRINT_ALGO_VERSION, caseFingerprint, DEFAULT_READINESS_POLICY_HASH } from "../acceptance/ids";
+import { CASE_FINGERPRINT_ALGO_VERSION, caseFingerprint, DEFAULT_READINESS_POLICY_HASH, frameFingerprint } from "../acceptance/ids";
 import pin from "./rendererPin.json";
 import { openDatabase } from "../db";
 import { createTestHandler } from "../test-auth";
@@ -57,14 +57,18 @@ const declaration = (patch: Partial<Record<string, unknown>> = {}): RendererDecl
 
 const caseWith = (rendererFingerprintValue: string): string => caseFingerprint({
   algoVersion: CASE_FINGERPRINT_ALGO_VERSION,
-  candidateId: `cand_${"0".repeat(64)}`,
-  caseKey: "alpha",
-  propsHash: "props-1",
-  surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
-  readinessPolicyHash: DEFAULT_READINESS_POLICY_HASH,
-  rendererFingerprint: rendererFingerprintValue,
-  casePolicyHash: "case-policy-v0",
-  referenceAssetId: null,
+  // Отпечаток случая расслоён (план 2026-08-04, D-B): рендерер живёт в **кадровом** слое, и
+  // именно поэтому его смена уводит в пересъёмку, а смена порога или эталона — нет.
+  frame: frameFingerprint({
+    candidateId: `cand_${"0".repeat(64)}`,
+    caseKey: "alpha",
+    propsHash: "props-1",
+    surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
+    readinessPolicyHash: DEFAULT_READINESS_POLICY_HASH,
+    rendererFingerprint: rendererFingerprintValue,
+  }),
+  comparison: "comparison-fixture",
+  verdictPolicy: "verdict-policy-fixture",
 });
 
 describe("renderer fingerprint 2.0", () => {
@@ -107,10 +111,12 @@ describe("renderer fingerprint 2.0", () => {
     expect(rendererFingerprintOf(base, DEFAULT_READINESS_POLICY_HASH)).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  test("bump алгоритма отпечатка случая в пакете ровно один: версия === 5", () => {
-    // §2.2 N5: R1 меняет схему входа (captureEnvFingerprint → rendererFingerprint), дальнейшие
-    // волны (флаги R2a, строгая readiness R4) меняют только значения внутри уже входящих хешей.
-    expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(5);
+  test("bump алгоритма отпечатка случая: версия === 6", () => {
+    // §2.2 N5 пакета renderer-contract-2 объявлял ровно один bump — и для **того** пакета это
+    // осталось верным (R1 сменил схему входа, R2a/R4 — только значения внутри уже входящих хешей).
+    // Версия 6 принадлежит другому плану (2026-08-04, решение D-B): отпечаток расслоён на
+    // кадр/сравнение/вердикт, и инвалидация накопленного reuse там санкционирована явно.
+    expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(6);
   });
 
   test("детерминизм-флаги запуска входят в отпечаток дословно", () => {

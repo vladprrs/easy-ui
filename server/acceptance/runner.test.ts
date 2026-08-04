@@ -692,11 +692,17 @@ test("смена requireVisual инвалидирует reuse: вердикт ad
   const soft = await runWithCaseSet(harness, caseSetOf(broken));
   expect(soft.run.status).toBe("pass");
 
-  // Тот же случай, тот же кадр, тот же эталон — но теперь визуал обязателен. Переиспользовать
-  // прошлый `pass` нельзя: он посчитан по другой обязательности.
+  // Тот же случай, тот же кадр, тот же эталон — но теперь визуал обязателен. Прошлый `pass`
+  // унаследован быть не может: он посчитан по другой обязательности. С расслоением отпечатка
+  // (план 2026-08-04) это уже не пересъёмка, а **пересчёт**: кадр и сравнение совпали, разошёлся
+  // только вердиктный слой, и метрик расхождения достаточно, чтобы выдать честный новый вердикт.
+  const capturedBefore = harness.service.calls.length;
   const hard = await runWithCaseSet(harness, caseSetOf(broken, { requireVisual: true }));
   expect(hard.run.status).toBe("fail");
-  expect(harness.repo.cases(hard.run.run_id)[0]!.reuse_reason).toBeNull();
+  expect(harness.repo.cases(hard.run.run_id)[0]!.reuse_reason).toBe("recompute:policy");
+  expect(harness.service.calls.length).toBe(capturedBefore);
+  const progress = JSON.parse(hard.run.progress_json) as { reused: number; frameReused: number; verdictRecomputed: number };
+  expect(progress).toMatchObject({ reused: 0, frameReused: 1, verdictRecomputed: 1 });
   harness.db.close();
 });
 

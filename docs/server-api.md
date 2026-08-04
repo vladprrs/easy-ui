@@ -443,7 +443,7 @@ CLI: `driver.mjs reject <candidateId> --reason <text>`.
 
 **Исполнение.** Ран живёт вне screenshot-помпы: собственный цикл ставит capture-джобы по одной, оставляя интерактиву слоты очереди, ретраит только инфраструктурные исходы джобы и терминализуется watchdog'ом при превышении дедлайна профиля. Пережившие рестарт `queued|running`-раны переводятся в `error` стартовой уборкой — потеря дешёвая, потому что повтор переиспользует результаты случаев по `case_fingerprint` (в `progress.reused`). Гейты: `contract`, `defaults`, `render`, `determinism` (повтор на выборке, побайтово), `audit`, [`geometry` 2.0](#geometry-contract-20--probe-paint-волна-w3-план-2026-08-03) и [`readiness`](#deterministic-capture-readiness-волна-w4-план-2026-08-03) — обязательные; [`visual`](#минимальный-визуальный-гейт-приёмки-волна-w5a-план-2026-08-03-2-a5) — advisory в `default-v1` и `required` в `pixel-strict-v1` либо при `requireVisual` case-set-манифеста; `regression`/`interactions` — `not-implemented` и в свёртке не участвуют. Свёртка: `fail` — любой случай `fail` **или** `indeterminate` по обязательному гейту; `error` — инфраструктурный отказ и нет ни одного `fail`; `cancelled` — по cancel; иначе `pass`. `reused`/`skipped`/алиасы не маскируют `fail`.
 
-**`GET /acceptance-runs/:runId`** отдаёт `status`, `policy {id,hash}`, `progress {total, completed, reused, failed, running, eta {secondsRemaining, basis}}`, `gates` (сводка «гейт → статус → сколько случаев»), `evidenceManifestHash` и `failedCases`, отсортированные по severity (`{rank, class, score}`) с перечнем провалившихся гейтов и их `detail`. **`/cases`** добавляет `propsHash`, `caseFingerprint`, `aliasOfCaseId`, `reuseReason`, качество капчура и `artifacts: [{name, sha256, bytes}]` — имена и адреса, но не содержимое.
+**`GET /acceptance-runs/:runId`** отдаёт `status`, `statusReason` (названная причина терминального статуса, сегодня — `refresh_scope_empty`; иначе `null`), `policy {id,hash}`, `progress {total, completed, reused, frameReused, verdictRecomputed, rediffed, failed, running, eta {secondsRemaining, basis}}` (смысл счётчиков reuse — [ниже](#трёхслойный-отпечаток-случая-каскад-reuse-и-алгебра-refresh-волна-w1-план-2026-08-04)), `refresh {requested, impact, effective}`, `gates` (сводка «гейт → статус → сколько случаев»), `evidenceManifestHash` и `failedCases`, отсортированные по severity (`{rank, class, score}`) с перечнем провалившихся гейтов и их `detail`. **`/cases`** добавляет `propsHash`, `caseFingerprint`, `aliasOfCaseId`, `reuseReason`, качество капчура и `artifacts: [{name, sha256, bytes}]` — имена и адреса, но не содержимое.
 
 **`GET /acceptance-runs/:runId/evidence`** — ZIP: `manifest.json`, `SHA256SUMS` (формат `sha256sum`, строки `"<sha256>  <caseId>/<name>"`) и сами артефакты по путям `<caseId>/<name>` (`render.png`, `geometry.json`, `determinism.png`, …). Манифест пишется при терминализации рана; до неё — `409 evidence_not_ready`. Сырьё тяжелее `limits.evidenceMaxBytes` — `413 evidence_too_large` (проверяется по размерам из манифеста, до чтения байтов). Артефакт, уже вычищенный GC evidence, остаётся строкой в `SHA256SUMS`, но отсутствует в архиве: `sha256sum -c` покажет ровно то, чего не хватает.
 
@@ -468,6 +468,55 @@ CLI: `driver.mjs reject <candidateId> --reason <text>`.
 CLI: `driver.mjs impact <id> --candidate <candidateId> --baseline-run <runId>` (dry-run отчёт), `driver.mjs accept <id> --baseline-run <runId>` (частичный ран).
 
 **Лимиты в discovery.** `limits.acceptanceMaxCasesPerRun` (случаев на ран), `limits.acceptanceMaxJobsPerRun` (capture-джоб на ран у профиля по умолчанию), `limits.acceptanceCaseTtlHours` (TTL кэша результатов случаев) и `limits.evidenceMaxBytes` (потолок байт evidence и экспорта).
+
+#### Трёхслойный отпечаток случая, каскад reuse и алгебра refresh (волна W1, план 2026-08-04)
+
+Плоский `case_fingerprint` смешивал в одном хэше три разнородные вещи — вход съёмки, вход сравнения и вход вердикта, — поэтому смена **одного числа** в политике («порог 2% → 0.5%») инвалидировала весь накопленный reuse и стоила полной пересъёмки матрицы. С этой волны отпечаток расслоён; `CASE_FINGERPRINT_ALGO_VERSION` поднят 5 → 6 (накопленный прод-кэш инвалидируется один раз, первый ран после деплоя — холодный).
+
+| Слой | Что в нём | Что означает совпадение |
+|---|---|---|
+| `frameFingerprint` | `candidateId`, `caseKey`, `propsHash`, поверхность (viewport/dsf/theme), `readinessPolicyHash`, `rendererFingerprint` | пересъёмка даст те же пиксели ⇒ кадр из CAS можно переиспользовать |
+| `comparisonFingerprint` | `referenceAssetId`, `cropLineage` (вкл. `sourceSurface`), `expectedGeometry`, `maxDimensionDeltaPx`, параметры канвы (`paintMargin`, `dsf`); слоты W5 `referenceSurface`/`referencePlacement` | метрики расхождения остаются в силе ⇒ пересчёт по ним законен |
+| `verdictPolicyHash` | профиль и его пороги (`maxRawDiffPct`, geometry-допуски), `perCase`-оверрайды, `requireVisual`, состав и роли гейтов, `allowPaintOverflow`/`expectedClip`, `expectedGeometry`, `policy.profile` манифеста | решение по тем же метрикам будет тем же |
+
+`case_fingerprint = sha256({algo: 6, frame, comparison, verdictPolicy})`. **`expectedGeometry` — двухслойное поле**: оно и допуск вердикта геометрии, и (с волны W5) `padTo` нормализации content-hug эталона, поэтому его смена уводит визуал в re-diff, а не в пересчёт по старым метрикам. Разбиение полей по слоям — типизированное и **тотальное**: новое поле политики или случая не соберётся, пока ему не назначен слой (значение `report-only` — обоснованное «ни в одном», а не пропуск).
+
+Examples-путь больше не хэширует заглушку `CASE_POLICY_HASH_V0`: вердиктный слой строится из **реальной эффективной политики рана**, поэтому `--policy pixel-strict-v1` инвалидирует reuse и на examples-, и на case-set-пути.
+
+**Каскад reuse.** По месту первого промаха, каждый шаг честно дороже предыдущего и честно дешевле пересъёмки:
+
+| Путь | Условие | Счётчик `progress` | `reuseReason` |
+|---|---|---|---|
+| полный reuse | совпал `case_fingerprint` | `reused` + `frameReused` | `case_fingerprint` |
+| recompute | совпали кадр и сравнение, разошёлся вердиктный слой | `frameReused` + `verdictRecomputed` | `recompute:policy` |
+| re-diff | совпал кадр, разошлось сравнение | `frameReused` + `rediffed` | `rediff:comparison` |
+| перенос baseline | импакт доказал «случай не мог измениться», слои сошлись | `reused` + `frameReused` | `impact:<basis>` |
+| перенос + пересчёт | то же, но разошёлся вердикт/сравнение | `frameReused` + `verdictRecomputed`/`rediffed` | `impact:<basis>+recompute:policy`, `impact:<basis>+rediff:comparison` |
+| пересъёмка | всё остальное | — | `null`, либо названная причина: `recapture:policy_snapshot_missing`, `recapture:policy_delta`, `recapture:frame_missing`, `recapture:frame_not_ready`, `recapture:no_verdict_delta`; при явном форсе — `refresh:all|failed|cases` |
+
+`progress.reused` — **только полный** reuse (двусмысленность из фидбэка снята): `frameReused` — надмножество (кадр не снимался), `verdictRecomputed`/`rediffed` — отдельные счётчики. Re-diff учитывается в EMA длительности как оплачиваемая работа, пересчёт — нет.
+
+Правила, которые каскад не нарушает ни при каких входных данных:
+
+- **Пересчёт идёт по дельте политики, а не по имени гейта.** Отображение «поле политики → затронутые гейты» решает, что пересчитывается (`visual`, `geometry`), что переносится (гейты вне дельты) и что требует пересъёмки (затронутый непересчитываемый гейт — например, при переходе гейта в/из `not-implemented`).
+- **Старая политика — снимок по значениям.** v29 хранит канонизованный `verdict_policy_json` рядом с `verdict_policy_hash` (хэш — валидатор снимка). Снимка нет, он нечитаем или хэш не сошёлся ⇒ дельта неизвестна ⇒ **пересъёмка, никогда перенос**. Тот же смысл у NULL-слоёв до-миграционных строк.
+- **Геометрия пересчитывается от сырых `layoutBounds`/`paintBounds`/`effectSources`**, а не от `overflow`, уже отфильтрованного прежним допуском: иначе ужесточение допуска молча не срабатывало бы.
+- **Кадр для re-diff — `paint.png` строки кэша**, с проверкой физического существования; нет кадра ⇒ `recapture:frame_missing`. Кадр, не прошедший readiness, визуального вердикта не получает и на re-diff (инвариант D5) ⇒ `recapture:frame_not_ready`.
+- **Производные артефакты переписываются.** `visual.json`/`geometry.json` пересчитанного случая пишутся новыми записями CAS с `recomputed: true` и `derivedFrom: <sha предыдущей>`; байтовые артефакты (`paint.png`, `diff.png`) переиспользуются. Манифест evidence и содержимое артефакта случая всегда согласованы.
+- **`policy.perCase`, адресующий случай с `aliasOf`, отвергается** `422 per_case_policy_on_alias`: вердикт алиаса идентичен вердикту цели, и такой допуск не был бы исполнен ничем.
+
+**Kill-switch `EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE`** (объявлен в `docker-compose.yml`, по умолчанию включён). `0` выключает **и** recompute, **и** re-diff: любой промах `case_fingerprint` уводит в пересъёмку — но никогда в перенос устаревшего вердикта. Откат флага не ретроактивен: уже записанные пересчитанные строки остаются годными (их чистка — bump `algoVersion`).
+
+**Алгебра refresh.** `refresh` получил **гранулярность**: `frame` — пересъёмка кадра, `verdict` — переоценка вердикта над переиспользованным кадром.
+
+- `refresh: "failed"` — **verdict-скоуп**: «пересмотри упавшее», а не «пересними упавшее». Кадр берётся из CAS при совпавшем `frameFingerprint`, поэтому `recapture = 0` — законный исход, а не ошибка. Флаг `recapture: true` (CLI `--recapture`) поднимает его до frame-скоупа.
+- `refresh: "all"` и `refresh: {caseIds}` — frame-скоуп (прежняя семантика «переснять»).
+- **Флейк-ретрай не потерян:** если у упавшего случая нет дельты вердикта/сравнения относительно кэша, пересчитывать нечего — verdict-скоуп эскалируется до пересъёмки (`recapture:no_verdict_delta`).
+- `forceOf("failed")` ищет прошлый провал сначала в вердиктах baseline-рана, затем frame-lookup'ом (`ORDER BY last_used_at DESC LIMIT 1`, с фильтром по `component_id`). Раньше он искал по **новому** `case_fingerprint`, и после смены порога форс молча снимался — корневая причина P0-3/P0-4 фидбэка.
+
+Ран несёт тройку `refresh {requested, impact, effective}` (`effective = requested ∪ impact`) — она считается на постановке, персистится (`acceptance_runs.refresh_json`) и отдаётся и в 202-ответе `POST /acceptance-runs`, и в `GET /acceptance-runs/:runId`. **Импакт-часть плана не форсит пересъёмку**: она запрещает перенос вердикта baseline, тогда как отпечаток доказывает строго больше («входы случая те же»), поэтому reuse по совпавшим слоям законен и для затронутого случая.
+
+**`refresh_scope_empty`.** Если явный скоуп непуст, хотя бы один случай отдан из кэша и при этом **ни один** не был переснят, пере-диффнут или пересчитан — форс не сделал ничего, и ран терминализуется как `error` с `statusReason: "refresh_scope_empty"` (постановка асинхронна, поэтому это исход рана, а не `422`). Статически вычислимые отказы скоупа (`caseIds` вне набора) остаются `422 unknown_case_id` на постановке. Первый ран с пустым кэшем через предикат проходит: там ничего и не переиспользовалось.
 
 ### Case-set-манифесты: наборы случаев семьи
 

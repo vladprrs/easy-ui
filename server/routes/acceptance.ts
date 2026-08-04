@@ -54,7 +54,7 @@ import { readArtifact, readRunManifest, sanitizeEvidenceName, sha256Sums, type R
 /** Опции §19.1 фидбэка, отклонённые триажем (A2: `manifestAssetId` не поддерживается никогда). */
 const UNSUPPORTED_TOP_LEVEL = ["concurrency", "manifestAssetId"] as const;
 
-const KNOWN_RUN_FIELDS = new Set(["candidateId", "idempotencyKey", "policy", "cases", "refresh", "caseSetId", "baselineRunId"]);
+const KNOWN_RUN_FIELDS = new Set(["candidateId", "idempotencyKey", "policy", "cases", "refresh", "recapture", "caseSetId", "baselineRunId"]);
 
 const KNOWN_IMPACT_FIELDS = new Set(["candidateId", "baselineRunId"]);
 
@@ -187,6 +187,9 @@ function runView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[]): Record<stri
     candidateId: run.candidate_id,
     componentId: run.component_id,
     status: run.status,
+    // Названная причина терминального статуса (D2): сегодня это `refresh_scope_empty` — форс был
+    // задан, но ни один случай не переоценён. `null` у обычного исхода, а не пустая строка.
+    statusReason: run.status_reason,
     policy: { id: run.policy_profile_id, hash: run.policy_profile_hash },
     caseSetId: run.case_set_id,
     idempotencyKey: run.idempotency_key,
@@ -196,6 +199,10 @@ function runView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[]): Record<stri
     // W6: план частичной пересъёмки, применённый к этому рану. `null` — импакт не считался
     // (ран поставлен без `baselineRunId`), а не «ничего не затронуто».
     impact: parseJson(run.impact_json),
+    // Алгебра refresh (C1): `{requested, impact, effective}` со скоупами `frame`/`verdict`.
+    // Тройка, а не одно поле: «что попросили» и «что применилось» расходятся законно (импакт
+    // добавляет случаи), и различить их обязан читатель, а не догадка.
+    refresh: parseJson(run.refresh_json),
     // Сортировка задана группировкой: сначала самые массовые группы (одна правка чинит больше всего
     // случаев). Пустой массив у ещё не терминализованного рана — не «причин нет», а «отчёт не собран».
     remediationGroups: Array.isArray(remediationGroups) ? remediationGroups : [],
@@ -344,6 +351,12 @@ async function startRun(request: Request, db: Database, principal: Principal, or
   // `refresh` (W1b): `none|failed|all|{caseIds}`. Молча деградировать один режим в другой нельзя —
   // это меняет стоимость рана; неизвестный `caseId` отвергает `startRun` (422 unknown_case_id).
   const refresh = parseRefresh(body.refresh);
+  // `recapture` (D5, CLI `--recapture`): поднимает verdict-скоуп `refresh:"failed"` до пересъёмки.
+  // На `all`/`{caseIds}` не влияет — они и так frame-скоуп.
+  if (body.recapture !== undefined && typeof body.recapture !== "boolean") {
+    throw new ApiError(400, "invalid_request", "recapture must be a boolean");
+  }
+  const recapture = body.recapture === true;
 
   // `baselineRunId` (W6): режим частичной пересъёмки. Форма проверяется здесь, владение — ниже
   // (baseline обязан принадлежать тому же компоненту, иначе это канал чтения чужих вердиктов).
@@ -381,6 +394,7 @@ async function startRun(request: Request, db: Database, principal: Principal, or
     ...(caseSetId === undefined ? {} : { caseSetId: caseSetId as string }),
     ...(cases === undefined ? {} : { cases }),
     ...(refresh === "none" ? {} : { refresh }),
+    ...(recapture ? { recapture } : {}),
     ...(typeof baselineRunId === "string" ? { baselineRunId } : {}),
   });
   return json({
@@ -395,6 +409,9 @@ async function startRun(request: Request, db: Database, principal: Principal, or
     // Отчёт импакта возвращается сразу на постановке (W6): агент видит стоимость рана до того,
     // как тот начал снимать, и может отказаться от него.
     ...(started.impact ? { impact: started.impact } : {}),
+    // Алгебра refresh (C1) печатается тройкой уже на постановке: «что попросили / что потребовал
+    // импакт / что применится» — до того, как ран потратил первую минуту.
+    refresh: started.refresh,
   }, 202, { ...noStore, location: `/api/acceptance-runs/${started.run.run_id}` });
 }
 

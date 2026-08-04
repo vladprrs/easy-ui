@@ -8,10 +8,12 @@ import {
   surfaceOfManifest, validateManifest,
 } from "./caseSets";
 import {
-  CASE_FINGERPRINT_ALGO_VERSION, CASE_POLICY_HASH_V0,
+  CASE_FINGERPRINT_ALGO_VERSION,
   DEFAULT_RENDERER_FINGERPRINT, DEFAULT_READINESS_POLICY_HASH,
-  caseFingerprint, caseFingerprintV0,
+  caseFingerprint, caseFingerprintsOf, comparisonFingerprintOf, frameFingerprint, verdictPolicyHashOf,
+  verdictPolicySnapshotOf,
 } from "./ids";
+import { ACCEPTANCE_POLICIES } from "./policies";
 
 /**
  * Case-set-манифесты (план 2026-08-03 §5 W2, амендмент A2).
@@ -159,6 +161,25 @@ test("aliasOf must name another non-alias case with identical props", () => {
   db.close();
 });
 
+test("per-case политика на алиасе отвергается: у алиаса нет своего вердикта (D16)", () => {
+  // Вердикт алиаса идентичен вердикту цели (D10) — своей съёмки и своего сравнения у него нет.
+  // Допуск, адресованный алиасу, объявляет намерение, которое не будет исполнено ничем; молчаливое
+  // игнорирование здесь означало бы матрицу, выглядящую строже, чем она есть.
+  const db = dbWithAsset();
+  fails(() => validateManifest(db, "yp-badge", manifest({
+    policy: { perCase: { two: { maxRawDiffPct: 0.1 } } },
+    cases: [{ id: "one", props: { tone: "a" } }, { id: "two", props: { tone: "a" }, aliasOf: "one" }],
+  } as unknown as Partial<CaseSetManifest>)), 422, "per_case_policy_on_alias");
+
+  // На цели тот же допуск законен.
+  const ok = validateManifest(db, "yp-badge", manifest({
+    policy: { perCase: { one: { maxRawDiffPct: 0.1 } } },
+    cases: [{ id: "one", props: { tone: "a" } }, { id: "two", props: { tone: "a" }, aliasOf: "one" }],
+  } as unknown as Partial<CaseSetManifest>));
+  expect(ok.manifest.policy?.perCase?.one?.maxRawDiffPct).toBe(0.1);
+  db.close();
+});
+
 test("crop lineage rectangles must be non-negative with a positive size", () => {
   const db = dbWithAsset();
   const ok = validateManifest(db, "yp-badge", manifest({
@@ -302,21 +323,32 @@ test("caseSetIdOf and the stored row agree on the address", () => {
 test("algoVersion bump invalidates every fingerprint accumulated by earlier waves", () => {
   // Граница волны обязана обнулить накопленный reuse: в W2 во входы вошёл `case_policy_hash`,
   // в W3 — геометрия 2.0 (`probe:"paint"`, другой вердикт по тем же props), в W4 — реальные
-  // readiness/env вместо заглушек, в W5a — визуальный гейт (тот же случай теперь может получить
-  // пиксельный вердикт), поэтому старый результат относится к другой модели случая (план §3 D1).
-  // Версия 5 — последняя запланированная: дальше отпечатки стабильны (reuse-KPI меряется на W6).
-  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(5);
-  const base = {
+  // readiness/env вместо заглушек, в W5a — визуальный гейт. Версия 6 (план 2026-08-04, D-B) —
+  // расслоение отпечатка на кадр/сравнение/вердикт: это другая **модель** случая, а не другие
+  // значения внутри прежней, поэтому прод-кэш инвалидируется целиком (санкционировано планом).
+  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(6);
+  const frame = frameFingerprint({
     candidateId: `cand_${"0".repeat(64)}`, caseKey: "alpha", propsHash: "props-1",
     surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
     readinessPolicyHash: DEFAULT_READINESS_POLICY_HASH, rendererFingerprint: DEFAULT_RENDERER_FINGERPRINT,
-    casePolicyHash: CASE_POLICY_HASH_V0, referenceAssetId: null,
-  };
+  });
+  const comparison = comparisonFingerprintOf({
+    referenceAssetId: null, expectedGeometry: null, maxDimensionDeltaPx: 8, paintMarginPx: 64, deviceScaleFactor: 2,
+  });
+  const verdictPolicy = verdictPolicyHashOf(verdictPolicySnapshotOf(ACCEPTANCE_POLICIES["default-v1"], { caseKey: "alpha", propsHash: "props-1" }));
+  const base = { frame, comparison, verdictPolicy };
+  expect(caseFingerprint({ ...base, algoVersion: 6 })).not.toBe(caseFingerprint({ ...base, algoVersion: 5 }));
   expect(caseFingerprint({ ...base, algoVersion: 5 })).not.toBe(caseFingerprint({ ...base, algoVersion: 4 }));
   expect(caseFingerprint({ ...base, algoVersion: 4 })).not.toBe(caseFingerprint({ ...base, algoVersion: 3 }));
-  expect(caseFingerprint({ ...base, algoVersion: 3 })).not.toBe(caseFingerprint({ ...base, algoVersion: 2 }));
-  expect(caseFingerprint({ ...base, algoVersion: 2 })).not.toBe(caseFingerprint({ ...base, algoVersion: 1 }));
-  // Случай case-set'а с собственной политикой и эталоном отличается от одноимённого examples-случая.
-  expect(caseFingerprintV0({ ...base, casePolicyHash: "cset-policy" })).not.toBe(caseFingerprintV0(base));
-  expect(caseFingerprintV0({ ...base, referenceAssetId: ASSET })).not.toBe(caseFingerprintV0(base));
+
+  // Случай case-set'а с собственным эталоном и допуском отличается от одноимённого examples-случая.
+  const fingerprintsOf = (item: Parameters<typeof caseFingerprintsOf>[0]["case"]): string => caseFingerprintsOf({
+    candidateId: `cand_${"0".repeat(64)}`,
+    surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
+    policy: ACCEPTANCE_POLICIES["default-v1"],
+    case: item,
+  }).case;
+  const plain = { caseKey: "alpha", propsHash: "props-1" };
+  expect(fingerprintsOf({ ...plain, casePolicy: { maxRawDiffPct: 0.1 } })).not.toBe(fingerprintsOf(plain));
+  expect(fingerprintsOf({ ...plain, referenceAssetId: ASSET })).not.toBe(fingerprintsOf(plain));
 });
