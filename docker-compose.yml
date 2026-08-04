@@ -38,8 +38,13 @@ services:
       EASYUI_RENDERER_GUARD_DISABLED: ${EASYUI_RENDERER_GUARD_DISABLED:-}
       EASYUI_RENDERER_STRICT_MANIFEST: ${EASYUI_RENDERER_STRICT_MANIFEST:-}
       EASYUI_CAPTURE_RECEIPTS_DISABLED: ${EASYUI_CAPTURE_RECEIPTS_DISABLED:-}
-      EASYUI_VISUAL_SIGNALS_V2: ${EASYUI_VISUAL_SIGNALS_V2:-}
-      EASYUI_RENDERER_POOL: ${EASYUI_RENDERER_POOL:-}
+      # R7a (signals-режим визуального вердикта) включён по решению пользователя 2026-08-04 при
+      # незакрытых прекондициях плана renderer-contract-2 §R7a (пороги causes.ts калиброваны под
+      # pixelmatch-шкалу, exact-rgba даёт ~2× большие rawDiffPct; класс «перекраска глифов» может
+      # прятаться в pass/renderer_residual). Откат — задать 0 в Dokploy env.
+      EASYUI_VISUAL_SIGNALS_V2: ${EASYUI_VISUAL_SIGNALS_V2:-1}
+      # R9a: тёплый пул воркеров капчура; численный критерий прод-включения выполнен (warm p95 705 мс).
+      EASYUI_RENDERER_POOL: ${EASYUI_RENDERER_POOL:-1}
       EASYUI_CAPTURE_CACHE: ${EASYUI_CAPTURE_CACHE:-}
     expose:
       - "8787"
