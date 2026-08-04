@@ -834,6 +834,46 @@ export const migrations = [
       JOIN components c ON c.id=r.component_id AND c.head_rev=r.rev
       WHERE r.figma_json IS NOT NULL`).run("migration:component_provenance", new Date().toISOString());
   },
+  (db: Database) => {
+    // v28: cross-renderer guard на визуальных эталонах
+    // (план `docs/plans/2026-08-03-renderer-contract-2.md` §5 **R6**, N6/N7). Единственная
+    // миграция пакета renderer-contract-2; номер — следующий свободный (v27 занят волной R3a RFC).
+    //
+    // Три инварианта, из которых следует форма этой миграции — **только `ADD COLUMN`, без FK,
+    // без CHECK, без перестройки таблиц**:
+    //
+    // 1. `visual_references.fingerprint_json` **не расширяется** (N6). `vref_sha256(...)` — это
+    //    PK/UNIQUE эталона, он записан в `visual_baseline_sets.members_json`, а
+    //    `fingerprintSchema` — `z.strictObject`: новое поле внутри отпечатка сменило бы id всех
+    //    эталонов и дало бы 422 на каждом PUT. Поэтому рендерер — **аддитивные атрибуты рядом**
+    //    с identity, а не её часть.
+    // 2. `visual_runs.status` **не расширяется новым значением** (N7): колонка под
+    //    `CHECK(status IN ('pass','fail','error','reference_missing'))`, и добавление значения в
+    //    SQLite — перестройка таблицы. Cross-renderer исход выражается парой
+    //    `status='error'` + `outcome_code` ('renderer_mismatch' | 'stale_renderer').
+    // 3. **Откат образа переживается**: обе таблицы читаются `SELECT *`, но ни один потребитель
+    //    не сериализует row наружу (`runReport`/`referencePublic` собирают ответ по полям),
+    //    поэтому старый образ на БД v28 стартует и отдаёт эталоны, просто не видя новых колонок.
+    //    Инвариант закреплён тестом (`server/visual-renderer-guard.test.ts`).
+    //
+    // Носитель истины о рендерере эталона — инлайновый `renderer_json` (переживает TTL/LRU
+    // receipt-стора); `receipt_sha256` — evidence-ссылка, поддержанная пином свипера
+    // (`server/main.ts`, канон `candidatePins`). NULL во всех пяти колонках значит ровно одно:
+    // «происхождение кадра неизвестно» — это `unknown` guard'а, а не «совпало».
+    for (const column of [
+      "renderer_fingerprint TEXT",
+      "renderer_json TEXT",
+      "font_manifest_hash TEXT",
+      "receipt_sha256 TEXT",
+      "renderer_recorded_at TEXT",
+    ]) db.run(`ALTER TABLE visual_references ADD COLUMN ${column}`);
+    for (const column of [
+      "renderer_guard TEXT",
+      "outcome_code TEXT",
+      "candidate_receipt_sha256 TEXT",
+      "reference_receipt_sha256 TEXT",
+    ]) db.run(`ALTER TABLE visual_runs ADD COLUMN ${column}`);
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

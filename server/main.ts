@@ -276,6 +276,12 @@ export async function startServer(options:{port?:number;database?:string;serveDi
       const pins=screenshots.liveReceiptShas();
       try { for(const sha of referencedArtifactShas(new AcceptanceRepo(db))) pins.add(sha); }
       catch { /* приёмка выключена или таблиц ещё нет — пины живых джоб остаются в силе */ }
+      // R6 (T-M12): receipt, на который ссылается визуальный эталон, — его evidence. TTL стора
+      // (7 суток) короче жизни эталона, поэтому без пина ссылка бы протухала, а diagnostic bundle
+      // рана (R7b) указывал бы в пустоту. Тумбстоны включены намеренно: у мёртвого эталона тоже
+      // есть раны, которые расследуют.
+      try { for(const row of db.query("SELECT receipt_sha256 sha FROM visual_references WHERE receipt_sha256 IS NOT NULL").all() as {sha:string}[]) pins.add(row.sha); }
+      catch { /* таблицы ещё нет — остальные пины остаются в силе */ }
       return pins;
     });
     await gcReceipts(dataDir);

@@ -33777,6 +33777,15 @@
                   "prototypeInstanceId": {
                     "type": "string"
                   },
+                  "receipts": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
                   "rev": {
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991,
@@ -34063,6 +34072,58 @@
                         "rendererBuild",
                         "consoleErrors",
                         "pageErrors"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema3": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "epoch": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fingerprint": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fontManifestHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "readinessPolicyHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "fingerprint",
+                        "fontManifestHash",
+                        "readinessPolicyHash",
+                        "epoch"
                       ],
                       "type": "object"
                     }
@@ -34433,6 +34494,16 @@
                                       }
                                     ]
                                   },
+                                  "candidateReceiptSha256": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "createdAt": {
                                     "type": "string"
                                   },
@@ -34515,6 +34586,20 @@
                                     },
                                     "type": "object"
                                   },
+                                  "outcomeCode": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "renderer_mismatch",
+                                          "stale_renderer"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "reference": {
                                     "anyOf": [
                                       {
@@ -34528,12 +34613,86 @@
                                   "referenceId": {
                                     "type": "string"
                                   },
+                                  "referenceReceiptSha256": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "referenceStatus": {
                                     "enum": [
                                       "known",
                                       "unknown"
                                     ],
                                     "type": "string"
+                                  },
+                                  "rendererGuard": {
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "candidate": {
+                                            "$ref": "#/$defs/__schema3"
+                                          },
+                                          "differing": {
+                                            "items": {
+                                              "type": "string"
+                                            },
+                                            "type": "array"
+                                          },
+                                          "flags": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "epoch": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              },
+                                              "rendererFlags": {
+                                                "type": "boolean"
+                                              }
+                                            },
+                                            "required": [
+                                              "rendererFlags",
+                                              "epoch"
+                                            ],
+                                            "type": "object"
+                                          },
+                                          "reference": {
+                                            "$ref": "#/$defs/__schema3"
+                                          },
+                                          "state": {
+                                            "enum": [
+                                              "matched",
+                                              "mismatch",
+                                              "unknown",
+                                              "disabled"
+                                            ],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "state",
+                                          "differing",
+                                          "reference",
+                                          "candidate",
+                                          "flags"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
                                   },
                                   "runId": {
                                     "type": "string"
@@ -34557,6 +34716,12 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "warnings": {
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
                                   }
                                 },
                                 "required": [
@@ -34574,7 +34739,12 @@
                                   "reference",
                                   "candidate",
                                   "diff",
-                                  "candidateMeta"
+                                  "candidateMeta",
+                                  "outcomeCode",
+                                  "rendererGuard",
+                                  "candidateReceiptSha256",
+                                  "referenceReceiptSha256",
+                                  "warnings"
                                 ],
                                 "type": "object"
                               },
@@ -34592,6 +34762,121 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "renderer": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "browserExecutableSha256": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "browserVersion": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "epoch": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "fingerprint": {
+                                    "type": "string"
+                                  },
+                                  "fontManifestHash": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "launchedExecutable": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "readinessPolicyHash": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "receiptSha256": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "recordedAt": {
+                                    "type": "string"
+                                  },
+                                  "source": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "manifest",
+                                          "fallback"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "fingerprint",
+                                  "fontManifestHash",
+                                  "readinessPolicyHash",
+                                  "epoch",
+                                  "browserVersion",
+                                  "launchedExecutable",
+                                  "browserExecutableSha256",
+                                  "source",
+                                  "receiptSha256",
+                                  "recordedAt"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -34600,7 +34885,8 @@
                           "note",
                           "createdAt",
                           "asset",
-                          "lastRun"
+                          "lastRun",
+                          "renderer"
                         ],
                         "type": "object"
                       },
@@ -34772,6 +35058,9 @@
                   },
                   "note": {
                     "type": "string"
+                  },
+                  "receiptSha256": {
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -34890,6 +35179,58 @@
                         "rendererBuild",
                         "consoleErrors",
                         "pageErrors"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema3": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "epoch": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fingerprint": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fontManifestHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "readinessPolicyHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "fingerprint",
+                        "fontManifestHash",
+                        "readinessPolicyHash",
+                        "epoch"
                       ],
                       "type": "object"
                     }
@@ -35256,6 +35597,16 @@
                                 }
                               ]
                             },
+                            "candidateReceiptSha256": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "createdAt": {
                               "type": "string"
                             },
@@ -35338,6 +35689,20 @@
                               },
                               "type": "object"
                             },
+                            "outcomeCode": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "renderer_mismatch",
+                                    "stale_renderer"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "reference": {
                               "anyOf": [
                                 {
@@ -35351,12 +35716,86 @@
                             "referenceId": {
                               "type": "string"
                             },
+                            "referenceReceiptSha256": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "referenceStatus": {
                               "enum": [
                                 "known",
                                 "unknown"
                               ],
                               "type": "string"
+                            },
+                            "rendererGuard": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "candidate": {
+                                      "$ref": "#/$defs/__schema3"
+                                    },
+                                    "differing": {
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "flags": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "epoch": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "rendererFlags": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "rendererFlags",
+                                        "epoch"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "reference": {
+                                      "$ref": "#/$defs/__schema3"
+                                    },
+                                    "state": {
+                                      "enum": [
+                                        "matched",
+                                        "mismatch",
+                                        "unknown",
+                                        "disabled"
+                                      ],
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "state",
+                                    "differing",
+                                    "reference",
+                                    "candidate",
+                                    "flags"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
                             "runId": {
                               "type": "string"
@@ -35380,6 +35819,12 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "warnings": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
                             }
                           },
                           "required": [
@@ -35397,7 +35842,12 @@
                             "reference",
                             "candidate",
                             "diff",
-                            "candidateMeta"
+                            "candidateMeta",
+                            "outcomeCode",
+                            "rendererGuard",
+                            "candidateReceiptSha256",
+                            "referenceReceiptSha256",
+                            "warnings"
                           ],
                           "type": "object"
                         },
@@ -35415,6 +35865,121 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "renderer": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "browserExecutableSha256": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "browserVersion": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "epoch": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "fingerprint": {
+                              "type": "string"
+                            },
+                            "fontManifestHash": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "launchedExecutable": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "readinessPolicyHash": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "receiptSha256": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "recordedAt": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "manifest",
+                                    "fallback"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "fingerprint",
+                            "fontManifestHash",
+                            "readinessPolicyHash",
+                            "epoch",
+                            "browserVersion",
+                            "launchedExecutable",
+                            "browserExecutableSha256",
+                            "source",
+                            "receiptSha256",
+                            "recordedAt"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -35423,7 +35988,8 @@
                     "note",
                     "createdAt",
                     "asset",
-                    "lastRun"
+                    "lastRun",
+                    "renderer"
                   ],
                   "type": "object"
                 }
@@ -35825,6 +36391,16 @@
                             }
                           ]
                         },
+                        "candidateReceiptSha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "createdAt": {
                           "type": "string"
                         },
@@ -35907,6 +36483,20 @@
                           },
                           "type": "object"
                         },
+                        "outcomeCode": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "renderer_mismatch",
+                                "stale_renderer"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "reference": {
                           "anyOf": [
                             {
@@ -35920,12 +36510,86 @@
                         "referenceId": {
                           "type": "string"
                         },
+                        "referenceReceiptSha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "referenceStatus": {
                           "enum": [
                             "known",
                             "unknown"
                           ],
                           "type": "string"
+                        },
+                        "rendererGuard": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "candidate": {
+                                  "$ref": "#/$defs/__schema4"
+                                },
+                                "differing": {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "flags": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "epoch": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "rendererFlags": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "rendererFlags",
+                                    "epoch"
+                                  ],
+                                  "type": "object"
+                                },
+                                "reference": {
+                                  "$ref": "#/$defs/__schema4"
+                                },
+                                "state": {
+                                  "enum": [
+                                    "matched",
+                                    "mismatch",
+                                    "unknown",
+                                    "disabled"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "state",
+                                "differing",
+                                "reference",
+                                "candidate",
+                                "flags"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "runId": {
                           "type": "string"
@@ -35949,6 +36613,12 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "warnings": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
                         }
                       },
                       "required": [
@@ -35966,7 +36636,12 @@
                         "reference",
                         "candidate",
                         "diff",
-                        "candidateMeta"
+                        "candidateMeta",
+                        "outcomeCode",
+                        "rendererGuard",
+                        "candidateReceiptSha256",
+                        "referenceReceiptSha256",
+                        "warnings"
                       ],
                       "type": "object"
                     },
@@ -36072,6 +36747,58 @@
                         "pageErrors"
                       ],
                       "type": "object"
+                    },
+                    "__schema4": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "epoch": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fingerprint": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fontManifestHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "readinessPolicyHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "fingerprint",
+                        "fontManifestHash",
+                        "readinessPolicyHash",
+                        "epoch"
+                      ],
+                      "type": "object"
                     }
                   },
                   "additionalProperties": false,
@@ -36144,6 +36871,121 @@
                         }
                       ]
                     },
+                    "renderer": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "browserExecutableSha256": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "browserVersion": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "epoch": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "fingerprint": {
+                              "type": "string"
+                            },
+                            "fontManifestHash": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "launchedExecutable": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "readinessPolicyHash": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "receiptSha256": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "recordedAt": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "manifest",
+                                    "fallback"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "fingerprint",
+                            "fontManifestHash",
+                            "readinessPolicyHash",
+                            "epoch",
+                            "browserVersion",
+                            "launchedExecutable",
+                            "browserExecutableSha256",
+                            "source",
+                            "receiptSha256",
+                            "recordedAt"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "runs": {
                       "items": {
                         "$ref": "#/$defs/__schema0"
@@ -36158,6 +37000,7 @@
                     "createdAt",
                     "asset",
                     "lastRun",
+                    "renderer",
                     "runs"
                   ],
                   "type": "object"
@@ -36419,6 +37262,58 @@
                         "rendererBuild",
                         "consoleErrors",
                         "pageErrors"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema3": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "epoch": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fingerprint": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fontManifestHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "readinessPolicyHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "fingerprint",
+                        "fontManifestHash",
+                        "readinessPolicyHash",
+                        "epoch"
                       ],
                       "type": "object"
                     }
@@ -36734,6 +37629,16 @@
                             }
                           ]
                         },
+                        "candidateReceiptSha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "createdAt": {
                           "type": "string"
                         },
@@ -36816,6 +37721,20 @@
                           },
                           "type": "object"
                         },
+                        "outcomeCode": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "renderer_mismatch",
+                                "stale_renderer"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "reference": {
                           "anyOf": [
                             {
@@ -36829,12 +37748,86 @@
                         "referenceId": {
                           "type": "string"
                         },
+                        "referenceReceiptSha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "referenceStatus": {
                           "enum": [
                             "known",
                             "unknown"
                           ],
                           "type": "string"
+                        },
+                        "rendererGuard": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "candidate": {
+                                  "$ref": "#/$defs/__schema3"
+                                },
+                                "differing": {
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                "flags": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "epoch": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "rendererFlags": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "rendererFlags",
+                                    "epoch"
+                                  ],
+                                  "type": "object"
+                                },
+                                "reference": {
+                                  "$ref": "#/$defs/__schema3"
+                                },
+                                "state": {
+                                  "enum": [
+                                    "matched",
+                                    "mismatch",
+                                    "unknown",
+                                    "disabled"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "state",
+                                "differing",
+                                "reference",
+                                "candidate",
+                                "flags"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "runId": {
                           "type": "string"
@@ -36858,6 +37851,12 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "warnings": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
                         }
                       },
                       "required": [
@@ -36875,7 +37874,12 @@
                         "reference",
                         "candidate",
                         "diff",
-                        "candidateMeta"
+                        "candidateMeta",
+                        "outcomeCode",
+                        "rendererGuard",
+                        "candidateReceiptSha256",
+                        "referenceReceiptSha256",
+                        "warnings"
                       ],
                       "type": "object"
                     },

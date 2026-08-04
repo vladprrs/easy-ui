@@ -243,11 +243,16 @@ describe("component provenance — cross-revision resolver", () => {
 });
 
 describe("component provenance — migration", () => {
-  /** Прогоняет все миграции, кроме последней (v27) — «старая» БД до посадки волны R3a. */
+  /**
+   * Индекс миграции v27 в массиве (нумерация с нуля). Пин по номеру, а не `at(-1)`: пакет
+   * renderer-contract-2 посадил v28, и «последняя миграция» перестала быть волной R3a.
+   */
+  const V27_INDEX = 26;
+  /** Прогоняет все миграции до v27 — «старая» БД до посадки волны R3a. */
   function legacyDatabase(): Database {
     const db = new Database(":memory:");
     db.run("PRAGMA foreign_keys = ON");
-    for (let index = 0; index < migrations.length - 1; index += 1) {
+    for (let index = 0; index < V27_INDEX; index += 1) {
       const isV13 = index === 12;
       if (isV13) db.run("PRAGMA foreign_keys = OFF");
       db.transaction(() => { migrations[index]!(db); db.run(`PRAGMA user_version = ${index + 1}`); })();
@@ -268,7 +273,7 @@ describe("component provenance — migration", () => {
     db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,figma_json,created_at) VALUES ('legacy-with',2,'x','yandex-pay',?,?)").run(JSON.stringify(FIGMA_A), at);
     db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,figma_json,created_at) VALUES ('legacy-without',1,'x','yandex-pay',NULL,?)").run(at);
 
-    migrations.at(-1)!(db);
+    migrations[V27_INDEX]!(db);
 
     const rows = db.query("SELECT component_id,rev,seq,figma_json,author FROM component_provenance ORDER BY component_id").all() as { component_id: string; rev: number; seq: number; figma_json: string; author: string }[];
     expect(rows).toHaveLength(1);
@@ -282,7 +287,7 @@ describe("component provenance — migration", () => {
     const ddl = () => Object.fromEntries((db.query("SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name").all() as { name: string; sql: string }[]).map((row) => [row.name, row.sql]));
     const before = ddl();
 
-    migrations.at(-1)!(db);
+    migrations[V27_INDEX]!(db);
 
     const after = ddl();
     for (const [name, sql] of Object.entries(before)) expect(after[name]).toBe(sql);
@@ -296,7 +301,7 @@ describe("component provenance — migration", () => {
 
   test("candidate_decisions keeps at most one rejection per candidate and cascades with the candidate", () => {
     const db = legacyDatabase();
-    migrations.at(-1)!(db);
+    migrations[V27_INDEX]!(db);
     const at = new Date().toISOString();
     db.query(`INSERT INTO component_candidates (candidate_id,component_id,design_system,rev,source_hash,bundle_hash,host_abi_version,build_fingerprint,observed_catalog_revision,policy_profile_hash,status,created_by,created_at,expires_at)
       VALUES ('cand_x','c','yandex-pay',1,'a','b',1,'f','cr','p','validated','u',?,?)`).run(at, at);

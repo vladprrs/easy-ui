@@ -39,6 +39,10 @@ function v14():Database {
   // v27 завела provenance-слой и надгробия решений по кандидатам (RFC candidate-acceptance R3a);
   // `candidate_decisions` сносится первой — это FK-ребёнок `component_candidates`.
   for(const table of ["candidate_decisions","component_provenance"] as const) db.run(`DROP TABLE IF EXISTS ${table}`);
+  // v28 (renderer-contract-2 R6) добавила аддитивные колонки guard'а визуальным таблицам —
+  // снимаем по той же причине, что и остальные post-v14 колонки.
+  for(const column of ["renderer_fingerprint","renderer_json","font_manifest_hash","receipt_sha256","renderer_recorded_at"] as const) db.run(`ALTER TABLE visual_references DROP COLUMN ${column}`);
+  for(const column of ["renderer_guard","outcome_code","candidate_receipt_sha256","reference_receipt_sha256"] as const) db.run(`ALTER TABLE visual_runs DROP COLUMN ${column}`);
   db.run("PRAGMA user_version=14");
   return db;
 }

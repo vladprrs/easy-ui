@@ -45,7 +45,7 @@ function seedRun(repo: AcceptanceRepo, id: string, extra: Record<string, unknown
 
 test("v25 lands on a database migrated from scratch and leaves no foreign-key violations", () => {
   const db = dbForRepo();
-  expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(27);
+  expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(28);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   // Partial unique index — первый в проекте; его наличие и есть механизм «≤1 нетерминальный run».
   const index = db.query("SELECT sql FROM sqlite_master WHERE type='index' AND name='acceptance_runs_one_in_flight'").get() as { sql: string } | null;

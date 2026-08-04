@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { ApiError, json, noStore, readJson } from "../http";
 import { parseWith } from "../contracts";
 import { fingerprintSchema } from "../visual/fingerprint";
-import { VisualRepo } from "../visual/repo";
+import { resolveReferenceRenderer, VisualRepo } from "../visual/repo";
 import type { VisualService } from "../visual/service";
 import { routeVisualBaselines } from "./visualBaselines";
 import type {Principal} from "../auth";
@@ -21,7 +21,7 @@ export async function routeVisual(request: Request, db: Database, dataDir: strin
   if (segments[0] === "visual-references") {
     const repo = new VisualRepo(db, dataDir);
     if (segments.length === 1) {
-      if (request.method === "PUT") return await putReference(request, db,repo,principal);
+      if (request.method === "PUT") return await putReference(request, db,dataDir,repo,principal);
       if (request.method === "GET") return listReferences(request,db,repo,principal);
       throw new ApiError(405, "method_not_allowed", "Method not allowed");
     }
@@ -49,17 +49,24 @@ function assertFingerprintMutation(db:Database,fp:Record<string,unknown>,princip
 function referenceFingerprint(repo:VisualRepo,id:string):Record<string,unknown>{const row=repo.getReference(id,true);if(!row)throw new ApiError(404,"reference_not_found","Visual reference not found");return JSON.parse(row.fingerprint_json) as Record<string,unknown>;}
 function assertReferenceMutation(db:Database,repo:VisualRepo,id:string,principal:Principal):void{assertFingerprintMutation(db,referenceFingerprint(repo,id),principal);}
 
-async function putReference(request: Request, db:Database,repo: VisualRepo,principal:Principal): Promise<Response> {
+async function putReference(request: Request, db:Database,dataDir:string,repo: VisualRepo,principal:Principal): Promise<Response> {
   const raw = await readJson(request);
   if (!isObject(raw)) throw new ApiError(400, "invalid_request", "Request body must be an object");
   const fingerprint = parseWith(fingerprintSchema, raw.fingerprint, "Fingerprint is invalid");
   assertFingerprintMutation(db,fingerprint as Fingerprint & Record<string,unknown>,principal);
   if (typeof raw.assetId !== "string" || !raw.assetId) throw new ApiError(400, "invalid_request", "assetId is required");
   if (raw.note !== undefined && typeof raw.note !== "string") throw new ApiError(400, "invalid_request", "note must be a string");
+  if (raw.receiptSha256 !== undefined && (typeof raw.receiptSha256 !== "string" || !/^[0-9a-f]{64}$/.test(raw.receiptSha256))) {
+    throw new ApiError(400, "invalid_request", "receiptSha256 must be a sha256 hex digest");
+  }
   const asset = repo.assetRepo().get(raw.assetId);
   if (!asset) throw new ApiError(422, "asset_not_found", "Reference asset does not exist");
   if (asset.mime !== "image/png") throw new ApiError(422, "invalid_reference_asset", "Reference asset must be a PNG");
-  const row = repo.upsertReferenceGeneric(fingerprint, raw.assetId, (raw.note as string | undefined) ?? null);
+  // R6 (T-B2, V-N3): рендерер эталона резолвится **здесь**, на общей точке обоих путей записи —
+  // иначе component-scope эталоны (только этот роут) остались бы без происхождения навсегда.
+  // Резолв асинхронный и потому идёт до `upsertReferenceGeneric` с его транзакцией.
+  const renderer = await resolveReferenceRenderer(dataDir, raw.assetId, (raw.receiptSha256 as string | undefined) ?? null);
+  const row = repo.upsertReferenceGeneric(fingerprint, raw.assetId, (raw.note as string | undefined) ?? null, renderer);
   return json(repo.referencePublic(row), 200, noStore);
 }
 

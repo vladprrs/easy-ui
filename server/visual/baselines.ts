@@ -3,7 +3,7 @@ import { canonicalStringify } from "../../src/capture/canonicalJson";
 import { ApiError } from "../http";
 import { parseStoredPrototypeDoc } from "../repos/prototypes";
 import { parseFingerprint, type Fingerprint } from "./fingerprint";
-import { VisualRepo } from "./repo";
+import { resolveReferenceRenderer, VisualRepo, type ReferenceRendererRecord } from "./repo";
 
 export interface BaselineViewport { width:number; height:number }
 export interface BaselineMemberInput { screenId:string; viewport:BaselineViewport; deviceScaleFactor:1|2|3; theme:"light"|"dark"; assetId:string }
@@ -39,7 +39,26 @@ export class VisualBaselineRepo {
     return {generation:row.generation,rev:row.rev,prototypeInstanceId:row.prototype_instance_id,createdAt:row.created_at,members:JSON.parse(row.members_json) as BaselineMember[]};
   }
 
-  commit(prototypeId:string,input:BaselineCommitInput,hook?:()=>void):Omit<BaselineSet,"prototypeInstanceId"|"createdAt"> {
+  /**
+   * Резолв рендерера для каждого кадра набора — **до** транзакции (R6).
+   *
+   * Почему отдельным шагом, а не внутри `commit`: чтение receipt'а — файловый ввод-вывод, а
+   * коммит набора живёт в синхронном `BEGIN IMMEDIATE`, где `await` невозможен. Порядок
+   * «сначала резолв, потом транзакция» заодно означает, что медленный диск не держит write-lock.
+   *
+   * `receiptSha256` (опционально, по assetId) — фолбэк массовой пересъёмки (V-N8): скрипт знает
+   * адрес receipt'а из результата джобы и не зависит от свежести индекса `assetId → receiptSha`.
+   */
+  async resolveRenderers(members:BaselineMemberInput[],receipts?:Record<string,string>):Promise<Map<string,ReferenceRendererRecord|null>> {
+    const resolved=new Map<string,ReferenceRendererRecord|null>();
+    for(const member of members) {
+      if(resolved.has(member.assetId)) continue;
+      resolved.set(member.assetId,await resolveReferenceRenderer(this.dataDir,member.assetId,receipts?.[member.assetId]??null));
+    }
+    return resolved;
+  }
+
+  commit(prototypeId:string,input:BaselineCommitInput,hook?:()=>void,renderers?:ReadonlyMap<string,ReferenceRendererRecord|null>):Omit<BaselineSet,"prototypeInstanceId"|"createdAt"> {
     let began=false;
     try {
       this.db.run("BEGIN IMMEDIATE"); began=true;
@@ -70,7 +89,7 @@ export class VisualBaselineRepo {
       hook?.();
       const members=normalized(input.members.map((member)=>{
         const fp=parseFingerprint({scope:"prototype-screen",prototypeId,prototypeInstanceId:proto.instance_id,screenId:member.screenId,refRevision:input.rev,viewport:member.viewport,deviceScaleFactor:member.deviceScaleFactor,theme:member.theme} satisfies Fingerprint);
-        const row=visual.upsertReferencePrivileged(fp,member.assetId,null);
+        const row=visual.upsertReferencePrivileged(fp,member.assetId,null,renderers?.get(member.assetId)??null);
         return {screenId:member.screenId,viewport:member.viewport,deviceScaleFactor:member.deviceScaleFactor,theme:member.theme,referenceId:row.id};
       }));
       const generation=(currentGeneration??0)+1;

@@ -517,6 +517,28 @@ const candidateMetaSchema=z.union([
   z.strictObject({kind:z.literal("component"),outcome:z.enum(["captured","capture_failed"]),requestedTarget:z.strictObject({version:z.number()}),resolvedTarget:z.strictObject({version:z.number()}),expected:componentExpectedSchema,browser:captureBrowserSchema.nullable(),error:z.string().optional(),version:z.number(),bundleHash:z.string().optional(),rendererBuild:z.string().nullable().optional(),browserVersion:z.string().optional()}),
 ]);
 
+/**
+ * Происхождение кадра эталона (R6). Носитель истины — эта запись, а не receipt: стор receipt'ов
+ * живёт по TTL/LRU, а эталон судится и через год. `null` в поле — «доказательство этого не
+ * принесло», и guard читает такой эталон как `unknown`, а не как совпавший.
+ */
+const guardSideSchema = z.object({
+  fingerprint: z.string().nullable(), fontManifestHash: z.string().nullable(),
+  readinessPolicyHash: z.string().nullable(), epoch: z.string().nullable(),
+});
+export const referenceRendererSchema = z.object({
+  fingerprint: z.string(), fontManifestHash: z.string().nullable(), readinessPolicyHash: z.string().nullable(),
+  epoch: z.string().nullable(), browserVersion: z.string().nullable(), launchedExecutable: z.string().nullable(),
+  browserExecutableSha256: z.string().nullable(), source: z.enum(["manifest", "fallback"]).nullable(),
+  receiptSha256: z.string().nullable(), recordedAt: z.string(),
+});
+export const rendererGuardSchema = z.object({
+  state: z.enum(["matched", "mismatch", "unknown", "disabled"]),
+  differing: z.array(z.string()),
+  reference: guardSideSchema, candidate: guardSideSchema,
+  flags: z.object({ rendererFlags: z.boolean(), epoch: z.string().nullable() }),
+});
+
 export const runReportSchema = z.object({
   runId: z.string(), referenceId: z.string(),
   status: z.enum(["pass", "fail", "error", "reference_missing", "reference_unknown"]),
@@ -528,19 +550,27 @@ export const runReportSchema = z.object({
   reference: evidenceAssetSchema.nullable(), candidate: evidenceAssetSchema.nullable(),
   diff: z.object({ assetId: z.string(), url: z.string() }).nullable(),
   candidateMeta: candidateMetaSchema.nullable(),
+  // R6 (cross-renderer guard): типизированный исход поверх `status` (N7 — новых значений `status`
+  // не появилось) и обе evidence-ссылки на receipt'ы сравнивавшихся кадров.
+  outcomeCode: z.enum(["renderer_mismatch", "stale_renderer"]).nullable(),
+  rendererGuard: rendererGuardSchema.nullable(),
+  candidateReceiptSha256: z.string().nullable(),
+  referenceReceiptSha256: z.string().nullable(),
+  warnings: z.array(z.string()),
 });
 
 export const referencePublicSchema = z.object({
   id: z.string(), fingerprint: z.unknown(), note: z.string().nullable(), createdAt: z.string(),
   asset: assetPublicSchema.extend({ url: z.string() }).nullable(),
   lastRun: runReportSchema.nullable(),
+  renderer: referenceRendererSchema.nullable(),
 });
 
 export const putVisualReferenceContract = registerContract({
   method: "PUT",
   path: "/api/visual-references",
   summary: "Upsert a visual reference by canonical fingerprint (asset must exist and be a PNG).",
-  requestSchema: z.object({ fingerprint: fingerprintContractSchema, assetId: z.string(), note: z.string().optional() }),
+  requestSchema: z.object({ fingerprint: fingerprintContractSchema, assetId: z.string(), note: z.string().optional(), receiptSha256: z.string().optional() }),
   responseSchema: referencePublicSchema,
   errors: [{status:409,code:"baseline_managed"},{ status: 422, code: "asset_not_found" }, { status: 422, code: "invalid_reference_asset" }, { status: 422, code: "validation_failed" }],
 });
@@ -599,7 +629,7 @@ const baselineMemberSchema=z.strictObject({screenId:z.string(),viewport:baseline
 const baselineResponseCore=z.strictObject({generation:z.number().int().positive(),rev:z.number().int().positive(),members:z.array(baselineMemberSchema)});
 export const putVisualBaselineContract=registerContract({
   method:"PUT",path:"/api/visual-baselines/prototypes/{id}",summary:"Atomically replace the complete committed visual baseline set for a prototype (generation CAS).",
-  requestSchema:z.strictObject({rev:z.number().int().positive(),prototypeInstanceId:z.string(),baseGeneration:z.number().int().positive().nullable(),members:z.array(z.strictObject({screenId:z.string(),viewport:baselineViewportSchema,deviceScaleFactor:deviceScaleSchema,theme:z.enum(["light","dark"]),assetId:z.string()}))}),
+  requestSchema:z.strictObject({rev:z.number().int().positive(),prototypeInstanceId:z.string(),baseGeneration:z.number().int().positive().nullable(),members:z.array(z.strictObject({screenId:z.string(),viewport:baselineViewportSchema,deviceScaleFactor:deviceScaleSchema,theme:z.enum(["light","dark"]),assetId:z.string()})),receipts:z.record(z.string(),z.string()).optional()}),
   responseSchema:baselineResponseCore,validated:true,
   errors:[{status:404,code:"prototype_not_found"},{status:404,code:"revision_not_found"},{status:409,code:"instance_conflict"},{status:409,code:"generation_conflict"},{status:422,code:"incomplete_baseline"},{status:422,code:"invalid_viewport"},{status:422,code:"asset_not_found"},{status:422,code:"invalid_reference_asset"},{status:422,code:"validation_failed"},headTrackingError],
 });

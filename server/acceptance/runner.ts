@@ -21,8 +21,9 @@ import {
   type CauseGeometryFacts, type CauseInput, type CauseReadinessFacts, type CauseVisualMetrics, type VisualCause,
 } from "../visual/causes";
 import type { AcceptanceCase } from "./cases";
-import { artifactPresent } from "./evidence";
-import { caseFingerprintV0, type CaseSurface } from "./ids";
+import { artifactPresent, readArtifact } from "./evidence";
+import { rendererFingerprint } from "../capture/renderer";
+import { caseFingerprintV0, readinessPolicyHashOf, type CaseSurface } from "./ids";
 import { CaptureInfraError } from "./gates/capture";
 import { GATE_ORDER, IMPLEMENTED_GATES } from "./gates";
 import { readinessBlocksVisual } from "./gates/readiness";
@@ -268,6 +269,31 @@ export const causesOfGates = (gates: GateResult[]): VisualCause[] => gateOf(gate
 
 const artifactsOf = (gates: GateResult[]): GateArtifactRef[] => gates.flatMap((gate) => gate.artifacts ?? []);
 
+/**
+ * Сверка рендерера переиспользуемого случая с рендерером **этого** процесса (R6, T-m20).
+ *
+ * Зачем она нужна, если `rendererFingerprint` и так входит в `case_fingerprint` (R1): отпечаток —
+ * ключ **lookup'а**, то есть утверждение о том, каким рендерером случай *должен* был сниматься.
+ * Эта проверка смотрит на доказательство — receipt артефакта — и отвечает, каким он снят на самом
+ * деле. Расхождение возможно при откате образа на БД, где кэш уже писался новым рендерером.
+ *
+ * Отсутствие `receipt.json` среди артефактов **не** отменяет reuse: receipt'ы могли быть выключены
+ * kill-switch'ем (R5), а вытесненный `gcEvidence`-ом артефакт уже отсечён проверкой
+ * `artifactPresent` выше. Итог сверки — «переснять», а не «уронить ран» (T-m20).
+ */
+export async function reusableRendererMatches(deps: CaseRunnerDeps, artifacts: GateArtifactRef[]): Promise<boolean> {
+  const ref = artifacts.find((artifact) => artifact.name === "receipt.json");
+  if (!ref) return true;
+  const bytes = await readArtifact(deps.context.dataDir, ref.sha256);
+  if (bytes === null) return false;
+  try {
+    const receipt = JSON.parse(new TextDecoder().decode(bytes)) as { renderer?: { fingerprint?: unknown } };
+    const stored = receipt.renderer?.fingerprint;
+    if (typeof stored !== "string") return true;
+    return stored === rendererFingerprint(readinessPolicyHashOf(deps.policy.readiness));
+  } catch { return false; }
+}
+
 /** Reuse: тот же отпечаток, тот же компонент и **физически существующие** артефакты (A4). */
 async function reusableResult(deps: CaseRunnerDeps, fingerprint: string): Promise<{ verdict: AcceptanceCaseVerdict; stored: StoredResult } | null> {
   const row = deps.repo.caseResultForComponent(fingerprint, deps.candidate.componentId);
@@ -282,6 +308,7 @@ async function reusableResult(deps: CaseRunnerDeps, fingerprint: string): Promis
   for (const artifact of artifacts) {
     if (!(await artifactPresent(deps.context.dataDir, artifact.sha256))) return null;
   }
+  if (!(await reusableRendererMatches(deps, artifacts))) return null;
   return { verdict: row.verdict as AcceptanceCaseVerdict, stored };
 }
 
