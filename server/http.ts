@@ -1,6 +1,13 @@
 export type ErrorDetails = { issues?: unknown[]; warnings?: unknown[]; currentRev?: number; currentVersion?: number; currentStatusRev?: number; currentGeneration?: number | null; usages?: unknown; report?: unknown; blockers?: Record<string, number>; runId?: string; retryAfterSeconds?: number; catalogRevision?: string; dataFingerprint?: string; planHash?: string;
   /** RFC candidate-acceptance R1: фактический sha256 head-исходника в `409 source_hash_mismatch`. */
-  sourceHash?: string };
+  sourceHash?: string;
+  /**
+   * RFC candidate-acceptance R3b: решение человека в конвертах `409 candidate_already_rejected`
+   * (плоские `reason`/`actor`/`createdAt` — конфликт по самому кандидату) и `409 candidate_rejected`
+   * (надгробие другой сборки той же ревизии: `candidateId` + вложенное `decision`).
+   */
+  reason?: string; actor?: string; createdAt?: string;
+  candidateId?: string; decision?: { reason: string; actor: string; createdAt: string } };
 
 export class ApiError extends Error {
   constructor(public status: 400|401|403|404|405|409|413|415|422|429|501|503, public code: string, message: string, public details: ErrorDetails = {}) { super(message); }

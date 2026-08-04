@@ -6,6 +6,7 @@
  * POST /api/components/:id/candidates        — validate head + идемпотентная durable-строка
  * POST /api/components/:id/impact            — dry-run импакта кандидата к baseline-рану (W6)
  * GET  /api/component-candidates/:candidateId
+ * POST /api/component-candidates/:candidateId/reject — отклонение человеком (R3b, надгробие)
  * POST /api/acceptance-runs                  — постановка рана (202)
  * GET  /api/acceptance-runs/:runId           — статус + gates + progress + eta + failedCases
  * GET  /api/acceptance-runs/:runId/cases     — per-case вердикты + имена артефактов
@@ -37,10 +38,11 @@ import { sha256 } from "../components/pipeline";
 import { validateComponentHead } from "../components/validate";
 import { ApiError, json, noStore, readJson } from "../http";
 import { maintenanceLockHeld } from "../maintenance";
+import { writeAuditEvent } from "../audit";
 import { ComponentRepo } from "../repos/components";
 import { zipResponse } from "./bundles";
 import type { AcceptanceOrchestrator, RefreshSpec } from "../acceptance/orchestrator";
-import type { AcceptanceCaseRow, AcceptanceRunRow, CandidateRow } from "../acceptance/repo";
+import type { AcceptanceCaseRow, AcceptanceRunRow, CandidateDecisionRow, CandidateRow } from "../acceptance/repo";
 import { isCandidateId, isRunId } from "../acceptance/ids";
 import { computeImpact } from "../acceptance/impact";
 import { isCaseSetId } from "../../src/acceptance/caseSetSchema";
@@ -88,8 +90,14 @@ function parseRefresh(value: unknown): RefreshSpec {
   throw new ApiError(400, "invalid_request", 'refresh must be "none", "failed", "all" or {caseIds: string[]}');
 }
 
-/** Публичное представление кандидата: durable-идентичность без внутренних полей строки. */
-function candidateView(row: CandidateRow): Record<string, unknown> {
+/**
+ * Публичное представление кандидата: durable-идентичность без внутренних полей строки.
+ *
+ * `rejected` — **вычисляемый** статус (§3.2а): хранимый enum `status` не расширяется, решение
+ * человека живёт отдельной append-only строкой `candidate_decisions`. Поэтому в DTO они и разведены:
+ * `status` остаётся `validated|promoted`, а надгробие приезжает парой `rejected` + `decision`.
+ */
+function candidateView(row: CandidateRow, decision?: CandidateDecisionRow): Record<string, unknown> {
   return {
     candidateId: row.candidate_id,
     componentId: row.component_id,
@@ -104,6 +112,10 @@ function candidateView(row: CandidateRow): Record<string, unknown> {
     catalogRevision: row.observed_catalog_revision,
     status: row.status,
     statusReason: row.status_reason,
+    rejected: decision !== undefined,
+    decision: decision === undefined
+      ? null
+      : { reason: decision.reason, actor: decision.actor, createdAt: decision.created_at },
     acceptanceRunId: row.acceptance_run_id,
     promotedVersion: row.promoted_version,
     createdAt: row.created_at,
@@ -233,7 +245,10 @@ async function createCandidate(request: Request, db: Database, dataDir: string, 
     policyProfileHash: policyProfileHash(policy),
     createdBy: actor.userId,
   });
-  return json({ ...candidateView(created.candidate), cached: created.cached, warnings: receipt.warnings }, 200, noStore);
+  // R3b (§3.2а, анти-воскрешение): повтор той же сборки возвращает **ту же** строку — включая
+  // отклонённую. POST не пересоздаёт кандидата и не снимает решение человека.
+  const decision = orchestrator.repo.decision(created.candidate.candidate_id);
+  return json({ ...candidateView(created.candidate, decision), cached: created.cached, warnings: receipt.warnings }, 200, noStore);
 }
 
 function getCandidate(request: Request, db: Database, candidateId: string, principal: Principal, orchestrator: AcceptanceOrchestrator): Response {
@@ -244,7 +259,41 @@ function getCandidate(request: Request, db: Database, candidateId: string, princ
   if (!isCandidateId(candidateId)) throw new ApiError(404, "not_found", "Candidate not found");
   const row = orchestrator.repo.requireCandidate(candidateId);
   assertComponentOwner(db, row.component_id, principal);
-  return json(candidateView(row), 200, noStore);
+  return json(candidateView(row, orchestrator.repo.decision(candidateId)), 200, noStore);
+}
+
+/**
+ * `POST /api/component-candidates/:candidateId/reject` (RFC §4.1, R3b) — отклонение человеком.
+ *
+ * Ручка ничего не мутирует в `component_candidates` и не трогает раны: это надгробие для UI и для
+ * promote-предиката (§4.3.1). Следствие, фиксируемое явно: отклонённый кандидат с живым раном
+ * продолжает занимать in-flight-слот до терминализации рана — reject **не** отменяет ран (для
+ * этого есть `POST /acceptance-runs/:runId/cancel`).
+ *
+ * Отмены нет: выход из отклонения — новая ревизия компонента, а не `unreject`.
+ */
+async function rejectCandidate(request: Request, db: Database, candidateId: string, principal: Principal, orchestrator: AcceptanceOrchestrator): Promise<Response> {
+  if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+  requireUser(principal);
+  if (!isCandidateId(candidateId)) throw new ApiError(404, "not_found", "Candidate not found");
+  const row = orchestrator.repo.requireCandidate(candidateId);
+  const actor = assertComponentOwner(db, row.component_id, principal);
+  const body = await readJson(request);
+  if (!isObject(body)) throw new ApiError(400, "invalid_request", "Request body must be an object");
+  for (const key of Object.keys(body)) {
+    if (key !== "reason") throw new ApiError(400, "invalid_request", `Unknown field: ${key}`);
+  }
+  const reason = body.reason;
+  // Причина обязательна: надгробие без неё бесполезно и UI, и следующему автору.
+  if (typeof reason !== "string" || reason.trim().length === 0 || reason.length > 2000) {
+    throw new ApiError(400, "invalid_request", "reason is required and must be a non-empty string of at most 2000 characters");
+  }
+  const rejected = orchestrator.repo.rejectCandidate({ candidateId, reason: reason.trim(), actor: actor.userId });
+  writeAuditEvent(db, {
+    actorId: actor.userId, action: "candidate.rejected", subjectType: "component", subjectId: row.component_id,
+    detail: { candidateId, componentId: row.component_id, rev: row.rev, reason: rejected.decision.reason },
+  });
+  return json(candidateView(rejected.candidate, rejected.decision), 200, noStore);
 }
 
 async function startRun(request: Request, db: Database, principal: Principal, orchestrator: AcceptanceOrchestrator): Promise<Response> {
@@ -470,6 +519,9 @@ export async function routeAcceptance(
   if (isCandidateCreate) return createCandidate(request, db, dataDir, segments[1]!, principal, orchestrator);
   if (isImpact) return componentImpact(request, db, dataDir, segments[1]!, principal, orchestrator);
   if (isCandidateRead) {
+    if (segments.length === 3 && segments[2] === "reject") {
+      return rejectCandidate(request, db, segments[1]!, principal, orchestrator);
+    }
     if (segments.length !== 2) throw new ApiError(404, "not_found", "API route not found");
     return getCandidate(request, db, segments[1]!, principal, orchestrator);
   }

@@ -266,6 +266,9 @@ function orderedCases(): [string, Case][] {
     // в acceptance-routes.test.ts и e2e; здесь — форма ручек и их 404-конверт.
     ["POST /api/components/{id}/candidates", { run: () => call("POST", "/api/components/contract-missing/candidates"), expected: err(404, "not_found") }],
     ["GET /api/component-candidates/{candidateId}", { run: () => call("GET", `/api/component-candidates/cand_${"0".repeat(64)}`), expected: err(404, "not_found") }],
+    // R3b: reject — терминальное надгробие; happy path и оба 409 в acceptance-routes.test.ts,
+    // здесь тот же 404-конверт несуществующего кандидата.
+    ["POST /api/component-candidates/{candidateId}/reject", { run: () => call("POST", `/api/component-candidates/cand_${"0".repeat(64)}/reject`, { reason: "contract probe" }), expected: err(404, "not_found") }],
     ["POST /api/acceptance-runs", { run: () => call("POST", "/api/acceptance-runs", { candidateId: `cand_${"0".repeat(64)}` }), expected: err(404, "not_found") }],
     ["POST /api/acceptance-runs", { run: () => call("POST", "/api/acceptance-runs", { candidateId: `cand_${"0".repeat(64)}`, caseSetId: "cset_x" }), expected: err(400, "invalid_request") }],
     ["GET /api/acceptance-runs/{runId}", { run: () => call("GET", `/api/acceptance-runs/${MISSING_RUN_ID}`), expected: err(404, "not_found") }],

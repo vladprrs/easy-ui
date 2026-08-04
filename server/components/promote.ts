@@ -132,6 +132,39 @@ function resolveAcceptanceRefs(
   return { candidate, runId: run.run_id };
 }
 
+/**
+ * Rejected-предикат (RFC §4.3.1, R3b) — **флаг-независимый** хелпер над `db`.
+ *
+ * Формулируется по субъекту, а не по ссылке: проверка «нет решения для переданного `candidateId`»
+ * обходится тривиально — R1-путь promote (receipt-based, `{baseRev, sourceHash}`) `candidateId` не
+ * передаёт вовсе, и отклонённая сборка публиковалась бы мимо надгробия. Поэтому спрашивается:
+ * **есть ли отклонённый кандидат для `(component_id, design_system, rev = baseRev)`**.
+ *
+ * Семантика намеренно широкая: человек отклонил сборку этой ревизии — блокируется **вся ревизия**,
+ * включая пересборки с другим `build_fingerprint` (иная тема/ABI). Выход — новая ревизия
+ * компонента: надгробий на неё нет по определению.
+ *
+ * Живёт здесь, а не в `acceptance/repo.ts`: тот инжектится только при `EASYUI_ACCEPTANCE_MATRIX=1`
+ * (`main.ts`), то есть предикат был бы выключен ровно в той конфигурации, где он и обходится
+ * R1-путём (триаж раунд3-m-4). Таблицы `component_candidates`/`candidate_decisions` заводят
+ * безусловные миграции v25/v27, поэтому запрос корректен при любом положении флага.
+ *
+ * `design_system` в кортеже избыточен (ревизия уже пинует дизайн-систему компонента) — оставлен
+ * для симметрии с составом `candidate_id`.
+ */
+export function assertRevisionNotRejected(db: Database, componentId: string, designSystem: string, rev: number): void {
+  const row = db.query(`SELECT c.candidate_id candidateId, d.reason, d.actor, d.created_at createdAt
+    FROM candidate_decisions d
+    JOIN component_candidates c ON c.candidate_id = d.candidate_id
+    WHERE d.decision='rejected' AND c.component_id=? AND c.design_system=? AND c.rev=?
+    ORDER BY d.created_at LIMIT 1`)
+    .get(componentId, designSystem, rev) as { candidateId: string; reason: string; actor: string; createdAt: string } | null;
+  if (!row) return;
+  throw new ApiError(409, "candidate_rejected",
+    `Revision ${rev} of ${componentId} was rejected by ${row.actor}; promote a new revision instead`,
+    { candidateId: row.candidateId, decision: { reason: row.reason, actor: row.actor, createdAt: row.createdAt } });
+}
+
 /** Свежая ревизия каталога — тот же снапшот-контракт, что у validate-receipt и library. */
 const currentCatalogRevision = (db: Database): string => db.transaction(() => libraryCatalog(db).catalogRevision)();
 
@@ -149,6 +182,9 @@ export async function promoteComponent(db: Database, dataDir: string, input: Pro
       sourceHash: actualSourceHash, currentRev: revision.rev,
     });
   }
+  // R3b: решение человека терминально и проверяется до любых мутаций — на обоих путях promote и
+  // независимо от `EASYUI_ACCEPTANCE_MATRIX` (иначе receipt-путь R1 публиковал бы отклонённое).
+  assertRevisionNotRejected(db, input.id, revision.designSystem, input.baseRev);
   if (input.expectedCatalogRevision !== undefined) {
     const observed = currentCatalogRevision(db);
     if (observed !== input.expectedCatalogRevision) {

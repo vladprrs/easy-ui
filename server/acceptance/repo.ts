@@ -16,9 +16,13 @@
  * - **≤1 нетерминальный ран на кандидата** — partial unique index `acceptance_runs_one_in_flight`.
  *   Предпроверка внутри той же транзакции даёт детерминированную доменную ошибку, а маппинг
  *   `SQLITE_CONSTRAINT_UNIQUE` остаётся race-safe подстраховкой (два процесса).
- * - **GC ничего не рвёт молча**: свипер кандидатов не трогает `promoted` (триаж V14), а раны,
- *   на которые ссылается `component_publishes` (плоские TEXT-колонки A9, без FK), защищены
+ * - **GC ничего не рвёт молча**: свипер кандидатов не трогает `promoted` (триаж V14) и кандидатов
+ *   с decision-строками (R3b, триаж раунд3-BL-2: иначе TTL работал бы как отложенный `unreject`),
+ *   а раны, на которые ссылается `component_publishes` (плоские TEXT-колонки A9, без FK), защищены
  *   запросом — FK бы этого не сделал.
+ * - **Отклонение (R3b) — append-only надгробие** в `candidate_decisions` (§3.2а): статус
+ *   `component_candidates.status` не расширяется, отмены reject нет, арбитр гонки двойной
+ *   вставки — partial unique index `candidate_decisions_one_rejected`.
  *
  * Доменные ошибки поднимаются как `ApiError` с кодами, которые роуты (T4) отдают как есть.
  */
@@ -61,6 +65,18 @@ export interface CandidateRow {
   created_by: string;
   created_at: string;
   expires_at: string;
+}
+
+/**
+ * Надгробие решения человека (§3.2а, R3b). Append-only: строки не обновляются и не удаляются —
+ * единственный разрешённый способ исчезновения — каскад вместе с самим кандидатом.
+ */
+export interface CandidateDecisionRow {
+  candidate_id: string;
+  decision: "rejected";
+  reason: string;
+  actor: string;
+  created_at: string;
 }
 
 export interface AcceptanceRunRow {
@@ -275,6 +291,60 @@ export class AcceptanceRepo {
         .run(version, runId ?? null, `promoted v${version}`, candidateId);
       return this.requireCandidate(candidateId);
     })();
+  }
+
+  // ------------------------------------------------------- решения (R3b, §3.2а)
+
+  /** Надгробие отклонения кандидата, если оно есть. `rejected` — вычисляемый статус, не колонка. */
+  decision(candidateId: string): CandidateDecisionRow | undefined {
+    return (this.db.query("SELECT * FROM candidate_decisions WHERE candidate_id=? AND decision='rejected'")
+      .get(candidateId) as CandidateDecisionRow | null) ?? undefined;
+  }
+
+  /**
+   * Отклонение человеком (RFC §4.1, R3b).
+   *
+   * Три инварианта, которые держит именно этот метод:
+   *
+   * - **`promoted` отклонять нечем** → `409 candidate_promoted` (**не** `candidate_already_promoted`:
+   *   тот занят CAS'ом `markPromoted` фазы B саги promote и означает другое состояние — триаж
+   *   раунд3-MJ-1). Надгробие на опубликованную сборку только заблокировало бы recovery-повтор саги;
+   * - **повтор** → `409 candidate_already_rejected` с существующим решением в `details`: без него
+   *   UI не может показать, кто и почему отклонил;
+   * - **гонка двух процессов** арбитрируется partial unique index'ом: предпроверка выше проходит у
+   *   обоих, проигравший `INSERT` получает `SQLITE_CONSTRAINT` и отдаёт тот же 409 с перечитанным
+   *   решением победителя.
+   *
+   * Отмены нет: `unreject`/DELETE не вводятся, а строка переживает TTL (см. `sweepExpiredCandidates`).
+   */
+  rejectCandidate(input: { candidateId: string; reason: string; actor: string }): { candidate: CandidateRow; decision: CandidateDecisionRow } {
+    const createdAt = now();
+    try {
+      return this.db.transaction(() => {
+        const candidate = this.requireCandidate(input.candidateId);
+        if (candidate.status === "promoted") {
+          throw new ApiError(409, "candidate_promoted", "Candidate is already promoted to a public version and cannot be rejected",
+            { currentVersion: candidate.promoted_version ?? undefined });
+        }
+        const existing = this.decision(input.candidateId);
+        if (existing) throw this.alreadyRejected(existing);
+        this.db.query("INSERT INTO candidate_decisions (candidate_id,decision,reason,actor,created_at) VALUES (?,'rejected',?,?,?)")
+          .run(input.candidateId, input.reason, input.actor, createdAt);
+        return { candidate, decision: this.decision(input.candidateId)! };
+      })();
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      if (typeof code === "string" && code.startsWith("SQLITE_CONSTRAINT")) {
+        const winner = this.decision(input.candidateId);
+        if (winner) throw this.alreadyRejected(winner);
+      }
+      throw error;
+    }
+  }
+
+  private alreadyRejected(decision: CandidateDecisionRow): ApiError {
+    return new ApiError(409, "candidate_already_rejected", "Candidate has already been rejected; rejection is terminal",
+      { reason: decision.reason, actor: decision.actor, createdAt: decision.created_at });
   }
 
   // --------------------------------------------------------------------- раны
@@ -570,14 +640,21 @@ export class AcceptanceRepo {
   /**
    * Свипер кандидатов по `expires_at`.
    *
-   * Пропускаются: `promoted` (триаж V14 — provenance версии), кандидаты с живым раном и кандидаты,
-   * чьи раны или сами они упомянуты в `component_publishes`. Удаление идёт вместе с ранами
-   * кандидата (случаи уходят каскадом v25) — иначе FK `acceptance_runs.candidate_id` не даст
-   * удалить строку, и свипер вечно возвращал бы ошибку.
+   * Пропускаются: `promoted` (триаж V14 — provenance версии), **кандидаты с decision-строками**
+   * (R3b, триаж раунд3-BL-2: каскад `ON DELETE CASCADE` снёс бы надгробие вместе с кандидатом, и
+   * повторный `POST …/candidates` той же сборки создал бы чистого — отложенный `unreject` по
+   * таймеру), кандидаты с живым раном и кандидаты, чьи раны или сами они упомянуты в
+   * `component_publishes`. Удаление идёт вместе с ранами кандидата (случаи уходят каскадом v25) —
+   * иначе FK `acceptance_runs.candidate_id` не даст удалить строку, и свипер вечно возвращал бы ошибку.
+   *
+   * Обе «структурные» защиты (`promoted`, надгробие) стоят в выборке, а не в теле цикла: такие
+   * кандидаты не кандидаты на удаление вовсе и в `skipped` не попадают.
    */
   sweepExpiredCandidates(atIso = now(), limit = 200): { deleted: number; skipped: number } {
-    const expired = this.db.query(`SELECT * FROM component_candidates
-      WHERE expires_at < ? AND status <> 'promoted' ORDER BY expires_at LIMIT ?`).all(atIso, limit) as CandidateRow[];
+    const expired = this.db.query(`SELECT * FROM component_candidates c
+      WHERE c.expires_at < ? AND c.status <> 'promoted'
+        AND NOT EXISTS (SELECT 1 FROM candidate_decisions d WHERE d.candidate_id = c.candidate_id)
+      ORDER BY c.expires_at LIMIT ?`).all(atIso, limit) as CandidateRow[];
     if (!expired.length) return { deleted: 0, skipped: 0 };
     const publishedRuns = this.runIdsReferencedByPublishes();
     const publishedCandidates = this.candidateIdsReferencedByPublishes();

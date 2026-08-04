@@ -7259,6 +7259,33 @@
                     "createdAt": {
                       "$ref": "#/$defs/__schema0"
                     },
+                    "decision": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "actor": {
+                              "type": "string"
+                            },
+                            "createdAt": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "reason",
+                            "actor",
+                            "createdAt"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "designSystem": {
                       "type": "string"
                     },
@@ -7280,6 +7307,9 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "rejected": {
+                      "type": "boolean"
                     },
                     "rev": {
                       "type": "number"
@@ -7329,6 +7359,8 @@
                     "catalogRevision",
                     "status",
                     "statusReason",
+                    "rejected",
+                    "decision",
                     "acceptanceRunId",
                     "promotedVersion",
                     "createdAt",
@@ -7372,6 +7404,248 @@
           }
         },
         "summary": "Read an acceptance candidate by id (global namespace; it does not overlap /api/catalog/candidates). Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/component-candidates/{candidateId}/reject": {
+      "post": {
+        "operationId": "post_component_candidates_candidateId_reject",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidateId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "maxLength": 2000,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reason"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": {},
+                  "properties": {
+                    "acceptanceRunId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "buildFingerprint": {
+                      "type": "string"
+                    },
+                    "bundleHash": {
+                      "type": "string"
+                    },
+                    "candidateId": {
+                      "type": "string"
+                    },
+                    "catalogRevision": {
+                      "type": "string"
+                    },
+                    "componentId": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "decision": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "actor": {
+                              "type": "string"
+                            },
+                            "createdAt": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "reason",
+                            "actor",
+                            "createdAt"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "designSystem": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "hostAbiVersion": {
+                      "type": "number"
+                    },
+                    "policyProfileHash": {
+                      "type": "string"
+                    },
+                    "promotedVersion": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rejected": {
+                      "type": "boolean"
+                    },
+                    "rev": {
+                      "type": "number"
+                    },
+                    "sourceHash": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "enum": [
+                        "validated",
+                        "promoted"
+                      ],
+                      "type": "string"
+                    },
+                    "statusReason": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "themeVersion": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "candidateId",
+                    "componentId",
+                    "designSystem",
+                    "rev",
+                    "sourceHash",
+                    "bundleHash",
+                    "hostAbiVersion",
+                    "themeVersion",
+                    "buildFingerprint",
+                    "policyProfileHash",
+                    "catalogRevision",
+                    "status",
+                    "statusReason",
+                    "rejected",
+                    "decision",
+                    "acceptanceRunId",
+                    "promotedVersion",
+                    "createdAt",
+                    "expiresAt"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (not the component owner, or a share/capture principal)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "candidate_already_rejected (the candidate already carries a rejection; the details hold the existing decision) | candidate_promoted (the candidate is already promoted to a public version and cannot be rejected)"
+          }
+        },
+        "summary": "Reject an acceptance candidate by hand: writes an append-only decision row (the stored `status` enum is NOT extended — `rejected` stays a computed flag on the DTO) and returns the candidate with `rejected: true` and `decision {reason, actor, createdAt}`. Owner or admin only; `reason` is required. THE DECISION IS TERMINAL: there is no unreject handle, the tombstone outlives the candidate TTL (the sweeper skips candidates that carry a decision), and repeating `POST /api/components/{id}/candidates` for the same build returns that same rejected candidate instead of a clean one. From then on `POST /api/components/{id}/promote` refuses the WHOLE revision with 409 candidate_rejected — on both paths, with or without `candidateId`, and regardless of EASYUI_ACCEPTANCE_MATRIX. Rejecting twice → 409 candidate_already_rejected carrying the existing decision; rejecting an already promoted candidate → 409 candidate_promoted with `{currentVersion}` (a different code from `markPromoted`'s 409 candidate_already_promoted, which reports a promote-saga CAS conflict). Rejection does not cancel a running acceptance run: it neither mutates the candidate row nor frees the in-flight slot. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
         "x-easyui-validated": false
       }
     },
@@ -8400,6 +8674,33 @@
                     "createdAt": {
                       "$ref": "#/$defs/__schema0"
                     },
+                    "decision": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "actor": {
+                              "type": "string"
+                            },
+                            "createdAt": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "reason",
+                            "actor",
+                            "createdAt"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "designSystem": {
                       "type": "string"
                     },
@@ -8421,6 +8722,9 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "rejected": {
+                      "type": "boolean"
                     },
                     "rev": {
                       "type": "number"
@@ -8476,6 +8780,8 @@
                     "catalogRevision",
                     "status",
                     "statusReason",
+                    "rejected",
+                    "decision",
                     "acceptanceRunId",
                     "promotedVersion",
                     "createdAt",
@@ -9541,7 +9847,9 @@
                                 "already_published",
                                 "source_hash_mismatch",
                                 "candidate_unavailable",
-                                "acceptance_run_in_flight"
+                                "acceptance_run_in_flight",
+                                "candidate_rejected",
+                                "candidate_already_promoted"
                               ],
                               "type": "string"
                             },
@@ -9786,7 +10094,7 @@
                 }
               }
             },
-            "description": "revision_conflict | already_published | source_hash_mismatch (sourceHash does not describe the current head revision) | candidate_unavailable (the candidate bundle vanished between build and read; validate again) | catalog_changed | canonical_role_conflict | acceptance_run_in_flight (the referenced candidate still has a queued/running acceptance run)"
+            "description": "revision_conflict | already_published | source_hash_mismatch (sourceHash does not describe the current head revision) | candidate_unavailable (the candidate bundle vanished between build and read; validate again) | catalog_changed | canonical_role_conflict | acceptance_run_in_flight (the referenced candidate still has a queued/running acceptance run) | candidate_rejected (a human rejected a candidate of this very revision; promote a new revision instead) | candidate_already_promoted (promote-saga CAS: the referenced candidate is already promoted to another version (phase-B markPromoted conflict))"
           },
           "413": {
             "content": {

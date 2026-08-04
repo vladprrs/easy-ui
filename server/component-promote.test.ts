@@ -12,6 +12,7 @@ import { PrototypeRepo } from "./repos/prototypes";
 import { BOOTSTRAP_ADMIN_ID, ensureBootstrapAdmin, UserRepo } from "./users";
 import { routeComponents } from "./routes/components";
 import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
+import { AcceptanceRepo } from "./acceptance/repo";
 import { ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, policyProfileHash } from "./acceptance/policies";
 import type { AcceptanceCaptureService } from "./acceptance/gates/types";
 
@@ -415,6 +416,93 @@ describe("promote with acceptance references (W1c, A9)", () => {
     const malformed = await promote({ candidateId: "not-a-candidate" });
     expect(malformed.status).toBe(400);
     expect(await malformed.json()).toMatchObject({ error: { code: "invalid_request" } });
+  }, 180_000);
+});
+
+/**
+ * Rejected-предикат promote (RFC §4.3.1, волна R3b).
+ *
+ * Предмет — ровно то, ради чего предикат переформулировали по субъекту: он обязан срабатывать
+ * там, где `candidateId` не передаётся вовсе (receipt-путь R1) и где acceptance-репозиторий не
+ * инжектирован (`EASYUI_ACCEPTANCE_MATRIX=0`) — таблицы v25/v27 заводятся безусловно.
+ */
+describe("promote refuses a rejected revision (R3b, §4.3.1)", () => {
+  const rejectRevision = (db: Database, input: { componentId: string; rev: number; sourceHash: string; reason: string }) => {
+    const repo = new AcceptanceRepo(db);
+    const { candidate } = repo.createCandidate({
+      componentId: input.componentId, designSystem: "yandex-pay", rev: input.rev,
+      sourceHash: input.sourceHash, bundleHash: "bundle-x", hostAbiVersion: 1, themeVersion: null,
+      observedCatalogRevision: "catalog-x", policyProfileHash: policyProfileHash(DEFAULT_POLICY),
+      createdBy: BOOTSTRAP_ADMIN_ID,
+    });
+    repo.rejectCandidate({ candidateId: candidate.candidate_id, reason: input.reason, actor: BOOTSTRAP_ADMIN_ID });
+    return candidate;
+  };
+
+  test("the R1 receipt path is blocked with EASYUI_ACCEPTANCE_MATRIX off", async () => {
+    // Матрицы нет вовсе: оркестратор не инжектирован, ручек приёмки не существует.
+    const { db, handler } = await setup();
+    const source = await fixture("rating-stars.tsx");
+    await createComponent(handler, "promote-rejected", "PromoteRejected", source);
+    const tombstone = rejectRevision(db, { componentId: "promote-rejected", rev: 1, sourceHash: "f".repeat(64), reason: "интервалы не по макету" });
+
+    const promoted = await validateThenPromote(handler, "promote-rejected", 1);
+    expect(promoted.status).toBe(409);
+    expect(await promoted.json()).toMatchObject({
+      error: {
+        code: "candidate_rejected",
+        candidateId: tombstone.candidate_id,
+        decision: { reason: "интервалы не по макету", actor: BOOTSTRAP_ADMIN_ID },
+      },
+    });
+    // Отказ дешёвый: ни версии, ни staging-строки.
+    expect(versionRows(db, "promote-rejected")).toEqual([]);
+
+    // Выход — новая ревизия: надгробий на неё нет по определению.
+    const rev2 = await saveRevision(handler, "promote-rejected", variant(source, "clean"), 1);
+    const clean = await validateThenPromote(handler, "promote-rejected", rev2);
+    expect(clean.status, await clean.clone().text()).toBe(201);
+  }, 180_000);
+
+  test("rejection blocks the WHOLE revision: a sibling build of the same rev is refused too", async () => {
+    const { db, handler, orchestrator } = await setup({ matrix: true });
+    const source = await fixture("rating-stars.tsx");
+    await createComponent(handler, "promote-rejsibling", "PromoteRejSibling", source);
+    const created = await handler(req("/components/promote-rejsibling/candidates", "POST"));
+    expect(created.status, await created.clone().text()).toBe(200);
+    const candidate = await created.json() as { candidateId: string; sourceHash: string };
+
+    // Надгробие — на ДРУГОЙ сборке той же ревизии (иной build_fingerprint: другая тема/ABI).
+    rejectRevision(db, { componentId: "promote-rejsibling", rev: 1, sourceHash: "e".repeat(64), reason: "ревизия отклонена" });
+
+    const promoted = await handler(req("/components/promote-rejsibling/promote", "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, candidateId: candidate.candidateId,
+    }));
+    expect(promoted.status).toBe(409);
+    expect(await promoted.json()).toMatchObject({ error: { code: "candidate_rejected" } });
+    expect(versionRows(db, "promote-rejsibling")).toEqual([]);
+    expect(orchestrator!.repo.requireCandidate(candidate.candidateId).status).toBe("validated");
+  }, 180_000);
+
+  test("idempotency is untouched: a repeat promote of a promoted candidate is not candidate_rejected", async () => {
+    const { db, handler, orchestrator } = await setup({ matrix: true });
+    const source = await fixture("rating-stars.tsx");
+    await createComponent(handler, "promote-rejidem", "PromoteRejIdem", source);
+    const created = await handler(req("/components/promote-rejidem/candidates", "POST"));
+    const candidate = await created.json() as { candidateId: string; sourceHash: string };
+    const body = { baseRev: 1, sourceHash: candidate.sourceHash, candidateId: candidate.candidateId };
+
+    const first = await handler(req("/components/promote-rejidem/promote", "POST", body));
+    expect(first.status, await first.clone().text()).toBe(201);
+    const repeat = await handler(req("/components/promote-rejidem/promote", "POST", body));
+    expect(repeat.status).toBe(409);
+    // Терминальный отказ приходит от саги (расширенный `already_published`-чек фазы A либо CAS
+    // `markPromoted` фазы B) — но никак не от предиката: надгробий на эту ревизию нет.
+    const code = (await repeat.json() as { error: { code: string } }).error.code;
+    expect(code).not.toBe("candidate_rejected");
+    expect(["already_published", "candidate_already_promoted"]).toContain(code);
+    expect(versionRows(db, "promote-rejidem")).toHaveLength(1);
+    expect(orchestrator!.repo.requireCandidate(candidate.candidateId).promoted_version).toBe(1);
   }, 180_000);
 });
 

@@ -168,6 +168,7 @@ test("флаг OFF: весь набор acceptance-ручек отвечает 4
   const calls: [string, string, unknown?][] = [
     [`/components/${COMPONENT_ID}/candidates`, "POST"],
     [`/component-candidates/cand_${"0".repeat(64)}`, "GET"],
+    [`/component-candidates/cand_${"0".repeat(64)}/reject`, "POST", { reason: "flag is off" }],
     ["/acceptance-runs", "POST", { candidateId: `cand_${"0".repeat(64)}` }],
     [`/acceptance-runs/${runId}`, "GET"],
     [`/acceptance-runs/${runId}/cases`, "GET"],
@@ -275,6 +276,11 @@ test("авторизация: чужой пользователь и share/captu
     await expectStatus(call(strangerPrincipal, path), 403, "forbidden");
     await expectStatus(call(share, path), 403, "forbidden");
     await expectStatus(call(capture, path), 403, "forbidden");
+  }
+  // R3b: reject — мутация чужого кандидата, поэтому тот же барьер и тем же кодом.
+  const rejectPath = `/component-candidates/${candidate.candidateId}/reject`;
+  for (const principal of [strangerPrincipal, share, capture]) {
+    await expectStatus(call(principal, rejectPath, "POST", { reason: "not mine" }), 403, "forbidden");
   }
   // Админ читает чужой ран: тот же short-circuit `requireResourceOwner`, что и везде.
   const adminPrincipal: Principal = { kind: "user", userId: BOOTSTRAP_ADMIN_ID, name: "Test Admin", isAdmin: true };
@@ -578,3 +584,65 @@ test("impact: dry-run отдаёт базис и план, кривая форм
       .rejects.toMatchObject({ status: 403, code: "forbidden" });
   }
 }, 180_000);
+
+/**
+ * Отклонение кандидата человеком (RFC §4.1, волна R3b).
+ *
+ * Предмет — терминальность решения на HTTP-поверхности: надгробие, его отражение в DTO, два
+ * разведённых 409-кода и анти-воскрешение повторным `POST …/candidates`. Свипер и promote-предикат
+ * проверяются в `acceptance/repo.test.ts` и `component-promote.test.ts` соответственно.
+ */
+test("reject: надгробие, rejected в DTO, повтор и promoted — разные 409, аудит", async () => {
+  const { db, handler, orchestrator } = await setup();
+  const candidate = await jsonOf<CandidateBody>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
+  const encoded = `/component-candidates/${candidate.candidateId}/reject`;
+
+  // Причина обязательна, чужие поля не игнорируются молча.
+  for (const body of [{}, { reason: "  " }, { reason: "ok", note: "x" }]) {
+    const bad = await handler(req(encoded, "POST", body));
+    expect({ body, status: bad.status }).toEqual({ body, status: 400 });
+  }
+
+  const rejected = await handler(req(encoded, "POST", { reason: "  межстрочный интервал не по макету  " }));
+  expect(rejected.status, await rejected.clone().text()).toBe(200);
+  const view = await jsonOf<CandidateBody & { rejected: boolean; decision: { reason: string; actor: string; createdAt: string } }>(rejected);
+  expect(view.rejected).toBe(true);
+  expect(view.decision.reason).toBe("межстрочный интервал не по макету");
+  // Хранимый enum не расширяется: `rejected` живёт рядом со `status`, а не вместо него.
+  expect(view.status).toBe("validated");
+
+  // Признак виден и на чтении кандидата.
+  const read = await jsonOf<{ rejected: boolean; decision: { actor: string } | null }>(await handler(req(`/component-candidates/${candidate.candidateId}`)));
+  expect(read.rejected).toBe(true);
+  expect(read.decision).not.toBeNull();
+
+  // Аудит-событие приёмки.
+  const audit = db.query("SELECT action,subject_id subjectId,detail FROM audit_events WHERE action='candidate.rejected'").all() as { subjectId: string; detail: string }[];
+  expect(audit).toHaveLength(1);
+  expect(audit[0]!.subjectId).toBe(COMPONENT_ID);
+  expect(JSON.parse(audit[0]!.detail)).toMatchObject({ candidateId: candidate.candidateId, rev: 1 });
+
+  // Повтор терминален и несёт существующее решение.
+  const again = await handler(req(encoded, "POST", { reason: "и ещё раз" }));
+  expect(again.status).toBe(409);
+  expect(await jsonOf<{ error: { code: string; reason: string; actor: string } }>(again))
+    .toMatchObject({ error: { code: "candidate_already_rejected", reason: "межстрочный интервал не по макету" } });
+
+  // Анти-воскрешение (§3.2а): повтор той же сборки возвращает ТОГО ЖЕ кандидата с надгробием.
+  const repeat = await jsonOf<CandidateBody & { rejected: boolean }>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
+  expect(repeat.candidateId).toBe(candidate.candidateId);
+  expect(repeat.cached).toBe(true);
+  expect(repeat.rejected).toBe(true);
+
+  // `promoted`-кандидат отклонять нечем — и это ДРУГОЙ код, не `candidate_already_promoted`.
+  const other = orchestrator!.repo.createCandidate({
+    componentId: COMPONENT_ID, designSystem: "yandex-pay", rev: 1,
+    sourceHash: `${"a".repeat(64)}`, bundleHash: "bundle-x", hostAbiVersion: 4, themeVersion: null,
+    observedCatalogRevision: "catalog-x", policyProfileHash: candidate.sourceHash, createdBy: BOOTSTRAP_ADMIN_ID,
+  }).candidate;
+  orchestrator!.repo.markPromoted(other.candidate_id, 3);
+  const promoted = await handler(req(`/component-candidates/${other.candidate_id}/reject`, "POST", { reason: "поздно" }));
+  expect(promoted.status).toBe(409);
+  expect(await jsonOf<{ error: { code: string; currentVersion: number } }>(promoted))
+    .toMatchObject({ error: { code: "candidate_promoted", currentVersion: 3 } });
+}, 60_000);

@@ -460,6 +460,7 @@ node driver.mjs accept pay-payment-card --refresh failed      # переснят
 node driver.mjs accept pay-payment-card --refresh alpha,beta  # переснять перечисленные case id
 node driver.mjs accept pay-payment-card --evidence run.zip    # + скачать evidence-архив
 node driver.mjs accept-status acc_…                           # вердикт уже поставленного рана
+node driver.mjs reject cand_… --reason "межстрочный интервал не по макету"  # отклонить сборку (терминально)
 node driver.mjs impact pay-payment-card --candidate cand_… --baseline-run acc_…   # dry-run: что придётся переснять
 node driver.mjs accept pay-payment-card --baseline-run acc_…  # частичная пересъёмка: снять только затронутое
 ```
@@ -481,6 +482,10 @@ evidence: GET /api/acceptance-runs/acc_8f1c…/evidence (pass --evidence <file.z
   - `theme-only` — исходник тот же, сменилась версия темы ДС: пересъёмке подлежат случаи, применившие изменившиеся токены/иконки (смена шрифта действует документ-широко → все);
   - `conservative` — всё остальное (изменилось и то и другое, правка не-литерала, нет доказательств формы, нетерминальный baseline): снимается всё, `reason` называет причину.
   Случай **без** readiness-evidence (динамический URL, вычищенный артефакт, старый шелл) всегда считается затронутым — молчаливого reuse не бывает. Незатронутые случаи получают вердикт baseline (`reuseReason: "impact:<basis>"`) и его артефакты; явный `--refresh` всегда перебивает импакт. Отчёт приезжает и в ответе на постановку рана, и в `impact` терминального рана.
+- **Отклонение кандидата: `reject <candidateId> --reason <text>`** (владелец или админ). Пишет append-only надгробие: кандидат отдаётся с `rejected: true` и `decision {reason, actor, createdAt}`, сам `status` не меняется.
+  - **Решение терминально и снимается только новой ревизией.** `unreject` не существует. Отклонение блокирует promote **всей ревизии** (`409 candidate_rejected` — на обоих путях promote, с `candidateId` и без него), переживает TTL кандидата (свипер такого кандидата не удаляет) и не сбрасывается повторным `accept`: тот вернёт **того же** кандидата с `rejected: true`.
+  - `409 candidate_already_rejected` — уже отклонён (в `details` — чьё и какое решение); `409 candidate_promoted` — сборка уже опубликована, отклонять нечего (не путать с `candidate_already_promoted` — это CAS саги promote).
+  - Reject **не** отменяет живой ран приёмки и не освобождает in-flight-слот кандидата.
 - Ссылки приёмки на публикации: `promote` принимает `candidateId`/`acceptanceRunId` (тело запроса, не флаги верба) — ран обязан быть терминальным `pass`/`pass_with_exceptions` этого же кандидата, иначе `422 acceptance_run_mismatch`/`acceptance_run_not_passed`; при живом ране — `409 acceptance_run_in_flight`. Обе ссылки записываются в строку опубликованной версии как provenance.
 
 ### Набор случаев семьи: `case-set`

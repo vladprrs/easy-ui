@@ -18,7 +18,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -206,6 +206,9 @@ export const flagSpecs = Object.freeze({
     "--evidence": { value: true, key: "evidence" },
   },
   "accept-status": { ...jsonFlag, "--evidence": { value: true, key: "evidence" } },
+  // RFC candidate-acceptance R3b: отклонение кандидата человеком. Решение терминально — ручки
+  // «разотклонить» нет ни в драйвере, ни на сервере; выход — новая ревизия компонента.
+  reject: { ...jsonFlag, "--reason": { value: true, key: "reason" } },
   // План 2026-08-03 §5 W6: dry-run импакта кандидата к baseline-рану (ничего не снимает).
   impact: {
     ...jsonFlag,
@@ -285,6 +288,7 @@ const ranges = Object.freeze({
   provenance: [2, 2],
   accept: [1, 1],
   "accept-status": [1, 1],
+  reject: [1, 1],
   impact: [1, 1],
   // `case-set put <componentId> <manifest.json>` (3) | `case-set get|coverage <caseSetId>` (2).
   "case-set": [2, 3],
@@ -2111,6 +2115,41 @@ async function runAcceptStatus(args, flags) {
 }
 
 /**
+ * `reject <candidateId> --reason <text>` (RFC candidate-acceptance §4.1, R3b) — отклонение сборки
+ * человеком.
+ *
+ * **Решение терминально.** Оно блокирует не только этот кандидат, но и любой promote **той же
+ * ревизии** компонента (`409 candidate_rejected`, оба пути promote), переживает TTL кандидата и не
+ * снимается повторным `accept`: тот вернёт того же кандидата с `rejected: true`. Выход из
+ * отклонения один — новая ревизия исходника.
+ *
+ * Reject не отменяет живой ран приёмки (для этого есть cancel на самом ране) и ничего не мутирует
+ * в самом кандидате: это надгробие, а не переход статуса.
+ */
+async function runReject(args, flags) {
+  const [candidateId] = args;
+  if (typeof flags.reason !== "string" || flags.reason.trim() === "") invalid("reject requires --reason <text>");
+  await requireAcceptanceMatrix();
+  const response = await call("POST", `/component-candidates/${encodeURIComponent(candidateId)}/reject`, { reason: flags.reason });
+  if (response.status === 409) {
+    const code = errorCode(response);
+    const details = response.json?.error ?? {};
+    if (code === "candidate_already_rejected") {
+      throw new CliError(`candidate ${candidateId} is already rejected by ${details.actor ?? "?"} at ${details.createdAt ?? "?"}: ${details.reason ?? "-"}; rejection is terminal, save a new revision instead`, { exitCode: EXIT.productErrors });
+    }
+    if (code === "candidate_promoted") {
+      throw new CliError(`candidate ${candidateId} is already promoted to version ${details.currentVersion ?? "?"} and cannot be rejected; deprecate or supersede that version instead`, { exitCode: EXIT.productErrors });
+    }
+  }
+  const rejected = await requireOk("reject", response);
+  report([
+    `rejected candidate ${rejected.candidateId} (${rejected.componentId} rev ${rejected.rev}) by ${rejected.decision?.actor ?? "-"}`,
+    `reason: ${rejected.decision?.reason ?? "-"}`,
+    `terminal: promote of rev ${rejected.rev} now fails with 409 candidate_rejected; save a new revision to move on`,
+  ], { command: "reject", ...rejected });
+}
+
+/**
  * KPI-инструмент RFC §9: сколько публичных версий стоил каждый компонент. Читает
  * `GET /api/components/:id/versions` и сводит статусы; `versionsPerComponent` — та самая
  * метрика churn'а (baseline yandex-pay-v2: 2,4 → цель ≤1,2).
@@ -2447,6 +2486,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "provenance") await runProvenance(args, flags);
   else if (cmd === "accept") await runAccept(args, flags);
   else if (cmd === "accept-status") await runAcceptStatus(args, flags);
+  else if (cmd === "reject") await runReject(args, flags);
   else if (cmd === "impact") await runImpact(args, flags);
   else if (cmd === "case-set") await runCaseSet(args, flags);
   else if (cmd === "audit") await (args[0] === "reuse" ? runReuseAudit(flags) : flags.versions ? runVersionsAudit(flags) : runAudit(flags));

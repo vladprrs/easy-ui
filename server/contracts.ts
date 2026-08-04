@@ -1275,7 +1275,7 @@ export const publishComponentContract = registerContract({
  */
 const componentPromoteConflictEnvelopeSchema = z.strictObject({
   error: z.union([
-    z.looseObject({ code: z.enum(["revision_conflict", "already_published", "source_hash_mismatch", "candidate_unavailable", "acceptance_run_in_flight"]), message: z.string() }),
+    z.looseObject({ code: z.enum(["revision_conflict", "already_published", "source_hash_mismatch", "candidate_unavailable", "acceptance_run_in_flight", "candidate_rejected", "candidate_already_promoted"]), message: z.string() }),
     componentPublishReuseErrorSchema,
   ]),
 });
@@ -1318,6 +1318,8 @@ export const promoteComponentContract = registerContract({
     { status: 422, code: "atomic_policy_violation" },
     { status: 422, code: "event_schema_not_serializable" },
     { status: 409, code: "acceptance_run_in_flight", description: "the referenced candidate still has a queued/running acceptance run" },
+    { status: 409, code: "candidate_rejected", description: "a human rejected a candidate of this very revision; promote a new revision instead" },
+    { status: 409, code: "candidate_already_promoted", description: "promote-saga CAS: the referenced candidate is already promoted to another version (phase-B markPromoted conflict)" },
     { status: 422, code: "acceptance_matrix_disabled", description: "candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off" },
     { status: 422, code: "acceptance_run_mismatch", description: "the acceptance run belongs to another candidate or ran under another policy profile" },
     { status: 422, code: "acceptance_run_not_passed", description: "the acceptance run is not a terminal pass/pass_with_exceptions" },
@@ -1364,6 +1366,9 @@ const acceptanceCandidateFields = {
   sourceHash: z.string(), bundleHash: z.string(), hostAbiVersion: z.number(), themeVersion: z.number().nullable(),
   buildFingerprint: z.string(), policyProfileHash: z.string(), catalogRevision: z.string(),
   status: z.enum(["validated", "promoted"]), statusReason: z.string().nullable(),
+  /** R3b: `rejected` — вычисляемый статус поверх append-only `candidate_decisions`, а не значение `status`. */
+  rejected: z.boolean(),
+  decision: z.looseObject({ reason: z.string(), actor: z.string(), createdAt: isoDate }).nullable(),
   acceptanceRunId: z.string().nullable(), promotedVersion: z.number().nullable(),
   createdAt: isoDate, expiresAt: isoDate,
 };
@@ -1485,6 +1490,22 @@ export const getComponentCandidateContract = registerContract({
   summary: "Read an acceptance candidate by id (global namespace; it does not overlap /api/catalog/candidates). Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
   responseSchema: z.looseObject(acceptanceCandidateFields),
   errors: [...acceptanceAuthErrors],
+});
+
+/**
+ * RFC §4.1 (волна R3b): отклонение кандидата человеком. Терминально по построению — `unreject`/DELETE
+ * не существует ни здесь, ни в планах: выход из отклонения — новая ревизия компонента.
+ */
+export const rejectComponentCandidateContract = registerContract({
+  method: "POST", path: "/api/component-candidates/{candidateId}/reject",
+  summary: "Reject an acceptance candidate by hand: writes an append-only decision row (the stored `status` enum is NOT extended — `rejected` stays a computed flag on the DTO) and returns the candidate with `rejected: true` and `decision {reason, actor, createdAt}`. Owner or admin only; `reason` is required. THE DECISION IS TERMINAL: there is no unreject handle, the tombstone outlives the candidate TTL (the sweeper skips candidates that carry a decision), and repeating `POST /api/components/{id}/candidates` for the same build returns that same rejected candidate instead of a clean one. From then on `POST /api/components/{id}/promote` refuses the WHOLE revision with 409 candidate_rejected — on both paths, with or without `candidateId`, and regardless of EASYUI_ACCEPTANCE_MATRIX. Rejecting twice → 409 candidate_already_rejected carrying the existing decision; rejecting an already promoted candidate → 409 candidate_promoted with `{currentVersion}` (a different code from `markPromoted`'s 409 candidate_already_promoted, which reports a promote-saga CAS conflict). Rejection does not cancel a running acceptance run: it neither mutates the candidate row nor frees the in-flight slot. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
+  requestSchema: z.strictObject({ reason: z.string().min(1).max(2000) }),
+  responseSchema: z.looseObject(acceptanceCandidateFields),
+  errors: [
+    ...acceptanceAuthErrors, errorCatalog.invalidRequest,
+    { status: 409, code: "candidate_already_rejected", description: "the candidate already carries a rejection; the details hold the existing decision" },
+    { status: 409, code: "candidate_promoted", description: "the candidate is already promoted to a public version and cannot be rejected" },
+  ],
 });
 
 export const createAcceptanceRunContract = registerContract({

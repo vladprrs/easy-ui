@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { migrate } from "../migrations";
 import { AcceptanceRepo, isTerminalRunStatus } from "./repo";
+import { ApiError } from "../http";
 import { buildFingerprint, candidateId, caseFingerprintV0, isRunId, runId } from "./ids";
 import { ACCEPTANCE_POLICIES, policyProfileHash, requiredGates } from "./policies";
 
@@ -345,5 +346,74 @@ test("sweeping a plain expired candidate removes its terminal runs and cascades 
   expect(repo.run(run.run_id)).toBeUndefined();
   expect((db.query("SELECT COUNT(*) n FROM acceptance_cases").get() as { n: number }).n).toBe(0);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  db.close();
+});
+
+// ------------------------------------------------- отклонения (R3b, §3.2а)
+
+test("rejecting a candidate writes an append-only tombstone and is terminal on repeat", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const { candidate } = repo.createCandidate(candidateInput());
+
+  expect(repo.decision(candidate.candidate_id)).toBeUndefined();
+  const rejected = repo.rejectCandidate({ candidateId: candidate.candidate_id, reason: "baseline drifted", actor: "user_a" });
+  expect(rejected.decision).toMatchObject({ decision: "rejected", reason: "baseline drifted", actor: "user_a" });
+  // Надгробие не мутирует сам кандидат: `status` остаётся хранимым enum'ом (§3.2а).
+  expect(repo.candidate(candidate.candidate_id)?.status).toBe("validated");
+
+  // Повтор — терминальный конфликт с существующим решением в `details`, а не вторая строка.
+  try {
+    repo.rejectCandidate({ candidateId: candidate.candidate_id, reason: "again", actor: "user_b" });
+    throw new Error("expected candidate_already_rejected");
+  } catch (error) {
+    expect(error).toBeInstanceOf(ApiError);
+    const api = error as ApiError;
+    expect(api.status).toBe(409);
+    expect(api.code).toBe("candidate_already_rejected");
+    expect(api.details).toMatchObject({ reason: "baseline drifted", actor: "user_a" });
+  }
+  expect((db.query("SELECT COUNT(*) n FROM candidate_decisions").get() as { n: number }).n).toBe(1);
+  db.close();
+});
+
+test("a promoted candidate cannot be rejected: candidate_promoted, not candidate_already_promoted", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const { candidate } = repo.createCandidate(candidateInput());
+  repo.markPromoted(candidate.candidate_id, 7);
+
+  try {
+    repo.rejectCandidate({ candidateId: candidate.candidate_id, reason: "too late", actor: "user_a" });
+    throw new Error("expected candidate_promoted");
+  } catch (error) {
+    const api = error as ApiError;
+    expect(api.status).toBe(409);
+    // Два разных кода, два разных состояния (триаж раунд3-MJ-1): `candidate_already_promoted`
+    // принадлежит CAS'у `markPromoted`, а не reject-ветке.
+    expect(api.code).toBe("candidate_promoted");
+    expect(api.details).toMatchObject({ currentVersion: 7 });
+  }
+  expect(repo.decision(candidate.candidate_id)).toBeUndefined();
+  db.close();
+});
+
+test("the sweeper never deletes a rejected candidate: the tombstone outlives the TTL", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const { candidate } = repo.createCandidate(candidateInput({ componentId: "yp-rejected" }));
+  repo.rejectCandidate({ candidateId: candidate.candidate_id, reason: "wrong spacing", actor: "user_a" });
+  db.query("UPDATE component_candidates SET expires_at='2026-01-01T00:00:00.000Z'").run();
+
+  // Иначе каскад `ON DELETE CASCADE` снёс бы решение и TTL работал бы отложенным `unreject`.
+  expect(repo.sweepExpiredCandidates()).toEqual({ deleted: 0, skipped: 0 });
+  expect(repo.candidate(candidate.candidate_id)).toBeDefined();
+  expect(repo.decision(candidate.candidate_id)?.reason).toBe("wrong spacing");
+
+  // Анти-воскрешение: та же сборка даёт ту же строку — уже с надгробием.
+  const repeated = repo.createCandidate(candidateInput({ componentId: "yp-rejected" }));
+  expect(repeated.cached).toBe(true);
+  expect(repeated.candidate.candidate_id).toBe(candidate.candidate_id);
+  expect(repo.decision(repeated.candidate.candidate_id)).toBeDefined();
   db.close();
 });
