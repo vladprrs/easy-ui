@@ -5,6 +5,7 @@ import { figmaBadgeTitle, levelSection, library } from "../../app/strings/librar
 import { atomicLevelLabel } from "../libraryModel";
 import { InlineComponentPreview } from "../preview/InlineComponentPreview";
 import type { PreviewPriority } from "../preview/previewScheduler";
+import { acceptanceBadge } from "../statusBadge";
 import { PreviewDisclosureButton } from "./PreviewDisclosureButton";
 
 export interface ComponentCardProps {
@@ -37,6 +38,7 @@ function Fact({ children, title }: { children: string; title?: string }): ReactE
  */
 export function ComponentCard({ entry, systemName, showSystem, priority, previewsEnabled }: ComponentCardProps): ReactElement {
   const { status, figma } = entry;
+  const acceptance = acceptanceBadge(status);
   const previewId = useId();
   // Раскрытие одностороннее: кнопка уступает место превью и больше не нужна — карточка сворачивается
   // сама, уехав из вьюпорта (`InlineComponentPreview` размонтирует содержимое, зона остаётся её).
@@ -53,6 +55,9 @@ export function ComponentCard({ entry, systemName, showSystem, priority, preview
           : null}
         {entry.deprecated
           ? <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-pay-red" title={library.deprecatedBadgeTitle}>{library.deprecatedBadge}</span>
+          : null}
+        {acceptance
+          ? <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${acceptance.className}`} title={acceptance.title}>{acceptance.label}</span>
           : null}
         {figma ? <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-eui-ink" title={figmaBadgeTitle(figma.fileKey, figma.nodeCount)}>Figma</span> : null}
       </div>

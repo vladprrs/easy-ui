@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState as useStateForTest } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,8 +25,13 @@ vi.mock("../../customComponents/loader", async (importOriginal) => ({
   loadCustomComponents: mocks.loadCustom,
 }));
 
-const summary = (version: number, status: ComponentMeta["versions"][number]["status"]): ComponentMeta["versions"][number] => ({
+const summary = (
+  version: number,
+  status: ComponentMeta["versions"][number]["status"],
+  acceptance: { candidateId?: string | null; acceptanceRunId?: string | null } = {},
+): ComponentMeta["versions"][number] => ({
   version, status, rev: version, statusReason: null, supersededBy: null, statusRev: 1, designSystem: "shadcn", publishedAt: "",
+  candidateId: acceptance.candidateId ?? null, acceptanceRunId: acceptance.acceptanceRunId ?? null,
 });
 const baseMeta = (versions = [summary(1, "active")], publishedVersion: number | null = 1): ComponentMeta => ({
   id: "widget", name: "Widget", designSystem: "shadcn", headRev: 2, publishedVersion, versions, updatedAt: "",
@@ -87,6 +92,26 @@ describe("ComponentPage", () => {
     expect(loadCustomComponents).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("tab", { name: "Код" }));
     expect(screen.getByText("const rejectedSource = true")).toBeTruthy();
+  });
+
+  // Блок приёмки (RFC candidate-acceptance §7, волна R3c). Пустой случай — ожидаемое состояние
+  // прода до включения promote-практики, поэтому он объясняет себя, а не выглядит поломкой.
+  it("показывает приёмку версии и объясняет её отсутствие", async () => {
+    renderPage();
+    await screen.findByTestId("widget");
+    fireEvent.click(screen.getByRole("tab", { name: "Код" }));
+    expect(screen.getByRole("region", { name: strings.acceptanceTitle })).toBeTruthy();
+    expect(screen.getByText(strings.acceptanceNoneTitle)).toBeTruthy();
+    expect(screen.queryByText(strings.acceptanceVerdictPassed)).toBeNull();
+
+    cleanup();
+    meta = baseMeta([summary(1, "active", { candidateId: "cand_1", acceptanceRunId: "acc_1" })]);
+    renderPage();
+    await screen.findByTestId("widget");
+    fireEvent.click(screen.getByRole("tab", { name: "Код" }));
+    expect(screen.getByText(strings.acceptanceVerdictPassed)).toBeTruthy();
+    expect(screen.getByText("acc_1")).toBeTruthy();
+    expect(screen.getByText("cand_1")).toBeTruthy();
   });
 
   it("mounts only after all required props become valid", async () => {

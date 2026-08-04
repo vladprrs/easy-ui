@@ -9,6 +9,7 @@ import {
   type ComponentMeta,
   type ComponentStatus,
   type ComponentVersion,
+  type ComponentVersionSummary,
   type ThemeContent,
 } from "../../api/client";
 import { downloadBundle } from "../../api/bundles";
@@ -141,6 +142,7 @@ export function ComponentPage() {
         </section>
         <section className="rounded-panel bg-eui-ink p-6 text-sm text-white" role="tabpanel" id="component-panel-2" aria-labelledby="component-tab-2" hidden={activeTab !== 2}>
           <ProvenanceBlock version={version.data} />
+          <AcceptanceBlock summary={versionStatus} />
           <SourceView source={version.data.source} />
         </section>
         <section className="rounded-panel bg-eui-lav p-6" role="tabpanel" id="component-panel-3" aria-labelledby="component-tab-3" hidden={activeTab !== 3}>
@@ -243,6 +245,36 @@ function ProvenanceBlock({ version }: { version: ComponentVersion }) {
       {rows.map(([label, value]) => <div key={label}><dt className="text-eui-ondark-2">{label}</dt><dd className="mt-0.5 font-medium">{value}</dd></div>)}
     </dl>
     {version.ownership?.reason ? <p className="mt-3 text-xs"><span className="text-eui-ondark-2">{strings.provenanceOwnership}: </span>{version.ownership.reason}{version.ownership.provenance ? ` (${version.ownership.provenance})` : ""}</p> : null}
+  </section>;
+}
+
+/**
+ * Блок приёмки выбранной версии (RFC candidate-acceptance §7, волна R3c). Показывает ровно то,
+ * что версия несёт как плоские receipt-ссылки: вердикт (сам факт непустого `acceptanceRunId` —
+ * promote записывает его только для рана с `pass|pass_with_exceptions`), сам ран и кандидата.
+ *
+ * Пустое состояние — **осмысленное, а не ошибка**: пока promote с кандидатом не вошёл в практику,
+ * ссылок нет ни у одной версии каталога (§11-R3c, ожидание приёмки волны). Поэтому пустой случай
+ * рисует объяснение, а не заглушку «нет данных».
+ */
+function AcceptanceBlock({ summary }: { summary: ComponentVersionSummary | undefined }) {
+  const runId = summary?.acceptanceRunId ?? null;
+  const candidateId = summary?.candidateId ?? null;
+  return <section aria-labelledby="component-acceptance-title" className="mb-5 rounded-popover bg-white/5 p-4">
+    <h2 id="component-acceptance-title" className={kickerOnDark}>{strings.acceptanceTitle}</h2>
+    {runId === null && candidateId === null
+      ? <div className="mt-2 text-xs">
+        <p className="font-medium">{strings.acceptanceNoneTitle}</p>
+        <p className="mt-1 text-eui-ondark-2">{strings.acceptanceNoneBody}</p>
+      </div>
+      : <dl className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
+        {([
+          [strings.acceptanceVerdict, runId === null ? strings.provenanceNotSet : strings.acceptanceVerdictPassed],
+          [strings.acceptanceRun, runId ?? strings.provenanceNotSet],
+          [strings.acceptanceCandidate, candidateId ?? strings.provenanceNotSet],
+        ] as [string, string][]).map(([label, value]) =>
+          <div key={label}><dt className="text-eui-ondark-2">{label}</dt><dd className="mt-0.5 font-medium [overflow-wrap:anywhere]">{value}</dd></div>)}
+      </dl>}
   </section>;
 }
 

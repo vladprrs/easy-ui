@@ -4945,6 +4945,9 @@
                           "status": {
                             "additionalProperties": false,
                             "properties": {
+                              "accepted": {
+                                "type": "boolean"
+                              },
                               "blocked": {
                                 "type": "boolean"
                               },
@@ -4966,7 +4969,8 @@
                               "verified",
                               "visualPending",
                               "blocked",
-                              "rejected"
+                              "rejected",
+                              "accepted"
                             ],
                             "type": "object"
                           },
@@ -5066,7 +5070,7 @@
             "description": "validation_failed"
           }
         },
-        "summary": "Library read model: latest active component versions with resolved status (published/verified/visualPending/blocked/rejected), head usage, Figma summary and the preview selector. Identity is (componentId, designSystem). Never returns source, props schemas or examples.",
+        "summary": "Library read model: latest active component versions with resolved status (published/verified/visualPending/blocked/rejected/accepted), head usage, Figma summary and the preview selector. `accepted` is independent of the visual `verified` flag: it means the active version carries a non-empty acceptance run receipt (promote with a passing acceptance run) and it is deliberately excluded from `catalogRevision`. Identity is (componentId, designSystem). Never returns source, props schemas or examples.",
         "x-easyui-validated": true
       }
     },
@@ -11633,6 +11637,26 @@
                   "items": {
                     "additionalProperties": {},
                     "properties": {
+                      "acceptanceRunId": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "candidateId": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "designSystem": {
                         "type": "string"
                       },
@@ -11654,7 +11678,9 @@
                       "rev",
                       "status",
                       "designSystem",
-                      "publishedAt"
+                      "publishedAt",
+                      "candidateId",
+                      "acceptanceRunId"
                     ],
                     "type": "object"
                   },
@@ -11675,7 +11701,7 @@
             "description": "not_found"
           }
         },
-        "summary": "List published versions with lifecycle status.",
+        "summary": "List published versions with lifecycle status and their flat acceptance receipts: `acceptanceRunId`/`candidateId` are non-null only for versions published by `promote` with a durable candidate and a passing acceptance run (null on everything published before, or through the legacy publish path).",
         "x-easyui-validated": false
       }
     },

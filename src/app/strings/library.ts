@@ -46,6 +46,9 @@ export const library = {
   canonicalBadgeTitle: (roles: string[]) => `Канонический компонент для ролей: ${roles.join(", ")}`,
   deprecatedBadge: "Устаревший",
   deprecatedBadgeTitle: "Последняя публикация компонента переведена в deprecated или superseded",
+  // Признак `accepted` (RFC candidate-acceptance §7): у активной версии есть acceptance-evidence.
+  acceptedBadge: "Принят",
+  acceptedBadgeTitle: "Активная версия опубликована через приёмку: за ней стоит пройденный acceptance-run",
   replacementLink: (name: string) => `Замена: ${name}`,
   usagesTreeAria: "Дерево использования компонента",
   openInEditor: "Редактор",
@@ -154,6 +157,7 @@ export const libraryStatusLabels = {
   "visual-pending": "Ждёт проверки",
   blocked: "Заблокирован",
   rejected: "Отклонён",
+  accepted: "Принят",
 } as const;
 
 export const componentStatusLabels = {

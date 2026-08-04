@@ -374,7 +374,7 @@ node driver.mjs promote rating-stars --strict-catalog   # отказать, ес
 - Требует `features.acceptancePromote` в `/api/capabilities` (kill-switch `EASYUI_ACCEPTANCE_DISABLED=1`); на старом сервере верб падает читаемо, `publish` продолжает работать.
 - Терминальные отказы (не ретраить): `409 already_published` — голове нужна новая ревизия; `409 revision_conflict`/`source_hash_mismatch` — голова изменилась между validate и promote, повторить верб целиком; `409 canonical_role_conflict`/`catalog_changed` — обычный reuse-STOP; `422` — те же коды, что у publish.
 - Каталого-временные проверки (host-имя, каноническая роль, атомарная политика, asset-refs) promote перепрогоняет — он их не обходит.
-- KPI-срез по версиям: `node driver.mjs audit --versions [--design-system <id>]` (версии/active/статусы/даты на компонент; exit 2, если у компонента не осталось active-версии).
+- KPI-срез по версиям: `node driver.mjs audit --versions [--design-system <id>]` (версии/active/статусы/колонка `acceptance`/даты на компонент; exit 2, если у компонента не осталось active-версии). Колонка `acceptance` — «есть/нет acceptance-evidence»: `<версий с непустым acceptanceRunId>/<всего>` плюс `active=yes|no`; нули по всему каталогу — норма, evidence появляется только у версий, опубликованных `promote` с пройденным раном. Тот же признак в библиотеке — `status.accepted` в `GET /api/catalog/library` (независим от `status.verified`, вне `catalogRevision`).
 
 ### Матричная приёмка семейства: `accept`
 

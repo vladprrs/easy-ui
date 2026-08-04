@@ -27,7 +27,7 @@ const entry = (patch: Partial<LibraryCatalogEntry> = {}): LibraryCatalogEntry =>
   kind: "component", id: "widget", name: "Widget", designSystem: "shadcn", version: 1,
   bundleUrl: "/api/components/widget/versions/1/bundle.js", bundleHash: "hash", hostAbiVersion: 4,
   description: "Widget", layoutNeutral: false, canonicalFor: [], deprecated: false, headUsageCount: 0,
-  status: { published: true, verified: false, visualPending: false, blocked: false, rejected: false },
+  status: { published: true, verified: false, visualPending: false, blocked: false, rejected: false, accepted: false },
   figma: null, preview: { selector: "legacy" }, ...patch,
 });
 

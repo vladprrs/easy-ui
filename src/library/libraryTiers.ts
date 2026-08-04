@@ -31,6 +31,14 @@ const assemblyRank = (entry: LibraryCatalogEntry): number => (entry.atomicLevel 
 /** verified → 0, visualPending → 1, остальное → 2: проверенное показываем раньше ожидающего съёмки. */
 const visualRank = (entry: LibraryCatalogEntry): number => (entry.status.verified ? 0 : entry.status.visualPending ? 1 : 2);
 
+/**
+ * `accepted` → 0, иначе 1 (RFC candidate-acceptance §7, волна R3c). Ступень стоит **перед**
+ * визуальной: пройденная приёмка — более сильное свидетельство пригодности, чем совпавший
+ * baseline. Пока promote с кандидатом не вошёл в практику, признак пуст у всего каталога и
+ * ступень нейтральна — порядок витрины остаётся ровно прежним.
+ */
+const acceptanceRank = (entry: LibraryCatalogEntry): number => (entry.status.accepted ? 0 : 1);
+
 const isRetired = (entry: LibraryCatalogEntry): boolean => entry.deprecated || entry.replacement !== undefined;
 
 /**
@@ -48,13 +56,14 @@ export function tierOf(entry: LibraryCatalogEntry): Exclude<LibraryTier, "recomm
 }
 
 /**
- * Порядок витрины «рекомендуем» (спека §6): объявленная роль → использование → визуальный статус →
- * уровень сборки → локализованное имя. Последняя ступень — ключ записи: без неё две системы с
+ * Порядок витрины «рекомендуем» (спека §6 + R3c): объявленная роль → использование → приёмка →
+ * визуальный статус → уровень сборки → локализованное имя. Последняя ступень — ключ записи: без неё две системы с
  * одноимённым компонентом дали бы неполный порядок, зависящий от порядка входа.
  */
 function compareRecommended(a: LibraryCatalogEntry, b: LibraryCatalogEntry): number {
   return (Number(b.canonicalFor.length > 0) - Number(a.canonicalFor.length > 0))
     || (b.headUsageCount - a.headUsageCount)
+    || (acceptanceRank(a) - acceptanceRank(b))
     || (visualRank(a) - visualRank(b))
     || (assemblyRank(b) - assemblyRank(a))
     || a.name.localeCompare(b.name, "ru")

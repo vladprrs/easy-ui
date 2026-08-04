@@ -251,7 +251,12 @@ export interface PublishPrototypeResult { version: number; rev: number; screens:
 export type AtomicLevel = "atom" | "molecule" | "organism" | "template" | "page";
 export interface ComponentSummary { id: string; name: string; designSystem: string; headRev: number; latestVersion: number | null; updatedAt: string }
 export type ComponentStatus = "staging" | "active" | "failed" | "rejected" | "deprecated" | "superseded" | "archived";
-export interface ComponentVersionSummary { version: number; rev: number; status: ComponentStatus; statusReason: string | null; supersededBy: number | null; statusRev: number; designSystem: string; publishedAt: string }
+/**
+ * `candidateId`/`acceptanceRunId` — плоские receipt-ссылки acceptance (RFC §7 A9): непусты только
+ * у версий, опубликованных `promote` с терминальным (pass) раном. У всего остального — `null`,
+ * и это нормальное состояние каталога, а не пробел в данных.
+ */
+export interface ComponentVersionSummary { version: number; rev: number; status: ComponentStatus; statusReason: string | null; supersededBy: number | null; statusRev: number; designSystem: string; publishedAt: string; candidateId?: string | null; acceptanceRunId?: string | null }
 export interface ComponentMeta { id: string; name: string; designSystem: string; headRev: number; publishedVersion?: number | null; versions: ComponentVersionSummary[]; updatedAt: string; figma?: FigmaProvenance | null }
 export interface ComponentStatusResult { status: ComponentStatus; statusRev: number }
 export const setComponentVersionStatus = (id: string, version: number, change: { status: ComponentStatus; reason?: string; supersededBy?: number; baseStatusRev: number }, signal?: AbortSignal) =>
@@ -289,7 +294,12 @@ export interface CatalogManifest { components: CatalogComponent[] }
 //
 // Идентичность записи — пара `(designSystem, id)`: один компонент может быть активен в двух
 // системах, и статусы у него в них разные (`server/routes/libraryCatalog.ts:23`).
-export interface LibraryCatalogStatus { published: boolean; verified: boolean; visualPending: boolean; blocked: boolean; rejected: boolean }
+/**
+ * `accepted` — независимый от visual-`verified` признак (RFC candidate-acceptance §7, волна R3c):
+ * у активной версии непустой `acceptanceRunId`. Смысл `verified` он не меняет и в проекцию
+ * `catalogRevision` не входит.
+ */
+export interface LibraryCatalogStatus { published: boolean; verified: boolean; visualPending: boolean; blocked: boolean; rejected: boolean; accepted: boolean }
 export interface LibraryCatalogEntry {
   kind: "component";
   id: string; name: string; designSystem: string; version: number;

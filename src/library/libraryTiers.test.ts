@@ -17,14 +17,16 @@ const entry = (patch: EntryPatch): LibraryCatalogEntry => ({
   canonicalFor: [],
   deprecated: false,
   headUsageCount: 0,
-  status: { published: true, verified: false, visualPending: true, blocked: false, rejected: false },
+  status: { published: true, verified: false, visualPending: true, blocked: false, rejected: false, accepted: false },
   figma: null,
   preview: null,
   ...patch,
 });
 
-const verified = { published: true, verified: true, visualPending: false, blocked: false, rejected: false };
-const pending = { published: true, verified: false, visualPending: true, blocked: false, rejected: false };
+const verified = { published: true, verified: true, visualPending: false, blocked: false, rejected: false, accepted: false };
+const pending = { published: true, verified: false, visualPending: true, blocked: false, rejected: false, accepted: false };
+
+const accepted = { published: true, verified: false, visualPending: true, blocked: false, rejected: false, accepted: true };
 
 const ids = (entries: LibraryCatalogEntry[]) => entries.map((item) => item.id);
 
@@ -47,6 +49,27 @@ describe("rankRecommended", () => {
     expect(rankRecommended(shuffled).map(libraryEntryKey)).toEqual(expected);
     // Порядок полный: любой вход даёт тот же выход, ничьих, разрешаемых порядком входа, нет.
     expect(rankRecommended(reversed).map(libraryEntryKey)).toEqual(expected);
+  });
+
+  // Ступень приёмки стоит ПЕРЕД визуальной (RFC candidate-acceptance §7, волна R3c): пройденная
+  // приёмка — более сильное свидетельство пригодности, чем совпавший baseline. Пока признак пуст
+  // у всего каталога (ожидаемое состояние прода), ступень нейтральна и порядок не меняется.
+  it("ranks accepted entries above verified ones at equal role and usage", () => {
+    const entries = [
+      entry({ id: "verified-only", name: "Zzz", headUsageCount: 3, status: verified }),
+      entry({ id: "accepted-only", name: "Aaa", headUsageCount: 3, status: accepted }),
+    ];
+    expect(ids(rankRecommended(entries))).toEqual(["accepted-only", "verified-only"]);
+    // Использование по-прежнему сильнее приёмки — порядок ступеней не переставлен.
+    expect(ids(rankRecommended([
+      entry({ id: "used", name: "Zzz", headUsageCount: 9, status: pending }),
+      entry({ id: "accepted", name: "Aaa", headUsageCount: 3, status: accepted }),
+    ]))).toEqual(["used", "accepted"]);
+    // Каталог без приёмки ранжируется ровно как раньше.
+    expect(ids(rankRecommended([
+      entry({ id: "pending", name: "Aaa", headUsageCount: 3, status: pending }),
+      entry({ id: "verified", name: "Zzz", headUsageCount: 3, status: verified }),
+    ]))).toEqual(["verified", "pending"]);
   });
 
   it("excludes retired, rejected and blocked entries even with the highest usage", () => {

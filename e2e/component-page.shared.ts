@@ -84,6 +84,13 @@ export function componentPageSuite(options: { api: string; seed: boolean; custom
       await expect(codePanel.locator("pre")).toContainText(attack);
       await expect(codePanel.locator("script")).toHaveCount(0);
       expect(await page.evaluate(() => (globalThis as typeof globalThis & { componentPagePwned?: boolean }).componentPagePwned)).toBeUndefined();
+
+      // Блок приёмки (RFC candidate-acceptance §7, волна R3c). Фикстура публикуется обычным
+      // publish, поэтому receipt-ссылок нет — и пустое состояние обязано объяснять себя, а не
+      // выглядеть поломкой: ровно это ожидание записано в §11-R3c про прод.
+      const acceptance = codePanel.getByRole("region", { name: "Приёмка" });
+      await expect(acceptance).toContainText("Версия опубликована без приёмки");
+      await expect(acceptance).not.toContainText("Acceptance-run");
     });
 
     test("switches versions while preserving the tab and distinguishes invalid from missing versions", async ({ page }) => {

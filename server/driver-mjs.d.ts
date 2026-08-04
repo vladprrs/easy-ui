@@ -173,6 +173,10 @@ declare module "*/author/driver.mjs" {
     versions: number;
     active: number;
     byStatus: Record<string, number>;
+    /** Сколько версий компонента несут непустой `acceptanceRunId` (RFC §12.6(в), волна R3c). */
+    acceptanceEvidence: number;
+    /** Принята ли сама активная версия — тот же признак, что Library-`accepted`. */
+    acceptedActive: boolean;
     latestVersion: number | null;
     firstPublishedAt: string | null;
     lastPublishedAt: string | null;
@@ -186,10 +190,13 @@ declare module "*/author/driver.mjs" {
     noActiveVersion: string[];
     multipleActive: string[];
     unpublished: string[];
+    versionsWithEvidence: number;
+    acceptedComponents: string[];
+    withoutEvidence: string[];
   }
   export function versionAuditRows(
     components: readonly { id: string; designSystem: string }[],
-    versionsById: Record<string, readonly { version: number; status: string; publishedAt: string }[]>,
+    versionsById: Record<string, readonly { version: number; status: string; publishedAt: string; acceptanceRunId?: string | null }[]>,
   ): DriverVersionAuditRow[];
   export function versionAuditFindings(rows: readonly DriverVersionAuditRow[]): DriverVersionAuditFindings;
   export function versionAuditExitCode(findings: { noActiveVersion: readonly string[] }): 0 | 2;

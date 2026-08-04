@@ -646,7 +646,9 @@ node driver.mjs diff my-flow 1 3 --json   # rev 3 против rev 1, полны
 
 Удаление компонента — soft: он исчезает из списка и недоступен новым сохранениям, но опубликованные bundle и пины существующих прототипов продолжают работать.
 
-Сколько публичных версий стоил каждый компонент — `node driver.mjs audit --versions [--design-system <id>]` (KPI-срез поверх `GET /api/components/:id/versions`): версии, active-счётчик, статусы и даты на компонент плюс сводка `versions per published component`. Exit 2 — если у какого-то компонента не осталось ни одной active-версии.
+Сколько публичных версий стоил каждый компонент — `node driver.mjs audit --versions [--design-system <id>]` (KPI-срез поверх `GET /api/components/:id/versions`): версии, active-счётчик, статусы, колонка `acceptance` и даты на компонент плюс сводка `versions per published component`. Колонка `acceptance` — «есть/нет acceptance-evidence»: `<версий с непустым acceptanceRunId>/<всего версий>` и `active=yes|no` про саму активную версию; в `--json` это `acceptanceEvidence`/`acceptedActive` на строке и `versionsWithEvidence`/`acceptedComponents`/`withoutEvidence` в `findings`. Evidence появляется только у версий, опубликованных `promote` с кандидатом и пройденным acceptance-раном, поэтому нули по всему каталогу — нормальное состояние, а не сбой. Exit 2 — если у какого-то компонента не осталось ни одной active-версии.
+
+Тот же признак виден в библиотеке: `GET /api/catalog/library` отдаёт `status.accepted` (у активной версии есть acceptance-evidence). Он **независим** от `status.verified` (визуальные эталоны) и не входит в `catalogRevision`.
 
 Жизненный цикл версий компонента: у published-версии есть статус (`active` по умолчанию). Неудачную версию можно пометить, не удаляя: `POST /components/:id/versions/:v/status` c `{status: rejected|deprecated|superseded|archived, reason?, supersededBy?, baseStatusRev}` (CAS по `statusRev` из read-back версии). `rejected`/`archived` перестают исполняться (плеер покажет `bundle_failed` в render-status), `deprecated`/`superseded` продолжают работать с warning'ом. Новые пины и манифест берут только `active`.
 

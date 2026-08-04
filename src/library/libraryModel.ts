@@ -134,7 +134,12 @@ export function similarComponents<T extends ComponentSearchFields & { id: string
 //   visualPending = published AND not verified.
 // Note that rejected/blocked describe the *latest* version even when an older active version keeps
 // the component present in the manifest, so a manifest entry can still read as blocked/rejected.
-export const LIBRARY_STATUS_KEYS = ["published", "verified", "visual-pending", "blocked", "rejected"] as const;
+//   accepted      = published AND the active version carries a non-empty acceptance run receipt
+//                   (RFC candidate-acceptance §7, wave R3c). Independent of `verified`: the visual
+//                   flag is about baselines, this one is about the acceptance pipeline. Empty
+//                   across the whole catalog until promote-with-candidate becomes practice — the
+//                   expected state, not a defect.
+export const LIBRARY_STATUS_KEYS = ["published", "verified", "accepted", "visual-pending", "blocked", "rejected"] as const;
 export type LibraryStatusKey = (typeof LIBRARY_STATUS_KEYS)[number];
 export const libraryStatusLabel: Record<LibraryStatusKey, string> = libraryStatusLabels;
 
@@ -165,13 +170,20 @@ export function componentLibraryStatus(
     && (reference.fingerprint as { componentId?: string }).componentId === componentId
     && (reference.fingerprint as { refVersion?: number }).refVersion === activeVersion
     && reference.lastRun?.status === "pass");
-  return { published, rejected, blocked, verified, visualPending: published && !verified };
+  // Оба вычислителя признака согласованы по определению: сервер смотрит `acceptance_run_id`
+  // активной версии каталога (`server/routes/libraryCatalog.ts:acceptedKeys`), легаси — тот же
+  // receipt в DTO той же версии. Пустая строка нормализуется наравне с `null`/`undefined`
+  // (колонка — плоский TEXT без FK), поэтому «пусто» здесь и там значит одно и то же.
+  const accepted = published && versions.some((version) =>
+    version.version === activeVersion && version.status === "active" && (version.acceptanceRunId ?? "") !== "");
+  return { published, rejected, blocked, verified, visualPending: published && !verified, accepted };
 }
 
 export function matchesLibraryFilter(status: ComponentLibraryStatus, filter: LibraryStatusKey): boolean {
   switch (filter) {
     case "published": return status.published;
     case "verified": return status.verified;
+    case "accepted": return status.accepted;
     case "visual-pending": return status.visualPending;
     case "blocked": return status.blocked;
     case "rejected": return status.rejected;

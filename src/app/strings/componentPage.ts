@@ -44,6 +44,15 @@ export const componentPage = {
   provenanceSourceBounded: "Ограничен контентом (sourceBounded)",
   provenanceReplacement: "Замена",
   provenanceNotSet: "не задано",
+  // Блок приёмки (RFC candidate-acceptance §7, волна R3c). Пустое состояние — осмысленное:
+  // ссылки появляются только у версий, опубликованных через promote с пройденным раном.
+  acceptanceTitle: "Приёмка",
+  acceptanceVerdict: "Вердикт",
+  acceptanceVerdictPassed: "Принята: за версией стоит пройденный acceptance-run",
+  acceptanceRun: "Acceptance-run",
+  acceptanceCandidate: "Кандидат",
+  acceptanceNoneTitle: "Версия опубликована без приёмки",
+  acceptanceNoneBody: "У версии нет ссылок на кандидата и acceptance-run: она опубликована обычным publish или promote без приёмки. Это нормальное состояние каталога, а не ошибка.",
   previewTitle: "Превью",
   controlsTitle: "Props",
   backgroundTitle: "Фон превью",

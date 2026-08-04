@@ -1661,8 +1661,11 @@ export const getCaseSetCoverageContract = registerContract({
 
 export const listComponentVersionsContract = registerContract({
   method: "GET", path: "/api/components/{id}/versions",
-  summary: "List published versions with lifecycle status.",
-  responseSchema: z.array(z.looseObject({ version: z.number(), rev: z.number(), status: z.string(), designSystem: z.string(), publishedAt: isoDate })),
+  summary: "List published versions with lifecycle status and their flat acceptance receipts: `acceptanceRunId`/`candidateId` are non-null only for versions published by `promote` with a durable candidate and a passing acceptance run (null on everything published before, or through the legacy publish path).",
+  responseSchema: z.array(z.looseObject({
+    version: z.number(), rev: z.number(), status: z.string(), designSystem: z.string(), publishedAt: isoDate,
+    candidateId: z.string().nullable(), acceptanceRunId: z.string().nullable(),
+  })),
   errors: [errorCatalog.notFound],
 });
 
@@ -2092,6 +2095,9 @@ export const catalogLibraryQuerySchema = z.strictObject({ designSystem: slugStri
 
 const libraryCatalogStatusSchema = z.strictObject({
   published: z.boolean(), verified: z.boolean(), visualPending: z.boolean(), blocked: z.boolean(), rejected: z.boolean(),
+  // `accepted` — независимый от visual-`verified` признак (RFC §7): активная версия несёт
+  // непустой `acceptance_run_id`. Не входит в проекцию `catalogRevision`.
+  accepted: z.boolean(),
 });
 
 const componentPreviewSelectorSchema = z.union([
@@ -2118,7 +2124,7 @@ export const libraryCatalogEntrySchema = z.strictObject({
 
 export const catalogLibraryContract = registerContract({
   method: "GET", path: "/api/catalog/library",
-  summary: "Library read model: latest active component versions with resolved status (published/verified/visualPending/blocked/rejected), head usage, Figma summary and the preview selector. Identity is (componentId, designSystem). Never returns source, props schemas or examples.",
+  summary: "Library read model: latest active component versions with resolved status (published/verified/visualPending/blocked/rejected/accepted), head usage, Figma summary and the preview selector. `accepted` is independent of the visual `verified` flag: it means the active version carries a non-empty acceptance run receipt (promote with a passing acceptance run) and it is deliberately excluded from `catalogRevision`. Identity is (componentId, designSystem). Never returns source, props schemas or examples.",
   query: catalogLibraryQuerySchema,
   validated: true,
   responseSchema: z.strictObject({

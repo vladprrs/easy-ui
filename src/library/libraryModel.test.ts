@@ -24,8 +24,8 @@ describe("library model", () => {
   });
 });
 
-const version = (v: number, status: ComponentVersionSummary["status"]): ComponentVersionSummary =>
-  ({ version: v, rev: v, status, statusReason: null, supersededBy: null, statusRev: 1, designSystem: "shadcn", publishedAt: "now" });
+const version = (v: number, status: ComponentVersionSummary["status"], acceptanceRunId: string | null = null): ComponentVersionSummary =>
+  ({ version: v, rev: v, status, statusReason: null, supersededBy: null, statusRev: 1, designSystem: "shadcn", publishedAt: "now", candidateId: null, acceptanceRunId });
 const componentReference = (componentId: string, refVersion: number, runStatus: "pass" | "fail"): VisualReference =>
   ({ id: `ref-${componentId}-${refVersion}`, fingerprint: { scope: "component", componentId, refVersion }, note: null, createdAt: "now", lastRun: { runId: "r", referenceId: "ref", status: runStatus, createdAt: "now", diffPercent: 0 } });
 
@@ -47,6 +47,21 @@ describe("component library status", () => {
     expect(componentLibraryStatus("c", 2, versions, [])).toMatchObject({ verified: false, visualPending: true });
   });
 
+  // `accepted` — независимый от visual-`verified` признак (RFC candidate-acceptance §7, R3c).
+  // Легаси-вычислитель обязан совпадать с серверным: он же исполняемая спецификация признака.
+  it("marks accepted only from the acceptance receipt of the active version", () => {
+    expect(componentLibraryStatus("c", 2, [version(2, "active", "acc_1")], [])).toMatchObject({ accepted: true, verified: false, visualPending: true });
+    // Evidence на другой версии активную не принимает.
+    expect(componentLibraryStatus("c", 2, [version(1, "active", "acc_1"), version(2, "active")], [])).toMatchObject({ accepted: false });
+    // Пустая строка — «пусто» наравне с null (колонка плоская TEXT без FK).
+    expect(componentLibraryStatus("c", 2, [version(2, "active", "")], [])).toMatchObject({ accepted: false });
+    expect(componentLibraryStatus("c", 2, [version(2, "active")], [])).toMatchObject({ accepted: false });
+    // Неопубликованный компонент не бывает принятым.
+    expect(componentLibraryStatus("c", 1, [version(1, "staging", "acc_1")], [])).toMatchObject({ published: false, accepted: false });
+    // Признак ортогонален визуальному: pass-run сам по себе ничего не принимает.
+    expect(componentLibraryStatus("c", 2, [version(2, "active")], [componentReference("c", 2, "pass")])).toMatchObject({ verified: true, accepted: false });
+  });
+
   it("matches each filter chip against its predicate", () => {
     const status = componentLibraryStatus("c", 2, [version(2, "active")], [componentReference("c", 2, "pass")]);
     expect(matchesLibraryFilter(status, "published")).toBe(true);
@@ -54,12 +69,19 @@ describe("component library status", () => {
     expect(matchesLibraryFilter(status, "visual-pending")).toBe(false);
     expect(matchesLibraryFilter(status, "blocked")).toBe(false);
     expect(matchesLibraryFilter(status, "rejected")).toBe(false);
+    expect(matchesLibraryFilter(status, "accepted")).toBe(false);
+    const accepted = componentLibraryStatus("c", 2, [version(2, "active", "acc_1")], []);
+    expect(matchesLibraryFilter(accepted, "accepted")).toBe(true);
   });
 
   it("offers only filters that narrow a heterogeneous component list", () => {
     const verified = componentLibraryStatus("a", 1, [version(1, "active")], [componentReference("a", 1, "pass")]);
     const pending = componentLibraryStatus("b", 1, [version(1, "active")], []);
     expect(applicableLibraryStatusKeys([verified, pending])).toEqual(["verified", "visual-pending"]);
+    // Чип «Принят» появляется только там, где он сужает список: пока приёмки нет ни у кого —
+    // ожидаемое на проде состояние — его в тулбаре не будет.
+    const accepted = componentLibraryStatus("d", 1, [version(1, "active", "acc_1")], []);
+    expect(applicableLibraryStatusKeys([accepted, pending])).toEqual(["accepted"]);
     expect(applicableLibraryStatusKeys([verified])).toEqual([]);
     expect(applicableLibraryStatusKeys([verified, verified])).toEqual([]);
     expect(applicableLibraryStatusKeys([])).toEqual([]);

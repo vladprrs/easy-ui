@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getComponentPreview, getDesignSystemById, getLibraryCatalog, type LibraryCatalogEntry, type LibraryCatalogResponse } from "../api/client";
@@ -25,7 +25,7 @@ const entry = (patch: Partial<LibraryCatalogEntry> & { id: string }): LibraryCat
   canonicalFor: [],
   deprecated: false,
   headUsageCount: 0,
-  status: { published: true, verified: false, visualPending: true, blocked: false, rejected: false },
+  status: { published: true, verified: false, visualPending: true, blocked: false, rejected: false, accepted: false },
   figma: null,
   preview: { selector: "legacy" },
   ...patch,
@@ -48,7 +48,7 @@ const catalog = (patch: Partial<LibraryCatalogResponse> = {}): LibraryCatalogRes
     entry({ id: "rating", name: "Rating", version: 3, atomicLevel: "molecule", description: "Choose a rating", canonicalFor: ["ctyp-rating"], headUsageCount: 1 }),
     entry({ id: "rating-legacy", name: "RatingLegacy", atomicLevel: "molecule", description: "Old rating widget", deprecated: true, replacement: "Rating" }),
     entry({ id: "chip", name: "Chip", version: 2, atomicLevel: "atom", preview: null }),
-    entry({ id: "navbar", name: "Navbar", atomicLevel: "organism", status: { published: false, verified: false, visualPending: false, blocked: false, rejected: true } }),
+    entry({ id: "navbar", name: "Navbar", atomicLevel: "organism", status: { published: false, verified: false, visualPending: false, blocked: false, rejected: true, accepted: false } }),
     entry({ id: "rating", name: "Rating", designSystem: "e2e", atomicLevel: "molecule" }),
   ],
   ...patch,
@@ -156,6 +156,36 @@ describe("LibraryPage витрина компонентов", () => {
     fireEvent.click(within(screen.getByLabelText("Фильтры статусов")).getByRole("button", { name: "Отклонён" }));
     expect(screen.getByLabelText("Страницы, шаблоны и организмы")).toBeTruthy();
     expect(screen.queryByLabelText("Молекулы")).toBeNull();
+  });
+
+  // Признак `accepted` (RFC candidate-acceptance §7, волна R3c): чип и бейдж появляются только
+  // там, где приёмка что-то нашла. Пустая приёмка (ожидаемое состояние прода до включения
+  // promote-практики) не должна ни рисовать бейджей, ни добавлять неработающий чип.
+  it("показывает чип и бейдж приёмки только при непустом accepted", async () => {
+    renderLibrary();
+    await screen.findByLabelText("Молекулы");
+    expect(within(screen.getByLabelText("Фильтры статусов")).queryByRole("button", { name: "Принят" })).toBeNull();
+    expect(screen.queryByTitle(/через приёмку/)).toBeNull();
+
+    vi.mocked(getLibraryCatalog).mockResolvedValue(catalog({
+      components: [
+        ...shelf,
+        entry({ id: "rating", name: "Rating", atomicLevel: "molecule" }),
+        entry({
+          id: "accepted-one", name: "AcceptedOne", atomicLevel: "molecule",
+          status: { published: true, verified: false, visualPending: true, blocked: false, rejected: false, accepted: true },
+        }),
+      ],
+    }));
+    cleanup();
+    renderLibrary();
+    const molecules = await screen.findByLabelText("Молекулы");
+    expect(within(molecules).getAllByTitle(/через приёмку/)).toHaveLength(1);
+
+    fireEvent.click(within(screen.getByLabelText("Фильтры статусов")).getByRole("button", { name: "Принят" }));
+    // Осталась ровно принятая запись (единственная — она же и вся витрина «Рекомендуем»).
+    expect(screen.getAllByRole("link", { name: "AcceptedOne" })).toHaveLength(1);
+    expect(screen.queryByRole("link", { name: "Rating" })).toBeNull();
   });
 
   it("не монтирует превью при ?libraryPreviews=off", async () => {

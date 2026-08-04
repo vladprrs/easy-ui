@@ -1504,7 +1504,9 @@ describe("author driver audit --versions (KPI, RFC §9)", () => {
 
     const human = await run(api, ["audit", "--versions"]);
     expect(human.exitCode).toBe(2);
-    expect(human.stdout).toContain("component\tdesignSystem\tversions\tactive\tlatest\tstatuses\tfirstPublishedAt\tlastPublishedAt");
+    expect(human.stdout).toContain("component\tdesignSystem\tversions\tactive\tlatest\tstatuses\tacceptance\tfirstPublishedAt\tlastPublishedAt");
+    // Колонка «есть/нет acceptance evidence» (RFC §12.6(в)): каталог без приёмки честно пуст.
+    expect(human.stdout).toContain("acceptance evidence: 0/");
     expect(human.stdout).toContain("no active version: stars");
     // Без фильтра в срез попадают все дизайн-системы.
     expect(human.stdout).toContain("other-ds");
@@ -1524,6 +1526,24 @@ describe("author driver audit --versions (KPI, RFC §9)", () => {
     expect(findings).toMatchObject({ components: 3, published: 2, totalVersions: 3, versionsPerComponent: 1.5, noActiveVersion: ["b"], unpublished: ["c"], firstVersionOnly: ["b"] });
     const lines = versionAuditLines("designSystem=yp", rows, findings);
     expect(lines[0]).toContain("2/3 components published, 3 public versions, 1.5 versions per published component");
+    // Без ссылок на раны колонка пуста везде — это ожидаемое состояние, а не сбой (§11-R3c).
+    expect(rows[0]).toMatchObject({ acceptanceEvidence: 0, acceptedActive: false });
+    expect(findings).toMatchObject({ versionsWithEvidence: 0, acceptedComponents: [], withoutEvidence: ["a", "b"] });
+    expect(lines[2]).toBe("acceptance evidence: 0/3 versions · accepted active version: 0/2 components · published components without any evidence: 2");
+    expect(lines[3]).toContain("acceptance");
+    expect(lines[4]?.split("\t")[6]).toBe("0/2 active=no");
+
+    // Evidence на активной версии: строка и сводка показывают и покрытие, и принятую активную.
+    const accepted = versionAuditRows([{ id: "a", designSystem: "yp" }], {
+      a: [
+        { version: 1, status: "superseded", publishedAt: "2026-01-01" },
+        { version: 2, status: "active", publishedAt: "2026-01-02", acceptanceRunId: "acc_1" },
+      ],
+    });
+    expect(accepted[0]).toMatchObject({ acceptanceEvidence: 1, acceptedActive: true });
+    const acceptedFindings = versionAuditFindings(accepted);
+    expect(acceptedFindings).toMatchObject({ versionsWithEvidence: 1, acceptedComponents: ["a"], withoutEvidence: [] });
+    expect(versionAuditLines("", accepted, acceptedFindings)[4]?.split("\t")[6]).toBe("1/2 active=yes");
     expect(lines.at(-1)).toBe("no active version: b");
   });
 });

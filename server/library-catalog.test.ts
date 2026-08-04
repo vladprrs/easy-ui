@@ -121,7 +121,7 @@ interface LibraryEntry {
   bundleUrl: string; bundleHash: string; hostAbiVersion: number; description: string;
   atomicLevel?: string; layoutNeutral: boolean; scope?: string; canonicalFor: string[]; replacement?: string;
   deprecated: boolean; headUsageCount: number;
-  status: { published: boolean; verified: boolean; visualPending: boolean; blocked: boolean; rejected: boolean };
+  status: { published: boolean; verified: boolean; visualPending: boolean; blocked: boolean; rejected: boolean; accepted: boolean };
   figma: null | { fileKey: string; nodeCount: number };
   preview: null | { selector: "legacy" } | { selector: "named"; name: string };
 }
@@ -138,20 +138,20 @@ describe("GET /api/catalog/library", () => {
   const DIVERGENCE = [
     {
       key: "lib-a lib-dual",
-      legacy: { published: true, rejected: true, blocked: false, verified: false, visualPending: true },
-      next: { published: true, rejected: false, blocked: false, verified: false, visualPending: true },
+      legacy: { published: true, rejected: true, blocked: false, verified: false, visualPending: true, accepted: false },
+      next: { published: true, rejected: false, blocked: false, verified: false, visualPending: true, accepted: false },
       reason: "легаси берёт latest по всем системам — это v3 (rejected) в lib-b; read-model смотрит только группу lib-a, где latest = v1 active",
     },
     {
       key: "lib-b lib-dual",
-      legacy: { published: true, rejected: true, blocked: false, verified: false, visualPending: true },
-      next: { published: true, rejected: true, blocked: false, verified: false, visualPending: true },
+      legacy: { published: true, rejected: true, blocked: false, verified: false, visualPending: true, accepted: false },
+      next: { published: true, rejected: true, blocked: false, verified: false, visualPending: true, accepted: false },
       reason: "совпадает: latest компонента и latest группы lib-b — одна и та же v3 (rejected)",
     },
     {
       key: "lib-a lib-solo",
-      legacy: { published: true, rejected: false, blocked: true, verified: false, visualPending: true },
-      next: { published: true, rejected: false, blocked: true, verified: false, visualPending: true },
+      legacy: { published: true, rejected: false, blocked: true, verified: false, visualPending: true, accepted: false },
+      next: { published: true, rejected: false, blocked: true, verified: false, visualPending: true, accepted: false },
       reason: "совпадает: компонент живёт в одной системе, разбиение ничего не меняет",
     },
   ];
@@ -234,6 +234,77 @@ describe("GET /api/catalog/library", () => {
     });
     // visualPending — ровно дополнение verified среди опубликованных.
     for (const entry of catalog.components) expect(entry.status.visualPending).toBe(!entry.status.verified);
+    db.close();
+  });
+
+  // --- accepted: независимый признак приёмки (RFC candidate-acceptance §7, волна R3c) ---
+
+  /** Плоский receipt A9 на строке публикации: promote пишет его только для пройденного рана. */
+  function seedAcceptanceReceipt(db: Database, id: string, version: number, runId: string | null, candidateId: string | null = null): void {
+    db.query("UPDATE component_publishes SET acceptance_run_id=?,candidate_id=? WHERE component_id=? AND version=?")
+      .run(runId, candidateId, id, version);
+  }
+
+  test("accepted читает acceptance-evidence активной версии и не подменяет visual-verified", async () => {
+    const { db, handler } = await setup();
+    seedSystem(db, "lib-a");
+    seedComponent(db, "acc-yes", "AccYes", [{ status: "active", designSystem: "lib-a" }]);
+    // Evidence висит на СТАРОЙ версии; активная — v2, признака у неё нет.
+    seedComponent(db, "acc-old-version", "AccOldVersion", [{ status: "active", designSystem: "lib-a" }]);
+    seedNewVersion(db, "acc-old-version", "lib-a");
+    // Пустая строка — «пусто» наравне с NULL: колонка плоская TEXT без FK.
+    seedComponent(db, "acc-empty", "AccEmpty", [{ status: "active", designSystem: "lib-a" }]);
+    seedComponent(db, "acc-none", "AccNone", [{ status: "active", designSystem: "lib-a" }]);
+
+    seedAcceptanceReceipt(db, "acc-yes", 1, "acc_11111111-1111-1111-1111-111111111111", "cand_yes");
+    seedAcceptanceReceipt(db, "acc-old-version", 1, "acc_22222222-2222-2222-2222-222222222222");
+    seedAcceptanceReceipt(db, "acc-empty", 1, "");
+
+    const catalog = await body<LibraryResponse>(await get(handler, "/catalog/library"));
+    expect(Object.fromEntries(catalog.components.map((entry) => [entry.id, entry.status.accepted]))).toEqual({
+      "acc-yes": true,
+      "acc-old-version": false,
+      "acc-empty": false,
+      "acc-none": false,
+    });
+    // Признак независим: визуальная сторона у принятой записи осталась нетронутой.
+    expect(entryOf(catalog, "lib-a", "acc-yes").status).toMatchObject({ verified: false, visualPending: true, accepted: true });
+    db.close();
+  });
+
+  test("ревизия не меняется от появления acceptance-evidence: status.accepted вне проекции", async () => {
+    const { db, handler } = await setup();
+    seedSystem(db, "lib-a");
+    seedComponent(db, "rev-accepted", "RevAccepted", [{ status: "active", designSystem: "lib-a" }]);
+    const before = await body<LibraryResponse>(await get(handler, "/catalog/library"));
+    expect(entryOf(before, "lib-a", "rev-accepted").status.accepted).toBe(false);
+
+    seedAcceptanceReceipt(db, "rev-accepted", 1, "acc_33333333-3333-3333-3333-333333333333", "cand_rev");
+    const after = await body<LibraryResponse>(await get(handler, "/catalog/library"));
+    expect(entryOf(after, "lib-a", "rev-accepted").status.accepted).toBe(true);
+    // Инвариант §7/M4: иначе любой acceptance-run глобально сдвигал бы хэш каталога.
+    expect(after.catalogRevision).toBe(before.catalogRevision);
+    db.close();
+  });
+
+  test("серверный и легаси-вычислители accepted согласованы, а versions-DTO несёт receipt-ссылки", async () => {
+    const { db, handler } = await setup();
+    seedSystem(db, "lib-a");
+    seedComponent(db, "acc-parity-yes", "AccParityYes", [{ status: "active", designSystem: "lib-a" }]);
+    seedComponent(db, "acc-parity-no", "AccParityNo", [{ status: "active", designSystem: "lib-a" }]);
+    seedAcceptanceReceipt(db, "acc-parity-yes", 1, "acc_44444444-4444-4444-4444-444444444444", "cand_parity");
+
+    const catalog = await body<LibraryResponse>(await get(handler, "/catalog/library"));
+    const references = (await body<{ references: VisualReference[] }>(await get(handler, "/visual-references?scope=component"))).references;
+    for (const entry of catalog.components) {
+      const meta = await body<{ versions: ComponentVersionSummary[] }>(await get(handler, `/components/${entry.id}`));
+      expect(componentLibraryStatus(entry.id, entry.version, meta.versions, references).accepted).toBe(entry.status.accepted);
+    }
+
+    const versions = await body<ComponentVersionSummary[]>(await get(handler, "/components/acc-parity-yes/versions"));
+    expect(versions[0]).toMatchObject({ version: 1, acceptanceRunId: "acc_44444444-4444-4444-4444-444444444444", candidateId: "cand_parity" });
+    const bare = await body<ComponentVersionSummary[]>(await get(handler, "/components/acc-parity-no/versions"));
+    expect(bare[0]).toMatchObject({ version: 1, acceptanceRunId: null, candidateId: null });
     db.close();
   });
 
@@ -400,7 +471,7 @@ describe("GET /api/catalog/library", () => {
       bundleUrl: "/api/components/meta-one/versions/1/bundle.js", bundleHash: "bh-meta-one-1", hostAbiVersion: 4,
       description: "Seeded component", atomicLevel: "molecule", layoutNeutral: true, scope: "section",
       canonicalFor: ["checkout-summary"], replacement: "meta-two", deprecated: false, headUsageCount: 0,
-      status: { published: true, verified: false, visualPending: true, blocked: false, rejected: false },
+      status: { published: true, verified: false, visualPending: true, blocked: false, rejected: false, accepted: false },
       figma: { fileKey: "FILEKEY", nodeCount: 2 },
       preview: { selector: "legacy" },
     });
@@ -442,7 +513,7 @@ describe("catalogRevision (чистая проекция)", () => {
       ...base,
       headUsageCount: 7, bundleUrl: "/api/components/rev-pure/versions/1/bundle.js", bundleHash: "bh-x",
       name: "RevPure", hostAbiVersion: 4, layoutNeutral: true, deprecated: true,
-      status: { published: true, verified: true, visualPending: false, blocked: false, rejected: false },
+      status: { published: true, verified: true, visualPending: false, blocked: false, rejected: false, accepted: false },
       figma: { fileKey: "F", nodeCount: 2 }, preview: { selector: "legacy" },
       // Поле, которого сегодня в записи ещё нет, — ровно тот сценарий, что протёк в B1.
       fieldAddedTomorrow: "whatever",

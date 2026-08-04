@@ -2160,12 +2160,19 @@ export function versionAuditRows(components, versionsById) {
     const active = versions.filter((version) => version.status === "active");
     const byStatus = {};
     for (const version of versions) byStatus[version.status] = (byStatus[version.status] ?? 0) + 1;
+    // Есть ли за версией acceptance-evidence (RFC §12.6(в), волна R3c): плоский receipt
+    // `acceptanceRunId` на строке публикации. Колонка read-only и нужна, чтобы измерить масштаб
+    // будущего бэкфилла legacy-версий (R4+). Пустая строка считается отсутствием наравне с
+    // null/undefined; сервер до R3c поля вовсе не отдавал — там тоже «нет».
+    const withEvidence = versions.filter((version) => (version.acceptanceRunId ?? "") !== "");
     return {
       id: component.id,
       designSystem: component.designSystem,
       versions: versions.length,
       active: active.length,
       byStatus,
+      acceptanceEvidence: withEvidence.length,
+      acceptedActive: active.some((version) => (version.acceptanceRunId ?? "") !== ""),
       latestVersion: versions.length ? versions[versions.length - 1].version : null,
       firstPublishedAt: versions.length ? versions[0].publishedAt : null,
       lastPublishedAt: versions.length ? versions[versions.length - 1].publishedAt : null,
@@ -2186,6 +2193,12 @@ export function versionAuditFindings(rows) {
     noActiveVersion: published.filter((row) => row.active === 0).map((row) => row.id),
     multipleActive: published.filter((row) => row.active > 1).map((row) => row.id),
     unpublished: rows.filter((row) => row.versions === 0).map((row) => row.id),
+    // Срез покрытия приёмкой (RFC §12.6): сколько публичных версий несут evidence и у скольких
+    // компонентов принята сама активная версия. Ноль здесь — **ожидаемое** состояние прода до
+    // включения promote-практики с EASYUI_ACCEPTANCE_MATRIX, а не дефект (§11-R3c).
+    versionsWithEvidence: published.reduce((sum, row) => sum + row.acceptanceEvidence, 0),
+    acceptedComponents: published.filter((row) => row.acceptedActive).map((row) => row.id),
+    withoutEvidence: published.filter((row) => row.acceptanceEvidence === 0).map((row) => row.id),
   };
 }
 
@@ -2196,11 +2209,14 @@ export function versionAuditLines(scope, rows, findings) {
   return [
     `version audit${scope ? ` (${scope})` : ""}: ${findings.published}/${findings.components} components published, ${findings.totalVersions} public versions, ${findings.versionsPerComponent} versions per published component`,
     `first-version-only: ${findings.firstVersionOnly.length} · no active version: ${findings.noActiveVersion.length} · multiple active: ${findings.multipleActive.length} · never published: ${findings.unpublished.length}`,
-    "component	designSystem	versions	active	latest	statuses	firstPublishedAt	lastPublishedAt",
+    `acceptance evidence: ${findings.versionsWithEvidence}/${findings.totalVersions} versions · accepted active version: ${findings.acceptedComponents.length}/${findings.published} components · published components without any evidence: ${findings.withoutEvidence.length}`,
+    "component	designSystem	versions	active	latest	statuses	acceptance	firstPublishedAt	lastPublishedAt",
     ...rows.map((row) => [
       row.id, row.designSystem, row.versions, row.active,
       row.latestVersion === null ? "-" : `v${row.latestVersion}`,
       Object.entries(row.byStatus).sort(([a], [b]) => a.localeCompare(b)).map(([status, count]) => `${status}=${count}`).join(",") || "-",
+      // «есть/нет acceptance evidence»: сколько версий несут ран и принята ли активная.
+      `${row.acceptanceEvidence}/${row.versions}${row.acceptedActive ? " active=yes" : row.versions ? " active=no" : ""}`,
       row.firstPublishedAt ?? "-", row.lastPublishedAt ?? "-",
     ].join("\t")),
     ...(findings.noActiveVersion.length ? [`no active version: ${findings.noActiveVersion.join(", ")}`] : []),
