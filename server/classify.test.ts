@@ -36,6 +36,9 @@ function v14():Database {
   db.run("ALTER TABLE design_systems DROP COLUMN acceptance");
   // v26 завела case-set-манифесты — тот же приём.
   db.run("DROP TABLE IF EXISTS component_case_sets");
+  // v27 завела provenance-слой и надгробия решений по кандидатам (RFC candidate-acceptance R3a);
+  // `candidate_decisions` сносится первой — это FK-ребёнок `component_candidates`.
+  for(const table of ["candidate_decisions","component_provenance"] as const) db.run(`DROP TABLE IF EXISTS ${table}`);
   db.run("PRAGMA user_version=14");
   return db;
 }

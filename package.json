@@ -20,6 +20,7 @@
     "verify:sdk": "tsc --noEmit -p sdk/tsconfig.json && tsx scripts/check-sdk-drift.ts && vitest run --config sdk/vitest.config.ts",
     "check:css": "node scripts/check-css.mjs",
     "verify:renderer": "tsx scripts/check-renderer-pin.ts",
+    "verify:provenance": "tsx scripts/check-provenance-resolver.ts",
     "preview": "vite preview",
     "server:dev": "ADMIN_NAME=admin ADMIN_PASSWORD=easy-ui-dev-password EASYUI_SURFACES=1 bun --watch server/main.ts",
     "server:test": "bun test server",
@@ -30,7 +31,7 @@
     "corpus:verify": "node scripts/renderer-corpus.mjs --verify",
     "corpus:record": "node scripts/renderer-corpus.mjs --record",
     "perf:library": "tsx scripts/perf-library.mjs",
-    "verify": "npm run typecheck && npm run server:typecheck && npm run lint && npm run test -- --run && npm run server:test && npm run validate:templates && npm run verify:openapi && npm run verify:sdk && npm run verify:renderer && npm run build && npm run check:css"
+    "verify": "npm run typecheck && npm run server:typecheck && npm run lint && npm run test -- --run && npm run server:test && npm run validate:templates && npm run verify:openapi && npm run verify:sdk && npm run verify:renderer && npm run verify:provenance && npm run build && npm run check:css"
   },
   "dependencies": {
     "@json-render/core": "0.19.0",

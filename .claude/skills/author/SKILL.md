@@ -365,7 +365,7 @@ preview rating-stars draft rev 7 bundleHash=1f9c… designSystemMetaVersion=14 v
 author-shots/rating-stars/rating-stars-draft-r7.png
 ```
 
-**Итоговый цикл атома:** правка исходника → сохранение ревизии **без публикации** → `preview --rev head-draft` (пиксели) → `preview --rev head-draft --probe geometry` + `expect` (числа) → validate-префлайт (`POST /api/components/:id/validate` — publish-набор проверок без создания версии; неподдерживаемое поле provenance, тип-ошибка или битый asset-ref ловятся здесь) → **`promote` ровно один раз** по итогам приёмки (см. «Приёмка головы: `promote`»). Verb `component` делает save+publish за один вызов, поэтому промежуточные сохранения идут через HTTP (`PUT /api/components/:id` с `baseRev` — гейт создания на PUT не действует); финальная публикация головы — повторный `driver.mjs component` с неизменными source+`--figma` (PUT отвечает no-op `unchanged`, и драйвер публикует голову) либо `POST /api/components/:id/publish`. Драфт-режим снимает head-ревизию через эфемерный candidate-bundle префлайта validate: published-версия не требуется, а провал префлайта (тип-ошибки, битые asset-refs) приезжает тем же кодом, что отдаёт publish, — превью сломанного драфта сообщает причину, а не «нет бандла».
+**Итоговый цикл атома:** правка исходника → сохранение ревизии **без публикации** → `preview --rev head-draft` (пиксели) → `preview --rev head-draft --probe geometry` + `expect` (числа) → validate-префлайт (`POST /api/components/:id/validate` — publish-набор проверок без создания версии; неподдерживаемое поле provenance, тип-ошибка или битый asset-ref ловятся здесь) → **`promote` ровно один раз** по итогам приёмки (см. «Приёмка головы: `promote`»). Verb `component` делает save+publish за один вызов, поэтому промежуточные сохранения идут через HTTP (`PUT /api/components/:id` с `baseRev` — гейт создания на PUT не действует); финальная публикация головы — повторный `driver.mjs component` с неизменным source (`--figma` передавать не нужно — provenance наследуется; PUT отвечает no-op `unchanged`, и драйвер публикует голову) либо `POST /api/components/:id/publish`. Драфт-режим снимает head-ревизию через эфемерный candidate-bundle префлайта validate: published-версия не требуется, а провал префлайта (тип-ошибки, битые asset-refs) приезжает тем же кодом, что отдаёт publish, — превью сломанного драфта сообщает причину, а не «нет бандла».
 
 Exit-коды — как у `snap` (0 — PNG, 2 — PNG с product-ошибками, 1 — нет PNG). Честные ограничения (план agent-iteration DX, P1a/P1b):
 
@@ -431,6 +431,24 @@ superseded: v3 (warm candidate: no recompile)
 - Терминальные отказы (не ретраить автоматически): `409 already_published` — голова уже опубликована, нужна новая ревизия; `409 revision_conflict`/`409 source_hash_mismatch` — голова изменилась между validate и promote, повторить верб целиком; `409 canonical_role_conflict`/`catalog_changed` — обычный reuse-STOP, решение человека; `422` — те же коды, что у publish (кроме компиляционных: их уже отсеял validate).
 - Promote **не** обходит каталого-временные проверки: имя host-примитива, каноническая роль, атомарная политика и asset-refs перепрогоняются на публикации.
 - `publish` остаётся рабочим и не меняется — это путь для случаев, когда приёмка не нужна (или сервер её погасил).
+
+### Правка Figma-происхождения: `provenance`
+
+Ссылка на Figma живёт отдельно от runtime-версий (append-only история с резолвом при чтении), поэтому её правка **не создаёт ни ревизии, ни версии** — раньше ради неё приходилось выпускать metadata-only версию.
+
+```bash
+node driver.mjs provenance rating-stars figma.json            # правка provenance головы
+node driver.mjs provenance rating-stars figma.json --rev 7    # правка provenance конкретной ревизии
+node driver.mjs provenance rating-stars null                  # явная очистка (tombstone)
+node driver.mjs provenance rating-stars figma.json --json
+```
+
+- Требует `features.acceptanceProvenance` в `/api/capabilities`; на старом сервере верб падает читаемо, а `--figma` у верба `component` продолжает работать.
+- Provenance **наследуется** ревизиями: обычный save без `--figma` её больше не обнуляет (резолв идёт по последней записи среди ревизий `≤ rev`). Очистка выражается только литералом `null`.
+- Повтор идентичного значения дедуплицируется: ответ `unchanged: true`, `seq: null`, новой записи в истории нет.
+- Provenance **опубликованной** версии сознательно мутабельна: `--rev` опубликованной ревизии меняет то, что отдаёт `GET /api/components/:id/versions/:v`. Иммутабельна только байтовая часть версии (`bundleHash`/бандл/`definition_meta`).
+- Владелец компонента или админ; `share`/`capture`-принципалы — 403.
+- Старый канон «слать `--figma` при каждом вызове `component`» **отменён**: флаг опционален и нужен только чтобы задать provenance одним вызовом при создании. Смена и очистка ссылки — верб `provenance`; сам флаг продолжает работать (тот же write-путь, та же seq-строка).
 
 ### Матричная приёмка семейства: `accept`
 
@@ -627,7 +645,7 @@ node driver.mjs diff my-flow 1 3 --json   # rev 3 против rev 1, полны
 
 Жизненный цикл версий компонента: у published-версии есть статус (`active` по умолчанию). Неудачную версию можно пометить, не удаляя: `POST /components/:id/versions/:v/status` c `{status: rejected|deprecated|superseded|archived, reason?, supersededBy?, baseStatusRev}` (CAS по `statusRev` из read-back версии). `rejected`/`archived` перестают исполняться (плеер покажет `bundle_failed` в render-status), `deprecated`/`superseded` продолжают работать с warning'ом. Новые пины и манифест берут только `active`.
 
-Discovery: `GET /api/openapi.json` (полный OpenAPI 3.1), `GET /api/capabilities` (actions/директивы/лимиты/фичи/системы), `GET /api/schemas/prototype-document.json` и `.../component-definition.json` — источник истины, когда этого файла недостаточно. Опционально к компоненту/прототипу можно прикладывать Figma-происхождение: поле `figma: {fileKey, nodeIds[], referenceScreenshots?: [assetId], lastSyncedAt?}` рядом с `doc`/`source` в POST/PUT — сохраняется на ревизии, отдаётся в read-back.
+Discovery: `GET /api/openapi.json` (полный OpenAPI 3.1), `GET /api/capabilities` (actions/директивы/лимиты/фичи/системы), `GET /api/schemas/prototype-document.json` и `.../component-definition.json` — источник истины, когда этого файла недостаточно. Опционально к компоненту/прототипу можно прикладывать Figma-происхождение: поле `figma: {fileKey, nodeIds[], referenceScreenshots?: [assetId], lastSyncedAt?}` рядом с `doc`/`source` в POST/PUT — сохраняется на ревизии, отдаётся в read-back; отдельная правка без новой ревизии/версии — `PUT /api/components/:id/provenance` (верб `provenance`).
 
 ## Gotchas
 

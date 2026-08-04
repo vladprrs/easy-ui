@@ -9,7 +9,7 @@ import { ComponentRepo } from "../repos/components";
 import { requireActiveDesignSystem } from "../designSystems";
 import { recordValidation } from "../validationRecords";
 import { collectAndValidateComponentAssetRefs } from "../validation";
-import { parseFigmaInput } from "../figma";
+import { figmaSchema, parseFigmaInput, recordProvenance, resolveProvenance, resolveProvenanceRaw } from "../figma";
 import { hostPrimitiveNames } from "../../src/catalog/hostPrimitives/definitions";
 import type { Principal } from "../auth";
 import { requireResourceOwner, requireUser } from "../authorization";
@@ -38,6 +38,17 @@ function body(v:unknown){const p=z.record(z.string(),z.unknown()).safeParse(v);i
 function int(v:unknown,name:string){if(typeof v!=="number"||!Number.isInteger(v)||v<1)throw new ApiError(400,"invalid_request",`${name} must be a positive integer`);return v;}
 function base(b:Record<string,unknown>){if(!Object.hasOwn(b,"baseRev"))throw new ApiError(400,"base_rev_required","baseRev is required");return int(b.baseRev,"baseRev");}
 function text(v:unknown,name:string,required=true){if(v===undefined&&!required)return undefined;if(typeof v!=="string")throw new ApiError(400,"invalid_request",`${name} must be a string`);return v;}
+/**
+ * Канонизация **сырой** стороны сравнения provenance (RFC §6, триаж раунд2-m4): значения,
+ * записанные любым write-путём, уже канонические (`parseFigmaInput` = `JSON.stringify(
+ * figmaSchema.parse(…))`), а вот колонка ревизии несёт исторические записи, сделанные до
+ * введения канонизации. Непарсящаяся строка возвращается как есть: она заведомо не равна
+ * каноническому входу, и no-op-ветка на ней просто не срабатывает.
+ */
+function canonicalProvenance(raw:string|null):string|null{
+  if(raw===null)return null;
+  try { return JSON.stringify(figmaSchema.parse(JSON.parse(raw))); } catch { return raw; }
+}
 export function reserveHostPrimitiveName(name:string):void{if(hostPrimitiveNames.has(name))throw new ApiError(409,"already_exists","Component name is reserved for a host primitive");}
 export async function checkSource(source:string,path:string,smoke=false){
   if(new TextEncoder().encode(source).byteLength>262144)throw new ApiError(413,"payload_too_large","Component source exceeds 256 KB");
@@ -247,11 +258,13 @@ export async function routeComponents(request:Request,db:Database,segments:strin
   const id=segments[1]!,tail=segments.slice(2);
   if(!tail.length){if(request.method==="GET")return json(repo.meta(id,includeDeleted),200,noStore);if(request.method==="PUT"){const actor=requireResourceOwner(db,"components",id,principal);reserveHostPrimitiveName(repo.meta(id).name);const b=body(await readJson(request)),source=text(b.source,"source",false),designSystem=text(b.designSystem,"designSystem",false),baseRev=base(b);const figmaProvided=Object.hasOwn(b,"figma");const figma=figmaProvided?parseFigmaInput(db,b.figma,"figma"):null;if(source===undefined&&designSystem===undefined&&!figmaProvided)throw new ApiError(400,"invalid_request","source, designSystem or figma is required");if(designSystem!==undefined){requireActiveDesignSystem(db,designSystem,["designSystem"]);requireResourceOwner(db,"design_systems",designSystem,principal);}const current=repo.cas(id,baseRev),head=repo.source(id,current.head_rev),nextSource=source??head.source,nextSystem=designSystem??current.design_system;const coreUnchanged=nextSource===head.source&&nextSystem===current.design_system;if(coreUnchanged&&!figmaProvided)throw new ApiError(400,"invalid_request","Component source and design system are unchanged");
       // P5.1 (план 2026-08-02): no-op PUT с figma-only изменением — и source, и figma
-      // byte-идентичны head (figma сравнивается каноническим JSON: обе стороны —
-      // `JSON.stringify(figmaSchema.parse(…))`). Ответ несёт `rev` головы: PUT всегда
-      // возвращал `{rev}`, старые драйверы зависят именно на нём. Изменившийся figma
-      // по-прежнему создаёт ревизию (ветка ниже).
-      if(coreUnchanged&&figmaProvided){const headFigma=(db.query("SELECT figma_json FROM component_revisions WHERE component_id=? AND rev=?").get(id,current.head_rev) as {figma_json:string|null}).figma_json;if(figma===headFigma)return json({unchanged:true as const,rev:current.head_rev},200,noStore);}const next=current.head_rev+1,path=await materializeSource(dataDir,id,next,nextSource);await checkSource(nextSource,path);const result=repo.save(id,source,designSystem,baseRev,text(b.message,"message",false),figma);db.query("UPDATE component_revisions SET author=? WHERE component_id=? AND rev=?").run(actor.userId,id,result.rev);
+      // byte-идентичны head. Предмет сравнения — **резолвнутое сырое** provenance
+      // (RFC candidate-acceptance §6, триаж R3-B2): сырая колонка ревизии после посадки
+      // резолвера была бы устаревшим снапшотом и давала бы `unchanged: true` на изменившейся
+      // provenance. Вход канонизирован `parseFigmaInput`, seq-значения каноничны по построению,
+      // и канонизировать остаётся только фолбэк-ветку — историческую колонку (триаж раунд2-m4).
+      // Ответ несёт `rev` головы: PUT всегда возвращал `{rev}`, старые драйверы зависят на нём.
+      if(coreUnchanged&&figmaProvided&&figma===canonicalProvenance(resolveProvenanceRaw(db,id,current.head_rev)))return json({unchanged:true as const,rev:current.head_rev},200,noStore);const next=current.head_rev+1,path=await materializeSource(dataDir,id,next,nextSource);await checkSource(nextSource,path);const result=repo.save(id,source,designSystem,baseRev,text(b.message,"message",false),figma,figmaProvided?{author:actor.userId}:undefined);db.query("UPDATE component_revisions SET author=? WHERE component_id=? AND rev=?").run(actor.userId,id,result.rev);
     // Write-through кэша шинглов и на PUT: head-драфт участвует в корпусе, поэтому «сохранил
     // дубликат в драфт → опубликовал» ловится тем же матчером (§3.6, план §3.1).
     cacheSourceShingles(db,id,result.rev,nextSource);writeAuditEvent(db,{actorId:actor.userId,action:"component.revision.saved",subjectType:"component",subjectId:id,detail:{rev:result.rev}});return json(result,200,noStore);}if(request.method==="DELETE"){const actor=requireResourceOwner(db,"components",id,principal);const b=body(await readJson(request));const baseRev=base(b);const reason=text(b.reason,"reason",false);const replacement=text(b.replacement,"replacement",false);if(b.force!==undefined&&typeof b.force!=="boolean")throw new ApiError(400,"invalid_request","force must be a boolean");
@@ -288,7 +301,34 @@ export async function routeComponents(request:Request,db:Database,segments:strin
   }
   if(tail[0]==="export"&&tail.length===1){if(request.method!=="GET")throw new ApiError(405,"method_not_allowed","Method not allowed");requireUser(principal);repo.row(id);const versionRaw=new URL(request.url).searchParams.get("version");const version=versionRaw===null?undefined:int(Number(versionRaw),"version");const closure=new BundleClosure(db,dataDir);const exported=closure.addComponent(id,version);const bytes=await closure.buildZip("component",new URL(request.url).origin);const suffix=exported.version!==null?`v${exported.version}`:`draft-r${exported.rev}`;return zipResponse(bytes,`easy-ui-component-${id}-${suffix}.zip`);}
   if(tail[0]==="revisions"){if(tail.length===1)return json(repo.revisions(id),200,noStore);if(tail.length===2)return json(repo.source(id,int(Number(tail[1]),"rev")),200,noStore);}
-  if(tail[0]==="restore"&&tail.length===1){const actor=requireResourceOwner(db,"components",id,principal);const b=body(await readJson(request));const result=repo.restore(id,int(b.rev,"rev"),base(b));db.query("UPDATE component_revisions SET author=? WHERE component_id=? AND rev=?").run(actor.userId,id,result.rev);writeAuditEvent(db,{actorId:actor.userId,action:"component.revision.saved",subjectType:"component",subjectId:id,detail:{rev:result.rev,restore:true}});return json(result,200,noStore);}
+  if(tail[0]==="restore"&&tail.length===1){const actor=requireResourceOwner(db,"components",id,principal);const b=body(await readJson(request));const result=repo.restore(id,int(b.rev,"rev"),base(b),actor.userId);db.query("UPDATE component_revisions SET author=? WHERE component_id=? AND rev=?").run(actor.userId,id,result.rev);writeAuditEvent(db,{actorId:actor.userId,action:"component.revision.saved",subjectType:"component",subjectId:id,detail:{rev:result.rev,restore:true}});return json(result,200,noStore);}
+  /**
+   * `PUT /api/components/:id/provenance` (RFC candidate-acceptance §6, волна R3a) — правка ссылки
+   * на Figma **без** новой ревизии и без новой версии: добавляет seq-строку в append-only
+   * `component_provenance` для указанной (по умолчанию головной) ревизии.
+   *
+   * - `figma: null` — tombstone (явная очистка), а не удаление строк;
+   * - повтор идентичного значения дедуплицируется (`unchanged: true`, seq не растёт) —
+   *   сравнение идёт с **резолвнутым сырым** значением, как и no-op компонентного PUT;
+   * - provenance опубликованной версии сознательно **мутабельна**: ручка меняет то, что отдаёт
+   *   `GET /versions/:v`; иммутабельна только байтовая часть версии;
+   * - авторизация — владелец компонента либо админ; `share`/`capture` получают 403 всегда
+   *   (`requireResourceOwner` → `requireUser`).
+   */
+  if(tail[0]==="provenance"&&tail.length===1){
+    if(request.method!=="PUT")throw new ApiError(405,"method_not_allowed","Method not allowed");
+    const actor=requireResourceOwner(db,"components",id,principal);
+    const b=body(await readJson(request));
+    for(const key of Object.keys(b))if(!["rev","figma"].includes(key))throw new ApiError(400,"invalid_request",`Unknown field: ${key}`);
+    if(!Object.hasOwn(b,"figma"))throw new ApiError(400,"invalid_request","figma is required (send null to clear provenance)");
+    const head=repo.row(id).head_rev;
+    const rev=b.rev===undefined?head:int(b.rev,"rev");
+    if(!db.query("SELECT 1 ok FROM component_revisions WHERE component_id=? AND rev=?").get(id,rev))throw new ApiError(404,"not_found","Component revision not found");
+    const figma=parseFigmaInput(db,b.figma,"figma");
+    const seq=db.transaction(()=>recordProvenance(db,{componentId:id,rev,figmaJson:figma,author:actor.userId}))();
+    if(seq!==null)writeAuditEvent(db,{actorId:actor.userId,action:"component.provenance.updated",subjectType:"component",subjectId:id,detail:{rev,seq}});
+    return json({rev,seq,unchanged:seq===null,figma:resolveProvenance(db,id,rev)},200,noStore);
+  }
   // P8 (план 2026-08-02): validate-префлайт head-ревизии — publish-проверки без создания
   // версии и без изменения public state. Kill-switch: EASYUI_VALIDATE_DISABLED=1 → ручки
   // нет (404), фича гаснет и в /api/capabilities.features. Тело запроса не читается.

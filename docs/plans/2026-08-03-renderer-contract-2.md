@@ -6,7 +6,7 @@
 
 > Этот план — **дельта** поверх посаженного состояния. Он не переоткрывает решения family-плана (D4 paint-режим, D5 readiness-политика, A4 CAS-evidence, D1 `case_fingerprint`), а достраивает то, что там было объявлено не-целью: полный renderer fingerprint, строгость ресурсов, типизированные коды, receipt, cross-renderer guard, разделение метрик, пул и кэш.
 
-> Очередь исполнения: **R0** → **R1** → **R2a** → **R2b** → **R2c** → **R3** → **R4** → **R5** → **R6** → **R7a/R7b**; **R8a** параллелится с R5–R7, **R8b** — строго после R5; **R9a/R9b** (P2) — после R7. Единственная миграция пакета — **v27** в R6. Прод-включение флагов — только в порядке §7 (guard раньше пикселей, инвентаризация эталонов раньше guard'а).
+> Очередь исполнения: **R0** → **R1** → **R2a** → **R2b** → **R2c** → **R3** → **R4** → **R5** → **R6** → **R7a/R7b**; **R8a** параллелится с R5–R7, **R8b** — строго после R5; **R9a/R9b** (P2) — после R7. Единственная миграция пакета — в R6 (следующий свободный номер; v27 занят волной R3a RFC candidate-acceptance — component_provenance/candidate_decisions, 2026-08-03). Прод-включение флагов — только в порядке §7 (guard раньше пикселей, инвентаризация эталонов раньше guard'а).
 
 ---
 
@@ -316,18 +316,18 @@
 **Done.** unit: receipt детерминирован кроме `timings`/`provenance.builtAt`; свипер не удаляет receipt, на который ссылается живой job-результат/CAS-манифест; тест «share/capture-принципал получает 403 на чужой job-receipt»; e2e: интерактивный `snap` (asset-путь) возвращает `receiptSha256`, `GET /api/screenshot-jobs/:id/receipt` отдаёт документ с `renderer` и `fontFaces` — закрытие дыры §1.6; замер прироста диска на 200 капчурах; `verify`.
 **Флаг.** Kill-switch `EASYUI_CAPTURE_RECEIPTS_DISABLED=1` (дефолт — включено).
 
-### R6 — Cross-renderer guard на визуальных эталонах (миграция v27)
+### R6 — Cross-renderer guard на визуальных эталонах (миграция: следующий свободный номер, v28+ — v27 занят R3a RFC)
 
 **Объём.**
-- **Миграция v27** (единственная, только `ADD COLUMN`, без FK): `visual_references` += `renderer_fingerprint TEXT NULL`, `renderer_json TEXT NULL`, `font_manifest_hash TEXT NULL`, `receipt_sha256 TEXT NULL`, `renderer_recorded_at TEXT NULL`; `visual_runs` += `renderer_guard TEXT NULL`, `outcome_code TEXT NULL`, `candidate_receipt_sha256 TEXT NULL`, `reference_receipt_sha256 TEXT NULL`.
+- **Миграция (следующий свободный номер, v28+)** (единственная в пакете, только `ADD COLUMN`, без FK): `visual_references` += `renderer_fingerprint TEXT NULL`, `renderer_json TEXT NULL`, `font_manifest_hash TEXT NULL`, `receipt_sha256 TEXT NULL`, `renderer_recorded_at TEXT NULL`; `visual_runs` += `renderer_guard TEXT NULL`, `outcome_code TEXT NULL`, `candidate_receipt_sha256 TEXT NULL`, `reference_receipt_sha256 TEXT NULL`.
 - Запись рендерера на эталон: `upsertReferencePrivileged` (общая точка обоих путей — `baselines.ts:73` и generic `PUT /api/visual-references`, V-N3) резолвит renderer-блок **по `assetId → receiptSha` индексу R5** (T-B2); NULL — только для PNG, залитых извне, или при истёкшем индексе (best-effort честно). Авторитетный носитель renderer-блока — инлайновый `renderer_json` (переживает TTL receipt-стора); `receipt_sha256` — evidence-ссылка, поддержанная **пином**: receipt'ы, на которые ссылается `visual_references`, не вытесняются свипером (канон `candidatePins`, T-M12). Расширение сигнатур `finalizeCaptured`/`terminalRow`/`runReport` под `outcome_code`/`renderer_guard` — явный объём (V-N13).
 - Guard в `VisualService.drive()` (E5, C-B2) между кадром кандидата и `runDiff`: `matched | mismatch | unknown`; `mismatch` ⇒ `status='error'`, `outcome_code='renderer_mismatch'`, `differing[]`, без процента; `unknown` ⇒ advisory `warnings:["renderer_unknown"]` — **до** включения флагов; при `EASYUI_RENDERER_FLAGS=1` + `EASYUI_RENDERER_EPOCH` (N11) `unknown`/чужая эпоха ⇒ `error/stale_renderer` без процента.
 - **`scripts/rebaseline-all.mjs`** (T-M10-риски): инвентаризация эталонов прода **обоих scope** (число — в план до включения флагов); переснятие prototype-scope через существующий `runBaseline`-путь и **component-scope через generic `PUT /api/visual-references`** (V-N3 — иначе после эпохи они stale без инструмента); rate-limit (уважение `BACKGROUND_QUEUE_RESERVE`), идемпотентность по поколениям `visual_baseline_sets`. **`renderer_json` при массовом переснятии пишется инлайном из результата джобы** (`receiptSha` берётся прямо из `JobStatus.result`), без зависимости от TTL/LRU-стора — сотни капчуров подряд иначе вытеснят ранние receipt'ы до commit'а (V-N8).
 - Приёмка: при reuse `acceptance_case_results` сверяется `receipt.renderer.rendererFingerprint` артефакта; расхождение **или отсутствие артефакта** (вытеснен `gcEvidence`) ⇒ пересъёмка, не ошибка рана (T-m20).
 - Rollback-политика (T-M8): точка невозврата — первая запись эталона с `renderer_fingerprint` при включённых флагах; откат образа/флага после неё — только с восстановлением бэкапа (канон surfaces); бэкап prod-volume — pre-flight этой волны; абзац в `docs/server-api.md#deployment`.
 
-**Файлы.** Изменяемые: `server/migrations.ts` (v27 + комментарий-инвариант), `server/visual/{repo.ts,service.ts,baselines.ts}`, `server/routes/{visual,visualBaselines}.ts` (generic-PUT — точка T-B2, V-N10), `server/capture/receiptStore.ts` (пин-провайдер), `server/acceptance/runner.ts`, `server/main.ts`. Новые: `scripts/rebaseline-all.mjs`. Contracts/openapi/sdk, `docs/server-api.md`.
-**Done.** unit: legacy-эталон (NULL) при выключенных флагах → `unknown`-advisory, вердикт по метрикам как раньше (нулевой регресс); при `EASYUI_RENDERER_FLAGS=1` → `error/stale_renderer` без процента; эталон ≠ кандидат → `error/renderer_mismatch` с `differing[]`; baseline через `runBaseline`-путь **и через generic-PUT** получает непустой `renderer_json` (T-B2 закрыт для обоих scope); dev/e2e-эталоны, созданные до эпохи, переснимаются в этой волне (V-N5); миграция v27 на копии прод-БД; **корректный** чек-лист совместимости: потребители `SELECT *` по `visual_references`/`visual_runs` существуют (4 места в `repo.ts`), но ни один не сериализует row наружу — тест-инвариант + «старый образ на БД v27 стартует и отдаёт эталоны» (T-M9-риски: формулировка v1 была фактически ложной); e2e `e2e/preview/renderer-guard.spec.ts`; `verify`.
+**Файлы.** Изменяемые: `server/migrations.ts` (миграция R6 + комментарий-инвариант), `server/visual/{repo.ts,service.ts,baselines.ts}`, `server/routes/{visual,visualBaselines}.ts` (generic-PUT — точка T-B2, V-N10), `server/capture/receiptStore.ts` (пин-провайдер), `server/acceptance/runner.ts`, `server/main.ts`. Новые: `scripts/rebaseline-all.mjs`. Contracts/openapi/sdk, `docs/server-api.md`.
+**Done.** unit: legacy-эталон (NULL) при выключенных флагах → `unknown`-advisory, вердикт по метрикам как раньше (нулевой регресс); при `EASYUI_RENDERER_FLAGS=1` → `error/stale_renderer` без процента; эталон ≠ кандидат → `error/renderer_mismatch` с `differing[]`; baseline через `runBaseline`-путь **и через generic-PUT** получает непустой `renderer_json` (T-B2 закрыт для обоих scope); dev/e2e-эталоны, созданные до эпохи, переснимаются в этой волне (V-N5); миграция R6 (v28+) на копии прод-БД; **корректный** чек-лист совместимости: потребители `SELECT *` по `visual_references`/`visual_runs` существуют (4 места в `repo.ts`), но ни один не сериализует row наружу — тест-инвариант + «старый образ на БД с миграцией R6 стартует и отдаёт эталоны» (T-M9-риски: формулировка v1 была фактически ложной); e2e `e2e/preview/renderer-guard.spec.ts`; `verify`.
 **Флаг.** `EASYUI_RENDERER_GUARD_DISABLED=1` (аварийный). Прод-включение `EASYUI_RENDERER_FLAGS` — только после этой волны и по чек-листу §7.
 
 ### R7a — Разделение метрик (сигналы + edge-маска)
@@ -380,7 +380,7 @@
 
 | Файл | Волны | Правило |
 |---|---|---|
-| `server/migrations.ts` | R6 (v27) | строго серийный; единственная миграция пакета |
+| `server/migrations.ts` | R6 (v28+) | строго серийный; единственная миграция пакета |
 | `server/capture/renderer.ts`, `rendererPin.json` | R1, R2a (флаги в хеш) | серийно |
 | `scripts/screenshot-worker.mjs` | R2a, R3, R5 | серийно; `buildLaunchArgs` — дословно тестируемая, сигнатуру не трогать |
 | `scripts/screenshot-pool-worker.mjs` | R9a | эксклюзив; strict-воркер не трогается |
@@ -427,7 +427,7 @@
 6. **Прод-включение флагов (строгий порядок):** (а) инвентаризация эталонов (`rebaseline-all.mjs --dry-run`, число в план); (б) бэкап prod-volume; (в) maintenance-окно: `EASYUI_RENDERER_FLAGS=1` + `EASYUI_RENDERER_EPOCH`; (г) `rebaseline-all.mjs` — массовое переснятие; (д) проверка: старый непереснятый эталон ⇒ `error/stale_renderer` без ложного процента, переснятый ⇒ `matched`; (е) точка невозврата зафиксирована — откат далее только с restore бэкапа (абзац в `docs/server-api.md#deployment`).
 7. `POST /api/acceptance-runs` на кандидате прошлого пакета: reuse не сработал (bump 4→5), холодный ран в бюджете §4; повторный — `reused: N/N`; **окно (6) и холодная пересъёмка приёмки разнесены по времени**.
 8. Диск: `du` по **всем** каталогам — `assets/`, `.acceptance/cas`, `.candidates`, `.receipts`, `.capture-cache`, SQLite+WAL — после 500 капчуров и после rebaseline; потолки соблюдены; рост `assets/` от переснятия зафиксирован числом.
-9. Миграция v27 на копии прод-БД; чек-лист отката: старый образ на БД v27 стартует (цикл `migrate()` пуст — проверено), эталоны читаются (SELECT * совместим — тест-инвариант R6), `.receipts`/`.capture-cache` при откате не растут **и не освобождаются** (кода нет — сказано явно), точка невозврата — п.6е.
+9. Миграция R6 (v28+) на копии прод-БД; чек-лист отката: старый образ на БД с миграцией R6 стартует (цикл `migrate()` пуст — проверено), эталоны читаются (SELECT * совместим — тест-инвариант R6), `.receipts`/`.capture-cache` при откате не растут **и не освобождаются** (кода нет — сказано явно), точка невозврата — п.6е.
 
 ---
 

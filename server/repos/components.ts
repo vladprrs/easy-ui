@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { ApiError } from "../http";
 import type { DefinitionMeta } from "../components/types";
 import { latestValidatedRev } from "../validationRecords";
-import { parseFigmaStored } from "../figma";
+import { recordProvenance, resolveProvenance, resolveProvenanceRaw } from "../figma";
 
 const now=()=>new Date().toISOString();
 // Statuses whose bundle is still executed by existing pins (K.3). rejected/archived/failed/staging do not serve.
@@ -17,8 +17,24 @@ export class ComponentRepo {
   constructor(private db:Database) {}
   row(id:string,includeDeleted=false):Row { const r=this.db.query(`SELECT * FROM components WHERE id=? ${includeDeleted?"":"AND deleted_at IS NULL"}`).get(id) as Row|null; if(!r) throw new ApiError(404,"not_found","Component not found"); return r; }
   cas(id:string,baseRev:number):Row { const r=this.row(id); if(r.head_rev!==baseRev) throw new ApiError(409,"revision_conflict","Component revision has changed",{currentRev:r.head_rev}); return r; }
-  create(id:string,name:string,source:string,designSystem:string,message?:string,figmaJson:string|null=null,ownerId:string|null=null) { return this.db.transaction(()=>{if(this.db.query("SELECT 1 FROM components WHERE id=? OR name=?").get(id,name)) throw new ApiError(409,"already_exists","Component id or name already exists"); const at=now(); this.db.query("INSERT INTO components (id,name,head_rev,design_system,deleted_at,created_at,updated_at,owner_id) VALUES (?,?,1,?,NULL,?,?,?)").run(id,name,designSystem,at,at,ownerId); this.db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,figma_json,message,created_at) VALUES (?,1,?,?,?,?,?)").run(id,source,designSystem,figmaJson,message??null,at); return {id,rev:1 as const};})(); }
-  save(id:string,source:string|undefined,designSystem:string|undefined,baseRev:number,message?:string,figmaJson:string|null=null) { return this.db.transaction(()=>{const r=this.cas(id,baseRev),head=this.source(id,r.head_rev),nextSource=source??head.source,nextSystem=designSystem??r.design_system,rev=r.head_rev+1,at=now();this.db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,figma_json,message,created_at) VALUES (?,?,?,?,?,?,?)").run(id,rev,nextSource,nextSystem,figmaJson,message??null,at);this.db.query("UPDATE components SET head_rev=?,design_system=?,updated_at=? WHERE id=? AND deleted_at IS NULL").run(rev,nextSystem,at,id);return {rev};})(); }
+  create(id:string,name:string,source:string,designSystem:string,message?:string,figmaJson:string|null=null,ownerId:string|null=null) { return this.db.transaction(()=>{if(this.db.query("SELECT 1 FROM components WHERE id=? OR name=?").get(id,name)) throw new ApiError(409,"already_exists","Component id or name already exists"); const at=now(); this.db.query("INSERT INTO components (id,name,head_rev,design_system,deleted_at,created_at,updated_at,owner_id) VALUES (?,?,1,?,NULL,?,?,?)").run(id,name,designSystem,at,at,ownerId); this.db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,figma_json,message,created_at) VALUES (?,1,?,?,?,?,?)").run(id,source,designSystem,figmaJson,message??null,at);
+    // Правило B1 (RFC §6, триаж раунд3-BL-1): create с переданным `figma` — тоже write-путь
+    // provenance. Без seq-строки первый же source-PUT без `figma` обнулил бы её: резолвер
+    // провалился бы на пустую колонку новой ревизии. `baselineRev: 0` — «предыдущей правды» у
+    // rev 1 нет, поэтому дедуп ничего не подавляет. Всё внутри той же транзакции (раунд3-m-2).
+    if(figmaJson!==null) recordProvenance(this.db,{componentId:id,rev:1,figmaJson,author:ownerId,baselineRev:0});
+    return {id,rev:1 as const};})(); }
+  /**
+   * `provenance` присутствует ⟺ вызывающий получил поле `figma` (в т.ч. `figma: null` —
+   * явная очистка). Значение seq-строки — тот же `figmaJson`, что уходит в колонку ревизии:
+   * колонка остаётся фолбэком резолвера для исторических ревизий (RFC §6).
+   */
+  save(id:string,source:string|undefined,designSystem:string|undefined,baseRev:number,message?:string,figmaJson:string|null=null,provenance?:{author:string|null}) { return this.db.transaction(()=>{const r=this.cas(id,baseRev),head=this.source(id,r.head_rev),nextSource=source??head.source,nextSystem=designSystem??r.design_system,rev=r.head_rev+1,at=now();this.db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,figma_json,message,created_at) VALUES (?,?,?,?,?,?,?)").run(id,rev,nextSource,nextSystem,figmaJson,message??null,at);this.db.query("UPDATE components SET head_rev=?,design_system=?,updated_at=? WHERE id=? AND deleted_at IS NULL").run(rev,nextSystem,at,id);
+    // Дедуп считается относительно **предыдущей** головы: колонка только что созданной ревизии
+    // ещё не «предыдущая правда», и сравнение с ней подавило бы нужную запись у компонентов без
+    // seq-истории (правило B1/m-1).
+    if(provenance!==undefined) recordProvenance(this.db,{componentId:id,rev,figmaJson,author:provenance.author,baselineRev:r.head_rev});
+    return {rev};})(); }
   delete(id:string,baseRev:number,tombstone:{reason?:string;replacement?:string}={}) { this.db.transaction(()=>{this.cas(id,baseRev);const at=now();this.db.query("UPDATE components SET deleted_at=?,delete_reason=?,replacement_component_id=?,updated_at=? WHERE id=? AND deleted_at IS NULL").run(at,tombstone.reason?.trim()||null,tombstone.replacement??null,at,id);})(); }
   /** Надгробие или null для живого компонента. */
   tombstone(id:string):ComponentTombstone|null { const r=this.row(id,true); return r.deleted_at===null?null:{deleted:true,deletedAt:r.deleted_at,reason:r.delete_reason,replacement:r.replacement_component_id}; }
@@ -34,15 +50,21 @@ export class ComponentRepo {
       validatedRevision:latestValidatedRev(this.db,"component",id),
       publishedVersion,
       renderable:{head:headActive,published:publishedVersion!==null?true:null},
-      figma:parseFigmaStored(this.figmaJsonForRev(id,r.head_rev)),
+      figma:resolveProvenance(this.db,id,r.head_rev),
       // Надгробие приезжает только при includeDeleted (иначе row() уже бросил 404).
       ...(r.deleted_at===null?{}:{deleted:true as const,deletedAt:r.deleted_at,reason:r.delete_reason,replacement:r.replacement_component_id}),
     };
   }
-  source(id:string,rev?:number){const r=this.row(id); const n=rev??r.head_rev; const x=this.db.query("SELECT rev,source,design_system,figma_json,message,created_at FROM component_revisions WHERE component_id=? AND rev=?").get(id,n) as {rev:number;source:string;design_system:string;figma_json:string|null;message:string|null;created_at:string}|null;if(!x)throw new ApiError(404,"not_found","Component revision not found");return {rev:x.rev,source:x.source,designSystem:x.design_system,figma:parseFigmaStored(x.figma_json),message:x.message,createdAt:x.created_at};}
-  private figmaJsonForRev(id:string,rev:number):string|null{return (this.db.query("SELECT figma_json FROM component_revisions WHERE component_id=? AND rev=?").get(id,rev) as {figma_json:string|null}|null)?.figma_json??null;}
+  source(id:string,rev?:number){const r=this.row(id); const n=rev??r.head_rev; const x=this.db.query("SELECT rev,source,design_system,message,created_at FROM component_revisions WHERE component_id=? AND rev=?").get(id,n) as {rev:number;source:string;design_system:string;message:string|null;created_at:string}|null;if(!x)throw new ApiError(404,"not_found","Component revision not found");return {rev:x.rev,source:x.source,designSystem:x.design_system,figma:resolveProvenance(this.db,id,x.rev),message:x.message,createdAt:x.created_at};}
   revisions(id:string){this.row(id);return (this.db.query("SELECT rev,design_system,message,created_at FROM component_revisions WHERE component_id=? ORDER BY rev DESC").all(id) as {rev:number;design_system:string;message:string|null;created_at:string}[]).map(x=>({rev:x.rev,designSystem:x.design_system,message:x.message,createdAt:x.created_at}));}
-  restore(id:string,sourceRev:number,baseRev:number){const src=this.source(id,sourceRev);return this.save(id,src.source,src.designSystem,baseRev,`Restore revision ${sourceRev}`,this.figmaJsonForRev(id,sourceRev));}
+  /**
+   * Restore пишет **резолвнутое** provenance исходной ревизии в обе стороны — и в колонку новой
+   * ревизии, и seq-строкой (триаж раунд2-M2/раунд3-m-3). Простой перенос колонки не работает:
+   * seq-записи более поздних ревизий старше по `(rev, seq)` и затенили бы восстановленное, а
+   * запись только в seq развела бы колонку и API. Tombstone (`null`) переносится наравне со
+   * значением — иначе восстановление «пустого» состояния было бы невыразимо.
+   */
+  restore(id:string,sourceRev:number,baseRev:number,actorId:string|null=null){const src=this.source(id,sourceRev);const raw=resolveProvenanceRaw(this.db,id,sourceRev);return this.save(id,src.source,src.designSystem,baseRev,`Restore revision ${sourceRev}`,raw,{author:actorId});}
   /**
    * Ставит новую версию в `staging`.
    *
@@ -81,7 +103,9 @@ export class ComponentRepo {
   // Bundle bytes for a pinned version. Serves active|deprecated|superseded (K.3); other statuses 404 bundle_unavailable.
   bundle(id:string,version:number){const x=this.db.query("SELECT compiled_js js,bundle_hash hash,status,status_reason reason FROM component_publishes WHERE component_id=? AND version=?").get(id,version) as {js:string;hash:string;status:string;reason:string|null}|null;if(!x)throw new ApiError(404,"not_found","Component version not found");if(!RENDERABLE_STATUS.has(x.status))throw new ApiError(404,"bundle_unavailable",`Component version bundle is unavailable (status ${x.status}${x.reason?`: ${x.reason}`:""})`);return {js:x.js,hash:x.hash};}
   // Metadata of any version stays readable regardless of status (K.3).
-  version(id:string,version:number){const x=this.db.query(`SELECT p.version,p.rev,p.status,p.status_reason,p.superseded_by,p.status_rev,p.definition_meta,p.bundle_hash,p.host_abi_version,p.published_at,r.source,r.design_system,r.figma_json FROM component_publishes p JOIN component_revisions r ON r.component_id=p.component_id AND r.rev=p.rev WHERE p.component_id=? AND p.version=?`).get(id,version) as {version:number;rev:number;status:string;status_reason:string|null;superseded_by:number|null;status_rev:number;definition_meta:string;bundle_hash:string;host_abi_version:number;published_at:string;source:string;design_system:string;figma_json:string|null}|null;if(!x)throw new ApiError(404,"not_found","Component version not found");return {version:x.version,rev:x.rev,status:x.status,statusReason:x.status_reason,supersededBy:x.superseded_by,statusRev:x.status_rev,source:x.source,designSystem:x.design_system,...JSON.parse(x.definition_meta),bundleHash:x.bundle_hash,hostAbiVersion:x.host_abi_version,assets:this.assets(id,version),figma:parseFigmaStored(x.figma_json),publishedAt:x.published_at};}
+  // `figma` версии резолвится по её ревизии и потому **мутабельна** (RFC §6): иммутабельна
+  // только байтовая часть версии — `compiled_js`/`bundle_hash`/`definition_meta`.
+  version(id:string,version:number){const x=this.db.query(`SELECT p.version,p.rev,p.status,p.status_reason,p.superseded_by,p.status_rev,p.definition_meta,p.bundle_hash,p.host_abi_version,p.published_at,r.source,r.design_system FROM component_publishes p JOIN component_revisions r ON r.component_id=p.component_id AND r.rev=p.rev WHERE p.component_id=? AND p.version=?`).get(id,version) as {version:number;rev:number;status:string;status_reason:string|null;superseded_by:number|null;status_rev:number;definition_meta:string;bundle_hash:string;host_abi_version:number;published_at:string;source:string;design_system:string}|null;if(!x)throw new ApiError(404,"not_found","Component version not found");return {version:x.version,rev:x.rev,status:x.status,statusReason:x.status_reason,supersededBy:x.superseded_by,statusRev:x.status_rev,source:x.source,designSystem:x.design_system,...JSON.parse(x.definition_meta),bundleHash:x.bundle_hash,hostAbiVersion:x.host_abi_version,assets:this.assets(id,version),figma:resolveProvenance(this.db,id,x.rev),publishedAt:x.published_at};}
   // Manual status transition with CAS on status_rev (K.2). Returns the new {status,statusRev}.
   setStatus(id:string,version:number,change:StatusChange){return this.db.transaction(()=>{
     this.row(id);

@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { ApiError } from "../http";
-import { figmaSchema } from "../figma";
+import { figmaSchema, resolveProvenanceRaw } from "../figma";
 import { ComponentRepo } from "../repos/components";
 import { collectAndValidateComponentAssetRefs } from "../validation";
 import { getLatestDesignSystemContent } from "../designSystems";
@@ -231,8 +231,10 @@ export type ValidateReceipt = {
 export async function validateComponentHead(db: Database, dataDir: string, id: string, userId: string, slot: ValidateSlotOptions = {}): Promise<ValidateReceipt> {
   const repo = new ComponentRepo(db);
   const head = repo.source(id);
-  const rawFigma = (db.query("SELECT figma_json FROM component_revisions WHERE component_id=? AND rev=?").get(id, head.rev) as { figma_json: string | null }).figma_json;
-  validateStoredFigma(db, rawFigma);
+  // Источник — **сырая** форма резолвера (RFC §6, триаж раунд2-B4): parsed-обёртка вернула бы
+  // `null` на непарсящейся seq-записи, и префлайт ослеп бы ровно на той поломке, которую обязан
+  // ловить 422-й.
+  validateStoredFigma(db, resolveProvenanceRaw(db, id, head.rev));
   collectAndValidateComponentAssetRefs(db, head.source);
   const sourceHash = sha256(head.source);
   const { entry, cached } = await withValidateSlot(userId, () => getOrComputeCandidate(dataDir, id, head.rev, head.source, sourceHash), slot);

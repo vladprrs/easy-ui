@@ -83,3 +83,41 @@ test("API revisions, publishing, component bundles, and shim ABI work end to end
     expect(keys.length, `${shim} shim exports`).toBeGreaterThan(0);
   }
 });
+
+/**
+ * RFC candidate-acceptance §6 (волна R3a): `PUT /api/components/:id/provenance` правит ссылку на
+ * Figma, **не создавая ни ревизии, ни версии**, и остаётся видимой после обычного source-PUT
+ * (cross-revision резолв). Сценарий держит именно этот контракт против живого сервера.
+ */
+test("provenance PUT edits the Figma link without a new revision or version", async ({ request }) => {
+  const componentId = "api-provenance-stars";
+  const source = await readFile("server/fixtures/rating-stars.tsx", "utf8");
+  const created = await createFixtureComponent(request, api, {
+    id: componentId, name: "ApiProvenanceStars", source, designSystem: STARTER_DS_ID,
+    intent: "Collects product ratings for the provenance lifecycle scenario",
+  }, {
+    reason: "Отдельная provenance-фикстура проверяет правку Figma-ссылки без новой версии",
+    allowedCandidateKeys: [`component:${STARTER_DS_ID}:ui-rating-stars`, `component:${STARTER_DS_ID}:api-rating-stars`],
+  });
+  expect(created.status()).toBe(201);
+  expect((await request.post(`${api}/components/${componentId}/publish`, { data: { baseRev: 1 } })).status()).toBe(201);
+
+  const figma = { fileKey: "e2eProvenanceKey", nodeIds: ["10:20"] };
+  const written = await request.put(`${api}/components/${componentId}/provenance`, { data: { figma } });
+  expect(written.status()).toBe(200);
+  expect(await written.json()).toMatchObject({ rev: 1, seq: 1, unchanged: false, figma });
+
+  // Ни новой ревизии, ни новой версии — и опубликованная версия уже отдаёт новую provenance.
+  const meta = await (await request.get(`${api}/components/${componentId}`)).json() as { headRev: number; versions: unknown[]; figma: unknown };
+  expect(meta.headRev).toBe(1);
+  expect(meta.versions).toHaveLength(1);
+  expect(meta.figma).toEqual(figma);
+  expect((await (await request.get(`${api}/components/${componentId}/versions/1`)).json()).figma).toEqual(figma);
+
+  // Повтор идентичного значения дедуплицируется; обычный source-PUT без figma её наследует.
+  const repeat = await request.put(`${api}/components/${componentId}/provenance`, { data: { figma } });
+  expect(await repeat.json()).toMatchObject({ unchanged: true, seq: null });
+  const saved = await request.put(`${api}/components/${componentId}`, { data: { source: `${source}\n// provenance touch\n`, baseRev: 1 } });
+  expect(saved.status()).toBe(200);
+  expect((await (await request.get(`${api}/components/${componentId}`)).json()).figma).toEqual(figma);
+});

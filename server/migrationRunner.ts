@@ -189,6 +189,10 @@ export function currentDataFingerprint(db: Database): string {
     catalog: activeRows(db),
     components: db.query("SELECT id,name,head_rev,design_system,deleted_at,delete_reason,replacement_component_id,created_at,updated_at FROM components ORDER BY id").all(),
     componentRevisions: db.query("SELECT component_id,rev,source,design_system,message,author,created_at,figma_json FROM component_revisions ORDER BY component_id,rev").all(),
+    // Provenance-слой (миграция v27, RFC §6): мутабельное состояние компонентов, которое видит
+    // API, но которого нет в колонке ревизии — без него план каталожной миграции считался бы
+    // свежим после правки provenance.
+    componentProvenance: db.query("SELECT component_id,rev,seq,figma_json,author,created_at FROM component_provenance ORDER BY component_id,rev,seq").all(),
     componentPublishes: db.query("SELECT component_id,version,rev,status,status_reason,superseded_by,status_rev,source_hash,bundle_hash,definition_meta FROM component_publishes ORDER BY component_id,version").all(),
     componentPublishAssets: db.query("SELECT component_id,version,asset_id FROM component_publish_assets ORDER BY component_id,version,asset_id").all(),
     compositions: db.query("SELECT id,name,head_rev,design_system,deleted_at,delete_reason,created_at,updated_at FROM compositions ORDER BY id").all(),

@@ -87,8 +87,10 @@ describe("component validate preflight (P8)", () => {
     const { db, handler } = await setup();
     const source = await fixture("rating-stars.tsx");
     expect((await createStars(handler, source, { figma: FIGMA })).status).toBe(201);
-    // Write-путь отсекает лишние поля; строка с pageNodeId эмулирует импортированную/legacy ревизию.
-    db.run("UPDATE component_revisions SET figma_json=? WHERE component_id=?", [JSON.stringify({ ...FIGMA, pageNodeId: "99:1" }), "validate-stars"]);
+    // Write-путь отсекает лишние поля; строка с pageNodeId эмулирует импортированную/legacy запись.
+    // Портится **seq-строка** provenance, а не колонка ревизии: с волной R3a источник правды —
+    // резолвер (`resolveProvenanceRaw`), и колонка под seq-записью уже не видна (RFC §6).
+    db.run("UPDATE component_provenance SET figma_json=? WHERE component_id=?", [JSON.stringify({ ...FIGMA, pageNodeId: "99:1" }), "validate-stars"]);
     const response = await handler(req("/components/validate-stars/validate", "POST"));
     expect(response.status).toBe(422);
     const body = await response.json() as { error: { code: string; issues: unknown[] } };

@@ -40,7 +40,7 @@ Read-only ответы (capabilities, каталог, версии, case-set'ы,
 Два харнеса:
 
 - **`driver.mjs`** — основной CLI: каталог, компоненты, прототипы, снапы, публикация. Полный справочник по механике (грамматика документа, директивы, версии, troubleshooting) — **`reference/easy-ui-authoring.md`**; здесь он не дублируется. Прочитай его перед началом.
-- **`api.mjs`** — то, чего нет в driver: `get <path>`, `send <METHOD> <path> <body.json>`, `upload <file>` (ассеты), `theme <dsId> <theme.json>` (PATCH темы с авто-CAS), `figma <componentId> <figma.json>` (ретроактивное прикрепление provenance; в обычном цикле используй `driver.mjs component --figma`).
+- **`api.mjs`** — то, чего нет в driver: `get <path>`, `send <METHOD> <path> <body.json>`, `upload <file>` (ассеты), `theme <dsId> <theme.json>` (PATCH темы с авто-CAS), `figma <componentId> <figma.json>` (легаси-путь ретроактивного прикрепления provenance через PUT + re-publish; в обычном цикле используй `driver.mjs provenance`, а при создании — `driver.mjs component --figma`).
 
 **Логин**: auth-клиент кэширует сессию на диске между вызовами (`$XDG_STATE_HOME/easyui`, TTL 24 ч; `EASYUI_SESSION_FILE` переопределяет путь, `EASYUI_SESSION_CACHE=0` выключает) — в норме логин один на серию. Лимит — 5 логинов на аккаунт в минуту: при `HTTP 429 rate_limited` проверь, не выключен ли кэш, подожди минуту и повтори.
 
@@ -166,7 +166,7 @@ node driver.mjs component pay-button PayButton pay-button.tsx \
   --figma pay-button.figma.json
 ```
 
-**`--figma` — при каждом вызове `component`**: `figma_json` живёт на ревизии и не наследуется — update или `component-move` без флага молча обнуляют provenance head. Держи `<id>.figma.json` рядом с TSX и передавай всегда. `api.mjs figma` остаётся только для ретроактивного прикрепления к уже опубликованному компоненту без правки source (он делает PUT + re-publish — лишняя версия). Лимиты ассетов: 5 MiB и 16 Mpx на файл.
+**`--figma` опционален**: provenance **наследуется** между ревизиями (резолв при чтении), поэтому update или `component-move` без флага её не обнуляют — флаг нужен ровно для того, чтобы задать ссылку одним вызовом при создании. Смена или очистка — верб `node driver.mjs provenance <componentId> <figma.json|null> [--rev N]`: без новой ревизии и без новой версии (`features.acceptanceProvenance`; `null` — явный tombstone). `api.mjs figma` — легаси-путь ретроактивного прикрепления через PUT + re-publish (лишняя версия), предпочитай верб `provenance`. Лимиты ассетов: 5 MiB и 16 Mpx на файл.
 
 Save проверяет синтаксис, **тип-ошибки ловит publish** (вывод tsc в ответе) — но ловить их publish'ем больше не нужно: перед публикацией прогоняй **validate-префлайт головы** (W2), он гоняет publish-набор проверок без создания версии и без изменения публичного состояния:
 
@@ -326,7 +326,7 @@ node driver.mjs accept-status acc_… --evidence run.zip           # верди�
 - [ ] компонент с несколькими вариантами: опубликован `case-set` по Figma-матрице (эталон и `dims` на каждую ячейку, `coverage` без `missingTuples`) и есть терминальный `accept`-ран `pass`/`pass_with_exceptions` по нему; `indeterminate`-случаи разобраны (readiness/габариты), а не списаны; runId и `caseSetId` — в `REPORT.md`, и они же переданы в `promote` (`candidateId`/`acceptanceRunId`);
 - [ ] интерактив: typed events объявлены и `emit` работает (проверь в плеере `?debug=1`);
 - [ ] definition: честный `atomicLevel`, продуктовый `description`, `examples`, при согласованной роли — `canonicalFor`;
-- [ ] Figma-provenance прикреплён (`--figma` при каждом вызове `component`), эталонные PNG в реестре ассетов;
+- [ ] Figma-provenance прикреплён (`--figma` при создании либо верб `provenance`; между ревизиями наследуется), эталонные PNG в реестре ассетов;
 - [ ] запись в `BUILD_ORDER.md`/`REPORT.md`.
 
 ## 6. Phase 2 — молекулы и организмы

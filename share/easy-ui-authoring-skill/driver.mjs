@@ -18,7 +18,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -128,7 +128,7 @@ export const flagSpecs = Object.freeze({
     "--intent": { value: true, key: "intent" },
     "--force-new": { value: false, key: "forceNew" },
     "--reason": { value: true, key: "reason" },
-    // Provenance не наследуется ревизией: файл передаётся при каждом вызове (план §T2, M8).
+    // Опционально: provenance наследуется между ревизиями (R3a), смена/очистка — верб `provenance`.
     "--figma": { value: true, key: "figma" },
   },
   "component-move": { ...jsonFlag, "--design-system": { value: true, key: "designSystem" } },
@@ -170,6 +170,19 @@ export const flagSpecs = Object.freeze({
     "--supersede": { value: true, key: "supersede", enum: ["auto", "none"] },
     "--strict-catalog": { value: false, key: "strictCatalog" },
     "--message": { value: true, key: "message" },
+  },
+  // RFC candidate-acceptance R3a: правка provenance без новой ревизии и версии.
+  provenance: {
+    ...jsonFlag,
+    "--rev": {
+      value: true,
+      key: "rev",
+      parse(value) {
+        const number = Number(value);
+        if (!Number.isInteger(number) || number < 1) invalid("--rev must be a positive integer");
+        return number;
+      },
+    },
   },
   // План 2026-08-03 §5 W1c: матричная приёмка семейства одной командой (кандидат → ран → poll).
   // План 2026-08-03 §5 W2: публикация и чтение case-set-манифеста семейства.
@@ -268,6 +281,8 @@ const ranges = Object.freeze({
   publish: [1, 1],
   usages: [1, 1],
   promote: [1, 1],
+  // `provenance <componentId> <figma.json>`; литерал `null` вместо файла — явная очистка.
+  provenance: [2, 2],
   accept: [1, 1],
   "accept-status": [1, 1],
   impact: [1, 1],
@@ -1773,6 +1788,32 @@ async function runAudit(flags) {
  * ушла), `source_hash_mismatch` (голова изменилась между validate и promote),
  * `already_published` (у ревизии уже есть версия), reuse-STOP'ы гейта каноничной роли.
  */
+/**
+ * `provenance <componentId> <figma.json|null> [--rev N]` (RFC candidate-acceptance §6, R3a) —
+ * правка ссылки на Figma **без** новой ревизии и без новой версии. `null` вместо пути к файлу —
+ * явная очистка (сервер пишет tombstone). Повтор идентичного значения дедуплицируется и
+ * отвечает `unchanged: true`.
+ */
+async function runProvenance(args, flags) {
+  const [id, figmaPath] = args;
+  const capabilities = await requireOk("capabilities", await call("GET", "/capabilities"));
+  if (capabilities.features?.acceptanceProvenance !== true) {
+    throw new CliError("server does not support the provenance handle (features.acceptanceProvenance is off); upgrade the server or send --figma with 'driver.mjs component ...'");
+  }
+  const figma = figmaPath === "null" ? null : await readFigmaProvenance(figmaPath);
+  const response = await call("PUT", `/components/${encodeURIComponent(id)}/provenance`, {
+    ...(flags.rev === undefined ? {} : { rev: flags.rev }),
+    figma,
+  });
+  const result = await requireOk("provenance", response);
+  report(
+    result.unchanged
+      ? `provenance ${id} rev ${result.rev} unchanged`
+      : `provenance ${id} rev ${result.rev} seq ${result.seq}`,
+    { command: "provenance", id, ...result },
+  );
+}
+
 async function runPromote(args, flags) {
   const [id] = args;
   const encoded = encodeURIComponent(id);
@@ -2403,6 +2444,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (cmd === "publish") await runPublish(args, flags);
   else if (cmd === "usages") await runUsages(args, flags);
   else if (cmd === "promote") await runPromote(args, flags);
+  else if (cmd === "provenance") await runProvenance(args, flags);
   else if (cmd === "accept") await runAccept(args, flags);
   else if (cmd === "accept-status") await runAcceptStatus(args, flags);
   else if (cmd === "impact") await runImpact(args, flags);

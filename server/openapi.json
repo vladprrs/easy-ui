@@ -2546,6 +2546,34 @@
                       },
                       "type": "array"
                     },
+                    "provenance": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "componentId": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "revs": {
+                            "items": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "componentId",
+                          "name",
+                          "revs"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "visualReferences": {
                       "items": {
                         "additionalProperties": false,
@@ -2599,7 +2627,8 @@
                     "prototypes",
                     "components",
                     "visualReferences",
-                    "visualRuns"
+                    "visualRuns",
+                    "provenance"
                   ],
                   "type": "object"
                 }
@@ -2628,7 +2657,7 @@
             "description": "validation_failed"
           }
         },
-        "summary": "List every hard pin retaining an asset, including tombstoned visual references and visual-run roles.",
+        "summary": "List every hard pin retaining an asset, including tombstoned visual references, visual-run roles and the component provenance revisions that reference it as a Figma reference screenshot.",
         "x-easyui-validated": true
       }
     },
@@ -3115,6 +3144,9 @@
                         "acceptancePromote": {
                           "type": "boolean"
                         },
+                        "acceptanceProvenance": {
+                          "type": "boolean"
+                        },
                         "acceptanceRuns": {
                           "type": "boolean"
                         },
@@ -3243,7 +3275,8 @@
                         "compositionV3",
                         "acceptanceMatrix",
                         "acceptanceCandidates",
-                        "acceptanceRuns"
+                        "acceptanceRuns",
+                        "acceptanceProvenance"
                       ],
                       "type": "object"
                     },
@@ -9787,6 +9820,241 @@
           }
         },
         "summary": "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate under the same policy profile (422 acceptance_run_mismatch) with a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`.",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/components/{id}/provenance": {
+      "put": {
+        "operationId": "put_components_id_provenance",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$defs": {
+                  "__schema0": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9:._-]+$",
+                    "type": "string"
+                  },
+                  "__schema1": {
+                    "pattern": "^asset_[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "properties": {
+                  "figma": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "fileKey": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9_-]+$",
+                            "type": "string"
+                          },
+                          "lastSyncedAt": {
+                            "maxLength": 40,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "nodeIds": {
+                            "items": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "maxItems": 50,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "referenceScreenshots": {
+                            "items": {
+                              "$ref": "#/$defs/__schema1"
+                            },
+                            "maxItems": 50,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "fileKey",
+                          "nodeIds"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "rev": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "figma"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$defs": {
+                    "__schema0": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9:._-]+$",
+                      "type": "string"
+                    },
+                    "__schema1": {
+                      "pattern": "^asset_[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": {},
+                  "properties": {
+                    "figma": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fileKey": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9_-]+$",
+                              "type": "string"
+                            },
+                            "lastSyncedAt": {
+                              "maxLength": 40,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "nodeIds": {
+                              "items": {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              "maxItems": 50,
+                              "minItems": 1,
+                              "type": "array"
+                            },
+                            "referenceScreenshots": {
+                              "items": {
+                                "$ref": "#/$defs/__schema1"
+                              },
+                              "maxItems": 50,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "fileKey",
+                            "nodeIds"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rev": {
+                      "type": "number"
+                    },
+                    "seq": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "unchanged": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "rev",
+                    "seq",
+                    "unchanged",
+                    "figma"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden (only the component owner or an admin may edit provenance)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "not_found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "method_not_allowed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "validation_failed | asset_not_found"
+          }
+        },
+        "summary": "Update the Figma provenance of a revision WITHOUT creating a revision or a version: appends a seq row to the append-only component_provenance history of `rev` (head by default). `figma: null` writes an explicit tombstone (clears provenance) instead of deleting rows; an unchanged value is deduplicated and answers {unchanged:true, seq:null}. Reads resolve cross-revision (the latest (rev,seq) row among revisions <= rev, otherwise the revision column), so a later source PUT inherits the provenance. The provenance of a PUBLISHED version is deliberately mutable through this handle — only the byte part of a version (compiled_js/bundle_hash/definition_meta) is immutable. Owner or admin only; share/capture principals are always 403.",
         "x-easyui-validated": false
       }
     },

@@ -683,15 +683,37 @@ describe("author driver figma provenance", () => {
     expect(JSON.parse(updated.stdout)).toMatchObject({ version: 2, figma: true });
     expect(await headFigma(api, "driver-figma-card")).toEqual(provenance);
 
-    // Осознанная фиксация серверной семантики: figma_json не наследуется ревизией, поэтому
-    // update без --figma обнуляет provenance на head. Операционное правило плана §T2 (M8) —
-    // передавать --figma при каждом вызове `component`; серверное наследование вне скоупа.
+    // С волной R3a (RFC candidate-acceptance §6) семантика противоположна прежней: provenance
+    // резолвится cross-revision, поэтому update **без** `--figma` её больше не обнуляет —
+    // наследование обеспечивает резолвер. Операционное правило M8 (слать `--figma` каждый раз)
+    // остаётся в силе как канон, но перестало быть страховкой от потери ссылки.
     const droppedSource = await writeComponentSource(directory, "DriverFigmaCard", "Card rebuilt from a Figma frame", "figma-dropped");
     const dropped = await run(api, ["component", "driver-figma-card", "DriverFigmaCard", droppedSource, "--design-system", "yandex-pay", "--json"]);
     expect(dropped.exitCode).toBe(0);
     expect(JSON.parse(dropped.stdout).figma).toBeUndefined();
-    expect(await headFigma(api, "driver-figma-card")).toBeNull();
+    expect(await headFigma(api, "driver-figma-card")).toEqual(provenance);
   }, 30_000); // три публикации подряд: каждая платит extract+typecheck в подпроцессе
+
+  test("the provenance verb edits the link without creating a revision or a version", async () => {
+    const { api, directory } = await setup();
+    const createSource = await writeComponentSource(directory, "DriverProvCard", "Card whose provenance is edited alone", "prov-verb");
+    const created = await run(api, ["component", "driver-prov-card", "DriverProvCard", createSource, "--design-system", "yandex-pay", "--intent", "Edit the Figma link of a published card", "--json"]);
+    expect(created.exitCode).toBe(0);
+
+    const figmaPath = await writeFigma(directory, "prov.json", provenance);
+    const written = await run(api, ["provenance", "driver-prov-card", figmaPath, "--json"]);
+    expect(written.exitCode).toBe(0);
+    expect(JSON.parse(written.stdout)).toMatchObject({ command: "provenance", id: "driver-prov-card", rev: 1, seq: 1, unchanged: false });
+    expect(await headFigma(api, "driver-prov-card")).toEqual(provenance);
+
+    // Повтор идентичного значения дедуплицируется, ревизия остаётся прежней.
+    const repeat = await run(api, ["provenance", "driver-prov-card", figmaPath, "--json"]);
+    expect(repeat.exitCode).toBe(0);
+    expect(JSON.parse(repeat.stdout)).toMatchObject({ unchanged: true, seq: null });
+    const meta = await (await fetch(`${api}/components/driver-prov-card`)).json() as { headRev: number; versions: unknown[] };
+    expect(meta.headRev).toBe(1);
+    expect(meta.versions).toHaveLength(1);
+  }, 30_000);
 
   test("a missing or non-JSON --figma file is an argument error before any request", async () => {
     const { api, directory, requests } = await setup();

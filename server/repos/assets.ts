@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { ApiError } from "../http";
 import { MAX_ASSET_BYTES, validateAsset } from "../assets/validate";
+import { provenanceAssetUsage } from "../figma";
 import type { Principal } from "../auth";
 
 export type AssetRow = {
@@ -36,6 +37,14 @@ export type AssetUsage = {
   components: { id: string; name: string; versions: number[] }[];
   visualReferences: { id: string; deleted: boolean }[];
   visualRuns: { id: string; referenceId: string; role: "reference" | "candidate" | "diff" }[];
+  /**
+   * Ссылки из append-only provenance компонентов (`referenceScreenshots` seq-записей),
+   * RFC candidate-acceptance §6/R3a. Секция существует ради
+   * **видимости**: без неё эталонный скриншот, на который ссылается только seq-запись, выглядел
+   * бы в отчёте неиспользуемым. FK от provenance к ассетам нет и RESTRICT здесь не при чём —
+   * DELETE-роута у ассетов не существует.
+   */
+  provenance: { componentId: string; name: string; revs: number[] }[];
 };
 
 const toPublic = (row: AssetRow): AssetPublic => ({
@@ -129,9 +138,14 @@ export class AssetRepo {
       `).all(id, id, id) as (AssetUsage["visualRuns"][number]&{json:string})[];
     if(principal){const visible=this.visiblePrototypeIds(principal);const ok=(json:string)=>{try{const fp=JSON.parse(json) as {scope?:string;prototypeId?:string};return fp.scope==="component"||!!fp.prototypeId&&visible.has(fp.prototypeId);}catch{return false;}};visualReferencesRaw=visualReferencesRaw.filter(x=>ok(x.json));visualRuns=visualRuns.filter(x=>ok((x as typeof x&{json:string}).json));}
 
+    // Секция provenance живёт в резолвере (`server/figma.ts`): он — единственный легальный
+    // читатель хранимой provenance, и скрипт-гейт `npm run verify:provenance` держит инвариант.
+    const provenance = provenanceAssetUsage(this.db, id);
+
     return {
       asset,
       prototypes: prototypes.map((row) => ({ ...row, pinnedAtHead: row.pinnedAtHead === 1 })),
+      provenance,
       components,
       visualReferences: visualReferencesRaw.map((row) => ({ id: row.id, deleted: row.deleted === 1 })),
       visualRuns: visualRuns.map(({id,referenceId,role})=>({id,referenceId,role})).sort((a,b)=>a.id.localeCompare(b.id)||a.role.localeCompare(b.role)),

@@ -273,7 +273,7 @@ export const listAssetsContract = registerContract({
 export const assetUsageContract = registerContract({
   method: "GET",
   path: "/api/assets/{id}/usage",
-  summary: "List every hard pin retaining an asset, including tombstoned visual references and visual-run roles.",
+  summary: "List every hard pin retaining an asset, including tombstoned visual references, visual-run roles and the component provenance revisions that reference it as a Figma reference screenshot.",
   params: z.strictObject({ id: assetIdString }),
   validated: true,
   responseSchema: z.strictObject({
@@ -284,6 +284,8 @@ export const assetUsageContract = registerContract({
     components: z.array(z.strictObject({ id: z.string(), name: z.string(), versions: z.array(z.number().int().positive()) })),
     visualReferences: z.array(z.strictObject({ id: z.string(), deleted: z.boolean() })),
     visualRuns: z.array(z.strictObject({ id: z.string(), referenceId: z.string(), role: z.enum(["reference", "candidate", "diff"]) })),
+    /** RFC candidate-acceptance §6 (R3a): ссылки из append-only provenance компонентов. */
+    provenance: z.array(z.strictObject({ componentId: z.string(), name: z.string(), revs: z.array(z.number().int().positive()) })),
   }),
   errors: [{ status: 404, code: "asset_not_found" }, { status: 422, code: "validation_failed" }],
 });
@@ -1242,6 +1244,19 @@ export const restoreComponentContract = registerContract({
   requestSchema: z.object({ rev: positiveInt, ...casBody }),
   responseSchema: z.looseObject({ rev: z.number() }),
   errors: [errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound, errorCatalog.revConflict],
+});
+
+/**
+ * RFC candidate-acceptance-pipeline §6 (волна R3a): provenance отвязана от runtime-версий.
+ * Правка ссылки на Figma больше не требует ни новой ревизии, ни metadata-only версии — она
+ * добавляет seq-строку в append-only `component_provenance`, а чтение резолвится cross-revision.
+ */
+export const putComponentProvenanceContract = registerContract({
+  method: "PUT", path: "/api/components/{id}/provenance",
+  summary: "Update the Figma provenance of a revision WITHOUT creating a revision or a version: appends a seq row to the append-only component_provenance history of `rev` (head by default). `figma: null` writes an explicit tombstone (clears provenance) instead of deleting rows; an unchanged value is deduplicated and answers {unchanged:true, seq:null}. Reads resolve cross-revision (the latest (rev,seq) row among revisions <= rev, otherwise the revision column), so a later source PUT inherits the provenance. The provenance of a PUBLISHED version is deliberately mutable through this handle — only the byte part of a version (compiled_js/bundle_hash/definition_meta) is immutable. Owner or admin only; share/capture principals are always 403.",
+  requestSchema: z.strictObject({ rev: positiveInt.optional(), figma: figmaSchema.nullable() }),
+  responseSchema: z.looseObject({ rev: z.number(), seq: z.number().nullable(), unchanged: z.boolean(), figma: figmaResponseSchema }),
+  errors: [errorCatalog.invalidRequest, errorCatalog.notFound, errorCatalog.methodNotAllowed, errorCatalog.validationFailed, { status: 403, code: "forbidden", description: "only the component owner or an admin may edit provenance" }, { status: 422, code: "asset_not_found" }],
 });
 
 export const publishComponentContract = registerContract({
@@ -2503,6 +2518,8 @@ export const capabilitiesResponseSchema = z.object({
      * (включая ссылки `candidateId`/`acceptanceRunId` в promote). Все false — ручек нет (404).
      */
     acceptanceMatrix: z.boolean(), acceptanceCandidates: z.boolean(), acceptanceRuns: z.boolean(),
+    /** `PUT /api/components/:id/provenance` — правка Figma-ссылки без ревизии и версии (RFC R3a); kill-switch'а нет. */
+    acceptanceProvenance: z.boolean(),
   }),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`

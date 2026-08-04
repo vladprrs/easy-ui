@@ -17,7 +17,8 @@ export const RETIRED_DESIGN_SYSTEM_TRIGGER_NAMES = [
   "composition_revisions_reject_retired_design_system_update",
 ] as const;
 
-const migrations = [
+/** Экспортируется ради тестов миграций (backfill R3a прогоняется на «старой» БД до v27). */
+export const migrations = [
   (db: Database) => {
     db.run(`CREATE TABLE prototypes (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
@@ -783,6 +784,55 @@ const migrations = [
       created_by TEXT NOT NULL,
       created_at TEXT NOT NULL)`);
     db.run("CREATE INDEX component_case_sets_component ON component_case_sets (component_id, created_at)");
+  },
+  (db: Database) => {
+    // v27: provenance-слой компонентов + надгробия решений по кандидатам
+    // (RFC candidate-acceptance §3.2а/§6/§8, волна R3a). Номер — следующий свободный на момент
+    // посадки (§8, триаж раунд2-m2); обе таблицы и backfill — **одна** миграция, потому что они
+    // садятся одной волной и должны быть атомарны относительно отката образа.
+    //
+    // 1. `component_provenance` — append-only история ссылок на Figma, отвязанная от ревизий и
+    //    версий: правка provenance больше не требует ни новой ревизии, ни metadata-only версии
+    //    (§3.5 improvements: ButtonGroup v2↔v3, Timer v2↔v3). Резолв — cross-revision, последняя
+    //    запись по `(rev, seq)` среди `rev' ≤ rev` (`server/figma.ts:resolveProvenanceRaw`).
+    //    Строка с `figma_json IS NULL` — **tombstone** (явная очистка), а не «нет записи».
+    //    Колонка `component_revisions.figma_json` продолжает заполняться write-путями и остаётся
+    //    фолбэком для исторических ревизий, у которых seq-записей нет.
+    // 2. `candidate_decisions` — append-only надгробия отклонений кандидатов (§3.2а). Таблица
+    //    заводится здесь, чтобы не расширять CHECK-enum `component_candidates.status`
+    //    (в SQLite это перестройка таблицы, которую §8 обещает не делать). Ручка reject,
+    //    предикат promote и правка свипера — **волна R3b**, эта миграция только даёт им схему.
+    //    FK `ON DELETE CASCADE` держит целостность на путях удаления кандидата; partial unique
+    //    index — арбитр гонки двойного reject (`SQLITE_CONSTRAINT` → `409 candidate_already_rejected`).
+    // 3. Backfill (§6, триаж раунд2-B2): наследования provenance в `repo.save` нет вовсе
+    //    (`figma_json` по умолчанию `null`), поэтому у компонентов без seq-записей первый же
+    //    source-PUT без `figma` обнулил бы provenance головы — резолвер провалился бы на пустую
+    //    колонку новой ревизии. Один `INSERT … SELECT` по head-ревизиям с непустым `figma_json`
+    //    закрывает это forward-only и идемпотентно относительно PK.
+    db.run(`CREATE TABLE component_provenance (
+      component_id TEXT NOT NULL,
+      rev INTEGER NOT NULL,
+      seq INTEGER NOT NULL,
+      figma_json TEXT,
+      author TEXT,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (component_id, rev, seq))`);
+    db.run("CREATE INDEX component_provenance_lookup ON component_provenance (component_id, rev DESC, seq DESC)");
+
+    db.run(`CREATE TABLE candidate_decisions (
+      candidate_id TEXT NOT NULL REFERENCES component_candidates(candidate_id) ON DELETE CASCADE,
+      decision TEXT NOT NULL CHECK(decision IN ('rejected')),
+      reason TEXT,
+      actor TEXT,
+      created_at TEXT NOT NULL)`);
+    db.run("CREATE UNIQUE INDEX candidate_decisions_one_rejected ON candidate_decisions (candidate_id) WHERE decision='rejected'");
+    db.run("CREATE INDEX candidate_decisions_candidate ON candidate_decisions (candidate_id)");
+
+    db.query(`INSERT INTO component_provenance (component_id,rev,seq,figma_json,author,created_at)
+      SELECT r.component_id, r.rev, 1, r.figma_json, ?, ?
+      FROM component_revisions r
+      JOIN components c ON c.id=r.component_id AND c.head_rev=r.rev
+      WHERE r.figma_json IS NOT NULL`).run("migration:component_provenance", new Date().toISOString());
   },
 ] as const;
 

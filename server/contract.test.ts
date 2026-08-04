@@ -252,6 +252,9 @@ function orderedCases(): [string, Case][] {
     ["GET /api/components/{id}/revisions", { run: () => call("GET", "/api/components/contract-stars/revisions"), expected: ok() }],
     ["GET /api/components/{id}/revisions/{rev}", { run: () => call("GET", "/api/components/contract-stars/revisions/1"), expected: ok() }],
     ["POST /api/components/{id}/restore", { run: () => call("POST", "/api/components/contract-stars/restore", { rev: 1, baseRev: 2 }), expected: ok() }],
+    // Provenance (RFC candidate-acceptance §6, R3a): ручка не создаёт ни ревизии, ни версии,
+    // поэтому happy path дёшев и покрывается прямо здесь.
+    ["PUT /api/components/{id}/provenance", { run: () => call("PUT", "/api/components/contract-stars/provenance", { figma: { fileKey: "contractKey", nodeIds: ["1:2"] } }), expected: ok() }],
     ["POST /api/components/{id}/publish", { run: () => call("POST", "/api/components/contract-stars/publish", { baseRev: 999 }), expected: err(409, "revision_conflict") }],
     // Promote (RFC candidate-acceptance R1) — happy path саги покрыт в component-promote.test.ts
     // (там же kill-switch и auto-supersede); здесь — CAS-конверт 409.
@@ -716,6 +719,8 @@ describe("route contracts", () => {
       themeSparseOps: true,
       themeSpacingResolverV2: true,
       acceptancePromote: true,
+      // R3a: ручка provenance доступна всегда — kill-switch'а у неё нет намеренно.
+      acceptanceProvenance: true,
       // Контракт-тест поднимает handler с оркестратором приёмки (иначе acceptance-роуты
       // не покрыть), поэтому матрица тут включена — на проде это `EASYUI_ACCEPTANCE_MATRIX`.
       acceptanceMatrix: true,

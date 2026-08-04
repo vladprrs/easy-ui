@@ -244,7 +244,17 @@ node driver.mjs component rating-stars RatingStars examples/rating-stars.tsx \
 # published rating-stars version 1 in yandex-pay
 ```
 
-`--figma` кладёт provenance той же ревизией, что и source. Поле живёт **на ревизии** и не наследуется: update или `component-move` без `--figma` обнуляют provenance head — храни `figma.json` рядом с TSX и передавай флаг при каждом вызове.
+`--figma` кладёт provenance одним вызовом вместе с source и **опционален**: provenance **наследуется** между ревизиями (резолв при чтении по последней записи среди ревизий `≤ rev`), поэтому update или `component-move` без флага её больше не обнуляют. Слать флаг при каждом вызове не нужно — он нужен ровно там, где ссылку задают сразу при создании.
+
+Смена или очистка ссылки — отдельный верб, **без** новой ревизии и версии:
+
+```bash
+node driver.mjs provenance rating-stars figma.json            # provenance головы
+node driver.mjs provenance rating-stars figma.json --rev 7    # provenance конкретной ревизии
+node driver.mjs provenance rating-stars null                  # явная очистка (tombstone)
+```
+
+Требует `features.acceptanceProvenance` в `/api/capabilities` (на старом сервере верб падает читаемо, `--figma` продолжает работать). Повтор идентичного значения дедуплицируется (`unchanged: true`). Provenance опубликованной версии сознательно мутабельна: `--rev` опубликованной ревизии меняет то, что отдаёт `GET /api/components/:id/versions/:v`; иммутабельна только байтовая часть версии. Доступ — владелец компонента или админ (`share`/`capture` — 403).
 
 Систему для компонента выбирает `--design-system`, затем `EASYUI_DESIGN_SYSTEM`; для создания она обязательна, при обновлении сохраняется текущая. Имя — уникальное `^[A-Z][A-Za-z0-9]*$`, после создания неизменно. Драйвер делает save + publish за один вызов. Save проверяет только синтаксис и контракт; **тип-ошибки ловит publish** — в ответе вывод tsc.
 
@@ -334,7 +344,7 @@ node driver.mjs preview rating-stars --rev head-draft      # сохранённ�
 
 `props.json` (JSON-объект props) и `--example` взаимоисключающи. PNG — content-hug: воркер снимает сам элемент, а не вьюпорт. По умолчанию файл пишется в `author-shots/<id>/<id>-v<version>[-<example|props-файл>].png` (драфт: `…-draft-r<rev>[-…].png`), `--out` задаёт путь явно. Вывод всегда сообщает, что отрендерено: `preview <id> v<N>` / `preview <id> draft rev <N> bundleHash=… designSystemMetaVersion=… viewport=… dsf=… theme=…` (в `--json` те же поля). Exit-коды — как у `snap` (0 — PNG, 2 — PNG с product-ошибками, 1 — нет PNG).
 
-Ограничения: published-режим работает **только по published-версии**; драфт-режим published-версии не требует, но идёт под троттлингом validate-префлайта (сборка candidate-bundle при холодном кэше; 429 `validate_in_flight` — повтор после завершения чужого прогона) и проверяет asset-refs драфта (422 `asset_not_found` до сборки); kill-switch `EASYUI_VALIDATE_DISABLED=1` гасит драфт-превью (published-режим работает). Цикл итерации без публикаций (W2): save ревизии через `PUT /api/components/:id` (verb `component` делает save+publish за вызов) → `preview --rev head-draft`; publish — один раз по итогам (повторный `component` с неизменными source+`--figma`: PUT отвечает no-op `unchanged`, и драйвер публикует голову). `--theme` — только light/dark, **версия темы не пинуется** (берётся последняя, фактическая — в `designSystemMetaVersion` вывода); viewport 64..2000 × 64..4000 и `width × height × dsf² ≤ 20 000 000` (при `--dsf 3` потолок ~2,2 Mpx); очередь скриншотов concurrency 1, cap 5 — при `429 queue_full` драйвер ретраит с бэкоффом (до 5 попыток, счётчик `queueRetries` в `--json`).
+Ограничения: published-режим работает **только по published-версии**; драфт-режим published-версии не требует, но идёт под троттлингом validate-префлайта (сборка candidate-bundle при холодном кэше; 429 `validate_in_flight` — повтор после завершения чужого прогона) и проверяет asset-refs драфта (422 `asset_not_found` до сборки); kill-switch `EASYUI_VALIDATE_DISABLED=1` гасит драфт-превью (published-режим работает). Цикл итерации без публикаций (W2): save ревизии через `PUT /api/components/:id` (verb `component` делает save+publish за вызов) → `preview --rev head-draft`; publish — один раз по итогам (повторный `component` с неизменным source, `--figma` передавать не нужно: PUT отвечает no-op `unchanged`, и драйвер публикует голову). `--theme` — только light/dark, **версия темы не пинуется** (берётся последняя, фактическая — в `designSystemMetaVersion` вывода); viewport 64..2000 × 64..4000 и `width × height × dsf² ≤ 20 000 000` (при `--dsf 3` потолок ~2,2 Mpx); очередь скриншотов concurrency 1, cap 5 — при `429 queue_full` драйвер ретраит с бэкоффом (до 5 попыток, счётчик `queueRetries` в `--json`).
 
 ### Числовая приёмка геометрии: `expect`
 

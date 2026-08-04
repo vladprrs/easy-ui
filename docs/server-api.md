@@ -345,7 +345,8 @@ Meta-ответы прототипов и компонентов additively не
 | `GET /components/:id/draft` | Alias текущего source DTO |
 | `GET /components/:id/revisions` | `{rev,designSystem,message:string|null,createdAt}[]` |
 | `GET /components/:id/revisions/:rev` | `{rev,source,designSystem,message:string|null,createdAt}` |
-| `POST /components/:id/restore` | `{rev,baseRev}` → `{rev}` |
+| `POST /components/:id/restore` | `{rev,baseRev}` → `{rev}`; переносит резолвнутую provenance исходной ревизии (включая tombstone) |
+| `PUT /components/:id/provenance` | `{rev?,figma}` → `{rev,seq,unchanged,figma}`; правка Figma-ссылки **без** новой ревизии и версии, см. [Provenance компонентов](#provenance-компонентов-без-новых-версий) |
 | `POST /components/:id/validate` | Тело не читается → 200 receipt префлайта head-ревизии; см. [Validate-префлайт](#validate-префлайт-публикации) |
 | `POST /components/:id/publish` | `{message?,baseRev,reuseOverride?}` → 201 `{version,hostAbiVersion,warnings}` и `Location`; `reuseOverride` — только для администратора (`403 admin_required`), конфликты роли — терминальные `409 catalog_changed\|canonical_role_conflict` |
 | `POST /components/:id/promote` | `{baseRev,sourceHash,expectedCatalogRevision?,supersede?,reuseOverride?,message?}` → 201 `{version,rev,hostAbiVersion,sourceHash,bundleHash,themeVersion,catalogRevision,superseded[],cached,warnings}` и `Location`; см. [Promote](#promote-приёмка-провалидированной-головы) |
@@ -816,12 +817,12 @@ assets/<sha256>                        # сырые байты, имя = sha256 
 
 ## Figma provenance
 
-Ссылка на исходный Figma-файл — **immutable-свойство ревизии**: колонка `figma_json TEXT NULL` в `prototype_revisions` и `component_revisions` (миграция v9, два additive `ALTER`). Поле `figma` принимается опционально рядом с `doc`/`source`:
+Ссылка на исходный Figma-файл принимается опционально рядом с `doc`/`source`. У **прототипов** она остаётся immutable-свойством ревизии (колонка `figma_json TEXT NULL` в `prototype_revisions`, миграция v9). У **компонентов** с миграции v27 provenance отвязана от ревизий и версий — см. [Provenance компонентов](#provenance-компонентов-без-новых-версий) ниже; колонка `component_revisions.figma_json` продолжает заполняться write-путями и служит фолбэком резолва для исторических ревизий.
 
 - Прототипы: `POST /prototypes` и `PUT /prototypes/:id` — `{doc, message?, figma?}`.
 - Компоненты: `POST /components` (`{id,name,source,…,figma?}`) и `PUT /components/:id` (`{source?,designSystem?,figma?,baseRev}`; допускается изменение **только** `figma` — создаётся новая ревизия с прежним source).
 
-**No-op figma-only PUT.** Повторная публикация неизменённого head невозможна и так (`409 already_published`), а сохранение байт-идентичного source — `400`. Оставалась одна дыра: PUT с `figma` создавал ревизию, даже когда и source, и `figma` совпадали с head. Теперь такой запрос ревизию не создаёт и отвечает `200 {unchanged:true, rev:<headRev>}` — `rev` присутствует всегда, поэтому старые клиенты, читающие только его, продолжают работать. Изменившаяся `figma` (включая явный `figma: null` при непустой provenance головы) по-прежнему создаёт ревизию: provenance — свойство ревизии, отвязка его от ревизий в контракт не входит.
+**No-op figma-only PUT.** Повторная публикация неизменённого head невозможна и так (`409 already_published`), а сохранение байт-идентичного source — `400`. Оставалась одна дыра: PUT с `figma` создавал ревизию, даже когда и source, и `figma` совпадали с head. Теперь такой запрос ревизию не создаёт и отвечает `200 {unchanged:true, rev:<headRev>}` — `rev` присутствует всегда, поэтому старые клиенты, читающие только его, продолжают работать. Предмет сравнения у компонентов — **резолвнутая** provenance головы (не сырая колонка ревизии), у прототипов — по-прежнему колонка.
 
 **Строгая схема** (`z.strictObject`, лишние ключи → `422 validation_failed`):
 
@@ -832,7 +833,28 @@ assets/<sha256>                        # сырые байты, имя = sha256 
 | `referenceScreenshots?` | ≤50 asset-id (`asset_<64hex>`); каждый обязан существовать в реестре assets, иначе `422 asset_not_found` |
 | `lastSyncedAt?` | ISO-дата (`Date.parse`-валидная), ≤40 символов |
 
-**Семантика.** Значение сохраняется на **создаваемой** ревизии; `restore` копирует `figma_json` исходной ревизии вместе с документом/исходником. `publish` прототипа переиспользует head-ревизию. Для owner read-back additively отдаёт `figma` (объект или `null`). Для любого не-owner принципала, включая Share/Capture, ключ `figma` в meta/draft/version **полностью отсутствует**, а история ревизий закрыта. Легаси-ревизии без ссылки читаются owner-у как `figma: null`.
+### Provenance компонентов без новых версий
+
+Правка ссылки на Figma раньше требовала новой ревизии, а у опубликованного компонента — metadata-only версии (одинаковый bundle hash, версия ради метаданных). С миграции **v27** provenance компонентов живёт в append-only таблице `component_provenance(component_id, rev, seq, figma_json, author, created_at)` и **резолвится при чтении**.
+
+| Аспект | Правило |
+|---|---|
+| Резолв | последняя запись по `(rev, seq)` среди ревизий `rev' ≤ rev` того же компонента; записей нет → `component_revisions.figma_json` самой ревизии |
+| Наследование | source-PUT **без** `figma` больше не обнуляет provenance: новая ревизия резолвится в запись предыдущей |
+| Очистка | `figma: null` пишет **tombstone**-строку (`figma_json IS NULL`); резолв возвращает `null` и не проваливается на колонку |
+| Запись | seq-строку пишет любой write-путь с переданным `figma` — `POST /components`, `PUT /components/:id`, `restore`, `PUT /components/:id/provenance` — тем же внутренним хелпером и в **той же транзакции**, что запись ревизии |
+| Дедуп | значение, равное резолвнутому, новой строки не создаёт (история не растёт от повторов драйвера) |
+| Идентичность | seq-запись **не** инвалидирует `sourceHash`, `build_fingerprint`, validate-receipt, `catalogRevision` и результаты приёмки: provenance — метаданные происхождения, не вход сборки |
+
+`PUT /api/components/:id/provenance` `{rev?, figma}` → `200 {rev, seq, unchanged, figma}` — правка **без** новой ревизии и без новой версии. `rev` по умолчанию головной; несуществующая ревизия → `404`. Доступ — владелец компонента или админ (`share`/`capture` — `403` всегда), аудит-событие `component.provenance.updated {rev, seq}`. Discovery — `capabilities.features.acceptanceProvenance` (kill-switch'а нет). CLI: `driver.mjs provenance <componentId> <figma.json|null> [--rev N]`.
+
+**Provenance опубликованной версии сознательно мутабельна**: `PUT …/provenance` с `rev` опубликованной версии меняет то, что отдаёт `GET /components/:id/versions/:v`. Иммутабельна только байтовая часть версии — `compiled_js`, `bundle_hash`, `definition_meta`. Ровно ради этого слой и вводился.
+
+Миграция v27 аддитивна (`CREATE TABLE` + индексы, без перестроек) и включает **backfill**: каждой head-ревизии с непустым `figma_json` пишется `seq = 1`-запись (автор `migration:component_provenance`). Без него первый же source-PUT без `figma` обнулил бы provenance у компонентов без seq-истории. Той же миграцией создаётся `candidate_decisions` (надгробия отклонений кандидатов, FK `ON DELETE CASCADE` + partial unique index) — схема под волну R3b; ручки reject в этой волне нет.
+
+Регресс-гард: `npm run verify:provenance` (`scripts/check-provenance-resolver.ts`) держит закрытый allowlist читателей/писателей `figma_json` — новый путь обязан ходить через резолвер `server/figma.ts` либо попасть в allowlist осознанной правкой.
+
+**Семантика (прототипы).** Значение сохраняется на **создаваемой** ревизии; `restore` копирует `figma_json` исходной ревизии вместе с документом. `publish` прототипа переиспользует head-ревизию. Для owner read-back additively отдаёт `figma` (объект или `null`). Для любого не-owner принципала, включая Share/Capture, ключ `figma` в meta/draft/version **полностью отсутствует**, а история ревизий закрыта. Легаси-ревизии без ссылки читаются owner-у как `figma: null`.
 
 ## Служебные endpoints
 
@@ -1057,7 +1079,7 @@ Layout owner вычисляется только из DOM: для непосре
 
 `driver.mjs geometry <protoId> <screenId>` печатает rect, layoutContext, роли, safeArea, ownership и `issues`. Observed clearance между соседними rect по оси и CSS gap owner'а выводятся только когда definition декларирует `layout.flow`, направление статически известно, owner подтверждает non-wrapped flex нужной оси и группа не содержит repeat/named slots. Во всех остальных случаях печатается `gaps: n/a (<причина>)`. Observed clearance намеренно может отличаться от CSS gap из-за margins.
 
-**CLI-контракт `driver.mjs` (волна 7.1/7.2).** `snap` завершается с кодом `0`, если PNG создан на всех экранах и `productErrors` пуст; `2`, если PNG создан, но есть product-ошибки; `1`, если PNG не создан вовсе. Инфраструктурный сбой (job `error`/`timeout`, 5xx) повторяется автоматически — ровно 2 попытки на экран; product-ошибки не повторяются никогда. `status` и `snap` принимают `--all-screens`, любой verb — `--json` (машинный документ в stdout вместо человеческих строк). `snap` дополнительно принимает `--viewport WxH`, `--dsf 1|2|3`, `--theme light|dark` (как `baseline`); вьюпорт по умолчанию — canvas-aware `resolveViewport` (паритет с `geometry`/`baseline`), бюджет capture-поверхности (`surface × dsf² ≤ 16 Mpx` — лимит ингеста ассетов) проверяется до постановки job'а. `component` принимает `--figma <file.json>` — provenance уходит одной ревизией с source (create и update; update без флага обнуляет provenance head-ревизии — семантика поля per-revision). Сессионная cookie кэшируется на диске между процессами (`scripts/easyui-auth.mjs`: `$XDG_STATE_HOME/easyui`, TTL 24 ч, атомарная запись; 401 с `code:"unauthorized"` на кэшированной cookie → один shared re-login с повтором запроса; выключатель `EASYUI_SESSION_CACHE=0`, путь — `EASYUI_SESSION_FILE`), GET-запросы и постановка screenshot-job'а ретраятся на 5xx с backoff 500/1500 мс.
+**CLI-контракт `driver.mjs` (волна 7.1/7.2).** `snap` завершается с кодом `0`, если PNG создан на всех экранах и `productErrors` пуст; `2`, если PNG создан, но есть product-ошибки; `1`, если PNG не создан вовсе. Инфраструктурный сбой (job `error`/`timeout`, 5xx) повторяется автоматически — ровно 2 попытки на экран; product-ошибки не повторяются никогда. `status` и `snap` принимают `--all-screens`, любой verb — `--json` (машинный документ в stdout вместо человеческих строк). `snap` дополнительно принимает `--viewport WxH`, `--dsf 1|2|3`, `--theme light|dark` (как `baseline`); вьюпорт по умолчанию — canvas-aware `resolveViewport` (паритет с `geometry`/`baseline`), бюджет capture-поверхности (`surface × dsf² ≤ 16 Mpx` — лимит ингеста ассетов) проверяется до постановки job'а. `component` принимает `--figma <file.json>` — provenance уходит одним вызовом вместе с source (create и update); флаг **опционален**: provenance наследуется между ревизиями, и update без флага её не обнуляет (см. [Provenance компонентов](#provenance-компонентов-без-новых-версий)). Смена и очистка ссылки — верб `provenance <componentId> <figma.json|null> [--rev N]`. Сессионная cookie кэшируется на диске между процессами (`scripts/easyui-auth.mjs`: `$XDG_STATE_HOME/easyui`, TTL 24 ч, атомарная запись; 401 с `code:"unauthorized"` на кэшированной cookie → один shared re-login с повтором запроса; выключатель `EASYUI_SESSION_CACHE=0`, путь — `EASYUI_SESSION_FILE`), GET-запросы и постановка screenshot-job'а ретраятся на 5xx с backoff 500/1500 мс.
 
 Для component screenshot `exampleName` выбирается строго из `definition.examples`: неизвестное имя или отсутствие `examples` → `422 unknown_example`, одновременные `props` и `exampleName` → `400 invalid_request`. После выбора набор проходит обычную валидацию props и участвует в `propsHash`.
 

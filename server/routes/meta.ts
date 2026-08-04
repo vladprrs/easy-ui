@@ -173,6 +173,11 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // evidence). Все три флага — одно и то же `EASYUI_ACCEPTANCE_MATRIX=1`, но разнесены по
       // подсистемам намеренно: W2+ включает case-set'ы и импакт отдельными ручками, и агент
       // должен проверять именно ту, которую собирается звать, а не «приёмку вообще».
+      // RFC candidate-acceptance R3a: `PUT /api/components/:id/provenance` — правка ссылки на
+      // Figma без новой ревизии и версии. Kill-switch'а нет намеренно: ручка не запускает ни
+      // сборок, ни ранов, а её выключение оставило бы агента без единственного способа
+      // отредактировать provenance опубликованной версии.
+      acceptanceProvenance: true,
       acceptanceMatrix: options.acceptanceMatrix === true,
       acceptanceCandidates: options.acceptanceMatrix === true,
       acceptanceRuns: options.acceptanceMatrix === true,
