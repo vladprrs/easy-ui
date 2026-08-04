@@ -1,87 +1,113 @@
 # План: подготовка easy-ui к первому публичному релизу в компании (release readiness)
 
+**Статус:** v2 — прошёл Stage 2 (адверсариальное ревью двумя Opus-агентами, триаж в конце файла).
+
 ## Контекст
 
 Сервис easy-ui готовится к первому публичному релизу внутри компании (Яндекс): внешнее code review и заезд во внутреннюю инфраструктуру. Проведён аудит тремя агентами (гигиена репо, качество кода/тестов, переносимость инфры). Решения пользователя:
 
-- **Язык — русский остаётся** (ревью внутри русскоязычной компании); унифицируем только смешанные файлы точечно, перевод не делаем.
-- **Публикация «свежим стартом»**: во внутренний git уезжает squash-нового репо/orphan-ветка с чистой историей; текущий репо остаётся личным архивом. Это снимает проблемы истории (25 МБ блобов `server/openapi.json`, прод-домен, composeId в старых коммитах).
-- **Два плана**: этот — гигиена репо + блокеры ревью + подготовка публикации. Хардненинг под внутреннюю инфру (non-root, секреты, метрики, rate limiting, Deploy/RTC-специфика) — отдельный план после этого (§W8 — только его скелет).
-- Целевая инфра — внутренняя яндексовая; публичных деталей нет, допущения фиксируем в плане как «проверить по внутренним докам».
+- **Язык — русский остаётся**; унифицируем смешанные файлы точечно, перевод не делаем.
+- **Публикация «свежим стартом»**: во внутренний git уезжает дерево с одной чистой историей; текущий репо остаётся личным архивом. Снимает проблемы истории (25 МБ блобов `server/openapi.json`, прод-домен, composeId в старых коммитах).
+- **Два плана**: этот — гигиена репо + блокеры ревью + подготовка публикации. Хардненинг под внутреннюю инфру — отдельный план-2 (§W8 — скелет/backlog).
+- Целевая инфра — внутренняя яндексовая; публичных деталей нет, допущения — «проверить по внутренним докам».
 
-Ключевые находки аудита, на которых стоит план: живой `DOKPLOY_API_KEY` и пароль в локальном `.env` (не в гите, но засвечены); README отстал на 255 коммитов; `LICENSE`/`license`-поля нет; 3 дубля PRODUCT_IMPROVEMENTS; `.dockerignore` пропускает в образ `.backups/` (594 МБ прод-данных), `Шрифты.zip`, `share/`; мёртвый код (`src/catalog/events.ts`, ~14 функций `src/api/client.ts`, флаг `EASYUI_CAPTURE_CACHE`); незарегистрированная ручка `TODO(T9)`; deprecated `BASIC_AUTH`; 11 русских строк мимо словаря; `retries: 0` + `trace: on-first-retry`; corpus-гейт возможно non-gating (`--bootstrap`).
+## Сквозные решения (после ревью)
+
+- **Запрещённые регэкспы** — главный механизм чистки вместо ручных списков: `pay-offline\.ru`, `dokploy`, `vladprrs`, `CWXPcz6h`, `DOKPLOY_API_KEY`, `@gmail\.com`, `651559498`. Grep по ним — пре-пуш гейт публикации и критерий готовности (0 совпадений в публикуемом дереве). Сейчас след — 38 трекаемых файлов.
+- **File ownership**: все правки `package.json` и `docker-compose.yml` принадлежат волне W4 (даже если по смыслу относятся к W1/W2/W5) — иначе волны конфликтуют.
+- **Порядок и corpus**: любые изменения, влияющие на образ/шрифты, завершаются ДО армирования corpus-гейта (W5-финал): смена шрифтов/базы инвалидирует отпечаток рендерера.
+- **`.claude/` публикуется**, кроме `.claude/skills/deploy/` (Dokploy-only, содержит прод-URL и composeId). Причина не выкидывать целиком: `scripts/sync-share-skills.mjs` читает канон из `.claude/skills/author/` без guard'ов. Остальные скиллы санитизируются от прод-дефолтов; ссылки на deploy-скилл (`CLAUDE.md`, `AGENTS.md`, `docs/plans/2026-07-29-scrn-gallery-ux.md:190`) заменяются на `docs/deploy-contract.md`; после — `grep -rn "skills/deploy"` = 0.
+- **`share/*.tgz` остаются в гите** (236 КБ суммарно — шум): `sync-share-skills.mjs --check` падает при отсутствии архива, а переделка скрипта не окупается. `--check` подключается к `npm run verify`.
 
 ## Волны работ
 
 ### W0 — Ротация секретов (немедленно, вне репо; делает пользователь)
-- Ротировать `DOKPLOY_API_KEY` (в Dokploy UI) и пароль пользователя `vlad` на проде: оба значения из `/home/coder/project/.env` засвечивались в агентских контекстах.
-- После ротации обновить локальный `.env` и секрет `DOKPLOY_API_KEY` в GitHub Actions.
+- Ротировать `DOKPLOY_API_KEY` (Dokploy UI) и пароль пользователя `vlad` на проде — оба значения из локального `.env` засвечивались в агентских контекстах.
+- Обновить локальный `.env` и секрет `DOKPLOY_API_KEY` в GitHub Actions.
+- После публикации во внутренний git — отдельно: судьба GHCR-пакета, Actions-секретов и PAT личного репо (архивация/отзыв).
 
 ### W1 — Лицензии и обязательные файлы
-- Проверить статус шрифтов `public/fonts/` (YS Text/YS Compressed — брендовые шрифты Яндекса, Coil): для внутрияндексового репо использование почти наверняка легально — **подтвердить по внутренним правилам бренда** и добавить `public/fonts/README.md` с указанием источника и условий. `Шрифты.zip` из рабочей копии удалить (он и так gitignored).
-- Добавить `LICENSE`-заглушку «Proprietary / internal use only» (или внутрияндексовый стандарт, уточнить при заезде) + `package.json`: `"license": "UNLICENSED"`, заполнить `description`, поднять `version` до `1.0.0`.
-- Добавить `SECURITY.md` (модель доверия: RCE by design, все аккаунты — доверенные операторы; ссылка на `docs/server-api.md` §«Граница доверия»), `CONTRIBUTING.md` (запуск, verify-контур, политика авторинга), `CODEOWNERS`-заготовку.
+- Шрифты `public/fonts/` — **считать блокером до подтверждения**: в гите исходные OTF (`Coil-*.otf`), собственный `.gitignore` заявляет «лицензия Commercial Type — в репозиторий не кладём», файлы раздаются публично. Подтвердить право внутрияндексового использования (YS Text/YS Compressed — брендовые шрифты Яндекса, скорее всего ок); добавить `public/fonts/README.md` с источником и условиями. План Б: woff2-сабсет/системный фолбэк — тогда обязательно ДО армирования corpus (см. сквозные решения). `Шрифты.zip` из рабочей копии удалить.
+- `LICENSE` «Proprietary / internal use only» (внутрияндексовый стандарт уточнить при заезде). Поля `package.json` (license/description/version 1.0.0, сохранить `private: true`) — руками волны W4.
+- `SECURITY.md`: модель доверия (RCE by design, все аккаунты — доверенные операторы, ссылка на `docs/server-api.md` §«Граница доверия») + раздел про заведомо тестовые пароли в репо (`easy-ui-dev-password`, `corpus-admin-password`, `e2e-admin-password`, `measure-*`) — чтобы снять гарантированные вопросы ревью.
+- `CONTRIBUTING.md` (запуск, verify-контур, политика авторинга, политика коммита `server/openapi.json` — только вместе с изменением контрактов), `CHANGELOG.md` (запись 1.0.0). `CODEOWNERS` — только с реальными владельцами; если их нет — не добавлять (заготовка с плейсхолдерами сама по себе замечание ревью).
+- Инвентаризация лицензий npm-зависимостей: license-checker → `docs/third-party.md`; отметить `@json-render/*` 0.19.0 (vercel-labs) как ключевую стороннюю зависимость.
 
 ### W2 — Чистка дерева репозитория
-- Удалить untracked-дубли: `docs/EASYUI_PRODUCT_IMPROVEMENTS.md`, `docs/audit/EASYUI_PRODUCT_IMPROVEMENTS.md` (канон остаётся `docs/easy-ui-product-improvements-v2.md`; если в untracked-версиях есть новый контент от 2026-08-03 — влить его в канон одним файлом).
-- `docs/`: создать `docs/README.md`-оглавление; вынести машинные артефакты (`docs/audit/*.json` — 4 файла, включая 272 КБ `audit-merged.json`) и `docs/feedback 2/` (каталог с пробелом + zip в гите) из будущей публикации; `docs/plans/` (49 файлов) и `docs/superpowers/` — оставить (внутренний репо, русский ок), но пометить в оглавлении как исторические.
-- `share/`: удалить `*.tgz` из гита (генерировать `scripts/sync-share-skills.mjs` по требованию); подключить `sync-share-skills --check` к `npm run verify`, чтобы зеркала не разъезжались.
-- Удалить `claude-here.sh`, `codex-here.sh` из будущей публикации (локальные обёртки с захардкоженным путём машины).
-- `.gitignore`: добавить `.superpowers/`, `*.db`, `*.db-wal`, `*.db-shm`, `*.pem`, `*.key`, `.env.local`; заменить четыре ad-hoc правила на `.*-data/`; правило `Шрифты.zip` → `*.zip` не делаем (в share/ zip больше не будет — достаточно текущего).
-- `.dockerignore` (важно: это дефект текущего образа): добавить `.backups/`, `work/`, `share/`, `e2e/`, `Шрифты.zip`, `.w0-data/`, `.w6-data/`, `.measure-data/`, `.superpowers/`, `docs/` уже есть — проверить полноту. Прогнать сборку образа и сравнить размер до/после.
+- Удалить untracked-дубли `docs/EASYUI_PRODUCT_IMPROVEMENTS.md` и `docs/audit/EASYUI_PRODUCT_IMPROVEMENTS.md` (канон — `docs/easy-ui-product-improvements-v2.md`; новый контент от 2026-08-03 влить в канон).
+- `docs/`: создать `docs/README.md`-оглавление; удалить машинные `docs/audit/*.json` (4 файла; ссылок из кода нет — проверено) и `docs/feedback 2/` (каталог с пробелом + zip). **`docs/audit/*.md` НЕ трогать** — на них ссылаются `server/catalog/roles.json:47,54`, `server/catalog/fingerprint.ts:214`, `policy.ts:55`, тесты и `scripts/calibrate-matcher.ts`. `docs/plans/` остаются, но: `2026-07-11-dokploy-deploy.md` санитизировать или исключить из публикации (содержит `BASIC_AUTH=vlad:<пароль>` и 20 вхождений домена); остальные планы пройдут через regex-гейт W6.
+- Удалить `claude-here.sh`, `codex-here.sh` (локальные обёртки, ссылок ниоткуда нет).
+- `.gitignore`: добавить `.superpowers/`, `.perf-verify/`, `*.zip` (кроме уже трекаемого — share-tgz это `.tgz`), `*.db`, `*.db-wal`, `*.db-shm`, `*.pem`, `*.key`; заменить `.w0-data/`/`.w6-data/`/`.measure-data/` на `.*-data/` (`data/` остаётся отдельным правилом). `.env.local` не нужен — уже покрыт `.env.*`.
+- `.dockerignore`: добавить `.backups`, `work`, `share`, `e2e`, `test`, `test-results`, `Шрифты.zip`, `.w0-data`, `.w6-data`, `.measure-data`, `.superpowers`, `.perf-verify`. **Синтаксис — без `**/` (root-anchored)**: паттерн `**/share` выкинул бы живой `server/share/`. Безопасность проверена: corpus читает `e2e/fixtures` с чекаута раннера, не из образа. Сборка образа до/после — зафиксировать размеры.
+- `public/design/cjm-ui/assets/*` НЕ удалять (используются e2e).
 
 ### W3 — Документация для нового читателя
-- Переписать `README.md` (сейчас отстал на 255 коммитов): что это, архитектура (SPA + Bun server + SQLite, screenshot/acceptance-контур), quick start (npm install, dev, verify), docker-запуск, полная таблица npm-скриптов, ссылки на `docs/server-api.md`, `docs/prototype-format.md`, `docs/authoring-sdk.md`, установка Bun (вместо «должен лежать в ~/.bun/bin»).
-- Создать `docs/operations.md` — единый реестр env-переменных (сейчас разъезжаются `.env.example`, compose и `docs/server-api.md`): все серверные переменные из аудита (§2 инфра-отчёта), полярность флагов (`*_DISABLED` = включено по умолчанию), какие обязательны, дефолты; раздел «данные и бэкапы» (SQLite + WAL как единица, `DATA_DIR` обязан быть внутри корня — причина: резолв `node_modules` для материализованного TSX; forward-only миграции и rollback-window ограничения).
-- Дополнить `.env.example` до полного набора переменных.
-- `docs/server-api.md` (408 КБ) — не разбиваем в этой волне (генерируемо-связанный, риск高), только добавляем в оглавление docs/README.md.
+- Переписать `README.md` (отстал на 255 коммитов): что это, архитектура (SPA + Bun server + SQLite, screenshot/acceptance-контур), quick start (npm install, установка Bun по `.bun-version`, `npx playwright install --with-deps chromium`), docker-запуск, полная таблица npm-скриптов, ссылки на ключевые доки.
+- `docs/operations.md` — единый реестр env-переменных (compose/.env.example/server-api сейчас расходятся): все серверные переменные, полярность флагов (`*_DISABLED` = включено по умолчанию, `EASYUI_RENDERER_STRICT_MANIFEST` — `!== "0"`), обязательность, дефолты; раздел «данные и бэкапы» (SQLite+WAL как единица; `DATA_DIR` обязан быть внутри корня — резолв `node_modules` для материализованного TSX; forward-only миграции, rollback-window ограничения).
+- Дополнить `.env.example` до полного набора.
+- Прогнать линтер markdown-ссылок после чисток W2 (ссылки поедут гарантированно).
+- `docs/server-api.md` (408 КБ) в этой волне не разбиваем.
 
-### W4 — Код: снятие замечаний будущего ревью
-Мелкие, но заметные ревьюеру вещи; каждая — атомарный коммит:
-- Удалить мёртвое: `src/catalog/events.ts` (файл целиком), неиспользуемые функции `src/api/client.ts` (`createPrototype`, `deletePrototype`, `repinPrototype`, `saveComposition`, `deleteComposition`, `listCompositionRevisions`, `listCompositionVersions`, `getCompositionVersion`, `getCapabilities`, `getCatalogUsages`, `getComponentUsageTree`, `createDesignSystem`, `patchDesignSystemTheme`, `setComponentVersionStatus`), одиночные мёртвые экспорты (`loadPrototypeList`, `listAssetsPage`, `enqueuePrototypeGeometry`, `createPrototypeId`, `idfWeight`, `surfaceById`, `mergeCaptureCodes`, `legacyDesignSystemSpacingScales`) — перед удалением каждый перепроверить grep'ом (динамические обращения).
-- Закрыть `TODO(T9)`: зарегистрировать ручку из `server/routes/components.ts:401` в `server/contracts.ts` → перегенерировать OpenAPI/SDK (`npm run generate:openapi && generate:sdk`).
-- Удалить deprecated-алиас `BASIC_AUTH` (`server/main.ts:106-109`) и устаревший комментарий `EASYUI_BASIC_AUTH` в `scripts/rebaseline-all.mjs:45`; в docs — только `LEGACY_BASIC_AUTH`.
-- Убрать мёртвый `EASYUI_CAPTURE_CACHE` из `docker-compose.yml:48` (не читается нигде; волна R9b не реализована — оставить упоминание только в плане renderer-contract-2).
-- Русские строки мимо словаря → `src/app/strings/`: `src/auth/UsersPage.tsx` (9 строк), `src/auth/LoginPage.tsx:39`, `src/editor/EditorCanvas.tsx:270`.
-- `src/player/ScreenSurface.tsx:423` — обернуть `console.warn` в `import.meta.env.DEV`.
-- `playwright.config.ts`: включить `retries: 1` в CI (иначе `trace: "on-first-retry"` никогда не срабатывает и падения e2e в CI остаются без артефактов) — либо осознанно `trace: "retain-on-failure"` при `retries: 0`; выбрать при реализации, зафиксировать комментарием.
-- `package.json`: убрать дубль `build:app`, добавить `packageManager`, отразить Bun-версию в README (engines Bun не поддерживает).
-- eslint: включить `typescript-eslint.recommendedTypeChecked` (projectService уже настроен); прогнать, точечно поправить/задокументировать подавления. Если находок слишком много (>50) — зафиксировать в плане хардненинга, не блокировать релиз.
-- Test-only легаси-рантайм встроенных ДС (`__EUI_LEGACY_TEST_RUNTIME__` ветки в `src/catalog/runtime.ts:49`, `src/prototype/validate.ts:384`, `src/editor/EditorView.tsx:70`) — не трогаем (живые тесты на нём), но добавить общий комментарий-указатель, почему ветки существуют.
+### W4 — Код: снятие замечаний будущего ревью (владеет `package.json`, `docker-compose.yml`)
+- **Мёртвый код — раздельно**:
+  - удалить: `src/catalog/events.ts` (подтверждено, потребителей нет), 14 функций `src/api/client.ts` (подтверждены по 1 вхождению, барrelей нет, тесты мокают через `importOriginal()`-спред), `loadPrototypeList`, `enqueuePrototypeGeometry`, `createPrototypeId`;
+  - **снять `export`, НЕ удалять** (используются внутри своих модулей): `listAssetsPage` (`src/api/assetsApi.ts:73`), `idfWeight` (`src/library/text.ts:55`), `surfaceById` (`src/prototype/surfaces.ts:59,86`), `mergeCaptureCodes` (`src/capture/readiness.ts:578`), `legacyDesignSystemSpacingScales` (`src/designSystems/spacingScale.ts:32`).
+- TODO(T9): ручка **уже зарегистрирована** (`server/contracts.ts:1981-1989`, есть в openapi.json) — удалить протухший комментарий `server/routes/components.ts:401`, опционально добавить кейс в `contract.test.ts`. Регенерация не нужна; второй дескриптор не создавать.
+- Удалить deprecated-алиас `BASIC_AUTH`: `server/main.ts:106-109` + переписать ассерты `server/auth.test.ts:139-143` + убрать проброс `docker-compose.yml:14` + комментарий в `.env.example` + `EASYUI_BASIC_AUTH` в `scripts/rebaseline-all.mjs:45`. Перед удалением проверить env compose в Dokploy (переменная снята с прода 2026-07-20, но убедиться, что не выставлена).
+- Убрать мёртвый `EASYUI_CAPTURE_CACHE` из `docker-compose.yml:48` (подтверждено: не читается нигде).
+- Русские строки мимо словаря → `src/app/strings/`: `src/auth/UsersPage.tsx` (9), `src/auth/LoginPage.tsx:39`, `src/editor/EditorCanvas.tsx:270`.
+- `src/player/ScreenSurface.tsx:423` — `console.warn` под `import.meta.env.DEV`.
+- `playwright.config.ts`: **`trace: "retain-on-failure"` при `retries: 0`** (решено; `retries: 1` опасен — stateful-серверы с общими `.e2e-data` не переподнимаются на ретрае, зелёный со второй попытки маскировал бы порядковую зависимость).
+- `package.json`: убрать дубль `build:app`, добавить `packageManager`, поля license/description/version из W1, `verify` += `sync-share-skills --check`.
+- `docker-compose.yml`: += `shm_size: 1g` (из W5; CI-гейт гоняет образ с `--shm-size=1g`, прод конфигурационно слабее протестированного).
+- Комментарий-указатель к test-only легаси-рантаймам `__EUI_LEGACY_TEST_RUNTIME__` (`src/catalog/runtime.ts:49`, `src/prototype/validate.ts:384`, `src/editor/EditorView.tsx:70`) — сами ветки не трогать.
+- ~~eslint recommendedTypeChecked~~ — перенесено в план-2 (оценка: сотни-тысячи диагностик, typed-режим на `*.mjs` требует `disableTypeChecked`-блока; не блокер релиза).
 
 ### W5 — CI/деплой: подготовка к переезду
-- `.github/workflows/build-image.yml`: вынести `composeId` в `vars`/`secrets`, `IMAGE` — в repo variable; job `deploy` пометить комментарием как Dokploy-специфичный (уйдёт при переезде).
-- `ci.yml`: добавить `concurrency`-группу и `timeout-minutes`.
-- Проверить, заармлен ли renderer-corpus гейт (сейчас `--bootstrap` = non-gating, warning в воркфлоу): если нет — прогнать процедуру `--adopt` и вмерджить запись в `expected.json`, иначе «пиксельный гейт» декоративен.
-- `docker-compose.yml`: добавить `shm_size: 1g` (CI-гейт гоняет образ с `--shm-size=1g`, прод сейчас конфигурационно слабее протестированного).
-- Написать `docs/deploy-contract.md`: что должен уметь любой CD (собрать образ с `EASYUI_BUILD_SHA`, corpus-гейт перед промоушеном тега, обязательные env, healthcheck-семантика `status: ready`, запрет сборки на прод-хосте). Это вход для плана-2 переезда на внутренний CD.
+- `.github/workflows/build-image.yml`: вынести в repo `vars` **и composeId, и хост dokploy** (`https://dokploy.pay-offline.ru`); `IMAGE` — repo variable (шаги deploy читают `$IMAGE` из env — сохранить проброс). Job `deploy` пометить как Dokploy-специфичный. **В публикуемом дереве (W6) job `deploy` удаляется целиком** — семантика переезжает в `docs/deploy-contract.md`.
+- `ci.yml`: `concurrency`-группа, `timeout-minutes`, ограничение push-триггера ветками (`main`) — сейчас полный verify+e2e на каждый push любой ветки дублируется с PR-прогоном.
+- `docs/deploy-contract.md`: что должен уметь любой CD — сборка с `EASYUI_BUILD_SHA`, corpus-гейт перед промоушеном тега, **бамп образа/шрифтов = обязательный re-adopt corpus** (отпечаток привязан к образу — иначе гейт снова декоративен), обязательные env, healthcheck-семантика `status: ready`, запрет сборки на прод-хосте.
+- **Армирование corpus-гейта — последним шагом всех волн** (после решения по шрифтам W1 и правок образа W2/W4): взять артефакт `renderer-corpus-<sha>` последнего main-прогона (PR-прогоны truncated — не адоптятся без `--force`), `--adopt`, коммит `e2e/fixtures/renderer-corpus/expected.json`; после армирования рассмотреть перевод bootstrap-`::warning::` в failure.
 
 ### W6 — Публикация «свежим стартом»
-- Собрать чек-лист исключений публикации (из W2): `.claude/` (скиллы с прод-URL и деплой-инструкциями — решить: вычистить URL или не публиковать каталог; рекомендация — не публиковать `.claude/skills/deploy`, остальные скиллы очистить от прод-дефолтов), `claude-here.sh`, `codex-here.sh`, `docs/audit/*.json`, `docs/feedback 2/`, `docker-compose.candidate.yml` (или оставить с русским комментарием — он легитимный drill-инструмент).
-- Процедура: свежий клон → применить чек-лист → `git checkout --orphan release` → один initial-коммит «easy-ui v1.0.0» → push во внутренний git (адрес получим при заезде). Прод-домен `easy-ui.pay-offline.ru` в рабочих файлах (`.env.example`, скрипты, скиллы) заменить на плейсхолдер/переменную до публикации.
-- `server/openapi.json` (1.4 МБ, генерируемый): оставить в гите нового репо (один блоб на публикацию не страшен), но зафиксировать в CONTRIBUTING политику «коммитится только вместе с изменением контрактов» — вопрос генерации в CI отложить в план-2.
+- **Процедура (не orphan!):** `git checkout --orphan` сохраняет старый объектный граф — риск утечки всей истории одним `push --mirror`. Вместо этого: копия рабочего дерева → применить чек-лист исключений → `rm -rf .git && git init` → корпоративные `user.name`/`user.email` → один initial-коммит «easy-ui v1.0.0» → push строго `git push <remote> HEAD:main` (без `--all/--mirror/--tags`).
+- Чек-лист исключений: `.claude/skills/deploy/`, `claude-here.sh`, `codex-here.sh`, `docs/audit/*.json`, `docs/feedback 2/`, `docs/plans/2026-07-11-dokploy-deploy.md` (если не санитизирован), job `deploy` из `build-image.yml`. `docker-compose.candidate.yml` остаётся (легитимный drill-инструмент) после regex-чистки. `AGENTS.md`/`CLAUDE.md` публикуются санитизированными (домен → плейсхолдер, deploy-разделы → ссылка на `docs/deploy-contract.md`).
+- **Пре-пуш гейты (обязательные):**
+  1. grep по запрещённым регэкспам (см. сквозные решения) = 0 совпадений;
+  2. gitleaks (или git-secrets) по дереву = чисто;
+  3. `git log --all --oneline | wc -l` = 1, `git rev-list --all --objects | wc -l` — только текущее дерево;
+  4. `npm audit --omit=dev` — зафиксировать результат.
+- Прод-домен в рабочих файлах (`.env.example`, скрипты, скиллы, доки — полный список даёт regex-гейт, 38 файлов) → плейсхолдер `https://easy-ui.example.internal` / переменная.
+- `server/openapi.json` остаётся в гите нового репо (один блоб на публикацию), политика коммита — в CONTRIBUTING (W1).
 
 ### W7 — Верификация
-- `npm run verify` + `npm run e2e` зелёные после каждой волны (W4 — обязательно).
-- Пересборка docker-образа после W2: размер уменьшился, `.backups`/`Шрифты.zip`/`share` в слоях отсутствуют (`docker history` / распаковка слоя).
+- `npm run verify` + `npm run e2e` зелёные после каждой волны; руками прогнать `node scripts/sync-share-skills.mjs --check` до коммита W4.
+- Пересборка docker-образа после W2: зафиксировать «transferring context» и `docker image inspect .Size` до/после; распаковкой слоя убедиться, что `.backups`/`Шрифты.zip`/`share`/`e2e` отсутствуют.
 - Runtime-прогон по `.claude/skills/verify/SKILL.md` после W4.
-- Финальный смоук чистого клона: свежий `git clone` (эмуляция публикации) → `npm ci` → `npm run verify` → `docker build` — всё проходит без файлов, существующих только в рабочей копии.
-- Прод не трогаем: волны W1–W6 не меняют поведение сервера (кроме `shm_size` и удаления мёртвого env — безопасно); деплой обычным пайплайном после мерджа.
+- Финальный смоук чистого клона (предусловия: Bun по `.bun-version`, `npx playwright install --with-deps chromium`): `npm ci` → `npm run verify` → `npm run e2e` → `docker build`.
+- Прод: волны меняют поведение минимально (`shm_size`, снятие мёртвых env, удаление алиаса `BASIC_AUTH` — предварительно проверив env в Dokploy); деплой обычным пайплайном после мерджа.
 
-### W8 — Скелет плана-2 (хардненинг, отдельный план — здесь не исполняется)
-Зафиксировать как backlog для следующего планирования, когда появятся требования внутренней инфры: non-root контейнер + chromium-sandbox стратегия; секреты через файлы/`*_FILE` (Yav-подобный secret-store); structured-логи + метрики (Solomon/Monitoring-подобное) + request-id; rate limiting за балансировщиком (реальный IP из заголовков доверенного прокси); `e2e/preview/screenshot.spec.ts:134` `test.fixme` — adversarial egress-тест; замена GitHub Actions → внутренний CI/CD (реестр, промоушен тега, corpus-артефакты); декомпозиция `server/contracts.ts` (2914 строк); автоматический бэкап volume; допущения об Аркадии/Deploy/RTC/TVM проверить по внутренним докам — публично они не описаны.
+### W8 — Скелет плана-2 (хардненинг + заезд, отдельный план)
+Backlog: non-root контейнер + chromium-sandbox стратегия; секреты через файлы/`*_FILE` (Yav-подобный store); structured-логи + метрики + request-id; rate limiting за балансировщиком (реальный IP от доверенного прокси); adversarial egress-тест (`e2e/preview/screenshot.spec.ts:134` `test.fixme`); замена GitHub Actions → внутренний CI/CD (реестр, промоушен тега, corpus-артефакты); **сборка без публичных CDN**: `playwright install` качает браузер с внешнего CDN, Bun — из Docker Hub, npm — публичный (нужны внутренние зеркала — первоочередной вопрос заезда); доступность Bun как рантайма во внутренней инфре; eslint `recommendedTypeChecked` (точечно: `no-floating-promises`, `no-misused-promises`, `await-thenable` + `disableTypeChecked` для js/mjs); декомпозиция `server/contracts.ts` (2914 строк); автоматический бэкап volume; генерация `server/openapi.json` в CI вместо коммита; допущения об Аркадии/Deploy/RTC/TVM — проверить по внутренним докам.
 
-## Исполнение (по workflow проекта)
+## Исполнение
 
-1. После одобрения — сохранить план в `docs/plans/2026-08-04-release-readiness.md`, закоммитить.
-2. Stage 2 — адверсариальное ревью плана Opus-субагентами (линзы: полнота чек-листа публикации, риски удаления «мёртвого» кода, корректность docker/CI-правок), триаж в план.
-3. Stage 3 — волны W1–W6 отдельными Opus-субагентами с файловым ownership (W2 и W4 не пересекаются — параллелить; W3 после W2; W5/W6 последними), оркестратор верифицирует и коммитит поволново.
+1. ~~Сохранить план, закоммитить~~ — сделано (b2e0552; v2 — этот файл).
+2. ~~Stage 2 ревью~~ — сделано, триаж ниже.
+3. Stage 3 — Opus-субагенты по волнам. Порядок: W1(доки)+W2 → W3 ∥ W4 → W5 → corpus-арм → W6-подготовка (без push — ждёт адреса внутреннего git). `package.json`/`docker-compose.yml` — только W4. Оркестратор верифицирует и коммитит поволново.
 
 ## Критерии готовности
 
-- Секреты ротированы (W0, подтверждение пользователя).
-- Чистый клон проходит `npm ci && npm run verify && npm run e2e && docker build`.
-- Образ не содержит прод-данных/шрифтового архива/share.
-- README/docs/README/operations.md актуальны; env-реестр полон.
-- Ноль untracked-дублей, мёртвый код удалён, TODO(T9) закрыт, corpus-гейт заармлен (или явно задокументирован как non-gating).
-- Готов чек-лист и процедура orphan-публикации; план-2 (хардненинг) заведён как backlog.
+- Секреты ротированы (W0, подтверждение пользователя); судьба GHCR/Actions-секретов личного репо решена.
+- Чистый клон (с предусловиями Bun+playwright) проходит `npm ci && npm run verify && npm run e2e && docker build`.
+- Размер образа зафиксирован до/после; прод-данных/шрифтового архива/share/e2e в слоях нет (проверено распаковкой).
+- **0 совпадений запрещённых регэкспов + чистый gitleaks в публикуемом дереве** (главный критерий).
+- README/docs/README/operations.md актуальны; markdown-ссылки прогнаны линтером; env-реестр полон.
+- Мёртвый код удалён/разэкспортирован, протухший TODO(T9)-комментарий снят, corpus-гейт заармлен (адопт с main-артефакта) или явно задокументирован как non-gating.
+- Готова процедура fresh-start публикации (`git init`, пре-пуш гейты); план-2 заведён как backlog.
+
+## Триаж находок Stage 2
+
+Ревьюер A (корректность): B1 TODO(T9) уже зарегистрирован — **принято**, пункт переписан. B2 tgz vs `--check` — **принято**, tgz остаются. B3 5/8 экспортов живые — **принято**, раздельные списки. M1 BASIC_AUTH — полный список файлов + проверка Dokploy env — **принято**. M2 eslint typed → план-2 — **принято**. M3 ownership `package.json`/compose → W4 — **принято**. M4 corpus re-adopt при бампах + порядок — **принято**. M5 полный след домена → regex-гейт — **принято**. m1–m9 (dockerignore root-anchored, `.perf-verify`, `*.zip`, retain-on-failure, ci.yml ветки, dokploy-хост в vars, предусловия клона) — **приняты**.
+
+Ревьюер B (полнота): B1 = A/B2. B2 `.claude/` публикуется кроме deploy (sync-share зависимость) — **принято**. B3 regex-список + корпоративная git-идентичность — **принято**. B4 шрифты = блокер + связка с corpus — **принято**. M1 job deploy удалить из публикации — **принято**. M2 портируемость (CDN/Bun/npm-зеркала — в W8; лицензии зависимостей — в W1) — **принято**. M3 CHANGELOG / реальный CODEOWNERS / `private: true` — **принято**. M4 gitleaks + npm audit — **принято**. M5 не-orphan процедура — **принято**. M6 санитизация `docs/plans/2026-07-11-dokploy-deploy.md` — **принято**. M7 AGENTS/CLAUDE.md санитизировать и публиковать — **принято**. m1 `docs/audit/*.md` и cjm-ui assets не трогать — **принято**. Отклонённых находок нет.
