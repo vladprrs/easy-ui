@@ -81,7 +81,10 @@ describe("cache policy", () => {
     expect(classify("GET", "/capabilities")?.mode).toBe("fresh");
     expect(classify("GET", "/catalog/manifest?designSystem=yp")?.mode).toBe("fresh");
     expect(classify("GET", "/case-sets/cs_1")?.mode).toBe("immutable");
-    expect(classify("GET", "/component-candidates/cand_1")?.mode).toBe("immutable");
+    // Кандидат приёмки — `fresh`, а не `immutable` (план 2026-08-04 W3, C22): его строка
+    // мутабельна (`status`/`acceptanceRunId`/`runs[]`), тёплый кэш иначе прятал бы новые раны.
+    expect(classify("GET", "/component-candidates/cand_1")).toMatchObject({ mode: "fresh" });
+    expect(classify("GET", "/component-candidates/cand_1")?.ttlMs).toBeGreaterThan(0);
     expect(classify("GET", "/components/a/versions/3")?.mode).toBe("immutable");
     expect(classify("GET", "/acceptance-runs/run_1")?.terminalOnly).toBe(true);
     expect(classify("GET", "/acceptance-runs/run_1/evidence")?.kind).toBe("blob");

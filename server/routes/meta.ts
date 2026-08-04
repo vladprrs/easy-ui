@@ -33,7 +33,8 @@ import { CALIBRATED_POLICY } from "../catalog/policy";
 import { VALIDATE_GLOBAL_CONCURRENT, VALIDATE_USER_CONCURRENT } from "../components/validate";
 import { CANDIDATE_CACHE_MAX_BYTES, CANDIDATE_CACHE_TTL_MS } from "../components/candidates";
 import {
-  ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, acceptanceCaseTtlHours, acceptanceMaxCasesPerRun, evidenceMaxBytes,
+  ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, PROMOTION_POLICY_PROFILES, acceptanceCaseTtlHours,
+  acceptanceMaxCasesPerRun, evidenceMaxBytes,
 } from "../acceptance/policies";
 
 // Discovery endpoints (plan §G): /api/openapi.json, /api/schemas/*, /api/capabilities.
@@ -202,6 +203,19 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // (инструментированный прогон раскрытия). Обе ручки ничего не пишут и **не** зависят от
       // kill-switch'а v3: выбор «композиция или TSX» надо делать до включения записи.
       compositionAnalyze: true,
+    },
+    /**
+     * Политики приёмки (план 2026-08-04 W3, D-A). `policyProfiles` — что примет
+     * `POST /acceptance-runs` в `policy` (иначе `422 unknown_policy_profile`);
+     * `promotionPolicyProfiles` — под каким профилем полученный вердикт допускает публикацию
+     * (иначе `422 acceptance_policy_mismatch` на promote). Сегодня множества совпадают, и
+     * различать их обязан клиент, а не догадка: пересечение задано конфигурацией сервера, а не
+     * инвариантом кода.
+     */
+    acceptance: {
+      policyProfiles: Object.keys(ACCEPTANCE_POLICIES),
+      defaultPolicyProfile: DEFAULT_ACCEPTANCE_POLICY_ID,
+      promotionPolicyProfiles: [...PROMOTION_POLICY_PROFILES],
     },
     // План renderer-contract-2 §5 R1: чем именно эта сборка рисует кадры. Агент (и приёмка
     // прода) обязаны иметь возможность сверить отпечаток с тем, что приехало в результате джобы,

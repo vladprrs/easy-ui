@@ -47,8 +47,10 @@ import { isCandidateId, isRunId } from "../acceptance/ids";
 import { computeImpact } from "../acceptance/impact";
 import { isCaseSetId } from "../../src/acceptance/caseSetSchema";
 import {
-  ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, acceptanceMaxCasesPerRun, acceptancePolicy, evidenceMaxBytes, policyProfileHash,
+  ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, PROMOTABLE_RUN_STATUSES, acceptanceMaxCasesPerRun, acceptancePolicy,
+  evidenceMaxBytes, isPromotionPolicyProfile, policyProfileHash,
 } from "../acceptance/policies";
+import { isTerminalRunStatus } from "../acceptance/repo";
 import { readArtifact, readRunManifest, sanitizeEvidenceName, sha256Sums, type RunManifest } from "../acceptance/evidence";
 
 /** Опции §19.1 фидбэка, отклонённые триажем (A2: `manifestAssetId` не поддерживается никогда). */
@@ -96,8 +98,14 @@ function parseRefresh(value: unknown): RefreshSpec {
  * `rejected` — **вычисляемый** статус (§3.2а): хранимый enum `status` не расширяется, решение
  * человека живёт отдельной append-only строкой `candidate_decisions`. Поэтому в DTO они и разведены:
  * `status` остаётся `validated|promoted`, а надгробие приезжает парой `rejected` + `decision`.
+ *
+ * **`runs[]` (план 2026-08-04 W3)** — все раны кандидата в порядке постановки с готовым
+ * `promotionEligible` (терминальный `pass|pass_with_exceptions` под допущенным к публикации
+ * профилем). Это источник автовыбора связки promote (W2b) и ответ на вопрос «каким раном
+ * публиковать», который скалярный `acceptanceRunId` не отвечает: он — **последний поставленный**
+ * ран кандидата (`attachRun`), а не принятый и не промоутабельный.
  */
-function candidateView(row: CandidateRow, decision?: CandidateDecisionRow): Record<string, unknown> {
+function candidateView(row: CandidateRow, decision?: CandidateDecisionRow, runs: AcceptanceRunRow[] = []): Record<string, unknown> {
   return {
     candidateId: row.candidate_id,
     componentId: row.component_id,
@@ -117,6 +125,16 @@ function candidateView(row: CandidateRow, decision?: CandidateDecisionRow): Reco
       ? null
       : { reason: decision.reason, actor: decision.actor, createdAt: decision.created_at },
     acceptanceRunId: row.acceptance_run_id,
+    runs: runs.map((run) => ({
+      runId: run.run_id,
+      status: run.status,
+      policyProfileId: run.policy_profile_id,
+      caseSetId: run.case_set_id,
+      finishedAt: run.finished_at,
+      promotionEligible: isTerminalRunStatus(run.status)
+        && PROMOTABLE_RUN_STATUSES.has(run.status)
+        && isPromotionPolicyProfile(run.policy_profile_id),
+    })),
     promotedVersion: row.promoted_version,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
@@ -255,7 +273,7 @@ async function createCandidate(request: Request, db: Database, dataDir: string, 
   // R3b (§3.2а, анти-воскрешение): повтор той же сборки возвращает **ту же** строку — включая
   // отклонённую. POST не пересоздаёт кандидата и не снимает решение человека.
   const decision = orchestrator.repo.decision(created.candidate.candidate_id);
-  return json({ ...candidateView(created.candidate, decision), cached: created.cached, warnings: receipt.warnings }, 200, noStore);
+  return json({ ...candidateView(created.candidate, decision, orchestrator.repo.runsForCandidate(created.candidate.candidate_id)), cached: created.cached, warnings: receipt.warnings }, 200, noStore);
 }
 
 function getCandidate(request: Request, db: Database, candidateId: string, principal: Principal, orchestrator: AcceptanceOrchestrator): Response {
@@ -266,7 +284,7 @@ function getCandidate(request: Request, db: Database, candidateId: string, princ
   if (!isCandidateId(candidateId)) throw new ApiError(404, "not_found", "Candidate not found");
   const row = orchestrator.repo.requireCandidate(candidateId);
   assertComponentOwner(db, row.component_id, principal);
-  return json(candidateView(row, orchestrator.repo.decision(candidateId)), 200, noStore);
+  return json(candidateView(row, orchestrator.repo.decision(candidateId), orchestrator.repo.runsForCandidate(candidateId)), 200, noStore);
 }
 
 /**
@@ -300,7 +318,7 @@ async function rejectCandidate(request: Request, db: Database, candidateId: stri
     actorId: actor.userId, action: "candidate.rejected", subjectType: "component", subjectId: row.component_id,
     detail: { candidateId, componentId: row.component_id, rev: row.rev, reason: rejected.decision.reason },
   });
-  return json(candidateView(rejected.candidate, rejected.decision), 200, noStore);
+  return json(candidateView(rejected.candidate, rejected.decision, orchestrator.repo.runsForCandidate(rejected.candidate.candidate_id)), 200, noStore);
 }
 
 async function startRun(request: Request, db: Database, principal: Principal, orchestrator: AcceptanceOrchestrator): Promise<Response> {

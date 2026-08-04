@@ -3341,6 +3341,32 @@
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "acceptance": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "defaultPolicyProfile": {
+                          "type": "string"
+                        },
+                        "policyProfiles": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "promotionPolicyProfiles": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "policyProfiles",
+                        "defaultPolicyProfile",
+                        "promotionPolicyProfiles"
+                      ],
+                      "type": "object"
+                    },
                     "actions": {
                       "items": {
                         "type": "string"
@@ -3976,6 +4002,7 @@
                     "resolvedSpaceScales",
                     "regions",
                     "features",
+                    "acceptance",
                     "renderer",
                     "reuseGate"
                   ],
@@ -7565,6 +7592,64 @@
                     "rev": {
                       "type": "number"
                     },
+                    "runs": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "caseSetId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finishedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "policyProfileId": {
+                            "type": "string"
+                          },
+                          "promotionEligible": {
+                            "type": "boolean"
+                          },
+                          "runId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "queued",
+                              "running",
+                              "pass",
+                              "pass_with_exceptions",
+                              "fail",
+                              "error",
+                              "cancelled"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "runId",
+                          "status",
+                          "policyProfileId",
+                          "caseSetId",
+                          "finishedAt",
+                          "promotionEligible"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "sourceHash": {
                       "type": "string"
                     },
@@ -7613,6 +7698,7 @@
                     "rejected",
                     "decision",
                     "acceptanceRunId",
+                    "runs",
                     "promotedVersion",
                     "createdAt",
                     "expiresAt"
@@ -7654,7 +7740,7 @@
             "description": "method_not_allowed"
           }
         },
-        "summary": "Read an acceptance candidate by id (global namespace; it does not overlap /api/catalog/candidates). Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+        "summary": "Read an acceptance candidate by id (global namespace; it does not overlap /api/catalog/candidates). Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1. The response is mutable — `status`, `acceptanceRunId` and `runs[]` change over the candidate's life — so clients must cache it with a short freshness window, never as immutable. `runs[]` lists every run of the candidate in queueing order with a precomputed `promotionEligible` (terminal pass/pass_with_exceptions under a promotion policy profile); the scalar `acceptanceRunId` is merely the LAST QUEUED run and must not be used to pick the run that backs a promote.",
         "x-easyui-validated": false
       }
     },
@@ -7787,6 +7873,64 @@
                     "rev": {
                       "type": "number"
                     },
+                    "runs": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "caseSetId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finishedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "policyProfileId": {
+                            "type": "string"
+                          },
+                          "promotionEligible": {
+                            "type": "boolean"
+                          },
+                          "runId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "queued",
+                              "running",
+                              "pass",
+                              "pass_with_exceptions",
+                              "fail",
+                              "error",
+                              "cancelled"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "runId",
+                          "status",
+                          "policyProfileId",
+                          "caseSetId",
+                          "finishedAt",
+                          "promotionEligible"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "sourceHash": {
                       "type": "string"
                     },
@@ -7835,6 +7979,7 @@
                     "rejected",
                     "decision",
                     "acceptanceRunId",
+                    "runs",
                     "promotedVersion",
                     "createdAt",
                     "expiresAt"
@@ -8980,6 +9125,64 @@
                     "rev": {
                       "type": "number"
                     },
+                    "runs": {
+                      "items": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "caseSetId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "finishedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/$defs/__schema0"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "policyProfileId": {
+                            "type": "string"
+                          },
+                          "promotionEligible": {
+                            "type": "boolean"
+                          },
+                          "runId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "queued",
+                              "running",
+                              "pass",
+                              "pass_with_exceptions",
+                              "fail",
+                              "error",
+                              "cancelled"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "runId",
+                          "status",
+                          "policyProfileId",
+                          "caseSetId",
+                          "finishedAt",
+                          "promotionEligible"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
                     "sourceHash": {
                       "type": "string"
                     },
@@ -9034,6 +9237,7 @@
                     "rejected",
                     "decision",
                     "acceptanceRunId",
+                    "runs",
                     "promotedVersion",
                     "createdAt",
                     "expiresAt",
@@ -9967,6 +10171,44 @@
                 "schema": {
                   "additionalProperties": {},
                   "properties": {
+                    "acceptancePolicy": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "properties": {
+                            "currentPolicyProfileHash": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "profileId": {
+                              "type": "string"
+                            },
+                            "runPolicyProfileHash": {
+                              "type": "string"
+                            },
+                            "stale": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "profileId",
+                            "runPolicyProfileHash",
+                            "currentPolicyProfileHash",
+                            "stale"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "acceptanceRunId": {
                       "anyOf": [
                         {
@@ -10043,7 +10285,8 @@
                     "cached",
                     "warnings",
                     "candidateId",
-                    "acceptanceRunId"
+                    "acceptanceRunId",
+                    "acceptancePolicy"
                   ],
                   "type": "object"
                 }
@@ -10365,7 +10608,7 @@
                 }
               }
             },
-            "description": "validation_failed | asset_not_found | atomic_policy_violation | event_schema_not_serializable | acceptance_matrix_disabled (candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off) | acceptance_run_mismatch (the acceptance run belongs to another candidate or ran under another policy profile) | acceptance_run_not_passed (the acceptance run is not a terminal pass/pass_with_exceptions)"
+            "description": "validation_failed | asset_not_found | atomic_policy_violation | event_schema_not_serializable | acceptance_matrix_disabled (candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off) | acceptance_run_mismatch (the acceptance run belongs to another candidate (with EASYUI_PROMOTE_POLICY_STRICT=1 also: its policy profile hash differs from the candidate stamp)) | acceptance_policy_mismatch (the acceptance run ran under a policy profile that may not back a promotion; details carry {runPolicyProfileId, allowed}) | acceptance_run_not_passed (the acceptance run is not a terminal pass/pass_with_exceptions)"
           },
           "429": {
             "content": {
@@ -10378,7 +10621,7 @@
             "description": "validate_in_flight (a validate/promote build is already in flight for this user) | queue_full (global validate concurrency cap reached)"
           }
         },
-        "summary": "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate under the same policy profile (422 acceptance_run_mismatch) with a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`.",
+        "summary": "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate (422 acceptance_run_mismatch), must have been executed under a promotion policy profile (`capabilities.acceptance.promotionPolicyProfiles`, otherwise 422 acceptance_policy_mismatch with `{runPolicyProfileId, allowed}`) and must carry a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). The candidate's own `policyProfileHash` is an informational stamp and is NOT compared with the run: candidate identity excludes policy, so requiring equality made every pixel-strict-v1 run unpromotable (defect P0-2, fixed 2026-08-04; EASYUI_PROMOTE_POLICY_STRICT=1 restores the old equality as an emergency rollback). A run whose `policy_profile_hash` no longer matches the current definition of its profile is accepted with a warning and both hashes reported in `acceptancePolicy` and in the audit event. Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`.",
         "x-easyui-validated": false
       }
     },

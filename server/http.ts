@@ -7,7 +7,12 @@ export type ErrorDetails = { issues?: unknown[]; warnings?: unknown[]; currentRe
    * (надгробие другой сборки той же ревизии: `candidateId` + вложенное `decision`).
    */
   reason?: string; actor?: string; createdAt?: string;
-  candidateId?: string; decision?: { reason: string; actor: string; createdAt: string } };
+  candidateId?: string; decision?: { reason: string; actor: string; createdAt: string };
+  /**
+   * План 2026-08-04 W3: `422 acceptance_policy_mismatch` — под каким профилем исполнен ран и
+   * какие профили допускают публикацию (`capabilities.acceptance.promotionPolicyProfiles`).
+   */
+  runPolicyProfileId?: string; allowed?: string[] };
 
 export class ApiError extends Error {
   constructor(public status: 400|401|403|404|405|409|413|415|422|429|501|503, public code: string, message: string, public details: ErrorDetails = {}) { super(message); }

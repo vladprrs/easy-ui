@@ -1449,7 +1449,7 @@ const componentPromoteConflictEnvelopeSchema = z.strictObject({
  */
 export const promoteComponentContract = registerContract({
   method: "POST", path: "/api/components/{id}/promote",
-  summary: "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate under the same policy profile (422 acceptance_run_mismatch) with a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`.",
+  summary: "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate (422 acceptance_run_mismatch), must have been executed under a promotion policy profile (`capabilities.acceptance.promotionPolicyProfiles`, otherwise 422 acceptance_policy_mismatch with `{runPolicyProfileId, allowed}`) and must carry a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). The candidate's own `policyProfileHash` is an informational stamp and is NOT compared with the run: candidate identity excludes policy, so requiring equality made every pixel-strict-v1 run unpromotable (defect P0-2, fixed 2026-08-04; EASYUI_PROMOTE_POLICY_STRICT=1 restores the old equality as an emergency rollback). A run whose `policy_profile_hash` no longer matches the current definition of its profile is accepted with a warning and both hashes reported in `acceptancePolicy` and in the audit event. Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`.",
   status: 201,
   requestSchema: z.strictObject({
     ...casBody,
@@ -1467,6 +1467,15 @@ export const promoteComponentContract = registerContract({
     themeVersion: z.number().nullable(), catalogRevision: z.string(),
     superseded: z.array(z.number()), cached: z.boolean(), warnings: z.array(z.string()),
     candidateId: z.string().nullable(), acceptanceRunId: z.string().nullable(),
+    /**
+     * Provenance политики публикации (план 2026-08-04 W3, C18): профиль рана и оба хэша его
+     * определения — на момент рана и текущий. `stale: true` — профиль правили после рана; это
+     * не отказ, а warning + запись обоих хэшей сюда и в аудит-событие `component.promoted`.
+     */
+    acceptancePolicy: z.looseObject({
+      profileId: z.string(), runPolicyProfileHash: z.string(),
+      currentPolicyProfileHash: z.string().nullable(), stale: z.boolean(),
+    }).nullable(),
   }),
   errors: [
     errorCatalog.invalidRequest, errorCatalog.baseRevRequired, errorCatalog.notFound,
@@ -1483,7 +1492,8 @@ export const promoteComponentContract = registerContract({
     { status: 409, code: "candidate_rejected", description: "a human rejected a candidate of this very revision; promote a new revision instead" },
     { status: 409, code: "candidate_already_promoted", description: "promote-saga CAS: the referenced candidate is already promoted to another version (phase-B markPromoted conflict)" },
     { status: 422, code: "acceptance_matrix_disabled", description: "candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off" },
-    { status: 422, code: "acceptance_run_mismatch", description: "the acceptance run belongs to another candidate or ran under another policy profile" },
+    { status: 422, code: "acceptance_run_mismatch", description: "the acceptance run belongs to another candidate (with EASYUI_PROMOTE_POLICY_STRICT=1 also: its policy profile hash differs from the candidate stamp)" },
+    { status: 422, code: "acceptance_policy_mismatch", description: "the acceptance run ran under a policy profile that may not back a promotion; details carry {runPolicyProfileId, allowed}" },
     { status: 422, code: "acceptance_run_not_passed", description: "the acceptance run is not a terminal pass/pass_with_exceptions" },
     { status: 429, code: "validate_in_flight", description: "a validate/promote build is already in flight for this user" },
     { status: 429, code: "queue_full", description: "global validate concurrency cap reached" },
@@ -1523,6 +1533,8 @@ export const validateComponentContract = registerContract({
  * Авторизация одна на все ручки: `requireUser` + владелец компонента по денормализованному
  * `component_id` (или админ); `share`/`capture`-принципалы получают 403 всегда.
  */
+const acceptanceRunStatusSchema = z.enum(["queued", "running", "pass", "pass_with_exceptions", "fail", "error", "cancelled"]);
+
 const acceptanceCandidateFields = {
   candidateId: z.string(), componentId: z.string(), designSystem: z.string(), rev: z.number(),
   sourceHash: z.string(), bundleHash: z.string(), hostAbiVersion: z.number(), themeVersion: z.number().nullable(),
@@ -1531,11 +1543,24 @@ const acceptanceCandidateFields = {
   /** R3b: `rejected` — вычисляемый статус поверх append-only `candidate_decisions`, а не значение `status`. */
   rejected: z.boolean(),
   decision: z.looseObject({ reason: z.string(), actor: z.string(), createdAt: isoDate }).nullable(),
-  acceptanceRunId: z.string().nullable(), promotedVersion: z.number().nullable(),
+  /**
+   * **Последний поставленный** ран кандидата (`attachRun`), не «принятый» и не «промоутабельный»
+   * (план 2026-08-04, C4). Источник выбора связки promote — `runs[]` ниже.
+   */
+  acceptanceRunId: z.string().nullable(),
+  /**
+   * Все раны кандидата в порядке постановки с готовым `promotionEligible` (терминальный
+   * `pass|pass_with_exceptions` под профилем из `capabilities.acceptance.promotionPolicyProfiles`)
+   * — план 2026-08-04 W3.
+   */
+  runs: z.array(z.looseObject({
+    runId: z.string(), status: acceptanceRunStatusSchema, policyProfileId: z.string(),
+    caseSetId: z.string().nullable(), finishedAt: isoDate.nullable(), promotionEligible: z.boolean(),
+  })),
+  promotedVersion: z.number().nullable(),
   createdAt: isoDate, expiresAt: isoDate,
 };
 
-const acceptanceRunStatusSchema = z.enum(["queued", "running", "pass", "pass_with_exceptions", "fail", "error", "cancelled"]);
 /**
  * Прогресс рана. Счётчики reuse разведены планом 2026-08-04 (D9), потому что одно поле `reused`
  * было двусмысленным (P2-10 фидбэка): `reused` — только полный reuse по `case_fingerprint`;
@@ -1683,7 +1708,7 @@ export const componentImpactContract = registerContract({
 
 export const getComponentCandidateContract = registerContract({
   method: "GET", path: "/api/component-candidates/{candidateId}",
-  summary: "Read an acceptance candidate by id (global namespace; it does not overlap /api/catalog/candidates). Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  summary: "Read an acceptance candidate by id (global namespace; it does not overlap /api/catalog/candidates). Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1. The response is mutable — `status`, `acceptanceRunId` and `runs[]` change over the candidate's life — so clients must cache it with a short freshness window, never as immutable. `runs[]` lists every run of the candidate in queueing order with a precomputed `promotionEligible` (terminal pass/pass_with_exceptions under a promotion policy profile); the scalar `acceptanceRunId` is merely the LAST QUEUED run and must not be used to pick the run that backs a promote.",
   responseSchema: z.looseObject(acceptanceCandidateFields),
   errors: [...acceptanceAuthErrors],
 });
@@ -2753,6 +2778,17 @@ export const capabilitiesResponseSchema = z.object({
    * запрос без `intent` проходит с предупреждением, в `enforce` — падает `400 invalid_request`.
    * `policyVersion` совпадает с `/api/catalog/candidates` и с записями аудита.
    */
+  /**
+   * Политики приёмки (план 2026-08-04 W3): что примет постановка рана и под каким профилем
+   * вердикт допускает promote. `promotionPolicyProfiles` — единственный способ узнать состав
+   * promotion-policy до вызова; ран под профилем вне множества отвергается
+   * `422 acceptance_policy_mismatch`.
+   */
+  acceptance: z.object({
+    policyProfiles: z.array(z.string()),
+    defaultPolicyProfile: z.string(),
+    promotionPolicyProfiles: z.array(z.string()),
+  }),
   /** Объявленный рендерер этой сборки (план renderer-contract-2 §5 R1). */
   renderer: rendererReportSchema,
   reuseGate: z.object({

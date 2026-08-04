@@ -596,3 +596,201 @@ describe("readiness reports a component without an active version (RFC R1, M7)",
     expect(pins.warnings!.map((warning) => warning.code)).toContain("component_no_active_version");
   }, 180_000);
 });
+
+/**
+ * Волна W3 плана 2026-08-04 (D-A/C18/C22/C30): promotion policy. Кандидат штампуется хэшем
+ * `default-v1` при создании, поэтому равенство «хэш рана == хэш кандидата» делало любой
+ * `pixel-strict-v1`-ран непромоутабельным (дефект P0-2). Предикат заменён на членство профиля
+ * рана в `PROMOTION_POLICY_PROFILES`, а расхождение хэша с текущим определением профиля стало
+ * warning'ом с provenance вместо отказа.
+ */
+describe("promotion policy (план 2026-08-04 W3)", () => {
+  async function policyFixture(id: string, name: string) {
+    const context = await setup({ matrix: true });
+    const source = await fixture("rating-stars.tsx");
+    await createComponent(context.handler, id, name, source);
+    const created = await context.handler(req(`/components/${id}/candidates`, "POST"));
+    expect(created.status, await created.clone().text()).toBe(200);
+    const candidate = await created.json() as { candidateId: string; sourceHash: string };
+    return { ...context, orchestrator: context.orchestrator!, id, candidate };
+  }
+
+  /** Ран создаётся напрямую через repo: тут проверяется предикат promote, а не постановка. */
+  const runWith = (
+    orchestrator: AcceptanceOrchestrator, candidateId: string, componentId: string,
+    policy: { policyProfileId: string; policyProfileHash: string },
+  ) => orchestrator.repo.createRun({
+    candidateId, componentId, createdBy: BOOTSTRAP_ADMIN_ID, cases: [],
+    policyProfileId: policy.policyProfileId, policyProfileHash: policy.policyProfileHash,
+  }).run;
+
+  const STRICT = ACCEPTANCE_POLICIES["pixel-strict-v1"];
+
+  test("репро P0-2: pixel-strict-v1 ран промоутится, хотя штамп кандидата — default-v1", async () => {
+    const { db, handler, orchestrator, id, candidate } = await policyFixture("promote-strict", "PromoteStrict");
+    // Именно эта пара и падала в проде: кандидат штампуется default-v1, ран исполнен strict-профилем.
+    expect(orchestrator.repo.requireCandidate(candidate.candidateId).policy_profile_hash)
+      .toBe(policyProfileHash(DEFAULT_POLICY));
+    const run = runWith(orchestrator, candidate.candidateId, id, {
+      policyProfileId: STRICT.id, policyProfileHash: policyProfileHash(STRICT),
+    });
+    orchestrator.repo.terminalizeRun(run.run_id, { status: "pass" });
+
+    const promoted = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, candidateId: candidate.candidateId, acceptanceRunId: run.run_id,
+    }));
+    expect(promoted.status, await promoted.clone().text()).toBe(201);
+    const body = await promoted.json() as { candidateId: string; acceptanceRunId: string; warnings: string[]; acceptancePolicy: Record<string, unknown> };
+    expect(body).toMatchObject({ candidateId: candidate.candidateId, acceptanceRunId: run.run_id });
+    // Профиль не менялся с момента рана — provenance есть, но stale не утверждается и warning'а нет.
+    expect(body.acceptancePolicy).toEqual({
+      profileId: "pixel-strict-v1",
+      runPolicyProfileHash: policyProfileHash(STRICT),
+      currentPolicyProfileHash: policyProfileHash(STRICT),
+      stale: false,
+    });
+    expect(body.warnings.some((warning) => warning.includes("policy profile"))).toBe(false);
+
+    // Версия несёт обе ссылки — и в списке, и в одиночном DTO (C30).
+    const version = await (await handler(req(`/components/${id}/versions/1`))).json() as Record<string, unknown>;
+    expect(version).toMatchObject({ candidateId: candidate.candidateId, acceptanceRunId: run.run_id });
+    const list = await (await handler(req(`/components/${id}`))).json() as { versions: Record<string, unknown>[] };
+    expect(list.versions[0]).toMatchObject({ candidateId: candidate.candidateId, acceptanceRunId: run.run_id });
+    expect(db.query("SELECT acceptance_run_id r FROM component_publishes WHERE component_id=?").get(id))
+      .toEqual({ r: run.run_id });
+  }, 180_000);
+
+  test("профиль вне promotion policy (инъекция мимо роута) → 422 acceptance_policy_mismatch", async () => {
+    const { handler, orchestrator, id, candidate } = await policyFixture("promote-badpolicy", "PromoteBadpolicy");
+    // Реестр сегодня содержит ровно два профиля, и `startRun` отвергает чужие (C3), поэтому
+    // единственный способ дойти до ветки отказа — записать ран мимо роута.
+    const run = runWith(orchestrator, candidate.candidateId, id, {
+      policyProfileId: "experimental-v9", policyProfileHash: "9".repeat(64),
+    });
+    orchestrator.repo.terminalizeRun(run.run_id, { status: "pass" });
+    const response = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, candidateId: candidate.candidateId, acceptanceRunId: run.run_id,
+    }));
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "acceptance_policy_mismatch",
+        runPolicyProfileId: "experimental-v9",
+        allowed: ["default-v1", "pixel-strict-v1"],
+      },
+    });
+  }, 180_000);
+
+  test("ран чужого кандидата остаётся acceptance_run_mismatch — код разведён с политикой", async () => {
+    const { handler, orchestrator, id, candidate } = await policyFixture("promote-foreignrun", "PromoteForeignrun");
+    const other = orchestrator.repo.createCandidate({
+      componentId: id, designSystem: "yandex-pay", rev: 77, sourceHash: "2".repeat(64), bundleHash: "3".repeat(64),
+      hostAbiVersion: 1, themeVersion: null, observedCatalogRevision: "catalog-y",
+      policyProfileHash: policyProfileHash(DEFAULT_POLICY), createdBy: BOOTSTRAP_ADMIN_ID,
+    }).candidate;
+    // Ран чужого кандидата исполнен ровно тем же (допущенным) профилем: отказ обязан быть про
+    // принадлежность, а не про политику.
+    const run = runWith(orchestrator, other.candidate_id, id, {
+      policyProfileId: DEFAULT_POLICY.id, policyProfileHash: policyProfileHash(DEFAULT_POLICY),
+    });
+    orchestrator.repo.terminalizeRun(run.run_id, { status: "pass" });
+    const response = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, candidateId: candidate.candidateId, acceptanceRunId: run.run_id,
+    }));
+    expect(response.status).toBe(422);
+    const body = await response.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("acceptance_run_mismatch");
+    expect(body.error.message).toContain("another candidate");
+  }, 180_000);
+
+  test("C18: устаревший хэш профиля — warning и оба хэша в ответе и в аудите, а не отказ", async () => {
+    const { db, handler, orchestrator, id, candidate } = await policyFixture("promote-stalehash", "PromoteStalehash");
+    // Профиль правили после рана: хэш строки рана не сходится с текущим определением.
+    const staleHash = "a".repeat(64);
+    const run = runWith(orchestrator, candidate.candidateId, id, {
+      policyProfileId: DEFAULT_POLICY.id, policyProfileHash: staleHash,
+    });
+    orchestrator.repo.terminalizeRun(run.run_id, { status: "pass" });
+    const promoted = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, candidateId: candidate.candidateId, acceptanceRunId: run.run_id,
+    }));
+    expect(promoted.status, await promoted.clone().text()).toBe(201);
+    const body = await promoted.json() as { warnings: string[]; acceptancePolicy: Record<string, unknown> };
+    expect(body.acceptancePolicy).toEqual({
+      profileId: "default-v1",
+      runPolicyProfileHash: staleHash,
+      currentPolicyProfileHash: policyProfileHash(DEFAULT_POLICY),
+      stale: true,
+    });
+    expect(body.warnings.some((warning) => warning.includes(staleHash) && warning.includes(policyProfileHash(DEFAULT_POLICY)))).toBe(true);
+    const event = auditActions(db, id).find((entry) => entry.action === "component.promoted");
+    expect(JSON.parse(event!.detail!).acceptancePolicy).toMatchObject({
+      runPolicyProfileHash: staleHash, currentPolicyProfileHash: policyProfileHash(DEFAULT_POLICY), stale: true,
+    });
+  }, 180_000);
+
+  test("kill-switch EASYUI_PROMOTE_POLICY_STRICT=1 возвращает старое равенство хэшей (P0-2)", async () => {
+    const { handler, orchestrator, id, candidate } = await policyFixture("promote-killswitch", "PromoteKillswitch");
+    const run = runWith(orchestrator, candidate.candidateId, id, {
+      policyProfileId: STRICT.id, policyProfileHash: policyProfileHash(STRICT),
+    });
+    orchestrator.repo.terminalizeRun(run.run_id, { status: "pass" });
+    const promote = () => handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, candidateId: candidate.candidateId, acceptanceRunId: run.run_id,
+    }));
+    process.env.EASYUI_PROMOTE_POLICY_STRICT = "1";
+    try {
+      const refused = await promote();
+      expect(refused.status).toBe(422);
+      const body = await refused.json() as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("acceptance_run_mismatch");
+      expect(body.error.message).toContain("policy profile");
+    } finally {
+      delete process.env.EASYUI_PROMOTE_POLICY_STRICT;
+    }
+    // Флаг снят — тот же ран промоутится.
+    expect((await promote()).status).toBe(201);
+  }, 180_000);
+
+  test("candidate-view отдаёт runs[] с promotionEligible; capabilities — состав promotion policy", async () => {
+    const { handler, orchestrator, id, candidate } = await policyFixture("promote-candview", "PromoteCandview");
+    const passed = runWith(orchestrator, candidate.candidateId, id, {
+      policyProfileId: STRICT.id, policyProfileHash: policyProfileHash(STRICT),
+    });
+    orchestrator.repo.terminalizeRun(passed.run_id, { status: "pass" });
+    const failed = runWith(orchestrator, candidate.candidateId, id, {
+      policyProfileId: DEFAULT_POLICY.id, policyProfileHash: policyProfileHash(DEFAULT_POLICY),
+    });
+    orchestrator.repo.terminalizeRun(failed.run_id, { status: "fail" });
+    const injected = runWith(orchestrator, candidate.candidateId, id, {
+      policyProfileId: "experimental-v9", policyProfileHash: "9".repeat(64),
+    });
+    orchestrator.repo.terminalizeRun(injected.run_id, { status: "pass" });
+
+    const view = await (await handler(req(`/component-candidates/${candidate.candidateId}`))).json() as {
+      acceptanceRunId: string; runs: { runId: string; status: string; policyProfileId: string; promotionEligible: boolean; caseSetId: string | null; finishedAt: string | null }[];
+    };
+    // Порядок — `ORDER BY created_at, run_id`; внутри одной секунды он определяется id, поэтому
+    // утверждение идёт по составу, а не по позиции.
+    const eligible = Object.fromEntries(view.runs.map((run) => [run.runId, run.promotionEligible]));
+    expect(eligible).toEqual({
+      [passed.run_id]: true,      // terminal pass + promotion-профиль
+      [failed.run_id]: false,     // терминальный, но не pass
+      [injected.run_id]: false,   // pass, но профиль не допущен к публикации
+    });
+    const passedView = view.runs.find((run) => run.runId === passed.run_id)!;
+    expect(passedView).toMatchObject({ status: "pass", policyProfileId: "pixel-strict-v1", caseSetId: null });
+    expect(passedView.finishedAt).toEqual(expect.any(String));
+    // Скалярное поле — «последний поставленный ран», а не промоутабельный (C4).
+    expect(view.acceptanceRunId).toBe(injected.run_id);
+
+    const caps = await (await handler(req("/capabilities"))).json() as {
+      acceptance: { policyProfiles: string[]; defaultPolicyProfile: string; promotionPolicyProfiles: string[] };
+    };
+    expect(caps.acceptance).toEqual({
+      policyProfiles: ["default-v1", "pixel-strict-v1"],
+      defaultPolicyProfile: "default-v1",
+      promotionPolicyProfiles: ["default-v1", "pixel-strict-v1"],
+    });
+  }, 180_000);
+});

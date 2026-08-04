@@ -27,6 +27,11 @@ services:
       # но никогда в перенос устаревшего вердикта. Откат флага не ретроактивен: уже записанные
       # пересчитанные строки остаются годными (их чистка — bump CASE_FINGERPRINT_ALGO_VERSION).
       EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE: ${EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE:-1}
+      # Аварийный откат promotion policy (план 2026-08-04, W3). Default **off**: promote проверяет
+      # профиль рана против `PROMOTION_POLICY_PROFILES`. `1` возвращает докритическое равенство
+      # хэшей профиля рана и кандидата, то есть возврат дефекта P0-2 (pixel-strict-раны снова
+      # перестанут промоутиться) — включать только как временную меру.
+      EASYUI_PROMOTE_POLICY_STRICT: ${EASYUI_PROMOTE_POLICY_STRICT:-}
       EASYUI_COMPOSITION_V3: ${EASYUI_COMPOSITION_V3:-1}
       EASYUI_RENDERER_FLAGS: ${EASYUI_RENDERER_FLAGS:-}
       EASYUI_RENDERER_EPOCH: ${EASYUI_RENDERER_EPOCH:-}

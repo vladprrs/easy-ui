@@ -681,6 +681,12 @@ export const migrations = [
     // 4. `acceptance_case_results` — cross-run кэш по `case_fingerprint` (D1) для reuse/дедупа;
     //    `component_id` денормализован, потому что reuse обязан проверять владение. Ссылок FK
     //    на раны нет намеренно: GC ранов не должен каскадом рушить кэш результатов.
+    // 4a. `component_candidates.policy_profile_hash` — **информационный штамп**: хэш профиля,
+    //    действовавшего на момент заморозки кандидата (всегда `default-v1`, политику кандидат не
+    //    выбирает — RFC-инвариант «policy вне идентичности кандидата»). В promote-предикате он
+    //    **не участвует** с волны W3 плана 2026-08-04: сверка с ним делала любой
+    //    `pixel-strict-v1`-ран непромоутабельным (P0-2). Промоутабельность решает профиль **рана**
+    //    (`acceptance_runs.policy_profile_id` ∈ `PROMOTION_POLICY_PROFILES`).
     // 5. `component_publishes.candidate_id`/`acceptance_run_id` — плоские TEXT без FK (A9,
     //    см. комментарий-инвариант v8 выше). `design_systems.acceptance` — с обязательным
     //    DEFAULT 'off': старый код (`routes/designSystems.ts`, `bundle/importer.ts`) INSERT'ит

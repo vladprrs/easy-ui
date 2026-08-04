@@ -143,6 +143,31 @@ export type AcceptancePolicyId = keyof typeof ACCEPTANCE_POLICIES;
 
 export const DEFAULT_ACCEPTANCE_POLICY_ID: AcceptancePolicyId = "default-v1";
 
+/**
+ * **Promotion policy** (план 2026-08-04, D-A/P0-2) — профили, под которыми полученный вердикт
+ * допускает публикацию. Это отдельное понятие от «профиля, под которым ран можно поставить»:
+ * идентичность кандидата политику не включает (RFC-инвариант), поэтому promote спрашивает не
+ * «совпал ли хэш профиля с кандидатским» (эмерджентный отказ P0-2: кандидат всегда штампуется
+ * `default-v1`, и любой `pixel-strict-v1`-ран падал `acceptance_run_mismatch`), а «принадлежит ли
+ * профиль рана множеству допущенных к публикации».
+ *
+ * Сегодня предикат тавтологичен — реестр содержит ровно эти два профиля, и `startRun` отвергает
+ * чужие (`422 unknown_policy_profile`). Он оставлен осознанно (триаж C3): это AC фидбэка и задел
+ * под per-DS конфигурацию, а ветка отказа проверяется тестом через инъекцию профиля мимо роута.
+ */
+export const PROMOTION_POLICY_PROFILES: readonly AcceptancePolicyId[] = ["default-v1", "pixel-strict-v1"];
+
+/** Профиль рана допускает публикацию под ним (см. `PROMOTION_POLICY_PROFILES`). */
+export const isPromotionPolicyProfile = (id: string): boolean =>
+  (PROMOTION_POLICY_PROFILES as readonly string[]).includes(id);
+
+/**
+ * Терминальные вердикты, с которыми ран допускает публикацию (RFC §4.3: `pass_with_exceptions` —
+ * только через `allowExceptions` политики, решение принято при свёртке рана). Живёт здесь, а не в
+ * саге promote: тот же предикат считает `promotionEligible` в candidate-view.
+ */
+export const PROMOTABLE_RUN_STATUSES: ReadonlySet<string> = new Set(["pass", "pass_with_exceptions"]);
+
 export const isAcceptancePolicyId = (value: string): value is AcceptancePolicyId =>
   Object.prototype.hasOwnProperty.call(ACCEPTANCE_POLICIES, value);
 

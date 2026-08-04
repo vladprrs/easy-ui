@@ -12,6 +12,10 @@ import { ensureDraftCandidate } from "./validate";
 import { getCandidateBundle } from "./candidates";
 import type { AcceptanceRepo, CandidateRow } from "../acceptance/repo";
 import { isTerminalRunStatus } from "../acceptance/repo";
+import {
+  ACCEPTANCE_POLICIES, PROMOTABLE_RUN_STATUSES, PROMOTION_POLICY_PROFILES,
+  isAcceptancePolicyId, isPromotionPolicyProfile, policyProfileHash,
+} from "../acceptance/policies";
 
 /**
  * Promote (RFC candidate-acceptance-pipeline §4.3, волна R1) — **сага**, не одна транзакция:
@@ -82,10 +86,34 @@ export type PromoteResult = {
   /** A9-receipts, записанные в строку версии (null — promote без матричной приёмки). */
   candidateId: string | null;
   acceptanceRunId: string | null;
+  /**
+   * Provenance политики публикации (план 2026-08-04 W3, C18): под каким профилем получен вердикт,
+   * каким хэшем профиль был на момент рана и каков он сейчас. `stale: true` — определение профиля
+   * менялось после рана: это **не** отказ (см. `resolveAcceptanceRefs`), а warning + запись обоих
+   * хэшей сюда и в аудит-событие `component.promoted`. `null` — promote без ссылки на ран.
+   */
+  acceptancePolicy: PromoteAcceptancePolicy | null;
 };
 
-/** Терминальные вердикты, с которыми ран допускает публикацию (RFC §4.3: `pass_with_exceptions` — только через `allowExceptions` политики, решение принято при свёртке рана). */
-const PROMOTABLE_RUN_STATUSES = new Set(["pass", "pass_with_exceptions"]);
+export type PromoteAcceptancePolicy = {
+  profileId: string;
+  runPolicyProfileHash: string;
+  currentPolicyProfileHash: string | null;
+  stale: boolean;
+};
+
+/**
+ * Аварийный откат W3 (`EASYUI_PROMOTE_POLICY_STRICT`, объявлен в `docker-compose.yml`, по
+ * умолчанию **выключен**): `1` возвращает докритическое поведение — равенство
+ * `run.policy_profile_hash === candidate.policy_profile_hash`, то есть возврат дефекта P0-2
+ * (кандидат всегда штампуется `default-v1`, поэтому `pixel-strict-v1`-раны снова перестанут
+ * промоутиться). Существует ровно для одного сценария: promotion-предикат оказался неверным на
+ * проде, и старое поведение — меньшее зло до отката образа.
+ */
+export const promotePolicyStrictEnabled = (): boolean => {
+  const value = process.env.EASYUI_PROMOTE_POLICY_STRICT ?? "";
+  return value !== "" && value !== "0";
+};
 
 /**
  * Сверка A9-ссылок запроса с durable-строками приёмки — **до** любых записей (фаза A.1).
@@ -97,15 +125,26 @@ const PROMOTABLE_RUN_STATUSES = new Set(["pass", "pass_with_exceptions"]);
  *   promote публиковал бы билд, который приёмка не видела (`409 revision_conflict`);
  * - живой (`queued|running`) ран кандидата запрещает публикацию (`409 acceptance_run_in_flight`):
  *   вердикт ещё не сложен;
- * - ран обязан принадлежать этому кандидату и разделять с ним `policy_profile_hash`
- *   (`422 acceptance_run_mismatch`) и быть терминальным `pass|pass_with_exceptions`
- *   (`422 acceptance_run_not_passed`).
+ * - ран обязан принадлежать этому кандидату (`422 acceptance_run_mismatch`) и быть терминальным
+ *   `pass|pass_with_exceptions` (`422 acceptance_run_not_passed`);
+ * - профиль рана обязан входить в `PROMOTION_POLICY_PROFILES` (`422 acceptance_policy_mismatch`).
+ *
+ * **Чего здесь больше нет** (план 2026-08-04 W3, D-A): равенства `policy_profile_hash` рана и
+ * кандидата. Кандидат штампуется хэшем `default-v1` при создании (политику он не выбирает —
+ * RFC-инвариант «policy вне идентичности кандидата»), поэтому равенство хэшей делало любой
+ * `pixel-strict-v1`-ран непромоутабельным (P0-2 фидбэка 2026-08-04). Штамп кандидата остаётся
+ * информационным. Аварийный возврат старого поведения — `EASYUI_PROMOTE_POLICY_STRICT=1`.
+ *
+ * Расхождение `run.policy_profile_hash` с текущим определением профиля (профиль правили после
+ * рана) — **не отказ** (C18): вердикт получен по политике, которая тогда действовала, и запрет
+ * публикации здесь наказывал бы за чужую правку кода. Оба хэша уезжают в `acceptancePolicy`
+ * ответа и аудит-события, плюс warning.
  */
 function resolveAcceptanceRefs(
   acceptance: PromoteAcceptance,
   input: { id: string; baseRev: number; sourceHash: string },
   headRev: number,
-): { candidate: CandidateRow; runId: string | null } {
+): { candidate: CandidateRow; runId: string | null; policy: PromoteAcceptancePolicy | null; warnings: string[] } {
   const { repo } = acceptance;
   const run = acceptance.acceptanceRunId === undefined ? null : repo.requireRun(acceptance.acceptanceRunId);
   if (run !== null && run.component_id !== input.id) throw new ApiError(404, "not_found", "Acceptance run not found");
@@ -122,14 +161,41 @@ function resolveAcceptanceRefs(
   if (inFlight) {
     throw new ApiError(409, "acceptance_run_in_flight", "Candidate has a non-terminal acceptance run; wait for it to finish before promoting", { runId: inFlight.run_id });
   }
-  if (run === null) return { candidate, runId: null };
-  if (run.candidate_id !== candidate.candidate_id || run.policy_profile_hash !== candidate.policy_profile_hash) {
-    throw new ApiError(422, "acceptance_run_mismatch", `Acceptance run does not belong to candidate ${candidate.candidate_id} or was executed under another policy profile`, { runId: run.run_id });
+  if (run === null) return { candidate, runId: null, policy: null, warnings: [] };
+  if (run.candidate_id !== candidate.candidate_id) {
+    throw new ApiError(422, "acceptance_run_mismatch", `Acceptance run belongs to another candidate, not ${candidate.candidate_id}`, { runId: run.run_id });
+  }
+  const strict = promotePolicyStrictEnabled();
+  if (strict) {
+    // Аварийный откат: докритическое равенство хэшей (см. `promotePolicyStrictEnabled`).
+    if (run.policy_profile_hash !== candidate.policy_profile_hash) {
+      throw new ApiError(422, "acceptance_run_mismatch", `Acceptance run was executed under another policy profile than candidate ${candidate.candidate_id}`, { runId: run.run_id });
+    }
+  } else if (!isPromotionPolicyProfile(run.policy_profile_id)) {
+    throw new ApiError(422, "acceptance_policy_mismatch",
+      `Acceptance run was executed under policy profile ${run.policy_profile_id}, which is not allowed to back a promotion`,
+      { runId: run.run_id, runPolicyProfileId: run.policy_profile_id, allowed: [...PROMOTION_POLICY_PROFILES] });
   }
   if (!isTerminalRunStatus(run.status) || !PROMOTABLE_RUN_STATUSES.has(run.status)) {
     throw new ApiError(422, "acceptance_run_not_passed", `Acceptance run is ${run.status}; only pass or pass_with_exceptions may back a promote`, { runId: run.run_id });
   }
-  return { candidate, runId: run.run_id };
+  // C18: сверка хэша рана с **текущим** определением профиля. Профиль неизвестен коду только на
+  // strict-пути (иначе предикат выше уже отказал) — тогда текущего хэша нет, и `stale` не
+  // утверждается: «сравнить не с чем» ≠ «разошлось».
+  const current = isAcceptancePolicyId(run.policy_profile_id)
+    ? policyProfileHash(ACCEPTANCE_POLICIES[run.policy_profile_id])
+    : null;
+  const stale = current !== null && current !== run.policy_profile_hash;
+  const policy: PromoteAcceptancePolicy = {
+    profileId: run.policy_profile_id,
+    runPolicyProfileHash: run.policy_profile_hash,
+    currentPolicyProfileHash: current,
+    stale,
+  };
+  const warnings = stale
+    ? [`Acceptance policy profile ${run.policy_profile_id} changed after run ${run.run_id} was executed (run hash ${run.policy_profile_hash}, current ${current}); the verdict is accepted under the policy that was in force then`]
+    : [];
+  return { candidate, runId: run.run_id, policy, warnings };
 }
 
 /**
@@ -283,7 +349,7 @@ export async function promoteComponent(db: Database, dataDir: string, input: Pro
     throw error;
   }
 
-  const warnings = [...extracted.warnings, ...(candidate.entry.parityWarnings ?? [])];
+  const warnings = [...extracted.warnings, ...(candidate.entry.parityWarnings ?? []), ...(acceptanceRefs?.warnings ?? [])];
   if (!meta.atomicLevel) warnings.push("Atomic design level is not provided; component will be classified as Other");
   warnings.push(...architectureWarnings(db, input.id, meta, revision.source));
   warnings.push(...duplicateWarnings(db, { designSystem: revision.designSystem, id: input.id, name: repo.meta(input.id).name, source: revision.source, meta }));
@@ -296,5 +362,6 @@ export async function promoteComponent(db: Database, dataDir: string, input: Pro
     superseded, cached: candidate.cached, warnings,
     candidateId: acceptanceRefs?.candidate.candidate_id ?? null,
     acceptanceRunId: acceptanceRefs?.runId ?? null,
+    acceptancePolicy: acceptanceRefs?.policy ?? null,
   };
 }

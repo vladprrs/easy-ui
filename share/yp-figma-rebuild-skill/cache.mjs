@@ -82,8 +82,9 @@ export function safeSegment(value, label = "segment") {
 
 /**
  * Что кэшируется. `immutable` — ответ, адрес которого уже содержит содержимое (версия
- * компонента, кандидат, case-set, терминальный ран); `fresh` — изменяемый ответ с окном
- * свежести и фингерпринтом (`catalogRevision`). Мутации, auth и нетерминальные раны
+ * компонента, case-set, терминальный ран); `fresh` — изменяемый ответ с окном свежести и
+ * фингерпринтом (`catalogRevision`) — сюда же относится и кандидат приёмки: его id
+ * content-addressed, но строка живёт (`status`/`acceptanceRunId`/`runs[]`). Мутации, auth и нетерминальные раны
  * не кэшируются никогда: `classify` возвращает для них `null`, а `terminalOnly` дополнительно
  * запрещает **запись** нетерминального ответа.
  */
@@ -97,7 +98,11 @@ export function classify(method, path) {
   if (first === "catalog" && (second === "manifest" || second === "candidates") && segments.length === 2) return json({ mode: "fresh", ttlMs: FRESH_TTL_MS });
   if (first === "design-systems" && segments.length === 2) return json({ mode: "fresh", ttlMs: FRESH_TTL_MS });
   if (first === "components" && third === "versions" && segments.length === 4) return json({ mode: "immutable" });
-  if (first === "component-candidates" && segments.length === 2) return json({ mode: "immutable" });
+  // Кандидат адресуется content-addressed id, но **строка** мутабельна: `status`
+  // (`validated → promoted`), `acceptanceRunId` и `runs[]` меняются в течение его жизни
+  // (план 2026-08-04 W3, C22). Поэтому `fresh`, а не `immutable`: иначе тёплый кэш вечно
+  // показывал бы кандидата без ранов. Автовыбор связки promote ходит мимо кэша — сетевым запросом.
+  if (first === "component-candidates" && segments.length === 2) return json({ mode: "fresh", ttlMs: FRESH_TTL_MS });
   if (first === "case-sets" && (segments.length === 2 || (segments.length === 3 && third === "coverage"))) return json({ mode: "immutable" });
   if (first === "acceptance-runs" && segments.length === 2) return json({ mode: "immutable", terminalOnly: true });
   if (first === "acceptance-runs" && segments.length === 3 && third === "cases") return json({ mode: "immutable", terminalOnly: true });

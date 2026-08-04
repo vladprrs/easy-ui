@@ -402,6 +402,29 @@ Meta-ответы прототипов и компонентов additively не
 
 **Kill-switch.** `EASYUI_ACCEPTANCE_DISABLED=1` (читается один раз на входе процесса) убирает ручку — `404 not_found` — и гасит `features.acceptancePromote` в discovery. Publish при этом продолжает работать: гашение приёмки не делает дизайн-систему неопубликуемой.
 
+#### Promotion policy: какой ран допускает публикацию (волна W3, план 2026-08-04)
+
+Ссылки `candidateId`/`acceptanceRunId` (`EASYUI_ACCEPTANCE_MATRIX=1`) сверяются до любых записей. Предикаты:
+
+- **кандидат** описывает ровно `{baseRev, sourceHash}` запроса (`409 revision_conflict`), не держит живого рана (`409 acceptance_run_in_flight`) и принадлежит этому компоненту (`404 not_found` — типизованный отказ был бы оракулом по чужой приёмке);
+- **ран принадлежит этому кандидату** — иначе `422 acceptance_run_mismatch`. Этот код больше **не** означает «другая политика»;
+- **профиль рана допущен к публикации**: `run.policy_profile_id ∈ capabilities.acceptance.promotionPolicyProfiles` — иначе `422 acceptance_policy_mismatch` с `{runPolicyProfileId, allowed}`;
+- **вердикт** — терминальный `pass|pass_with_exceptions` (`422 acceptance_run_not_passed`).
+
+**Хэш профиля кандидата в предикате не участвует.** `component_candidates.policy_profile_hash` — **информационный штамп**: кандидат замораживает билд, а не политику (RFC-инвариант «policy вне идентичности кандидата»), и штампуется хэшем `default-v1` при создании. Прежняя сверка «хэш рана == хэш кандидата» поэтому делала любой `pixel-strict-v1`-ран непромоутабельным — дефект P0-2 фидбэка 2026-08-04, снят этой волной.
+
+**Устаревший хэш профиля — warning, не отказ.** `run.policy_profile_hash` сверяется с текущим `policyProfileHash(ACCEPTANCE_POLICIES[run.policy_profile_id])`; расхождение (профиль правили после рана) даёт warning в `warnings[]` и provenance в ответе:
+
+```json
+"acceptancePolicy": {"profileId": "pixel-strict-v1", "runPolicyProfileHash": "…", "currentPolicyProfileHash": "…", "stale": true}
+```
+
+Те же поля уезжают в аудит-событие `component.promoted` (колонки под них у `component_publishes` нет — волна идёт без миграций). Запрет публикации здесь наказывал бы за правку кода, а не за качество сборки: вердикт получен по политике, которая тогда действовала.
+
+**Kill-switch `EASYUI_PROMOTE_POLICY_STRICT`** (объявлен в `docker-compose.yml`, по умолчанию **выключен**). `1` возвращает докритическое равенство хэшей профиля рана и кандидата, то есть **возврат дефекта P0-2** — только аварийный откат до отката образа.
+
+**DTO версий.** `candidateId`/`acceptanceRunId` отдаёт и список версий (`GET /components/:id`, `no-store`), и одиночный `GET /components/:id/versions/:version`, и 201-ответ promote. Ограничение (C30): одиночный DTO версии клиентский кэш держит как `immutable` (адрес несёт версию), а receipts — мутабельная часть строки, их проставляет фаза B саги. Свежую связку читать по 201-ответу promote или по списку версий, а не из тёплого кэша ручки версии.
+
 ### Acceptance: кандидаты и матричные раны
 
 Матричная приёмка (план `docs/plans/2026-08-03-family-acceptance-and-composition-v3.md` §5 W1a, RFC §4.1–4.2) заменяет семейство из десятков клиентских операций **одной постановкой и polls**: неизменяемый кандидат (замороженный билд ревизии) + набор верификационных случаев → durable-ран с per-case вердиктами, гейтами и content-addressed evidence.
@@ -422,7 +445,7 @@ Meta-ответы прототипов и компонентов additively не
 | `POST` | `/acceptance-runs/:runId/cancel` | `200` ран в статусе `cancelled` |
 | `POST` | `/components/:id/impact` | `200` отчёт импакта (dry-run, ничего не снимает) |
 
-**`POST /components/:id/candidates`** (тело `{}`) выполняет тот же [validate-префлайт головы](#validate-префлайт-публикации) — с тем же троттлингом и теми же кодами — и этим же материализует бандл, который потом снимается **по ревизии кандидата**, а не по head. Строка идемпотентна по `{componentId, designSystem, rev, buildFingerprint}`: повтор на неизменённом билде возвращает тот же `candidateId` с `cached: true` и не сбрасывает его `status`. Бандл кандидата пинуется против GC candidate-кэша, пока на него ссылается нетерминальный ран. Ответ: `candidateId`, `componentId`, `designSystem`, `rev`, `sourceHash`, `bundleHash`, `hostAbiVersion`, `themeVersion`, `buildFingerprint`, `policyProfileHash`, `catalogRevision`, `status` (`validated|promoted`), `statusReason`, `rejected`, `decision` (`{reason, actor, createdAt}` либо `null`), `acceptanceRunId`, `promotedVersion`, `createdAt`, `expiresAt`, `cached`, `warnings`. Уехавшая между префлайтом и записью голова — `409 revision_conflict {currentRev}`. Списочной ручки нет (триаж A7): кандидат адресуется своим id.
+**`POST /components/:id/candidates`** (тело `{}`) выполняет тот же [validate-префлайт головы](#validate-префлайт-публикации) — с тем же троттлингом и теми же кодами — и этим же материализует бандл, который потом снимается **по ревизии кандидата**, а не по head. Строка идемпотентна по `{componentId, designSystem, rev, buildFingerprint}`: повтор на неизменённом билде возвращает тот же `candidateId` с `cached: true` и не сбрасывает его `status`. Бандл кандидата пинуется против GC candidate-кэша, пока на него ссылается нетерминальный ран. Ответ: `candidateId`, `componentId`, `designSystem`, `rev`, `sourceHash`, `bundleHash`, `hostAbiVersion`, `themeVersion`, `buildFingerprint`, `policyProfileHash`, `catalogRevision`, `status` (`validated|promoted`), `statusReason`, `rejected`, `decision` (`{reason, actor, createdAt}` либо `null`), `acceptanceRunId`, `promotedVersion`, `createdAt`, `expiresAt`, `cached`, `warnings`. `policyProfileHash` — информационный штамп профиля на момент заморозки (в promote-предикате [не участвует](#promotion-policy-какой-ран-допускает-публикацию-волна-w3-план-2026-08-04)). `acceptanceRunId` — **последний поставленный** ран, а не принятый; выбирать ран для promote по нему нельзя. Полный список — `runs: [{runId, status, policyProfileId, caseSetId, finishedAt, promotionEligible}]` в порядке постановки, где `promotionEligible` = терминальный `pass|pass_with_exceptions` под профилем из `capabilities.acceptance.promotionPolicyProfiles`. Ответ **мутабелен** (`status`/`acceptanceRunId`/`runs[]` живут вместе с кандидатом) — клиентский кэш харнеса держит его как `fresh` с коротким TTL, не как `immutable`. Уехавшая между префлайтом и записью голова — `409 revision_conflict {currentRev}`. Списочной ручки нет (триаж A7): кандидат адресуется своим id.
 
 **`POST /component-candidates/:candidateId/reject`** `{reason}` — отклонение сборки человеком (RFC §4.1, волна R3b). Владелец компонента или админ; `reason` обязателен (непустая строка). Решение пишется **append-only**-строкой в `candidate_decisions`: хранимый enum `status` не расширяется, а `rejected` — вычисляемый признак DTO (`rejected: true` + `decision {reason, actor, createdAt}`). Пишется аудит-событие `candidate.rejected`.
 
@@ -1643,6 +1666,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
     "componentValidate": true, "componentGeometry": true, "componentDraftPreview": true, "prototypeHeadTracking": true, "readinessProfile": true, "themeDryRun": true, "themeSparseOps": true, "themeSpacingResolverV2": true,
     "surfaces": true, "surfacesWrite": false,
     "acceptanceMatrix": false, "acceptanceCandidates": false, "acceptanceRuns": false },
+  "acceptance": { "policyProfiles": ["default-v1", "pixel-strict-v1"], "defaultPolicyProfile": "default-v1", "promotionPolicyProfiles": ["default-v1", "pixel-strict-v1"] },
   "renderer": { "rendererSchema": 2, "rendererVersion": "r2", "fingerprint": "<sha256>", "policyHash": "<sha256 дефолтной readiness-политики>",
     "os": "linux", "arch": "x64", "nodeVersion": "24.x.y", "playwrightVersion": "1.61.1",
     "browserName": "chromium", "browserVersion": "149.0.7827.55", "browserRevision": "1228",
@@ -1653,6 +1677,8 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
   "reuseGate": { "mode": "shadow", "intentRequired": false, "policyVersion": 1 }
 }
 ```
+
+`acceptance` разводит два разных множества политик приёмки: `policyProfiles` — что примет `POST /acceptance-runs` в `policy` (иначе `422 unknown_policy_profile`), `promotionPolicyProfiles` — под каким профилем полученный вердикт [допускает публикацию](#promotion-policy-какой-ран-допускает-публикацию-волна-w3-план-2026-08-04) (иначе `422 acceptance_policy_mismatch`). Сегодня множества совпадают; различать их обязан клиент, а не догадка — пересечение задано конфигурацией сервера, а не инвариантом кода.
 
 `reuseGate` описывает фазу [reuse-гейта](#reuse-gate-при-создании-и-публикации-компонента) этого инстанса: `mode` — `shadow` либо `enforce`, `intentRequired` истинно ровно в `enforce`, `policyVersion` — версия политики матчинга, та же, что в ответах `/api/catalog/candidates` и в записях аудита. Значение приходит из `REUSE_GATE`, прочитанной один раз на входе процесса, — повторного чтения окружения на запросе нет, поэтому discovery и сам гейт не могут разойтись.
 
