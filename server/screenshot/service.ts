@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import type { CaptureExpected } from "../../src/capture/protocol";
+import type { CaptureExpected, CaptureFontFaceDeclaration, CaptureFontManifest } from "../../src/capture/protocol";
 import {
   codesFromReadinessReason, isCaptureFailureCode, sanitizeCaptureCodes,
   type CaptureCode, type CaptureFailureCode,
@@ -19,6 +19,7 @@ import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
 import { docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
 import { surfaceDesignSystem, surfaceOf } from "../../src/prototype/surfaces";
+import { resolveCaptureMode } from "../capture/modes";
 import { buildDeterminismArgs, compareBrowserVersion, policyHashOf, rendererDeclaration, rendererFingerprintOf, strictManifestEnabled } from "../capture/renderer";
 import { buildStaticAllowedUrls, rendererBuildFrom } from "./allowedUrls";
 import { classifyCaptureErrors } from "./noise";
@@ -44,14 +45,19 @@ export interface CaptureQuality {
  * acceptance-ретраев своя таксономия. `queue_full` не бывает исходом поставленной джобы —
  * его возвращает enqueue (см. {@link jobOutcomeOfError}).
  */
-export type JobOutcome = "ok" | "worker_crash" | "timeout" | "queue_full" | "subprocess_error" | "renderer_mismatch";
+export type JobOutcome = "ok" | "worker_crash" | "timeout" | "queue_full" | "subprocess_error" | "renderer_mismatch" | "surface_missing";
 
 /**
  * Исходы, которые ретраить бессмысленно (§5 R3, минор приёмки R1). `renderer_mismatch` —
  * расхождение объявленного манифеста и фактически нарисовавшего кадр браузера: повтор в том же
  * процессе даст ровно то же расхождение, а бюджет `maxInfraRetries` тратился бы на шум.
+ *
+ * `surface_missing` (минор R3, закрыт в R4) — на странице нет `#eui-capture-surface`: шелл не
+ * отрендерил поверхность (ошибка компонента, неверный маршрут). До волны это ехало как
+ * `subprocess_error` и жгло `maxInfraRetries` приёмки, хотя повтор даёт ровно ту же пустую
+ * страницу — терминальность по канону `renderer_mismatch`.
  */
-export const TERMINAL_JOB_OUTCOMES: readonly JobOutcome[] = ["renderer_mismatch"] as const;
+export const TERMINAL_JOB_OUTCOMES: readonly JobOutcome[] = ["renderer_mismatch", "surface_missing"] as const;
 export const isTerminalJobOutcome = (outcome: JobOutcome): boolean => TERMINAL_JOB_OUTCOMES.includes(outcome);
 
 /**
@@ -249,7 +255,7 @@ export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult 
 
 export interface WorkerJob {
   captureOrigin: string; captureUrl: string; token: string;
-  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: { marginPx: number }; readiness?: ReadinessPolicy; expected: CaptureExpected };
+  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: { marginPx: number }; readiness?: ReadinessPolicy; fonts?: CaptureFontManifest; expected: CaptureExpected };
   allowedUrls: string[]; viewport: Viewport; deviceScaleFactor: number; colorScheme: "light" | "dark"; waitForFonts: boolean; expected: CaptureExpected;
   probe?: CaptureProbe; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
   /** ≤20 ключей маркеров для детальных измерений; пустой массив — корневой маркер (W3). */
@@ -302,6 +308,12 @@ interface InternalJob {
    * (её приносит профиль приёмки); прочие пути остаются на дефолте, то есть ведут себя как раньше.
    */
   readinessPolicy?: ReadinessPolicy;
+  /**
+   * R4: манифест шрифтов темы джобы (`fontManifestHash` + объявленные faces). Замораживается на
+   * постановке вместе с темой: политика `required-faces` судит именно ту версию темы, по которой
+   * считался `case_fingerprint`.
+   */
+  fonts?: CaptureFontManifest;
   /**
    * Объявленный рендерер, замороженный на постановке (R1). Заморожен именно здесь, а не читается
    * в момент результата: отпечаток обязан относиться к тому же процессу и той же политике, по
@@ -406,6 +418,40 @@ export function themeAssetIds(content: ThemeContent | null): string[] {
   return [...ids];
 }
 
+/**
+ * Манифест шрифтов темы (план renderer-contract-2 §5 **R4**, N4).
+ *
+ * `themeFontSchema` — `{family, src, weight?, style?}`: ни `assetId`, ни `sha256` в схеме нет
+ * (C-m13). `src` — это и есть id ассета (`ThemeStyle` подставляет его в `assetUrl(font.src)`),
+ * а sha256 содержимого выводится из канонического формата id `asset_<sha256>`
+ * (`server/assets.test.ts`); id иного формата даёт `sha256: null` — врать нельзя.
+ *
+ * Манифест уезжает поверхности в bootstrap'е и определяет **required-faces** строгой политики:
+ * без него (ДС без темы, `fonts: []`) строгость шрифтов вырождается в v1-семантику.
+ */
+export function declaredFontFaces(content: ThemeContent | null): CaptureFontFaceDeclaration[] {
+  const faces = (content?.fonts ?? []).map((font) => {
+    const assetId = /^\/api\/assets\//.test(font.src) ? decodeURIComponent(font.src.replace(/^\/api\/assets\//, "").split(/[?#]/)[0]!) : font.src;
+    const sha = /^asset_([0-9a-f]{64})$/.exec(assetId);
+    return {
+      family: font.family,
+      weight: font.weight === undefined ? "400" : String(font.weight),
+      style: font.style ?? "normal",
+      assetId,
+      sha256: sha ? sha[1]! : null,
+    };
+  });
+  // Порядок объявления темы на кадр не влияет, а на хэш влиял бы: сортировка делает манифест
+  // функцией содержимого темы, а не порядка правок в ней.
+  return faces.sort((left, right) => canonicalStringify(left) < canonicalStringify(right) ? -1 : 1);
+}
+
+/** `fontManifestHash` — sha256 канонизованного списка объявленных faces. */
+export function fontManifestOf(content: ThemeContent | null): CaptureFontManifest {
+  const declared = declaredFontFaces(content);
+  return { declared, manifestHash: new Bun.CryptoHasher("sha256").update(canonicalStringify(declared)).digest("hex") };
+}
+
 export interface ScreenshotServiceDeps {
   db: Database; dataDir: string; serveDist?: string;
   captureOrigin: string; chromiumAvailable: boolean; runJob: RunJob;
@@ -486,13 +532,16 @@ export class ScreenshotService {
     // ДС **снимаемого экрана**: у мульти-поверхностного дока это ДС его поверхности (D14).
     const screenDesignSystem = surfaceDesignSystem(surfaceOf(full.doc, screenId), full.doc) ?? full.doc.designSystem;
     const screenMetaVersion = themePins[screenDesignSystem] ?? null;
-    const resolvedSpaceScale = opts.probe ? (() => {
-      const themeContent = screenMetaVersion == null
-        ? getLatestDesignSystemContent(this.deps.db, screenDesignSystem)
-        : getDesignSystemVersion(this.deps.db, screenDesignSystem, screenMetaVersion);
-      // Резолвер — свойство пиннутой версии темы (миграция v23): старые версии остаются на legacy-пути.
-      return resolveSpacingScale(screenDesignSystem, themeContent?.tokens ?? {}, themeContent?.spacingResolver);
-    })() : undefined;
+    // R4: тема экрана резолвится на **любой** frozen-постановке, а не только при `opts.probe` —
+    // манифест шрифтов нужен и обычному кадру (мульти-ДС документ → манифест ДС снимаемого экрана).
+    const themeContent = screenMetaVersion == null
+      ? getLatestDesignSystemContent(this.deps.db, screenDesignSystem)
+      : getDesignSystemVersion(this.deps.db, screenDesignSystem, screenMetaVersion);
+    // Резолвер — свойство пиннутой версии темы (миграция v23): старые версии остаются на legacy-пути.
+    const resolvedSpaceScale = opts.probe
+      ? resolveSpacingScale(screenDesignSystem, themeContent?.tokens ?? {}, themeContent?.spacingResolver)
+      : undefined;
+    const fonts = fontManifestOf(themeContent ?? null);
     const geometryRoleKeys = opts.probe === "geometry" ? geometryRoleKeysOf(full.doc, screenId) : undefined;
     const theme = opts.theme === "dark" ? "dark" : "light";
     const expected: CaptureExpected = { kind: "prototype", prototypeInstanceId:full.prototypeInstanceId, rev: snap.rev, componentManifestHash: full.componentManifestHash, builtinCatalogHash: full.builtinCatalogHash, designSystem: screenDesignSystem ?? null, dsMetaVersion: screenMetaVersion, rendererBuild: this.rendererBuild };
@@ -510,7 +559,7 @@ export class ScreenshotService {
     query.set("theme", theme); query.set("dsf", String(dsf));
     const captureUrl = `/capture/${encodeURIComponent(id)}/s/${encodeURIComponent(screenId)}?${query}`;
     const capturePins: CapturePin[] = full.components.map((p) => ({ id: p.id, name: p.name, version: p.version, bundleUrl: p.bundleUrl, bundleHash: p.bundleHash, status: p.status }));
-    const {jobId}=this.push({ kind: "prototype", expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins, capturePins, captureManifestHash: full.componentManifestHash, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
+    const {jobId}=this.push({ kind: "prototype", expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins, capturePins, captureManifestHash: full.componentManifestHash, fonts, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
     return {jobId,expected,components:capturePins};
   }
 
@@ -536,7 +585,7 @@ export class ScreenshotService {
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/${version}?${query}`;
     // Компонентная геометрия (P1b): шкала — из последней темы, ролей экрана у одиночного компонента нет.
     const resolvedSpaceScale = opts.probe ? resolveSpacingScale(dto.designSystem, themeContent.tokens, themeContent.spacingResolver) : undefined;
-    const {jobId}=this.push({ kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}) });
+    const {jobId}=this.push({ kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, fonts: fontManifestOf(themeContent), ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}) });
     return {jobId,expected};
   }
 
@@ -591,7 +640,7 @@ export class ScreenshotService {
     this.guardQueue(lane);
     // Acceptance-путь **всегда** пинует политику readiness явно: её хэш входит в `case_fingerprint`,
     // поэтому «политика по умолчанию у поверхности» и «политика рана» обязаны быть одним объектом.
-    return this.pushDraftCapture(id, draft, viewport, dsf, { ...opts, readinessPolicy: opts.readinessPolicy ?? DEFAULT_READINESS_POLICY });
+    return this.pushDraftCapture(id, draft, viewport, dsf, { ...opts, readinessPolicy: opts.readinessPolicy ?? resolveCaptureMode("acceptance").readiness });
   }
 
   /** Общее тело draft/candidate-постановки: bootstrap, allowlist и handshake строятся от `draft`. */
@@ -632,6 +681,9 @@ export class ScreenshotService {
     const { jobId } = this.push({
       kind: "component", expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false,
       draft: { name: repo.row(id).name, designSystem: draft.designSystem, bundleUrl, ...(meta.propsJsonSchema !== undefined ? { propsJsonSchema: meta.propsJsonSchema } : {}), ...(meta.examples !== undefined ? { examples: meta.examples } : {}) },
+      // Драфт и кандидат приёмки: компонент не пинует тему, поэтому манифест — от последней версии
+      // темы его ДС, той же, что уже дала `dsMetaVersion` handshake'а.
+      fonts: fontManifestOf(themeContent),
       ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}),
       ...(paintMargin === undefined ? {} : { paintMargin, geometryDetailKeys: (opts.geometryDetailKeys ?? []).slice(0, 20) }),
       ...(opts.deliver ? { deliver: opts.deliver } : {}),
@@ -788,6 +840,9 @@ export class ScreenshotService {
       if (job.paintMargin !== undefined) workerJob.bootstrap.paint = { marginPx: job.paintMargin };
       // Политика readiness — туда же: поверхность исполняет её и публикует доказательство (W4).
       if (job.readinessPolicy !== undefined) workerJob.bootstrap.readiness = job.readinessPolicy;
+      // R4: манифест шрифтов темы — вход правила required-faces (T-M10). Пустой манифест уезжает
+      // тоже: «тема есть, шрифтов в ней нет» и «манифест не приехал» — разные факты.
+      if (job.fonts !== undefined) workerJob.bootstrap.fonts = job.fonts;
       const result = await this.deps.runJob(workerJob, JOB_DEADLINE_MS);
       if (!result.ok) {
         job.status = "error";
@@ -796,7 +851,9 @@ export class ScreenshotService {
         const code = isCaptureFailureCode(result.code) ? result.code : null;
         job.error = { code: code ?? "capture_failed", message: result.error };
         if (code !== null) job.failure = { code, message: result.error };
-        job.jobOutcome = classifyJobFailure(result.error);
+        // Отсутствие поверхности — терминальный исход, а не инфраструктурный шум (см.
+        // `TERMINAL_JOB_OUTCOMES`): классификация по тексту сообщения дала бы `subprocess_error`.
+        job.jobOutcome = code === "surface_missing" ? "surface_missing" : classifyJobFailure(result.error);
         this.expire(job);
         return;
       }

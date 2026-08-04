@@ -77,6 +77,11 @@ export const readinessGate: Gate = {
       images: (evidence as { images?: unknown }).images ?? null,
       framesWaited: (evidence as { framesWaited?: number }).framesWaited ?? null,
       animationsDisabled: (evidence as { animationsDisabled?: boolean }).animationsDisabled ?? null,
+      // R4: доказательство строгой политики. `null` — политика профиля её не требовала (v1),
+      // а не «проверили и всё хорошо»: гейт обязан различать эти случаи глазами читателя evidence.
+      imageDetails: (evidence as { imageDetails?: unknown[] }).imageDetails ?? null,
+      layout: (evidence as { layout?: unknown }).layout ?? null,
+      fontManifestHash: (evidence as { fontManifestHash?: string | null }).fontManifestHash ?? null,
       themeResources: {
         tokens: themeResources.tokens ?? [],
         icons: themeResources.icons ?? [],
@@ -92,9 +97,15 @@ export const readinessGate: Gate = {
     }
     if (!observed.readinessMet) {
       const pending = metrics.pendingRequests.slice(0, 5).join("; ");
+      // Типизированные коды с указателем на виновника (R4) — в `detail`: читателю отчёта нужен
+      // не только класс причины, но и **что именно** не доехало (семейство, URL, ключ элемента).
+      const typed = (observed.readinessCodes ?? [])
+        .filter((code) => code.severity === "error")
+        .map((code) => (code.ref === undefined ? code.code : `${code.code}(${code.ref})`))
+        .slice(0, 5).join(", ");
       return {
         gate: "readiness", status: "fail", artifacts, metrics,
-        detail: `Capture readiness not met (${observed.readinessReason ?? "unknown"})${pending ? `: ${pending}` : ""}`,
+        detail: `Capture readiness not met (${observed.readinessReason ?? "unknown"})${typed ? ` [${typed}]` : ""}${pending ? `: ${pending}` : ""}`,
       };
     }
     return { gate: "readiness", status: "pass", artifacts, metrics };

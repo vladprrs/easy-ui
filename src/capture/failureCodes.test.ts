@@ -25,9 +25,8 @@ const REACHABILITY: Record<CaptureFailureCode, { kind: "unit"; codes: () => stri
   surface_missing: { kind: "fixture", where: "scripts/screenshot-worker.mjs → server/screenshot-worker.test.ts + server/screenshot.test.ts" },
   surface_overflow: { kind: "fixture", where: "server/acceptance/gates/geometry2.ts → server/acceptance/gates/geometry2.test.ts" },
   renderer_mismatch: { kind: "fixture", where: "server/screenshot/service.ts → server/capture/renderer.test.ts" },
-  // Строгая политика R4 (`fonts: \"required-faces\"`): сегодня `settleFonts` вообще не смотрит на
-  // `check()`, поэтому эмитента у кода нет — и это записано, а не замолчано.
-  font_face_missing: { kind: "deferred", wave: "R4" },
+  // R4 посажен: эмитент — `settleFonts` в required-faces (`check()===false`).
+  font_face_missing: { kind: "fixture", where: "src/capture/readiness.ts#settleFonts → src/capture/readiness.test.ts + e2e/preview/capture-strictness.spec.ts" },
 };
 
 describe("capture failure codes", () => {
@@ -45,7 +44,8 @@ describe("capture failure codes", () => {
         expect(origin.wave).toBe("R3");
       } else if (plan.kind === "fixture") {
         expect(plan.where.length, `${code} обязан называть файл с фикстурой`).toBeGreaterThan(0);
-        expect(origin.wave).toBe("R3");
+        // Волна происхождения — R3 (typed codes) либо R4 (строгая readiness посадила эмитент).
+        expect(["R3", "R4"]).toContain(origin.wave);
       } else {
         // Отложенный код обязан согласовываться с реестром: волна в одном месте, а не в двух.
         expect(origin.wave).toBe(plan.wave);

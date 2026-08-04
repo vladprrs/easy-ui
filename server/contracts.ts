@@ -411,12 +411,12 @@ export const captureFailureCodeSchema = z.enum([
   "renderer_mismatch", "navigation_failed", "runtime_error",
 ]);
 /** Таксономия исхода **джобы** (A3): инфраструктура против терминального `renderer_mismatch`. */
-export const jobOutcomeSchema = z.enum(["ok", "worker_crash", "timeout", "queue_full", "subprocess_error", "renderer_mismatch"]);
+export const jobOutcomeSchema = z.enum(["ok", "worker_crash", "timeout", "queue_full", "subprocess_error", "renderer_mismatch", "surface_missing"]);
 
 export const screenshotJobContract = registerContract({
   method: "GET",
   path: "/api/screenshot-jobs/{jobId}",
-  summary: "Poll a screenshot job (queued|running|done|error) and read its result. Terminal jobs additionally carry `outcome` (job taxonomy: ok|worker_crash|timeout|queue_full|subprocess_error|renderer_mismatch — only `ok` and `renderer_mismatch` are terminal for a client, the rest are infrastructure and may be retried) and, when the cause is typed, `failure` with a `CaptureFailureCode`. The legacy `error` object is unchanged.",
+  summary: "Poll a screenshot job (queued|running|done|error) and read its result. Terminal jobs additionally carry `outcome` (job taxonomy: ok|worker_crash|timeout|queue_full|subprocess_error|renderer_mismatch|surface_missing — only `ok`, `renderer_mismatch` and `surface_missing` are terminal for a client, the rest are infrastructure and may be retried) and, when the cause is typed, `failure` with a `CaptureFailureCode`. The legacy `error` object is unchanged.",
   responseSchema: z.object({
     status: z.enum(["queued", "running", "done", "error"]),
     result: screenshotJobResultSchema.optional(),

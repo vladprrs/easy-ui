@@ -10,7 +10,7 @@
  * а не сборки).
  */
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import { DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
+import { DEFAULT_READINESS_POLICY, STRICT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 
 /**
  * Роль гейта в вердикте (свёртка D10):
@@ -127,6 +127,11 @@ const PIXEL_STRICT_V1: AcceptancePolicy = {
   // рендерера, но не сдвиг элемента и не другой цвет.
   visual: { maxRawDiffPct: 0.5, maxDimensionDeltaPx: 4 },
   requireVisual: true,
+  // R4 (план renderer-contract-2 §5): пиксельная приёмка судит только доказанно готовый кадр —
+  // обязательные faces манифеста темы, строгий декод картинок, устоявшийся layout. `default-v1`
+  // остаётся на v1 намеренно: перевод дефолтного профиля — отдельный откатываемый шаг после
+  // приёмки этой волны (N10), иначе строгость приехала бы всем сразу и без окна отката.
+  readiness: STRICT_READINESS_POLICY,
 };
 
 export const ACCEPTANCE_POLICIES = {

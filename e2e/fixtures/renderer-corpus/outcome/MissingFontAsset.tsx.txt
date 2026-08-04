@@ -11,10 +11,14 @@ import type { EasyUIComponentProps } from "easy-ui/runtime";
  * блокируется deny-proxy воркера — ровно тот случай, что описан в §1.4: `settleFonts` сегодня
  * **не валит** кадр на `FontFace.status === "error"`.
  *
- * Текущее (до R4) поведение, зафиксированное в `expected.json` и в
- * `e2e/preview/renderer-determinism.spec.ts`: джоба завершается `done`, кадр рисуется
- * fallback-шрифтом, типизированного кода нет. R4 обязан превратить это в `font_face_missing`
- * (K3/K4) — вместе с ожиданиями этой фикстуры.
+ * **Исход R4 (владелец ожиданий — R4, §6).** Ожидания фикстуры остаются прежними — `done`,
+ * `failureCode: null`, кадр нарисован fallback-шрифтом, — и это не недоделка, а прямое следствие
+ * N10: строгость включается **политикой профиля приёмки**, а корпус снимает интерактивной ручкой
+ * `POST /api/components/:id/versions/:v/screenshot`, то есть по политике v1. Плюс `@font-face`
+ * здесь объявлен **самим компонентом**, а не темой, поэтому в required-faces (правило T-M10,
+ * `required = declared ∩ used`) он не попадает ни при какой политике: манифест строит сервер из
+ * `themeContent.fonts`. Под `pixel-strict-v1` с face'ом, объявленным темой, тот же дефект даёт
+ * `font_face_missing` — это доказывает `e2e/preview/capture-strictness.spec.ts`.
  */
 export const definition = {
   props: z.strictObject({ caption: z.string() }),

@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { openDatabase } from "./db";
 import { createHandler } from "./main";
 import { prototypeDocSchema } from "../src/prototype/schema";
-import { geometryRoleKeysOf, ScreenshotService, themeAssetIds, validatePropsAgainstSchema, type RunJob, type WorkerResult } from "./screenshot/service";
+import { declaredFontFaces, fontManifestOf, geometryRoleKeysOf, isTerminalJobOutcome, ScreenshotService, themeAssetIds, validatePropsAgainstSchema, type RunJob, type WorkerResult } from "./screenshot/service";
 import { classifyCaptureErrors, isInfraNoise } from "./screenshot/noise";
 import { CaptureSessionStore, isLoopbackAddress, matchAllowed } from "./screenshot/sessions";
 import { buildStaticAllowedUrls, rendererBuildFrom } from "./screenshot/allowedUrls";
@@ -134,7 +134,11 @@ describe("screenshot job API", () => {
     expect(body.failure?.code).toBe("surface_missing");
     expect(body.failure?.message).toContain("#eui-capture-surface");
     expect(body.error?.code).toBe("surface_missing");
-    expect(body.outcome).toBe("subprocess_error");
+    // R4 (минор R3): отсутствие поверхности — **терминальный** исход, а не инфраструктурный шум.
+    // До волны это ехало как `subprocess_error` и жгло `maxInfraRetries` приёмки на повторах,
+    // которые дают ровно ту же пустую страницу.
+    expect(body.outcome).toBe("surface_missing");
+    expect(isTerminalJobOutcome("surface_missing")).toBe(true);
   });
 
   /** Нетипизированный отказ воркера остаётся доволновым `capture_failed` и `failure` не выдумывает. */
@@ -325,6 +329,80 @@ describe("allowedUrls builder", () => {
     const service = makeService(db, dir);
     const { jobId } = service.enqueuePrototype("theme-assets", "welcome", { viewport: { width: 390, height: 844 } });
     expect(service.peek(jobId)?.allowedUrls).toContain(`/api/assets/${assetId}`);
+  });
+
+  /**
+   * R4 (план renderer-contract-2 §5): манифест шрифтов темы. `assetId` и `sha256` в схеме темы
+   * отсутствуют (C-m13) — первый берётся из `src`, второй из канонического формата id
+   * `asset_<sha256>`; порядок объявления на хэш не влияет, содержимое — влияет.
+   */
+  test("font manifest: assetId из src, sha256 из формата id, хэш — функция содержимого", () => {
+    const sha = "b".repeat(64);
+    const manifest = fontManifestOf({
+      tokens: {},
+      fonts: [
+        { family: "Corpus Text", src: `asset_${sha}`, weight: 700 },
+        { family: "Legacy", src: "/api/assets/asset_legacy", style: "italic" },
+      ],
+      icons: [],
+    });
+    expect(manifest.manifestHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(manifest.declared).toContainEqual({ family: "Corpus Text", weight: "700", style: "normal", assetId: `asset_${sha}`, sha256: sha });
+    // Не-каноничный id не притворяется хэшем: `null` честнее выдуманного sha.
+    expect(manifest.declared).toContainEqual({ family: "Legacy", weight: "400", style: "italic", assetId: "asset_legacy", sha256: null });
+
+    const reordered = fontManifestOf({
+      tokens: {},
+      fonts: [{ family: "Legacy", src: "asset_legacy", style: "italic" }, { family: "Corpus Text", src: `asset_${sha}`, weight: 700 }],
+      icons: [],
+    });
+    expect(reordered.manifestHash).toBe(manifest.manifestHash);
+    expect(fontManifestOf({ tokens: {}, fonts: [], icons: [] }).declared).toEqual([]);
+    expect(fontManifestOf(null).manifestHash).toBe(fontManifestOf({ tokens: {}, fonts: [], icons: [] }).manifestHash);
+    expect(declaredFontFaces(null)).toEqual([]);
+  });
+
+  /** Постановка прототипа резолвит тему **снимаемого экрана** на любом капчуре, не только probe. */
+  test("prototype enqueue freezes the theme font manifest onto the job", async () => {
+    const { db, dir, handler } = await setup();
+    const sha = "c".repeat(64);
+    const assetId = `asset_${sha}`;
+    db.run(
+      "INSERT INTO assets (id,sha256,mime,size,width,height,original_name,created_at) VALUES (?,?,?,?,?,?,?,?)",
+      [assetId, sha, "font/woff2", 16, null, null, "ys-text.woff2", "now"],
+    );
+    db.run(
+      "INSERT INTO design_system_versions (system_id,version,tokens_json,fonts_json,icons_json,created_at) VALUES (?,?,?,?,?,?)",
+      ["yandex-pay", 1, "{}", JSON.stringify([{ family: "YS Text", src: assetId, weight: 400 }]), "[]", "now"],
+    );
+    expect((await handler(req("/prototypes", "POST", { doc: await helloDoc("font-manifest") }))).status).toBe(201);
+    const service = makeService(db, dir);
+    const { jobId } = service.enqueuePrototype("font-manifest", "welcome", { viewport: { width: 390, height: 844 } });
+    const job = service.peek(jobId);
+    expect(job?.fonts?.declared).toEqual([{ family: "YS Text", weight: "400", style: "normal", assetId, sha256: sha }]);
+    expect(job?.fonts?.manifestHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  /** Манифест обязан доехать до поверхности: он вход правила required-faces, а не серверная запись. */
+  test("bootstrap carries the frozen font manifest to the surface", async () => {
+    const { db, dir, handler } = await setup();
+    const sha = "d".repeat(64);
+    db.run(
+      "INSERT INTO assets (id,sha256,mime,size,width,height,original_name,created_at) VALUES (?,?,?,?,?,?,?,?)",
+      [`asset_${sha}`, sha, "font/woff2", 16, null, null, "ys.woff2", "now"],
+    );
+    db.run(
+      "INSERT INTO design_system_versions (system_id,version,tokens_json,fonts_json,icons_json,created_at) VALUES (?,?,?,?,?,?)",
+      ["yandex-pay", 1, "{}", JSON.stringify([{ family: "YS Text", src: `asset_${sha}` }]), "[]", "now"],
+    );
+    expect((await handler(req("/prototypes", "POST", { doc: await helloDoc("font-bootstrap") }))).status).toBe(201);
+    let seen: { fonts?: { declared: unknown[]; manifestHash: string } } | undefined;
+    const runJob: RunJob = async (job) => { seen = job.bootstrap; return { ok: false, error: "stop here" }; };
+    const service = makeService(db, dir, runJob);
+    const { jobId } = service.enqueuePrototype("font-bootstrap", "welcome", { viewport: { width: 390, height: 844 } });
+    for (let i = 0; i < 50 && service.get(jobId).status !== "error"; i++) await Bun.sleep(5);
+    expect(seen?.fonts?.manifestHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(seen?.fonts?.declared).toHaveLength(1);
   });
 
   test("includes index.html and assets, tolerating a missing dist build", () => {

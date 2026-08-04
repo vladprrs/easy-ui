@@ -58,6 +58,31 @@ export interface ComponentDraftExpected {
 export type CaptureExpected = PrototypeExpected | ComponentExpected | ComponentDraftExpected;
 
 /**
+ * Объявленный face темы (план renderer-contract-2 §5 **R4**). Собирает его **сервер** на
+ * постановке: `themeContent.fonts[].src` — это assetId (`assetUrl(font.src)` в `ThemeStyle`), а
+ * sha256 содержимого выводится из формата id `asset_<sha256>`; в схеме темы ни того, ни другого
+ * поля нет (C-m13), поэтому парсинг — явный объём волны.
+ *
+ * Поверхность не ходит за этим списком в API: манифест обязан относиться к той же версии темы,
+ * по которой считался `case_fingerprint` джобы.
+ */
+export interface CaptureFontFaceDeclaration {
+  family: string;
+  /** CSS-значение `font-weight` как объявлено темой (в т.ч. диапазон variable-шрифта, `"400 700"`). */
+  weight: string;
+  style: string;
+  assetId: string;
+  /** sha256 файла шрифта, если id содержит его (`asset_<sha256>`); иначе `null`. */
+  sha256: string | null;
+}
+
+/** Манифест шрифтов темы джобы: объявленные faces + их хэш (вход receipt'а R5 и guard'а R6). */
+export interface CaptureFontManifest {
+  declared: CaptureFontFaceDeclaration[];
+  manifestHash: string;
+}
+
+/**
  * Доказательство готовности кадра (план §5 W4). Едет **рядом** с handshake-полями и в сравнение
  * `readyToExpected` ↔ `expected` не входит: политика в `expected` не дублируется (триаж R1-m2),
  * сервер сверяет её хэш прямо в результате. Для не-acceptance путей поле advisory.
@@ -74,8 +99,19 @@ export interface CaptureReadinessReport {
   policyHash: string;
   elapsedMs: number;
   evidence: {
-    fontFaces: { family: string; weight: string; style: string; status: string }[];
+    /**
+     * `checked`/`required`/`assetId`/`sha256` — строгая политика R4: какие faces были **обязаны**
+     * приехать (пересечение манифеста темы и наблюдённых семейств, T-M10) и что показал
+     * `document.fonts.check()`. У политики v1 полей нет — форма доказательства аддитивна.
+     */
+    fontFaces: { family: string; weight: string; style: string; status: string; required?: boolean; checked?: boolean; assetId?: string; sha256?: string | null }[];
     images: { total: number; decoded: number; failed: number };
+    /** Строгий декод R4: пофайловое доказательство (URL/assetId/интринсики/contentHash). */
+    imageDetails?: { url: string; assetId: string | null; naturalWidth: number; naturalHeight: number; decoded: boolean; contentHash: string | null }[];
+    /** Исход стабилизации layout (R4): присутствует, когда политика её требует. */
+    layout?: { stable: boolean; attempts: number; elementKey: string | null };
+    /** Хэш манифеста шрифтов темы, по которому судились required-faces (R4). */
+    fontManifestHash?: string | null;
     pendingRequests: string[];
     framesWaited: number;
     animationsDisabled: boolean;
@@ -177,6 +213,11 @@ export interface CaptureBootstrap {
    * (`DEFAULT_READINESS_POLICY`), то есть интерактивные пути ведут себя как раньше.
    */
   readiness?: ReadinessPolicy;
+  /**
+   * Манифест шрифтов темы джобы (R4). Отсутствует — строгая политика вырождается в v1-семантику
+   * шрифтов: у ДС без темы (`fonts: []`) требовать нечего (K3-оговорка §5 R4).
+   */
+  fonts?: CaptureFontManifest;
   expected: CaptureExpected;
 }
 

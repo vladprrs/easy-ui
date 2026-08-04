@@ -21,15 +21,38 @@ export interface ReadinessNetworkPolicy {
   scope: "component-owned";
 }
 
+/**
+ * Стабилизация layout (план renderer-contract-2 §5 R4, P5): «rAF → мера → rAF → мера →
+ * сравнение» до `attempts` попыток. Присутствует только в политике v2 — в v1 ключа нет вовсе,
+ * иначе изменился бы `policyHash` доволновых политик и обнулился накопленный reuse (K-инвариант).
+ */
+export interface ReadinessLayoutPolicy {
+  stabilize: boolean;
+  /** Сколько раз пересмерять, прежде чем признать layout неустойчивым. */
+  attempts: number;
+}
+
 export interface ReadinessPolicy {
-  version: 1;
+  /**
+   * `1` — доволновая политика (см. `DEFAULT_READINESS_POLICY`), `2` — строгая (R4,
+   * `STRICT_READINESS_POLICY`). Версия — не украшение: она выбирает семантику каждого поля ниже,
+   * и её валидирует `isReadinessPolicy`, потому что политика приезжает поверхности из bootstrap'а.
+   */
+  version: 1 | 2;
   /**
    * `used-faces` — ждать только те `@font-face`, которые реально применились к поверхности
    * (перечисление семейств через `getComputedStyle` выборки + `document.fonts`);
-   * `document-ready` — деградация до `document.fonts.ready` целиком.
+   * `document-ready` — деградация до `document.fonts.ready` целиком;
+   * `required-faces` (v2) — **требовать** faces манифеста темы, чьё семейство наблюдено на
+   * поверхности: отсутствие face'а — `font_face_missing`, отказ загрузки — `font_load_failed`.
    */
-  fonts: "used-faces" | "document-ready";
-  images: "decoded";
+  fonts: "used-faces" | "document-ready" | "required-faces";
+  /**
+   * `decoded` — картинка считается годной, если у неё есть растр;
+   * `decoded-strict` (v2) — `complete ∧ naturalWidth>0 ∧ naturalHeight>0 ∧ decode() resolved`,
+   * иначе `image_load_failed`.
+   */
+  images: "decoded" | "decoded-strict";
   network: ReadinessNetworkPolicy;
   /** Сколько подряд стабильных rAF-кадров после layout считать доказательством покоя. */
   frames: number;
@@ -37,6 +60,8 @@ export interface ReadinessPolicy {
   animations: "disabled" | "allowed";
   /** Потолок ожидания: превышение — не бросок, а честный `readiness.met === false`. */
   timeoutMs: number;
+  /** Только v2: перемера геометрии после frames-settle (`layout_unstable`). */
+  layout?: ReadinessLayoutPolicy;
 }
 
 /**
@@ -51,6 +76,27 @@ export const DEFAULT_READINESS_POLICY: ReadinessPolicy = Object.freeze({
   frames: 2,
   animations: "disabled",
   timeoutMs: 15_000,
+}) as ReadinessPolicy;
+
+/**
+ * Строгая политика v2 (план renderer-contract-2 §5 R4, N10): её носит профиль приёмки
+ * `pixel-strict-v1`. Отличия от v1 — ровно три и все они про **доказательство**, а не про
+ * ожидание подольше: обязательные faces манифеста темы, строгий критерий декода картинок и
+ * перемера layout после frames-settle. Интерактивные пути остаются на v1: строгость включается
+ * политикой профиля, а не env-флагом.
+ *
+ * `timeoutMs`/`frames`/`network`/`animations` намеренно совпадают с v1: цена волны — не ожидание,
+ * а честность вердикта.
+ */
+export const STRICT_READINESS_POLICY: ReadinessPolicy = Object.freeze({
+  version: 2,
+  fonts: "required-faces",
+  images: "decoded-strict",
+  network: Object.freeze({ quietMs: 200, scope: "component-owned" }) as ReadinessNetworkPolicy,
+  frames: 2,
+  animations: "disabled",
+  timeoutMs: 15_000,
+  layout: Object.freeze({ stabilize: true, attempts: 3 }) as ReadinessLayoutPolicy,
 }) as ReadinessPolicy;
 
 /** Канонизованная форма политики — единственный вход хэша (порядок ключей не значим). */
@@ -83,11 +129,23 @@ export function isReadinessPolicy(value: unknown): value is ReadinessPolicy {
   if (value === null || typeof value !== "object") return false;
   const policy = value as Partial<ReadinessPolicy>;
   const network = policy.network as Partial<ReadinessNetworkPolicy> | undefined;
-  return policy.version === 1
-    && (policy.fonts === "used-faces" || policy.fonts === "document-ready")
-    && policy.images === "decoded"
-    && network !== undefined && typeof network.quietMs === "number" && network.scope === "component-owned"
+  const common = network !== undefined && typeof network.quietMs === "number" && network.scope === "component-owned"
     && typeof policy.frames === "number" && Number.isFinite(policy.frames) && policy.frames >= 0
     && (policy.animations === "disabled" || policy.animations === "allowed")
     && typeof policy.timeoutMs === "number" && policy.timeoutMs > 0;
+  if (!common) return false;
+  // Версия выбирает допустимые значения условий целиком: «v1 со строгими шрифтами» — не политика,
+  // а испорченный bootstrap, и поверхность обязана вернуться к дефолту, а не гадать.
+  if (policy.version === 1) {
+    return (policy.fonts === "used-faces" || policy.fonts === "document-ready")
+      && policy.images === "decoded" && policy.layout === undefined;
+  }
+  if (policy.version === 2) {
+    const layout = policy.layout as Partial<ReadinessLayoutPolicy> | undefined;
+    return (policy.fonts === "required-faces" || policy.fonts === "used-faces" || policy.fonts === "document-ready")
+      && (policy.images === "decoded-strict" || policy.images === "decoded")
+      && layout !== undefined && typeof layout.stabilize === "boolean"
+      && typeof layout.attempts === "number" && Number.isInteger(layout.attempts) && layout.attempts >= 1;
+  }
+  return false;
 }

@@ -114,11 +114,19 @@ export function codesFromReadinessReason(reason: string | null | undefined): Cap
   return codesFromReadinessReasons(reason.split(",").map((part) => part.trim()).filter((part) => part.length > 0));
 }
 
+/**
+ * Потолок числа кодов одного капчура: строгая политика R4 эмитит по коду на каждый негодный
+ * ресурс (битый `<img>`, недоступный face), и поверхность с сотнями таких ресурсов иначе
+ * раздула бы readinessCodes/метрики гейта без добавочной диагностической ценности.
+ */
+export const CAPTURE_CODES_LIMIT = 64;
+
 /** Санитайзер кодов, приехавших из страницы/воркера: наружу уходят только объявленные значения. */
 export function sanitizeCaptureCodes(value: unknown): CaptureCode[] {
   if (!Array.isArray(value)) return [];
   const codes: CaptureCode[] = [];
   for (const item of value) {
+    if (codes.length >= CAPTURE_CODES_LIMIT) break;
     if (item === null || typeof item !== "object") continue;
     const record = item as Record<string, unknown>;
     if (!isCaptureFailureCode(record.code)) continue;

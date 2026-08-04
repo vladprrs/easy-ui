@@ -1172,7 +1172,7 @@ case-set-манифеста (`policy.perCase.<id>`): `allowPaintOverflow` (ож�
 `features.captureReadiness` в `GET /capabilities`.
 
 ```ts
-readinessPolicy = { version: 1, fonts: "used-faces" | "document-ready", images: "decoded",
+readinessPolicy = { version: 1, fonts: "used-faces" | "document-ready", images: "decoded",   // v2 — ниже, «Строгая readiness 2.0»
   network: { quietMs: 200, scope: "component-owned" }, frames: 2,
   animations: "disabled", timeoutMs: 15000 }
 readinessPolicyHash = sha256(canonicalStringify(policy))       // src/capture/readinessPolicy.ts
@@ -1851,10 +1851,10 @@ sha этого не даёт, нужны сами PNG, поэтому оба п�
 
 | Код | Кто эмитит | Смысл |
 |---|---|---|
-| `font_load_failed` | поверхность (`fonts_timeout`, `fonts_pending`) | шрифт не догрузился; до строгой политики R4 — `warning` |
-| `font_face_missing` | поверхность, **волна R4** | объявленный темой и реально используемый face не загрузился |
+| `font_load_failed` | поверхность (`fonts_timeout`, `fonts_pending`; R4 — отказ required-face) | шрифт не догрузился; под политикой v1 — `warning`, под строгой v2 — `error` |
+| `font_face_missing` | поверхность (R4, `fonts: "required-faces"`) | объявленный темой и реально используемый face недоступен (`document.fonts.check() === false`) |
 | `image_load_failed` | поверхность (`images_timeout`, `images_failed`) | изображение без растра |
-| `layout_unstable` | поверхность (`frames_timeout`; `stability.ts` — R4) | layout не успокоился |
+| `layout_unstable` | поверхность (`frames_timeout`; `stability.ts` — R4) | layout не успокоился за ≤3 попытки перемеры |
 | `surface_missing` | воркер | в документе нет `#eui-capture-surface` |
 | `surface_overflow` | гейт `geometry` v2 | вердикт политики геометрии (`paint-overflow-*`, `layout-overflow`) |
 | `renderer_mismatch` | сервис (сверка манифеста), guard визуальных ранов — R6 | кадр нарисовал не тот браузер, что объявлен |
@@ -1875,7 +1875,7 @@ sha этого не даёт, нужны сами PNG, поэтому оба п�
 {
   "status": "error",
   "error": { "code": "navigation_failed", "message": "navigation failed: net::ERR_CONNECTION_REFUSED…" },
-  "outcome": "renderer_mismatch | subprocess_error | worker_crash | timeout | queue_full | ok",
+  "outcome": "renderer_mismatch | surface_missing | subprocess_error | worker_crash | timeout | queue_full | ok",
   "failure": { "code": "navigation_failed", "message": "…" }   // только когда причина типизирована
 }
 ```
@@ -1890,3 +1890,72 @@ sha этого не даёт, нужны сами PNG, поэтому оба п�
 **Изменение поведения:** отсутствие `#eui-capture-surface` больше **не** деградирует в снимок всей
 страницы. Раньше такой кадр молча уезжал в эталоны и давал необъяснимый визуальный провал; теперь
 это `surface_missing` — отказ джобы с названной причиной.
+
+### Строгая readiness 2.0 (волна R4, план 2026-08-03 renderer-contract-2)
+
+Политика readiness получила **вторую версию**. Доволновая v1 не изменилась ни в одном байте
+(`policyHash` тот же — иначе обнулился бы весь накопленный reuse приёмки), рядом появилась
+строгая:
+
+```ts
+STRICT_READINESS_POLICY = { version: 2, fonts: "required-faces", images: "decoded-strict",
+  network: { quietMs: 200, scope: "component-owned" }, frames: 2,
+  animations: "disabled", timeoutMs: 15000, layout: { stabilize: true, attempts: 3 } }
+```
+
+Строгость включается **политикой профиля приёмки**, не env-флагом: её носит `pixel-strict-v1`.
+`default-v1` и все интерактивные пути (галерея, библиотека, draft-preview, `POST
+…/screenshot`) остаются на v1 — их поведение волной не изменилось. Перевод `default-v1` — отдельный
+откатываемый шаг после приёмки волны.
+
+**`fonts: "required-faces"`.** Сервер строит **манифест шрифтов темы** джобы и кладёт его в
+`bootstrap.fonts = { declared, manifestHash }`. `assetId` берётся из `themeContent.fonts[].src`
+(в схеме темы этого поля нет), `sha256` — из канонического формата id `asset_<sha256>`
+(не-канонический id даёт `null`). Манифест резолвится на **всех** frozen-постановках: у прототипа
+— по ДС снимаемого экрана с её пиннутой версией темы, у компонента/драфта/кандидата — по последней
+версии темы его ДС. Правило требования:
+
+```
+required = faces манифеста темы  ∩  семейства, реально применённые к поверхности
+```
+
+Тема вправе объявлять шрифты, которых компонент не касается: требовать их загрузки нельзя.
+Оговорка о «реально применённых»: наблюдение — это токены computed `font-family` выборки
+элементов (весь стек, включая фолбэки, которые ни одного глифа не отрисовали), а выборка
+ограничена потолками (≈400 элементов / 24 семейства). Следствия: face темы, стоящий в стеке
+только фолбэком, может стать required (ложная строгость — редкость на реальных темах);
+семейство за пределами выборки требование молча теряет (деградация в v1-поведение). Первая
+«ложная» сработка `font_face_missing` — свойство этой выборки, а не баг строгости. Для
+каждого required-face поверхность делает `document.fonts.load('<weight> <style> 16px "<family>"')`,
+затем `check()` — он **авторитет**, `FontFace.status` — подтверждение:
+
+| Наблюдение | Код |
+|---|---|
+| `check() === false` | `font_face_missing` (severity `error`, `ref` — семейство) |
+| `check() === true`, но загрузка отвергнута или `FontFace.status === "error"` | `font_load_failed` |
+
+Диапазон веса variable-шрифта (`"400 700"`) нормализуется к первому токену — иначе шорткод был бы
+невалиден и волна врала бы `font_face_missing`. ДС **без темы** (`fonts: []`) — манифест пуст, и
+строгость шрифтов вырождается в v1-семантику: требовать нечего.
+
+**`images: "decoded-strict"`.** Критерий годности картинки — `complete ∧ naturalWidth > 0 ∧
+naturalHeight > 0 ∧ decode() resolved`; отказ даёт `image_load_failed` с URL виновника. До волны
+хватало «есть хоть какой-то растр», поэтому битый `<img>` рядом с живым давал «готовый» кадр.
+Доказательство пополнилось `evidence.imageDetails[]` (`url`, `assetId`, интринсики, `decoded`,
+`contentHash` из id ассета).
+
+**`layout.stabilize`.** После frames-settle и до сбора ресурсов темы поверхность делает до
+`attempts` (3) циклов «rAF → мера → rAF → мера → сравнение». Подпись кадра — прямоугольники
+поверхности и всех geometry-узлов `[data-eui-key]`, округлённые до 1/64 px. Исчерпание попыток —
+`layout_unstable` с `ref` первого разъехавшегося узла и `evidence.layout = { stable, attempts,
+elementKey }`.
+
+Метрики гейта `readiness` (и артефакт `readiness.json`) получили аддитивные `imageDetails`,
+`layout`, `fontManifestHash`; `null` в них означает «политика профиля этого не требовала», а не
+«проверено и хорошо». `detail` упавшего гейта теперь называет типизированные коды с указателем на
+виновника.
+
+**Терминальность `surface_missing`.** Исход джобы `outcome` пополнился значением `surface_missing`
+(было: такой отказ классифицировался как `subprocess_error`). Терминальные исходы теперь два —
+`renderer_mismatch` и `surface_missing`: повтор капчура даёт ровно ту же пустую страницу, и бюджет
+`maxInfraRetries` приёмки на него больше не тратится.

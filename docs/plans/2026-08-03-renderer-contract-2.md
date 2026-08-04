@@ -215,6 +215,21 @@
 то есть эталоны, снятые с выключенными флагами, к включённым неприменимы. Оговорка: обе цифры
 сняты на dev-хосте; на GH-раннере абсолютные значения будут другими, значима только дельта.
 
+**Факт R4 (2026-08-04, тот же dev-хост, `scripts/measure-acceptance.mjs --cases 20` — холодный ран приёмки, профиль `default-v1`, различается **только** политика readiness; замер сделан подменой `default-v1.readiness` на время замера, в коде профиль остался на v1):**
+
+| Политика readiness | coldMs (20 случаев) | ms/case | Δ |
+|---|---|---|---|
+| v1 `DEFAULT_READINESS_POLICY` | 51 901 / 51 890 | **2 595** | — |
+| v2 `STRICT_READINESS_POLICY` | 54 948 / 54 915 | **2 747** | **+153 мс/case, +5,9 %** |
+
+Каждая конфигурация снята дважды, разброс между повторами ≤ 33 мс на ран (≈0,06 %), поэтому дельта
+значима. **Вывод: строгая readiness стоит +5,9 % холодного рана** — против порога §4 (>50 % суммарного
+прироста verify-capture) это на порядок меньше; вместе с +2,95 % детерминизм-флагов R2c суммарный
+прирост пакета на сегодня ≈ **+9 %**. Оговорки: (а) тёплый ран (полный reuse) не меняется вовсе —
+`warmMs` 506/507 мс в обеих конфигурациях, потому что кадры не переснимаются; (б) абсолютные числа —
+dev-хост, значима только дельта; (в) в проде строгость получает **только** `pixel-strict-v1`
+(N10), то есть на стоимость `default-v1`-ранов волна сегодня не влияет вовсе.
+
 **Кросс-хост (K2), статус R2c.** Вердикт **не принят в этой волне**: в среде исполнения волны нет
 рабочего docker-демона (nested-контейнер: `bridge`-сеть и bind-mount'ы запрещены), поэтому матрицу
 образа локально снять не удалось. Вместо жёсткого гейта заведён **bootstrap-режим**: если для
@@ -310,7 +325,7 @@
 - `src/capture/stability.ts`: `rectSignature` (поверхность + geometry-узлы, округление 1/64 px), «rAF → мера → rAF → мера → сравнение», ≤3 попытки ⇒ `layout_unstable` с `elementKey`. После `settleFrames`, до `themeResources`.
 - `server/capture/modes.ts` — внутренний `resolveCaptureMode` (E8).
 - `server/acceptance/policies.ts`: `pixel-strict-v1.readiness = STRICT_READINESS_POLICY`; `default-v1` — отдельным откатываемым шагом после приёмки.
-- Обновление `outcome/`-ожиданий корпуса (владение переходит R4 — правило §6).
+- Обновление `outcome/`-ожиданий корпуса (владение переходит R4 — правило §6). **Факт приёмки R4 (2026-08-04, осознанное сужение):** интерактивный путь корпуса (`POST …/screenshot` без политики) живёт на v1-политике, и записываемая форма исхода (`{status, failureCode, imageProduced, consoleErrors, pageErrors}`) readiness-кодов не несёт — typed-коды на outcome-фикстурах корпусом недостижимы без правки харнесса R2b (передача политики/запись кодов из job.result) либо отдельного strict-прогона. Ожидания outcome/ остались «done/failureCode:null» (фиксация нерегресса дефолтного пути), K3-покрытие строгих кодов живёт в `e2e/preview/capture-strictness.spec.ts` + unit. **Follow-up (кандидат в объём R9b или отдельный микрорелиз): strict-режим corpus-harness** — до него метрика K4 на интерактивном канале корпусом не покрыта.
 
 **Файлы.** Новые: `src/capture/stability.ts` (+тест), `server/capture/modes.ts`. Изменяемые: `src/capture/{readinessPolicy.ts,readiness.ts,protocol.ts,CaptureComponent.tsx,CaptureSurface.tsx}`, `server/screenshot/service.ts`, `server/acceptance/{policies.ts,gates/readiness.ts}`, `e2e/fixtures/renderer-corpus/outcome/**`, contracts/openapi/sdk, `docs/server-api.md`.
 **Done.** K3: e2e `e2e/preview/capture-strictness.spec.ts` — «нет font asset» ⇒ `font_face_missing`, «битый `<img>`» ⇒ `image_load_failed`, «поздняя мутация» ⇒ `layout_unstable` за ≤3 попытки; unit «политика v1 даёт тот же `policyHash`, что до волны»; unit variable-шрифт `weight:"400 700"` — ложного `font_face_missing` нет; unit «face, объявленный темой, но не использованный компонентом, не требуется»; замер стоимости readiness v2 — факты в §4; `verify`.

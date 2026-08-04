@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { collectCaptureEnv, observedCaptureEnvFingerprint, type CaptureEnvInput } from "./env";
 import { codesFromReadinessReasons, READINESS_REASON_CODES } from "./failureCodes";
-import { collectReadiness, collectThemeAssets, collectThemeTokens, usedFontFamilies } from "./readiness";
+import {
+  collectReadiness, collectThemeAssets, collectThemeTokens, fontFaceShorthand, fontShorthandWeight,
+  requiredFontFaces, usedFontFamilies,
+} from "./readiness";
+import type { CaptureFontFaceDeclaration } from "./protocol";
 import {
   canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, isReadinessPolicy, readinessPolicyHash,
-  type ReadinessPolicy,
+  STRICT_READINESS_POLICY, type ReadinessPolicy,
 } from "./readinessPolicy";
 
 // W4 (план 2026-08-03 §3 D5, §5 W4): политика readiness, отпечаток окружения и сбор
@@ -162,6 +166,213 @@ describe("readiness evidence", () => {
     expect(collectThemeAssets(root, elements)).toEqual({ icons: [], images: [] });
 
     outside.remove();
+    root.remove();
+  });
+});
+
+// --- R4: строгая политика readiness 2.0 --------------------------------------------------
+// (план `docs/plans/2026-08-03-renderer-contract-2.md` §5 R4)
+
+describe("строгая политика v2", () => {
+  /**
+   * K-инвариант волны: политика v1 обязана давать **тот же** `policyHash`, что до неё. Хэш
+   * политики входит в `case_fingerprint` (D1) и в отпечаток рендерера — его сдвиг обнулил бы весь
+   * накопленный reuse приёмки молча. Значение снято с доволнового кода (коммит f54eec0).
+   */
+  it("v1 даёт доволновый policyHash, v2 — свой", async () => {
+    expect(await readinessPolicyHash(DEFAULT_READINESS_POLICY))
+      .toBe("5d5b5fb16425aa9d45c759724d6fc96b86253ca9153541cc960575dc8c3acbe7");
+    expect(await readinessPolicyHash(STRICT_READINESS_POLICY))
+      .not.toBe(await readinessPolicyHash(DEFAULT_READINESS_POLICY));
+    expect(DEFAULT_READINESS_POLICY.version).toBe(1);
+    expect("layout" in DEFAULT_READINESS_POLICY).toBe(false);
+    expect(STRICT_READINESS_POLICY).toMatchObject({
+      version: 2, fonts: "required-faces", images: "decoded-strict", layout: { stabilize: true, attempts: 3 },
+    });
+  });
+
+  it("валидирует политику по версии: смесь v1-условий со строгими — испорченный bootstrap", () => {
+    expect(isReadinessPolicy(STRICT_READINESS_POLICY)).toBe(true);
+    expect(isReadinessPolicy({ ...STRICT_READINESS_POLICY, layout: undefined })).toBe(false);
+    expect(isReadinessPolicy({ ...STRICT_READINESS_POLICY, layout: { stabilize: true, attempts: 0 } })).toBe(false);
+    expect(isReadinessPolicy({ ...DEFAULT_READINESS_POLICY, layout: { stabilize: true, attempts: 3 } })).toBe(false);
+    expect(isReadinessPolicy({ ...DEFAULT_READINESS_POLICY, fonts: "required-faces" })).toBe(false);
+    expect(isReadinessPolicy({ ...STRICT_READINESS_POLICY, version: 3 })).toBe(false);
+  });
+
+  it("шорткод face'а нормализует variable-диапазон веса и стиль", () => {
+    expect(fontShorthandWeight("400 700")).toBe("400");
+    expect(fontShorthandWeight(500)).toBe("500");
+    expect(fontShorthandWeight("bold")).toBe("bold");
+    expect(fontShorthandWeight(undefined)).toBe("400");
+    expect(fontFaceShorthand({ family: "Corpus Text", weight: "400 700", style: "italic" }))
+      .toBe('400 italic 16px "Corpus Text"');
+  });
+
+  /** T-M10: required = declared ∩ observed-used-families. Тема вправе объявлять лишнее. */
+  it("требует только те объявленные faces, чьё семейство наблюдено на поверхности", () => {
+    const declared: CaptureFontFaceDeclaration[] = [
+      { family: "Corpus Text", weight: "400", style: "normal", assetId: "asset_a", sha256: null },
+      { family: "Never Used", weight: "400", style: "normal", assetId: "asset_b", sha256: null },
+    ];
+    const required = requiredFontFaces(declared, new Set(["corpus text"]));
+    expect(required.map((face) => face.family)).toEqual(["Corpus Text"]);
+  });
+});
+
+describe("readiness под строгой политикой", () => {
+  const STRICT: ReadinessPolicy = { ...STRICT_READINESS_POLICY, timeoutMs: 2_000, network: { quietMs: 0, scope: "component-owned" } };
+
+  /** Минимальный FontFaceSet: jsdom его не реализует, а вся строгость шрифтов — про него. */
+  const installFontSet = (options: { available: string[]; faces?: { family: string; weight: string; style: string; status: string }[]; failing?: string[] }) => {
+    const checked: string[] = [];
+    const loaded: string[] = [];
+    const set = {
+      ready: Promise.resolve(),
+      load(query: string) {
+        loaded.push(query);
+        return options.failing?.includes(query) ? Promise.reject(new Error("network")) : Promise.resolve([]);
+      },
+      check(query: string) { checked.push(query); return options.available.includes(query); },
+      [Symbol.iterator]() { return (options.faces ?? [])[Symbol.iterator](); },
+    };
+    Object.defineProperty(document, "fonts", { value: set, configurable: true });
+    return { checked, loaded };
+  };
+
+  const surface = (html: string): HTMLElement => {
+    const root = document.createElement("div");
+    root.id = "eui-capture-surface";
+    root.innerHTML = html;
+    document.body.append(root);
+    return root;
+  };
+
+  const manifest = (declared: CaptureFontFaceDeclaration[]) => ({ declared, manifestHash: "manifest-hash" });
+
+  afterEach(() => { Reflect.deleteProperty(document, "fonts"); });
+
+  /**
+   * Variable-шрифт объявляет диапазон весов (`"400 700"`). Без нормализации шорткода `check()`
+   * получил бы невалидный ввод, и волна начала бы врать `font_face_missing` на каждой такой теме.
+   */
+  it("variable-шрифт weight:\"400 700\" не даёт ложного font_face_missing", async () => {
+    const probe = installFontSet({ available: ['400 normal 16px "Corpus Text"'] });
+    const root = surface('<p style="font-family: \'Corpus Text\', sans-serif">1 234 ₽</p>');
+
+    const report = await collectReadiness(root, STRICT, {
+      fonts: manifest([{ family: "Corpus Text", weight: "400 700", style: "normal", assetId: "asset_f", sha256: null }]),
+    });
+
+    expect(probe.checked).toEqual(['400 normal 16px "Corpus Text"']);
+    expect(report.codes.some((code) => code.code === "font_face_missing")).toBe(false);
+    expect(report.evidence.fontManifestHash).toBe("manifest-hash");
+    // Обязательный face виден в доказательстве вместе с ассетом, по которому его объявила тема.
+    expect(report.evidence.fontFaces).toContainEqual(expect.objectContaining({ family: "Corpus Text", required: true, checked: true, assetId: "asset_f" }));
+    root.remove();
+  });
+
+  it("объявленный темой, но не использованный компонентом face не требуется", async () => {
+    const probe = installFontSet({ available: ['400 normal 16px "Corpus Text"'] });
+    const root = surface('<p style="font-family: \'Corpus Text\'">x</p>');
+
+    const report = await collectReadiness(root, STRICT, {
+      fonts: manifest([
+        { family: "Corpus Text", weight: "400", style: "normal", assetId: "asset_a", sha256: null },
+        { family: "Never Used", weight: "400", style: "normal", assetId: "asset_b", sha256: null },
+      ]),
+    });
+
+    expect(probe.checked).toEqual(['400 normal 16px "Corpus Text"']);
+    expect(report.codes.some((code) => code.code === "font_face_missing")).toBe(false);
+    root.remove();
+  });
+
+  it("отсутствующий face темы — font_face_missing с указателем на семейство", async () => {
+    installFontSet({ available: [], faces: [] });
+    const root = surface('<p style="font-family: \'Corpus Missing\'">Шрифт не доехал</p>');
+
+    const report = await collectReadiness(root, STRICT, {
+      fonts: manifest([{ family: "Corpus Missing", weight: "400", style: "normal", assetId: "asset_0", sha256: null }]),
+    });
+
+    expect(report.met).toBe(false);
+    const missing = report.codes.find((code) => code.code === "font_face_missing");
+    expect(missing).toMatchObject({ severity: "error", ref: "Corpus Missing" });
+    expect(report.reason).toContain("fonts_missing");
+    // Доволновая семантика v1 на той же поверхности молчит: строгость приходит политикой.
+    const lenient = await collectReadiness(surface('<p style="font-family: \'Corpus Missing\'">x</p>'), { ...DEFAULT_READINESS_POLICY, timeoutMs: 2_000, network: { quietMs: 0, scope: "component-owned" } });
+    expect(lenient.codes.some((code) => code.code === "font_face_missing")).toBe(false);
+    root.remove();
+  });
+
+  it("объявленный face со статусом error — font_load_failed, а не отсутствие", async () => {
+    installFontSet({
+      available: ['400 normal 16px "Corpus Text"'],
+      faces: [{ family: "Corpus Text", weight: "400", style: "normal", status: "error" }],
+    });
+    const root = surface('<p style="font-family: \'Corpus Text\'">x</p>');
+
+    const report = await collectReadiness(root, STRICT, {
+      fonts: manifest([{ family: "Corpus Text", weight: "400", style: "normal", assetId: "asset_a", sha256: null }]),
+    });
+
+    expect(report.codes.some((code) => code.code === "font_load_failed")).toBe(true);
+    expect(report.codes.some((code) => code.code === "font_face_missing")).toBe(false);
+    root.remove();
+  });
+
+  /**
+   * `decoded-strict`: картинка с растром, но без успешного `decode()`, больше не считается годной.
+   * До волны такой кадр объявлялся готовым — это и есть дыра §1.4 плана.
+   */
+  it("decoded-strict валит картинку без декода, decoded — нет", async () => {
+    installFontSet({ available: [] });
+    const root = surface('<img src="/api/assets/asset_11" alt="half" />');
+    const image = root.querySelector("img")!;
+    Object.defineProperty(image, "complete", { value: true, configurable: true });
+    Object.defineProperty(image, "naturalWidth", { value: 64, configurable: true });
+    Object.defineProperty(image, "naturalHeight", { value: 0, configurable: true });
+    Object.defineProperty(image, "decode", { value: () => Promise.reject(new Error("broken")), configurable: true });
+
+    const strict = await collectReadiness(root, STRICT, { fonts: manifest([]) });
+    expect(strict.met).toBe(false);
+    // `img.src` в браузере — абсолютный URL: доказательство несёт ровно то, что запрашивалось.
+    const failed = strict.codes.find((code) => code.code === "image_load_failed");
+    expect(failed).toMatchObject({ severity: "error" });
+    expect(failed?.ref).toContain("/api/assets/asset_11");
+    expect(strict.evidence.imageDetails).toEqual([
+      expect.objectContaining({ assetId: "asset_11", naturalWidth: 64, naturalHeight: 0, decoded: false, contentHash: null }),
+    ]);
+
+    const lenient = await collectReadiness(root, { ...DEFAULT_READINESS_POLICY, timeoutMs: 2_000, network: { quietMs: 0, scope: "component-owned" } });
+    expect(lenient.evidence.images.failed).toBe(0);
+    expect(lenient.evidence.imageDetails).toBeUndefined();
+    root.remove();
+  });
+
+  it("contentHash берётся из id ассета, когда id каноничен", async () => {
+    installFontSet({ available: [] });
+    const sha = "a".repeat(64);
+    const root = surface(`<img src="/api/assets/asset_${sha}" alt="ok" />`);
+    const image = root.querySelector("img")!;
+    Object.defineProperty(image, "complete", { value: true, configurable: true });
+    Object.defineProperty(image, "naturalWidth", { value: 8, configurable: true });
+    Object.defineProperty(image, "naturalHeight", { value: 8, configurable: true });
+    Object.defineProperty(image, "decode", { value: () => Promise.resolve(), configurable: true });
+
+    const report = await collectReadiness(root, STRICT, { fonts: manifest([]) });
+    expect(report.evidence.imageDetails?.[0]).toMatchObject({ assetId: `asset_${sha}`, contentHash: sha, decoded: true });
+    expect(report.codes.some((code) => code.code === "image_load_failed")).toBe(false);
+    root.remove();
+  });
+
+  it("стабилизация layout едет в доказательстве и молчит на спокойной поверхности", async () => {
+    installFontSet({ available: [] });
+    const root = surface('<div data-eui-key="root"><span>стабильно</span></div>');
+    const report = await collectReadiness(root, STRICT, { fonts: manifest([]) });
+    expect(report.evidence.layout).toEqual({ stable: true, attempts: 1, elementKey: null });
+    expect(report.codes.some((code) => code.code === "layout_unstable")).toBe(false);
     root.remove();
   });
 });
