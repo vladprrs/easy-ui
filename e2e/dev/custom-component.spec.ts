@@ -11,7 +11,13 @@ test("custom component hooks, events, state templates, and published navigation 
     id: "ui-rating-stars", name: "UiRatingStars", source, designSystem: STARTER_DS_ID, intent: "Collects customer ratings in the interactive product flow",
   }, {
     reason: "Отдельная UI-фикстура проверяет события, состояние и навигацию пользовательского флоу",
-    allowedCandidateKeys: [`component:${STARTER_DS_ID}:api-rating-stars`],
+    // Обе фикстуры `api.spec.ts` живут в той же ДС и рождены из того же `rating-stars.tsx`,
+    // поэтому reuse-гейт законно предлагает обе. Порядок спек между воркерами не задан, и
+    // allowlist обязан покрывать оба исхода — иначе тест зелёный только при одном из порядков.
+    allowedCandidateKeys: [
+      `component:${STARTER_DS_ID}:api-rating-stars`,
+      `component:${STARTER_DS_ID}:api-provenance-stars`,
+    ],
   })).status()).toBe(201);
   expect((await request.post(`${api}/components/ui-rating-stars/publish`, { data: { baseRev: 1 } })).status()).toBe(201);
 

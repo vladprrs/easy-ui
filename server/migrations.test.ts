@@ -831,3 +831,68 @@ test("v30 adds multi-run provenance columns to a populated v29 database without 
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   db.close();
 });
+
+/**
+ * Обратный тест отката образа (план 2026-08-04, триаж C28): **код v28 на БД v29/v30**.
+ *
+ * Прямое направление (v28-БД → v29 → v30) проверяют тесты выше; здесь проверяется то, что
+ * случается при откате образа после миграции, когда откатить схему уже нельзя:
+ *
+ * 1. **старт** — `migrate()` старого кода на «будущей» БД не запускает ни одного шага
+ *    (цикл `for(index=current; index<migrations.length)` при `current ≥ length` пуст) и ничего
+ *    не ломает; здесь это моделируется повторным прогоном на уже мигрированной базе;
+ * 2. **запись** — INSERT'ы ровно того состава колонок, который знал код до v29/v30, проходят:
+ *    все новые колонки nullable и без DEFAULT-ограничений;
+ * 3. **чтение** — строки, записанные старым составом, читаются целиком, а новые колонки честно
+ *    отвечают NULL («неизвестно»), что и уводит каскад reuse в пересъёмку (D17), а promote —
+ *    в legacy-ветку `acceptance_run_ids IS NULL ⇒ [acceptance_run_id]`.
+ *
+ * Образец — `server/visual-renderer-guard.test.ts` («старый образ на БД v28»).
+ */
+test("откат образа: код v28 на БД v30 стартует, пишет и читает приёмку без колонок v29/v30 (C28)",()=>{
+  const db=new Database(":memory:"); migrate(db);
+  const at="2026-08-04T12:00:00.000Z";
+  // (1) Старт старого образа: миграций к применению нет, аудит FK проходит.
+  expect(()=>migrate(db)).not.toThrow();
+  expect((db.query("PRAGMA user_version").get() as {user_version:number}).user_version).toBe(30);
+
+  db.run("INSERT INTO components (id,name,head_rev,design_system,created_at,updated_at) VALUES ('yp-rollback','YpRollback',1,'yandex-pay','now','now')");
+  db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES ('yp-rollback',1,'src','yandex-pay','now')");
+
+  // (2) Запись составом v28: ни `refresh_json`/`status_reason` (v29), ни `renderer_fingerprint` (v30),
+  // ни слоёв отпечатка, ни квитанции reuse — их этот код не знает.
+  db.query(`INSERT INTO component_candidates
+    (candidate_id,component_id,design_system,rev,source_hash,bundle_hash,host_abi_version,theme_version,build_fingerprint,
+     observed_catalog_revision,policy_profile_hash,status,created_by,created_at,expires_at)
+    VALUES ('cand_rollback','yp-rollback','yandex-pay',1,'src-hash','bundle-hash',4,NULL,'bf','cat','ph','validated','u',?,?)`).run(at,at);
+  db.query(`INSERT INTO acceptance_runs
+    (run_id,candidate_id,component_id,status,policy_profile_hash,policy_profile_id,progress_json,gates_json,created_by,created_at)
+    VALUES ('acc_rollback','cand_rollback','yp-rollback','pass','ph','default-v1','{"total":1}','{}','u',?)`).run(at);
+  db.query(`INSERT INTO acceptance_cases
+    (run_id,case_id,case_key,props_hash,case_fingerprint,case_policy_hash,status,verdict,gates_json,started_at,finished_at)
+    VALUES ('acc_rollback','alpha','alpha','props','fp_case','ph_case','done','pass','[]',?,?)`).run(at,at);
+  db.query(`INSERT INTO acceptance_case_results
+    (case_fingerprint,component_id,artifacts_json,metrics_json,verdict,produced_run_id,created_at,last_used_at)
+    VALUES ('fp_case','yp-rollback','[]','{}','pass','acc_rollback',?,?)`).run(at,at);
+  db.query(`INSERT INTO component_publishes
+    (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at,candidate_id,acceptance_run_id)
+    VALUES ('yp-rollback',1,1,'active','js','{}','src-hash','bundle-hash',4,?,'cand_rollback','acc_rollback')`).run(at);
+
+  // (3) Чтение: строки на месте, новые колонки — NULL, а не мусор и не отказ.
+  expect(db.query("SELECT status,refresh_json refresh,status_reason reason,renderer_fingerprint fp FROM acceptance_runs WHERE run_id='acc_rollback'").get())
+    .toEqual({status:"pass",refresh:null,reason:null,fp:null});
+  expect(db.query(`SELECT verdict,frame_fingerprint frame,comparison_fingerprint comparison,verdict_policy_hash vph,reuse_receipt_json receipt
+    FROM acceptance_cases WHERE run_id='acc_rollback' AND case_id='alpha'`).get())
+    .toEqual({verdict:"pass",frame:null,comparison:null,vph:null,receipt:null});
+  expect(db.query(`SELECT verdict,frame_fingerprint frame,comparison_fingerprint comparison,verdict_policy_hash vph,verdict_policy_json snapshot
+    FROM acceptance_case_results WHERE case_fingerprint='fp_case'`).get())
+    .toEqual({verdict:"pass",frame:null,comparison:null,vph:null,snapshot:null});
+  // Legacy-строка публикации: массив ранов NULL — читатель обязан вывести его из скаляра.
+  expect(db.query("SELECT acceptance_run_id one,acceptance_run_ids many FROM component_publishes WHERE component_id='yp-rollback'").get())
+    .toEqual({one:"acc_rollback",many:null});
+  // NULL-слой не находится lookup'ом по слоям: сравнение с NULL ложно, и reuse честно не случается.
+  expect(db.query("SELECT COUNT(*) n FROM acceptance_case_results WHERE component_id='yp-rollback' AND frame_fingerprint=?").get("fp_case"))
+    .toEqual({n:0});
+  expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  db.close();
+});

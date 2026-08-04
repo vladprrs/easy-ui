@@ -111,6 +111,18 @@
 
 **N5 (major). Bump `CASE_FINGERPRINT_ALGO_VERSION` — ровно один, в R1 (4→5).** R1 меняет **схему** входа ⇒ bump. R2a (флаги) и R4 (строгая политика) меняют **значения** внутри уже входящих хешей ⇒ reuse инвалидируется автоматически без смены схемы. Тест-инвариант: «bump'ов в пакете больше нет». Полный список точек инвалидации и их цена — §4.
 
+> **Отметка (2026-08-04, постфактум).** Инвариант N5 пересмотрен **вне** этого пакета: план
+> `docs/plans/2026-08-04-acceptance-pipeline-feedback.md` (решение D-B, волна W1) поднял
+> `CASE_FINGERPRINT_ALGO_VERSION` **5→6** — это санкционированный второй bump, и он не отменяет N5.
+> Основание: отпечаток случая расслоён на `frameFingerprint` / `comparisonFingerprint` /
+> `verdictPolicyHash`, а examples-путь перестал хэшировать заглушку `CASE_POLICY_HASH_V0` вместо
+> реального профиля рана, то есть изменилась **схема** входа, а не значения внутри прежней схемы —
+> ровно тот критерий, по которому N5 и разрешал bump. Инвариант «в пакете renderer-contract-2
+> bump ровно один (4→5, в R1)» остаётся верным: тест-пины версии переехали с литерала `5` на `6`
+> (`server/capture/renderer.test.ts`, `server/acceptance/ids.test.ts`), история номера записана в
+> комментарии `server/acceptance/ids.ts`. Цена — холодный прод-кэш на первом ране после деплоя
+> (≈6 с/case), признана планом 2026-08-04 (§Верификация, C9).
+
 **N6 (major). Renderer fingerprint не входит в `fingerprint_json` таблицы `visual_references`.** `vref_sha256(...)` — PK/UNIQUE, записан в `visual_baseline_sets.members_json`, и `fingerprintSchema` — `z.strictObject` (новое поле = 422). Identity эталона остаётся поверхностной; renderer — **аддитивные атрибуты + guard перед диффом**. `server/visual/fingerprint.ts` пакетом **не трогается** — это осознанно (§8).
 
 **N7 (medium). Новый статус в `visual_runs.status` не вводится.** `CHECK(status IN ('pass','fail','error','reference_missing'))` (`server/migrations.ts:133,260`) — расширение требует rebuild таблицы. Решение: `status='error'` + аддитивные `outcome_code TEXT` (`renderer_mismatch` | `stale_renderer`) и `renderer_guard TEXT`.
@@ -334,7 +346,7 @@ dev-хосте (8 vCPU против 4 у прод-сервиса), поэтом�
 
 **Объём.**
 - `server/capture/renderer.ts`: асинхронная инициализация на старте (чтение манифеста / dev-фолбэк с null-деградацией), `RENDERER_VERSION`, `rendererPin.json`, `rendererFingerprint(readinessPolicyHash)`, `rendererDeclaration()`, `buildDeterminismArgs()` (пока: явные дубли srgb/hide-scrollbars).
-- `server/acceptance/ids.ts`: `captureEnvFingerprintOf` удаляется (потребители — только `ids.ts` и `caseSets.test.ts`, сверено), вход `case_fingerprint` → `rendererFingerprint`; `CASE_FINGERPRINT_ALGO_VERSION = 5` (**последний bump пакета**).
+- `server/acceptance/ids.ts`: `captureEnvFingerprintOf` удаляется (потребители — только `ids.ts` и `caseSets.test.ts`, сверено), вход `case_fingerprint` → `rendererFingerprint`; `CASE_FINGERPRINT_ALGO_VERSION = 5` (**последний bump пакета**; о санкционированном 5→6 вне пакета — отметка к N5 выше).
 - Переименование наблюдённой in-page пробы → `observedCaptureEnvFingerprint` (`src/capture/env.ts`, метрики гейтов, `service.ts`).
 - `server/screenshot/service.ts`: `rendererDeclaration` на джобе; сверка версии по major.minor.build → hard-fail `job.error.code="renderer_mismatch"`; kill-switch `EASYUI_RENDERER_STRICT_MANIFEST=0` → warning.
 - Self-check манифеста на старте + секция `renderer` в `/api/health` и `GET /api/capabilities`.

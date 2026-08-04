@@ -40,7 +40,7 @@ const hashOf = (payload: unknown): string => sha256(canonicalStringify(payload))
  *   renderer-contract-2 (§2.2 N5) объявлял **ровно один** bump — в R1, где менялась схема входа
  *   (`captureEnvFingerprint` → `rendererFingerprint`). К моменту R1 значение уже было 5, поэтому
  *   номер тогда не двигался: вход поменял и имя ключа, и значение.
- * - **Версия 6 — санкционированный вторый bump** (план `docs/plans/2026-08-04-acceptance-pipeline-feedback.md`,
+ * - **Версия 6 — санкционированный второй bump** (план `docs/plans/2026-08-04-acceptance-pipeline-feedback.md`,
  *   решение D-B). Отпечаток случая перестал быть плоским: он расслоён на `frameFingerprint`
  *   (входы съёмки), `comparisonFingerprint` (входы сравнения) и `verdictPolicyHash` (входы
  *   вердикта), а examples-путь перестал хэшировать заглушку `CASE_POLICY_HASH_V0` вместо реального
