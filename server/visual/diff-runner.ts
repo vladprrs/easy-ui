@@ -35,6 +35,14 @@ export interface NormalizedDiffJob {
   options?: {
     /** `cropLineage.rect` эталона: `[x, y, width, height]` в его собственных пикселях. */
     cropRect?: number[];
+    /**
+     * W5 (content-hug reference): **объявленная сервером** каноническая канва сравнения в device
+     * px. Воркер её не выводит — ни `expectedGeometry`, ни margin рендерера ему не известны, и
+     * догадка на его стороне была бы вторым источником правды о размере канвы.
+     */
+    padReferenceTo?: { width: number; height: number };
+    /** Смещение эталона в этой канве; по умолчанию `(0, 0)`. Сервер шлёт `margin × dsf`. */
+    referencePlacement?: { x: number; y: number };
     /** Допуск расхождения габаритов после crop, px; больше — `indeterminate`. */
     maxDimensionDeltaPx?: number;
     rawThreshold?: number;
@@ -69,10 +77,25 @@ export interface NormalizedDiffMetrics {
   thresholds: { raw: number; aa: number };
 }
 export interface Dims { width: number; height: number }
+/**
+ * Происхождение эталона, которым воркер фактически сравнивал (W5): что он получил, что вырезал,
+ * во что уложил. Это и есть lineage, который уезжает в evidence: без него «сравнение прошло»
+ * неотличимо от «сравнили не то» — ровно та непрозрачность, из-за которой автор фидбэка чинил
+ * эталон вслепую по размерам из упавшего рана.
+ */
+export interface ReferenceNormalization {
+  sourceDims: Dims;
+  cropApplied: boolean;
+  croppedDims: Dims;
+  padTo: Dims | null;
+  placement: { x: number; y: number } | null;
+  refDims?: Dims;
+}
 export type NormalizedDiffIndeterminate = {
   ok: true; mode: "normalize"; indeterminate: true; reason: string;
   sourceDims: Dims; refDims: Dims; candDims: Dims; cropApplied: boolean;
   dimensionDelta?: { width: number; height: number; tolerancePx: number };
+  referenceNormalization?: ReferenceNormalization;
 };
 export type NormalizedDiffMeasured = {
   ok: true; mode: "normalize"; indeterminate: false;
@@ -81,6 +104,9 @@ export type NormalizedDiffMeasured = {
   metrics: NormalizedDiffMetrics;
   diffPngBase64: string;
   normalizedCandidatePngBase64: string;
+  referenceNormalization?: ReferenceNormalization;
+  /** Дериват эталона — только когда сервер строил канву (`padReferenceTo`). */
+  normalizedReferencePngBase64?: string;
 };
 export type NormalizedDiffResult = NormalizedDiffIndeterminate | NormalizedDiffMeasured | DiffErr;
 export type RunNormalizedDiff = (job: NormalizedDiffJob) => Promise<NormalizedDiffResult>;

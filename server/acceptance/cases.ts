@@ -16,6 +16,7 @@
  */
 import { ApiError } from "../http";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
+import type { CropSourceSurface, ReferenceSurface } from "../../src/acceptance/caseSetSchema";
 import type { CandidateEntry } from "../components/candidates";
 import type { CaseSurface } from "./ids";
 import { acceptanceMaxCasesPerRun } from "./policies";
@@ -76,7 +77,15 @@ export interface AcceptanceCase {
    * его нормализация размеров гейта `visual` (W5a) — эталон обрезается до кадра случая **до**
    * сравнения, иначе вырезка из макета никогда не сойдётся с paint-кадром компонента.
    */
-  cropLineage?: { parentNodeId?: string; rect: [number, number, number, number] };
+  cropLineage?: { parentNodeId?: string; rect: [number, number, number, number]; sourceSurface?: CropSourceSurface };
+  /**
+   * Чем является ассет эталона (W5, фидбэк P1): `"paint"` — уже каноническая канва случая
+   * (сегодняшнее поведение и дефолт потребителя), `"content-hug"` — вырезка по содержимому,
+   * которую сервер сам паддит до канвы. Вход слоя сравнения: его смена ⇒ re-diff, не recompute.
+   */
+  referenceSurface?: ReferenceSurface;
+  /** Смещение content-hug эталона в канве, device px; по умолчанию `margin × dsf` (W5). */
+  referencePlacement?: { x: number; y: number };
   /**
    * Координаты случая в измерениях семьи (`cases[].dims` манифеста W2). В `case_fingerprint` не
    * входят намеренно: смена координаты не меняет ни съёмку, ни вердикт — это ярлык для отчёта.

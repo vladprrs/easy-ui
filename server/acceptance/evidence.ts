@@ -100,6 +100,17 @@ export async function readArtifact(dataDir: string, sha: string): Promise<Uint8A
   catch { return null; }
 }
 
+/**
+ * Запись CAS в манифесте случая: `paint.png`, `geometry.json`, `diff.png`,
+ * `normalized-candidate.png`, `visual.json`, `receipt.json` и — с волны W5 —
+ * `normalized-reference.png`.
+ *
+ * Последняя появляется только там, где эталон **строил сервер** (`referenceSurface:"content-hug"`):
+ * иммутабельный источник остаётся в реестре ассетов и адресуется из `visual.json` парой
+ * `referenceSource {assetId, sha256}`, а в CAS едет ровно то, чего в реестре нет, — построенная
+ * канва вместе с её lineage (`referenceNormalization`). Без деривата «сравнение прошло» было бы
+ * неотличимо от «сравнили не то»: канву не восстановить по одному лишь id исходного ассета.
+ */
 export interface EvidenceEntry { name: string; sha256: string; bytes: number }
 export interface EvidenceCaseEntry {
   caseId: string;

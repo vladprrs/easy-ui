@@ -8,8 +8,9 @@ import { putArtifact, readArtifact } from "../evidence";
 import { ACCEPTANCE_POLICIES } from "../policies";
 import { spawnNormalizedDiffWorker } from "../../visual/diff-runner";
 import type { CandidateSubject, GateContext } from "./types";
-import { paintShaKey } from "./geometry2";
-import { visualGate, visualSeverityClass } from "./visual";
+import type { CropSourceSurface, ReferenceSurface } from "../../../src/acceptance/caseSetSchema";
+import { geometryFactsKey, paintShaKey, type GeometryFacts } from "./geometry2";
+import { referenceCanvasOf, visualGate, visualSeverityClass } from "./visual";
 
 /**
  * Гейт `visual` (план 2026-08-03 §2 A5, §5 W5a).
@@ -71,10 +72,17 @@ interface ContextOptions {
   policyId?: keyof typeof ACCEPTANCE_POLICIES;
   referenceAssetId?: string | null;
   casePolicy?: { maxRawDiffPct?: number };
-  cropLineage?: { rect: [number, number, number, number] };
+  cropLineage?: { rect: [number, number, number, number]; sourceSurface?: CropSourceSurface };
   /** Кандидатный кадр в CAS; `null` — гейт вызывается без снятого paint-кадра. */
   candidate?: Buffer | null;
   runDiff?: GateContext["runDiff"];
+  /** W5: поверхность эталона и его место в канонической канве. */
+  referenceSurface?: ReferenceSurface;
+  referencePlacement?: { x: number; y: number };
+  expectedGeometry?: { width: number; height: number };
+  /** Факты кадра, которые в бою кладёт гейт `geometry` (W5-фолбэк канвы). */
+  geometryFacts?: GeometryFacts;
+  dsf?: number;
 }
 
 async function context(options: ContextOptions = {}) {
@@ -83,6 +91,7 @@ async function context(options: ContextOptions = {}) {
   const db = new Database(":memory:");
   migrate(db);
   const shared = new Map<string, unknown>();
+  if (options.geometryFacts) shared.set(geometryFactsKey("alpha"), options.geometryFacts);
   const candidate = options.candidate === undefined ? CANDIDATE : options.candidate;
   if (candidate) {
     const stored = await putArtifact(dir, new Uint8Array(candidate));
@@ -100,8 +109,11 @@ async function context(options: ContextOptions = {}) {
       ...(options.referenceAssetId === undefined ? {} : { referenceAssetId: options.referenceAssetId }),
       ...(options.casePolicy ? { casePolicy: options.casePolicy } : {}),
       ...(options.cropLineage ? { cropLineage: options.cropLineage } : {}),
+      ...(options.referenceSurface ? { referenceSurface: options.referenceSurface } : {}),
+      ...(options.referencePlacement ? { referencePlacement: options.referencePlacement } : {}),
+      ...(options.expectedGeometry ? { expectedGeometry: options.expectedGeometry } : {}),
     },
-    surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
+    surface: { viewport: { width: 390, height: 844 }, dsf: options.dsf ?? 2, theme: "light" },
     determinismSampled: false,
     shared,
     sleep: () => Promise.resolve(),
@@ -233,4 +245,123 @@ test("без снятого paint-кадра и при отказе воркер
 test("severity-класс: расхождение в пределах AA-бюджета — aa, структурное — raw", () => {
   expect(visualSeverityClass({ rawDiffPct: 3, aaDiffPct: 0.2 }, 2)).toBe("aa");
   expect(visualSeverityClass({ rawDiffPct: 3, aaDiffPct: 2.9 }, 2)).toBe("raw");
+});
+
+// ------------------------------------------- content-hug reference (W5, фидбэк P1)
+
+/**
+ * Ловушка `pay-card-button` из фидбэка целиком.
+ *
+ * Кандидат — paint-канва `264×160` с компонентом `136×32` в точке `(64, 64)`; эталон — штатный
+ * content-hug экспорт Figma-узла `136×32`. До W5 это давало `dimensions_irreconcilable`, автор
+ * подсматривал размеры канвы в упавшем ране и паддил PNG вручную.
+ */
+const HUG_REFERENCE = framePng(136, 32, { x: 0, y: 0, width: 136, height: 32, color: INK });
+const PAINT_CANDIDATE = framePng(264, 160, { x: 64, y: 64, width: 136, height: 32, color: INK });
+
+test("W5: content-hug 136×32 сравнивается с paint-канвой 264×160 без ручного паддинга", async () => {
+  const { ctx, db, dir } = await context({
+    policyId: "pixel-strict-v1", candidate: PAINT_CANDIDATE, dsf: 1,
+    referenceSurface: "content-hug", expectedGeometry: { width: 136, height: 32 },
+  });
+  ctx.case.referenceAssetId = await putAsset(db, dir, HUG_REFERENCE);
+
+  const result = await visualGate.run(ctx);
+  expect(result.status).toBe("pass");
+  expect(result.metrics).toMatchObject({ rawDiffPct: 0, refDims: { width: 264, height: 160 } });
+  // Канва — `expectedGeometry + 2×margin`, место — `margin × dsf`: ровно то, что делает съёмка.
+  expect(result.metrics!.referenceNormalization).toMatchObject({
+    referenceSurface: "content-hug", cropApplied: false,
+    padTo: { width: 264, height: 160 }, placement: { x: 64, y: 64 },
+    marginPx: 64, deviceScaleFactor: 1,
+    layoutRoot: { width: 136, height: 32 }, layoutRootSource: "expectedGeometry",
+    sourceDims: { width: 136, height: 32 },
+  });
+  // Дериват эталона — в артефактах случая, рядом с иммутабельной ссылкой на исходный ассет.
+  expect(result.artifacts?.map((item) => item.name).sort())
+    .toEqual(["diff.png", "normalized-candidate.png", "normalized-reference.png", "visual.json"]);
+  const record = JSON.parse(new TextDecoder().decode(
+    (await readArtifact(dir, result.artifacts!.find((item) => item.name === "visual.json")!.sha256))!,
+  )) as { referenceSource: { assetId: string; sha256: string }; normalizedReferenceSha256: string };
+  expect(record.referenceSource).toEqual({ assetId: ctx.case.referenceAssetId!, sha256: sha256(new Uint8Array(HUG_REFERENCE)) });
+  expect(record.normalizedReferenceSha256).toBe(result.artifacts!.find((item) => item.name === "normalized-reference.png")!.sha256);
+  db.close();
+});
+
+test("W5: тот же эталон без referenceSurface остаётся несводимым — legacy-поведение не тронуто (D13)", async () => {
+  const { ctx, db, dir } = await context({ policyId: "pixel-strict-v1", candidate: PAINT_CANDIDATE, dsf: 1 });
+  ctx.case.referenceAssetId = await putAsset(db, dir, HUG_REFERENCE);
+
+  const result = await visualGate.run(ctx);
+  expect(result.status).toBe("indeterminate");
+  expect(result.metrics).toMatchObject({ reason: "dimensions_irreconcilable" });
+  // Паддинга не было вовсе: manifest без новых полей сравнивается ровно как до волны.
+  expect(result.metrics!.referenceNormalization).toMatchObject({ referenceSurface: "paint", padTo: null, placement: null });
+  db.close();
+});
+
+test("W5: crop не применяется дважды — 136×32 не превращается в 116×12", async () => {
+  // Эталон уже вырезан агентом; `cropLineage` остался provenance'ом родительского узла.
+  const lineage = { rect: [20, 20, 136, 32] as [number, number, number, number] };
+  const provenance = await context({
+    policyId: "pixel-strict-v1", candidate: PAINT_CANDIDATE, dsf: 1,
+    referenceSurface: "content-hug", expectedGeometry: { width: 136, height: 32 },
+    cropLineage: { ...lineage, sourceSurface: "content-hug" },
+  });
+  provenance.ctx.case.referenceAssetId = await putAsset(provenance.db, provenance.dir, HUG_REFERENCE);
+  const kept = await visualGate.run(provenance.ctx);
+  expect(kept.status).toBe("pass");
+  expect(kept.metrics).toMatchObject({ cropApplied: false, rawDiffPct: 0 });
+  expect(kept.metrics!.referenceNormalization).toMatchObject({
+    sourceSurface: "content-hug", cropApplied: false, croppedDims: { width: 136, height: 32 },
+  });
+  provenance.db.close();
+
+  // Тот же rect, объявленный как координаты **родительского узла**, режется ровно один раз — и
+  // именно поэтому его нельзя применять к уже вырезанному ассету: получилось бы 116×12.
+  const doubled = await context({
+    policyId: "pixel-strict-v1", candidate: PAINT_CANDIDATE, dsf: 1,
+    referenceSurface: "content-hug", expectedGeometry: { width: 136, height: 32 },
+    cropLineage: { ...lineage, sourceSurface: "figma-node" },
+  });
+  doubled.ctx.case.referenceAssetId = await putAsset(doubled.db, doubled.dir, HUG_REFERENCE);
+  const cut = await visualGate.run(doubled.ctx);
+  expect(cut.metrics!.referenceNormalization).toMatchObject({ cropApplied: true, croppedDims: { width: 116, height: 12 } });
+  expect(cut.status).toBe("fail");
+  doubled.db.close();
+});
+
+test("W5: без expectedGeometry канва берётся из измеренного layoutBounds, а без обоих — indeterminate", async () => {
+  const measured = await context({
+    policyId: "pixel-strict-v1", candidate: PAINT_CANDIDATE, dsf: 1, referenceSurface: "content-hug",
+    geometryFacts: { layoutBounds: { width: 136, height: 32 }, paintMargin: 64, deviceScaleFactor: 1 },
+  });
+  measured.ctx.case.referenceAssetId = await putAsset(measured.db, measured.dir, HUG_REFERENCE);
+  const result = await visualGate.run(measured.ctx);
+  expect(result.status).toBe("pass");
+  expect(result.metrics!.referenceNormalization).toMatchObject({ layoutRootSource: "layoutBounds", padTo: { width: 264, height: 160 } });
+  measured.db.close();
+
+  // Ни объявленного корня, ни измеренного (re-diff без свежей геометрии): сравнивать компонент с
+  // канвой, построенной наугад, значило бы выдать вердикт о пустоте.
+  const blind = await context({ policyId: "pixel-strict-v1", candidate: PAINT_CANDIDATE, dsf: 1, referenceSurface: "content-hug" });
+  blind.ctx.case.referenceAssetId = await putAsset(blind.db, blind.dir, HUG_REFERENCE);
+  const unresolved = await visualGate.run(blind.ctx);
+  expect(unresolved.status).toBe("indeterminate");
+  expect(unresolved.metrics).toMatchObject({ reason: "reference_canvas_unresolved" });
+  expect(unresolved.detail).toContain("expectedGeometry");
+  blind.db.close();
+});
+
+test("W5: канва считается в device px, а placement по умолчанию — margin × dsf", async () => {
+  const { ctx, db } = await context({
+    candidate: null, dsf: 2, referenceSurface: "content-hug", expectedGeometry: { width: 136, height: 32 },
+  });
+  expect(referenceCanvasOf(ctx)).toMatchObject({
+    padTo: { width: 528, height: 320 }, placement: { x: 128, y: 128 }, deviceScaleFactor: 2,
+  });
+  // Явный placement перекрывает умолчание — на нём же держится смена comparison-отпечатка (C12).
+  ctx.case.referencePlacement = { x: 100, y: 90 };
+  expect(referenceCanvasOf(ctx)!.placement).toEqual({ x: 100, y: 90 });
+  db.close();
 });

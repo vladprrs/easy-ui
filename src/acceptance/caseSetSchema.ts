@@ -75,6 +75,32 @@ export const caseSetCasePolicySchema = z.strictObject({
 });
 
 /**
+ * Поверхность эталона (план 2026-08-04 §W5, фидбэк «P1. Padded paint reference и root geometry»).
+ *
+ * - `"paint"` — ассет **уже** является канонической paint-канвой случая (прозрачный фон + поле
+ *   `margin` вокруг компонента). Это сегодняшнее — и единственное до W5 — поведение, поэтому оно
+ *   же дефолт **в потребителе**: манифест без поля сравнивается ровно как раньше.
+ * - `"content-hug"` — ассет обрезан по содержимому (штатный экспорт Figma-узла). Сервер сам
+ *   строит из него каноническую канву: паддит прозрачным до `expectedGeometry + 2×margin` и
+ *   размещает по `referencePlacement`. Ровно это избавляет автора от ручного PNG-паддинга,
+ *   ради которого он раньше подсматривал размеры канвы в упавшем ране.
+ */
+export const REFERENCE_SURFACES = ["content-hug", "paint"] as const;
+export type ReferenceSurface = (typeof REFERENCE_SURFACES)[number];
+
+/**
+ * Поверхность, **в координатах которой** записан `cropLineage.rect`, то есть та, которой ассет
+ * является физически.
+ *
+ * - `"figma-node"` — ассет это экспорт родительского узла целиком, и `rect` надо применить, чтобы
+ *   получить эталон случая (сегодняшняя семантика; она же дефолт при отсутствии поля).
+ * - `"content-hug"` / `"paint"` — ассет **уже** вырезан, и `rect` остаётся только provenance'ом.
+ *   Повторное применение — та самая ловушка фидбэка, превращавшая `136×32` в `116×12`.
+ */
+export const CROP_SOURCE_SURFACES = ["figma-node", "content-hug", "paint"] as const;
+export type CropSourceSurface = (typeof CROP_SOURCE_SURFACES)[number];
+
+/**
  * `cropLineage` (§19.5 фидбэка): происхождение эталона — прямоугольник внутри родительского
  * узла Figma. Нужен нормализации размеров в W5a (crop эталона до кадра случая), поэтому
  * записывается уже сейчас: перевыпускать манифесты семейств ради одного поля недопустимо.
@@ -88,14 +114,37 @@ export const caseSetCropLineageSchema = z.strictObject({
     z.number().gt(0).max(1e6),
     z.number().gt(0).max(1e6),
   ]),
+  /**
+   * Строго `.optional()` **без** `.default()` (C6/C25): `caseSetIdOf` хэширует `parsed.data`, и
+   * zod-дефолт сменил бы контентный адрес всех уже опубликованных манифестов. Дефолт
+   * (`"figma-node"`) применяет потребитель — `server/acceptance/gates/visual.ts`.
+   */
+  sourceSurface: z.enum(CROP_SOURCE_SURFACES).optional(),
 });
 
 export const caseSetCaseSchema = z.strictObject({
   id: caseId,
   props: z.record(z.string(), z.unknown()),
   referenceAssetId: z.string().regex(REFERENCE_ASSET_ID_PATTERN, "must be an asset id").optional(),
+  /**
+   * **Габариты layout-корня** компонента в CSS px — не размер канвы сравнения. Две величины
+   * разного смысла: эталон приезжает padded (`layout + 2×margin`), а `expectedGeometry` судит
+   * геометрия против настоящего root'а. Ровно эта путаница роняла `pay-card-button` 12/12
+   * (фидбэк P1); теперь она хотя бы называется по-разному и ловится warning'ом при PUT.
+   */
   expectedGeometry: z.strictObject({ width: dimensionPx, height: dimensionPx }).optional(),
   cropLineage: caseSetCropLineageSchema.optional(),
+  /** Чем является ассет эталона. Дефолт (`"paint"`) — в потребителе, не в схеме (C6/C25). */
+  referenceSurface: z.enum(REFERENCE_SURFACES).optional(),
+  /**
+   * Смещение content-hug эталона внутри канонической канвы, в **пикселях канвы** (device px).
+   * Опущено — сервер берёт `margin × deviceScaleFactor`, то есть ровно то место, куда кладёт
+   * компонент сама paint-съёмка. Значение имеет смысл только при `referenceSurface:"content-hug"`.
+   */
+  referencePlacement: z.strictObject({
+    x: z.number().int().min(0).max(8192),
+    y: z.number().int().min(0).max(8192),
+  }).optional(),
   /**
    * Явный алиас: случай с теми же props, что у цели, снимается один раз и наследует вердикт
    * (D10). Без `aliasOf` дубликат props — отказ `422 duplicate_case_props`, иначе матрица тихо

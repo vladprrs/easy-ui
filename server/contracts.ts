@@ -1831,7 +1831,7 @@ const caseSetCoverageSchema = z.looseObject({
 
 export const putComponentCaseSetContract = registerContract({
   method: "PUT", path: "/api/components/{id}/case-sets",
-  summary: "Publish a case-set manifest for a component: the durable, content-addressed source of an acceptance run's cases (`caseSetId` = \"cset_\" + sha256 of the canonical manifest, so republishing the same manifest is idempotent and returns the same id with cached:true; an edited manifest is a NEW set and never overwrites the old one, so runs stay reproducible). The server validates the manifest as a product entity: schema (manifestVersion 1, strict objects, case ids matching ^[A-Za-z0-9._-]{1,64}$), the declared componentId, the per-run case ceiling, unique case ids, existence of every referenceAssetId in the asset registry (422 asset_not_found), duplicate props without `aliasOf` (422 duplicate_case_props), alias targets (must be another non-alias case with identical props), and crop-lineage rectangles. Dimension coverage gaps and props that disagree with the published component schema come back as `warnings`, never as failures. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
+  summary: "Publish a case-set manifest for a component: the durable, content-addressed source of an acceptance run's cases (`caseSetId` = \"cset_\" + sha256 of the canonical manifest, so republishing the same manifest is idempotent and returns the same id with cached:true; an edited manifest is a NEW set and never overwrites the old one, so runs stay reproducible). The server validates the manifest as a product entity: schema (manifestVersion 1, strict objects, case ids matching ^[A-Za-z0-9._-]{1,64}$), the declared componentId, the per-run case ceiling, unique case ids, existence of every referenceAssetId in the asset registry (422 asset_not_found), duplicate props without `aliasOf` (422 duplicate_case_props), alias targets (must be another non-alias case with identical props), and crop-lineage rectangles. Dimension coverage gaps and props that disagree with the published component schema come back as `warnings`, never as failures. The reference contract is TWO-PART (wave 2026-08-04 W5): `expectedGeometry` is the LAYOUT ROOT in CSS px, while the comparison canvas is the padded paint surface (`root + 2 x 64px margin, x deviceScaleFactor`). Declare `referenceSurface: \"content-hug\"` (plus optional `referencePlacement {x,y}` in canvas device px, default `margin x dsf`) to hand the server a plain Figma export and let it build that canvas itself — no hand-padded PNGs. `cropLineage.sourceSurface` (`figma-node` | `content-hug` | `paint`) says which surface `rect` addresses, so an already-cropped asset is never cropped a second time; omitting it keeps today's `figma-node` semantics. Rectangles that do not fit their asset are 422 crop_rect_out_of_bounds, and `content-hug` + `cropLineage` without `sourceSurface: \"figma-node\"` is 422 crop_lineage_conflict. An `expectedGeometry` that looks like a padded canvas is a warning. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
   requestSchema: z.strictObject({ manifest: z.unknown() }),
   responseSchema: z.looseObject({
     caseSetId: z.string(), componentId: z.string(), designSystem: z.string(),
@@ -1845,6 +1845,11 @@ export const putComponentCaseSetContract = registerContract({
     { status: 422, code: "duplicate_case_props", description: "two cases declare identical props without aliasOf" },
     { status: 422, code: "invalid_alias_target", description: "aliasOf names a missing case, an alias, or a case with different props" },
     { status: 422, code: "asset_not_found", description: "a referenceAssetId is not in the asset registry" },
+    { status: 422, code: "crop_rect_out_of_bounds", description: "cropLineage.rect does not fit the referenced asset" },
+    {
+      status: 422, code: "crop_lineage_conflict",
+      description: "referenceSurface \"content-hug\" with a cropLineage requires cropLineage.sourceSurface \"figma-node\"",
+    },
   ],
 });
 

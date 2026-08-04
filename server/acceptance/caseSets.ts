@@ -24,10 +24,10 @@
  */
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import { caseSetManifestSchema, type CaseSetManifest } from "../../src/acceptance/caseSetSchema";
+import { caseSetManifestSchema, type CaseSetManifest, type CropSourceSurface } from "../../src/acceptance/caseSetSchema";
 import { ApiError } from "../http";
 import { propsHashOf, type AcceptanceCase } from "./cases";
-import type { CaseSurface } from "./ids";
+import { COMPARISON_PAINT_MARGIN_PX, type CaseSurface } from "./ids";
 import { acceptanceMaxCasesPerRun } from "./policies";
 
 const sha256 = (value: string): string => new Bun.CryptoHasher("sha256").update(value).digest("hex");
@@ -111,6 +111,79 @@ function propsWarnings(manifest: CaseSetManifest, schema: ReturnType<typeof publ
   return warnings;
 }
 
+/**
+ * Применяется ли `cropLineage.rect` к байтам ассета (W5). Отсутствующий `sourceSurface` — это
+ * legacy-семантика «ассет = экспорт родительского узла, вырезай», и она обязана остаться
+ * побайтово прежней (D13). Объявленные `content-hug`/`paint` означают «уже вырезано»: rect
+ * остаётся provenance'ом, и повторный crop (`136×32 → 116×12` из фидбэка) не случается.
+ */
+export function cropIsApplied(lineage: { sourceSurface?: CropSourceSurface } | undefined): boolean {
+  if (lineage === undefined) return false;
+  return lineage.sourceSurface === undefined || lineage.sourceSurface === "figma-node";
+}
+
+/**
+ * Две проверки происхождения эталона (§W5):
+ *
+ * 1. **`crop_rect_out_of_bounds`** — rect, который применяется к ассету, обязан целиком в него
+ *    помещаться. Сегодня воркер молча клампит вырезку по краям, то есть сравнивает не то, что
+ *    объявлено; отказ при PUT дешевле, чем 49 случаев с тихо усечённым эталоном.
+ * 2. **`crop_lineage_conflict`** — `referenceSurface:"content-hug"` вместе с crop'ом значит
+ *    «вырежи из узла и получишь content-hug». Любой другой `sourceSurface` при этом утверждает,
+ *    что ассет уже content-hug/paint, и одновременно требует его резать: два взаимоисключающих
+ *    утверждения об одном ассете — отказ, а не выбор одного из них наугад.
+ */
+function validateCropLineage(manifest: CaseSetManifest, assetDims: Map<string, { width: number; height: number } | null>): void {
+  for (const item of manifest.cases) {
+    const lineage = item.cropLineage;
+    if (lineage === undefined) continue;
+    if (item.referenceSurface === "content-hug" && lineage.sourceSurface !== "figma-node") {
+      throw new ApiError(422, "crop_lineage_conflict",
+        `Case ${item.id} declares referenceSurface "content-hug" with a cropLineage, so the asset must be the parent node`
+        + " export: set cropLineage.sourceSurface to \"figma-node\", or drop cropLineage if the asset is already cropped",
+        { issues: [issue(["cases", item.id, "cropLineage", "sourceSurface"], `expected "figma-node", got ${JSON.stringify(lineage.sourceSurface ?? null)}`)] });
+    }
+    if (!cropIsApplied(lineage)) continue;
+    const dims = item.referenceAssetId === undefined ? null : assetDims.get(item.referenceAssetId) ?? null;
+    // Размеров нет (не-растр или доисторическая строка) — проверять нечем; выдумывать отказ хуже.
+    if (dims === null) continue;
+    const [x, y, width, height] = lineage.rect;
+    if (x + width > dims.width || y + height > dims.height) {
+      throw new ApiError(422, "crop_rect_out_of_bounds",
+        `Case ${item.id}: cropLineage.rect [${lineage.rect.join(", ")}] does not fit the ${dims.width}×${dims.height} reference asset`,
+        { issues: [issue(["cases", item.id, "cropLineage", "rect"], `rect exceeds the ${dims.width}×${dims.height} asset`)] });
+    }
+  }
+}
+
+/**
+ * Warning «`expectedGeometry` похож на padded-канву» (§W5). Эвристика ровно та, что описал фидбэк:
+ * автор, увидевший `264×160` в диагностике упавшего сравнения, вписывает эту канву в
+ * `expectedGeometry`, и геометрия начинает судить layout-корень против канвы — 12/12 fail.
+ *
+ * Признак: `expectedGeometry` совпадает с размерами самого эталона (в его масштабе — 1× или dsf),
+ * и вычитание `2×margin` всё ещё оставляет положительный корень. Это warning, не отказ: канва,
+ * случайно равная корню, теоретически возможна, а блокировать PUT из-за похожести нельзя.
+ */
+function paddedCanvasWarnings(manifest: CaseSetManifest, assetDims: Map<string, { width: number; height: number } | null>): string[] {
+  const dsf = manifest.capture.deviceScaleFactor ?? 2;
+  const margin = COMPARISON_PAINT_MARGIN_PX;
+  const warnings: string[] = [];
+  for (const item of manifest.cases) {
+    const expected = item.expectedGeometry;
+    if (!expected || item.referenceSurface === "content-hug") continue;
+    if (expected.width <= 2 * margin || expected.height <= 2 * margin) continue;
+    const dims = item.referenceAssetId === undefined ? null : assetDims.get(item.referenceAssetId) ?? null;
+    if (dims === null) continue;
+    const matches = [1, dsf].some((scale) => dims.width === expected.width * scale && dims.height === expected.height * scale);
+    if (!matches) continue;
+    warnings.push(`case ${item.id}: expectedGeometry ${expected.width}×${expected.height} equals the reference canvas;`
+      + ` expectedGeometry is the LAYOUT ROOT, not the padded comparison canvas (root is probably`
+      + ` ${expected.width - 2 * margin}×${expected.height - 2 * margin}) — see referenceSurface:"content-hug"`);
+  }
+  return warnings;
+}
+
 export interface ValidatedManifest {
   manifest: CaseSetManifest;
   caseSetId: string;
@@ -143,14 +216,21 @@ export function validateManifest(db: Database, componentId: string, raw: unknown
     byId.set(item.id, item);
   }
 
-  // Эталоны: существование в реестре ассетов (канон `parseFigmaInput`, `server/figma.ts`).
+  // Эталоны: существование в реестре ассетов (канон `parseFigmaInput`, `server/figma.ts`) и —
+  // с W5 — сводимость `cropLineage.rect` с реальными размерами PNG.
+  const assetDims = new Map<string, { width: number; height: number } | null>();
   for (const item of manifest.cases) {
     if (item.referenceAssetId === undefined) continue;
-    if (!db.query("SELECT 1 ok FROM assets WHERE id=?").get(item.referenceAssetId)) {
+    const row = db.query("SELECT width,height FROM assets WHERE id=?")
+      .get(item.referenceAssetId) as { width: number | null; height: number | null } | null;
+    if (!row) {
       throw new ApiError(422, "asset_not_found", "A referenced case asset does not exist",
         { issues: [issue(["cases", item.id, "referenceAssetId"], `unknown asset: ${item.referenceAssetId}`)] });
     }
+    assetDims.set(item.referenceAssetId, row.width !== null && row.height !== null ? { width: row.width, height: row.height } : null);
   }
+
+  validateCropLineage(manifest, assetDims);
 
   // Алиасы: цель обязана существовать, не быть собой и сама не быть алиасом (цепочки запрещены —
   // вердикт наследуется ровно на один шаг, D10).
@@ -211,6 +291,13 @@ export function validateManifest(db: Database, componentId: string, raw: unknown
       if (missing.length > 0 && item.aliasOf === undefined) {
         warnings.push(`case ${item.id}: dims miss the declared dimensions ${missing.sort().join(", ")}`);
       }
+    }
+  }
+  warnings.push(...paddedCanvasWarnings(manifest, assetDims));
+  for (const item of manifest.cases) {
+    if (item.referenceSurface === "content-hug" && item.expectedGeometry === undefined) {
+      warnings.push(`case ${item.id}: referenceSurface "content-hug" without expectedGeometry —`
+        + " the canonical canvas will be derived from the measured layoutBounds of the run");
     }
   }
   warnings.push(...propsWarnings(manifest, publishedPropsSchema(db, componentId)));
@@ -353,6 +440,11 @@ export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCas
       ...(manifest.policy?.perCase?.[item.id] ? { casePolicy: manifest.policy.perCase[item.id] } : {}),
       // W5a: происхождение эталона — вход нормализации размеров гейта `visual`.
       ...(item.cropLineage ? { cropLineage: item.cropLineage } : {}),
+      // W5: чем является ассет и куда он кладётся в канонической канве. Дефолты **не**
+      // подставляются здесь: отсутствующее поле обязано остаться отсутствующим до самого
+      // `comparisonFingerprint`, иначе legacy-манифесты сменили бы отпечаток (D13).
+      ...(item.referenceSurface ? { referenceSurface: item.referenceSurface } : {}),
+      ...(item.referencePlacement ? { referencePlacement: item.referencePlacement } : {}),
       // W5b: координата случая в семье — вход `variantFamily` группировки ремедиаций.
       ...(item.dims ? { dims: item.dims } : {}),
     });

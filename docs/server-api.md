@@ -499,7 +499,7 @@ CLI: `driver.mjs impact <id> --candidate <candidateId> --baseline-run <runId>` (
 | Слой | Что в нём | Что означает совпадение |
 |---|---|---|
 | `frameFingerprint` | `candidateId`, `caseKey`, `propsHash`, поверхность (viewport/dsf/theme), `readinessPolicyHash`, `rendererFingerprint` | пересъёмка даст те же пиксели ⇒ кадр из CAS можно переиспользовать |
-| `comparisonFingerprint` | `referenceAssetId`, `cropLineage` (вкл. `sourceSurface`), `expectedGeometry`, `maxDimensionDeltaPx`, параметры канвы (`paintMargin`, `dsf`); слоты W5 `referenceSurface`/`referencePlacement` | метрики расхождения остаются в силе ⇒ пересчёт по ним законен |
+| `comparisonFingerprint` | `referenceAssetId`, `cropLineage` (вкл. `sourceSurface`), `expectedGeometry`, `maxDimensionDeltaPx`, параметры канвы (`paintMargin`, `dsf`); `referenceSurface`/`referencePlacement` (W5) | метрики расхождения остаются в силе ⇒ пересчёт по ним законен |
 | `verdictPolicyHash` | профиль и его пороги (`maxRawDiffPct`, geometry-допуски), `perCase`-оверрайды, `requireVisual`, состав и роли гейтов, `allowPaintOverflow`/`expectedClip`, `expectedGeometry`, `policy.profile` манифеста | решение по тем же метрикам будет тем же |
 
 `case_fingerprint = sha256({algo: 6, frame, comparison, verdictPolicy})`. **`expectedGeometry` — двухслойное поле**: оно и допуск вердикта геометрии, и (с волны W5) `padTo` нормализации content-hug эталона, поэтому его смена уводит визуал в re-diff, а не в пересчёт по старым метрикам. Разбиение полей по слоям — типизированное и **тотальное**: новое поле политики или случая не соберётся, пока ему не назначен слой (значение `report-only` — обоснованное «ни в одном», а не пропуск).
@@ -569,22 +569,51 @@ Examples-путь больше не хэширует заглушку `CASE_POLI
     "props": { "family": "Product", "state": "Default" },
     "dims": { "family": "Product", "state": "Default" },               // координата в матрице
     "referenceAssetId": "asset_<sha256>",                              // эталон из реестра ассетов
-    "expectedGeometry": { "width": 140, "height": 96 },
-    "cropLineage": { "parentNodeId": "54863:9518", "rect": [0, 0, 140, 96] },
+    "referenceSurface": "content-hug",                                 // чем является ассет (W5; по умолчанию "paint")
+    "referencePlacement": { "x": 128, "y": 128 },                      // место в канве, device px (по умолчанию margin×dsf)
+    "expectedGeometry": { "width": 140, "height": 96 },                // ЛЕЙАУТ-КОРЕНЬ в CSS px, не канва сравнения
+    "cropLineage": { "parentNodeId": "54863:9518", "rect": [0, 0, 140, 96], "sourceSurface": "figma-node" },
     "aliasOf": null                                                    // явный дубликат props
   }]
 }
 ```
 
+**Двухчастный контракт эталона (волна W5, план 2026-08-04; фидбэк P1).** `expectedGeometry` и
+поверхность сравнения — **разные величины**, и их путаница стоила `pay-card-button` 12 провалов из
+12: геометрия судит layout-корень компонента, а визуал сравнивает padded paint-канву
+(`корень + 2×64 px маргина`, всё × `deviceScaleFactor`), внутри которой компонент лежит со
+смещением `margin × dsf`.
+
+| Поле | Что описывает | Кто читает |
+|---|---|---|
+| `expectedGeometry` | габариты **layout-корня** в CSS px | гейт `geometry` (допуски) и гейт `visual` (`padTo` канвы) |
+| `referenceSurface` | чем является ассет: `"paint"` (уже каноническая канва, дефолт) или `"content-hug"` (штатный экспорт узла) | гейт `visual` |
+| `referencePlacement` | смещение content-hug эталона внутри канвы, **device px**; по умолчанию `margin × dsf` | гейт `visual` |
+| `cropLineage.rect` | прямоугольник происхождения эталона | гейт `visual` — **только если** `sourceSurface` говорит, что резать надо |
+| `cropLineage.sourceSurface` | в координатах какой поверхности записан `rect`: `figma-node` (резать; дефолт при отсутствии поля), `content-hug`/`paint` (уже вырезано, rect — provenance) | гейт `visual` |
+
+С `referenceSurface: "content-hug"` **сервер сам** строит каноническую канву: паддит эталон
+прозрачным до `(expectedGeometry + 2×margin) × dsf` и кладёт его по `referencePlacement`. Ручной
+паддинг PNG и подглядывание размеров канвы в диагностике упавшего рана больше не нужны. Корень
+берётся из `expectedGeometry`, а при его отсутствии — из измеренного в этом же ране `layoutBounds`;
+если недоступно ни то, ни другое (re-diff без свежей геометрии) — `indeterminate` с
+`reason: "reference_canvas_unresolved"`, а не сравнение с канвой, построенной наугад.
+
+Все три новых поля **строго опциональны и без zod-дефолтов**: дефолт применяет потребитель.
+`caseSetId` — контентный адрес `parsed.data`, поэтому дефолт в схеме сменил бы адрес всех уже
+опубликованных манифестов. Следствие-инвариант: манифест, который новых полей не объявляет,
+сравнивается **побайтово так же, как до W5** (паддинг — только при `content-hug`, crop — как
+сегодня), и его `cset_` не двигается.
+
 Charset `case.id` совпадает с charset имён записей evidence-архива (защита от zip-slip), поэтому **Figma node id вида `54863:9537` не проходит** — санитизировать на клиенте.
 
-**Отказы `PUT`** (все `422`): `validation_failed` (схема, charset, `cropLineage.rect` с отрицательными координатами или нулевым размером), `case_set_component_mismatch` (манифест описывает другой `componentId`), `case_set_too_large` (больше `limits.acceptanceMaxCasesPerRun` случаев), `duplicate_case_id`, `duplicate_case_props` (одинаковые props без `aliasOf`), `invalid_alias_target` (цель отсутствует, сама является алиасом или имеет другие props), `asset_not_found` (эталона нет в реестре).
+**Отказы `PUT`** (все `422`): `validation_failed` (схема, charset, `cropLineage.rect` с отрицательными координатами или нулевым размером), `case_set_component_mismatch` (манифест описывает другой `componentId`), `case_set_too_large` (больше `limits.acceptanceMaxCasesPerRun` случаев), `duplicate_case_id`, `duplicate_case_props` (одинаковые props без `aliasOf`), `invalid_alias_target` (цель отсутствует, сама является алиасом или имеет другие props), `asset_not_found` (эталона нет в реестре), `crop_rect_out_of_bounds` (применяемый `rect` не помещается в размеры ассета — раньше воркер молча клампил вырезку и сравнивал не то, что объявлено), `crop_lineage_conflict` (`referenceSurface: "content-hug"` вместе с `cropLineage` требует `sourceSurface: "figma-node"`: «ассет уже вырезан» и «вырежи из него» — взаимоисключающие утверждения об одном ассете).
 
-**Предупреждения, а не отказы** (`warnings[]`): неполные/недекларированные `dims` и расхождение props со схемой опубликованной версии компонента — схема головы законно отличается от последней публикации, а манифест часто готовится до правки компонента.
+**Предупреждения, а не отказы** (`warnings[]`): `expectedGeometry`, равный размерам эталона и похожий на padded-канву (`корень + 2×64`) — тот самый способ уронить геометрию 12/12; `referenceSurface: "content-hug"` без `expectedGeometry` (канва будет выведена из измеренного `layoutBounds`); неполные/недекларированные `dims` и расхождение props со схемой опубликованной версии компонента — схема головы законно отличается от последней публикации, а манифест часто готовится до правки компонента.
 
 **Coverage** (`GET /case-sets/:caseSetId/coverage`): `dimensions`, `expectedTuples` (декартово произведение), `presentTuples` (различные tuples из `cases[].dims`), `missingTuples[]` и `duplicates[] {tuple, caseIds}`. Манифест без `dimensions` получает тривиальный отчёт (`expectedTuples: 0`, `presentTuples` = число случаев): фиктивное произведение по неполной Figma-матрице не выдумывается.
 
-**Ран по набору.** `POST /acceptance-runs {candidateId, caseSetId}` строит случаи из манифеста: `capture` задаёт поверхность съёмки, `referenceAssetId`/`expectedGeometry` уезжают в durable-строки случаев, `policy.profile` + `policy.perCase[caseId]` дают `case_policy_hash`, который входит в `case_fingerprint` — правка допуска одного случая инвалидирует reuse ровно его. Эталоны гейтами пока не потребляются (визуальный гейт — следующая волна), но уже записываются и видны в `GET /acceptance-runs/:runId/cases`.
+**Ран по набору.** `POST /acceptance-runs {candidateId, caseSetId}` строит случаи из манифеста: `capture` задаёт поверхность съёмки, `referenceAssetId`/`referenceSurface`/`referencePlacement`/`expectedGeometry`/`cropLineage` уезжают в durable-строки случаев, `policy.profile` + `policy.perCase[caseId]` дают `case_policy_hash`, который входит в `case_fingerprint` — правка допуска одного случая инвалидирует reuse ровно его. Эталон и его нормализацию потребляет [визуальный гейт](#минимальный-визуальный-гейт-приёмки-волна-w5a-план-2026-08-03-2-a5); все поля происхождения эталона — входы `comparisonFingerprint`, поэтому их правка даёт **re-diff** (пересравнение сохранённого кадра), а не пересъёмку и не пересчёт по старым метрикам.
 
 ### Поиск кандидатов на переиспользование
 
@@ -1323,9 +1352,27 @@ readiness не считает сравнивающие гейты случая (
 Кандидат — тот самый `paint.png`, который снял гейт `geometry`: второй съёмки нет, поэтому
 `layoutBounds`, `paintBounds` и пиксельный вердикт относятся к одной сессии.
 
-**Нормализация размеров** (обязательная часть): эталон обрезается по `cases[].cropLineage.rect`
-(прямоугольник в его собственных пикселях), затем обе картинки добиваются прозрачным до общего
-холста с выравниванием по левому-верхнему углу. Если после crop габариты расходятся больше
+**Нормализация размеров** (обязательная часть). Порядок фиксирован и **однократен** (волна W5):
+
+1. **crop** — по `cases[].cropLineage.rect`, и только если `cropLineage.sourceSurface` объявляет
+   ассет экспортом родительского узла (`figma-node` либо отсутствие поля — legacy-семантика). При
+   `sourceSurface: "content-hug"|"paint"` ассет уже вырезан, rect остаётся provenance'ом, и
+   повторного crop'а не происходит: именно он превращал эталон `136×32` в `116×12`.
+2. **построение канвы** — только при `referenceSurface: "content-hug"`: эталон кладётся в
+   прозрачный холст `(expectedGeometry ?? layoutBounds + 2×margin) × dsf` по `referencePlacement`
+   (по умолчанию `margin × dsf`). Размеры канвы считает **сервер** и передаёт воркеру числом
+   (`padTo`): у воркера нет ни `expectedGeometry`, ни маргина рендерера, и вывод размеров на его
+   стороне был бы вторым источником правды. Эталон, не помещающийся в объявленную канву, —
+   `indeterminate`, а не тихая обрезка.
+3. **дополнение до общего холста** — обе картинки добиваются прозрачным по левому-верхнему углу.
+
+Что и как сервер сделал с эталоном, видно в `metrics.referenceNormalization`
+(`{referenceSurface, sourceSurface, cropApplied, cropRect, croppedDims, padTo, placement, marginPx,
+deviceScaleFactor, layoutRoot, layoutRootSource, sourceDims, refDims}`) — оно же в `visual.json`.
+Поле кладётся всегда: «ничего не паддили и не резали» — тоже факт, и его отсутствие раньше и
+делало нормализацию невидимой для автора.
+
+Если после нормализации габариты расходятся больше
 `maxDimensionDeltaPx` профиля (`default-v1` — 8 px, `pixel-strict-v1` — 4 px), метрик нет вовсе:
 гейт отдаёт `indeterminate` с названной причиной, а не выдуманный процент расхождения.
 
@@ -1349,8 +1396,11 @@ readiness не считает сравнивающие гейты случая (
 роняет. Случай без эталона — `skipped` у необязательного гейта и `indeterminate` у обязательного
 (D10: `skipped` положен только необязательным).
 
-Артефакты случая — `diff.png`, `normalized-candidate.png` и `visual.json` в CAS; сам эталон в CAS
-**не копируется** — он уже в asset-store, и в записи едет его `referenceAssetId`. Инвариант D5
+Артефакты случая — `diff.png`, `normalized-candidate.png` и `visual.json` в CAS, плюс
+`normalized-reference.png`, когда канву строил сервер (`referenceSurface: "content-hug"`). Сам
+эталон в CAS **не копируется** — он уже иммутабелен в asset-store, и evidence несёт на него
+ссылку парой `referenceSource {assetId, sha256}`, а рядом — построенный сервером дериват с полным
+lineage (`referenceNormalization`). Инвариант D5
 действует в полную силу: кадр с `readinessMet: false` до визуального гейта не доходит вовсе.
 Граница волны подняла `case_fingerprint.algoVersion` до **5** — это последний запланированный bump,
 дальше отпечатки стабильны.

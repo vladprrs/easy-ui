@@ -105,6 +105,27 @@ export function cropPng(png, rect) {
   return out;
 }
 
+/**
+ * Кладёт картинку в прозрачный холст `width×height` со смещением `(x, y)` (план 2026-08-04 §W5).
+ *
+ * Отдельная функция, а не параметр `padPng`: у выравнивания по левому-верхнему углу и у
+ * размещения по объявленному placement'у разный смысл. Первое — техническое дополнение до общего
+ * холста после того, как размеры уже сведены; второе — **построение** канонической канвы из
+ * content-hug эталона, и промахнуться в нём на margin значит сравнить компонент с пустотой.
+ *
+ * `null` — вырезка не помещается: выдумывать обрезку здесь нельзя, это `indeterminate` наверху.
+ */
+export function placePng(png, width, height, x, y) {
+  if (x < 0 || y < 0 || png.width + x > width || png.height + y > height) return null;
+  const out = new PNG({ width, height });
+  out.data.fill(0);
+  for (let row = 0; row < png.height; row += 1) {
+    const from = row * png.width * 4;
+    png.data.copy(out.data, ((y + row) * width + x) * 4, from, from + png.width * 4);
+  }
+  return out;
+}
+
 /** Дополняет картинку прозрачным до холста `width×height`, выравнивая по левому-верхнему углу. */
 export function padPng(png, width, height) {
   if (png.width === width && png.height === height) return png;
@@ -391,8 +412,14 @@ export function bestOffsetOf(refData, candData, width, height, options = {}) {
 /**
  * Нормализация размеров + метрики случая приёмки.
  *
- * `options`: `{ cropRect?: [x,y,w,h], maxDimensionDeltaPx?, rawThreshold?, aaThreshold?,
- * regionDeltaThreshold?, maxRegions?, offsetWindow? }`.
+ * `options`: `{ cropRect?: [x,y,w,h], padReferenceTo?: {width,height}, referencePlacement?: {x,y},
+ * maxDimensionDeltaPx?, rawThreshold?, aaThreshold?, regionDeltaThreshold?, maxRegions?,
+ * offsetWindow? }`.
+ *
+ * Порядок нормализации эталона фиксирован и однократен: crop (если вызывающий его запросил) →
+ * размещение в канонической канве `padReferenceTo` по `referencePlacement`. Ни того, ни другого
+ * воркер не «додумывает»: двойной crop — ровно та ловушка, из-за которой `136×32` превращался в
+ * `116×12` (фидбэк P1).
  */
 export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
   const refSource = PNG.sync.read(referencePng);
@@ -401,7 +428,7 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
   const candDims = { width: candidate.width, height: candidate.height };
 
   const cropRect = Array.isArray(options.cropRect) && options.cropRect.length === 4 ? options.cropRect : null;
-  const reference = cropRect ? cropPng(refSource, cropRect) : refSource;
+  let reference = cropRect ? cropPng(refSource, cropRect) : refSource;
   if (!reference) {
     return {
       ok: true, mode: "normalize", indeterminate: true,
@@ -409,7 +436,30 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
       sourceDims, refDims: sourceDims, candDims, cropApplied: false,
     };
   }
+  // W5: `padReferenceTo` — **объявленная** вызывающим каноническая канва, а не выведенная здесь.
+  // Воркер не знает ни `expectedGeometry`, ни margin'а рендерера, поэтому вывод размеров на его
+  // стороне был бы догадкой; сервер считает канву сам и присылает её числом.
+  const croppedDims = { width: reference.width, height: reference.height };
+  const padTo = options.padReferenceTo ?? null;
+  const placement = options.referencePlacement ?? { x: 0, y: 0 };
+  if (padTo) {
+    const placed = placePng(reference, padTo.width, padTo.height, placement.x, placement.y);
+    if (!placed) {
+      return {
+        ok: true, mode: "normalize", indeterminate: true,
+        reason: `reference ${croppedDims.width}×${croppedDims.height} placed at (${placement.x}, ${placement.y})`
+          + ` does not fit the ${padTo.width}×${padTo.height} canonical canvas`,
+        sourceDims, refDims: croppedDims, candDims, cropApplied: cropRect !== null,
+        referenceNormalization: { sourceDims, cropApplied: cropRect !== null, croppedDims, padTo, placement },
+      };
+    }
+    reference = placed;
+  }
   const refDims = { width: reference.width, height: reference.height };
+  const referenceNormalization = {
+    sourceDims, cropApplied: cropRect !== null, croppedDims,
+    padTo, placement: padTo ? placement : null, refDims,
+  };
   const tolerance = options.maxDimensionDeltaPx ?? DEFAULT_MAX_DIMENSION_DELTA_PX;
   const deltaWidth = Math.abs(refDims.width - candDims.width);
   const deltaHeight = Math.abs(refDims.height - candDims.height);
@@ -419,6 +469,7 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
       reason: `reference ${refDims.width}×${refDims.height} and candidate ${candDims.width}×${candDims.height} differ by ${deltaWidth}×${deltaHeight}px, beyond the ${tolerance}px pad tolerance`,
       sourceDims, refDims, candDims, cropApplied: cropRect !== null,
       dimensionDelta: { width: deltaWidth, height: deltaHeight, tolerancePx: tolerance },
+      referenceNormalization,
     };
   }
 
@@ -469,6 +520,7 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
     refDims,
     candDims,
     cropApplied: cropRect !== null,
+    referenceNormalization,
     canvas: { width, height },
     padded: { reference: refDims.width !== width || refDims.height !== height, candidate: candDims.width !== width || candDims.height !== height },
     metrics: {
@@ -489,6 +541,9 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
     },
     diffPngBase64: PNG.sync.write(diff).toString("base64"),
     normalizedCandidatePngBase64: PNG.sync.write(paddedCand).toString("base64"),
+    // Дериват эталона отдаётся **только** когда сервер действительно строил канву: для legacy-пути
+    // лишний PNG-энкод на случай — это чистая цена без читателя (D13: доволновое поведение).
+    ...(padTo ? { normalizedReferencePngBase64: PNG.sync.write(paddedRef).toString("base64") } : {}),
   };
 }
 

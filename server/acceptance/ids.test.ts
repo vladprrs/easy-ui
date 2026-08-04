@@ -158,6 +158,38 @@ test("W5-слоты канонизуются отсутствием: незап�
   expect(filled).not.toBe(bare);
 });
 
+test("W5: нормализация content-hug эталона форсирует re-diff, а не recompute (C12)", () => {
+  // C0/C12/D1: `referenceSurface`, `referencePlacement` и `cropLineage.sourceSurface` участвуют в
+  // построении нормализованного эталона, значит их смена меняет **метрики**, а не только вердикт.
+  // Промах обязан приходиться на слой сравнения: кадр цел (re-diff), но старый rawDiffPct мёртв.
+  const paint = { ...PLAIN, referenceAssetId: ASSET_A, expectedGeometry: { width: 136, height: 32 } };
+  const base = fingerprints(paint);
+
+  const hug = fingerprints({ ...paint, referenceSurface: "content-hug" });
+  expect(hug.frame).toBe(base.frame);
+  expect(hug.verdictPolicy).toBe(base.verdictPolicy);
+  expect(hug.comparison).not.toBe(base.comparison);
+  expect(hug.case).not.toBe(base.case);
+
+  const placed = fingerprints({ ...paint, referenceSurface: "content-hug", referencePlacement: { x: 128, y: 128 } });
+  expect(placed.frame).toBe(base.frame);
+  expect(placed.verdictPolicy).toBe(base.verdictPolicy);
+  expect(placed.comparison).not.toBe(hug.comparison);
+
+  // `sourceSurface` решает, режется эталон или нет, — то есть с чем именно сравнивают.
+  const lineage = { rect: [20, 10, 136, 32] as const };
+  const cropped = fingerprints({ ...paint, cropLineage: { ...lineage } });
+  const provenanceOnly = fingerprints({ ...paint, cropLineage: { ...lineage, sourceSurface: "content-hug" } });
+  expect(provenanceOnly.frame).toBe(cropped.frame);
+  expect(provenanceOnly.comparison).not.toBe(cropped.comparison);
+});
+
+test("W5: поля content-hug классифицированы как comparison, а не как кадр", () => {
+  const layerOf = (field: LayeredField): readonly string[] => (FIELD_LAYERS as Record<string, readonly string[]>)[field]!;
+  expect(layerOf("referenceSurface")).toEqual(["comparison"]);
+  expect(layerOf("referencePlacement")).toEqual(["comparison"]);
+});
+
 test("расчёт отпечатков детерминирован и собирается из своих же слоёв", () => {
   const item = { ...PLAIN, referenceAssetId: ASSET_A };
   const first = fingerprints(item);
@@ -192,6 +224,10 @@ const CASE_SAMPLE: Required<AcceptanceCase> = {
   declaredPolicyProfile: null,
   casePolicy: {},
   cropLineage: { rect: [0, 0, 1, 1] },
+  // W5: content-hug reference. Оба поля — входы построения нормализованного эталона, значит
+  // comparison по инварианту D1 (проверка слоя — тестом ниже).
+  referenceSurface: "paint",
+  referencePlacement: { x: 0, y: 0 },
   dims: {},
   geometryDetailKeys: [],
 };

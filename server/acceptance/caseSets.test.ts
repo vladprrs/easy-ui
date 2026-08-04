@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { migrate } from "../migrations";
+import { canonicalStringify } from "../../src/capture/canonicalJson";
 import { ApiError } from "../http";
 import type { CaseSetManifest } from "../../src/acceptance/caseSetSchema";
 import {
@@ -351,4 +352,168 @@ test("algoVersion bump invalidates every fingerprint accumulated by earlier wave
   const plain = { caseKey: "alpha", propsHash: "props-1" };
   expect(fingerprintsOf({ ...plain, casePolicy: { maxRawDiffPct: 0.1 } })).not.toBe(fingerprintsOf(plain));
   expect(fingerprintsOf({ ...plain, referenceAssetId: ASSET })).not.toBe(fingerprintsOf(plain));
+});
+
+// ------------------------------------------------- content-hug reference (W5, фидбэк P1)
+
+/**
+ * Ассет с настоящими габаритами: `crop_rect_out_of_bounds` меряет rect именно против них, а
+ * warning «expectedGeometry похож на канву» — против них же.
+ */
+const dbWithSizedAsset = (id: string, width: number, height: number): Database => {
+  const db = new Database(":memory:");
+  migrate(db);
+  db.run("INSERT INTO assets (id,sha256,mime,size,width,height,created_at) VALUES (?,?,'image/png',10,?,?,'now')",
+    [id, id.slice("asset_".length), width, height]);
+  return db;
+};
+
+const NODE_ASSET = `asset_${"b".repeat(64)}`;
+
+test("W5: cropLineage.rect за пределами эталона отвергается при PUT, а не клампится при сравнении", () => {
+  const db = dbWithSizedAsset(NODE_ASSET, 200, 160);
+  // Вырезка помещается — набор валиден.
+  validateManifest(db, "yp-badge", manifest({
+    cases: [{ id: "default", props: { tone: "neutral" }, referenceAssetId: NODE_ASSET, cropLineage: { rect: [20, 10, 136, 32] } }],
+  } as unknown as Partial<CaseSetManifest>));
+  // Вырезка вылезает по высоте: сегодня воркер молча урезал бы её и сравнил не то, что объявлено.
+  fails(() => validateManifest(db, "yp-badge", manifest({
+    cases: [{ id: "default", props: { tone: "neutral" }, referenceAssetId: NODE_ASSET, cropLineage: { rect: [20, 150, 136, 32] } }],
+  } as unknown as Partial<CaseSetManifest>)), 422, "crop_rect_out_of_bounds");
+  // Уже вырезанный ассет: rect — provenance родительского узла, к байтам он не применяется,
+  // поэтому и границами ассета не меряется (иначе честный provenance был бы невыразим).
+  validateManifest(db, "yp-badge", manifest({
+    cases: [{
+      id: "default", props: { tone: "neutral" }, referenceAssetId: NODE_ASSET,
+      cropLineage: { rect: [20, 150, 136, 32], sourceSurface: "content-hug" },
+    }],
+  } as unknown as Partial<CaseSetManifest>));
+  db.close();
+});
+
+test("W5: content-hug + cropLineage требует sourceSurface \"figma-node\" — иначе crop_lineage_conflict", () => {
+  const db = dbWithSizedAsset(NODE_ASSET, 200, 160);
+  // «Ассет — экспорт узла, вырежи из него content-hug» — связное утверждение.
+  validateManifest(db, "yp-badge", manifest({
+    cases: [{
+      id: "default", props: { tone: "neutral" }, referenceAssetId: NODE_ASSET,
+      referenceSurface: "content-hug", expectedGeometry: { width: 136, height: 32 },
+      cropLineage: { rect: [20, 10, 136, 32], sourceSurface: "figma-node" },
+    }],
+  } as unknown as Partial<CaseSetManifest>));
+  // «Ассет уже content-hug» + «вырежи из него» — два взаимоисключающих утверждения об одном ассете.
+  for (const sourceSurface of [undefined, "content-hug", "paint"]) {
+    fails(() => validateManifest(db, "yp-badge", manifest({
+      cases: [{
+        id: "default", props: { tone: "neutral" }, referenceAssetId: NODE_ASSET,
+        referenceSurface: "content-hug", expectedGeometry: { width: 136, height: 32 },
+        cropLineage: { rect: [20, 10, 136, 32], ...(sourceSurface === undefined ? {} : { sourceSurface }) },
+      }],
+    } as unknown as Partial<CaseSetManifest>)), 422, "crop_lineage_conflict");
+  }
+  db.close();
+});
+
+test("W5: expectedGeometry, равный padded-канве эталона, ловится warning'ом (репро pay-card-button)", () => {
+  // Ровно фидбэк P1: автор увидел `264×160` в диагностике упавшего сравнения и вписал канву в
+  // `expectedGeometry` — геометрия начала судить layout-корень против канвы и упала 12/12.
+  const db = dbWithSizedAsset(NODE_ASSET, 264, 160);
+  const { warnings } = validateManifest(db, "yp-badge", manifest({
+    capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, theme: "light" },
+    cases: [{ id: "default", props: { tone: "neutral" }, referenceAssetId: NODE_ASSET, expectedGeometry: { width: 264, height: 160 } }],
+  } as unknown as Partial<CaseSetManifest>));
+  expect(warnings.some((line) => line.includes("LAYOUT ROOT") && line.includes("136×32"))).toBe(true);
+
+  // Правильная запись того же случая: корень 136×32 + content-hug эталон — warning'а нет.
+  const clean = dbWithSizedAsset(NODE_ASSET, 136, 32);
+  const ok = validateManifest(clean, "yp-badge", manifest({
+    capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, theme: "light" },
+    cases: [{
+      id: "default", props: { tone: "neutral" }, referenceAssetId: NODE_ASSET,
+      referenceSurface: "content-hug", referencePlacement: { x: 64, y: 64 },
+      expectedGeometry: { width: 136, height: 32 },
+    }],
+  } as unknown as Partial<CaseSetManifest>));
+  expect(ok.warnings).toEqual([]);
+  db.close();
+  clean.close();
+});
+
+test("W5: новые поля доезжают до случая рана без подстановки дефолтов", () => {
+  const db = dbWithSizedAsset(NODE_ASSET, 200, 160);
+  const { manifest: parsed } = validateManifest(db, "yp-badge", manifest({
+    cases: [
+      {
+        id: "hug", props: { tone: "neutral" }, referenceAssetId: NODE_ASSET,
+        referenceSurface: "content-hug", referencePlacement: { x: 128, y: 128 },
+        expectedGeometry: { width: 136, height: 32 },
+        cropLineage: { rect: [20, 10, 136, 32], sourceSurface: "figma-node" },
+      },
+      { id: "legacy", props: { tone: "accent" }, referenceAssetId: NODE_ASSET, cropLineage: { rect: [20, 10, 136, 32] } },
+    ],
+  } as unknown as Partial<CaseSetManifest>));
+  const [hug, legacy] = buildCasesFromManifest(parsed);
+  expect(hug).toMatchObject({
+    referenceSurface: "content-hug", referencePlacement: { x: 128, y: 128 },
+    cropLineage: { rect: [20, 10, 136, 32], sourceSurface: "figma-node" },
+  });
+  // Legacy-случай не получает дефолтов: отсутствующее поле обязано остаться отсутствующим до
+  // самого `comparisonFingerprint`, иначе отпечатки старых манифестов сдвинулись бы (C6/D13).
+  expect(Object.keys(legacy!)).not.toContain("referenceSurface");
+  expect(Object.keys(legacy!)).not.toContain("referencePlacement");
+  expect(legacy!.cropLineage).toEqual({ rect: [20, 10, 136, 32] });
+  db.close();
+});
+
+/**
+ * Голден-неизменность (C25/D13). Манифест по мотивам `pay-card-button` из фидбэка, записанный
+ * **до** W5. Его контентный адрес — часть продукта: раны ссылаются на `cset_`, и сдвиг адреса
+ * означал бы, что исторический набор больше не резолвится, а повторный PUT плодит строки.
+ * Литерал здесь — не «зафиксируем то, что вышло», а именно этот инвариант.
+ */
+const HISTORIC_MANIFEST = {
+  manifestVersion: 1,
+  componentId: "yp-badge",
+  capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "light" },
+  requireVisual: true,
+  policy: { profile: "pixel-strict-v1", perCase: { primary: { maxRawDiffPct: 1 } } },
+  dimensions: { variant: ["primary", "secondary"] },
+  cases: [
+    {
+      id: "primary", props: { variant: "primary", label: "Оплатить" }, referenceAssetId: NODE_ASSET,
+      expectedGeometry: { width: 136, height: 32 }, cropLineage: { parentNodeId: "12:34", rect: [20, 10, 136, 32] },
+      dims: { variant: "primary" },
+    },
+    { id: "secondary", props: { variant: "secondary", label: "Оплатить" }, dims: { variant: "secondary" } },
+  ],
+} as const;
+
+test("W5: голден-неизменность — исторический манифест сохраняет свой cset_ и остаётся cached", () => {
+  const db = dbWithSizedAsset(NODE_ASSET, 200, 160);
+  const { manifest: parsed, caseSetId } = validateManifest(db, "yp-badge", structuredClone(HISTORIC_MANIFEST));
+  expect(caseSetId).toBe("cset_5455a1a56ae2bd8a278d6c697a66645b099ea649ed46516acb65930e0c9e1dbb");
+  // И тот же инвариант в форме, не зависящей от литерала: адрес — это хэш **того, что прислали**,
+  // а не того, что дописал парсер. Появись у нового поля `.default()`, равенство сломалось бы.
+  expect(caseSetId).toBe(`cset_${new Bun.CryptoHasher("sha256").update(canonicalStringify(HISTORIC_MANIFEST)).digest("hex")}`);
+
+  const repo = new CaseSetRepo(db);
+  const first = repo.put({ componentId: "yp-badge", designSystem: "yandex-pay", manifest: parsed, createdBy: "user_a" });
+  expect(first.cached).toBe(false);
+  // Повторный PUT того же исторического манифеста — та же строка, а не новая версия набора.
+  const again = validateManifest(db, "yp-badge", structuredClone(HISTORIC_MANIFEST));
+  const second = repo.put({ componentId: "yp-badge", designSystem: "yandex-pay", manifest: again.manifest, createdBy: "user_a" });
+  expect(second.cached).toBe(true);
+  expect(second.row.case_set_id).toBe(caseSetId);
+
+  // Новые поля появляются в адресе только тогда, когда их объявили: сам факт их существования в
+  // схеме адрес не двигает (`.optional()` без `.default()`).
+  const hug = validateManifest(db, "yp-badge", {
+    ...structuredClone(HISTORIC_MANIFEST),
+    cases: [
+      { ...structuredClone(HISTORIC_MANIFEST.cases[0]), referenceSurface: "content-hug", cropLineage: { parentNodeId: "12:34", rect: [20, 10, 136, 32], sourceSurface: "figma-node" } },
+      structuredClone(HISTORIC_MANIFEST.cases[1]),
+    ],
+  });
+  expect(hug.caseSetId).not.toBe(caseSetId);
+  db.close();
 });

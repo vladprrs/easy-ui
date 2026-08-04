@@ -177,9 +177,10 @@ export function frameFingerprint(input: FrameFingerprintInput): string {
  * построении нормализованного эталона (`padTo`/placement/crop), обязано быть здесь — иначе его
  * смену «пересчитали» бы по старым метрикам, что и есть тихий stale-вердикт.
  *
- * `referenceSurface`/`referencePlacement`/`cropLineage.sourceSurface` — слоты под W5 (content-hug
- * reference). Сегодня их никто не заполняет; `undefined` канонизуется отсутствием ключа, поэтому
- * появление полей в W5 не меняет отпечатки уже снятых legacy-манифестов.
+ * `referenceSurface`/`referencePlacement`/`cropLineage.sourceSurface` — поля W5 (content-hug
+ * reference). `undefined` канонизуется **отсутствием ключа**, поэтому манифест, который их не
+ * объявляет, даёт ровно тот же `comparisonFingerprint`, что до W5: инвариант неизменности legacy
+ * (D13) держится здесь, а не только в гейте.
  */
 export interface ComparisonFingerprintInput {
   referenceAssetId: string | null;
@@ -400,6 +401,10 @@ export const FIELD_LAYERS = {
   geometryDetailKeys: ["frame"],
   referenceAssetId: ["comparison"],
   cropLineage: ["comparison"],
+  // W5: чем является ассет и куда он кладётся в канве — входы построения нормализованного эталона,
+  // а значит comparison по инварианту D1. Кадр они не трогают: пересъёмка их не касается.
+  referenceSurface: ["comparison"],
+  referencePlacement: ["comparison"],
   // D1: `expectedGeometry` — двухслойное поле. Оно и допуск вердикта геометрии, и (с W5) `padTo`
   // нормализации content-hug эталона, поэтому его смена обязана давать re-diff, а не recompute.
   expectedGeometry: ["comparison", "verdict"],

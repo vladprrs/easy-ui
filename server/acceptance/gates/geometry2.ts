@@ -29,6 +29,19 @@ import type { Gate, GateContext, GateResult } from "./types";
 /** Ключ мемо: sha paint-кадра случая — на него ссылаются и evidence, и будущий гейт `visual`. */
 export const paintShaKey = (caseId: string): string => `geometry.paint.sha:${caseId}`;
 
+/**
+ * Ключ мемо: измеренные факты кадра случая (W5). Их читает гейт `visual`, когда строит
+ * каноническую канву из content-hug эталона и `expectedGeometry` у случая не объявлен: канва
+ * тогда выводится из **измеренного** `layoutBounds` и того же `paintMargin`, которым снимался
+ * кадр. Пересчитывать margin из константы вместо факта съёмки нельзя — они обязаны совпадать.
+ */
+export const geometryFactsKey = (caseId: string): string => `geometry.facts:${caseId}`;
+export interface GeometryFacts {
+  layoutBounds: { width: number; height: number } | null;
+  paintMargin: number | null;
+  deviceScaleFactor: number;
+}
+
 /** Допуски случая: профиль даёт пороги в px, манифест (W2) — намерения `allowPaintOverflow`/`expectedClip`. */
 export function geometryTolerancesOf(ctx: GateContext): GeometryTolerancesInput {
   const perCase = ctx.case.casePolicy ?? {};
@@ -132,6 +145,13 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         clipChain: detail?.clipChain ?? [],
         geometry,
       };
+      // W5: факты кадра — вход канонической канвы визуального сравнения (см. `geometryFactsKey`).
+      ctx.shared.set(geometryFactsKey(ctx.case.caseId), {
+        layoutBounds: isRect(record.layoutBounds) ? { width: record.layoutBounds.width, height: record.layoutBounds.height } : null,
+        paintMargin: record.paintMargin,
+        deviceScaleFactor: ctx.surface.dsf,
+      } satisfies GeometryFacts);
+
       const artifact = await putArtifact(ctx.dataDir, record as unknown as Record<string, unknown>);
       artifacts.push({ name: "geometry.json", sha256: artifact.sha256, bytes: artifact.bytes });
 
