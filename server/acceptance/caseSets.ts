@@ -24,7 +24,10 @@
  */
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import { caseSetManifestSchema, type CaseSetManifest, type CropSourceSurface } from "../../src/acceptance/caseSetSchema";
+import {
+  CASE_SET_MAX_EXPECTED_TUPLES, COVERAGE_MISSING_TUPLES_LIMIT, caseSetManifestSchema, expectedTuplesOf,
+  type CaseSetManifest, type CropSourceSurface,
+} from "../../src/acceptance/caseSetSchema";
 import { ApiError } from "../http";
 import { propsHashOf, type AcceptanceCase } from "./cases";
 import { COMPARISON_PAINT_MARGIN_PX, type CaseSurface } from "./ids";
@@ -184,6 +187,25 @@ function paddedCanvasWarnings(manifest: CaseSetManifest, assetDims: Map<string, 
   return warnings;
 }
 
+/**
+ * Потолок декартова произведения (план 2026-08-04 §W6, C5/C16). Считается **перемножением длин**,
+ * поэтому 8 осей по 64 значения отвергаются за микросекунды — до того, как кто-нибудь попробует
+ * материализовать 2.8·10^14 tuples. Вызывается и валидацией манифеста, и `coverageOf`: второй путь
+ * достижим на уже сохранённых наборах (`GET /coverage`) и на манифестах, приехавших мимо PUT.
+ */
+export function assertCoverageWithinCeiling(manifest: CaseSetManifest): number {
+  const expected = expectedTuplesOf(manifest.dimensions);
+  if (expected > CASE_SET_MAX_EXPECTED_TUPLES) {
+    const sizes = Object.entries(manifest.dimensions ?? {}).sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([name, values]) => `${name}=${values.length}`).join(" × ");
+    throw new ApiError(422, "case_set_coverage_too_large",
+      `The declared dimensions span ${Number.isFinite(expected) ? expected : "more than 2^53"} tuples (${sizes}),`
+      + ` above the ceiling of ${CASE_SET_MAX_EXPECTED_TUPLES}; split the family or drop an axis from \`dimensions\``,
+      { issues: [issue(["dimensions"], `Cartesian product exceeds ${CASE_SET_MAX_EXPECTED_TUPLES} tuples`)] });
+  }
+  return expected;
+}
+
 export interface ValidatedManifest {
   manifest: CaseSetManifest;
   caseSetId: string;
@@ -209,6 +231,9 @@ export function validateManifest(db: Database, componentId: string, raw: unknown
     throw new ApiError(422, "case_set_too_large",
       `Case set exceeds the per-run limit of ${acceptanceMaxCasesPerRun} cases (${manifest.cases.length} declared)`);
   }
+  // Потолок произведения — **до** любой работы с покрытием (C5/C16): это чистая арифметика над
+  // длинами, и она обязана отсекать декартову бомбу раньше, чем кто-либо начнёт строить tuples.
+  assertCoverageWithinCeiling(manifest);
 
   const byId = new Map<string, typeof manifest.cases[number]>();
   for (const item of manifest.cases) {
@@ -356,7 +381,11 @@ export interface CoverageReport {
   dimensions: Record<string, string[]>;
   expectedTuples: number;
   presentTuples: number;
+  /** Первые `COVERAGE_MISSING_TUPLES_LIMIT` незакрытых ячеек; полное число — в `missingCount`. */
   missingTuples: Record<string, string>[];
+  missingCount: number;
+  /** `true` — список ячеек усечён (план 2026-08-04 §W6): читать `missingCount`, а не `.length`. */
+  truncated: boolean;
   duplicates: { tuple: Record<string, string>; caseIds: string[] }[];
 }
 
@@ -372,8 +401,14 @@ export function coverageOf(manifest: CaseSetManifest): CoverageReport {
   const dimensions = manifest.dimensions ?? {};
   const names = Object.keys(dimensions).sort();
   if (names.length === 0) {
-    return { dimensions: {}, expectedTuples: 0, presentTuples: manifest.cases.length, missingTuples: [], duplicates: [] };
+    return {
+      dimensions: {}, expectedTuples: 0, presentTuples: manifest.cases.length,
+      missingTuples: [], missingCount: 0, truncated: false, duplicates: [],
+    };
   }
+  // Первым делом — арифметика (C5/C16). Ниже стоит перебор произведения, и он допустим ровно
+  // потому, что произведение уже доказано не превышающим потолок.
+  const expectedTuples = assertCoverageWithinCeiling(manifest);
   const keyOf = (tuple: Record<string, string>): string => names.map((name) => `${name}=${tuple[name] ?? ""}`).join("|");
 
   const present = new Map<string, { tuple: Record<string, string>; caseIds: string[] }>();
@@ -390,19 +425,34 @@ export function coverageOf(manifest: CaseSetManifest): CoverageReport {
     else present.set(key, { tuple, caseIds: [item.id] });
   }
 
-  let expected: Record<string, string>[] = [{}];
-  for (const name of names) {
-    expected = expected.flatMap((prefix) => dimensions[name]!.map((value) => ({ ...prefix, [name]: value })));
+  // Одометр по осям вместо `flatMap`-материализации: полный список ячеек в памяти не нужен
+  // никому — нужны их число и первые `COVERAGE_MISSING_TUPLES_LIMIT` незакрытых.
+  const missingTuples: Record<string, string>[] = [];
+  let missingCount = 0;
+  const counters = names.map(() => 0);
+  for (let index = 0; index < expectedTuples; index++) {
+    const tuple: Record<string, string> = {};
+    for (let axis = 0; axis < names.length; axis++) tuple[names[axis]!] = dimensions[names[axis]!]![counters[axis]!]!;
+    if (!present.has(keyOf(tuple))) {
+      missingCount += 1;
+      if (missingTuples.length < COVERAGE_MISSING_TUPLES_LIMIT) missingTuples.push(tuple);
+    }
+    for (let axis = names.length - 1; axis >= 0; axis--) {
+      counters[axis] = counters[axis]! + 1;
+      if (counters[axis]! < dimensions[names[axis]!]!.length) break;
+      counters[axis] = 0;
+    }
   }
 
-  const missingTuples = expected.filter((tuple) => !present.has(keyOf(tuple)));
   const duplicates = [...present.values()].filter((entry) => entry.caseIds.length > 1)
     .map((entry) => ({ tuple: entry.tuple, caseIds: entry.caseIds }));
   return {
     dimensions: Object.fromEntries(names.map((name) => [name, dimensions[name]!])),
-    expectedTuples: expected.length,
+    expectedTuples,
     presentTuples: present.size,
     missingTuples,
+    missingCount,
+    truncated: missingCount > missingTuples.length,
     duplicates,
   };
 }

@@ -1825,13 +1825,15 @@ export const cancelAcceptanceRunContract = registerContract({
 const caseSetCoverageSchema = z.looseObject({
   dimensions: z.record(z.string(), z.array(z.string())),
   expectedTuples: z.number(), presentTuples: z.number(),
+  /** Первые 64 незакрытых ячейки (план 2026-08-04 W6); полное число — `missingCount`. */
   missingTuples: z.array(z.record(z.string(), z.string())),
+  missingCount: z.number(), truncated: z.boolean(),
   duplicates: z.array(z.looseObject({ tuple: z.record(z.string(), z.string()), caseIds: z.array(z.string()) })),
 });
 
 export const putComponentCaseSetContract = registerContract({
   method: "PUT", path: "/api/components/{id}/case-sets",
-  summary: "Publish a case-set manifest for a component: the durable, content-addressed source of an acceptance run's cases (`caseSetId` = \"cset_\" + sha256 of the canonical manifest, so republishing the same manifest is idempotent and returns the same id with cached:true; an edited manifest is a NEW set and never overwrites the old one, so runs stay reproducible). The server validates the manifest as a product entity: schema (manifestVersion 1, strict objects, case ids matching ^[A-Za-z0-9._-]{1,64}$), the declared componentId, the per-run case ceiling, unique case ids, existence of every referenceAssetId in the asset registry (422 asset_not_found), duplicate props without `aliasOf` (422 duplicate_case_props), alias targets (must be another non-alias case with identical props), and crop-lineage rectangles. Dimension coverage gaps and props that disagree with the published component schema come back as `warnings`, never as failures. The reference contract is TWO-PART (wave 2026-08-04 W5): `expectedGeometry` is the LAYOUT ROOT in CSS px, while the comparison canvas is the padded paint surface (`root + 2 x 64px margin, x deviceScaleFactor`). Declare `referenceSurface: \"content-hug\"` (plus optional `referencePlacement {x,y}` in canvas device px, default `margin x dsf`) to hand the server a plain Figma export and let it build that canvas itself — no hand-padded PNGs. `cropLineage.sourceSurface` (`figma-node` | `content-hug` | `paint`) says which surface `rect` addresses, so an already-cropped asset is never cropped a second time; omitting it keeps today's `figma-node` semantics. Rectangles that do not fit their asset are 422 crop_rect_out_of_bounds, and `content-hug` + `cropLineage` without `sourceSurface: \"figma-node\"` is 422 crop_lineage_conflict. An `expectedGeometry` that looks like a padded canvas is a warning. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
+  summary: "Publish a case-set manifest for a component: the durable, content-addressed source of an acceptance run's cases (`caseSetId` = \"cset_\" + sha256 of the canonical manifest, so republishing the same manifest is idempotent and returns the same id with cached:true; an edited manifest is a NEW set and never overwrites the old one, so runs stay reproducible). The server validates the manifest as a product entity: schema (manifestVersion 1, strict objects, case ids matching ^[A-Za-z0-9._-]{1,64}$), the declared componentId, the per-run case ceiling, unique case ids, existence of every referenceAssetId in the asset registry (422 asset_not_found), duplicate props without `aliasOf` (422 duplicate_case_props), alias targets (must be another non-alias case with identical props), and crop-lineage rectangles. Dimension coverage gaps and props that disagree with the published component schema come back as `warnings`, never as failures. The reference contract is TWO-PART (wave 2026-08-04 W5): `expectedGeometry` is the LAYOUT ROOT in CSS px, while the comparison canvas is the padded paint surface (`root + 2 x 64px margin, x deviceScaleFactor`). Declare `referenceSurface: \"content-hug\"` (plus optional `referencePlacement {x,y}` in canvas device px, default `margin x dsf`) to hand the server a plain Figma export and let it build that canvas itself — no hand-padded PNGs. `cropLineage.sourceSurface` (`figma-node` | `content-hug` | `paint`) says which surface `rect` addresses, so an already-cropped asset is never cropped a second time; omitting it keeps today's `figma-node` semantics. Rectangles that do not fit their asset are 422 crop_rect_out_of_bounds, and `content-hug` + `cropLineage` without `sourceSurface: \"figma-node\"` is 422 crop_lineage_conflict. An `expectedGeometry` that looks like a padded canvas is a warning. A single canonical axis may carry up to `limits.caseSetMaxDimensionValues` (64) values, so a 49-state family is ONE case set and ONE run — no manual sharding; the Cartesian product of all axes is capped at `limits.caseSetMaxExpectedTuples` (422 case_set_coverage_too_large, computed by multiplying axis lengths before any tuple is materialized) and `coverage.missingTuples` carries at most 64 cells with `missingCount` and `truncated` alongside. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
   requestSchema: z.strictObject({ manifest: z.unknown() }),
   responseSchema: z.looseObject({
     caseSetId: z.string(), componentId: z.string(), designSystem: z.string(),
@@ -1841,6 +1843,10 @@ export const putComponentCaseSetContract = registerContract({
     ...acceptanceAuthErrors, errorCatalog.invalidRequest, errorCatalog.payloadTooLarge, errorCatalog.validationFailed,
     { status: 422, code: "case_set_component_mismatch", description: "the manifest names another componentId than the route" },
     { status: 422, code: "case_set_too_large", description: "the manifest declares more cases than limits.acceptanceMaxCasesPerRun" },
+    {
+      status: 422, code: "case_set_coverage_too_large",
+      description: "the Cartesian product of `dimensions` exceeds limits.caseSetMaxExpectedTuples (checked by multiplying axis lengths, before any tuple is built)",
+    },
     { status: 422, code: "duplicate_case_id" },
     { status: 422, code: "duplicate_case_props", description: "two cases declare identical props without aliasOf" },
     { status: 422, code: "invalid_alias_target", description: "aliasOf names a missing case, an alias, or a case with different props" },
@@ -1851,6 +1857,23 @@ export const putComponentCaseSetContract = registerContract({
       description: "referenceSurface \"content-hug\" with a cropLineage requires cropLineage.sourceSurface \"figma-node\"",
     },
   ],
+});
+
+/**
+ * Dry-run манифеста (план 2026-08-04 §W6, P1-7/C20/C23). Гейт возможности —
+ * `capabilities.features.caseSetValidate`: старая сборка отвечает на путь 404, и клиент обязан
+ * узнать это до вызова, а не молча свалиться на мутирующий PUT.
+ */
+export const validateComponentCaseSetContract = registerContract({
+  method: "POST", path: "/api/components/{id}/case-sets/validate",
+  summary: "Dry-run a case-set manifest: exactly the checks of PUT /api/components/{id}/case-sets (schema, componentId, per-run ceiling, Cartesian ceiling, unique ids, reference assets, aliases, crop lineage, duplicate props) WITHOUT writing anything. Returns the content address the manifest would get (`caseSetId`), the run's case list as the orchestrator would build it (`cases {count, ids}` — aliases included, same `empty_case_set` refusal), `coverage`, `warnings`, and `wouldBeCached` (true when that exact manifest is already published, i.e. a PUT would be an idempotent repeat). Owner or admin, same authorization as PUT. Gated by `capabilities.features.caseSetValidate`; requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
+  requestSchema: z.strictObject({ manifest: z.unknown() }),
+  responseSchema: z.looseObject({
+    caseSetId: z.string(), componentId: z.string(), designSystem: z.string(),
+    cases: z.looseObject({ count: z.number(), ids: z.array(z.string()) }),
+    coverage: caseSetCoverageSchema, warnings: z.array(z.string()), wouldBeCached: z.boolean(),
+  }),
+  errors: putComponentCaseSetContract.errors,
 });
 
 export const getCaseSetContract = registerContract({
@@ -2714,6 +2737,13 @@ export const capabilitiesResponseSchema = z.object({
     /** Матричная приёмка (план 2026-08-03 §5 W1a): ёмкость рана, TTL кэша случаев, потолок байт evidence. */
     acceptanceMaxCasesPerRun: z.number(), acceptanceMaxJobsPerRun: z.number(),
     acceptanceCaseTtlHours: z.number(), evidenceMaxBytes: z.number(),
+    /**
+     * Case-set-манифест (план 2026-08-04 §W6): потолок массива `cases`, число осей `dimensions`,
+     * значений в оси (≥ `acceptanceMaxCasesPerRun`, чтобы одна каноническая ось не шардировала
+     * семью), размер декартова произведения и единственная поддерживаемая версия манифеста.
+     */
+    caseSetMaxCases: z.number(), caseSetMaxDimensions: z.number(), caseSetMaxDimensionValues: z.number(),
+    caseSetMaxExpectedTuples: z.number(), caseSetManifestVersion: z.number(),
     /** `doc.surfaces` (план 2026-08-02 multi-surface-flows, D1): число поверхностей документа (v1 — ровно две). */
     surfaces: z.number(),
   }),
@@ -2777,6 +2807,8 @@ export const capabilitiesResponseSchema = z.object({
     acceptanceMatrix: z.boolean(), acceptanceCandidates: z.boolean(), acceptanceRuns: z.boolean(),
     /** `PUT /api/components/:id/provenance` — правка Figma-ссылки без ревизии и версии (RFC R3a); kill-switch'а нет. */
     acceptanceProvenance: z.boolean(),
+    /** `POST /api/components/:id/case-sets/validate` — dry-run манифеста без записи (план 2026-08-04 §W6, C23). */
+    caseSetValidate: z.boolean(),
   }),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`

@@ -287,6 +287,7 @@ node driver.mjs expect expected/pay-button.json actual.json
 
 ```bash
 node api.mjs upload figma-refs/pay-card-product-default@2x.png   # эталон каждой ячейки → asset_<sha256>
+node driver.mjs case-set validate matrix.json                    # dry-run манифеста без записи (локально → сервер)
 node driver.mjs case-set put pay-payment-card matrix.json        # → caseSetId + coverage
 node driver.mjs case-set coverage cset_…                         # какие ячейки матрицы не закрыты
 node driver.mjs accept pay-payment-card --case-set cset_…        # кандидат → ран → poll → вердикт
@@ -298,6 +299,8 @@ node driver.mjs accept-status acc_… --evidence run.zip           # верди�
 - `case.id` — `^[A-Za-z0-9._-]{1,64}$`: **Figma node id `54863:9537` не пройдёт**, санитизируй (`54863-9537`).
 - Эталон — id ассета реестра, а не байты; несуществующий → `422 asset_not_found`. Два случая с одинаковыми props → `422 duplicate_case_props`; осознанный дубликат помечается `aliasOf` (снимается один кадр).
 - `caseSetId` контентный (`cset_<sha256>` манифеста): та же публикация идемпотентна, изменённая — **новый** набор, старые раны остаются воспроизводимыми.
+- **Sparse-семья — одна каноническая ось.** Матрица Figma с дырами описывается **одной** осью с перечислением состояний (`dimensions: {state: [… 49 значений …]}`), а не произведением осей, половина ячеек которого пустует: ось держит до `limits.caseSetMaxDimensionValues` (64) значений — больше ёмкости рана, поэтому **49 состояний — один case-set и один ран**, шардировать руками не нужно. Произведение всех осей выше `limits.caseSetMaxExpectedTuples` (4096) — `422 case_set_coverage_too_large`; `missingTuples` в ответе усечён до 64 ячеек, полное число — в `missingCount`. Лимиты читать из `GET /api/capabilities → limits`.
+- `componentId` в манифесте **обязателен** и совпадает с id компонента; `null` схема не принимает **нигде** — необязательное поле опускают, а не зануляют (`"cropLineage": null` — `422 validation_failed`, а не «нет lineage»). Проверять манифест до публикации: `case-set validate <matrix.json>` (локальные проверки идут до сети, серверные — без записи, ручка под `capabilities.features.caseSetValidate`).
 - Профили порогов: `pixel-strict-v1` — `maxRawDiffPct` 0.5 %, расхождение габаритов после crop > 4 px даёт `indeterminate` (метрик нет вовсе, а не выдуманный процент); `default-v1` — 2 % и 8 px, визуальный гейт там необязателен, если в манифесте нет `requireVisual: true`.
 
 Что читать в вердикте (то же приезжает в `--json` и в evidence-архиве):

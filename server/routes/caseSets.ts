@@ -4,6 +4,7 @@
  *
  * ```
  * PUT  /api/components/:id/case-sets     — валидация + идемпотентная публикация манифеста
+ * POST /api/components/:id/case-sets/validate — те же проверки без записи (dry-run, W6)
  * GET  /api/case-sets/:caseSetId         — манифест + метаданные строки
  * GET  /api/case-sets/:caseSetId/coverage — покрытие измерений семьи
  * ```
@@ -26,7 +27,9 @@ import { requireResourceOwner, requireUser } from "../authorization";
 import { ApiError, json, noStore, readJson } from "../http";
 import { ComponentRepo } from "../repos/components";
 import type { AcceptanceOrchestrator } from "../acceptance/orchestrator";
-import { CaseSetRepo, coverageOf, manifestOfRow, validateManifest, type CaseSetRow } from "../acceptance/caseSets";
+import {
+  buildCasesFromManifest, CaseSetRepo, caseSetIdOf, coverageOf, manifestOfRow, validateManifest, type CaseSetRow,
+} from "../acceptance/caseSets";
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -73,6 +76,44 @@ async function putCaseSet(request: Request, db: Database, componentId: string, p
   }, 200, noStore);
 }
 
+/**
+ * Dry-run манифеста (план 2026-08-04 §W6, P1-7): те же проверки, что у PUT, **без записи**.
+ *
+ * Единственным способом узнать вердикт сервера по манифесту была мутирующая публикация, и автор
+ * 49-случайной семьи либо публиковал заведомо черновой набор (плодя `cset_`-строки, на которые
+ * потом ссылаются раны), либо угадывал. Ручка отвечает ровно тем же, чем ответил бы PUT, плюс
+ * `wouldBeCached` — существует ли такой набор уже (то есть был бы PUT идемпотентным повтором).
+ *
+ * `cases` здесь — не число, а `{count, ids}`: dry-run обязан показать **набор случаев рана**,
+ * который построил бы оркестратор (`buildCasesFromManifest` — тот же код, включая отказ
+ * `empty_case_set`), а не только его мощность.
+ */
+async function validateCaseSet(request: Request, db: Database, componentId: string, principal: Principal): Promise<Response> {
+  if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+  requireResourceOwner(db, "components", componentId, principal);
+  const body = await readJson(request);
+  if (!isObject(body)) throw new ApiError(400, "invalid_request", "Request body must be an object");
+  for (const key of Object.keys(body)) {
+    if (key !== "manifest") throw new ApiError(400, "invalid_request", `Unknown field: ${key}`);
+  }
+  if (body.manifest === undefined) throw new ApiError(400, "invalid_request", "manifest is required");
+
+  const { manifest, warnings } = validateManifest(db, componentId, body.manifest);
+  const cases = buildCasesFromManifest(manifest);
+  const caseSetId = caseSetIdOf(manifest);
+  return json({
+    caseSetId,
+    componentId,
+    designSystem: new ComponentRepo(db).row(componentId).design_system,
+    cases: { count: cases.length, ids: cases.map((item) => item.caseId) },
+    coverage: coverageOf(manifest),
+    warnings,
+    // Существование строки — единственное, что отличает dry-run от последующего PUT: набор
+    // контентно адресован, поэтому «уже опубликован» — это ответ про кэш, а не про конфликт.
+    wouldBeCached: new CaseSetRepo(db).get(caseSetId) !== undefined,
+  }, 200, noStore);
+}
+
 /** Строка набора + проверка владения компонентом, которому она принадлежит. */
 function requireOwnedCaseSet(db: Database, caseSetId: string, principal: Principal): CaseSetRow {
   requireUser(principal);
@@ -94,10 +135,13 @@ export async function routeCaseSets(
   orchestrator?: AcceptanceOrchestrator,
 ): Promise<Response | null> {
   const isComponentCaseSets = segments[0] === "components" && segments[2] === "case-sets" && segments.length === 3;
+  const isCaseSetValidate = segments[0] === "components" && segments[2] === "case-sets"
+    && segments[3] === "validate" && segments.length === 4;
   const isCaseSetRead = segments[0] === "case-sets";
-  if (!isComponentCaseSets && !isCaseSetRead) return null;
+  if (!isComponentCaseSets && !isCaseSetValidate && !isCaseSetRead) return null;
   if (!orchestrator) throw new ApiError(404, "not_found", "Acceptance matrix is disabled");
 
+  if (isCaseSetValidate) return validateCaseSet(request, db, segments[1]!, principal);
   if (isComponentCaseSets) return putCaseSet(request, db, segments[1]!, principal);
   if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
   if (segments.length === 2) return json(caseSetView(requireOwnedCaseSet(db, segments[1]!, principal)), 200, noStore);

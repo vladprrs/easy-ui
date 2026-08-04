@@ -31,6 +31,9 @@ import {
   buildBaselinePlan,
   parseDiffArguments,
   parseArgs,
+  caseSetIdOfManifest,
+  caseSetLimits,
+  caseSetManifestIssues,
   previewDraftOutputPath,
   previewOutputPath,
   DEFAULT_EXPECT_TOLERANCE,
@@ -2318,4 +2321,126 @@ describe("author driver existence provenance (W4)", () => {
     expect(missing.stderr).toContain("artifact Ghost not found");
     expect(calls.filter((call) => call.path === "/api/catalog/manifest").length - warmed).toBe(1);
   }, 30_000);
+});
+
+/**
+ * `case-set validate` — локально-первый dry-run (план 2026-08-04 §W6, C20/C23).
+ *
+ * Смысл команды в порядке действий: структурная проверка и локальный контентный адрес считаются
+ * **до** сети, поэтому битый манифест не стоит ни одного запроса и ни одной строки в БД, а
+ * серверная половина подключается только когда сервер её умеет (`features.caseSetValidate`).
+ */
+describe("author driver case-set validate (W6)", () => {
+  const CASE_SET = `cset_${"a".repeat(64)}`;
+  const validManifest = (overrides: Record<string, unknown> = {}) => ({
+    manifestVersion: 1,
+    componentId: "pay-payment-card",
+    capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "light" },
+    dimensions: { state: ["default", "disabled"] },
+    cases: [
+      { id: "default", props: { state: "default" }, dims: { state: "default" } },
+      { id: "disabled", props: { state: "disabled" }, dims: { state: "disabled" } },
+    ],
+    ...overrides,
+  });
+
+  const validateRoutes = (features: Record<string, boolean> = { acceptanceMatrix: true, caseSetValidate: true }) => ({
+    "GET /api/capabilities": () => ({
+      json: {
+        features,
+        limits: {
+          acceptanceMaxCasesPerRun: 64, caseSetMaxCases: 512, caseSetMaxDimensions: 8,
+          caseSetMaxDimensionValues: 64, caseSetMaxExpectedTuples: 4096, caseSetManifestVersion: 1,
+        },
+      },
+    }),
+    "POST /api/components/pay-payment-card/case-sets/validate": () => ({
+      json: {
+        caseSetId: CASE_SET, componentId: "pay-payment-card", designSystem: "yandex-pay",
+        cases: { count: 2, ids: ["default", "disabled"] },
+        coverage: {
+          dimensions: { state: ["default", "disabled"] }, expectedTuples: 2, presentTuples: 2,
+          missingTuples: [], missingCount: 0, truncated: false, duplicates: [],
+        },
+        warnings: ["case default: props not in the published schema"], wouldBeCached: false,
+      },
+    }),
+  } as Record<string, (body: Record<string, unknown> | null) => StubReply>);
+
+  test("a broken manifest fails locally, without a single request", async () => {
+    const { api, calls } = await stubApi(validateRoutes());
+    const manifestPath = resolve(await testDirectory(), "broken.json");
+    // Три классические ошибки фидбэка сразу: `cropLineage: null`, Figma node id в `case.id`
+    // и опущенный `componentId`.
+    await writeFile(manifestPath, JSON.stringify({
+      manifestVersion: 1,
+      capture: { viewport: { width: 390, height: 844 } },
+      cases: [{ id: "54863:9537", props: {}, cropLineage: null }],
+    }));
+    const result = await run(api, ["case-set", "validate", manifestPath]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("nothing was sent to the server");
+    expect(result.stderr).toContain("componentId is required");
+    expect(result.stderr).toContain("cropLineage: null is the classic case");
+    expect(result.stderr).toContain("^[A-Za-z0-9._-]{1,64}$");
+    // Ни одного запроса: даже capabilities не читались — манифест не дожил до сети.
+    expect(calls).toEqual([]);
+  }, 30_000);
+
+  test("a valid manifest reaches the dry-run handle and nothing is published", async () => {
+    const { api, calls } = await stubApi(validateRoutes());
+    const manifestPath = resolve(await testDirectory(), "matrix.json");
+    await writeFile(manifestPath, JSON.stringify(validManifest()));
+    const result = await run(api, ["case-set", "validate", manifestPath, "--json"]);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      command: "case-set validate", checked: "server", caseSetId: CASE_SET,
+      cases: { count: 2, ids: ["default", "disabled"] }, wouldBeCached: false,
+    });
+    expect(calls.map((call) => `${call.method} ${call.path}`))
+      .toEqual(["GET /api/capabilities", "POST /api/components/pay-payment-card/case-sets/validate"]);
+    // Dry-run не публикует: PUT в списке вызовов отсутствует.
+    expect(calls.some((call) => call.method === "PUT")).toBe(false);
+  }, 30_000);
+
+  test("a server without the dry-run handle keeps the local verdict instead of falling back to PUT", async () => {
+    const { api, calls } = await stubApi(validateRoutes({ acceptanceMatrix: true }));
+    const manifestPath = resolve(await testDirectory(), "matrix.json");
+    await writeFile(manifestPath, JSON.stringify(validManifest()));
+    const result = await run(api, ["case-set", "validate", manifestPath, "--json"]);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ command: "case-set validate", checked: "local", componentId: "pay-payment-card" });
+    expect(calls.some((call) => call.method !== "GET")).toBe(false);
+  }, 30_000);
+
+  test("the local checks mirror the server limits, and the local caseSetId is the content address", () => {
+    expect(caseSetManifestIssues(validManifest())).toEqual([]);
+    // Одна каноническая ось на 49 значений — законна (W6): семья на 49 состояний не шардируется.
+    const states = Array.from({ length: 49 }, (_, index) => `s${index}`);
+    expect(caseSetManifestIssues(validManifest({
+      dimensions: { state: states },
+      cases: states.map((state) => ({ id: `case-${state}`, props: { state }, dims: { state } })),
+    }))).toEqual([]);
+    // Декартова бомба ловится до сети — перемножением длин, а не построением ячеек.
+    const bomb = caseSetManifestIssues(validManifest({
+      dimensions: Object.fromEntries(Array.from({ length: 8 }, (_, axis) =>
+        [`axis${axis}`, Array.from({ length: 64 }, (_, index) => `v${index}`)])),
+    }));
+    expect(bomb.join("\n")).toContain("above the ceiling of 4096");
+    // Лимиты сервера перекрывают дефолты драйвера: та же ось против старого потолка — отказ.
+    expect(caseSetManifestIssues(validManifest({ dimensions: { state: states } }),
+      caseSetLimits({ limits: { caseSetMaxDimensionValues: 32 } })).join("\n")).toContain("at most 32 values");
+    // Контентный адрес не зависит от порядка ключей и совпадает с формой сервера.
+    expect(caseSetIdOfManifest(validManifest())).toMatch(/^cset_[0-9a-f]{64}$/);
+    expect(caseSetIdOfManifest({ componentId: "x", manifestVersion: 1 }))
+      .toBe(caseSetIdOfManifest({ manifestVersion: 1, componentId: "x" }));
+  });
+
+  test("case-set validate takes exactly one positional and rejects the put-shaped call", () => {
+    expect(parseArgs(["case-set", "validate", "matrix.json"]))
+      .toMatchObject({ cmd: "case-set", args: ["validate", "matrix.json"] });
+    for (const args of [["case-set", "validate"], ["case-set", "validate", "pay-card", "matrix.json"]]) {
+      expect(() => parseArgs(args)).toThrow();
+    }
+  });
 });

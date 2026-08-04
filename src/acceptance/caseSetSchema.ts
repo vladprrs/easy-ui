@@ -40,9 +40,49 @@ export const isCaseSetId = (value: string): boolean => CASE_SET_ID_PATTERN.test(
  * правки общей схемы.
  */
 export const CASE_SET_MAX_CASES = 512;
-/** Потолок измерений покрытия и значений в измерении: coverage строит декартово произведение. */
+/**
+ * Потолок измерений покрытия и значений в измерении.
+ *
+ * `CASE_SET_MAX_DIMENSION_VALUES` = 64 (план 2026-08-04 §W6, P1-7): 32 было **ниже**
+ * `acceptanceMaxCasesPerRun`, поэтому семья из 49 состояний с одной канонической осью не
+ * помещалась в один манифест и её шардировали руками — шардирование, которого продукт не просил.
+ * Инвариант «≥ acceptanceMaxCasesPerRun» проверяет серверный тест (`server/acceptance/caseSets.test.ts`):
+ * схема — общий с клиентом модуль и server-код не импортирует.
+ */
 export const CASE_SET_MAX_DIMENSIONS = 8;
-export const CASE_SET_MAX_DIMENSION_VALUES = 32;
+export const CASE_SET_MAX_DIMENSION_VALUES = 64;
+
+/**
+ * Потолок **декартова произведения** измерений (C5/C16). Одних поосевых лимитов мало: 8 осей по 64
+ * значения — это 2.8·10^14 tuples, и `coverageOf` материализовал бы их `flatMap`'ом до любой
+ * проверки, то есть манифест на две страницы убивал бы процесс. Произведение считается
+ * **перемножением длин** до материализации; превышение — `422 case_set_coverage_too_large`.
+ */
+export const CASE_SET_MAX_EXPECTED_TUPLES = 4096;
+
+/**
+ * Сколько незакрытых ячеек уезжает в ответ. Полный список при 4096 ожидаемых tuples — это мегабайты
+ * JSON в ответе на PUT; ответ несёт первые `COVERAGE_MISSING_TUPLES_LIMIT` и флаг `truncated`,
+ * а полное число — в `missingCount`.
+ */
+export const COVERAGE_MISSING_TUPLES_LIMIT = 64;
+
+/**
+ * Размер декартова произведения объявленных измерений — перемножением длин, без материализации.
+ * Возвращает `0` для набора без `dimensions` (тривиальное покрытие, фиктивное произведение по
+ * неполной Figma-матрице не выдумывается) и `Infinity`, если произведение переполняет число.
+ */
+export function expectedTuplesOf(dimensions: Record<string, string[]> | undefined): number {
+  if (!dimensions) return 0;
+  const names = Object.keys(dimensions);
+  if (names.length === 0) return 0;
+  let product = 1;
+  for (const name of names) {
+    product *= dimensions[name]!.length;
+    if (!Number.isFinite(product)) return Infinity;
+  }
+  return product;
+}
 
 const caseId = z.string().regex(CASE_ID_PATTERN, "case id must match ^[A-Za-z0-9._-]{1,64}$");
 const dimensionName = z.string().regex(/^[A-Za-z0-9._-]{1,48}$/, "dimension name must match ^[A-Za-z0-9._-]{1,48}$");

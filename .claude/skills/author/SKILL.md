@@ -520,6 +520,7 @@ evidence: GET /api/acceptance-runs/acc_8f1c…/evidence (pass --evidence <file.z
 ```
 
 ```bash
+node driver.mjs case-set validate matrix.json               # dry-run: проверка без записи (локально → сервер)
 node driver.mjs case-set put pay-payment-card matrix.json   # публикация манифеста → caseSetId + coverage
 node driver.mjs case-set coverage cset_…                    # чего не хватает в матрице
 node driver.mjs case-set get cset_…                         # манифест обратно
@@ -529,7 +530,11 @@ node driver.mjs accept pay-payment-card --case-set cset_…   # ран по на
 - `case.id` — charset `^[A-Za-z0-9._-]{1,64}$` (из него строятся имена записей evidence-архива), поэтому **Figma node id вида `54863:9537` не пройдёт** — санитизировать на своей стороне.
 - Эталон — **id ассета реестра** (`asset_<sha256>`, загрузить через `POST /api/assets`), а не байты: несуществующий ассет — `422 asset_not_found`.
 - Два случая с одинаковыми props — `422 duplicate_case_props`; осознанный дубликат помечается `aliasOf` (снимается один кадр, вердикт наследуется). Алиас обязан повторять props цели и не может ссылаться на другой алиас.
-- Покрытие: `expectedTuples` — декартово произведение `dimensions`, `missingTuples` — незакрытые ячейки, `duplicates` — ячейки с двумя случаями. Манифест без `dimensions` получает тривиальный coverage: фиктивное произведение по неполной Figma-матрице не выдумывается.
+- Покрытие: `expectedTuples` — декартово произведение `dimensions`, `missingTuples` — незакрытые ячейки (в ответе — **не больше 64**, полное число в `missingCount`, признак усечения — `truncated`), `duplicates` — ячейки с двумя случаями. Манифест без `dimensions` получает тривиальный coverage: фиктивное произведение по неполной Figma-матрице не выдумывается.
+- **Sparse-семья — одна каноническая ось.** Если состояния семьи не раскладываются в честную решётку (Figma-матрица с дырами), объявляй **одну** ось с перечислением состояний (`dimensions: {state: [… 49 значений …]}`), а не произведение осей, половина ячеек которого пустует. Ось держит до `limits.caseSetMaxDimensionValues` (64) значений — это ≥ ёмкости рана, поэтому **семья из 49 состояний — один case-set и один ран**; шардировать вручную не нужно (два набора = два `cset_`, два рана и ручная сшивка provenance).
+- Лимиты не запоминай — читай из `GET /api/capabilities → limits`: `caseSetManifestVersion`, `caseSetMaxCases` (512), `caseSetMaxDimensions` (8), `caseSetMaxDimensionValues` (64), `caseSetMaxExpectedTuples` (4096) и `acceptanceMaxCasesPerRun` (ёмкость одного рана). Декартово произведение осей выше потолка — `422 case_set_coverage_too_large` (считается перемножением длин, до построения ячеек).
+- Две подсказки схемы, на которых теряют round-trip: `componentId` **обязателен** и обязан совпадать с id в пути; `null` схема не принимает **нигде** — необязательное поле надо **опускать**, а не занулять (`"cropLineage": null` — это `422 validation_failed`, а не «нет lineage»).
+- `case-set validate <manifest.json>` — dry-run: структура, charset, `null`-поля и все лимиты проверяются **локально, до сети** (битый манифест не стоит ни одного запроса), затем сервер повторяет полную валидацию без записи и отдаёт `caseSetId`, `cases {count, ids}`, `coverage`, `warnings` и `wouldBeCached` (такой набор уже опубликован — `put` был бы идемпотентным повтором). Ручка живёт под `capabilities.features.caseSetValidate`; на сервере без неё команда честно печатает «проверено локально», а не подменяет проверку публикацией.
 - Неполные `dims` и расхождение props со схемой опубликованного компонента — **`warnings`**, а не отказ.
 - `capture` манифеста задаёт поверхность съёмки набора, `policy.perCase` входит в `case_policy_hash` случая: правка допуска одного случая инвалидирует reuse ровно его. Эталоны гейтами пока не потребляются (визуальный гейт — следующая волна), но уже записываются в строки случаев.
 

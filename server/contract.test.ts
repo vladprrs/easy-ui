@@ -42,7 +42,10 @@ import {
 import { UserRepo } from "./users";
 import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
 import { caseSetIdOf } from "./acceptance/caseSets";
-import { caseSetManifestSchema } from "../src/acceptance/caseSetSchema";
+import {
+  CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
+  CASE_SET_MAX_EXPECTED_TUPLES, caseSetManifestSchema,
+} from "../src/acceptance/caseSetSchema";
 import type { AcceptanceCaptureService } from "./acceptance/gates/types";
 
 // Contract test (plan §G): every registered route contract is exercised through
@@ -285,6 +288,8 @@ function orderedCases(): [string, Case][] {
     // Case-set-манифесты (план 2026-08-03 §5 W2): PUT — happy path (он дешёвый, капчур не нужен),
     // чтение и coverage — по вычисленному контентному адресу того же манифеста.
     ["PUT /api/components/{id}/case-sets", { run: () => call("PUT", "/api/components/contract-stars/case-sets", { manifest: CONTRACT_MANIFEST }), expected: ok() }],
+    // W6: dry-run того же манифеста — после PUT, поэтому `wouldBeCached` в ответе истинно.
+    ["POST /api/components/{id}/case-sets/validate", { run: () => call("POST", "/api/components/contract-stars/case-sets/validate", { manifest: CONTRACT_MANIFEST }), expected: ok() }],
     ["GET /api/case-sets/{caseSetId}", { run: () => call("GET", `/api/case-sets/${CONTRACT_CASE_SET_ID}`), expected: ok() }],
     ["GET /api/case-sets/{caseSetId}/coverage", { run: () => call("GET", `/api/case-sets/${CONTRACT_CASE_SET_ID}/coverage`), expected: ok() }],
     ["GET /api/components/{id}/versions", { run: () => call("GET", "/api/components/contract-stars/versions"), expected: ok() }],
@@ -689,8 +694,17 @@ describe("route contracts", () => {
       acceptanceMaxJobsPerRun: ACCEPTANCE_POLICIES["default-v1"].maxJobsPerRun,
       acceptanceCaseTtlHours: ACCEPTANCE_CASE_TTL_HOURS,
       evidenceMaxBytes: EVIDENCE_MAX_BYTES,
+      // W6: потолки case-set-манифеста видны в discovery — агент планирует семью, а не ловит 422.
+      caseSetMaxCases: CASE_SET_MAX_CASES,
+      caseSetMaxDimensions: CASE_SET_MAX_DIMENSIONS,
+      caseSetMaxDimensionValues: CASE_SET_MAX_DIMENSION_VALUES,
+      caseSetMaxExpectedTuples: CASE_SET_MAX_EXPECTED_TUPLES,
+      caseSetManifestVersion: CASE_SET_MANIFEST_VERSION,
       surfaces: SURFACES_LIMIT,
     });
+    // Инвариант P1-7: одна каноническая ось обязана вмещать целый ран, иначе семья на
+    // `acceptanceMaxCasesPerRun` состояний шардируется исключительно из-за лимита схемы.
+    expect(value.limits.caseSetMaxDimensionValues).toBeGreaterThanOrEqual(value.limits.acceptanceMaxCasesPerRun);
     expect(value.computedOps).toEqual([...COMPUTED_OPS]);
     // The ordered contract case may have created the fixture system already; Bun can execute
     // this independent case before or after it, so assert the stable built-in system only.
@@ -733,6 +747,8 @@ describe("route contracts", () => {
       acceptanceMatrix: true,
       acceptanceCandidates: true,
       acceptanceRuns: true,
+      // W6 (C23): dry-run манифеста — отдельный флаг возможности, а не вывод из acceptanceMatrix.
+      caseSetValidate: true,
       computed: true,
       surfaces: true,
       // Write-политика мульти-поверхностных документов — kill-switch EASYUI_SURFACES (D16).

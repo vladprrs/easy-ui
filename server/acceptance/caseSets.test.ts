@@ -3,7 +3,10 @@ import { Database } from "bun:sqlite";
 import { migrate } from "../migrations";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import { ApiError } from "../http";
-import type { CaseSetManifest } from "../../src/acceptance/caseSetSchema";
+import {
+  CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_EXPECTED_TUPLES, COVERAGE_MISSING_TUPLES_LIMIT,
+  type CaseSetManifest,
+} from "../../src/acceptance/caseSetSchema";
 import {
   buildCasesFromManifest, CaseSetRepo, casePolicyHashOf, caseSetIdOf, coverageOf, manifestOfRow,
   surfaceOfManifest, validateManifest,
@@ -14,7 +17,7 @@ import {
   caseFingerprint, caseFingerprintsOf, comparisonFingerprintOf, frameFingerprint, verdictPolicyHashOf,
   verdictPolicySnapshotOf,
 } from "./ids";
-import { ACCEPTANCE_POLICIES } from "./policies";
+import { ACCEPTANCE_POLICIES, acceptanceMaxCasesPerRun } from "./policies";
 
 /**
  * Case-set-манифесты (план 2026-08-03 §5 W2, амендмент A2).
@@ -246,7 +249,75 @@ test("coverage is the Cartesian product of the declared dimensions", () => {
 test("a manifest without dimensions gets a trivial coverage, not an invented product", () => {
   const db = dbWithAsset();
   const { manifest: parsed } = validateManifest(db, "yp-badge", manifest());
-  expect(coverageOf(parsed)).toEqual({ dimensions: {}, expectedTuples: 0, presentTuples: 2, missingTuples: [], duplicates: [] });
+  expect(coverageOf(parsed)).toEqual({
+    dimensions: {}, expectedTuples: 0, presentTuples: 2,
+    missingTuples: [], missingCount: 0, truncated: false, duplicates: [],
+  });
+  db.close();
+});
+
+// ------------------------------------------------- лимиты и потолок произведения (W6)
+
+/**
+ * P1-7: лимит значений в измерении был **ниже** ёмкости рана, и семья из 49 состояний
+ * шардировалась только из-за схемы. Инвариант живёт здесь, а не в схеме: `caseSetSchema.ts` —
+ * общий с клиентом модуль и server-код (реестр политик) не импортирует.
+ */
+test("one canonical axis holds a whole run: CASE_SET_MAX_DIMENSION_VALUES >= acceptanceMaxCasesPerRun", () => {
+  expect(CASE_SET_MAX_DIMENSION_VALUES).toBeGreaterThanOrEqual(acceptanceMaxCasesPerRun);
+});
+
+test("a 49-state family is one case set and one run: a single axis of 49 values passes", () => {
+  const db = dbWithAsset();
+  const states = Array.from({ length: 49 }, (_, index) => `s${index}`);
+  const { manifest: parsed, caseSetId } = validateManifest(db, "yp-badge", manifest({
+    dimensions: { state: states },
+    cases: states.map((state) => ({ id: `case-${state}`, props: { state }, dims: { state } })),
+  } as unknown as Partial<CaseSetManifest>));
+  expect(caseSetId).toMatch(/^cset_[0-9a-f]{64}$/);
+  const coverage = coverageOf(parsed);
+  expect({ expected: coverage.expectedTuples, present: coverage.presentTuples, missing: coverage.missingCount })
+    .toEqual({ expected: 49, present: 49, missing: 0 });
+  // Один ран: 49 случаев помещаются в `acceptanceMaxCasesPerRun` без шардирования.
+  expect(buildCasesFromManifest(parsed)).toHaveLength(49);
+  db.close();
+});
+
+test("the Cartesian bomb is refused by multiplying axis lengths, before a single tuple exists", () => {
+  const db = dbWithAsset();
+  const values = Array.from({ length: 64 }, (_, index) => `v${index}`);
+  const dimensions = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`axis${index}`, values]));
+  // 64^8 ≈ 2.8·10^14 ячеек: материализация убила бы процесс, поэтому отказ — чистая арифметика.
+  fails(() => validateManifest(db, "yp-badge", manifest({ dimensions } as unknown as Partial<CaseSetManifest>)),
+    422, "case_set_coverage_too_large");
+  // Тот же потолок на пути покрытия: манифест мимо PUT (или из старой строки) его не обходит.
+  fails(() => coverageOf({
+    ...(manifest() as unknown as CaseSetManifest), dimensions,
+  }), 422, "case_set_coverage_too_large");
+
+  // Ровно на потолке (4096 = 2^12) набор проходит: граница включающая.
+  const twelveAxes = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`axis${index}`, index < 4 ? ["a", "b", "c", "d"] : ["a"]]));
+  const { manifest: parsed } = validateManifest(db, "yp-badge", manifest({ dimensions: twelveAxes } as unknown as Partial<CaseSetManifest>));
+  expect(coverageOf(parsed).expectedTuples).toBe(CASE_SET_MAX_EXPECTED_TUPLES / 16);
+  db.close();
+});
+
+test("missingTuples is truncated to 64 cells with the full count alongside", () => {
+  const db = dbWithAsset();
+  const values = Array.from({ length: 64 }, (_, index) => `v${index}`);
+  const { manifest: parsed } = validateManifest(db, "yp-badge", manifest({
+    dimensions: { left: values, right: ["a", "b"] },
+    cases: [{ id: "only", props: { left: "v0" }, dims: { left: "v0", right: "a" } }],
+  } as unknown as Partial<CaseSetManifest>));
+  const coverage = coverageOf(parsed);
+  expect({ expected: coverage.expectedTuples, missing: coverage.missingCount, truncated: coverage.truncated })
+    .toEqual({ expected: 128, missing: 127, truncated: true });
+  expect(coverage.missingTuples).toHaveLength(COVERAGE_MISSING_TUPLES_LIMIT);
+  // Усечение не выдумывает ячейки: каждая из отданных — настоящая координата произведения.
+  for (const tuple of coverage.missingTuples) {
+    expect(values).toContain(tuple.left);
+    expect(["a", "b"]).toContain(tuple.right);
+  }
   db.close();
 });
 

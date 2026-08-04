@@ -2,11 +2,12 @@
 // easy-ui authoring driver. Zero dependencies (Node 18+): любая съёмка идёт через серверный
 // рендерер (план renderer-contract-2 §5 R8a — один рендерер, локального браузера в драйвере нет).
 
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createEasyUiClient } from "./easyui-auth.mjs";
-import { nullCache, openCache, TERMINAL_RUN_STATUSES } from "./cache.mjs";
+import { canonicalJson, nullCache, openCache, TERMINAL_RUN_STATUSES } from "./cache.mjs";
 
 const API = (process.env.EASYUI_API ?? "https://easy-ui.pay-offline.ru/api").replace(/\/$/, "");
 const client = createEasyUiClient({ apiBase: API });
@@ -19,7 +20,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set validate <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -397,9 +398,12 @@ export function parseArgs(argv) {
   // проверяется здесь, чтобы `case-set get a.json b.json` не уехало в сервер как «лишний» аргумент.
   if (command === "case-set") {
     const [subcommand] = positionals;
-    if (!["put", "get", "coverage"].includes(subcommand)) invalid("case-set requires a subcommand: put | get | coverage");
+    if (!["put", "validate", "get", "coverage"].includes(subcommand)) invalid("case-set requires a subcommand: put | validate | get | coverage");
     if (subcommand === "put" && positionals.length !== 3) invalid("usage: case-set put <componentId> <manifest.json>");
-    if (subcommand !== "put" && positionals.length !== 2) invalid(`usage: case-set ${subcommand} <caseSetId>`);
+    // `validate` берёт componentId из самого манифеста (поле обязательное), поэтому позиционал
+    // ровно один: дублировать id руками — способ разъехаться с манифестом.
+    if (subcommand === "validate" && positionals.length !== 2) invalid("usage: case-set validate <manifest.json>");
+    if (subcommand !== "put" && subcommand !== "validate" && positionals.length !== 2) invalid(`usage: case-set ${subcommand} <caseSetId>`);
   }
   // `impact` — dry-run отчёт (W6): обе стороны сравнения обязаны быть названы явно, иначе
   // «импакт компонента» ничего не значит.
@@ -2463,10 +2467,151 @@ async function reportAcceptance(run, { command, componentId, candidateId, flags 
  * читает его обратно, `coverage` печатает покрытие измерений. Матрицу клиент не собирает: он
  * отдаёт манифест, а полноту tuples, ссылки на эталоны и дубли props проверяет сервер.
  */
+/**
+ * Локальные лимиты case-set-манифеста (план 2026-08-04 §W6). Это **дефолты**, а не истина:
+ * настоящие значения приезжают из `GET /api/capabilities → limits.caseSet*` и перекрывают их
+ * (`caseSetLimits`). Держать копию всё равно приходится — драйвер обязан отвергать битый
+ * манифест **до** сети, а сеть может быть недоступна ровно в тот момент, когда автор правит JSON.
+ */
+export const CASE_SET_LIMITS = Object.freeze({
+  manifestVersion: 1,
+  maxCases: 512,
+  maxCasesPerRun: 64,
+  maxDimensions: 8,
+  maxDimensionValues: 64,
+  maxExpectedTuples: 4096,
+});
+
+/** Лимиты из ответа `/capabilities` поверх дефолтов: сервер — источник истины, драйвер — эхо. */
+export function caseSetLimits(capabilities) {
+  const limits = capabilities?.limits ?? {};
+  const number = (value, fallback) => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
+  return {
+    manifestVersion: number(limits.caseSetManifestVersion, CASE_SET_LIMITS.manifestVersion),
+    maxCases: number(limits.caseSetMaxCases, CASE_SET_LIMITS.maxCases),
+    maxCasesPerRun: number(limits.acceptanceMaxCasesPerRun, CASE_SET_LIMITS.maxCasesPerRun),
+    maxDimensions: number(limits.caseSetMaxDimensions, CASE_SET_LIMITS.maxDimensions),
+    maxDimensionValues: number(limits.caseSetMaxDimensionValues, CASE_SET_LIMITS.maxDimensionValues),
+    maxExpectedTuples: number(limits.caseSetMaxExpectedTuples, CASE_SET_LIMITS.maxExpectedTuples),
+  };
+}
+
+const CASE_SET_ID_CHARSET = /^[A-Za-z0-9._-]{1,64}$/;
+const CASE_SET_TOP_LEVEL_KEYS = new Set(["manifestVersion", "componentId", "source", "capture", "dimensions", "requireVisual", "policy", "cases"]);
+const CASE_SET_CASE_KEYS = new Set([
+  "id", "props", "referenceAssetId", "expectedGeometry", "cropLineage", "referenceSurface",
+  "referencePlacement", "aliasOf", "dims",
+]);
+const isPlainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Каждый `null` в манифесте — ошибка: схема сервера не принимает `null` **нигде**. */
+function nullPaths(value, path = [], found = []) {
+  if (value === null) found.push(path.join("."));
+  else if (Array.isArray(value)) value.forEach((item, index) => nullPaths(item, [...path, index], found));
+  else if (isPlainObject(value)) for (const [key, item] of Object.entries(value)) nullPaths(item, [...path, key], found);
+  return found;
+}
+
+/**
+ * Структурная проверка манифеста **до сети** (план 2026-08-04 §W6, C20).
+ *
+ * Драйвер — zero-dependency Node-скрипт (и зеркалится в share-пакеты без сборки), поэтому
+ * серверный `zod` сюда не импортируется: полный разбор остаётся за сервером, а здесь живёт
+ * дешёвый набор проверок, закрывающий ровно те ошибки, на которых автор терял round-trip —
+ * форму, обязательные поля, charset id, `null` вместо опущенного поля (классика — `cropLineage: null`)
+ * и все лимиты, включая потолок декартова произведения. Возвращает список строк-претензий;
+ * пустой список означает «локально претензий нет», а не «сервер это примет».
+ */
+export function caseSetManifestIssues(manifest, limits = CASE_SET_LIMITS) {
+  const issues = [];
+  if (!isPlainObject(manifest)) return ["manifest must be a JSON object"];
+  for (const path of nullPaths(manifest)) {
+    issues.push(`${path || "manifest"}: null is not a value the schema accepts — omit the field entirely (cropLineage: null is the classic case)`);
+  }
+  for (const key of Object.keys(manifest)) {
+    if (!CASE_SET_TOP_LEVEL_KEYS.has(key)) issues.push(`unknown field "${key}": the manifest schema is strict, a typo is a refusal, not a default`);
+  }
+  if (manifest.manifestVersion !== limits.manifestVersion) {
+    issues.push(`manifestVersion must be ${limits.manifestVersion} (got ${JSON.stringify(manifest.manifestVersion)})`);
+  }
+  if (typeof manifest.componentId !== "string" || manifest.componentId.length === 0 || manifest.componentId.length > 64) {
+    issues.push("componentId is required: it names the component the set belongs to and must equal the route's id");
+  }
+  const viewport = manifest.capture?.viewport;
+  if (!isPlainObject(manifest.capture) || !isPlainObject(viewport)
+    || !Number.isInteger(viewport.width) || !Number.isInteger(viewport.height)
+    || viewport.width <= 0 || viewport.height <= 0) {
+    issues.push("capture.viewport {width, height} is required and must be positive integers (CSS px)");
+  }
+
+  const dimensions = manifest.dimensions;
+  if (dimensions !== undefined) {
+    if (!isPlainObject(dimensions)) issues.push("dimensions must be an object of axis → values[]");
+    else {
+      const names = Object.keys(dimensions);
+      if (names.length > limits.maxDimensions) issues.push(`dimensions: at most ${limits.maxDimensions} axes (got ${names.length})`);
+      let product = 1;
+      for (const name of names) {
+        const values = dimensions[name];
+        if (!Array.isArray(values) || values.length === 0) { issues.push(`dimensions."${name}" must be a non-empty array of values`); continue; }
+        if (values.length > limits.maxDimensionValues) {
+          issues.push(`dimensions."${name}": at most ${limits.maxDimensionValues} values (got ${values.length})`);
+        }
+        product *= values.length;
+      }
+      if (product > limits.maxExpectedTuples) {
+        issues.push(`dimensions span ${product} tuples, above the ceiling of ${limits.maxExpectedTuples}`
+          + " (422 case_set_coverage_too_large): split the family or drop an axis");
+      }
+    }
+  }
+
+  const cases = manifest.cases;
+  if (!Array.isArray(cases) || cases.length === 0) return [...issues, "cases must be a non-empty array"];
+  if (cases.length > limits.maxCases) issues.push(`cases: at most ${limits.maxCases} entries (got ${cases.length})`);
+  if (cases.length > limits.maxCasesPerRun) {
+    issues.push(`cases: ${cases.length} exceeds the per-run ceiling of ${limits.maxCasesPerRun} (422 case_set_too_large)`);
+  }
+  const byId = new Map();
+  for (const [index, item] of cases.entries()) {
+    if (!isPlainObject(item)) { issues.push(`cases[${index}] must be an object`); continue; }
+    for (const key of Object.keys(item)) {
+      if (!CASE_SET_CASE_KEYS.has(key)) issues.push(`cases[${index}]: unknown field "${key}"`);
+    }
+    if (typeof item.id !== "string" || !CASE_SET_ID_CHARSET.test(item.id)) {
+      issues.push(`cases[${index}].id must match ^[A-Za-z0-9._-]{1,64}$ (a Figma node id like "54863:9537" does not)`);
+    } else if (byId.has(item.id)) issues.push(`duplicate case id: ${item.id}`);
+    else byId.set(item.id, item);
+    if (!isPlainObject(item.props)) issues.push(`cases[${index}].props must be an object`);
+    if (item.referenceAssetId !== undefined && !/^asset_[0-9a-f]{64}$/.test(String(item.referenceAssetId))) {
+      issues.push(`cases[${index}].referenceAssetId must be an asset registry id (asset_<sha256>), not bytes or a path`);
+    }
+  }
+  for (const item of cases) {
+    if (!isPlainObject(item) || item.aliasOf === undefined) continue;
+    const target = byId.get(item.aliasOf);
+    if (!target || item.aliasOf === item.id) issues.push(`case ${item.id}: aliasOf "${item.aliasOf}" is not another case of this set`);
+    else if (target.aliasOf !== undefined) issues.push(`case ${item.id}: aliasOf "${item.aliasOf}" is itself an alias; alias chains are not allowed`);
+  }
+  return issues;
+}
+
+/**
+ * Контентный адрес манифеста, посчитанный локально — тот же алгоритм, что у сервера
+ * (`cset_` + sha256 канонизованного JSON). Нужен до сети: по нему автор понимает, публиковал ли
+ * он уже этот набор, и им же сверяется ответ сервера.
+ */
+export function caseSetIdOfManifest(manifest) {
+  return `cset_${createHash("sha256").update(canonicalJson(manifest)).digest("hex")}`;
+}
+
 function coverageLines(coverage, { caseSetId, componentId }) {
   const names = Object.keys(coverage.dimensions ?? {}).sort();
   const lines = [
-    `case-set ${caseSetId}${componentId ? ` (${componentId})` : ""} coverage: ${coverage.presentTuples}/${coverage.expectedTuples} tuples, missing ${coverage.missingTuples?.length ?? 0}`,
+    // `missingCount` — полное число незакрытых ячеек; `missingTuples` сервер усекает до 64 (W6),
+    // поэтому считать пропуски по длине списка нельзя: он врёт ровно на больших семьях.
+    `case-set ${caseSetId}${componentId ? ` (${componentId})` : ""} coverage: ${coverage.presentTuples}/${coverage.expectedTuples} tuples,`
+    + ` missing ${coverage.missingCount ?? coverage.missingTuples?.length ?? 0}${coverage.truncated ? " (list truncated below)" : ""}`,
     `dimensions: ${names.length ? names.map((name) => `${name}=${coverage.dimensions[name].join("|")}`).join(" ") : "-"}`,
   ];
   const tuple = (item) => names.map((name) => `${name}=${item[name]}`).join(",");
@@ -2475,8 +2620,73 @@ function coverageLines(coverage, { caseSetId, componentId }) {
   return lines;
 }
 
+/**
+ * `case-set validate <manifest.json>` — dry-run манифеста, локально-первый (C20/C23).
+ *
+ * Порядок обязателен: структурная проверка и локальный `caseSetId` считаются **до** любого
+ * запроса, поэтому битый манифест диагностируется без сети и без единой строки в БД. Сервер
+ * подключается вторым шагом и только если он умеет dry-run (`features.caseSetValidate`):
+ * молчаливый фолбэк на мутирующий PUT — ровно то, чего эта команда и должна избегать.
+ */
+async function runCaseSetValidate(args) {
+  const [, manifestPath] = args;
+  const manifest = await readJsonArgument(manifestPath, "case-set manifest");
+  const local = caseSetManifestIssues(manifest, CASE_SET_LIMITS);
+  if (local.length > 0) {
+    throw new CliError([`case-set validate failed locally (${local.length} issue(s)); nothing was sent to the server:`,
+      ...local.map((issue) => `  ${issue}`)].join("\n"));
+  }
+  const caseSetId = caseSetIdOfManifest(manifest);
+  const componentId = manifest.componentId;
+
+  let capabilities = null;
+  try {
+    const response = await call("GET", "/capabilities");
+    if (response.status === 200) capabilities = response.json;
+  } catch {
+    capabilities = null;
+  }
+  if (capabilities === null) {
+    report([
+      `case-set manifest is locally valid: ${manifest.cases.length} cases for ${componentId}`,
+      `local caseSetId: ${caseSetId}`,
+      "warning: the server is unreachable — server-side checks (assets, props schema, coverage) were not run",
+    ], { command: "case-set validate", checked: "local", caseSetId, componentId, cases: manifest.cases.length, issues: [] });
+    return;
+  }
+  // Лимиты сервера перекрывают локальные дефолты: сборка могла поднять потолок (или опустить).
+  const serverIssues = caseSetManifestIssues(manifest, caseSetLimits(capabilities));
+  if (serverIssues.length > 0) {
+    throw new CliError([`case-set validate failed against the limits of this server (${serverIssues.length} issue(s)):`,
+      ...serverIssues.map((issue) => `  ${issue}`)].join("\n"));
+  }
+  if (capabilities.features?.caseSetValidate !== true) {
+    report([
+      `case-set manifest is locally valid: ${manifest.cases.length} cases for ${componentId}`,
+      `local caseSetId: ${caseSetId}`,
+      "warning: this server has no dry-run handle (features.caseSetValidate is off); the server-side checks run only on 'case-set put'",
+    ], { command: "case-set validate", checked: "local", caseSetId, componentId, cases: manifest.cases.length, issues: [] });
+    return;
+  }
+
+  const result = await requireOk("case-set validate",
+    await call("POST", `/components/${encodeURIComponent(componentId)}/case-sets/validate`, { manifest }));
+  report([
+    `case-set validate ok for ${result.componentId}: ${result.cases?.count ?? manifest.cases.length} cases,`
+    + ` caseSetId ${result.caseSetId}${result.wouldBeCached ? " (already published: a PUT would be an idempotent repeat)" : " (not published yet)"}`,
+    ...(result.caseSetId !== caseSetId
+      ? [`warning: the server computed a different caseSetId (${result.caseSetId}) than this client (${caseSetId})`]
+      : []),
+    ...coverageLines(result.coverage ?? {}, { caseSetId: result.caseSetId }),
+    ...(result.warnings ?? []).map((warning) => `warning: ${warning}`),
+  ], { command: "case-set validate", checked: "server", localCaseSetId: caseSetId, ...result });
+}
+
 async function runCaseSet(args, flags) {
   const [subcommand] = args;
+  // `validate` — единственная подкоманда, которая начинает работу локально: гейт матрицы
+  // проверяется внутри неё, после структурного разбора манифеста.
+  if (subcommand === "validate") return runCaseSetValidate(args);
   await requireAcceptanceMatrix();
   if (subcommand === "put") {
     const [, componentId, manifestPath] = args;

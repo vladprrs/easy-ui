@@ -446,10 +446,59 @@ test("case-sets: PUT идемпотентен, GET и coverage отдают на
   }
 }, 120_000);
 
+/**
+ * Dry-run манифеста (план 2026-08-04 §W6). Ключевое свойство — **немутирующий**: после вызова
+ * набора не существует, и следующий PUT остаётся первой публикацией (`cached: false`).
+ */
+test("case-sets validate: dry-run отдаёт caseSetId/cases/coverage и ничего не пишет", async () => {
+  const { db, handler } = await setup({ autoDrain: false });
+  seedAsset(db);
+
+  const dry = await handler(req(`/components/${COMPONENT_ID}/case-sets/validate`, "POST", { manifest: caseSetManifest() }));
+  expect(dry.status, await dry.clone().text()).toBe(200);
+  const report = await jsonOf<{
+    caseSetId: string; componentId: string; wouldBeCached: boolean;
+    cases: { count: number; ids: string[] }; coverage: { expectedTuples: number; missingCount: number; truncated: boolean };
+    warnings: string[];
+  }>(dry);
+  expect(report.caseSetId).toMatch(/^cset_[0-9a-f]{64}$/);
+  expect({ id: report.componentId, cached: report.wouldBeCached }).toEqual({ id: COMPONENT_ID, cached: false });
+  expect(report.cases).toEqual({ count: 3, ids: ["alpha", "beta", "beta-copy"] });
+  expect(report.coverage).toMatchObject({ expectedTuples: 2, missingCount: 0, truncated: false });
+
+  // Ничего не записано: набор по вычисленному адресу не читается, а PUT — всё ещё первый.
+  expect((await handler(req(`/case-sets/${report.caseSetId}`))).status).toBe(404);
+  const put = await jsonOf<CaseSetBody>(await handler(req(`/components/${COMPONENT_ID}/case-sets`, "PUT", { manifest: caseSetManifest() })));
+  expect({ id: put.caseSetId, cached: put.cached }).toEqual({ id: report.caseSetId, cached: false });
+
+  // После публикации тот же dry-run честно говорит, что PUT был бы идемпотентным повтором.
+  const again = await jsonOf<{ wouldBeCached: boolean }>(
+    await handler(req(`/components/${COMPONENT_ID}/case-sets/validate`, "POST", { manifest: caseSetManifest() })));
+  expect(again.wouldBeCached).toBe(true);
+
+  // Отказы — те же коды, что у PUT, и тоже без записи.
+  const bomb = await handler(req(`/components/${COMPONENT_ID}/case-sets/validate`, "POST", {
+    manifest: caseSetManifest({
+      dimensions: Object.fromEntries(Array.from({ length: 8 }, (_, axis) =>
+        [`axis${axis}`, Array.from({ length: 64 }, (_, index) => `v${index}`)])),
+    }),
+  }));
+  expect(bomb.status).toBe(422);
+  expect(await jsonOf<{ error: { code: string } }>(bomb)).toMatchObject({ error: { code: "case_set_coverage_too_large" } });
+
+  const mismatch = await handler(req(`/components/${COMPONENT_ID}/case-sets/validate`, "POST", { manifest: caseSetManifest({ componentId: "someone-else" }) }));
+  expect(mismatch.status).toBe(422);
+  expect(await jsonOf<{ error: { code: string } }>(mismatch)).toMatchObject({ error: { code: "case_set_component_mismatch" } });
+
+  // GET по dry-run-пути — 405: ручка мутационной формы, но не мутация.
+  expect((await handler(req(`/components/${COMPONENT_ID}/case-sets/validate`))).status).toBe(405);
+}, 120_000);
+
 test("case-sets: гейт OFF даёт 404, чужой пользователь и share/capture — 403", async () => {
   const off = await setup({ matrix: false });
   for (const [path, method, body] of [
     [`/components/${COMPONENT_ID}/case-sets`, "PUT", { manifest: caseSetManifest() }],
+    [`/components/${COMPONENT_ID}/case-sets/validate`, "POST", { manifest: caseSetManifest() }],
     [`/case-sets/cset_${"0".repeat(64)}`, "GET", undefined],
     [`/case-sets/cset_${"0".repeat(64)}/coverage`, "GET", undefined],
   ] as [string, string, unknown][]) {
@@ -474,6 +523,9 @@ test("case-sets: гейт OFF даёт 404, чужой пользователь 
       await expect(call(principal, path)).rejects.toMatchObject({ status: 403, code: "forbidden" });
     }
     await expect(call(principal, `/components/${COMPONENT_ID}/case-sets`, "PUT", { manifest: caseSetManifest() }))
+      .rejects.toMatchObject({ status: 403, code: "forbidden" });
+    // Dry-run авторизуется ровно как PUT: он читает чужой манифест против чужого компонента.
+    await expect(call(principal, `/components/${COMPONENT_ID}/case-sets/validate`, "POST", { manifest: caseSetManifest() }))
       .rejects.toMatchObject({ status: 403, code: "forbidden" });
   }
 }, 120_000);

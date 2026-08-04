@@ -261,4 +261,17 @@ declare module "*/author/driver.mjs" {
   export interface DriverExistence { source: DriverExistenceSource; refreshed: boolean; status: number }
   export const EXISTENCE_SOURCES: readonly DriverExistenceSource[];
   export function existenceReport(): { existence?: DriverExistence };
+  /** Лимиты case-set-манифеста, известные драйверу офлайн (план 2026-08-04 §W6). */
+  export interface DriverCaseSetLimits {
+    manifestVersion: number;
+    maxCases: number;
+    maxCasesPerRun: number;
+    maxDimensions: number;
+    maxDimensionValues: number;
+    maxExpectedTuples: number;
+  }
+  export const CASE_SET_LIMITS: Readonly<DriverCaseSetLimits>;
+  export function caseSetLimits(capabilities: unknown): DriverCaseSetLimits;
+  export function caseSetManifestIssues(manifest: unknown, limits?: DriverCaseSetLimits): string[];
+  export function caseSetIdOfManifest(manifest: unknown): string;
 }

@@ -36,6 +36,10 @@ import {
   ACCEPTANCE_POLICIES, DEFAULT_ACCEPTANCE_POLICY_ID, PROMOTION_POLICY_PROFILES, acceptanceCaseTtlHours,
   acceptanceMaxCasesPerRun, evidenceMaxBytes,
 } from "../acceptance/policies";
+import {
+  CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
+  CASE_SET_MAX_EXPECTED_TUPLES,
+} from "../../src/acceptance/caseSetSchema";
 
 // Discovery endpoints (plan §G): /api/openapi.json, /api/schemas/*, /api/capabilities.
 // The OpenAPI document is the committed artifact generated from server/contracts.ts;
@@ -110,6 +114,18 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       acceptanceMaxJobsPerRun: ACCEPTANCE_POLICIES[DEFAULT_ACCEPTANCE_POLICY_ID].maxJobsPerRun,
       acceptanceCaseTtlHours,
       evidenceMaxBytes,
+      // Case-set-манифест (план 2026-08-04 §W6, P1-7): все потолки, которые может нарушить
+      // манифест семьи, — здесь, а не в чужой голове. `caseSetMaxDimensionValues` ≥
+      // `acceptanceMaxCasesPerRun` by design: ось, которая **уже** не помещается в ран, не должна
+      // дополнительно упираться в лимит схемы (ровно это шардировало семью из 49 состояний).
+      // `caseSetMaxExpectedTuples` — потолок декартова произведения `dimensions` (C5/C16):
+      // произведение считается перемножением длин до материализации, превышение — 422
+      // `case_set_coverage_too_large`.
+      caseSetMaxCases: CASE_SET_MAX_CASES,
+      caseSetMaxDimensions: CASE_SET_MAX_DIMENSIONS,
+      caseSetMaxDimensionValues: CASE_SET_MAX_DIMENSION_VALUES,
+      caseSetMaxExpectedTuples: CASE_SET_MAX_EXPECTED_TUPLES,
+      caseSetManifestVersion: CASE_SET_MANIFEST_VERSION,
       // `doc.surfaces`: сколько поверхностей несёт документ (v1 — ровно две).
       // Импорт из места энфорса (`src/prototype/schema`), канон docs/server-api.md#capabilities.
       surfaces: SURFACES_LIMIT,
@@ -182,6 +198,11 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       acceptanceMatrix: options.acceptanceMatrix === true,
       acceptanceCandidates: options.acceptanceMatrix === true,
       acceptanceRuns: options.acceptanceMatrix === true,
+      // План 2026-08-04 §W6 (C23): `POST /api/components/:id/case-sets/validate` — dry-run
+      // манифеста без записи. Отдельный флаг, а не вывод из `acceptanceMatrix`: клиент обязан
+      // проверять именно ту ручку, которую зовёт, — старая сборка с включённой матрицей ответит
+      // на неё 404, и молчаливый фолбэк на мутирующий PUT был бы худшим из возможных исходов.
+      caseSetValidate: options.acceptanceMatrix === true,
       // План 2026-08-02 (computed-state): top-level `doc.computed` — производные значения
       // стейта, read-only, читаются обычным `$state` по bare-ключу. Набор операций —
       // в `computedOps`, лимиты — в `limits.computed*`.
