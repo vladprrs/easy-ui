@@ -586,7 +586,14 @@ export class AcceptanceOrchestrator {
       && executions.some((item) => item.reused)
       && !executions.some((item) => item.frameReused !== true || item.rediffed === true || item.verdictRecomputed === true);
     const verdict = scopeEmpty ? "error" as const : foldRunVerdict(executions, policy);
-    const manifest = this.manifestOf(run, subject, verdict, executions);
+    // Эффективная вердиктная политика каждого случая — в манифест (критерий P0-3, W8). Считается
+    // тем же вызовом, что и отпечатки рана (`caseFingerprintsFor`), поэтому снимок в evidence и
+    // хэш в строке случая совпадают по построению, а не по совпадению.
+    const verdictPolicies = new Map(cases.map((item) => {
+      const fps = caseFingerprintsFor(deps, item);
+      return [item.caseId, { hash: fps.verdictPolicy, snapshot: fps.verdictPolicySnapshot }] as const;
+    }));
+    const manifest = this.manifestOf(run, subject, verdict, executions, verdictPolicies);
     const { manifestHash } = await writeRunManifest(this.deps.dataDir, run.run_id, manifest);
     return this.repo.terminalizeRun(run.run_id, {
       status: verdict,
@@ -704,7 +711,13 @@ export class AcceptanceOrchestrator {
     return summary;
   }
 
-  private manifestOf(run: AcceptanceRunRow, subject: CandidateSubject, verdict: string, executions: CaseExecution[]): RunManifest {
+  private manifestOf(
+    run: AcceptanceRunRow,
+    subject: CandidateSubject,
+    verdict: string,
+    executions: CaseExecution[],
+    verdictPolicies: ReadonlyMap<string, { hash: string; snapshot: VerdictPolicySnapshot }> = new Map(),
+  ): RunManifest {
     const cases: EvidenceCaseEntry[] = [...executions].sort(bySeverity).map((execution) => ({
       caseId: execution.caseId,
       caseKey: execution.caseKey,
@@ -714,6 +727,11 @@ export class AcceptanceOrchestrator {
       ...(execution.reuseReason?.startsWith("refresh:") ? { refreshReason: execution.reuseReason } : {}),
       ...(execution.reused && execution.reuseReason !== null ? { reuseReason: execution.reuseReason } : {}),
       aliasOfCaseId: execution.aliasOfCaseId,
+      // Квитанция уровней reuse (P2-10) и эффективная политика случая (P0-3) — часть
+      // доказательства, а не украшение отчёта: без них манифест не отвечает ни «что пересчитали»,
+      // ни «каким порогом мерили».
+      reuseReceipt: reuseReceiptOf(execution),
+      ...(verdictPolicies.has(execution.caseId) ? { verdictPolicy: verdictPolicies.get(execution.caseId)! } : {}),
       artifacts: execution.artifacts.map((artifact) => ({ name: artifact.name, sha256: artifact.sha256, bytes: artifact.bytes })),
     }));
     return {

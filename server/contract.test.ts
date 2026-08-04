@@ -750,6 +750,7 @@ describe("route contracts", () => {
       // W6 (C23): dry-run манифеста — отдельный флаг возможности, а не вывод из acceptanceMatrix.
       caseSetValidate: true,
       acceptanceMultiRunPromote: true,
+      acceptanceSummaryView: true,
       computed: true,
       surfaces: true,
       // Write-политика мульти-поверхностных документов — kill-switch EASYUI_SURFACES (D16).

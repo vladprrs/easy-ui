@@ -20,7 +20,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set validate <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] | accept-status <runId> [--evidence <file.zip>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set validate <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] [--summary] | accept-status <runId> [--evidence <file.zip>] [--summary] [--case <caseId>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh; accept/accept-status --summary print the compact agent report (server ?view=summary when features.acceptanceSummaryView is on, otherwise the same shape summarised locally) and accept-status --case <caseId> drills into one case with its gates, causes and reuse receipt — --json keeps its meaning in every case\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -243,8 +243,18 @@ export const flagSpecs = Object.freeze({
       },
     },
     "--evidence": { value: true, key: "evidence" },
+    // План 2026-08-04 §W8 (P1-9) — компактный отчёт. Строго opt-in: смысл `--json` не меняется
+    // (C11/C17/C24), полный вид остаётся дефолтом и инструментом отладки.
+    "--summary": { value: false, key: "summary" },
   },
-  "accept-status": { ...jsonFlag, "--evidence": { value: true, key: "evidence" } },
+  "accept-status": {
+    ...jsonFlag,
+    "--evidence": { value: true, key: "evidence" },
+    "--summary": { value: false, key: "summary" },
+    // Drill-down одного случая после сводки (§W8): полные гейты, причины, квитанция reuse и
+    // артефакты ровно одного случая вместо всего рана.
+    "--case": { value: true, key: "case" },
+  },
   // RFC candidate-acceptance R3b: отклонение кандидата человеком. Решение терминально — ручки
   // «разотклонить» нет ни в драйвере, ни на сервере; выход — новая ревизия компонента.
   reject: { ...jsonFlag, "--reason": { value: true, key: "reason" } },
@@ -2400,6 +2410,19 @@ function refreshScopeText(value) {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.length ? value.join(",") : "-";
   if (typeof value !== "object") return String(value);
+  // Боевая форма плана (сервер v29+): `{frame:{all,failed,caseIds}, verdict:{…}}` — два скоупа
+  // рядом, а не один режим. Читается первой: именно её отдаёт `refresh_json` рана.
+  if (typeof value.frame === "object" || typeof value.verdict === "object") {
+    const parts = [];
+    for (const scope of ["frame", "verdict"]) {
+      const target = value[scope];
+      if (target === null || typeof target !== "object") continue;
+      if (target.all === true) parts.push(`${scope}:all`);
+      else if (target.failed === true) parts.push(`${scope}:failed`);
+      if (Array.isArray(target.caseIds) && target.caseIds.length > 0) parts.push(`${scope}:${target.caseIds.length} case(s)`);
+    }
+    return parts.length ? parts.join(" ") : "none";
+  }
   const caseIds = Array.isArray(value.caseIds) ? value.caseIds : null;
   const mode = value.mode ?? value.refresh ?? (caseIds ? `${caseIds.length} case(s)` : null);
   const scope = value.scope ?? null;
@@ -2432,6 +2455,107 @@ function acceptLines(run, { componentId, evidencePath }) {
   lines.push(evidencePath
     ? `evidence: ${evidencePath}`
     : `evidence: GET /api/acceptance-runs/${run.runId}/evidence (pass --evidence <file.zip> to download)`);
+  return lines;
+}
+
+// ------------------------------------------------- компактная сводка рана (§W8, P1-9)
+
+/**
+ * Локальная сводка полного рана — фолбэк для сервера без `?view=summary`.
+ *
+ * Форма **та же**, что у серверной (`view:"summary"`), потому что её читает агент, а не человек:
+ * различаться должен источник (`summarySource`), а не набор полей. Считать её на клиенте всё
+ * равно приходится — старая сборка молча игнорирует query и отдаёт полный ран, и деградировать
+ * из-за этого в 1800 строк было бы ровно тем, что волна чинит.
+ */
+export function localRunSummary(run) {
+  const { eta: _eta, ...progress } = run.progress ?? {};
+  const gates = {};
+  for (const [gate, counts] of Object.entries(run.gates ?? {})) {
+    gates[gate] = counts !== null && typeof counts === "object" && !Array.isArray(counts)
+      ? Object.entries(counts).map(([status, count]) => `${status}:${count}`).join(" ")
+      : String(counts);
+  }
+  const remediationGroups = {};
+  for (const group of run.remediationGroups ?? []) {
+    if (!group || typeof group.key !== "string") continue;
+    const cases = Array.isArray(group.cases) ? group.cases : [];
+    remediationGroups[group.key.slice(0, 12)] = `${group.cause?.code ?? "unclassified"} ×${cases.length}: ${cases.join(", ")}`;
+  }
+  const refresh = run.refresh ?? null;
+  return {
+    view: "summary",
+    summarySource: "client",
+    runId: run.runId,
+    status: run.status,
+    statusReason: run.statusReason ?? null,
+    progress,
+    gates,
+    refresh: refresh === null || typeof refresh !== "object"
+      ? null
+      : {
+        requested: refreshScopeText(refresh.requested) ?? "none",
+        impact: refreshScopeText(refresh.impact) ?? "none",
+        effective: refreshScopeText(refresh.effective) ?? "none",
+      },
+    failedCases: (run.failedCases ?? []).map((item) => {
+      const gate = (item.failedGates ?? [])[0] ?? null;
+      const metrics = gate?.metrics ?? {};
+      const cause = (item.causes ?? [])[0] ?? null;
+      const number = (value) => (typeof value === "number" && Number.isFinite(value) ? value : null);
+      return {
+        caseId: item.caseId,
+        gate: gate?.gate ?? (item.status === "error" ? "error" : "-"),
+        raw: number(metrics.rawDiffPct),
+        aa: number(metrics.aaDiffPct),
+        cause: cause ? `${cause.code}${cause.detail ? `: ${cause.detail}` : ""}` : gate?.detail ?? `verdict ${item.verdict ?? item.status}`,
+      };
+    }),
+    remediationGroups,
+    evidenceUrl: `/api/acceptance-runs/${run.runId}/evidence`,
+  };
+}
+
+/**
+ * Сводка рана: серверная, если сервер её умеет, иначе — локальная над уже полученным раном.
+ *
+ * Два условия, а не одно (C23): capability-флаг **и** маркер `view` в теле. Флаг отвечает на
+ * вопрос «сборка умеет», маркер — «этот ответ действительно сводка»: сервер прошлых волн на
+ * незнакомый query отвечает полным раном с кодом 200, и доверять одному лишь коду нельзя.
+ */
+async function acceptanceSummary(run, capabilities) {
+  if (capabilities?.features?.acceptanceSummaryView === true) {
+    const response = await call("GET", `/acceptance-runs/${encodeURIComponent(run.runId)}?view=summary`);
+    if (response.status === 200 && response.json?.view === "summary") {
+      return { summarySource: "server", ...response.json };
+    }
+    progress(`warning: server did not answer ?view=summary with a summary marker (status ${response.status}); summarising locally`);
+  }
+  return localRunSummary(run);
+}
+
+/** Человеческий вид сводки: те же данные, что в `--json`, без повторения метрик по случаям. */
+function summaryLines(summary, { componentId, evidencePath }) {
+  const done = summary.progress ?? {};
+  const lines = [
+    `acceptance ${componentId ?? "-"} run ${summary.runId} verdict ${summary.status}${summary.statusReason ? ` (${summary.statusReason})` : ""}`,
+    `cases: ${done.completed ?? 0}/${done.total ?? 0} reused=${done.reused ?? 0} frameReused=${done.frameReused ?? 0}`
+      + ` recomputed=${done.verdictRecomputed ?? 0} rediffed=${done.rediffed ?? 0} failed=${done.failed ?? 0}`,
+    `gates: ${Object.entries(summary.gates ?? {}).map(([gate, text]) => `${gate}[${text}]`).join(" ") || "-"}`,
+  ];
+  if (summary.refresh) {
+    lines.push(`refresh: requested=${summary.refresh.requested} impact=${summary.refresh.impact} effective=${summary.refresh.effective}`);
+  }
+  if (summary.failedCases?.length) {
+    lines.push("failed cases (worst first):");
+    for (const item of summary.failedCases) {
+      const metrics = item.raw === null && item.aa === null ? "" : ` raw=${item.raw ?? "-"}% aa=${item.aa ?? "-"}%`;
+      lines.push(`  ${item.caseId} ${item.gate}${metrics}: ${item.cause}`);
+    }
+  }
+  for (const [key, text] of Object.entries(summary.remediationGroups ?? {})) lines.push(`remediation ${key}: ${text}`);
+  lines.push(evidencePath ? `evidence: ${evidencePath}` : `evidence: GET ${summary.evidenceUrl} (pass --evidence <file.zip> to download)`);
+  lines.push(`drill down: driver.mjs accept-status ${summary.runId} --case <caseId>`);
   return lines;
 }
 
@@ -2488,7 +2612,13 @@ async function pollAcceptanceRun(runId, { deadlineMs }) {
   }
 }
 
-async function reportAcceptance(run, { command, componentId, candidateId, flags }) {
+/**
+ * Отчёт о терминальном ране. `summary` (флаг `--summary`) меняет **что печатается**, но не то,
+ * что записывается: `cache.link`/`cache.receipt` всегда строятся из **полного** рана (D-E), иначе
+ * навигация «кандидат → ран → случаи» осталась бы без вердиктов случаев ровно в том сценарии,
+ * ради которого сводка и заводилась.
+ */
+async function reportAcceptance(run, { command, componentId, candidateId, flags, summary = null }) {
   const evidencePath = flags.evidence === undefined ? null : await downloadEvidence(run.runId, flags.evidence);
   const exitCode = acceptExitCode(run.status);
   // Квитанция и связи (W7): candidate → run → cases → artifacts → report. Кэш хранит навигацию
@@ -2504,10 +2634,15 @@ async function reportAcceptance(run, { command, componentId, candidateId, flags 
     runId: run.runId, status: run.status, exitCode,
     progress: run.progress ?? null, evidence: evidencePath,
   });
-  report(acceptLines(run, { componentId, evidencePath }), {
-    command, componentId: componentId ?? run.componentId, candidateId: candidateId ?? run.candidateId,
-    exitCode, ...(evidencePath ? { evidence: evidencePath } : {}), ...run, ...existenceReport(),
-  });
+  report(
+    summary === null
+      ? acceptLines(run, { componentId, evidencePath })
+      : summaryLines(summary, { componentId: componentId ?? run.componentId, evidencePath }),
+    {
+      command, componentId: componentId ?? run.componentId, candidateId: candidateId ?? run.candidateId,
+      exitCode, ...(evidencePath ? { evidence: evidencePath } : {}), ...(summary ?? run), ...existenceReport(),
+    },
+  );
   if (exitCode !== EXIT.ok) {
     throw new CliError(`acceptance run ${run.runId} finished as ${run.status}${run.failedCases?.length ? `: ${run.failedCases.map((item) => item.caseId).join(", ")}` : ""}`, { exitCode });
   }
@@ -2775,7 +2910,7 @@ async function runCaseSet(args, flags) {
 async function runAccept(args, flags) {
   const [id] = args;
   const encoded = encodeURIComponent(id);
-  await requireAcceptanceMatrix();
+  const capabilities = await requireAcceptanceMatrix();
   const meta = await getMeta("components", id, { mutating: true });
   if (!meta) throw new CliError(`components/${id} not found; hint: run 'driver.mjs get components'`);
   // Кандидат — тот же validate-префлайт: его предупреждения принадлежат приёмке, а не съёмке.
@@ -2792,7 +2927,7 @@ async function runAccept(args, flags) {
     // `--recapture` (план 2026-08-04 §W2a, D5): скоуп обновления. Поле отправляется **только**
     // под флагом — сервер без алгебры refresh (до W1) не должен получать незнакомое поле,
     // а дефолтный скоуп выбирает он сам.
-    ...(flags.recapture ? { refreshMode: "frame" } : {}),
+    ...(flags.recapture ? { recapture: true } : {}),
     // `--baseline-run` (W6): частичная пересъёмка. Сервер сам считает импакт и снимает только
     // затронутые случаи; недоказуемый импакт означает полный ран, а не тихую экономию.
     ...(flags.baselineRun === undefined ? {} : { baselineRunId: flags.baselineRun }),
@@ -2807,7 +2942,9 @@ async function runAccept(args, flags) {
   if (queuedRefresh) progress(queuedRefresh);
   if (queued.impact) progress(impactLines(queued.impact, id)[0]);
   const run = await pollAcceptanceRun(queued.runId, { deadlineMs: (flags.timeoutSec ?? ACCEPT_DEFAULT_TIMEOUT_SEC) * 1000 });
-  await reportAcceptance(run, { command: "accept", componentId: id, candidateId: candidate.candidateId, flags });
+  // Полный ран уже получен опросом — он и уезжает в link/receipt; `--summary` меняет только вывод.
+  const summary = flags.summary ? await acceptanceSummary(run, capabilities) : null;
+  await reportAcceptance(run, { command: "accept", componentId: id, candidateId: candidate.candidateId, flags, summary });
 }
 
 /**
@@ -2844,18 +2981,58 @@ async function runImpact(args, flags) {
   report(impactLines(impact, id), { command: "impact", componentId: id, ...impact });
 }
 
+/**
+ * Drill-down одного случая (`accept-status <runId> --case <caseId>`, §W8): полные гейты, причины,
+ * квитанция reuse и артефакты ровно одного случая. Ничего не пишет в кэш-навигацию: это чтение
+ * поверх уже записанного раном, а не отдельная приёмка.
+ */
+async function reportAcceptanceCase(runId, caseId) {
+  const path = `/acceptance-runs/${encodeURIComponent(runId)}/cases?case=${encodeURIComponent(caseId)}`;
+  const response = await call("GET", path);
+  if (response.status === 404) {
+    throw new CliError(`acceptance run ${runId} has no case ${caseId}; list them with 'driver.mjs accept-status ${runId}'`, { exitCode: EXIT.productErrors });
+  }
+  const body = await requireOk(`acceptance case ${caseId}`, response);
+  // Старый сервер фильтра не знает и отдаёт все случаи — сужаем сами, чтобы вывод не врал.
+  const item = (body.cases ?? []).find((row) => row.caseId === caseId);
+  if (!item) throw new CliError(`acceptance run ${runId} has no case ${caseId}`, { exitCode: EXIT.productErrors });
+  const receipt = item.reuseReceipt ?? null;
+  const lines = [
+    `case ${item.caseId} of run ${runId}: ${item.verdict ?? item.status}${item.aliasOfCaseId ? ` (alias of ${item.aliasOfCaseId})` : ""}`,
+    `gates: ${(item.gates ?? []).map((gate) => `${gate.gate}=${gate.status}`).join(" ") || "-"}`,
+    ...(item.gates ?? []).filter((gate) => gate.detail).map((gate) => `  ${gate.gate}: ${gate.detail}`),
+    ...(item.causes ?? []).map((cause) => `  cause ${cause.code} (${cause.confidence}): ${cause.detail}`),
+    `reuse: ${receipt ? Object.entries(receipt.reuse ?? {}).map(([level, value]) => `${level}=${value ? "hit" : "miss"}`).join(" ") : `reason ${item.reuseReason ?? "-"}`}`,
+    `artifacts: ${(item.artifacts ?? []).map((artifact) => artifact.name).join(", ") || "-"}`,
+  ];
+  const exitCode = item.verdict === "fail" || item.verdict === "indeterminate" || item.status === "error"
+    ? EXIT.productErrors
+    : EXIT.ok;
+  report(lines, { command: "accept-status --case", runId, exitCode, ...item });
+  if (exitCode !== EXIT.ok) throw new CliError(`case ${caseId} of run ${runId} is ${item.verdict ?? item.status}`, { exitCode });
+}
+
 async function runAcceptStatus(args, flags) {
   const [runId] = args;
-  await requireAcceptanceMatrix();
+  const capabilities = await requireAcceptanceMatrix();
+  if (flags.case !== undefined) {
+    await reportAcceptanceCase(runId, flags.case);
+    return;
+  }
+  // Полный ран берётся всегда: он — источник link/receipt и терминальной проверки. `--summary`
+  // добавляет к нему компактный отчёт, а не заменяет источник (D-E).
   const run = await requireOk("acceptance run", await call("GET", `/acceptance-runs/${encodeURIComponent(runId)}`));
+  const summary = flags.summary ? await acceptanceSummary(run, capabilities) : null;
   if (!ACCEPT_TERMINAL.has(run.status)) {
     report(
-      [`acceptance run ${run.runId} is ${run.status} ${run.progress?.completed ?? 0}/${run.progress?.total ?? 0} reused=${run.progress?.reused ?? 0}`],
-      { command: "accept-status", exitCode: EXIT.ok, ...run },
+      summary === null
+        ? [`acceptance run ${run.runId} is ${run.status} ${run.progress?.completed ?? 0}/${run.progress?.total ?? 0} reused=${run.progress?.reused ?? 0}`]
+        : summaryLines(summary, { componentId: run.componentId, evidencePath: null }),
+      { command: "accept-status", exitCode: EXIT.ok, ...(summary ?? run) },
     );
     return;
   }
-  await reportAcceptance(run, { command: "accept-status", flags });
+  await reportAcceptance(run, { command: "accept-status", flags, summary });
 }
 
 /**

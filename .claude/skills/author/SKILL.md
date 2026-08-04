@@ -468,7 +468,9 @@ node driver.mjs accept pay-payment-card --refresh failed      # обновить
 node driver.mjs accept pay-payment-card --refresh failed --recapture   # те же случаи, но с принудительной пересъёмкой
 node driver.mjs accept pay-payment-card --refresh alpha,beta  # обновить перечисленные case id
 node driver.mjs accept pay-payment-card --evidence run.zip    # + скачать evidence-архив
-node driver.mjs accept-status acc_…                           # вердикт уже поставленного рана
+node driver.mjs accept pay-payment-card --summary             # компактный отчёт (канон для агента)
+node driver.mjs accept-status acc_… --summary                 # вердикт уже поставленного рана, компактно
+node driver.mjs accept-status acc_… --case disabled-dark      # drill-down: гейты, причины и квитанция одного случая
 node driver.mjs reject cand_… --reason "межстрочный интервал не по макету"  # отклонить сборку (терминально)
 node driver.mjs impact pay-payment-card --candidate cand_… --baseline-run acc_…   # dry-run: что придётся переснять
 node driver.mjs accept pay-payment-card --baseline-run acc_…  # частичная пересъёмка: снять только затронутое
@@ -476,16 +478,22 @@ node driver.mjs accept pay-payment-card --baseline-run acc_…  # частичн
 
 ```
 acceptance pay-payment-card run acc_8f1c… verdict fail
-cases: 49/49 reused=41 failed=2 policy=default-v1
+cases: 49/49 reused=41 frameReused=47 recomputed=6 rediffed=0 failed=2
+gates: contract[pass:49] geometry[pass:47 fail:2] visual[pass:49]
+refresh: requested=verdict:failed impact=none effective=verdict:failed
 failed cases (worst first):
-  disabled-dark [fail] severity=structure#1 gates: geometry=fail (paint overflow 12px, source .highlight)
+  disabled-dark geometry raw=-% aa=-%: paint overflow 12px, source .highlight
+remediation 4f1ab2c9d0e1: effect-overflow ×2: disabled-dark, disabled-light
 evidence: GET /api/acceptance-runs/acc_8f1c…/evidence (pass --evidence <file.zip> to download)
+drill down: driver.mjs accept-status acc_8f1c… --case <caseId>
 ```
 
 - Требует `features.acceptanceMatrix` в `/api/capabilities` (opt-in `EASYUI_ACCEPTANCE_MATRIX=1`); без него верб падает читаемо, а путь `promote` продолжает работать.
 - Прогресс (`completed/total`, `reused`, ETA) идёт в **stderr** — stdout принадлежит `--json`. Exit: 0 — `pass`/`pass_with_exceptions`, 2 — `fail`/`error`/`cancelled` и клиентский таймаут (`--timeout-sec`, дефолт 1800; ран на сервере продолжается, добирать вердикт — `accept-status <runId>`).
 - Байты evidence по умолчанию **не** качаются: печатается адрес архива; `--evidence <file.zip>` сохраняет zip (`manifest.json` + `SHA256SUMS` + артефакты).
 - **Алгебра refresh: `--refresh` выбирает случаи, `--recapture` — глубину.** `--refresh none|failed|all|id,id2` отвечает на вопрос «какие случаи обновить», и по умолчанию это **переоценка вердикта**: если сравнение и политика позволяют, сервер переиспользует уже снятый кадр и пересчитывает вердикт (смена только порога больше не стоит съёмки семьи). `--recapture` поднимает скоуп тех же случаев до **кадра** — принудительная пересъёмка (флейк рендера, подозрение на протухший кадр). `--refresh none --recapture` — противоречие и ошибка аргументов. Что именно применилось, видно строкой `refresh: requested=… impact=… effective=…` (и полем `refresh` в `--json`): агент просит скоуп, импакт может его расширить, решает сервер. Сервер без алгебры refresh строку не отдаёт — это не ошибка, а старая сборка.
+- **`--summary` — канон для агента, `--json` без него не меняется.** Полный отчёт failed-рана на 25 случаев — около 1800 строк (в каждом провале повторяются `metrics`/`regions`); `--summary` печатает ту же приёмку меньше чем в 100 строк: `progress` со всеми счётчиками уровней reuse, `gates` строкой на гейт, `failedCases [{caseId, gate, raw, aa, cause}]`, группы ремедиаций и адрес evidence. Полный вид (`--json` без `--summary`) остаётся инструментом отладки и по-прежнему отдаёт ран целиком — смысл `--json` флаг `--summary` не меняет. Источник сводки: `?view=summary` сервера при `features.acceptanceSummaryView`, иначе — та же форма, сведённая локально (`summarySource: "client"` в `--json`). Записи кэша (link/receipt) в обоих случаях строятся из **полного** рана.
+- **Drill-down: `accept-status <runId> --case <caseId>`.** После сводки за подробностями одного случая идти сюда, а не за полным раном: печатаются его гейты с `detail`, классифицированные причины, артефакты и **квитанция reuse** по уровням (`candidate/frame/readiness/geometry/visualMetrics/verdict` — `hit`/`miss`). Именно квитанция отвечает, пересчитывался ли вердикт: `reused` в прогрессе этого по построению не различает. Exit 2, если случай упал.
 - `409 acceptance_run_in_flight` — у кандидата уже есть живой ран: не ставить второй, дождаться его через `accept-status`.
 - **Частичная пересъёмка (`--baseline-run <runId>`).** Правка одного ассета в семье из 49 состояний не обязана стоить 49 капчуров. `impact` считает это заранее и печатает **базис**:
   - `asset-only` — форма исходника побайтово та же (все литералы `asset_<sha256>` заменены плейсхолдером и хэш совпал), тема не менялась: пересъёмке подлежат случаи, чьи **наблюдённые** ресурсы (readiness-evidence кадра) содержат изменившийся ассет;

@@ -208,6 +208,11 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // массив `400 Unknown field: acceptanceRunIds`, и клиент обязан узнать это до мутации, а
       // не по коду ошибки уже отправленного promote.
       acceptanceMultiRunPromote: options.acceptanceMatrix === true,
+      // План 2026-08-04 §W8 (C23): `GET /api/acceptance-runs/:runId?view=summary` — компактная
+      // сводка рана. Флаг отдельный, потому что деградация тут молчаливая: сервер до этой волны
+      // просто игнорирует незнакомый query и отдаёт полный ран на 1800 строк. Клиент обязан и
+      // проверить флаг, и убедиться в маркере `view:"summary"` в теле ответа.
+      acceptanceSummaryView: options.acceptanceMatrix === true,
       // План 2026-08-02 (computed-state): top-level `doc.computed` — производные значения
       // стейта, read-only, читаются обычным `$state` по bare-ключу. Набор операций —
       // в `computedOps`, лимиты — в `limits.computed*`.

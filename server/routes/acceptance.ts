@@ -9,7 +9,8 @@
  * POST /api/component-candidates/:candidateId/reject — отклонение человеком (R3b, надгробие)
  * POST /api/acceptance-runs                  — постановка рана (202)
  * GET  /api/acceptance-runs/:runId           — статус + gates + progress + eta + failedCases
- * GET  /api/acceptance-runs/:runId/cases     — per-case вердикты + имена артефактов
+ *                                              (`?view=summary` — компактная сводка, W8)
+ * GET  /api/acceptance-runs/:runId/cases     — per-case вердикты + имена артефактов (`?case=<id>`)
  * GET  /api/acceptance-runs/:runId/evidence  — zip (manifest + SHA256SUMS + артефакты CAS)
  * POST /api/acceptance-runs/:runId/cancel    — только из `queued` (триаж A6)
  * ```
@@ -229,6 +230,129 @@ function runView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[]): Record<stri
     startedAt: run.started_at,
     finishedAt: run.finished_at,
     failedCases: failed,
+  };
+}
+
+// ------------------------------------------------------------------ summary-view (W8, P1-9)
+
+/** Метрики визуального гейта случая — источник `raw`/`aa` сводки. */
+function visualMetricsOf(row: AcceptanceCaseRow): { raw: number | null; aa: number | null } {
+  const visual = gatesOf(row).find((gate) => gate.gate === "visual") as { metrics?: Record<string, unknown> } | undefined;
+  const metrics = visual?.metrics;
+  const number = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
+  return isObject(metrics)
+    ? { raw: number(metrics.rawDiffPct), aa: number(metrics.aaDiffPct) }
+    : { raw: null, aa: null };
+}
+
+/** Обрезка причины: сводка обязана быть короткой, полный текст лежит в `view=full` и в evidence. */
+const CAUSE_MAX_CHARS = 160;
+const shorten = (value: string): string =>
+  (value.length <= CAUSE_MAX_CHARS ? value : `${value.slice(0, CAUSE_MAX_CHARS - 1)}…`).replace(/\s+/g, " ").trim();
+
+/**
+ * Одна строка провала в сводке: `{caseId, gate, raw, aa, cause}` (форма §P1 фидбэка).
+ *
+ * `gate` — **главный** провал случая (первый из упавших в порядке гейтов), `cause` — самая
+ * доказательная причина: классифицированный код визуального расхождения, если он есть, иначе
+ * `detail` гейта. Оба поля усечены намеренно: `metrics`/`regions` каждого случая и были тем, что
+ * раздувало ответ до 1800 строк.
+ */
+function summaryFailedCase(row: AcceptanceCaseRow): Record<string, unknown> {
+  const failedGates = gatesOf(row).filter((gate) => gate.status === "fail" || gate.status === "indeterminate");
+  const primary = failedGates[0] ?? null;
+  const cause = causesOf(row).find(isObject) as { code?: unknown; detail?: unknown } | undefined;
+  const { raw, aa } = visualMetricsOf(row);
+  const text = cause !== undefined && typeof cause.code === "string"
+    ? shorten(typeof cause.detail === "string" && cause.detail.length > 0 ? `${cause.code}: ${cause.detail}` : cause.code)
+    : primary?.detail !== undefined
+      ? shorten(primary.detail)
+      : shorten(row.status === "error" ? "case errored before a verdict" : `verdict ${row.verdict ?? row.status}`);
+  return {
+    caseId: row.case_id,
+    gate: primary?.gate ?? (row.status === "error" ? "error" : "-"),
+    raw, aa,
+    cause: text,
+  };
+}
+
+/** Сводка гейтов рана: `{gate: "pass:17 fail:8"}` — одна строка на гейт вместо вложенной карты. */
+function summaryGates(run: AcceptanceRunRow): Record<string, string> {
+  const parsed = parseJson(run.gates_json);
+  if (!isObject(parsed)) return {};
+  const out: Record<string, string> = {};
+  for (const [gate, counts] of Object.entries(parsed)) {
+    out[gate] = isObject(counts)
+      ? Object.entries(counts).map(([status, count]) => `${status}:${String(count)}`).join(" ")
+      : String(counts);
+  }
+  return out;
+}
+
+/** План refresh одной строкой: `frame:all`, `verdict:failed`, `frame:3 case(s)`, `none`. */
+function summaryRefreshPlan(plan: unknown): string {
+  if (!isObject(plan)) return "none";
+  const parts: string[] = [];
+  for (const scope of ["frame", "verdict"] as const) {
+    const target = plan[scope];
+    if (!isObject(target)) continue;
+    if (target.all === true) parts.push(`${scope}:all`);
+    else if (target.failed === true) parts.push(`${scope}:failed`);
+    if (Array.isArray(target.caseIds) && target.caseIds.length > 0) parts.push(`${scope}:${target.caseIds.length} case(s)`);
+  }
+  return parts.length === 0 ? "none" : parts.join(" ");
+}
+
+/**
+ * Компактное представление рана (`?view=summary`, план 2026-08-04 §W8, фидбэк P1-9).
+ *
+ * Три решения формы, без которых сводка не решает свою задачу:
+ *
+ * 1. **Маркер `view:"summary"` в теле обязателен** (C23): сервер до этой волны молча игнорирует
+ *    незнакомый query и отдаёт полный ран — клиент отличает одно от другого только по маркеру,
+ *    а не по коду ответа.
+ * 2. **`gates` и `remediationGroups` — карты «ключ → строка»**, а не вложенные объекты: сводка
+ *    живёт под бюджетом «failed-ран на 25 случаев < 100 строк», и каждая вложенность стоит строк.
+ *    Полные формы никуда не делись — они в `view=full` (default) и в evidence-манифесте.
+ * 3. **Метрики случая не повторяются**: `raw`/`aa` — два числа визуального гейта, всё остальное
+ *    (regions, bestOffset, thresholds) берётся точечно через `/cases?case=<id>`.
+ */
+function runSummaryView(run: AcceptanceRunRow, cases: AcceptanceCaseRow[]): Record<string, unknown> {
+  const stored = parseJson(run.progress_json);
+  // `eta` в сводке не нужен (ран терминален чаще, чем нет), `remediationGroups` едут отдельным
+  // разделом — как и в полном виде.
+  const { remediationGroups, eta, ...progress } = isObject(stored)
+    ? stored as Record<string, unknown>
+    : {} as Record<string, unknown>;
+  void eta;
+  const refresh = parseJson(run.refresh_json);
+  const groups: Record<string, string> = {};
+  if (Array.isArray(remediationGroups)) {
+    for (const group of remediationGroups) {
+      if (!isObject(group) || typeof group.key !== "string") continue;
+      const code = isObject(group.cause) ? String(group.cause.code) : "unclassified";
+      const members = Array.isArray(group.cases) ? group.cases.map(String) : [];
+      groups[group.key.slice(0, 12)] = shorten(`${code} ×${members.length}: ${members.join(", ")}`);
+    }
+  }
+  return {
+    // Маркер версии контракта, а не украшение (C23) — см. §1 доклада выше.
+    view: "summary",
+    runId: run.run_id,
+    status: run.status,
+    statusReason: run.status_reason,
+    progress,
+    gates: summaryGates(run),
+    refresh: isObject(refresh)
+      ? {
+        requested: summaryRefreshPlan(refresh.requested),
+        impact: summaryRefreshPlan(refresh.impact),
+        effective: summaryRefreshPlan(refresh.effective),
+      }
+      : null,
+    failedCases: cases.filter(isFailedCase).sort(bySeverity).map(summaryFailedCase),
+    remediationGroups: groups,
+    evidenceUrl: `/api/acceptance-runs/${run.run_id}/evidence`,
   };
 }
 
@@ -487,6 +611,12 @@ function caseView(row: AcceptanceCaseRow, manifest: RunManifest | null): Record<
     aliasOfCaseId: row.alias_of_case_id,
     reuseReason: row.reuse_reason,
     reused: row.reuse_reason === "case_fingerprint",
+    // Квитанция reuse по уровням (P2-10): `{reuse:{candidate,frame,readiness,geometry,
+    // visualMetrics,verdict}, fingerprints:{frame,comparison,verdictPolicy,case}}`. `reuseReason`
+    // остаётся производной сводкой одной строкой; квитанция отвечает уровень за уровнем — иначе
+    // «reused=25» не отличимо от «вердикт пересчитан» при смене порога. `null` — строка рана
+    // старше v29 (квитанции тогда не писались), а не «ничего не переиспользовано».
+    reuseReceipt: parseJson(row.reuse_receipt_json),
     referenceAssetId: row.reference_asset_id,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
@@ -564,14 +694,30 @@ export async function routeAcceptance(
   const runId = segments[1]!;
   if (segments.length === 2) {
     if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
+    // `view` (W8): `full` — исторический ответ по умолчанию, `summary` — компактная сводка.
+    // Неизвестное значение отвергается, а не деградирует в default: молчаливый полный ответ на
+    // опечатку и есть тот случай, ради которого сводка заводилась.
+    const view = new URL(request.url).searchParams.get("view") ?? "full";
+    if (view !== "full" && view !== "summary") {
+      throw new ApiError(400, "invalid_request", 'view must be "full" or "summary"');
+    }
     const run = requireOwnedRun(db, runId, principal, orchestrator);
-    return json(runView(run, orchestrator.repo.cases(runId)), 200, noStore);
+    const cases = orchestrator.repo.cases(runId);
+    return json(view === "summary" ? runSummaryView(run, cases) : runView(run, cases), 200, noStore);
   }
   if (segments.length === 3 && segments[2] === "cases") {
     if (request.method !== "GET") throw new ApiError(405, "method_not_allowed", "Method not allowed");
     requireOwnedRun(db, runId, principal, orchestrator);
     const manifest = await readRunManifest(dataDir, runId);
-    const cases = [...orchestrator.repo.cases(runId)].sort(bySeverity).map((row) => caseView(row, manifest));
+    // `?case=<id>` (W8) — drill-down одного случая после сводки. Неизвестный id — 404, а не
+    // пустой список: «случая нет в наборе» и «случай ещё не исполнен» — разные ответы, и молча
+    // отдать пустоту на опечатку значило бы соврать про покрытие рана.
+    const only = new URL(request.url).searchParams.get("case");
+    const rows = [...orchestrator.repo.cases(runId)].sort(bySeverity);
+    if (only !== null && !rows.some((row) => row.case_id === only)) {
+      throw new ApiError(404, "not_found", `Acceptance run ${runId} has no case ${only}`);
+    }
+    const cases = rows.filter((row) => only === null || row.case_id === only).map((row) => caseView(row, manifest));
     return json({ runId, cases }, 200, noStore);
   }
   if (segments.length === 3 && segments[2] === "evidence") {

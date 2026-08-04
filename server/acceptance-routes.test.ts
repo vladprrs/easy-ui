@@ -15,7 +15,8 @@ import { routeCaseSets } from "./routes/caseSets";
 import type { AcceptanceCaptureService } from "./acceptance/gates/types";
 import type { CaptureProbe, JobOutcome, JobStatus, ScreenshotResult } from "./screenshot/service";
 import type { InkBboxResult } from "./acceptance/inkBbox";
-import { readinessPolicyHashOf } from "./acceptance/ids";
+import { readinessPolicyHashOf, verdictPolicyHashOf } from "./acceptance/ids";
+import { readRunManifest } from "./acceptance/evidence";
 import { ACCEPTANCE_POLICIES } from "./acceptance/policies";
 
 /**
@@ -699,3 +700,205 @@ test("reject: надгробие, rejected в DTO, повтор и promoted — 
   expect(await jsonOf<{ error: { code: string; currentVersion: number } }>(promoted))
     .toMatchObject({ error: { code: "candidate_promoted", currentVersion: 3 } });
 }, 60_000);
+
+// ------------------------------------------------- компактная сводка рана (W8, P1-9)
+
+/**
+ * `?view=summary` (план 2026-08-04 §W8). Предмет — **форма и объём**: failed-ран на 25 случаев в
+ * полном виде занимал около 1800 строк и переполнял контекст агента, поэтому бюджет сводки
+ * («меньше 100 строк pretty-JSON») проверяется тестом наравне с полями.
+ *
+ * Ран собирается напрямую через репозиторий: съёмка 25 случаев здесь не предмет, а вердикты,
+ * гейты и группы ремедиаций нужны ровно в том виде, в каком их пишет терминализация.
+ */
+const seedFailedRun = (orchestrator: AcceptanceOrchestrator, candidateId: string, options: { cases: number; failed: number }) => {
+  const ids = Array.from({ length: options.cases }, (_, index) => `case-${String(index).padStart(2, "0")}`);
+  const { run } = orchestrator.repo.createRun({
+    candidateId, componentId: COMPONENT_ID, policyProfileId: "default-v1", policyProfileHash: "f".repeat(64),
+    createdBy: BOOTSTRAP_ADMIN_ID,
+    refresh: {
+      requested: { frame: { all: false, failed: false, caseIds: [] }, verdict: { all: false, failed: true, caseIds: [] } },
+      impact: { frame: { all: false, failed: false, caseIds: [] }, verdict: { all: false, failed: false, caseIds: [] } },
+      effective: { frame: { all: false, failed: false, caseIds: [] }, verdict: { all: false, failed: true, caseIds: [] } },
+    },
+    cases: ids.map((caseId, index) => ({
+      caseId, caseKey: caseId, propsHash: `${index}`.padStart(64, "0"),
+      caseFingerprint: `${index}`.padStart(64, "a"), casePolicyHash: "c".repeat(64),
+      frameFingerprint: `${index}`.padStart(64, "b"), comparisonFingerprint: `${index}`.padStart(64, "c"),
+      verdictPolicyHash: "d".repeat(64),
+    })),
+  });
+  ids.forEach((caseId, index) => {
+    const failed = index < options.failed;
+    orchestrator.repo.updateCase(run.run_id, caseId, {
+      status: "done",
+      verdict: failed ? "fail" : "pass",
+      severity: failed ? { rank: 2, class: "raw", score: 12.5 } : null,
+      gates: [
+        { gate: "contract", status: "pass" },
+        { gate: "render", status: "pass" },
+        {
+          gate: "visual", status: failed ? "fail" : "pass",
+          // Полный мешок метрик — ровно то, что раздувало ответ: сводка обязана взять из него два числа.
+          metrics: {
+            rawDiffPct: failed ? 2.69 : 0, aaDiffPct: failed ? 1.27 : 0, maxChannelDelta: 64,
+            regions: [{ x: 1, y: 2, width: 3, height: 4 }, { x: 5, y: 6, width: 7, height: 8 }],
+            totalRegions: 2, bestOffset: { dx: 0, dy: 0, residualPct: 2.6 },
+            thresholds: { maxRawDiffPct: 0.5 }, rawDiffPixels: 100, aaDiffPixels: 40, totalPixels: 4000,
+          },
+          ...(failed
+            ? {
+              detail: "Visual diff 2.69% exceeds the 0.5% budget (aa-tolerant 1.27%, max channel delta 64, 2 region(s))",
+              causes: [{ code: "surface-tint", confidence: 0.9, detail: "the whole surface is tinted" }],
+            }
+            : {}),
+        },
+      ],
+      reuseReceipt: {
+        reuse: { candidate: true, frame: true, readiness: true, geometry: true, visualMetrics: false, verdict: false },
+        fingerprints: { frame: `${index}`.padStart(64, "b"), comparison: `${index}`.padStart(64, "c"), verdictPolicy: "d".repeat(64), case: `${index}`.padStart(64, "a") },
+        reuseReason: "rediff:reference",
+      },
+      finishedAt: "2026-08-04T10:00:00.000Z",
+    });
+  });
+  orchestrator.repo.terminalizeRun(run.run_id, {
+    status: "fail",
+    gates: { contract: { pass: options.cases }, render: { pass: options.cases }, visual: { pass: options.cases - options.failed, fail: options.failed } },
+    progress: {
+      total: options.cases, completed: options.cases, reused: 0, frameReused: options.cases,
+      verdictRecomputed: 0, rediffed: options.cases, failed: options.failed, running: 0,
+      eta: { secondsRemaining: 0, basis: "measured" },
+      remediationGroups: [
+        {
+          key: "k".repeat(64), cause: { code: "surface-tint", confidence: 0.9, detail: "the whole surface is tinted" },
+          bboxSignature: null, sharedElementKey: "root", variantFamily: null,
+          cases: ids.slice(0, options.failed), caseCount: options.failed,
+          suggestion: "Compare the surface fill/background token of the component with the reference.",
+        },
+      ],
+    },
+  });
+  return run.run_id;
+};
+
+interface SummaryView {
+  view: string; runId: string; status: string; statusReason: string | null;
+  progress: Record<string, number>; gates: Record<string, string>;
+  refresh: { requested: string; impact: string; effective: string } | null;
+  failedCases: { caseId: string; gate: string; raw: number | null; aa: number | null; cause: string }[];
+  remediationGroups: Record<string, string>;
+  evidenceUrl: string;
+}
+
+test("view=summary: форма сводки failed-рана и бюджет объёма (25 случаев < 100 строк)", async () => {
+  const { handler, orchestrator } = await setup({ autoDrain: false });
+  const candidate = await jsonOf<CandidateBody>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
+  const runId = seedFailedRun(orchestrator!, candidate.candidateId, { cases: 25, failed: 8 });
+
+  const response = await handler(req(`/acceptance-runs/${runId}?view=summary`));
+  expect(response.status, await response.clone().text()).toBe(200);
+  const summary = await jsonOf<SummaryView>(response);
+
+  // Маркер контракта (C23): по нему клиент отличает сводку от полного рана старого сервера.
+  expect(summary.view).toBe("summary");
+  expect(summary).toMatchObject({ runId, status: "fail", statusReason: null, evidenceUrl: `/api/acceptance-runs/${runId}/evidence` });
+  // Счётчики уровней reuse (D9) — в сводке целиком: ради них она и заводилась.
+  expect(summary.progress).toMatchObject({ total: 25, completed: 25, reused: 0, frameReused: 25, verdictRecomputed: 0, rediffed: 25, failed: 8, running: 0 });
+  expect(summary.progress).not.toHaveProperty("eta");
+  expect(summary.gates).toEqual({ contract: "pass:25", render: "pass:25", visual: "pass:17 fail:8" });
+  expect(summary.refresh).toEqual({ requested: "verdict:failed", impact: "none", effective: "verdict:failed" });
+  expect(summary.failedCases).toHaveLength(8);
+  expect(summary.failedCases[0]).toEqual({
+    caseId: "case-00", gate: "visual", raw: 2.69, aa: 1.27,
+    cause: "surface-tint: the whole surface is tinted",
+  });
+  // Метрики целиком в сводку не едут — за ними идут точечно, в `/cases?case=<id>`.
+  expect(JSON.stringify(summary)).not.toContain("totalPixels");
+  expect(Object.values(summary.remediationGroups)).toEqual(["surface-tint ×8: case-00, case-01, case-02, case-03, case-04, case-05, case-06, case-07"]);
+
+  // Бюджет объёма (P1-9): полный вид того же рана — сотни строк, сводка — меньше сотни.
+  const lines = JSON.stringify(summary, null, 2).split("\n").length;
+  expect(lines).toBeLessThan(100);
+  const full = await jsonOf<unknown>(await handler(req(`/acceptance-runs/${runId}`)));
+  expect(JSON.stringify(full, null, 2).split("\n").length).toBeGreaterThan(lines * 4);
+}, 120_000);
+
+test("view: default остаётся полным ответом, неизвестное значение — 400", async () => {
+  const { handler, orchestrator } = await setup({ autoDrain: false });
+  const candidate = await jsonOf<CandidateBody>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
+  const runId = seedFailedRun(orchestrator!, candidate.candidateId, { cases: 3, failed: 1 });
+
+  // Регрессия формы полного вида: набор ключей и вложенность failedCases не менялись волной W8.
+  const full = await jsonOf<Record<string, unknown>>(await handler(req(`/acceptance-runs/${runId}`)));
+  expect(Object.keys(full).sort()).toEqual([
+    "candidateId", "caseSetId", "componentId", "createdAt", "eta", "evidenceManifestHash", "failedCases",
+    "finishedAt", "gates", "idempotencyKey", "impact", "policy", "progress", "refresh", "remediationGroups",
+    "runId", "startedAt", "status", "statusReason",
+  ]);
+  expect(full).not.toHaveProperty("view");
+  const failedCases = full.failedCases as { caseId: string; failedGates: { gate: string; metrics: Record<string, unknown> }[] }[];
+  expect(failedCases[0]!.failedGates[0]!.metrics.totalPixels).toBe(4000);
+  // `?view=full` — то же самое явно.
+  expect(await jsonOf<Record<string, unknown>>(await handler(req(`/acceptance-runs/${runId}?view=full`)))).toEqual(full);
+
+  const bad = await handler(req(`/acceptance-runs/${runId}?view=short`));
+  expect(bad.status).toBe(400);
+  expect(await jsonOf<{ error: { code: string } }>(bad)).toMatchObject({ error: { code: "invalid_request" } });
+}, 120_000);
+
+test("cases: ?case сужает ответ до одного случая, чужой id — 404, receipt едет в DTO", async () => {
+  const { handler, orchestrator } = await setup({ autoDrain: false });
+  const candidate = await jsonOf<CandidateBody>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
+  const runId = seedFailedRun(orchestrator!, candidate.candidateId, { cases: 5, failed: 2 });
+
+  const all = await jsonOf<{ cases: { caseId: string }[] }>(await handler(req(`/acceptance-runs/${runId}/cases`)));
+  expect(all.cases).toHaveLength(5);
+
+  const one = await handler(req(`/acceptance-runs/${runId}/cases?case=case-03`));
+  expect(one.status).toBe(200);
+  const body = await jsonOf<{ cases: { caseId: string; reuseReceipt: { reuse: Record<string, boolean>; fingerprints: Record<string, string> } | null }[] }>(one);
+  expect(body.cases.map((item) => item.caseId)).toEqual(["case-03"]);
+  // Квитанция уровней (P2-10): `reused` в прогрессе не отличает «ничего не считали» от
+  // «вердикт пересчитан», квитанция обязана отвечать уровень за уровнем.
+  expect(body.cases[0]!.reuseReceipt).toMatchObject({
+    reuse: { candidate: true, frame: true, readiness: true, geometry: true, visualMetrics: false, verdict: false },
+    fingerprints: { verdictPolicy: "d".repeat(64) },
+  });
+
+  const missing = await handler(req(`/acceptance-runs/${runId}/cases?case=nope`));
+  expect(missing.status).toBe(404);
+  expect(await jsonOf<{ error: { code: string } }>(missing)).toMatchObject({ error: { code: "not_found" } });
+}, 120_000);
+
+test("evidence-манифест несёт квитанцию reuse и эффективную вердиктную политику случая", async () => {
+  const { db, dir, handler, orchestrator } = await setup();
+  seedAsset(db);
+  const created = await jsonOf<CaseSetBody>(await handler(req(`/components/${COMPONENT_ID}/case-sets`, "PUT", { manifest: caseSetManifest() })));
+  const candidate = await jsonOf<CandidateBody>(await handler(req(`/components/${COMPONENT_ID}/candidates`, "POST")));
+  const run = await jsonOf<RunBody>(await handler(req("/acceptance-runs", "POST", { candidateId: candidate.candidateId, caseSetId: created.caseSetId })));
+  await orchestrator!.settled();
+
+  const manifest = await readRunManifest(dir, run.runId);
+  expect(manifest).not.toBeNull();
+  const alpha = manifest!.cases.find((item) => item.caseId === "alpha")!;
+  // Критерий P0-3: эффективная политика случая — снимком и хэшем, а не одним хэшем.
+  expect(alpha.verdictPolicy!.hash).toMatch(/^[0-9a-f]{64}$/);
+  // Квитанция — часть доказательства, а не только API-ответа; её `verdictPolicy` адресует ровно
+  // тот снимок, что лежит рядом в манифесте.
+  expect(alpha.reuseReceipt).toMatchObject({
+    reuse: { candidate: false, frame: false, verdict: false },
+    fingerprints: { verdictPolicy: alpha.verdictPolicy!.hash },
+  });
+  expect((alpha.reuseReceipt!.fingerprints as { case: string }).case).toMatch(/^[0-9a-f]{64}$/);
+  expect(alpha.verdictPolicy!.snapshot).toMatchObject({
+    policyProfileId: "default-v1", requireVisual: false,
+    expectedGeometry: { width: 140, height: 96 },
+  });
+  // Снимок и хэш согласованы по построению — сверка тем же алгоритмом, что и в раннере.
+  expect(verdictPolicyHashOf(alpha.verdictPolicy!.snapshot)).toBe(alpha.verdictPolicy!.hash);
+  // Случай без per-case габаритов несёт свой снимок, а не снимок соседа.
+  const beta = manifest!.cases.find((item) => item.caseId === "beta")!;
+  expect(beta.verdictPolicy!.snapshot.expectedGeometry).toBeNull();
+  expect(beta.verdictPolicy!.hash).not.toBe(alpha.verdictPolicy!.hash);
+}, 180_000);

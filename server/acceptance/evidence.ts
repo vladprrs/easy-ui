@@ -24,7 +24,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/p
 import { resolve } from "node:path";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import { ApiError } from "../http";
-import { isRunId } from "./ids";
+import { isRunId, type VerdictPolicySnapshot } from "./ids";
 import { evidenceMaxBytes as DEFAULT_EVIDENCE_MAX_BYTES, acceptanceCaseTtlHours } from "./policies";
 import type { AcceptanceRepo } from "./repo";
 
@@ -127,6 +127,20 @@ export interface EvidenceCaseEntry {
    */
   reuseReason?: string;
   aliasOfCaseId: string | null;
+  /**
+   * Квитанция reuse случая (W8, P2-10): `{reuse:{candidate,frame,readiness,geometry,visualMetrics,
+   * verdict}, fingerprints:{frame,comparison,verdictPolicy,case}}`. В манифесте она обязательна не
+   * меньше, чем в API: доказательство приёмки без ответа «что здесь вообще считали заново»
+   * неотличимо от доказательства, собранного целиком из кэша.
+   */
+  reuseReceipt?: Record<string, unknown>;
+  /**
+   * **Эффективная вердиктная политика случая** (критерий P0-3): снимок по значениям + его хэш.
+   * Хэш один ничего не доказывает читателю evidence — по нему нельзя увидеть, каким порогом мерили;
+   * снимок один не проверяем — по нему нельзя сверить строку кэша, из которой вердикт переносился.
+   * Поэтому пара, и ровно та же пара, что персистит `acceptance_case_results.verdict_policy_json`.
+   */
+  verdictPolicy?: { hash: string; snapshot: VerdictPolicySnapshot };
   artifacts: EvidenceEntry[];
 }
 export interface RunManifest {

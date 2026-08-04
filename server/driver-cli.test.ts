@@ -1,7 +1,7 @@
 import { createTestHandler } from "./test-auth";
 import { createHandler } from "./main";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createEasyUiClient } from "../scripts/easyui-auth.mjs";
 import type { Database } from "bun:sqlite";
@@ -1659,10 +1659,11 @@ describe("author driver promote verb", () => {
  * Поэтому сервер — скриптованный stub, а не полный handler: он позволяет подсунуть кандидата
  * «не той сборки» и ран чужого кандидата, чего живой оркестратор по построению не создаст.
  */
-interface StubCall { method: string; path: string; body: Record<string, unknown> | null }
+/** `search` (W8): query — часть контракта клиента (`?view=summary`, `?case=<id>`), а не шум. */
+interface StubCall { method: string; path: string; search: string; body: Record<string, unknown> | null }
 type StubReply = { status?: number; json: unknown };
 
-async function stubApi(routes: Record<string, (body: Record<string, unknown> | null) => StubReply>) {
+async function stubApi(routes: Record<string, (body: Record<string, unknown> | null, url: URL) => StubReply>) {
   await testDirectory();
   const calls: StubCall[] = [];
   const server = Bun.serve({
@@ -1677,10 +1678,10 @@ async function stubApi(routes: Record<string, (body: Record<string, unknown> | n
       if (url.pathname === "/api/auth/login") {
         return new Response("{}", { headers: { ...headers, "set-cookie": "easyui_session=stub-session-token; Path=/" } });
       }
-      calls.push({ method: request.method, path: url.pathname, body });
+      calls.push({ method: request.method, path: url.pathname, search: url.search, body });
       const route = routes[`${request.method} ${url.pathname}`];
       if (!route) return new Response(JSON.stringify({ error: { code: "not_found", message: `stub has no route for ${request.method} ${url.pathname}` } }), { status: 404, headers });
-      const reply = route(body);
+      const reply = route(body, url);
       return new Response(JSON.stringify(reply.json), { status: reply.status ?? 200, headers });
     },
   });
@@ -1971,12 +1972,14 @@ describe("author driver accept refresh algebra (W2a)", () => {
     const { api, calls } = await stubApi(acceptRoutes(undefined));
     const escalated = await run(api, ["accept", "refreshed", "--refresh", "failed", "--recapture"]);
     expect(escalated.exitCode).toBe(0);
-    expect(calls.find((call) => call.path === "/api/acceptance-runs")?.body).toMatchObject({ refresh: "failed", refreshMode: "frame" });
+    // Поле тела — `recapture` (контракт `POST /api/acceptance-runs`): драйвер до W8 слал
+    // несуществующее `refreshMode`, и сервер отвечал `400 Unknown field` — `--recapture` не работал.
+    expect(calls.find((call) => call.path === "/api/acceptance-runs")?.body).toMatchObject({ refresh: "failed", recapture: true });
 
     const plain = await run(api, ["accept", "refreshed", "--refresh", "failed"]);
     expect(plain.exitCode).toBe(0);
     const bodies = calls.filter((call) => call.path === "/api/acceptance-runs");
-    expect(Object.keys(bodies[1]?.body ?? {})).not.toContain("refreshMode");
+    expect(Object.keys(bodies[1]?.body ?? {})).not.toContain("recapture");
   }, 30_000);
 
   test("the run's refresh triple is printed and stays in --json; an older server just omits it", async () => {
@@ -2000,6 +2003,164 @@ describe("author driver accept refresh algebra (W2a)", () => {
       .toMatchObject({ cmd: "accept", flags: { refresh: "failed", recapture: true } });
     expect(() => parseArgs(["accept", "pay-card", "--refresh", "none", "--recapture"])).toThrow(/--recapture contradicts --refresh none/);
   });
+});
+
+/**
+ * План 2026-08-04 §W8 (P1-9, P2-10): компактный отчёт приёмки.
+ *
+ * Три инварианта клиента и все три — предмет тестов: `--summary` строго opt-in (смысл `--json`
+ * не меняется, C11/C17/C24); серверная сводка берётся только при `features.acceptanceSummaryView`
+ * **и** маркере `view` в теле (C23), иначе та же форма считается локально; drill-down `--case`
+ * идёт в `/cases?case=<id>` и печатает квитанцию reuse.
+ */
+describe("author driver acceptance summary (W8)", () => {
+  const FULL_RUN = {
+    runId: RUN, candidateId: CANDIDATE, componentId: "summed", status: "fail", statusReason: null,
+    policy: { id: "default-v1", hash: "h" }, caseSetId: null, idempotencyKey: null,
+    progress: { total: 4, completed: 4, reused: 0, frameReused: 4, verdictRecomputed: 0, rediffed: 4, failed: 1, running: 0, eta: { secondsRemaining: 0, basis: "measured" } },
+    eta: { secondsRemaining: 0, basis: "measured" },
+    gates: { contract: { pass: 4 }, visual: { pass: 3, fail: 1 } },
+    impact: null,
+    refresh: {
+      requested: { frame: { all: false, failed: false, caseIds: [] }, verdict: { all: false, failed: true, caseIds: [] } },
+      impact: { frame: { all: false, failed: false, caseIds: [] }, verdict: { all: false, failed: false, caseIds: [] } },
+      effective: { frame: { all: false, failed: false, caseIds: [] }, verdict: { all: false, failed: true, caseIds: [] } },
+    },
+    remediationGroups: [{
+      key: "k".repeat(64), cause: { code: "surface-tint", confidence: 0.9, detail: "surface tinted" },
+      bboxSignature: null, sharedElementKey: "root", variantFamily: null,
+      cases: ["alpha"], caseCount: 1, suggestion: "compare the surface token",
+    }],
+    evidenceManifestHash: null, createdAt: "2026-08-04T10:00:00.000Z", startedAt: null, finishedAt: "2026-08-04T10:05:00.000Z",
+    failedCases: [{
+      caseId: "alpha", caseKey: "alpha", status: "done", verdict: "fail",
+      severity: { rank: 2, class: "raw", score: 12.5 },
+      causes: [{ code: "surface-tint", confidence: 0.9, detail: "surface tinted" }],
+      failedGates: [{
+        gate: "visual", status: "fail", detail: "Visual diff 2.69% exceeds the 0.5% budget",
+        metrics: { rawDiffPct: 2.69, aaDiffPct: 1.27, totalPixels: 4000, regions: [{ x: 1, y: 2, width: 3, height: 4 }] },
+      }],
+    }],
+  };
+  const SERVER_SUMMARY = {
+    view: "summary", runId: RUN, status: "fail", statusReason: null,
+    progress: { total: 4, completed: 4, reused: 0, frameReused: 4, verdictRecomputed: 0, rediffed: 4, failed: 1, running: 0 },
+    gates: { contract: "pass:4", visual: "pass:3 fail:1" },
+    refresh: { requested: "verdict:failed", impact: "none", effective: "verdict:failed" },
+    failedCases: [{ caseId: "alpha", gate: "visual", raw: 2.69, aa: 1.27, cause: "surface-tint: surface tinted" }],
+    remediationGroups: { kkkkkkkkkkkk: "surface-tint ×1: alpha" },
+    evidenceUrl: `/api/acceptance-runs/${RUN}/evidence`,
+  };
+  const CASE_ROW = {
+    caseId: "alpha", caseKey: "alpha", status: "done", verdict: "fail",
+    severity: { rank: 2, class: "raw", score: 12.5 }, propsHash: "p", caseFingerprint: "f",
+    aliasOfCaseId: null, reuseReason: "rediff:reference", reused: false,
+    reuseReceipt: {
+      reuse: { candidate: true, frame: true, readiness: true, geometry: true, visualMetrics: false, verdict: false },
+      fingerprints: { frame: "fr", comparison: "cmp", verdictPolicy: "vp", case: "f" },
+      reuseReason: "rediff:reference",
+    },
+    referenceAssetId: null, startedAt: null, finishedAt: null,
+    gates: [{ gate: "visual", status: "fail", detail: "Visual diff 2.69% exceeds the 0.5% budget" }],
+    causes: [{ code: "surface-tint", confidence: 0.9, detail: "surface tinted" }],
+    artifacts: [{ name: "paint.png", sha256: "a".repeat(64), bytes: 10 }],
+  };
+
+  const summaryRoutes = (options: { summaryView?: boolean; honourView?: boolean } = {}) => ({
+    "GET /api/capabilities": () => ({ json: { features: { acceptanceMatrix: true, ...(options.summaryView === false ? {} : { acceptanceSummaryView: true }) } } }),
+    "GET /api/components/summed": () => ({ json: { id: "summed", headRev: 1, designSystem: "yandex-pay" } }),
+    "POST /api/components/summed/candidates": () => ({ json: { candidateId: CANDIDATE, rev: 1, warnings: [] } }),
+    "POST /api/acceptance-runs": () => ({ status: 202, json: { runId: RUN, cases: 4 } }),
+    [`GET /api/acceptance-runs/${RUN}`]: (_body: Record<string, unknown> | null, url: URL) => ({
+      // Сервер прошлых волн игнорирует незнакомый query — это и моделирует `honourView: false`.
+      json: url.searchParams.get("view") === "summary" && options.honourView !== false ? SERVER_SUMMARY : FULL_RUN,
+    }),
+    [`GET /api/acceptance-runs/${RUN}/cases`]: (_body: Record<string, unknown> | null, url: URL) => ({
+      json: { runId: RUN, cases: url.searchParams.get("case") === null ? [CASE_ROW] : [CASE_ROW].filter((row) => row.caseId === url.searchParams.get("case")) },
+    }),
+  } as Record<string, (body: Record<string, unknown> | null, url: URL) => StubReply>);
+
+  test("--summary uses ?view=summary when the capability is on and keeps the full run for the link/receipt store", async () => {
+    const { api, calls } = await stubApi(summaryRoutes());
+    const cacheDir = resolve(await testDirectory(), "summary-cache");
+    const result = await run(api, ["accept", "summed", "--summary", "--cache-dir", cacheDir]);
+    expect(result.exitCode).toBe(2);
+    // Опрос идёт полным видом (он же источник link/receipt), сводка — отдельным запросом.
+    const polls = calls.filter((call) => call.path === `/api/acceptance-runs/${RUN}`);
+    expect(polls.some((call) => call.search === "")).toBe(true);
+    expect(polls.some((call) => call.search === "?view=summary")).toBe(true);
+    expect(result.stdout).toContain("cases: 4/4 reused=0 frameReused=4 recomputed=0 rediffed=4 failed=1");
+    expect(result.stdout).toContain("alpha visual raw=2.69% aa=1.27%: surface-tint: surface tinted");
+    expect(result.stdout).toContain("remediation kkkkkkkkkkkk: surface-tint ×1: alpha");
+    expect(result.stdout).toContain(`drill down: driver.mjs accept-status ${RUN} --case <caseId>`);
+    // Полный мешок метрик в сводку не попадает — ради этого волна и делалась.
+    expect(result.stdout).not.toContain("totalPixels");
+    // Навигация кэша построена по ПОЛНОМУ рану: у случая есть вердикт, а не только id.
+    const store = JSON.parse(await readFile(resolve(cacheDir, "links.json"), "utf8")) as { links: { runId: string; cases: unknown[] }[] };
+    expect(store.links.at(-1)).toMatchObject({ runId: RUN, cases: [{ caseId: "alpha", verdict: "fail", caseFingerprint: null }] });
+  }, 30_000);
+
+  test("without the capability the same shape is summarised locally; the marker separates the two sources", async () => {
+    const { api, calls } = await stubApi(summaryRoutes({ summaryView: false }));
+    const result = await run(api, ["accept-status", RUN, "--summary", "--json"]);
+    expect(result.exitCode).toBe(2);
+    expect(calls.some((call) => call.search === "?view=summary")).toBe(false);
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      command: "accept-status", view: "summary", summarySource: "client", runId: RUN, status: "fail",
+      gates: { contract: "pass:4", visual: "pass:3 fail:1" },
+      refresh: { requested: "verdict:failed", impact: "none", effective: "verdict:failed" },
+      remediationGroups: { kkkkkkkkkkkk: "surface-tint ×1: alpha" },
+      evidenceUrl: `/api/acceptance-runs/${RUN}/evidence`,
+    });
+    expect(payload.failedCases).toEqual([{ caseId: "alpha", gate: "visual", raw: 2.69, aa: 1.27, cause: "surface-tint: surface tinted" }]);
+    expect(JSON.stringify(payload)).not.toContain("totalPixels");
+
+    // Сервер объявил фичу, но ответил полным раном (прокси/старый билд за флагом) — клиент
+    // замечает отсутствие маркера и сводит локально, а не печатает 1800 строк.
+    const lying = await stubApi(summaryRoutes({ honourView: false }));
+    const fallback = await run(lying.api, ["accept-status", RUN, "--summary", "--json"]);
+    expect(fallback.exitCode).toBe(2);
+    expect(JSON.parse(fallback.stdout)).toMatchObject({ view: "summary", summarySource: "client" });
+    expect(fallback.stderr).toContain("summary marker");
+  }, 30_000);
+
+  test("--json without --summary is unchanged: the full run, no summary fields", async () => {
+    const { api, calls } = await stubApi(summaryRoutes());
+    const result = await run(api, ["accept-status", RUN, "--json"]);
+    expect(result.exitCode).toBe(2);
+    expect(calls.some((call) => call.search === "?view=summary")).toBe(false);
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(payload.view).toBeUndefined();
+    expect(payload.summarySource).toBeUndefined();
+    // Полный ран уезжает в JSON как был: метрики гейтов на месте, группы — массивом объектов.
+    expect(payload.failedCases).toEqual(FULL_RUN.failedCases);
+    expect(payload.remediationGroups).toEqual(FULL_RUN.remediationGroups);
+    expect(payload.progress).toEqual(FULL_RUN.progress);
+    expect(Object.keys(payload).sort()).toEqual([
+      "cache", "candidateId", "caseSetId", "command", "componentId", "createdAt", "eta", "evidenceManifestHash",
+      "exitCode", "failedCases", "finishedAt", "gates", "idempotencyKey", "impact", "policy",
+      "progress", "refresh", "remediationGroups", "runId", "startedAt", "status", "statusReason",
+    ]);
+  }, 30_000);
+
+  test("--case drills into one case: its gates, causes and the per-level reuse receipt", async () => {
+    const { api, calls } = await stubApi(summaryRoutes());
+    const result = await run(api, ["accept-status", RUN, "--case", "alpha"]);
+    // Провалившийся случай — продуктовый отказ, как и провалившийся ран.
+    expect(result.exitCode).toBe(2);
+    expect(calls.find((call) => call.path === `/api/acceptance-runs/${RUN}/cases`)?.search).toBe("?case=alpha");
+    expect(result.stdout).toContain(`case alpha of run ${RUN}: fail`);
+    expect(result.stdout).toContain("gates: visual=fail");
+    expect(result.stdout).toContain("cause surface-tint (0.9): surface tinted");
+    // Квитанция уровней (P2-10): «кадр переиспользован, вердикт — нет» читается по уровням.
+    expect(result.stdout).toContain("reuse: candidate=hit frame=hit readiness=hit geometry=hit visualMetrics=miss verdict=miss");
+    expect(result.stdout).toContain("artifacts: paint.png");
+
+    const missing = await run(api, ["accept-status", RUN, "--case", "nope"]);
+    expect(missing.exitCode).toBe(2);
+    expect(missing.stderr).toContain("has no case nope");
+  }, 30_000);
 });
 
 describe("author driver audit --versions (KPI, RFC §9)", () => {

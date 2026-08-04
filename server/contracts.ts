@@ -1691,6 +1691,33 @@ const acceptanceRunViewSchema = z.looseObject({
   })),
 });
 
+/**
+ * Компактная сводка рана (`?view=summary`, план 2026-08-04 §W8, фидбэк P1-9).
+ *
+ * Форма намеренно **не** является подмножеством `acceptanceRunViewSchema`: `gates` и
+ * `remediationGroups` схлопнуты в карты «ключ → строка», а `failedCases` несут два числа вместо
+ * полного мешка метрик. Это и есть предмет P1-9: failed-ран на 25 случаев в полном виде — около
+ * 1800 строк, в сводке — меньше 100.
+ */
+const acceptanceRunSummarySchema = z.looseObject({
+  /** Маркер контракта (C23): его отсутствие означает сервер, который проигнорировал `view`. */
+  view: z.literal("summary"),
+  runId: z.string(), status: acceptanceRunStatusSchema, statusReason: z.string().nullable(),
+  progress: acceptanceProgressSchema,
+  /** `{gate: "pass:17 fail:8"}` — по строке на гейт. */
+  gates: z.record(z.string(), z.string()),
+  /** `{requested, impact, effective}` строками (`frame:all`, `verdict:failed`, `none`); `null` — ран до v29. */
+  refresh: z.looseObject({ requested: z.string(), impact: z.string(), effective: z.string() }).nullable(),
+  failedCases: z.array(z.looseObject({
+    caseId: z.string(), gate: z.string(),
+    raw: z.number().nullable(), aa: z.number().nullable(),
+    cause: z.string(),
+  })),
+  /** `{<12 символов ключа группы>: "<cause> ×N: caseId, caseId…"}`. */
+  remediationGroups: z.record(z.string(), z.string()),
+  evidenceUrl: z.string(),
+});
+
 /** Общие отказы владения: чужой компонент — 403, несуществующий кандидат/ран — 404. */
 const acceptanceAuthErrors = [
   { status: 403, code: "forbidden", description: "not the component owner, or a share/capture principal" },
@@ -1793,20 +1820,34 @@ export const createAcceptanceRunContract = registerContract({
 
 export const getAcceptanceRunContract = registerContract({
   method: "GET", path: "/api/acceptance-runs/{runId}",
-  summary: "Poll an acceptance run: status, per-gate roll-up, progress {total, completed, reused, failed, running}, ETA and failedCases sorted by severity. Terminal runs also carry `remediationGroups`: visual failures classified into causes (surface-tint, edge-radius-stroke, geometry-shift, text-raster-residual, missing-late-asset, alpha-compositing, effect-overflow, descendant-outside-mask, unclassified) and grouped by {cause, quantized bbox signature, element key, shared variant family} so one broken shared asset across 20 states reads as one group, sorted by case count. Classification never affects pass/fail. Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
-  responseSchema: acceptanceRunViewSchema,
+  summary: "Poll an acceptance run: status, per-gate roll-up, progress {total, completed, reused, frameReused, verdictRecomputed, rediffed, failed, running}, ETA and failedCases sorted by severity. Terminal runs also carry `remediationGroups`: visual failures classified into causes (surface-tint, edge-radius-stroke, geometry-shift, text-raster-residual, missing-late-asset, alpha-compositing, effect-overflow, descendant-outside-mask, unclassified) and grouped by {cause, quantized bbox signature, element key, shared variant family} so one broken shared asset across 20 states reads as one group, sorted by case count. Classification never affects pass/fail. `?view=summary` (wave W8, `capabilities.features.acceptanceSummaryView`) answers with a COMPACT report instead: `{view:\"summary\", runId, status, statusReason, progress, gates {gate: \"pass:17 fail:8\"}, refresh {requested, impact, effective} as strings, failedCases [{caseId, gate, raw, aa, cause}], remediationGroups {key: \"<cause> ×N: caseIds\"}, evidenceUrl}` — a failed 25-case run prints under 100 lines instead of ~1800. The `view` marker in the BODY is the compatibility test: servers older than W8 ignore the query and return the full view, so a client must check both the capability flag and the marker. `view=full` is the default and is unchanged; any other value is 400 invalid_request. Drill down into a single case with GET /api/acceptance-runs/{runId}/cases?case=<id>. Owner or admin only. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  query: z.object({ view: z.enum(["full", "summary"]).optional() }),
+  responseSchema: z.union([acceptanceRunViewSchema, acceptanceRunSummarySchema]),
   errors: [...acceptanceAuthErrors],
 });
 
 export const getAcceptanceRunCasesContract = registerContract({
   method: "GET", path: "/api/acceptance-runs/{runId}/cases",
-  summary: "Per-case verdicts of a run with gate results, severity, classified visual `causes` (W5b diagnostics; empty for cases whose visual outcome is not fail/indeterminate), reuse reason and the evidence artifact names/digests (never bytes: artifact content is served only inside the runId-scoped evidence archive). Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  summary: "Per-case verdicts of a run with gate results, severity, classified visual `causes` (W5b diagnostics; empty for cases whose visual outcome is not fail/indeterminate), reuse reason, the per-case REUSE RECEIPT and the evidence artifact names/digests (never bytes: artifact content is served only inside the runId-scoped evidence archive). `reuseReceipt` (wave W8, feedback P2-10) reports reuse LEVEL BY LEVEL — `{reuse:{candidate, frame, readiness, geometry, visualMetrics, verdict}, fingerprints:{frame, comparison, verdictPolicy, case}, reuseReason?}` — because a single `reused` counter cannot tell 'nothing was recomputed' from 'the verdict was recomputed under a new threshold over a reused frame'; it is null for cases recorded before schema v29. `?case=<id>` narrows the answer to one case (the drill-down after `?view=summary` on the run); an id outside this run's case set is 404, never an empty list. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
+  query: z.object({ case: z.string().optional() }),
   responseSchema: z.looseObject({
     runId: z.string(),
     cases: z.array(z.looseObject({
       caseId: z.string(), caseKey: z.string(), status: z.string(), verdict: z.string().nullable(),
       severity: acceptanceSeveritySchema, propsHash: z.string(), caseFingerprint: z.string(),
       aliasOfCaseId: z.string().nullable(), reuseReason: z.string().nullable(), reused: z.boolean(),
+      /** Квитанция reuse по уровням (W8, P2-10); `null` — строка случая старше миграции v29. */
+      reuseReceipt: z.looseObject({
+        reuse: z.looseObject({
+          candidate: z.boolean(), frame: z.boolean(), readiness: z.boolean(),
+          geometry: z.boolean(), visualMetrics: z.boolean(), verdict: z.boolean(),
+        }),
+        fingerprints: z.looseObject({
+          frame: z.string().nullable(), comparison: z.string().nullable(),
+          verdictPolicy: z.string().nullable(), case: z.string(),
+        }),
+        reuseReason: z.string().optional(),
+      }).nullable(),
       referenceAssetId: z.string().nullable(), startedAt: isoDate.nullable(), finishedAt: isoDate.nullable(),
       gates: z.array(acceptanceGateResultSchema), causes: z.array(acceptanceCauseSchema),
       artifacts: z.array(z.looseObject({ name: z.string(), sha256: z.string(), bytes: z.number() })),
@@ -2831,6 +2872,13 @@ export const capabilitiesResponseSchema = z.object({
     caseSetValidate: z.boolean(),
     /** `promote` принимает `acceptanceRunIds[]` — набор ранов шардированной семьи (план 2026-08-04 §W7, C23). */
     acceptanceMultiRunPromote: z.boolean(),
+    /**
+     * `GET /api/acceptance-runs/{runId}?view=summary` — компактная сводка рана (план 2026-08-04
+     * §W8, C23). Проверять флаг обязан клиент **до** запроса: сервер прошлых волн молча
+     * игнорирует незнакомый query и отдаёт полный ран, поэтому вторая проверка — маркер
+     * `view:"summary"` в теле ответа.
+     */
+    acceptanceSummaryView: z.boolean(),
   }),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`

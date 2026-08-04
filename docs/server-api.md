@@ -460,8 +460,8 @@ Meta-ответы прототипов и компонентов additively не
 | `GET` | `/component-candidates/:candidateId` | `200` кандидат |
 | `POST` | `/component-candidates/:candidateId/reject` | `200` кандидат с `rejected: true` |
 | `POST` | `/acceptance-runs` | `202` `{runId,status,cases,progress,cached}` |
-| `GET` | `/acceptance-runs/:runId` | `200` статус + gates + progress + eta + `failedCases` |
-| `GET` | `/acceptance-runs/:runId/cases` | `200` per-case вердикты и имена артефактов |
+| `GET` | `/acceptance-runs/:runId` | `200` статус + gates + progress + eta + `failedCases`; `?view=summary` — компактная сводка |
+| `GET` | `/acceptance-runs/:runId/cases` | `200` per-case вердикты, квитанции reuse и имена артефактов; `?case=<id>` — один случай |
 | `GET` | `/acceptance-runs/:runId/evidence` | `200` `application/zip` |
 | `POST` | `/acceptance-runs/:runId/cancel` | `200` ран в статусе `cancelled` |
 | `POST` | `/components/:id/impact` | `200` отчёт импакта (dry-run, ничего не снимает) |
@@ -487,7 +487,33 @@ CLI: `driver.mjs reject <candidateId> --reason <text>`.
 
 **Исполнение.** Ран живёт вне screenshot-помпы: собственный цикл ставит capture-джобы по одной, оставляя интерактиву слоты очереди, ретраит только инфраструктурные исходы джобы и терминализуется watchdog'ом при превышении дедлайна профиля. Пережившие рестарт `queued|running`-раны переводятся в `error` стартовой уборкой — потеря дешёвая, потому что повтор переиспользует результаты случаев по `case_fingerprint` (в `progress.reused`). Гейты: `contract`, `defaults`, `render`, `determinism` (повтор на выборке, побайтово), `audit`, [`geometry` 2.0](#geometry-contract-20--probe-paint-волна-w3-план-2026-08-03) и [`readiness`](#deterministic-capture-readiness-волна-w4-план-2026-08-03) — обязательные; [`visual`](#минимальный-визуальный-гейт-приёмки-волна-w5a-план-2026-08-03-2-a5) — advisory в `default-v1` и `required` в `pixel-strict-v1` либо при `requireVisual` case-set-манифеста; `regression`/`interactions` — `not-implemented` и в свёртке не участвуют. Свёртка: `fail` — любой случай `fail` **или** `indeterminate` по обязательному гейту; `error` — инфраструктурный отказ и нет ни одного `fail`; `cancelled` — по cancel; иначе `pass`. `reused`/`skipped`/алиасы не маскируют `fail`.
 
-**`GET /acceptance-runs/:runId`** отдаёт `status`, `statusReason` (названная причина терминального статуса, сегодня — `refresh_scope_empty`; иначе `null`), `policy {id,hash}`, `progress {total, completed, reused, frameReused, verdictRecomputed, rediffed, failed, running, eta {secondsRemaining, basis}}` (смысл счётчиков reuse — [ниже](#трёхслойный-отпечаток-случая-каскад-reuse-и-алгебра-refresh-волна-w1-план-2026-08-04)), `refresh {requested, impact, effective}`, `gates` (сводка «гейт → статус → сколько случаев»), `evidenceManifestHash` и `failedCases`, отсортированные по severity (`{rank, class, score}`) с перечнем провалившихся гейтов и их `detail`. **`/cases`** добавляет `propsHash`, `caseFingerprint`, `aliasOfCaseId`, `reuseReason`, качество капчура и `artifacts: [{name, sha256, bytes}]` — имена и адреса, но не содержимое.
+**`GET /acceptance-runs/:runId`** отдаёт `status`, `statusReason` (названная причина терминального статуса, сегодня — `refresh_scope_empty`; иначе `null`), `policy {id,hash}`, `progress {total, completed, reused, frameReused, verdictRecomputed, rediffed, failed, running, eta {secondsRemaining, basis}}` (смысл счётчиков reuse — [ниже](#трёхслойный-отпечаток-случая-каскад-reuse-и-алгебра-refresh-волна-w1-план-2026-08-04)), `refresh {requested, impact, effective}`, `gates` (сводка «гейт → статус → сколько случаев»), `evidenceManifestHash` и `failedCases`, отсортированные по severity (`{rank, class, score}`) с перечнем провалившихся гейтов и их `detail`. **`/cases`** добавляет `propsHash`, `caseFingerprint`, `aliasOfCaseId`, `reuseReason`, качество капчура и `artifacts: [{name, sha256, bytes}]` — имена и адреса, но не содержимое, — плюс [квитанцию reuse](#компактная-сводка-рана-и-квитанция-reuse-волна-w8-план-2026-08-04) `reuseReceipt`. `?case=<caseId>` сужает ответ до одного случая; id вне набора рана — `404 not_found`, а не пустой список.
+
+##### Компактная сводка рана и квитанция reuse (волна W8, план 2026-08-04)
+
+**`GET /acceptance-runs/:runId?view=summary`** отдаёт тот же ран **компактно**: failed-ран на 25 случаев в полном виде — около 1800 строк (в каждом провале повторяются `metrics`/`regions`), в сводке — меньше 100. Форма:
+
+```json
+{
+  "view": "summary",
+  "runId": "acc_…", "status": "fail", "statusReason": null,
+  "progress": {"total":25,"completed":25,"reused":0,"frameReused":25,"verdictRecomputed":0,"rediffed":25,"failed":8,"running":0},
+  "gates": {"contract":"pass:25","visual":"pass:17 fail:8"},
+  "refresh": {"requested":"verdict:failed","impact":"none","effective":"verdict:failed"},
+  "failedCases": [{"caseId":"…","gate":"visual","raw":2.69,"aa":1.27,"cause":"surface-tint: …"}],
+  "remediationGroups": {"<12 символов ключа>":"surface-tint ×8: caseId, caseId, …"},
+  "evidenceUrl": "/api/acceptance-runs/acc_…/evidence"
+}
+```
+
+- **`view=full` — дефолт и он не менялся**: вложенные `gates`, `remediationGroups`-массив объектов и полные `failedGates[].metrics` остаются там. Неизвестное значение `view` — `400 invalid_request`, а не тихий полный ответ.
+- **Маркер `view:"summary"` в теле обязателен для клиента.** Гейт возможности — `capabilities.features.acceptanceSummaryView`, но одного флага мало: сервер до этой волны молча игнорирует незнакомый query и отвечает полным раном с кодом 200. Клиент проверяет **и** флаг, **и** маркер; при отсутствии маркера — сводит полный ран локально в ту же форму (`driver.mjs accept-status --summary` печатает `summarySource: "client"`).
+- **Сводка не заменяет источник записи.** Ссылки, квитанции и любые производные (`cache.link`/`cache.receipt` харнеса) строятся из полного рана: сводка — вид для чтения, а не свидетельство.
+- **Drill-down** — `GET /acceptance-runs/:runId/cases?case=<caseId>` (CLI `accept-status <runId> --case <caseId>`): полные гейты, причины, артефакты и квитанция ровно одного случая.
+
+**Квитанция reuse (`reuseReceipt`)** отвечает на вопрос «что именно переиспользовано» **по уровням**, а не одним счётчиком: `{reuse: {candidate, frame, readiness, geometry, visualMetrics, verdict}, fingerprints: {frame, comparison, verdictPolicy, case}, reuseReason?}`. Она есть у каждого случая в `/cases` (`null` — строка старше миграции v29) и в манифесте evidence. Именно она различает «ничего не считали заново» и «вердикт пересчитан по новому порогу над переиспользованным кадром» — то, чего `progress.reused` по построению не различает.
+
+Манифест evidence с этой волны несёт по случаю ещё и **эффективную вердиктную политику** — `verdictPolicy {hash, snapshot}`. Пара, а не один хэш: снимок отвечает читателю, каким порогом мерили, хэш проверяет, что снимок — тот самый (тот же валидатор, что у `acceptance_case_results.verdict_policy_json`).
 
 **`GET /acceptance-runs/:runId/evidence`** — ZIP: `manifest.json`, `SHA256SUMS` (формат `sha256sum`, строки `"<sha256>  <caseId>/<name>"`) и сами артефакты по путям `<caseId>/<name>` (`render.png`, `geometry.json`, `determinism.png`, …). Манифест пишется при терминализации рана; до неё — `409 evidence_not_ready`. Сырьё тяжелее `limits.evidenceMaxBytes` — `413 evidence_too_large` (проверяется по размерам из манифеста, до чтения байтов). Артефакт, уже вычищенный GC evidence, остаётся строкой в `SHA256SUMS`, но отсутствует в архиве: `sha256sum -c` покажет ровно то, чего не хватает.
 
@@ -1795,6 +1821,7 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 | `acceptanceCandidates` | доступны `POST /components/:id/candidates` и `GET /component-candidates/:id` | тот же флаг |
 | `acceptanceRuns` | доступны `/acceptance-runs*` (постановка, poll, cases, evidence, cancel) | тот же флаг |
 | `acceptanceMultiRunPromote` | promote принимает `acceptanceRunIds[]` — [набор ранов шардированной семьи](#multi-run-promote-шардированная-семья-волна-w7-план-2026-08-04) | тот же флаг; сборка до W7 отвечает на массив `400 invalid_request` |
+| `acceptanceSummaryView` | `GET /acceptance-runs/:runId?view=summary` — [компактная сводка рана](#компактная-сводка-рана-и-квитанция-reuse-волна-w8-план-2026-08-04) | тот же флаг; сборка до W8 **молча** игнорирует query и отдаёт полный ран, поэтому клиент дополнительно проверяет маркер `view` в теле |
 
 `EASYUI_SURFACES` — единственный switch с **обратной** полярностью: пустое значение означает «запись выключена» (`surfacesWrite: false`), а не «разрешено». Он читается на запросе, поэтому discovery и поведение ручки совпадают по определению. Остальные kill-switch'и (`EASYUI_VALIDATE_DISABLED`, `EASYUI_ACCEPTANCE_DISABLED`, `EASYUI_ACCEPTANCE_MATRIX`, `EASYUI_THEME_RESOLVER_V2_DISABLED`), как и `REUSE_GATE`, читаются один раз на входе процесса, поэтому discovery и поведение ручек не могут разойтись. Флаг `false` означает «выключено на этом инстансе», а отсутствие ключа — «образ старше этой волны»; клиент обязан различать эти случаи. Лимиты `validateUserConcurrent`/`validateGlobalConcurrent` описывают, когда прилетит `429 validate_in_flight`/`429 queue_full`, а `validateCacheTtlHours`/`validateCacheMiB` — срок жизни и потолок candidate-кэша (после вытеснения следующий draft-preview просто пересоберёт кандидата).
 
