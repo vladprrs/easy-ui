@@ -401,11 +401,29 @@ const screenshotComponentGeometryResultSchema = z.object({
 const screenshotGeometryResultSchema = z.discriminatedUnion("surface", [screenshotPrototypeGeometryResultSchema, screenshotComponentGeometryResultSchema]);
 export const screenshotJobResultSchema = z.union([screenshotImageResultSchema, screenshotGeometryResultSchema]);
 
+/**
+ * Типизированные исходы капчура (план 2026-08-03-renderer-contract-2 §3 E3, §5 R3). Словарь один
+ * на продукт: те же значения кладут в метрики гейты приёмки и в доказательство readiness.
+ */
+export const captureFailureCodeSchema = z.enum([
+  "font_load_failed", "font_face_missing", "image_load_failed",
+  "layout_unstable", "surface_missing", "surface_overflow",
+  "renderer_mismatch", "navigation_failed", "runtime_error",
+]);
+/** Таксономия исхода **джобы** (A3): инфраструктура против терминального `renderer_mismatch`. */
+export const jobOutcomeSchema = z.enum(["ok", "worker_crash", "timeout", "queue_full", "subprocess_error", "renderer_mismatch"]);
+
 export const screenshotJobContract = registerContract({
   method: "GET",
   path: "/api/screenshot-jobs/{jobId}",
-  summary: "Poll a screenshot job (queued|running|done|error) and read its result.",
-  responseSchema: z.object({ status: z.enum(["queued", "running", "done", "error"]), result: screenshotJobResultSchema.optional(), error: z.object({ code: z.string(), message: z.string() }).optional() }),
+  summary: "Poll a screenshot job (queued|running|done|error) and read its result. Terminal jobs additionally carry `outcome` (job taxonomy: ok|worker_crash|timeout|queue_full|subprocess_error|renderer_mismatch — only `ok` and `renderer_mismatch` are terminal for a client, the rest are infrastructure and may be retried) and, when the cause is typed, `failure` with a `CaptureFailureCode`. The legacy `error` object is unchanged.",
+  responseSchema: z.object({
+    status: z.enum(["queued", "running", "done", "error"]),
+    result: screenshotJobResultSchema.optional(),
+    error: z.object({ code: z.string(), message: z.string() }).optional(),
+    outcome: jobOutcomeSchema.optional(),
+    failure: z.object({ code: captureFailureCodeSchema, message: z.string() }).optional(),
+  }),
   errors: [{ status: 404, code: "job_not_found" }],
 });
 

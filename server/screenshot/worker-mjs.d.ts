@@ -9,6 +9,8 @@ declare module "*/screenshot-worker.mjs" {
   export function matchAllowed(path: string, allowedUrls: readonly string[]): boolean;
   export function canonicalStringify(value: unknown): string;
   export function readyToExpected(ready: Record<string, unknown>): Record<string, unknown>;
+  /** Коды воркера из словаря `src/capture/failureCodes.ts` (R3): дубль сверяется тестом. */
+  export const WORKER_FAILURE_CODES: Readonly<{ navigation: string; runtime: string; surfaceMissing: string }>;
 }
 
 declare module "*/geometry.mjs" {

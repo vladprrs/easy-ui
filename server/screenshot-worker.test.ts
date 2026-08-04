@@ -12,7 +12,9 @@ import {
   matchAllowed,
   readyToExpected,
   STRICT_DETERMINISM_ARGS,
+  WORKER_FAILURE_CODES,
 } from "../scripts/screenshot-worker.mjs";
+import { CAPTURE_FAILURE_CODES } from "../src/capture/failureCodes";
 import { collectGeometry, unionRects } from "../src/capture/geometry.mjs";
 import {
   buildDeterminismArgs as serverDeterminismArgs,
@@ -217,6 +219,33 @@ describe("screenshot worker helpers", () => {
   test("component-draft readiness comparison carries the content-addressed identity",()=>{
     expect(readyToExpected({kind:"component-draft",componentId:"w",rev:3,sourceHash:"s".repeat(64),bundleHash:"b",propsHash:"p",dsMetaVersion:2,rendererBuild:null}))
       .toEqual({kind:"component-draft",componentId:"w",rev:3,sourceHash:"s".repeat(64),bundleHash:"b",propsHash:"p",dsMetaVersion:2,rendererBuild:null});
+  });
+
+  /**
+   * R3: воркер — `.mjs` под node и TS-словарь импортировать не может, поэтому коды в нём
+   * продублированы строками. Здесь дубль сверяется с единственным источником правды: разъехаться
+   * молча они не могут.
+   */
+  test("worker failure codes belong to the product-wide dictionary", () => {
+    for (const code of Object.values(WORKER_FAILURE_CODES)) {
+      expect(CAPTURE_FAILURE_CODES as readonly string[]).toContain(code);
+    }
+    expect(Object.values(WORKER_FAILURE_CODES).sort()).toEqual(["navigation_failed", "runtime_error", "surface_missing"]);
+  });
+
+  /**
+   * Отсутствие `#eui-capture-surface` раньше молча деградировало в `page.screenshot()` — кадр
+   * «чего-то» уезжал в эталоны и давал необъяснимый визуальный провал (§5 R3). Проверяется по
+   * исходнику: поднимать chromium ради отрицательного случая в unit-тесте незачем, а фактическое
+   * поведение закрывает `e2e/preview/capture-failure-codes.spec.ts`.
+   */
+  test("a missing capture surface is refused, not silently degraded to a full-page screenshot", () => {
+    const source = readFileSync(new URL("../scripts/screenshot-worker.mjs", import.meta.url), "utf8");
+    expect(source).not.toContain("await page.screenshot(");
+    expect(source.match(/WORKER_FAILURE_CODES\.surfaceMissing/g)?.length).toBe(2);
+    // Навигация и handshake — разные коды, оба типизированы.
+    expect(source).toContain("WORKER_FAILURE_CODES.navigation");
+    expect(source).toContain("WORKER_FAILURE_CODES.runtime");
   });
 
   test("geometry evaluate function is self-contained and uses the shared union vector", () => {

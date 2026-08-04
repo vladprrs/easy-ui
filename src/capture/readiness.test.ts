@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { collectCaptureEnv, observedCaptureEnvFingerprint, type CaptureEnvInput } from "./env";
+import { codesFromReadinessReasons, READINESS_REASON_CODES } from "./failureCodes";
 import { collectReadiness, collectThemeAssets, collectThemeTokens, usedFontFamilies } from "./readiness";
 import {
   canonicalReadinessPolicy, DEFAULT_READINESS_POLICY, isReadinessPolicy, readinessPolicyHash,
@@ -113,6 +114,39 @@ describe("readiness evidence", () => {
     if (!report.met) expect(report.evidence.pendingRequests.some((item) => item.startsWith("image:"))).toBe(true);
 
     delete (globalThis as { __easyUiShared?: unknown }).__easyUiShared;
+    root.remove();
+  });
+
+  /**
+   * R3: `codes` появляются **рядом**, а `reason` остаётся в доволновом формате — склеенная
+   * запятыми строка тех же токенов, отсутствующая при выполненной политике. Это не косметика:
+   * маппинг причин в коды не биективен (§3 E3, C-M5), уже записанные evidence-артефакты и метрики
+   * гейта `readiness` читают именно `reason`, и импакт-анализ W6 сравнивает его как строку.
+   */
+  it("reason сохраняет доволновый формат, а codes едут рядом", async () => {
+    // Картинка без растра в jsdom: политика не выполняется, причина непустая.
+    const root = surface('<img src="/api/assets/asset_missing" alt="broken" />');
+    const report = await collectReadiness(root, { ...DEFAULT_READINESS_POLICY, timeoutMs: 2_000, network: { quietMs: 0, scope: "component-owned" } });
+
+    expect(report.met).toBe(false);
+    expect(typeof report.reason).toBe("string");
+    // Формат: только известные токены, разделитель — запятая без пробелов, без обёрток и префиксов.
+    expect(report.reason).toMatch(/^[a-z_]+(,[a-z_]+)*$/);
+    const tokens = report.reason!.split(",");
+    expect(tokens).toContain("images_failed");
+    for (const token of tokens) expect(Object.keys(READINESS_REASON_CODES)).toContain(token);
+    // Коды — производное от тех же токенов, но не замена: две строки могут дать один код.
+    expect(report.codes).toEqual(codesFromReadinessReasons(tokens));
+    expect(report.codes.some((item) => item.code === "image_load_failed")).toBe(true);
+
+    // Выполненная политика: поля `reason` нет вовсе (а не пустая строка), коды пусты.
+    const ok = await collectReadiness(surface("<span>text</span>"), {
+      ...DEFAULT_READINESS_POLICY, timeoutMs: 2_000, network: { quietMs: 0, scope: "component-owned" },
+    });
+    expect(ok.met).toBe(true);
+    expect("reason" in ok).toBe(false);
+    expect(ok.codes).toEqual([]);
+
     root.remove();
   });
 

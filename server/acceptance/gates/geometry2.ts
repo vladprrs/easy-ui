@@ -17,8 +17,9 @@
  */
 import {
   evaluateGeometryPolicy, geometryVerdictBlocks,
-  type GeometryPolicyRect, type GeometryTolerancesInput,
+  type GeometryPolicyRect, type GeometryPolicyVerdict, type GeometryTolerancesInput,
 } from "../../../src/capture/geometryPolicy";
+import type { CaptureCode } from "../../../src/capture/failureCodes";
 import type { GeometryDetail } from "../../../src/capture/geometry.mjs";
 import { putArtifact } from "../evidence";
 import { spawnInkBboxWorker, type RunInkBbox } from "../inkBbox";
@@ -49,6 +50,28 @@ function rootDetail(geometry: Record<string, unknown>): GeometryDetail | null {
   const details = geometry.details;
   if (!Array.isArray(details) || details.length === 0) return null;
   return details[0] as GeometryDetail;
+}
+
+/**
+ * Вердикт геометрии в типизированный словарь (§3 E3, §5 R3): `surface_overflow` — единственный код
+ * этой области, и он эмитится **только** когда вердикт действительно блокирует при текущих
+ * допусках. `indeterminate` кодом не сопровождается: «не измерили» — не «вылезло за поверхность».
+ * `severity` берётся из того же `geometryVerdictBlocks`, что и статус гейта, — два источника
+ * правды о том, провал это или нет, здесь недопустимы.
+ */
+export function geometryCodes(
+  verdict: GeometryPolicyVerdict,
+  tolerances: GeometryTolerancesInput,
+  reasons: readonly string[],
+): CaptureCode[] {
+  if (verdict === "clean" || verdict === "indeterminate") return [];
+  const blocks = geometryVerdictBlocks(verdict, tolerances);
+  return [{
+    code: "surface_overflow",
+    severity: blocks ? "error" : "warning",
+    detail: reasons.length > 0 ? reasons.join("; ") : `geometry verdict ${verdict}`,
+    ref: verdict,
+  }];
 }
 
 export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWorker): Gate {
@@ -132,6 +155,9 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
         metrics: {
           semantics: "v2-paint",
           policyVerdict: policy.policyVerdict,
+          // R3: тот же вердикт типизированным кодом — `surface_overflow` (плюс коды readiness
+          // кадра, если поверхность их принесла: paint-джоба несёт доказательство).
+          codes: [...geometryCodes(policy.policyVerdict, tolerances, policy.reasons), ...(capture.readiness?.readinessCodes ?? [])],
           layoutBounds: record.layoutBounds,
           paintBounds: record.paintBounds,
           paintBoundsSource: record.paintBoundsSource,

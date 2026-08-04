@@ -8,6 +8,7 @@ import { ApiError } from "../http";
 import { acquireMaintenanceLock, maintenanceLockHeld } from "../maintenance";
 import type { CandidateEntry } from "../components/candidates";
 import type { CaptureProbe, JobOutcome, JobStatus, ScreenshotResult } from "../screenshot/service";
+import { codesFromReadinessReason, type CaptureCode } from "../../src/capture/failureCodes";
 import type { InkBboxResult } from "./inkBbox";
 import { caseSetManifestSchema, type CaseSetManifest } from "../../src/acceptance/caseSetSchema";
 import { buildCases, propsHashOf } from "./cases";
@@ -56,6 +57,8 @@ function framePng(props: Record<string, unknown> | undefined, shift = 0): Uint8A
 const READY_READINESS = {
   readinessMet: true as boolean | null,
   readinessReason: null as string | null,
+  // R3: типизированные коды едут рядом с доволновой строкой причины (маппинг не биективен).
+  readinessCodes: [] as CaptureCode[] | null,
   readinessPolicyHash: readinessPolicyHashOf(ACCEPTANCE_POLICIES["default-v1"].readiness) as string | null,
   readinessEvidence: {
     fontFaces: [{ family: "Ya Sans", weight: "400", style: "normal", status: "loaded" }],
@@ -423,6 +426,7 @@ test("readiness fail роняет случай, глушит сравниваю�
     ...READY_READINESS,
     readinessMet: false,
     readinessReason: "images_failed",
+    readinessCodes: codesFromReadinessReason("images_failed"),
     readinessEvidence: {
       ...(READY_READINESS.readinessEvidence as Record<string, unknown>),
       images: { total: 1, decoded: 0, failed: 1 },
@@ -461,7 +465,7 @@ test("капчур без доказательства readiness даёт indete
   const harness = await setup();
   harness.service.readiness = {
     ...READY_READINESS,
-    readinessMet: null, readinessReason: null, readinessPolicyHash: null, readinessEvidence: null,
+    readinessMet: null, readinessReason: null, readinessCodes: null, readinessPolicyHash: null, readinessEvidence: null,
     observedCaptureEnvFingerprint: null,
   };
   const run = await startAndRun(harness);
@@ -669,6 +673,7 @@ test("инвариант D5: кадр без readiness не доходит до 
     ...READY_READINESS,
     readinessMet: false,
     readinessReason: "fonts_pending",
+    readinessCodes: codesFromReadinessReason("fonts_pending"),
     readinessEvidence: { ...(READY_READINESS.readinessEvidence as Record<string, unknown>), pendingRequests: ["font:Ya Sans"] },
   };
   const { run, visual } = await runWithCaseSet(harness, caseSetOf(referenceAssetId, { requireVisual: true }));

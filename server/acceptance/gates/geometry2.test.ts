@@ -149,6 +149,34 @@ test("инвариант: overflow без названного источник�
   expect(result.metrics!.policyVerdict).toBe("paint-overflow-not-clipped");
 });
 
+/**
+ * R3: вердикт геометрии выходит наружу типизированным кодом словаря E3. `severity` берётся из
+ * того же `geometryVerdictBlocks`, что и статус гейта: допущенная краска — предупреждение, а не
+ * ошибка, `clean`/`indeterminate` кода не эмитят вовсе.
+ */
+test("policyVerdict маппится в surface_overflow с severity по допускам", async () => {
+  const { ctx } = await context({
+    result: paintResult({ effectSources: [BLUR] }),
+    inkBbox: ink({ x: 46.5, y: 47, width: 175, height: 130 }),
+  });
+  const failed = await geometry2Gate.run(ctx);
+  expect(failed.metrics!.codes).toEqual([
+    { code: "surface_overflow", severity: "error", detail: expect.stringContaining("ink extends past the layout bounds"), ref: "paint-overflow-not-clipped" },
+  ]);
+
+  const clean = await context();
+  expect((await geometry2Gate.run(clean.ctx)).metrics!.codes).toEqual([]);
+
+  const allowed = await context({
+    result: paintResult({ effectSources: [BLUR] }),
+    inkBbox: ink({ x: 46.5, y: 47, width: 175, height: 130 }),
+    casePolicy: { allowPaintOverflow: true },
+  });
+  const allowedResult = await geometry2Gate.run(allowed.ctx);
+  expect(allowedResult.status).toBe("pass");
+  expect((allowedResult.metrics!.codes as { severity: string }[])[0]!.severity).toBe("warning");
+});
+
 test("allowPaintOverflow и expectedClip переводят ожидаемую краску в pass, не пряча вердикт", async () => {
   const allowed = await context({
     result: paintResult({ effectSources: [BLUR] }),

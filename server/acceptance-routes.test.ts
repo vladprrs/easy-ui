@@ -56,6 +56,7 @@ const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
 const READY_READINESS = {
   readinessMet: true,
   readinessReason: null,
+  readinessCodes: [],
   readinessPolicyHash: readinessPolicyHashOf(ACCEPTANCE_POLICIES["default-v1"].readiness),
   readinessEvidence: {
     fontFaces: [], images: { total: 0, decoded: 0, failed: 0 }, pendingRequests: [],

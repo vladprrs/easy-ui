@@ -31769,6 +31769,44 @@
                       ],
                       "type": "object"
                     },
+                    "failure": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "code": {
+                          "enum": [
+                            "font_load_failed",
+                            "font_face_missing",
+                            "image_load_failed",
+                            "layout_unstable",
+                            "surface_missing",
+                            "surface_overflow",
+                            "renderer_mismatch",
+                            "navigation_failed",
+                            "runtime_error"
+                          ],
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "outcome": {
+                      "enum": [
+                        "ok",
+                        "worker_crash",
+                        "timeout",
+                        "queue_full",
+                        "subprocess_error",
+                        "renderer_mismatch"
+                      ],
+                      "type": "string"
+                    },
                     "result": {
                       "anyOf": [
                         {
@@ -32158,7 +32196,7 @@
             "description": "job_not_found"
           }
         },
-        "summary": "Poll a screenshot job (queued|running|done|error) and read its result.",
+        "summary": "Poll a screenshot job (queued|running|done|error) and read its result. Terminal jobs additionally carry `outcome` (job taxonomy: ok|worker_crash|timeout|queue_full|subprocess_error|renderer_mismatch — only `ok` and `renderer_mismatch` are terminal for a client, the rest are infrastructure and may be retried) and, when the cause is typed, `failure` with a `CaptureFailureCode`. The legacy `error` object is unchanged.",
         "x-easyui-validated": false
       }
     },

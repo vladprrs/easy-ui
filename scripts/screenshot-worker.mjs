@@ -92,6 +92,18 @@ export function buildLaunchArgs(denyPort, capturePort) {
   ];
 }
 
+/**
+ * Коды воркера из словаря `src/capture/failureCodes.ts` (§3 E3, §5 R3). Дублируются строками
+ * потому, что воркер — `.mjs` под node и TS-модуль импортировать не может; тест
+ * `server/screenshot-worker.test.ts` сверяет этот объект с `CAPTURE_FAILURE_CODES`, поэтому
+ * разъехаться молча они не могут.
+ */
+export const WORKER_FAILURE_CODES = Object.freeze({
+  navigation: "navigation_failed",
+  runtime: "runtime_error",
+  surfaceMissing: "surface_missing",
+});
+
 export function readyToExpected(ready) {
   // `designSystem` — резолвнутая ДС снимаемого экрана (multi-surface D14): пара
   // `(designSystem, dsMetaVersion)` сверяется целиком, иначе дрейф темы второй ДС невидим.
@@ -171,13 +183,28 @@ async function run(job) {
     });
     page.on("pageerror", (err) => { if (pageErrors.length < 100) pageErrors.push(err.message); });
 
-    await page.goto(job.captureOrigin + job.captureUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+    // Навигация — отдельный типизированный исход (§5 R3): «страница не открылась» и «страница
+    // открылась, но шелл не сошёлся с ожиданием» — разные диагнозы, и клиент обязан различать их
+    // без чтения текста ошибки.
+    try {
+      await page.goto(job.captureOrigin + job.captureUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+    } catch (error) {
+      return {
+        ok: false, code: WORKER_FAILURE_CODES.navigation,
+        error: `navigation failed: ${error?.message ?? String(error)}`,
+        consoleErrors, consoleWarnings, pageErrors,
+      };
+    }
 
-    const handle = await page.waitForFunction(() => window.__EUI_CAPTURE_READY__ ?? null, null, { timeout: 20000, polling: 100 });
-    const ready = await handle.jsonValue();
-    if (!ready || ready.status === "error") return { ok: false, error: ready?.error ?? "capture reported error", consoleErrors, consoleWarnings, pageErrors };
+    const ready = await (async () => {
+      const handle = await page.waitForFunction(() => window.__EUI_CAPTURE_READY__ ?? null, null, { timeout: 20000, polling: 100 });
+      return handle.jsonValue();
+    })().catch((error) => ({ status: "error", error: `capture handshake timed out: ${error?.message ?? String(error)}` }));
+    // Шелл не опубликовал handshake либо опубликовал ошибку — это исполнение страницы, а не
+    // навигация и не поверхность: `runtime_error`.
+    if (!ready || ready.status === "error") return { ok: false, code: WORKER_FAILURE_CODES.runtime, error: ready?.error ?? "capture reported error", consoleErrors, consoleWarnings, pageErrors };
     if (canonicalStringify(readyToExpected(ready)) !== canonicalStringify(job.expected)) {
-      return { ok: false, error: `readiness mismatch: got ${canonicalStringify(readyToExpected(ready))} expected ${canonicalStringify(job.expected)}`, consoleErrors, consoleWarnings, pageErrors };
+      return { ok: false, code: WORKER_FAILURE_CODES.runtime, error: `readiness mismatch: got ${canonicalStringify(readyToExpected(ready))} expected ${canonicalStringify(job.expected)}`, consoleErrors, consoleWarnings, pageErrors };
     }
     // W4: доказательство readiness и отпечаток окружения — рядом с handshake, вне сравнения с
     // `expected` (политика в `expected` не дублируется, триаж R1-m2). Старый шелл их не шлёт —
@@ -206,11 +233,13 @@ async function run(job) {
       });
       const paintGeometry = { ...measurements, ...analyzeGeometry(measurements) };
       const surface = await page.$("#eui-capture-surface");
+      // Отсутствие поверхности — отказ, а не деградация в кадр всей страницы (§5 R3). Раньше
+      // здесь молча снимался viewport: получался кадр «чего-то», который затем сравнивался с
+      // эталоном компонента и давал необъяснимый визуальный провал вместо честной причины.
+      if (!surface) return { ok: false, code: WORKER_FAILURE_CODES.surfaceMissing, error: "#eui-capture-surface is missing in the captured document", consoleErrors, consoleWarnings, pageErrors };
       // `omitBackground` снимает белую подложку браузера: без неё альфа за пределами компонента
       // была бы непрозрачной и ink-bbox совпал бы с кадром целиком.
-      const png = surface
-        ? await surface.screenshot({ type: "png", omitBackground: true })
-        : await page.screenshot({ type: "png", omitBackground: true });
+      const png = await surface.screenshot({ type: "png", omitBackground: true });
       return {
         ok: true, geometry: paintGeometry,
         pngBase64: png.toString("base64"),
@@ -222,7 +251,8 @@ async function run(job) {
     }
 
     const el = await page.$("#eui-capture-surface");
-    const buf = el ? await el.screenshot({ type: "png" }) : await page.screenshot({ type: "png" });
+    if (!el) return { ok: false, code: WORKER_FAILURE_CODES.surfaceMissing, error: "#eui-capture-surface is missing in the captured document", consoleErrors, consoleWarnings, pageErrors };
+    const buf = await el.screenshot({ type: "png" });
     const width = buf.length >= 24 ? buf.readUInt32BE(16) : job.viewport.width;
     const height = buf.length >= 24 ? buf.readUInt32BE(20) : job.viewport.height;
     return { ok: true, pngBase64: buf.toString("base64"), width, height, consoleErrors, consoleWarnings, pageErrors, browserVersion: browser.version(), ...readinessFields };

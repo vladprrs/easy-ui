@@ -8,6 +8,7 @@ import { ApiError } from "../http";
 import { insertDesignSystemVersion } from "../designSystems";
 import { assetRefsOf, sourceShapeHashOf, writeCandidate, type CandidateEntry } from "../components/candidates";
 import type { CaptureProbe, JobOutcome, JobStatus, ScreenshotResult } from "../screenshot/service";
+import type { CaptureCode } from "../../src/capture/failureCodes";
 import type { InkBboxResult } from "./inkBbox";
 import { computeImpact } from "./impact";
 import { normalizeThemeResources, observedResourcesOfRun, themeTokenCssVar } from "./resources";
@@ -54,6 +55,7 @@ function framePng(props: Record<string, unknown> | undefined): Uint8Array {
 const readinessFor = (props: Record<string, unknown> | undefined) => ({
   readinessMet: true as boolean | null,
   readinessReason: null as string | null,
+  readinessCodes: [] as CaptureCode[] | null,
   readinessPolicyHash: readinessPolicyHashOf(profile.readiness) as string | null,
   readinessEvidence: {
     fontFaces: [], images: { total: 1, decoded: 1, failed: 0 }, pendingRequests: [] as string[],

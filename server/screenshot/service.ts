@@ -1,6 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import type { CaptureExpected } from "../../src/capture/protocol";
+import {
+  codesFromReadinessReason, isCaptureFailureCode, sanitizeCaptureCodes,
+  type CaptureCode, type CaptureFailureCode,
+} from "../../src/capture/failureCodes";
 import { DEFAULT_READINESS_POLICY, type ReadinessPolicy } from "../../src/capture/readinessPolicy";
 import type { GeometryCollection, GeometryRect, GeometryRole } from "../../src/capture/geometry.mjs";
 import { resolveSpacingScale } from "../../src/designSystems/spacingScale";
@@ -40,7 +44,15 @@ export interface CaptureQuality {
  * acceptance-ретраев своя таксономия. `queue_full` не бывает исходом поставленной джобы —
  * его возвращает enqueue (см. {@link jobOutcomeOfError}).
  */
-export type JobOutcome = "ok" | "worker_crash" | "timeout" | "queue_full" | "subprocess_error";
+export type JobOutcome = "ok" | "worker_crash" | "timeout" | "queue_full" | "subprocess_error" | "renderer_mismatch";
+
+/**
+ * Исходы, которые ретраить бессмысленно (§5 R3, минор приёмки R1). `renderer_mismatch` —
+ * расхождение объявленного манифеста и фактически нарисовавшего кадр браузера: повтор в том же
+ * процессе даст ровно то же расхождение, а бюджет `maxInfraRetries` тратился бы на шум.
+ */
+export const TERMINAL_JOB_OUTCOMES: readonly JobOutcome[] = ["renderer_mismatch"] as const;
+export const isTerminalJobOutcome = (outcome: JobOutcome): boolean => TERMINAL_JOB_OUTCOMES.includes(outcome);
 
 /**
  * Режим измерения джобы. `geometry` — измерительная джоба без кадра (существующие ручки);
@@ -58,6 +70,12 @@ export type CaptureProbe = "geometry" | "paint";
 export interface CaptureReadinessOutcome {
   readinessMet: boolean | null;
   readinessReason: string | null;
+  /**
+   * Те же причины типизированным словарём (§5 R3). `null` — доказательства не было вовсе;
+   * пустой массив — политика выполнена. Поле **не заменяет** `readinessReason`: маппинг не
+   * биективен (§3 E3, C-M5), и доволновый формат причины сохраняется как есть.
+   */
+  readinessCodes: CaptureCode[] | null;
   /** sha256 политики, по которой шелл реально ждал — сверяется с политикой джобы. */
   readinessPolicyHash: string | null;
   readinessEvidence: Record<string, unknown> | null;
@@ -109,7 +127,19 @@ export function jobOutcomeOfError(error: unknown): Exclude<JobOutcome, "ok"> {
   return classifyJobFailure(error instanceof Error ? error.message : String(error));
 }
 
-export interface JobStatus { status: "queued" | "running" | "done" | "error"; result?: ScreenshotResult; error?: { code: string; message: string } }
+/**
+ * Статус джобы наружу. `error` — доволновая форма (её код остаётся из старого словаря ручек:
+ * `capture_failed`, `renderer_mismatch`, ApiError-код постановки); `outcome` и `failure` —
+ * **аддитивные** поля R3: таксономия исхода джобы (A3) и типизированная причина капчура (E3).
+ * Ни одно существующее поле не меняет ни имени, ни значения.
+ */
+export interface JobStatus {
+  status: "queued" | "running" | "done" | "error";
+  result?: ScreenshotResult;
+  error?: { code: string; message: string };
+  outcome?: JobOutcome;
+  failure?: { code: CaptureFailureCode; message: string };
+}
 export interface ScreenshotImageResult extends CaptureQuality {
   kind: "image";
   imageUrl: string; assetId: string; width: number; height: number;
@@ -233,7 +263,7 @@ export interface WorkerJob {
 }
 /** Доказательство readiness и отпечаток окружения, опубликованные шеллом (W4). */
 export type WorkerReadiness = {
-  readiness?: { met: boolean; reason?: string; policyHash: string; elapsedMs: number; evidence: Record<string, unknown> };
+  readiness?: { met: boolean; reason?: string; codes?: unknown; policyHash: string; elapsedMs: number; evidence: Record<string, unknown> };
   captureEnv?: { fingerprint: string; input: Record<string, unknown> };
 };
 export type WorkerImageOk = { ok: true; pngBase64: string; width: number; height: number; consoleErrors: string[]; consoleWarnings?: string[]; pageErrors: string[]; browserVersion: string } & WorkerReadiness;
@@ -241,7 +271,8 @@ export type WorkerGeometryOk = { ok: true; geometry: GeometryCollection; console
 /** Paint-джоба: geometry и PNG приезжают вместе — это и есть смысл режима. */
 export type WorkerPaintOk = WorkerImageOk & { geometry: GeometryCollection };
 export type WorkerOk = WorkerImageOk | WorkerGeometryOk | WorkerPaintOk;
-export type WorkerErr = { ok: false; error: string; consoleErrors?: string[]; consoleWarnings?: string[]; pageErrors?: string[] };
+/** `code` — типизированный исход воркера (R3): навигация, исполнение страницы, поверхность. */
+export type WorkerErr = { ok: false; error: string; code?: string; consoleErrors?: string[]; consoleWarnings?: string[]; pageErrors?: string[] };
 export type WorkerResult = WorkerOk | WorkerErr;
 export type RunJob = (job: WorkerJob, deadlineMs: number) => Promise<WorkerResult>;
 
@@ -279,6 +310,8 @@ interface InternalJob {
   renderer: RendererOnJob;
   result?: ScreenshotResult; error?: { code: string; message: string }; resultExpiresAt?: number;
   jobOutcome?: JobOutcome;
+  /** Типизированная причина капчура (R3), если она известна: едет в `GET /api/screenshot-jobs/:id`. */
+  failure?: { code: CaptureFailureCode; message: string };
 }
 
 /**
@@ -693,13 +726,21 @@ export class ScreenshotService {
     this.reapExpired();
     const job = this.jobs.get(jobId);
     if (!job) throw new ApiError(404, "job_not_found", "Screenshot job not found");
-    return { status: job.status, ...(job.result ? { result: job.result } : {}), ...(job.error ? { error: job.error } : {}) };
+    return {
+      status: job.status,
+      ...(job.result ? { result: job.result } : {}),
+      ...(job.error ? { error: job.error } : {}),
+      // R3: таксономия исхода и типизированная причина выходят наружу — «почему кадр не получился»
+      // перестаёт быть вопросом к тексту сообщения (K4).
+      ...(job.jobOutcome ? { outcome: job.jobOutcome } : {}),
+      ...(job.failure ? { failure: job.failure } : {}),
+    };
   }
   /**
-   * Исход джобы (A3) для in-process потребителей (acceptance-оркестратор). В HTTP-ответ
-   * `GET /api/screenshot-jobs/:id` намеренно не попадает: контракт этого роута — зона W1a
-   * по openapi/contracts, а таксономия нужна только оркестратору. `undefined` — джоба ещё
-   * не терминальна либо результат уже вычищен по RESULT_TTL.
+   * Исход джобы (A3) для in-process потребителей (acceptance-оркестратор). С волны R3 та же
+   * таксономия аддитивно едет и в HTTP-ответ `GET /api/screenshot-jobs/:id` (поле `outcome`):
+   * клиенту нужно отличать «инфраструктура, повтори» от «терминально, не повторяй».
+   * `undefined` — джоба ещё не терминальна либо результат уже вычищен по RESULT_TTL.
    */
   outcome(jobId: string): JobOutcome | undefined {
     return this.jobs.get(jobId)?.jobOutcome;
@@ -748,7 +789,17 @@ export class ScreenshotService {
       // Политика readiness — туда же: поверхность исполняет её и публикует доказательство (W4).
       if (job.readinessPolicy !== undefined) workerJob.bootstrap.readiness = job.readinessPolicy;
       const result = await this.deps.runJob(workerJob, JOB_DEADLINE_MS);
-      if (!result.ok) { job.status = "error"; job.error = { code: "capture_failed", message: result.error }; job.jobOutcome = classifyJobFailure(result.error); this.expire(job); return; }
+      if (!result.ok) {
+        job.status = "error";
+        // Типизированный код воркера (R3) становится и кодом ошибки джобы, и её `failure`;
+        // нетипизированный отказ остаётся доволновым `capture_failed` — врать про код нельзя.
+        const code = isCaptureFailureCode(result.code) ? result.code : null;
+        job.error = { code: code ?? "capture_failed", message: result.error };
+        if (code !== null) job.failure = { code, message: result.error };
+        job.jobOutcome = classifyJobFailure(result.error);
+        this.expire(job);
+        return;
+      }
       // Сверка объявленного и фактического рендерера (§3 E2). Расхождение major.minor.build
       // значит, что образ не соответствует манифесту: кадр нельзя ни сравнивать с эталоном, ни
       // переиспользовать по `case_fingerprint`, поэтому это hard-fail, а не предупреждение.
@@ -756,9 +807,11 @@ export class ScreenshotService {
       if (mismatch !== null && strictManifestEnabled()) {
         job.status = "error";
         job.error = { code: "renderer_mismatch", message: mismatch };
-        // Терминальный по смыслу, но по таксономии A3 — инфраструктурный: у приёмки нет исхода
-        // «рендерер не тот», а ретраи в том же процессе дадут ровно то же расхождение.
-        job.jobOutcome = "subprocess_error";
+        job.failure = { code: "renderer_mismatch", message: mismatch };
+        // Собственный **терминальный** исход таксономии (R3): раньше расхождение ехало как
+        // `subprocess_error` и приёмка тратила на него бюджет `maxInfraRetries` — ретраи в том же
+        // процессе дают ровно то же расхождение, это не инфраструктурный шум.
+        job.jobOutcome = "renderer_mismatch";
         this.expire(job);
         return;
       }
@@ -908,6 +961,13 @@ export class ScreenshotService {
     return {
       readinessMet: result.readiness ? result.readiness.met : null,
       readinessReason: result.readiness?.reason ?? null,
+      // Коды берутся у шелла, а если он их не прислал (билд до R3) — выводятся из доволновой
+      // строки причины тем же словарём. Отсутствие доказательства целиком — `null`.
+      readinessCodes: result.readiness
+        ? (Array.isArray(result.readiness.codes)
+          ? sanitizeCaptureCodes(result.readiness.codes)
+          : codesFromReadinessReason(result.readiness.reason))
+        : null,
       readinessPolicyHash: result.readiness?.policyHash ?? null,
       readinessEvidence: result.readiness?.evidence ?? null,
       observedCaptureEnvFingerprint: result.captureEnv?.fingerprint ?? null,

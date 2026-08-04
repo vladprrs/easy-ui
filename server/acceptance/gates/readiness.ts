@@ -54,6 +54,7 @@ export const readinessGate: Gate = {
     const artifact = await putArtifact(ctx.dataDir, {
       met: observed.readinessMet,
       reason: observed.readinessReason,
+      codes: observed.readinessCodes ?? [],
       policyHash: observed.readinessPolicyHash,
       expectedPolicyHash,
       observedCaptureEnvFingerprint: observed.observedCaptureEnvFingerprint,
@@ -64,7 +65,10 @@ export const readinessGate: Gate = {
     const themeResources = (evidence as { themeResources?: { tokens?: string[]; icons?: string[]; images?: string[] } }).themeResources ?? {};
     const metrics = {
       met: observed.readinessMet,
+      // `reason` — доволновая строка, `codes` — типизированный словарь рядом (R3, E3): маппинг не
+      // биективен, поэтому в метриках живут оба, а не одно вместо другого.
       reason: observed.readinessReason,
+      codes: observed.readinessCodes ?? [],
       policyHash: observed.readinessPolicyHash,
       expectedPolicyHash,
       observedCaptureEnvFingerprint: observed.observedCaptureEnvFingerprint,

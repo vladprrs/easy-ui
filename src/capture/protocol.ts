@@ -7,6 +7,7 @@
  * snapshot (`expected`).
  */
 import type { CaptureEnvInput } from "./env";
+import type { CaptureCode } from "./failureCodes";
 import type { ReadinessPolicy } from "./readinessPolicy";
 
 export interface PrototypeExpected {
@@ -64,6 +65,12 @@ export type CaptureExpected = PrototypeExpected | ComponentExpected | ComponentD
 export interface CaptureReadinessReport {
   met: boolean;
   reason?: string;
+  /**
+   * Типизированные коды тех же причин (§5 R3). Опционально: шелл, собранный до волны, их не шлёт,
+   * и это «неизвестно», а не «пусто». `reason` рядом сохраняется в доволновом формате — маппинг
+   * не биективен (§3 E3, C-M5), поэтому одно поле не выводится из другого.
+   */
+  codes?: CaptureCode[];
   policyHash: string;
   elapsedMs: number;
   evidence: {

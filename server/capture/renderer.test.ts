@@ -22,7 +22,7 @@ import { CASE_FINGERPRINT_ALGO_VERSION, caseFingerprint, DEFAULT_READINESS_POLIC
 import pin from "./rendererPin.json";
 import { openDatabase } from "../db";
 import { createTestHandler } from "../test-auth";
-import { ScreenshotService, type RunJob, type WorkerResult } from "../screenshot/service";
+import { isTerminalJobOutcome, ScreenshotService, type RunJob, type WorkerResult } from "../screenshot/service";
 import { prototypeDocSchema } from "../../src/prototype/schema";
 
 // R1 плана 2026-08-03-renderer-contract-2: отпечаток рендерера — объявленный, серверный,
@@ -243,6 +243,12 @@ describe("сверка манифеста на капчуре (§3 E2)", () => {
     expect(mismatched.status).toBe("error");
     expect(mismatched.error?.code).toBe("renderer_mismatch");
     expect(mismatched.error?.message).toContain("199.0.1111.0");
+    // R3: у расхождения собственный **терминальный** исход таксономии — приёмка больше не тратит
+    // на него бюджет инфраструктурных ретраев (ретрай в том же процессе даст то же расхождение).
+    expect(mismatched.outcome).toBe("renderer_mismatch");
+    expect(mismatched.failure?.code).toBe("renderer_mismatch");
+    expect(isTerminalJobOutcome("renderer_mismatch")).toBe(true);
+    expect(isTerminalJobOutcome("subprocess_error")).toBe(false);
 
     // Та же major.minor.build, другой patch — не расхождение (T-M7).
     const patched = await captureWith(`${majorMinorBuild(declared)!}.999`);

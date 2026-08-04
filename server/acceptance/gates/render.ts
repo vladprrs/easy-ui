@@ -45,6 +45,10 @@ export const renderGate: Gate = {
         width: image.width, height: image.height, bytes: artifact.bytes, sha256: artifact.sha256,
         retries: capture.retries, captureClean: clean,
         browserVersion: capture.browserVersion ?? null,
+        // Типизированные коды кадра (R3): гейт `render` судит качество консоли, но причина
+        // «кадр снят с непрогруженным ресурсом» обязана быть машиночитаемой и здесь — иначе
+        // K4 держится только на гейте `readiness`, которого у не-байтовых режимов может не быть.
+        codes: capture.readiness?.readinessCodes ?? [],
       },
       warnings: [...capture.quality.runtimeWarnings, ...capture.quality.infraWarnings],
       ...(clean ? {} : { detail: capture.quality.productErrors.slice(0, 5).join("; ") }),

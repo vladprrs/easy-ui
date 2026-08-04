@@ -1839,3 +1839,51 @@ sha этого не даёт, нужны сами PNG, поэтому оба п�
 матрицу образа, портит в ней один sha, вмердживает как ожидание этого отпечатка и повторяет
 `--verify` — прогон обязан покраснеть. Деплой при этом не запускается (job `deploy` требует
 `push` в `main`), а правки живут только в workspace прогона, так что `main` не портится.
+
+### Типизированные коды капчура и `outcome` джобы (волна R3, план 2026-08-03 renderer-contract-2)
+
+До волны причина неуспеха капчура была ad-hoc строкой (`"fonts_timeout,images_failed"`), а наружу
+по HTTP ехал безымянный `capture_failed`: «почему кадр не получился» выяснялось глазами по PNG.
+С R3 словарь исходов — один на продукт (`src/capture/failureCodes.ts`, §3 E3):
+
+| Код | Кто эмитит | Смысл |
+|---|---|---|
+| `font_load_failed` | поверхность (`fonts_timeout`, `fonts_pending`) | шрифт не догрузился; до строгой политики R4 — `warning` |
+| `font_face_missing` | поверхность, **волна R4** | объявленный темой и реально используемый face не загрузился |
+| `image_load_failed` | поверхность (`images_timeout`, `images_failed`) | изображение без растра |
+| `layout_unstable` | поверхность (`frames_timeout`; `stability.ts` — R4) | layout не успокоился |
+| `surface_missing` | воркер | в документе нет `#eui-capture-surface` |
+| `surface_overflow` | гейт `geometry` v2 | вердикт политики геометрии (`paint-overflow-*`, `layout-overflow`) |
+| `renderer_mismatch` | сервис (сверка манифеста), guard визуальных ранов — R6 | кадр нарисовал не тот браузер, что объявлен |
+| `navigation_failed` | воркер | `page.goto` не открыл capture-URL |
+| `runtime_error` | воркер (handshake/mismatch), поверхность (`network_timeout`) | исполнение страницы |
+
+Форма кода: `{ code, severity: "error"|"warning", detail, ref? }`.
+
+**`reason` не заменяется кодами.** Маппинг не биективен (две legacy-строки схлопываются в один
+код), поэтому доказательство readiness несёт **оба** поля: `reason` в доволновом формате (строки
+через запятую, поля нет при `met: true`) и `codes[]` рядом. Это же правило действует в метриках
+гейтов `readiness`/`render`/`geometry` и в CAS-артефакте `readiness.json`.
+
+**`GET /api/screenshot-jobs/:id`** получил два **аддитивных** поля; `status`, `result` и `error`
+не изменились:
+
+```jsonc
+{
+  "status": "error",
+  "error": { "code": "navigation_failed", "message": "navigation failed: net::ERR_CONNECTION_REFUSED…" },
+  "outcome": "renderer_mismatch | subprocess_error | worker_crash | timeout | queue_full | ok",
+  "failure": { "code": "navigation_failed", "message": "…" }   // только когда причина типизирована
+}
+```
+
+`outcome` — таксономия исхода **джобы**: `worker_crash`/`timeout`/`queue_full`/`subprocess_error`
+инфраструктурны (повтор осмыслен), `renderer_mismatch` — **терминальный** исход, повтор в том же
+процессе даст ровно то же расхождение. Приёмка это уважает: `maxInfraRetries` на терминальные
+исходы не тратится (раньше расхождение рендерера ехало как `subprocess_error` и съедало бюджет
+ретраев). `failure` появляется только при типизированной причине; нетипизированный отказ остаётся
+доволновым `error.code = "capture_failed"` — код не выдумывается.
+
+**Изменение поведения:** отсутствие `#eui-capture-surface` больше **не** деградирует в снимок всей
+страницы. Раньше такой кадр молча уезжал в эталоны и давал необъяснимый визуальный провал; теперь
+это `surface_missing` — отказ джобы с названной причиной.

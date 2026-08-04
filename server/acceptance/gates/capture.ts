@@ -11,7 +11,7 @@
  *   повтор даст тот же ответ.
  */
 import { ApiError } from "../../http";
-import { jobOutcomeOfError, type JobOutcome } from "../../screenshot/service";
+import { isTerminalJobOutcome, jobOutcomeOfError, type JobOutcome } from "../../screenshot/service";
 import type { CaptureQuality, CaptureReadinessOutcome, ScreenshotResult } from "../../screenshot/service";
 import type { GateContext } from "./types";
 
@@ -53,6 +53,7 @@ function readinessOf(result: ScreenshotResult): CaptureReadinessOutcome | undefi
     ? {
       readinessMet: result.readinessMet,
       readinessReason: result.readinessReason,
+      readinessCodes: result.readinessCodes,
       readinessPolicyHash: result.readinessPolicyHash,
       readinessEvidence: result.readinessEvidence,
       observedCaptureEnvFingerprint: result.observedCaptureEnvFingerprint,
@@ -61,7 +62,11 @@ function readinessOf(result: ScreenshotResult): CaptureReadinessOutcome | undefi
     : undefined;
 }
 
-const isRetryable = (outcome: JobOutcome): boolean => outcome !== "ok";
+/**
+ * Ретраится инфраструктура — и только она. Терминальные исходы таксономии (`renderer_mismatch`,
+ * R3) повтор в том же процессе воспроизведёт дословно, поэтому бюджет на них не тратится.
+ */
+const isRetryable = (outcome: JobOutcome): boolean => outcome !== "ok" && !isTerminalJobOutcome(outcome);
 
 /** Доменный (не инфраструктурный) отказ постановки: ответ детерминирован, повтор бессмыслен. */
 function isProductRefusal(error: unknown): boolean {
@@ -100,7 +105,9 @@ export async function captureCase(
   const budget = ctx.policy.maxInfraRetries;
   let lastOutcome: JobOutcome = "subprocess_error";
   let lastMessage = "capture did not run";
+  let attempts = 0;
   for (let attempt = 0; attempt <= budget; attempt++) {
+    attempts = attempt + 1;
     if (attempt > 0) {
       const backoff = Math.min(QUEUE_BACKOFF_BASE_MS * 2 ** (attempt - 1), QUEUE_BACKOFF_MAX_MS);
       await ctx.sleep(lastOutcome === "queue_full" ? backoff : QUEUE_BACKOFF_BASE_MS);
@@ -149,6 +156,8 @@ export async function captureCase(
     if (finished.error) {
       lastOutcome = ctx.service.outcome(jobId) ?? jobOutcomeOfError(new Error(finished.error.message));
       lastMessage = finished.error.message;
+      // Терминальный исход обрывает цикл сразу: следующая попытка не может дать другого ответа.
+      if (!isRetryable(lastOutcome)) break;
       continue;
     }
     const result = finished.result;
@@ -187,5 +196,7 @@ export async function captureCase(
     lastOutcome = "subprocess_error";
     lastMessage = `unexpected capture result kind: ${result.kind}`;
   }
-  throw new CaptureInfraError(lastOutcome, budget + 1, `capture failed after ${budget + 1} attempts (${lastOutcome}): ${lastMessage}`);
+  // Число попыток — фактическое: терминальный исход обрывает цикл, и врать про исчерпанный
+  // бюджет в диагностике нельзя.
+  throw new CaptureInfraError(lastOutcome, attempts, `capture failed after ${attempts} attempts (${lastOutcome}): ${lastMessage}`);
 }

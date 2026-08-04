@@ -21,6 +21,7 @@
  * них частичная пересъёмка невозможна в принципе.
  */
 import { collectCaptureEnv, type CaptureEnv } from "./env";
+import { codesFromReadinessReasons, type CaptureCode } from "./failureCodes";
 import { CAPTURE_BOOTSTRAP_KEY, CAPTURE_READY_KEY, type CaptureBootstrap, type CaptureReady } from "./protocol";
 import {
   DEFAULT_READINESS_POLICY, isReadinessPolicy, readinessPolicyHash,
@@ -65,8 +66,15 @@ export interface ReadinessEvidence {
 
 export interface ReadinessReport {
   met: boolean;
-  /** Причина невыполнения политики (`fonts_timeout`, `images_failed`, `network_timeout`, …). */
+  /**
+   * Причина невыполнения политики (`fonts_timeout`, `images_failed`, `network_timeout`, …) в
+   * **доволновом** формате: строки склеены запятой, поле отсутствует при `met: true`. Это поле
+   * — не легаси-обломок: маппинг причин в коды не биективен (§3 E3, C-M5), две строки схлопываются
+   * в один код, поэтому `reason` сохраняется, а `codes` едет рядом.
+   */
   reason?: string;
+  /** Те же причины типизированным словарём (§5 R3). Пустой массив при выполненной политике. */
+  codes: CaptureCode[];
   policyHash: string;
   elapsedMs: number;
   evidence: ReadinessEvidence;
@@ -353,7 +361,10 @@ export async function collectReadiness(root: ParentNode, policy: ReadinessPolicy
 
   return {
     met: reasons.length === 0,
+    // Формат `reason` доволновый и таким остаётся: его читают уже записанные evidence-артефакты,
+    // метрики гейта `readiness` и импакт W6. Типизация приезжает **дополнительным** полем.
     ...(reasons.length === 0 ? {} : { reason: reasons.join(",") }),
+    codes: codesFromReadinessReasons(reasons),
     policyHash,
     elapsedMs: Math.round(now() - startedAt),
     evidence: {

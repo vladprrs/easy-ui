@@ -112,6 +112,46 @@ describe("screenshot job API", () => {
     expect(final.result.componentPins).toEqual([]);
   });
 
+  /**
+   * R3: типизированный исход воркера доезжает наружу — и в `failure` (причина по словарю E3), и в
+   * `outcome` (таксономия джобы A3). Доволновое поле `error` остаётся на месте: клиенты, читающие
+   * его, ничего не теряют.
+   */
+  test("typed worker failure surfaces as failure.code and outcome over HTTP", async () => {
+    const { db, dir, handler: h } = await setup();
+    expect((await h(req("/prototypes", "POST", { doc: await helloDoc("typed-failure") }))).status).toBe(201);
+    const runJob: RunJob = async () => ({ ok: false, code: "surface_missing", error: "#eui-capture-surface is missing in the captured document" });
+    const service = makeService(db, dir, runJob);
+    const handler = createTestHandler(db, { dataDir: dir, screenshots: service });
+    const { jobId } = service.enqueuePrototype("typed-failure", "welcome", { viewport: { width: 390, height: 844 } });
+    let status = service.get(jobId).status;
+    for (let i = 0; i < 50 && status !== "done" && status !== "error"; i++) { await Bun.sleep(5); status = service.get(jobId).status; }
+
+    const response = await handler(req(`/screenshot-jobs/${jobId}`));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { status: string; error?: { code: string }; failure?: { code: string; message: string }; outcome?: string };
+    expect(body.status).toBe("error");
+    expect(body.failure?.code).toBe("surface_missing");
+    expect(body.failure?.message).toContain("#eui-capture-surface");
+    expect(body.error?.code).toBe("surface_missing");
+    expect(body.outcome).toBe("subprocess_error");
+  });
+
+  /** Нетипизированный отказ воркера остаётся доволновым `capture_failed` и `failure` не выдумывает. */
+  test("an untyped worker failure keeps the pre-wave shape", async () => {
+    const { db, dir, handler: h } = await setup();
+    expect((await h(req("/prototypes", "POST", { doc: await helloDoc("untyped-failure") }))).status).toBe(201);
+    const runJob: RunJob = async () => ({ ok: false, error: "worker produced no result: killed" });
+    const service = makeService(db, dir, runJob);
+    const { jobId } = service.enqueuePrototype("untyped-failure", "welcome", { viewport: { width: 390, height: 844 } });
+    let status = service.get(jobId).status;
+    for (let i = 0; i < 50 && status !== "done" && status !== "error"; i++) { await Bun.sleep(5); status = service.get(jobId).status; }
+    const final = service.get(jobId);
+    expect(final.error?.code).toBe("capture_failed");
+    expect(final.failure).toBeUndefined();
+    expect(final.outcome).toBe("worker_crash");
+  });
+
   test("geometry probe returns metadata without ingesting a PNG asset", async () => {
     const { db, dir, handler: h } = await setup();
     expect((await h(req("/prototypes", "POST", { doc: await helloDoc("geometry") }))).status).toBe(201);
