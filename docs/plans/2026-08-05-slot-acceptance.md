@@ -213,6 +213,19 @@ Round 3 (single reviewer over v3 deltas): **no blocking findings**; all six v3 d
 - **W4 (single agent):** `routes/meta.ts`, `contracts.ts` (+`errors` arrays, `image-bytes` result variant, `candidateOverrides`/`candidateOverlay` fields), regenerate `openapi.json`, `docs/server-api.md`, affected skill docs + `.claude/skills/author/driver.mjs` overlay-aware result handling. Done: `npm run verify:openapi` green; docs checklist complete.
 - **W5 (orchestrator):** `npm run verify`; `bun test server/`; `npm run e2e` + new e2e (publish child → slot-parent candidate → case-set with two slot-differing cases → run → two distinct frames → promote; + carousel default-slot capture); reverse-compat: prior build vs v31 DB starts; measure worst legal slot case (12×8) against the 60 s job deadline — lower limits if threatened; deploy checklist: `EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE=1` confirmed before rollout.
 
+## W5 verification results (2026-08-05 — EXECUTED, all green)
+
+- `npm run verify` PASS; `npm run e2e` 151 passed / 1 pre-existing skip; full `bun test server/ scripts/` 1178 pass + vitest 1330 pass; `verify:openapi` clean.
+- Reverse-compat: old runner's `for (index = current; index < migrations.length)` no-ops at user_version=31 → prior build starts against v31 DB; slot-manifests fail named (`case_set_manifest_unreadable`).
+- **Runtime (real chromium, local server, DS slotlab):** case-set with two byte-identical-props cases differing only in `slotBindings` accepted (no `duplicate_case_props`) and run `pass` 3/3: frames A `fdab5abf…` ≠ B `9a60b78d…` (234×141), 9-child default rail C `118c4e26…` 478×141 (ширина арифметически точная: 32+9×44+8×8+2); `acceptance_cases.slots_hash` populated and distinct at equal `props_hash` (проверено оркестратором напрямую в sqlite). Overlay smoke: `--candidate` snap `7b933f94…` ≠ published `e96996f0…`, `GET /bytes` 200 image/png no-store, pins carry `status:"candidate"`.
+- **Worst-case measurement:** 12-child и 12+12 (24 children) cases capture in ~3.7 s каждый — ~6% от 60 s deadline, плоская кривая 4→24 детей (стоимость — фикс-оверхед кадра, не дети). Лимиты 12×8 не пересматриваются.
+- **Deploy checklist:** перед выкаткой подтвердить `EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE=1` (иначе ALGO-7 bump = полная пересъёмка кэша). Деплой по отдельной команде пользователя.
+
+**Follow-ups (не блокируют, зафиксированы):**
+1. [DX, pre-existing] Капчур недоступен (worker 501 `screenshot_unavailable`) → ран терминалится `error` без какой-либо диагностики (statusReason null, artifacts пустые, лога нет) — оператору не за что зацепиться. Отдельная задача.
+2. [docs] Статус-ручка overlay-джобы возвращает `candidateOverlay: null` — provenance живёт только в 202-ответе enqueue; поправить формулировку в docs/server-api.md («enqueue response», не «enqueue/status»).
+3. [fixture] Публикация organism-парента требует `definition.ownership.reason` (`atomic_policy_violation`) — помнить в сценариях приёмки.
+
 ## Critical files
 
 `src/acceptance/caseSetSchema.ts` · `server/acceptance/caseSets.ts` · `server/routes/caseSets.ts` · `server/acceptance/ids.ts` · `server/acceptance/cases.ts` · `server/acceptance/orchestrator.ts` · `server/acceptance/runner.ts` · `server/acceptance/impact.ts` · `server/acceptance/evidence.ts` · `server/acceptance/repo.ts` · `server/screenshot/service.ts` · `server/acceptance/gates/capture.ts` · `src/capture/CaptureComponent.tsx` · `src/capture/protocol.ts` · `scripts/screenshot-worker.mjs` · `server/components/promote.ts` · `server/routes/screenshots.ts` · `server/components/candidates.ts` · `server/capture/receiptStore.ts` · `server/repos/prototypes.ts` · `server/migrations.ts` · `server/routes/meta.ts` · `server/contracts.ts` · `docs/server-api.md`
