@@ -24,6 +24,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/p
 import { resolve } from "node:path";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import { ApiError } from "../http";
+import type { ResolvedSlotBinding } from "./cases";
 import { isRunId, type VerdictPolicySnapshot } from "./ids";
 import { evidenceMaxBytes as DEFAULT_EVIDENCE_MAX_BYTES, acceptanceCaseTtlHours } from "./policies";
 import type { AcceptanceRepo } from "./repo";
@@ -112,6 +113,25 @@ export async function readArtifact(dataDir: string, sha: string): Promise<Uint8A
  * неотличимо от «сравнили не то»: канву не восстановить по одному лишь id исходного ассета.
  */
 export interface EvidenceEntry { name: string; sha256: string; bytes: number }
+
+/**
+ * Ребёнок слота в манифесте (план 2026-08-05 §A7): **разрешённый** пин, а не то, что было написано
+ * в манифесте набора. `bundleHash` и `propsHash` здесь потому, что именно они входят в кадровый
+ * слой отпечатка: без них читатель evidence видит «в слоте был PayChild v1», но не может отличить
+ * снятый билд ребёнка от любого другого с тем же номером версии.
+ */
+export interface EvidenceSlotChild {
+  componentId: string;
+  /** Имя опубликованного компонента — то, чем ребёнок пинуется в манифесте набора. */
+  name: string;
+  version: number;
+  bundleHash: string;
+  props: Record<string, unknown>;
+  propsHash: string;
+}
+/** Слот случая: ключ (`default` — неявный слот `children`, §A2a) и дети **в порядке рендера**. */
+export interface EvidenceSlotBinding { slot: string; children: EvidenceSlotChild[] }
+
 export interface EvidenceCaseEntry {
   caseId: string;
   caseKey: string;
@@ -141,7 +161,51 @@ export interface EvidenceCaseEntry {
    * Поэтому пара, и ровно та же пара, что персистит `acceptance_case_results.verdict_policy_json`.
    */
   verdictPolicy?: { hash: string; snapshot: VerdictPolicySnapshot };
+  /**
+   * **Разрешённое дерево слотов случая** (§A7): что именно рендерилось внутри кандидата. Кадр
+   * слот-случая зависит от детей не меньше, чем от props родителя, поэтому без дерева манифест не
+   * отвечает «что мы приняли»: два случая с одинаковыми props и разным содержимым слотов
+   * неразличимы. Поля опциональны и пишутся условным спредом — у slot-free случая их нет вовсе
+   * (инвариант «отсутствует, а не пусто»), и его запись остаётся побайтово прежней.
+   */
+  slotBindings?: EvidenceSlotBinding[];
+  /**
+   * Тот же `slots_hash`, что персистирован в `acceptance_cases` и вошёл в рукопожатие капчура —
+   * одним значением сверяются строка случая, кадр и evidence.
+   */
+  slotsHash?: string;
   artifacts: EvidenceEntry[];
+}
+
+/**
+ * Слот-поля записи манифеста из случая рана. Плоский `ResolvedSlotBinding[]` группируется по
+ * слотам — читателю evidence нужен слепок дерева, а не кортежи отпечатка; порядок слотов и детей
+ * внутри слота сохраняется как есть (он же порядок рендера и пре-образ `slotsHash`).
+ *
+ * Возвращает **пустой объект**, если у случая нет слотов: спред пустого объекта не добавляет ключей,
+ * и slot-free запись не отличается от досhlot-овой ни одним байтом.
+ */
+export function evidenceSlotsOf(
+  item: { slotBindings?: ResolvedSlotBinding[]; slotsHash?: string } | undefined,
+): { slotBindings?: EvidenceSlotBinding[]; slotsHash?: string } {
+  if (!item || item.slotBindings === undefined || item.slotBindings.length === 0) return {};
+  const bySlot = new Map<string, EvidenceSlotChild[]>();
+  for (const binding of item.slotBindings) {
+    const children = bySlot.get(binding.slot) ?? [];
+    if (children.length === 0) bySlot.set(binding.slot, children);
+    children.push({
+      componentId: binding.componentId,
+      name: binding.name,
+      version: binding.version,
+      bundleHash: binding.bundleHash,
+      props: binding.props,
+      propsHash: binding.propsHash,
+    });
+  }
+  return {
+    slotBindings: [...bySlot].map(([slot, children]) => ({ slot, children })),
+    ...(item.slotsHash === undefined ? {} : { slotsHash: item.slotsHash }),
+  };
 }
 export interface RunManifest {
   version: 1;

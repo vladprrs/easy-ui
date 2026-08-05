@@ -11,7 +11,7 @@ import { CaptureSurface } from "./CaptureSurface";
 import { CaptureStyle, useCaptureTheme, usePublishError } from "./CaptureChrome";
 import { bootstrapRendererBuild, publishReady, readBootstrap, settleSurface } from "./readiness";
 import { propsHashBrowser } from "./propsHash";
-import type { CaptureReady, ComponentDraftExpected } from "./protocol";
+import type { CaptureReady, CaptureSlotsBootstrap, ComponentDraftExpected } from "./protocol";
 
 interface LoadedComponent {
   id: string;
@@ -73,19 +73,43 @@ function paintFieldMargin(): number | null {
 }
 
 /**
+ * Дерево кандидатного капчура (план 2026-08-05 §A6). Без `slots` — то же одноэлементное дерево,
+ * что и до волны (бесслотовый кадр обязан остаться байт-в-байт прежним). Со слотами — родитель `c`
+ * с детьми `s0…sN` в порядке рендера: **именованный** ребёнок несёт `slot`, ребёнок неявного
+ * дефолтного слота — не несёт ключа вовсе (§A2a; `runtimeSpec` схлопывает обе формы
+ * в `slotIndices.default`). `customTypes` — родитель плюс имена всех детей.
+ */
+function captureRuntimeTree(name: string, props: Record<string, unknown>, slots: CaptureSlotsBootstrap | undefined) {
+  const entries = slots?.tree ?? [];
+  if (entries.length === 0) {
+    return toRuntimeSpec(
+      { root: "c", elements: { c: { type: name, props } } } as Parameters<typeof toRuntimeSpec>[0],
+      { customTypes: new Set([name]) },
+    );
+  }
+  const keys = entries.map((_, index) => `s${index}`);
+  const elements: Record<string, unknown> = { c: { type: name, props, children: keys } };
+  entries.forEach((entry, index) => {
+    elements[keys[index]] = { type: entry.name, props: entry.props ?? {}, ...(entry.slot ? { slot: entry.slot } : {}) };
+  });
+  return toRuntimeSpec(
+    { root: "c", elements } as Parameters<typeof toRuntimeSpec>[0],
+    { customTypes: new Set([name, ...entries.map((entry) => entry.name)]) },
+  );
+}
+
+/**
  * Shared single-component capture surface: renders the resolved tree, then publishes the
  * readiness object built by `readyOf` (published version or draft rev — P1b).
  */
-function ComponentCaptureSurface({ name, designSystem, theme, props, custom, readyOf }: {
+function ComponentCaptureSurface({ name, designSystem, theme, props, custom, slots, readyOf }: {
   name: string; designSystem: string; theme: ThemeContent | null;
   props: Record<string, unknown>; custom: CustomPlayerRuntime;
+  slots?: CaptureSlotsBootstrap;
   readyOf: (propsHash: string) => CaptureReady;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
-  const tree = useMemo(() => toRuntimeSpec(
-    { root: "c", elements: { c: { type: name, props } } } as Parameters<typeof toRuntimeSpec>[0],
-    { customTypes: new Set([name]) },
-  ), [name, props]);
+  const tree = useMemo(() => captureRuntimeTree(name, props, slots), [name, props, slots]);
 
   useEffect(() => {
     let cancelled = false;
@@ -187,10 +211,14 @@ interface LoadedDraftComponent {
   props: Record<string, unknown>;
   dsMetaVersion: number | null;
   theme: ThemeContent | null;
+  /** Слот-содержимое случая приёмки (§A6); отсутствует у бесслотового кадра. */
+  slots?: CaptureSlotsBootstrap;
+  /** Эхо `expected.slotsHash` — поверхность его не пересчитывает (§A6, домашний паттерн). */
+  slotsHash?: string;
 }
 
 /** Reads and validates the worker bootstrap; a draft capture has no browser fallback. */
-function readDraftBootstrap(): { expected: ComponentDraftExpected; name: string; designSystem: string; bundleUrl: string; props: Record<string, unknown> } {
+function readDraftBootstrap(): { expected: ComponentDraftExpected; name: string; designSystem: string; bundleUrl: string; props: Record<string, unknown>; slots?: CaptureSlotsBootstrap } {
   const bootstrap = readBootstrap();
   if (bootstrap?.kind !== "component-draft" || bootstrap.expected.kind !== "component-draft") {
     throw new Error("Draft component capture requires a component-draft capture bootstrap");
@@ -204,11 +232,12 @@ function readDraftBootstrap(): { expected: ComponentDraftExpected; name: string;
     expected: bootstrap.expected,
     name: target.name, designSystem: target.designSystem, bundleUrl: target.bundleUrl,
     props: bootstrap.props ?? {},
+    ...(bootstrap.slots === undefined ? {} : { slots: bootstrap.slots }),
   };
 }
 
 async function loadDraftComponent(id: string, signal: AbortSignal): Promise<LoadedDraftComponent> {
-  const { expected, name, designSystem, bundleUrl, props } = readDraftBootstrap();
+  const { expected, name, designSystem, bundleUrl, props, slots } = readDraftBootstrap();
   if (expected.componentId !== id) throw new Error(`Draft capture targets ${expected.componentId}, not ${id}`);
   // Components are not theme-pinned: use the latest theme of the component's design system.
   let dsMetaVersion: number | null = null; let theme: ThemeContent | null = null;
@@ -216,23 +245,32 @@ async function loadDraftComponent(id: string, signal: AbortSignal): Promise<Load
   return {
     id, name, rev: expected.rev, sourceHash: expected.sourceHash, bundleHash: expected.bundleHash,
     bundleUrl, designSystem, props, dsMetaVersion, theme,
+    ...(slots === undefined ? {} : { slots }),
+    ...(expected.slotsHash === undefined ? {} : { slotsHash: expected.slotsHash }),
   };
 }
 
+/**
+ * Бандл драфта и бандлы опубликованных детей слотов грузятся **одним** вызовом загрузчика:
+ * определения родителя и детей обязаны попасть в один рантайм-реестр, иначе дерево `c` + `s0…sN`
+ * рендерилось бы с неизвестными типами.
+ */
 async function loadDraftRuntime(loaded: LoadedDraftComponent, signal: AbortSignal): Promise<CustomPlayerRuntime> {
-  const result = await loadCustomComponents([{
-    id: loaded.id, name: loaded.name, version: loaded.rev,
-    bundleUrl: loaded.bundleUrl, bundleHash: loaded.bundleHash,
-  }]);
+  const result = await loadCustomComponents([
+    { id: loaded.id, name: loaded.name, version: loaded.rev, bundleUrl: loaded.bundleUrl, bundleHash: loaded.bundleHash },
+    ...(loaded.slots?.children ?? []).map(({ id, name, version, bundleUrl, bundleHash }) => ({ id, name, version, bundleUrl, bundleHash })),
+  ]);
   if (signal.aborted) throw new DOMException("aborted", "AbortError");
   return result;
 }
 
 function LoadedDraftCapture({ loaded, custom }: { loaded: LoadedDraftComponent; custom: CustomPlayerRuntime }) {
-  return <ComponentCaptureSurface name={loaded.name} designSystem={loaded.designSystem} theme={loaded.theme} props={loaded.props} custom={custom}
+  return <ComponentCaptureSurface name={loaded.name} designSystem={loaded.designSystem} theme={loaded.theme} props={loaded.props} custom={custom} slots={loaded.slots}
     readyOf={(propsHash) => ({
       status: "ready", kind: "component-draft", componentId: loaded.id, rev: loaded.rev, sourceHash: loaded.sourceHash,
       bundleHash: loaded.bundleHash, propsHash, dsMetaVersion: loaded.dsMetaVersion, rendererBuild: bootstrapRendererBuild(),
+      // Эхо из frozen-bootstrap: пересчитывать нечего — пре-образ хэша живёт на сервере (§A3).
+      ...(loaded.slotsHash === undefined ? {} : { slotsHash: loaded.slotsHash }),
     })} />;
 }
 

@@ -14,7 +14,7 @@ import { HostStageSurface } from "../catalog/hostPrimitives";
 import { CaptureSurface } from "./CaptureSurface";
 import { CaptureStyle, useCaptureTheme, usePublishError, usePublishOnSettle } from "./CaptureChrome";
 import { bootstrapRendererBuild, readBootstrap } from "./readiness";
-import type { CaptureReady, PrototypeBootstrapTarget } from "./protocol";
+import type { CaptureReady, PrototypeBootstrapTarget, PrototypeCandidateOverlayEntry } from "./protocol";
 import { ArchivedPrototype } from "../player/PrototypeLoader";
 
 interface LoadedPrototype {
@@ -55,6 +55,15 @@ function bootstrapPrototypeTarget(): PrototypeBootstrapTarget | undefined {
   if (bootstrap?.kind !== "prototype") return undefined;
   const target = bootstrap.target as unknown as PrototypeBootstrapTarget | undefined;
   return target?.kind === "prototype" && Array.isArray(target.components) ? target : undefined;
+}
+
+/**
+ * Подменённые кандидатами пины overlay-джобы (план 2026-08-05 §B2.7). Поверхность их не выводит:
+ * список заморожен постановкой в `expected` и лишь эхорится в ready — ровно как manifest/catalog-хэши.
+ */
+function bootstrapCandidateOverlay(): PrototypeCandidateOverlayEntry[] | undefined {
+  const expected = readBootstrap()?.expected;
+  return expected?.kind === "prototype" ? expected.candidateOverlay : undefined;
 }
 
 async function loadPrototype(id: string, screenId: string, rev: number | undefined, version: number | undefined, signal: AbortSignal): Promise<LoadedPrototype> {
@@ -100,12 +109,16 @@ function LoadedPrototypeCapture({ loaded, custom, screenId }: { loaded: LoadedPr
   const { screenDesignSystem, screenMetaVersion } = loaded;
   // D10: устройство поверхности экрана, а не `doc.device` — на дуо-доке это разные значения.
   const screenSurface = surfaceOf(doc, screenId);
+  const candidateOverlay = bootstrapCandidateOverlay();
   usePublishOnSettle(ref, (): CaptureReady => ({
     status: "ready", kind: "prototype", revision: loaded.rev,
     prototypeInstanceId: loaded.prototypeInstanceId,
     componentManifestHash: loaded.componentManifestHash, builtinCatalogHash: loaded.builtinCatalogHash,
     designSystem: screenDesignSystem ?? null,
     dsMetaVersion: screenMetaVersion ?? null, rendererBuild: bootstrapRendererBuild(),
+    // Эхо `expected.candidateOverlay` (план 2026-08-05 §B2.7): у джобы без подмен поля нет,
+    // и пре-образ `readyToExpected` остаётся байт-в-байт прежним.
+    ...(candidateOverlay === undefined ? {} : { candidateOverlay }),
   }));
 
   if (!screen || !tree) return <div ref={ref} data-capture-error="screen-not-found" />;

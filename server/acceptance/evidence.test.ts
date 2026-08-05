@@ -7,10 +7,11 @@ import { AcceptanceRepo } from "./repo";
 import { policyProfileHash, ACCEPTANCE_POLICIES } from "./policies";
 import { runId as newRunId } from "./ids";
 import {
-  artifactPresent, casPath, casRoot, evidenceManifestHash, gcEvidence, putArtifact,
+  artifactPresent, casPath, casRoot, evidenceManifestHash, evidenceSlotsOf, gcEvidence, putArtifact,
   readRunManifest, runEvidenceDir, sanitizeEvidenceName, sha256Sums, writeRunManifest,
   type RunManifest,
 } from "./evidence";
+import type { ResolvedSlotBinding } from "./cases";
 
 // W1a (план 2026-08-03 §2 A4): CAS, per-run манифест и GC evidence.
 
@@ -51,6 +52,67 @@ const manifestOf = (runId: string, artifacts: { name: string; sha256: string; by
   policyProfileId: profile.id, policyProfileHash: policyProfileHash(profile),
   verdict: "pass", createdAt: "2026-08-03T00:00:00.000Z", finishedAt: "2026-08-03T00:01:00.000Z",
   cases: [{ caseId: "full", caseKey: "full", verdict: "pass", status: "done", reused: false, aliasOfCaseId: null, artifacts }],
+});
+
+/**
+ * **Golden slot-free манифеста** (план 2026-08-05 §A7, test-first): зафиксирован на неизменённом
+ * коде ДО добавления `slotBindings`/`slotsHash`. Слот-поля опциональны и пишутся условным спредом,
+ * поэтому манифест рана без слотов обязан остаться побайтово прежним — иначе `evidence_manifest_hash`
+ * поехал бы у всех уже принятых ранов, а он связан промоутом (`promote.ts:239`).
+ */
+const GOLDEN_SLOT_FREE_MANIFEST_HASH = "9217c6c82949e1c3f1741f87246c6dcae1c17e8b41a192eff700419fad1aea1f";
+const GOLDEN_RUN_ID = "acc_00000000-0000-4000-8000-000000000000";
+
+test("slot-free run manifest hashes to its pre-slotBindings golden", () => {
+  const manifest = manifestOf(GOLDEN_RUN_ID, [{ name: "render.png", sha256: "a".repeat(64), bytes: 3 }]);
+  expect(evidenceManifestHash(manifest)).toBe(GOLDEN_SLOT_FREE_MANIFEST_HASH);
+});
+
+const slotChild = (over: Partial<ResolvedSlotBinding> = {}): ResolvedSlotBinding => ({
+  slot: "items", index: 0, componentId: "pay-child", name: "PayChild", version: 1,
+  bundleHash: "bh-child-1", props: {}, propsHash: "props-empty", ...over,
+});
+
+test("evidenceSlotsOf groups the resolved tuple by slot and keeps render order", () => {
+  const grouped = evidenceSlotsOf({
+    slotBindings: [
+      slotChild({ slot: "items", index: 0, props: { text: "one" }, propsHash: "ph-one" }),
+      slotChild({ slot: "items", index: 1, props: { text: "two" }, propsHash: "ph-two" }),
+      slotChild({ slot: "default", index: 0 }),
+    ],
+    slotsHash: "b".repeat(64),
+  });
+  expect(grouped.slotBindings).toEqual([
+    {
+      slot: "items",
+      children: [
+        { componentId: "pay-child", name: "PayChild", version: 1, bundleHash: "bh-child-1", props: { text: "one" }, propsHash: "ph-one" },
+        { componentId: "pay-child", name: "PayChild", version: 1, bundleHash: "bh-child-1", props: { text: "two" }, propsHash: "ph-two" },
+      ],
+    },
+    { slot: "default", children: [{ componentId: "pay-child", name: "PayChild", version: 1, bundleHash: "bh-child-1", props: {}, propsHash: "props-empty" }] },
+  ]);
+  expect(grouped.slotsHash).toBe("b".repeat(64));
+
+  // Инвариант «отсутствует, а не пусто»: у slot-free случая слот-ключей нет вовсе, поэтому спред
+  // результата не добавляет к записи манифеста ни одного байта.
+  for (const empty of [undefined, {}, { slotBindings: [] }, { slotBindings: [], slotsHash: "c".repeat(64) }]) {
+    expect(Object.keys(evidenceSlotsOf(empty))).toEqual([]);
+  }
+});
+
+test("evidence manifest hash moves when a slot child's bundleHash alone changes", () => {
+  const withChild = (bundleHash: string): RunManifest => {
+    const manifest = manifestOf(GOLDEN_RUN_ID, [{ name: "render.png", sha256: "a".repeat(64), bytes: 3 }]);
+    manifest.cases[0] = {
+      ...manifest.cases[0]!,
+      ...evidenceSlotsOf({ slotBindings: [slotChild({ bundleHash })], slotsHash: `${bundleHash}-slots` }),
+    };
+    return manifest;
+  };
+  expect(evidenceManifestHash(withChild("bh-child-1"))).not.toBe(evidenceManifestHash(withChild("bh-child-2")));
+  // …и не совпадает с golden'ом slot-free рана: дерево слотов входит в доказательство.
+  expect(evidenceManifestHash(withChild("bh-child-1"))).not.toBe(GOLDEN_SLOT_FREE_MANIFEST_HASH);
 });
 
 test("CAS is content-addressed: same bytes land on the same sharded path, different bytes do not", async () => {

@@ -838,6 +838,8 @@ describe("multi-run promote (план 2026-08-04 W7)", () => {
     orchestrator: AcceptanceOrchestrator, candidateId: string, componentId: string,
     options: {
       caseSetId?: string | null; propsHashes: string[]; caseKeys?: string[];
+      /** §A8: `slots_hash` строк случая — параллельный `propsHashes` массив; NULL = бесслотовый. */
+      slotsHashes?: (string | null)[];
       status?: "pass" | "fail"; policyProfileId?: string; rendererFingerprint?: string | null;
       evidenceManifestHash?: string;
     },
@@ -847,10 +849,16 @@ describe("multi-run promote (план 2026-08-04 W7)", () => {
       policyProfileId: options.policyProfileId ?? DEFAULT_POLICY.id, policyProfileHash: POLICY_HASH,
       caseSetId: options.caseSetId ?? null,
       rendererFingerprint: options.rendererFingerprint === undefined ? RENDERER : options.rendererFingerprint,
-      cases: options.propsHashes.map((propsHash, index) => ({
-        caseId: `case_${propsHash}`, caseKey: options.caseKeys?.[index] ?? `key-${propsHash}`,
-        propsHash, caseFingerprint: `fp-${propsHash}-${index}`, casePolicyHash: "cp",
-      })),
+      cases: options.propsHashes.map((propsHash, index) => {
+        // PK — (run_id, case_id): при равных props случаи различаются слотовым суффиксом.
+        const slotsHash = options.slotsHashes?.[index] ?? null;
+        return {
+          caseId: `case_${propsHash}${slotsHash === null ? "" : `_${slotsHash}`}`,
+          caseKey: options.caseKeys?.[index] ?? `key-${propsHash}`,
+          propsHash, caseFingerprint: `fp-${propsHash}-${slotsHash ?? "-"}-${index}`, casePolicyHash: "cp",
+          ...(slotsHash === null ? {} : { slotsHash }),
+        };
+      }),
     }).run;
     orchestrator.repo.terminalizeRun(run.run_id, {
       status: options.status ?? "pass",
@@ -912,6 +920,99 @@ describe("multi-run promote (план 2026-08-04 W7)", () => {
     expect(body.error.overlapCount).toBe(1);
     expect(versionRows(db, id)).toEqual([]);
   }, 180_000);
+
+  /**
+   * §A8 (план 2026-08-05, T3.2). Ключ покрытия стал (propsHash, slotsHash, surface), и promote
+   * читает его как непрозрачную строку из `repo.runCoverage` — код саги не менялся, меняется
+   * только поведение. Кейс SMS в терминах promote: два рана одного кандидата на ОДНОЙ поверхности
+   * с одинаковым `props_hash`, но разными детьми слотов. До v31 их ключи совпадали → ложный
+   * `acceptance_coverage_overlap` и `coveredCases: 1`; теперь это два разных кадра.
+   */
+  test("одинаковые props, разные slotsHash → покрытие дизъюнктно, expectedCases считает два кадра (§A8)", async () => {
+    const { db, handler, orchestrator, id, candidate } = await familyFixture("promote-slots", "PromoteSlots");
+    // Одна и та же поверхность (light) в обоих наборах — иначе разошлись бы уже по surfaceKey.
+    const setA = putCaseSet(db, id, "light", ["a1"]);
+    const setB = putCaseSet(db, id, "light", ["b1"]);
+    const runA = shard(orchestrator, candidate.candidateId, id, {
+      caseSetId: setA.case_set_id, propsHashes: ["p-sms"], slotsHashes: ["slots-a"], caseKeys: ["sms-empty"],
+    });
+    const runB = shard(orchestrator, candidate.candidateId, id, {
+      caseSetId: setB.case_set_id, propsHashes: ["p-sms"], slotsHashes: ["slots-b"], caseKeys: ["sms-filled"],
+    });
+    // Строки действительно разошлись только по слотовой колонке.
+    expect(orchestrator.repo.cases(runA.run_id).map((row) => [row.props_hash, row.slots_hash]))
+      .toEqual([["p-sms", "slots-a"]]);
+    expect(orchestrator.repo.cases(runB.run_id).map((row) => [row.props_hash, row.slots_hash]))
+      .toEqual([["p-sms", "slots-b"]]);
+
+    const promoted = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, candidateId: candidate.candidateId,
+      acceptanceRunIds: [runA.run_id, runB.run_id], expectedCases: 2,
+    }));
+    expect(promoted.status, await promoted.clone().text()).toBe(201);
+    const body = await promoted.json() as { acceptanceRunIds: string[]; warnings: string[] };
+    expect(body.acceptanceRunIds).toHaveLength(2);
+    // Ни отказа по пересечению, ни warning'а о совпавших caseKey (ключи случаев здесь разные).
+    expect(body.warnings.some((warning) => warning.includes("case key(s)"))).toBe(false);
+  }, 180_000);
+
+  /**
+   * Обратная сторона того же ключа: слоты не ослабляют дизъюнктность. Совпали И props, И слоты —
+   * это один и тот же кадр, принятый дважды, и отказ остаётся прежним.
+   */
+  test("одинаковые props И одинаковые slotsHash → по-прежнему 422 acceptance_coverage_overlap (§A8)", async () => {
+    const { db, handler, orchestrator, id, candidate } = await familyFixture("promote-slotsdup", "PromoteSlotsdup");
+    const setA = putCaseSet(db, id, "light", ["a1"]);
+    const setB = putCaseSet(db, id, "light", ["b1"]);
+    const runA = shard(orchestrator, candidate.candidateId, id, {
+      caseSetId: setA.case_set_id, propsHashes: ["p-sms", "p-other"], slotsHashes: ["slots-a", "slots-a"],
+    });
+    const runB = shard(orchestrator, candidate.candidateId, id, {
+      caseSetId: setB.case_set_id, propsHashes: ["p-sms"], slotsHashes: ["slots-a"],
+    });
+    const response = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, acceptanceRunIds: [runA.run_id, runB.run_id],
+    }));
+    expect(response.status).toBe(422);
+    const body = await response.json() as { error: { code: string; overlapCount: number } };
+    expect(body.error.code).toBe("acceptance_coverage_overlap");
+    expect(body.error.overlapCount).toBe(1);
+    expect(versionRows(db, id)).toEqual([]);
+  }, 180_000);
+
+  /**
+   * Легаси-инвариант §A8 на уровне саги: бесслотовый ран (`slots_hash` NULL) и слотовый с теми же
+   * props — разные кадры, а два бесслотовых с одинаковыми props — по-прежнему один. Это
+   * гарантирует, что подстановка `"-"` не сделала NULL «джокером» ни в ту, ни в другую сторону.
+   */
+  test("бесслотовый ран не пересекается со слотовым, но с бесслотовым — да (§A8, легаси)", async () => {
+    const { db, handler, orchestrator, id, candidate } = await familyFixture("promote-slotsnull", "PromoteSlotsnull");
+    const setA = putCaseSet(db, id, "light", ["a1"]);
+    const setB = putCaseSet(db, id, "light", ["b1"]);
+    const slotless = shard(orchestrator, candidate.candidateId, id, { caseSetId: setA.case_set_id, propsHashes: ["p-sms"] });
+    const slotted = shard(orchestrator, candidate.candidateId, id, {
+      caseSetId: setB.case_set_id, propsHashes: ["p-sms"], slotsHashes: ["slots-a"],
+    });
+    expect(orchestrator.repo.cases(slotless.run_id).map((row) => row.slots_hash)).toEqual([null]);
+
+    const promoted = await handler(req(`/components/${id}/promote`, "POST", {
+      baseRev: 1, sourceHash: candidate.sourceHash, candidateId: candidate.candidateId,
+      acceptanceRunIds: [slotless.run_id, slotted.run_id], expectedCases: 2,
+    }));
+    expect(promoted.status, await promoted.clone().text()).toBe(201);
+
+    // Второй компонент: два бесслотовых рана с одинаковыми props — доv31-поведение, отказ.
+    const legacy = await familyFixture("promote-slotsnull2", "PromoteSlotsnull2");
+    const setC = putCaseSet(legacy.db, legacy.id, "light", ["c1"]);
+    const setD = putCaseSet(legacy.db, legacy.id, "light", ["d1"]);
+    const one = shard(legacy.orchestrator, legacy.candidate.candidateId, legacy.id, { caseSetId: setC.case_set_id, propsHashes: ["p-sms"] });
+    const two = shard(legacy.orchestrator, legacy.candidate.candidateId, legacy.id, { caseSetId: setD.case_set_id, propsHashes: ["p-sms"] });
+    const refused = await legacy.handler(req(`/components/${legacy.id}/promote`, "POST", {
+      baseRev: 1, sourceHash: legacy.candidate.sourceHash, acceptanceRunIds: [one.run_id, two.run_id],
+    }));
+    expect(refused.status).toBe(422);
+    expect(await codeOf(refused)).toBe("acceptance_coverage_overlap");
+  }, 240_000);
 
   test("одинаковые props на РАЗНЫХ поверхностях промоутятся, а совпавшие caseKey дают warning (D12)", async () => {
     const { db, handler, orchestrator, id, candidate } = await familyFixture("promote-themes", "PromoteThemes");

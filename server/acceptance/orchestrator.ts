@@ -24,7 +24,7 @@ import { ComponentRepo } from "../repos/components";
 import { getCandidateForRev } from "../components/validate";
 import { buildCases, DEFAULT_CASE_SURFACE, type AcceptanceCase } from "./cases";
 import { buildCasesFromManifest, casesOfRun, CaseSetRepo, manifestOfRow, surfaceOfManifest } from "./caseSets";
-import { writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./evidence";
+import { evidenceSlotsOf, writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./evidence";
 import type { RunInkBbox } from "./inkBbox";
 import type { RunNormalizedDiff } from "../visual/diff-runner";
 import type { CaseSetManifest } from "../../src/acceptance/caseSetSchema";
@@ -632,7 +632,7 @@ export class AcceptanceOrchestrator {
       const fps = caseFingerprintsFor(deps, item);
       return [item.caseId, { hash: fps.verdictPolicy, snapshot: fps.verdictPolicySnapshot }] as const;
     }));
-    const manifest = this.manifestOf(run, subject, verdict, executions, verdictPolicies);
+    const manifest = this.manifestOf(run, subject, verdict, executions, verdictPolicies, cases);
     const { manifestHash } = await writeRunManifest(this.deps.dataDir, run.run_id, manifest);
     return this.repo.terminalizeRun(run.run_id, {
       status: verdict,
@@ -761,7 +761,12 @@ export class AcceptanceOrchestrator {
     verdict: string,
     executions: CaseExecution[],
     verdictPolicies: ReadonlyMap<string, { hash: string; snapshot: VerdictPolicySnapshot }> = new Map(),
+    runCases: readonly AcceptanceCase[] = [],
   ): RunManifest {
+    // Слот-дерево берётся из **того же** набора случаев, что дал отпечатки рана (`casesOfRun`), а не
+    // перерешается по манифесту набора: иначе доказательство описывало бы пины, разрешённые позже
+    // съёмки, и могло бы разойтись с тем, что реально снято.
+    const bySlotCase = new Map(runCases.map((item) => [item.caseId, item] as const));
     const cases: EvidenceCaseEntry[] = [...executions].sort(bySeverity).map((execution) => ({
       caseId: execution.caseId,
       caseKey: execution.caseKey,
@@ -776,6 +781,9 @@ export class AcceptanceOrchestrator {
       // ни «каким порогом мерили».
       reuseReceipt: reuseReceiptOf(execution),
       ...(verdictPolicies.has(execution.caseId) ? { verdictPolicy: verdictPolicies.get(execution.caseId)! } : {}),
+      // Слот-поля — условным спредом: у slot-free случая (и у всего examples-пути) их нет вовсе,
+      // и его запись остаётся побайтово прежней (golden §A7).
+      ...evidenceSlotsOf(bySlotCase.get(execution.caseId)),
       artifacts: execution.artifacts.map((artifact) => ({ name: artifact.name, sha256: artifact.sha256, bytes: artifact.bytes })),
     }));
     return {

@@ -3,6 +3,7 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { getComponentVersion, getDesignSystemVersion, getPrototypeDraft } from "../api/client";
+import { loadCustomComponents } from "../customComponents/loader";
 import { prototypeDocSchema } from "../prototype/schema";
 import { CapturePrototype } from "./CapturePrototype";
 import { CaptureComponent, CaptureComponentDraft } from "./CaptureComponent";
@@ -83,6 +84,31 @@ describe("capture shell", () => {
     expect(surface!.style.getPropertyValue("--eui-space-md")).toBe("12px");
     expect(screen.queryByRole("navigation")).toBeNull();
     expect(screen.queryByRole("banner")).toBeNull();
+  });
+
+  // План 2026-08-05 §B2.7: overlay-джоба эхорит `expected.candidateOverlay` в ready; у обычной
+  // джобы поля нет вовсе — пре-образ `readyToExpected` остаётся байт-в-байт прежним.
+  it("echoes candidateOverlay from the frozen bootstrap and omits it otherwise", async () => {
+    const overlay = [{ componentId: "widget", candidateId: "cand_1", bundleHash: "cand-bh" }];
+    window.__EUI_CAPTURE_BOOTSTRAP__ = {
+      kind: "prototype",
+      target: { kind: "prototype", rev: 3 },
+      expected: {
+        kind: "prototype", prototypeInstanceId: "capture-instance", rev: 3,
+        componentManifestHash: "m", builtinCatalogHash: "b", designSystem: null, dsMetaVersion: null,
+        rendererBuild: null, candidateOverlay: overlay,
+      },
+    };
+    const router = createMemoryRouter([{ path: "/capture/:protoId/s/:screenId", element: <CapturePrototype /> }], { initialEntries: ["/capture/cap/s/welcome"] });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(window.__EUI_CAPTURE_READY__).toMatchObject({ status: "ready", candidateOverlay: overlay }));
+  });
+
+  it("publishes a prototype readiness object without candidateOverlay when no override was frozen", async () => {
+    const router = createMemoryRouter([{ path: "/capture/:protoId/s/:screenId", element: <CapturePrototype /> }], { initialEntries: ["/capture/cap/s/welcome"] });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(window.__EUI_CAPTURE_READY__).toBeDefined());
+    expect(window.__EUI_CAPTURE_READY__).not.toHaveProperty("candidateOverlay");
   });
 
   it("portals ordered Overlay layers into #eui-capture-surface", async () => {
@@ -244,6 +270,74 @@ describe("capture component draft (P1b)", () => {
     renderDraftCapture();
     await waitFor(() => expect(document.querySelector("[data-capture-error]")).not.toBeNull());
     expect(screen.queryByTestId("widget")).toBeNull();
+  });
+
+  // План 2026-08-05 §A6: bootstrap со `slots` превращает одноэлементное дерево в `c` + `s0…sN`.
+  // Именованный ребёнок несёт `slot`, ребёнок дефолтного слота — не несёт ключа вовсе (§A2a).
+  describe("slot bindings (план 2026-08-05 §A6)", () => {
+    type SlotProps = { props: Record<string, unknown>; slots: Record<string, unknown>; children?: unknown };
+    const chip = (p: SlotProps) => <li data-testid="chip">{String(p.props.label ?? "")}</li>;
+    const panelRuntime = {
+      definitions: {
+        Panel: { props: z.object({ title: z.string().optional() }), description: "panel", slots: ["header", "items"], capabilities: { namedSlots: true } },
+        Chip: { props: z.object({ label: z.string().optional() }), description: "chip" },
+      },
+      components: {
+        Panel: (p: SlotProps) => <div><header data-testid="header-slot">{p.slots.header as never}</header><ul data-testid="items-slot">{p.slots.items as never}</ul></div>,
+        Chip: chip,
+      },
+    };
+    const carouselRuntime = {
+      definitions: {
+        Carousel: { props: z.object({}), description: "carousel" },
+        Chip: { props: z.object({ label: z.string().optional() }), description: "chip" },
+      },
+      components: { Carousel: (p: SlotProps) => <ul data-testid="carousel">{p.children as never}</ul>, Chip: chip },
+    };
+    const childPin = { id: "chip", name: "Chip", version: 4, bundleUrl: "/api/components/chip/versions/4/bundle.js", bundleHash: "chip-bh", status: "active" };
+    const slottedBootstrap = (name: string, tree: { slot?: string; index: number; name: string; props: Record<string, unknown> }[]) => ({
+      ...draftBootstrap(),
+      target: { ...draftBootstrap().target, name },
+      props: {},
+      slots: { children: [childPin], tree },
+      expected: { ...draftBootstrap().expected, slotsHash: "s".repeat(64) },
+    });
+
+    it("routes two children into a named slot and echoes slotsHash", async () => {
+      vi.mocked(loadCustomComponents).mockResolvedValueOnce(panelRuntime as never);
+      window.__EUI_CAPTURE_BOOTSTRAP__ = slottedBootstrap("Panel", [
+        { slot: "items", index: 0, name: "Chip", props: { label: "one" } },
+        { slot: "items", index: 1, name: "Chip", props: { label: "two" } },
+      ]);
+      renderDraftCapture();
+      await waitFor(() => expect(screen.queryByTestId("items-slot")).not.toBeNull());
+      expect(screen.getByTestId("items-slot").textContent).toBe("onetwo");
+      expect(screen.getByTestId("header-slot").textContent).toBe("");
+      expect(screen.getAllByTestId("chip")).toHaveLength(2);
+      // Родительский драфт и опубликованные дети грузятся одним вызовом загрузчика.
+      expect(vi.mocked(loadCustomComponents).mock.lastCall![0]).toEqual([
+        { id: "widget", name: "Panel", version: 3, bundleUrl: expect.stringContaining("/draft/"), bundleHash: "bh" },
+        { id: "chip", name: "Chip", version: 4, bundleUrl: childPin.bundleUrl, bundleHash: "chip-bh" },
+      ]);
+      await waitFor(() => expect(window.__EUI_CAPTURE_READY__).toMatchObject({ status: "ready", kind: "component-draft", slotsHash: "s".repeat(64) }));
+    });
+
+    it("renders nine default-slot children (карусель, §A2a)", async () => {
+      vi.mocked(loadCustomComponents).mockResolvedValueOnce(carouselRuntime as never);
+      window.__EUI_CAPTURE_BOOTSTRAP__ = slottedBootstrap("Carousel",
+        Array.from({ length: 9 }, (_, index) => ({ index, name: "Chip", props: { label: `m${index}` } })));
+      renderDraftCapture();
+      await waitFor(() => expect(screen.queryByTestId("carousel")).not.toBeNull());
+      expect(screen.getAllByTestId("chip")).toHaveLength(9);
+      expect(screen.getByTestId("carousel").textContent).toBe("m0m1m2m3m4m5m6m7m8");
+    });
+
+    it("keeps the slot-free draft handshake free of slotsHash", async () => {
+      window.__EUI_CAPTURE_BOOTSTRAP__ = draftBootstrap();
+      renderDraftCapture();
+      await waitFor(() => expect(window.__EUI_CAPTURE_READY__).toBeDefined());
+      expect(window.__EUI_CAPTURE_READY__).not.toHaveProperty("slotsHash");
+    });
   });
 });
 

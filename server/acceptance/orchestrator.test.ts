@@ -9,6 +9,7 @@ import type { CandidateEntry } from "../components/candidates";
 import type { CaptureProbe, JobOutcome, JobStatus, ScreenshotResult } from "../screenshot/service";
 import type { CaptureCode } from "../../src/capture/failureCodes";
 import type { InkBboxResult } from "./inkBbox";
+import { canonicalStringify } from "../../src/capture/canonicalJson";
 import { caseSetManifestSchema, type CaseSetManifest } from "../../src/acceptance/caseSetSchema";
 import { CaseSetRepo } from "./caseSets";
 import { readArtifact, readRunManifest } from "./evidence";
@@ -762,4 +763,116 @@ test("названный отказ постановки капчур-джобы
   const details = gatesOfCase(harness, run.run_id, "alpha").map((gate) => gate.detail ?? "").join("\n");
   expect(details).toContain("PayChild");
   harness.db.close();
+});
+
+// ------------------------------------------------ evidence-манифест слот-рана (§A7, T3.3)
+
+/**
+ * Нормализация манифеста под golden: значения, уникальные для запуска (идентификаторы рана и
+ * кандидата, времена, sha-адреса CAS), заменяются заглушками. Предмет сверки — **форма и значения
+ * манифеста**, а не uuid'ы харнесса; всё, что осталось после нормализации, обязано быть стабильным.
+ */
+const normalizeManifest = (value: unknown): unknown => {
+  if (typeof value === "string") {
+    if (/^[0-9a-f]{64}$/.test(value)) return "<sha256>";
+    if (/^(acc|cand)_/.test(value)) return "<id>";
+    if (/^\d{4}-\d{2}-\d{2}T/.test(value)) return "<ts>";
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(normalizeManifest);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, normalizeManifest(item)]));
+  }
+  return value;
+};
+
+const manifestShapeHash = (manifest: unknown): string =>
+  new Bun.CryptoHasher("sha256").update(canonicalStringify(normalizeManifest(manifest))).digest("hex");
+
+/**
+ * **Golden slot-free манифеста** (§A7, test-first): снят на неизменённом коде ДО того, как
+ * `manifestOf` научился писать `slotBindings`/`slotsHash`. Оба поля пишутся условным спредом,
+ * поэтому у рана без слотов манифест обязан остаться прежним побайтово: `evidence_manifest_hash`
+ * связан промоутом (`promote.ts:239`), и сдвиг формы обесценил бы уже принятые раны.
+ */
+const GOLDEN_SLOT_FREE_MANIFEST_SHAPE = "3001649a187ebe57a4103f21783604c86770f5dea00455ec976f3ecc0bf45a95";
+
+test("evidence-манифест slot-free рана не меняется от появления слот-полей (golden §A7)", async () => {
+  const harness = await setup();
+  const reference = await putAsset(harness, framePng({ label: "a" }));
+  const { run } = await runWith(harness, manifestOf([{ id: "alpha", props: { label: "a" }, referenceAssetId: reference }]));
+  const manifest = (await readRunManifest(harness.dir, run.run_id))!;
+
+  expect(manifest.cases[0]!.slotBindings).toBeUndefined();
+  expect(manifest.cases[0]!.slotsHash).toBeUndefined();
+  expect(Object.keys(manifest.cases[0]!)).not.toContain("slotBindings");
+  expect(manifestShapeHash(manifest)).toBe(GOLDEN_SLOT_FREE_MANIFEST_SHAPE);
+  harness.db.close();
+});
+
+test("evidence-манифест слот-рана несёт разрешённое дерево слотов и slotsHash случая", async () => {
+  const harness = await setup({ slots: ["items"], namedSlots: true });
+  seedChild(harness, { id: "pay-child", name: "PayChild" });
+  const started = await harness.orchestrator.startRun({
+    candidateId: harness.candidateId, createdBy: "user_a",
+    caseSetId: putSet(harness, slotManifest([
+      {
+        id: "alpha",
+        props: { label: "a" },
+        slotBindings: {
+          items: [{ type: "PayChild", version: 1, props: { text: "one" } }, { type: "PayChild", version: 1, props: { text: "two" } }],
+          default: [{ type: "PayChild", version: 1 }],
+        },
+      },
+    ])),
+  });
+  const run = await harness.orchestrator.executeRun(started.run.run_id);
+  const manifest = (await readRunManifest(harness.dir, run.run_id))!;
+  const entry = manifest.cases.find((item) => item.caseId === "alpha")!;
+
+  // Плоский кортеж отпечатка сгруппирован по слотам, порядок детей — порядок рендера.
+  expect(entry.slotBindings).toEqual([
+    {
+      slot: "items",
+      children: [
+        { componentId: "pay-child", name: "PayChild", version: 1, bundleHash: "bh-pay-child-1", props: { text: "one" }, propsHash: expect.any(String) },
+        { componentId: "pay-child", name: "PayChild", version: 1, bundleHash: "bh-pay-child-1", props: { text: "two" }, propsHash: expect.any(String) },
+      ],
+    },
+    {
+      slot: "default",
+      children: [
+        { componentId: "pay-child", name: "PayChild", version: 1, bundleHash: "bh-pay-child-1", props: {}, propsHash: expect.any(String) },
+      ],
+    },
+  ]);
+  expect(entry.slotBindings![0]!.children[0]!.propsHash).not.toBe(entry.slotBindings![0]!.children[1]!.propsHash);
+  // Один и тот же `slots_hash` в строке случая и в доказательстве: сверять нечего, если они разные.
+  expect(entry.slotsHash).toBe(harness.repo.cases(run.run_id)[0]!.slots_hash!);
+  expect(entry.slotsHash).toMatch(/^[0-9a-f]{64}$/);
+  harness.db.close();
+});
+
+test("evidence_manifest_hash съезжает от одной лишь смены bundleHash ребёнка слота", async () => {
+  /** Слот-ран поверх ребёнка с заданным билдом; отпечатки и артефакты нормализуются. */
+  const shapeOf = async (bundleHash: string): Promise<string> => {
+    const harness = await setup({ slots: ["items"], namedSlots: true });
+    seedChild(harness, { id: "pay-child", name: "PayChild" });
+    harness.db.run("UPDATE component_publishes SET bundle_hash=? WHERE component_id='pay-child'", [bundleHash]);
+    const started = await harness.orchestrator.startRun({
+      candidateId: harness.candidateId, createdBy: "user_a",
+      caseSetId: putSet(harness, slotManifest([
+        { id: "alpha", props: { label: "a" }, slotBindings: { items: [{ type: "PayChild", version: 1 }] } },
+      ])),
+    });
+    const run = await harness.orchestrator.executeRun(started.run.run_id);
+    const manifest = (await readRunManifest(harness.dir, run.run_id))!;
+    expect(manifest.cases[0]!.slotBindings![0]!.children[0]!.bundleHash).toBe(bundleHash);
+    harness.db.close();
+    return manifestShapeHash(manifest);
+  };
+
+  // Пересобранный ребёнок — другое доказательство: приёмка, снятая со старым билдом, не описывает
+  // новый, и промоут, связывающий `evidence_manifest_hash`, обязан это видеть.
+  expect(await shapeOf("bh-child-a")).not.toBe(await shapeOf("bh-child-b"));
 });
