@@ -32,9 +32,12 @@ node .claude/skills/deploy/driver.mjs watch    # poll Dokploy until done/error (
 node .claude/skills/deploy/driver.mjs verify   # health/auth/SPA checks against prod
 ```
 
-The legacy deploy driver still checks infrastructure state; use the author driver for the session-auth read-back after it reports healthy:
+Before pushing a feature wave, check the plan's deploy checklist and the `environment:` block in `docker-compose.yml` — feature flags default there (e.g. `EASYUI_ACCEPTANCE_MATRIX`, `EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE`, `EASYUI_RENDERER_POOL` all default to `1`; a Dokploy env override wins over the compose default).
+
+The legacy deploy driver still checks infrastructure state; use the author driver for the session-auth read-back after it reports healthy. The author driver reads `EASYUI_USERNAME`/`EASYUI_PASSWORD` from the environment, not from `.env` — source it first:
 
 ```bash
+set -a; source .env; set +a
 EASYUI_API=https://easy-ui.pay-offline.ru/api node .claude/skills/author/driver.mjs get prototypes
 ```
 
@@ -46,6 +49,16 @@ PASS  API requires auth (401, www-authenticate=null)
 PASS  SPA open (200)
 PASS  login sets session cookie (200)
 PASS  API with session cookie (200)
+```
+
+To smoke-check feature flags after a wave, read `GET /api/capabilities` **with a session cookie** — the endpoint is behind auth, and an unauthenticated curl returns a 401 JSON body in which every feature key is simply absent (looks like "flags missing", is actually "not logged in"):
+
+```bash
+set -a; source .env; set +a; jar=$(mktemp)
+curl -s -c "$jar" -X POST https://easy-ui.pay-offline.ru/api/auth/login \
+  -H 'Content-Type: application/json' -H 'Origin: https://easy-ui.pay-offline.ru' \
+  -d "{\"name\":\"$EASYUI_USERNAME\",\"password\":\"$EASYUI_PASSWORD\"}" -o /dev/null -w '%{http_code}\n'
+curl -s -b "$jar" https://easy-ui.pay-offline.ru/api/capabilities   # flags in .features, limits in .limits
 ```
 
 ## Manual deploy / redeploy (no new commit)
