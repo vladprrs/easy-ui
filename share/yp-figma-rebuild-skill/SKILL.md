@@ -5,128 +5,93 @@ description: Rebuild the Yandex Pay design system in easy-ui from scratch, atom 
 
 # Пересборка Yandex Pay: Figma → easy-ui, pixel perfect, атом за атомом
 
-Ты — агент с двумя инструментами: **Figma MCP** (библиотека дизайн-системы Yandex Pay — источник истины) и **HTTP API easy-ui** (харнес `driver.mjs` + `api.mjs` из этого пакета). Существующая в easy-ui система `yandex-pay` собиралась без прямого доступа к Figma и фундаментально расходится с оригиналом. Твоя задача — построить систему компонентов **заново, с нуля**: каждый токен, атом, молекула и организм снимаются с Figma и публикуются в **новую** дизайн-систему, из которой потом собираются кликабельные прототипы, пиксельно совпадающие с макетами.
+Ты — агент с двумя инструментами: **Figma MCP** (библиотека Yandex Pay — источник истины) и **HTTP API easy-ui** (харнес `driver.mjs` + `api.mjs` из этого пакета). Существующая система `yandex-pay` собиралась без доступа к Figma и расходится с оригиналом. Задача — построить систему **заново, с нуля**: каждый токен, атом, молекула и организм снимаются с Figma и публикуются в **новую** дизайн-систему `yandex-pay-v2`.
 
-Это марафон, не спринт: работа идёт строго по уровням (токены → атомы → молекулы → организмы → эталонные экраны), каждый компонент проходит численную и пиксельную приёмку до перехода к следующему. Прогресс фиксируется в файлах (`BUILD_ORDER.md`, `REPORT.md`) — сессию можно прервать и продолжить.
+Это марафон по уровням (токены → атомы → молекулы → организмы → экраны). Прогресс фиксируется в `BUILD_ORDER.md`/`REPORT.md` — сессию можно прервать и продолжить.
+
+Этот файл — рабочий скелет. Детальная механика лежит в `reference/` и читается **по мере надобности** (§9, карта) — не загружай всё разом.
 
 ## 0. Незыблемые правила
 
-1. **Старую систему `yandex-pay` не трогать.** Не публиковать в неё, не менять её тему, не архивировать её компоненты, не переиспользовать её `Yp*`-имена. Прод живёт на ней. Читать её можно только как справку по механике easy-ui (как устроен работающий TSX-компонент) — **никогда** как источник визуальных значений.
-2. **Figma — единственный источник значений.** Каждый цвет, отступ, радиус, размер, толщина шрифта, тень берётся из Figma (variables, inspect/dev-mode данные ноды), а не «на глаз», не из памяти и не из старой системы. Каждое значение в TSX должно быть прослеживаемо до Figma-ноды.
-3. **Атом за атомом.** Компонент не готов, пока не прошёл приёмку (§5). Молекула не начинается, пока не готовы все её атомы. Не публиковать «примерно похожее, доведу потом».
-4. **Все повторяющиеся стилевые значения — через токены темы** (`color()` / `space()` из `easy-ui/runtime/v4`). Сырой литерал допустим только как fallback внутри `color(...)` и для метрик конкретного компонента, не покрытых токенами (высота контрола, ширина иконки).
-5. **Renderer НЕ применяет Zod-дефолты.** Каждый `.default(X)` схемы обязан дублироваться `?? X` в рендер-коде; каждый массив — `?? []`; каждый lookup по ключу — с fallback-веткой. Это причина №1 поломок старой системы.
-6. **Никакого base64.** Иллюстрации, иконки, шрифты — только через реестр ассетов (`api.mjs upload` → `asset_<sha256>`).
-7. **Каждый компонент несёт Figma-provenance**: `fileKey` + `nodeIds` + загруженные эталонные скриншоты (`api.mjs figma`). Без provenance компонент не считается готовым.
-8. **`409 component_reuse_required | canonical_role_conflict | catalog_changed` — терминальный STOP**: не ретраить, не переименовывать ради обхода, `--force-new` — только человек-админ. Reuse-гейт действует и в новой системе.
+1. **Прогресс живёт в продукте, а не в локальных файлах.** easy-ui — твой верстак, а не только релизная цель: итерации идут серверными драфтами (save → `preview --rev head-draft`), а не «соберу всё локально и залью потом». Компонент публикуется **сразу**, как только приёмка сошлась; полировка сверх порогов — новыми версиями, а не задержкой публикации. Каждая рабочая сессия обязана оставить видимый след в easy-ui: новые публикации, версию темы, обновлённые probe-галереи. Локальные заметки и PNG без опубликованного результата прогрессом **не считаются**.
+2. **Старую систему `yandex-pay` не трогать.** Не публиковать в неё, не менять тему, не архивировать, не переиспользовать `Yp*`-имена. Читать — только как справку по механике easy-ui, никогда как источник визуальных значений.
+3. **Figma — единственный источник значений.** Каждый цвет, отступ, радиус, вес, тень — из Figma (variables, inspect), не «на глаз», не из памяти, не из старой системы. Каждое значение в TSX прослеживаемо до Figma-ноды.
+4. **Атом за атомом.** Молекула не начинается, пока не опубликованы все её атомы. Если атом не сходится по пикселям после ~3 полировочных итераций — публикуй лучшее состояние, фиксируй остаток диффа в `REPORT.md` как known-gap и иди дальше; возвращение — новой версией.
+5. **Повторяющиеся стилевые значения — через токены темы** (`color()` / `space()` из `easy-ui/runtime/v4`). Сырой литерал — только как fallback внутри `color(...)` и для метрик конкретного компонента.
+6. **Renderer НЕ применяет Zod-дефолты.** Каждый `.default(X)` схемы дублируется `?? X` в рендере; массивы — `?? []`; lookup — с fallback-веткой. Причина №1 поломок старой системы.
+7. **Никакого base64.** Иллюстрации, иконки, шрифты — только через реестр ассетов (`api.mjs upload` → `asset_<sha256>`).
+8. **Каждый компонент несёт Figma-provenance**: `fileKey` + `nodeIds` + эталонные скриншоты. Без provenance компонент не готов.
+9. **`409 component_reuse_required | canonical_role_conflict | catalog_changed` — терминальный STOP**: не ретраить, не переименовывать ради обхода, `--force-new` — только человек-админ.
 
 ## 1. Setup
 
 Пакет самодостаточен, репозиторий easy-ui не нужен. Node ≥ 18. Для пиксельного диффа один раз: `npm i pixelmatch pngjs` (в каталоге пакета).
 
 ```bash
-export EASYUI_USERNAME="…"    # named-аккаунт easy-ui (нужны права на создание дизайн-системы)
+export EASYUI_USERNAME="…"    # named-аккаунт (нужны права на создание дизайн-системы)
 export EASYUI_PASSWORD="…"
-# инстанс по умолчанию — https://easy-ui.pay-offline.ru; другой: export EASYUI_API="http://127.0.0.1:8787/api"
+# дефолтный инстанс — https://easy-ui.pay-offline.ru; другой: export EASYUI_API="http://127.0.0.1:8787/api"
 
 node driver.mjs get prototypes          # smoke: API и креды живы
-node api.mjs get /capabilities          # actions, лимиты, фаза reuse-гейта, features
+node api.mjs get /capabilities          # actions, features, лимиты, фаза reuse-гейта
 ```
 
-Цикл ниже опирается на серверные возможности, объявленные в `features` этого инстанса: `componentValidate` (префлайт), `componentDraftPreview` (`preview --rev head-draft`), `componentGeometry` + `geometryPaint` (`preview --probe geometry`, измерение краски на приёмке), `prototypeHeadTracking` (`track: head`), `captureReadiness`, `readinessProfile`, `themeDryRun`/`themeSparseOps`, `acceptancePromote` (`promote`), `acceptanceProvenance` (верб `provenance`), `acceptanceMatrix`/`acceptanceCandidates`/`acceptanceRuns` (`accept`, §4.8), `caseSetValidate` (dry-run манифеста), `acceptanceSummaryView` (`--summary`), `acceptanceMultiRunPromote` (набор ранов в `promote`), `compositionV3`/`compositionAnalyze` (§6). Числовые потолки лежат рядом, в `limits` того же ответа (`caseSetMaxCases`, `caseSetMaxDimensions`, `caseSetMaxDimensionValues`, `caseSetMaxExpectedTuples`, `acceptanceMaxCasesPerRun`) — читать их оттуда, а не из памяти. Драйвер проверяет их сам и на старом инстансе падает читаемым сообщением («server does not support …»), а не странным 404 — но на старом сервере цикл деградирует до «публикация на итерацию», и это надо учитывать в плане работ. Секция `renderer` того же ответа объявляет идентичность рендерера (версия chromium, sha запускаемого `chrome-headless-shell`, хэши шрифтового стека и флагов запуска, итоговый `fingerprint`) — она входит в отпечаток случая приёмки, поэтому апгрейд браузера на инстансе честно обнуляет накопленный reuse снимков.
-
-Read-only ответы (capabilities, каталог, версии, case-set'ы, **терминальные** раны приёмки) кэшируются локально: `--cache-dir .easyui-cache` (или `EASYUI_CACHE_DIR`) на любом вербе, `--cache-refresh` форсирует промах. Кэш — ускоритель, а не свидетельство: в `--json` каждого ответа едет `cache.status` (`hit|miss|refresh|off`), и в отчёт идёт он, а не «я помню».
-
-Отрицательный вывод о существовании ресурса кэшу не доверяется (план 2026-08-04 §W4): ответы со статусом ≠ 200 на диск не пишутся вовсе, `GET /components/:id` не кэшируется, а «нет в каталожном списке» (`fresh`-окно 5 минут; в списке — только опубликованные версии) перед вердиктом перепроверяется **ровно одним** принудительным сетевым запросом. Источник вывода назван в `--json` полем `existence {source: list-cache|direct-cache|direct-network, refreshed, status}`; мутационные пути (`accept`, `promote`, `case-set put`, save/publish/delete) читают ресурс мимо кэша всегда. Свежесохранённый драфт поэтому доступен без `--cache-refresh`; если `not found` всё же пришёл — это ответ сервера, и проверять надо учётку и адрес API, а не кэш.
+Цикл опирается на серверные `features` (preflight, draft-preview, geometry, acceptance-матрица, promote, head-tracking…) и числовые `limits` — читай их из `/capabilities` этого инстанса, не из памяти; на старом инстансе драйвер падает читаемым «server does not support …». Полный разбор features/лимитов, кэша драйвера (`--cache-dir`, `cache.status`, семантика «not found») и кэша логина — **`reference/server-features.md`**.
 
 Два харнеса:
 
-- **`driver.mjs`** — основной CLI: каталог, компоненты, прототипы, снапы, публикация. Полный справочник по механике (грамматика документа, директивы, версии, troubleshooting) — **`reference/easy-ui-authoring.md`**; здесь он не дублируется. Прочитай его перед началом.
-- **`api.mjs`** — то, чего нет в driver: `get <path>`, `send <METHOD> <path> <body.json>`, `upload <file>` (ассеты), `theme <dsId> <theme.json>` (PATCH темы с авто-CAS), `figma <componentId> <figma.json>` (легаси-путь ретроактивного прикрепления provenance через PUT + re-publish; в обычном цикле используй `driver.mjs provenance`, а при создании — `driver.mjs component --figma`).
+- **`driver.mjs`** — основной CLI: каталог, компоненты, прототипы, снапы, публикация, приёмка. Полный справочник по механике easy-ui (грамматика документа, директивы, версии, troubleshooting) — **`reference/easy-ui-authoring.md`**; открывай его секциями по мере надобности, не целиком.
+- **`api.mjs`** — то, чего нет в driver: `get <path>`, `send <METHOD> <path> <body.json>`, `upload <file>`, `theme <dsId> <theme.json>` (PATCH темы с авто-CAS).
 
-**Логин**: auth-клиент кэширует сессию на диске между вызовами (`$XDG_STATE_HOME/easyui`, TTL 24 ч; `EASYUI_SESSION_FILE` переопределяет путь, `EASYUI_SESSION_CACHE=0` выключает) — в норме логин один на серию. Лимит — 5 логинов на аккаунт в минуту: при `HTTP 429 rate_limited` проверь, не выключен ли кэш, подожди минуту и повтори.
+**Один аккаунт на всю работу** (тему меняет владелец системы, скриншоты — владелец прототипа). Slug свободен? — `node api.mjs get /design-systems/yandex-pay-v2` → `404` = свободен.
 
-**Один аккаунт на всю работу**: тему может менять только владелец системы (или админ), скриншоты — только владелец прототипа. Все шаги делай под одним и тем же аккаунтом. Перед созданием проверь, свободен ли slug: `node api.mjs get /design-systems/yandex-pay-v2` → `404` = свободен; существующая система под чужим владельцем всплывёт не сразу, а `403` на первом PATCH темы.
-
-Смоук Figma MCP: получи корневые страницы файла библиотеки и убедись, что можешь (а) читать структуру и стили нод, (б) экспортировать PNG ноды. Без обоих не начинай.
+Смоук Figma MCP: прочитай структуру/стили нод и экспортируй PNG ноды. Без обоих не начинай.
 
 ## 2. Именование и площадка
-
-- Дизайн-система: slug **`yandex-pay-v2`**, имя «Yandex Pay v2». Создание:
 
 ```bash
 node driver.mjs design-system yandex-pay-v2 "Yandex Pay v2" "Pixel-perfect rebuild of the Yandex Pay design system from Figma"
 ```
 
-- **Имена компонентов в easy-ui глобально уникальны across дизайн-систем** — `Yp*`/`yp-*` заняты старой системой. Канон новой: id `pay-<kebab>`, имя `Pay<Pascal>` (`pay-button` / `PayButton`, `pay-box` / `PayBox`). Не отступать от префикса.
-- Probe-прототипы: `ypv2-probe-<level>` (`ypv2-probe-molecules`, `ypv2-probe-organisms`, …; атомам probe не нужен — §4.6), эталонные экраны: `ypv2-ref-<flow>`. `doc.id` глобальны — не занимать чужие (`node driver.mjs get prototypes`).
+- **Имена компонентов глобально уникальны across дизайн-систем** — `Yp*`/`yp-*` заняты. Канон новой: id `pay-<kebab>`, имя `Pay<Pascal>` (`pay-button` / `PayButton`).
+- Probe-прототипы: `ypv2-probe-<level>` (`ypv2-probe-atoms`, `ypv2-probe-molecules`, …), эталонные экраны: `ypv2-ref-<flow>`. `doc.id` глобальны — не занимать чужие.
 
 ## 3. Phase 0 — разведка и фундамент
 
-Результат фазы — закоммиченный в рабочий каталог `BUILD_ORDER.md` и тема v1.
+Результат фазы **виден в продукте**: тема v1 опубликована, `pay-box` + `pay-text` опубликованы, галерея `ypv2-probe-atoms` создана; локально — `BUILD_ORDER.md`.
 
 ### 3.1 Инвентаризация Figma
 
-1. Обойди библиотеку: страницы → фреймы → published components. Для каждого компонента запиши `nodeId`, имя, варианты (component properties и их значения), зависимость от других компонентов (instances внутри).
-2. Собери **`BUILD_ORDER.md`**: таблица `порядок | figma-компонент | nodeId | уровень (atom/molecule/organism) | зависимости | целевой id (pay-*) | статус`. Правило порядка: компонент идёт только после всех своих зависимостей. Первым — служебный layout-атом (§3.4).
-3. Экспортируй переменные/стили: цветовые variables (все режимы, минимум light), типографические стили (семейство, размер, интерлиньяж, вес), spacing/radius, тени.
+1. Обойди библиотеку: страницы → фреймы → published components; для каждого — `nodeId`, имя, варианты, зависимости (instances внутри).
+2. Собери **`BUILD_ORDER.md`**: `порядок | figma-компонент | nodeId | уровень | зависимости | целевой id (pay-*) | статус`. Компонент идёт только после всех зависимостей; первым — `pay-box` (§3.4).
+3. Экспортируй variables/стили: цвета (все режимы, минимум light), типографика, spacing/radius, тени.
 
-### 3.2 Тема: tokens + fonts
+### 3.2 Тема: tokens + fonts + icons
 
-Тема — версионируемые коллекции `{tokens, fonts, icons}`; токены доезжают в runtime как CSS-переменные `--eui-<key с '.'→'-'>`, шрифты — как `@font-face`.
-
-- Грамматика ключа: `^[a-z][a-z0-9]*(\.[a-z0-9-]+)*$`, значение — строка ≤256 без `;{}<>` (число допустимо только вне `space.*`).
-- **`space.*` — жёсткие правила**: ровно девятка `space.none|xs|sm|md|lg|xl|2xl|3xl|4xl` (из неё сервер строит `resolvedSpaceScale`), значения — **строки в абсолютных px** (`"4px"`, не `4`), `space.none` — ровно `"0px"`, шкала неубывающая, других `space.*`-ключей быть не может. Нарушение любой из этих норм молча откатывает `resolvedSpaceScale` на каноническую `0/4/8/12/16/24/32/48/64` — именно поэтому §3.3 обязателен.
-- **`color.*` — синтаксический allowlist значений**: hex, `rgb(a)/hsl(a)/var()`, named color, `linear-gradient()/radial-gradient()`. `color.shadow-*` — только форма box-shadow `[inset] <x> <y> [blur] [spread] <color>` (список через запятую можно); `color.gradient-*` — только gradient-функция. `drop-shadow(...)`, `blur(...)` и прочие эффекты Figma в токен не лезут (422) — такие эффекты живут в CSS конкретного компонента.
-- Пространства ключей: `color.<semantic>` — **все** цвета из Figma variables (семантические имена Figma в kebab: `color.text-primary`, `color.bg-main`, `color.button-primary-bg`, …), тени `color.shadow-*`, градиенты `color.gradient-*`; `radius.*`, `font.*` — по потребности (читаются через `token("radius.m")`).
-- Шкала spacing не обязана совпадать с канонической — бери фактическую сетку Figma. Значение Figma вне шкалы (например gutter 20px) — не подгонять под токен, а писать литералом в компоненте.
-- Шрифты (YS Text и что ещё использует библиотека): нужны woff2/ttf-файлы. Сначала проверь реестр — `node api.mjs get /design-systems/yandex-pay` → `fonts[]` содержит asset-id уже загруженных начертаний; ассеты глобальны, переиспользуй эти id (это бинарники, не визуальные решения старой DS — можно). Недостающие начертания запроси у владельца и загрузи: `node api.mjs upload YS-Text-Medium.woff2`.
-- **Иконки** — тоже коллекция темы: `icons: [{name, assetId, viewBox?, themes?{light,dark}}]`, `name` — kebab-slug, `assetId` — существующий `image/*`-ассет (сначала upload, потом PATCH — ссылка на несуществующий ассет = 422). В компоненте иконка читается `Icon({name})` из `easy-ui/runtime/v4`.
+Тема — версионируемые коллекции `{tokens, fonts, icons}`; токены доезжают как CSS-переменные, шрифты — как `@font-face`. Жёсткие правила грамматики (`space.*` — ровно девятка строк в px, иначе молчаливый откат шкалы; allowlist значений `color.*`; sparse-патчи `addTokens` с `dryRun`; `stalePins` в ответе) — **`reference/theme.md`**, прочитай его перед первым PATCH.
 
 ```bash
-cat > theme.json <<'EOF'
-{ "tokens": { "color.text-primary": "…из Figma…",
-              "space.none": "0px", "space.xs": "4px", "space.sm": "8px", "…": "…px" },
-  "fonts":  [ { "family": "YS Text", "src": "asset_<sha256>", "weight": 400 },
-              { "family": "YS Text", "src": "asset_<sha256>", "weight": 500 } ],
-  "icons":  [ { "name": "plus-glyph", "assetId": "asset_<sha256>" } ] }
-EOF
-node api.mjs theme yandex-pay-v2 theme.json    # версия 1 (baseVersion подставится сам)
+node api.mjs upload YS-Text-Medium.woff2        # шрифты: сначала проверь fonts[] старой DS — ассеты глобальны, переиспользуй id
+node api.mjs theme yandex-pay-v2 theme.json     # версия 1 (baseVersion подставится сам)
 ```
 
-PATCH-семантика: переданная коллекция **заменяет** предыдущую целиком, опущенная наследуется. Но полный словарь ради двух токенов больше не нужен — правь тему **sparse-операциями с dry-run** (W4):
-
-```bash
-# 1. dry-run: валидация + дифф + итоговая resolvedSpaceScale, версия НЕ создаётся
-echo '{"addTokens":{"color.button-primary-bg":"#FFDD2D"},"dryRun":true}' > patch.json
-node api.mjs theme yandex-pay-v2 patch.json     # baseVersion подставит сам
-# 2. тот же файл без "dryRun" — запись
-```
-
-- `addTokens`/`addFonts`/`addIcons` — **append-only** поверх `baseVersion`: передаёшь только добавляемое. Существующая запись с другим значением → `409 theme_append_conflict` (тихой перезаписи нет), удаление невозможно — для него остаётся полный PATCH. Sparse-операция и её полный аналог (`tokens`/`fonts`/`icons`) в одном теле взаимоисключающи.
-- **No-op не создаёт версию**: патч, результат которого равен `baseVersion`, отвечает `{noop:true, nextVersion:null}` — 13 версий темы за миграцию больше не набегает.
-- Ответ несёт `diff` (added/changed/removed), `resolvedSpaceScale`, `spacingResolver` и **`stalePins`** — список прототипов, чья голова пинует старую версию темы. Это точный список того, что надо пересохранить, а не догадка.
-- `spacingResolver: 2` у новых версий: spacing-оверрайды мерджатся на базовую шкалу самой DS, а полный token-патч, из которого `space.*` выпали целиком, наследует шкалу базовой версии (наследованные ключи перечислены в `inheritedSpaceTokens`), а не молча уезжает на каноническую.
-
-Пока на токен никто не сослался, значения можно свободно править новой версией; после — каждая правка глобально меняет уже принятые компоненты, фиксируй такие правки в `BUILD_ORDER.md`. **Ревизия прототипа пинует версию темы**: после любого PATCH темы пересохрани каждый probe/ref-прототип из `stalePins` (`driver.mjs prototype <doc>.json`) до пере-снапа, иначе snap покажет старые токены и «фикс не сработал» — `track: head` (§4.6) резолвит только компонентные пины и от этого не спасает. `preview` атома тему не пинует — берёт всегда последнюю, пересохранений не требует (§4.6).
+**Ревизия прототипа пинует версию темы**: после любого PATCH темы пересохрани каждый probe/ref-прототип из `stalePins` до пере-снапа. `preview` атома тему не пинует — всегда последняя.
 
 ### 3.3 Верификация темы
 
-`node driver.mjs catalog list yandex-pay-v2 --json` → `designSystem.resolvedSpaceScale` совпадает с задуманной девяткой (если вернулась каноническая `0/4/8/…`, которую ты не задавал — тема нарушила правила `space.*` и молча откатилась, чинить). После появления `pay-box` и `pay-text` собери probe-экран-«свотч» (сетка цветов и текстовых стилей) и проверь фактические цвета пикселей snap-PNG против hex из Figma (точное равенство; пипетка — прочитать RGB нужного пикселя из PNG любым способом, хоть `compare.mjs` на однотонном эталоне).
+`node driver.mjs catalog list yandex-pay-v2 --json` → `resolvedSpaceScale` совпадает с задуманной девяткой (каноническая `0/4/8/…`, которую ты не задавал, = тема нарушила правила и откатилась — чинить). После `pay-box`/`pay-text` — probe-«свотч» и пиксельная проверка цветов против hex из Figma.
 
 ### 3.4 Служебный layout-атом — первым
 
-В новой системе нет layout-примитива (host даёт только `Image`/`Hotspot`/`Overlay`/`@eui/FlowRoot`), поэтому ни probe, ни экран собрать не из чего. Первый компонент — **`pay-box` / `PayBox`**: flex-стек, моделирующий autolayout Figma: `mode: "row"|"col"`, `gap`/`padding`/`paddingX`/`paddingY` (токены шкалы **или** число px — union, как в Figma), `align`/`justify`, `width: "hug"|"fill"|<число>`, `height` аналогично, `background`, `radius`. Семантика hug/fill — точно как в Figma autolayout: **hug по умолчанию** (контейнер обнимает контент; не повторяй ошибку старой системы, где box рос `flex:1` по умолчанию и раздувал вложенные ряды).
-
-В definition `pay-box` укажи layout-метаданные: `layout: { version: 1, spacing: ["gap", "padding", "paddingX", "paddingY"] }` — их читает geometry-probe. Флаг `layoutNeutral: true` ставь только если готов выполнить его жёсткий конформанс-гейт целиком: объявленный слот `default`, непустой `layout`, **никаких** events, `interactive !== true`, `atomicLevel` atom/molecule и SSR-рендер, реально выводящий default-слот; иначе publish упадёт — проще не ставить.
+Первый компонент — **`pay-box` / `PayBox`**: flex-стек, моделирующий autolayout Figma: `mode: "row"|"col"`, `gap`/`padding(X|Y)` (токен шкалы **или** число px), `align`/`justify`, `width`/`height: "hug"|"fill"|<число>`, `background`, `radius`. **Hug по умолчанию** (не повторяй `flex:1`-ошибку старой системы). В definition — `layout: { version: 1, spacing: ["gap","padding","paddingX","paddingY"] }` (читает geometry-probe). `layoutNeutral: true` — только если готов к его жёсткому конформанс-гейту; проще не ставить.
 
 ## 4. Phase 1 — цикл атома (основной рабочий цикл)
 
-Для каждого компонента из `BUILD_ORDER.md`, строго по порядку:
+Для каждого компонента из `BUILD_ORDER.md`, строго по порядку. Ритм: **черновая итерация — на серверных драфтах, публикация — сразу после приёмки, витрина — в галерее.**
 
 ### 4.1 Выписка из Figma
 
-Возьми ноду компонента (и каждого варианта) и выпиши **все** значения: размеры фрейма, autolayout (направление, gap, паддинги, hug/fill), fills/strokes с привязкой к variable, радиусы, эффекты (тени с полными параметрами), типографику (семейство/вес/размер/интерлиньяж/letter-spacing), состояния (default/hover/pressed/disabled — что есть в вариантах). Экспортируй **эталонный PNG** каждого варианта: предпочтительно @2x — сверка тогда идёт против `preview --dsf 2` для атома (или `snap --dsf 2` для probe-экрана; субпиксельные детали виднее); если MCP отдаёт только scale 1 — сравнивай со снапом без `--dsf`. Масштабы эталона и снапа обязаны совпадать. Выписку сохрани в `notes/<pay-id>.md` — она же чек-лист сверки.
+Возьми ноду (и каждый вариант), выпиши **все** значения: размеры, autolayout (направление, gap, паддинги, hug/fill), fills/strokes с привязкой к variable, радиусы, тени, типографику, состояния. Экспортируй эталонный PNG каждого варианта, предпочтительно @2x (сверка тогда против `--dsf 2`; масштабы эталона и снапа обязаны совпадать). Выписка — в `notes/<pay-id>.md`, она же чек-лист сверки.
 
 ### 4.2 Reuse-гейт
 
@@ -134,264 +99,157 @@ node api.mjs theme yandex-pay-v2 patch.json     # baseVersion подставит
 node driver.mjs catalog search yandex-pay-v2 --intent "<продуктовая задача компонента>" --json
 ```
 
-Гейт enforce действует и здесь, и его скоуп — **внутри одной дизайн-системы**: старые `Yp*` никогда не заблокируют создание `pay-*`, но по мере наполнения `yandex-pay-v2` гейт становится реальным для твоих же компонентов. Вариант того же Figma-компонента (size/tone/state) — это **проп существующего** `pay-*`, не новый id. Кандидат почти покрывает — расширь его non-breaking ревизией. `409` — терминальный STOP (правило 8); пересечение по `canonicalFor` блокирует независимо от score. Экран/секция из готовых компонентов — это **composition** (`driver.mjs composition`), не новый компонент.
+Скоуп гейта — внутри одной DS: старые `Yp*` не заблокируют `pay-*`, но по мере наполнения `yandex-pay-v2` гейт реален для твоих же компонентов. Вариант Figma-компонента (size/tone/state) — **проп существующего** `pay-*`, не новый id; кандидат почти покрывает — расширь non-breaking ревизией; экран/секция из готовых компонентов — composition (§6). `409` — STOP (правило 9).
 
 ### 4.3 Схема
 
-- Component properties Figma → zod strict: варианты → `z.enum([...])`, булевы свойства → `z.boolean()`, текстовые слоты → `z.string()`, instance-swap → `z.enum` допустимых значений либо named slot. Имена пропов — нормализованные имена свойств Figma (camelCase).
-- Дефолт каждого пропа = дефолтный вариант компонента в Figma.
-- Интерактивные компоненты (кнопки, карточки выбора, инпуты, свитчи) обязаны объявлять **typed events** (`events: { press: z.strictObject({}) }`, для выбора — payload с id) и `interactive: true` + `accessibleLabelProps`.
-- Контейнерные — `slots` (named slots по слотам Figma) и/или `children`. Имена слотов — **kebab-slug** (не camelCase), и named slots требуют `capabilities: { namedSlots: true } as const` в definition; объявленный слот обязан рендериться.
-- `canonicalFor` в этой пересборке **не ставить** без явного согласования с владельцем инстанса: сервер проверяет только форму слага, выдуманная роль молча становится каноном. Список согласованных ролей — `reference/canonical-roles.md`.
+- Component properties → zod strict: варианты → `z.enum`, булевы → `z.boolean()`, текст → `z.string()`, instance-swap → enum либо named slot. Имена пропов — camelCase от имён свойств Figma; дефолт пропа = дефолтный вариант в Figma.
+- Интерактивные компоненты обязаны объявлять **typed events** (`events: { press: z.strictObject({}) }`) + `interactive: true` + `accessibleLabelProps`.
+- Контейнерные — `slots` (имена — **kebab-slug**; named slots требуют `capabilities: { namedSlots: true } as const`; объявленный слот обязан рендериться) и/или `children`.
+- `canonicalFor` — **не ставить** без согласования с владельцем инстанса (`reference/canonical-roles.md`).
 
 ### 4.4 Рендер
 
 Шаблон — `templates/atom.tsx`. Требования:
 
-- Импорты значений — только из `easy-ui/runtime/v4` (доступны `token`, `space`, `color`, `Icon`; импортируй нужные). Ровно один value-runtime-специфаер на модуль; тип `EasyUIComponentProps` — type-only из `easy-ui/runtime`, это допустимо.
-- Каждый цвет/тень/градиент — `color("<ключ без color.>", "<точный литерал из Figma>")`: fallback держит пиксель-паритет, ключ ведёт в тему.
-- Каждый `.default()` схемы → парный `?? <тот же дефолт>`; массивы → `?? []`; lookup-таблицы → fallback-ветка; арифметика — без NaN.
-- `fontWeight` — только реально существующие начертания загруженных шрифтов (иначе браузер сделает faux-bold и пиксели уедут).
-- Объявленный slot обязан рендериться.
-- `examples` в definition обязательны: минимум default-вид + по одному на существенный вариант (это и варианты для `preview --example`, и материал для стикершита, и превью в Library).
+- Импорты значений — только из `easy-ui/runtime/v4` (`token`, `space`, `color`, `Icon`); ровно один value-специфаер на модуль; `EasyUIComponentProps` — type-only из `easy-ui/runtime`.
+- Каждый цвет/тень/градиент — `color("<ключ>", "<точный литерал из Figma>")`; каждый `.default()` → парный `??`; массивы → `?? []`; lookup → fallback-ветка; арифметика без NaN.
+- `fontWeight` — только реально загруженные начертания (иначе faux-bold и пиксели уедут).
+- `examples` обязательны: default + по одному на существенный вариант (это варианты `preview --example`, стикершит и превью в Library).
 
 ### 4.5 Публикация + provenance
 
 ```bash
-node api.mjs upload figma-refs/pay-button-primary.png     # → asset_<sha256>, на каждый эталонный PNG
+node api.mjs upload figma-refs/pay-button-primary.png     # эталонные PNG → asset_<sha256>
 cat > pay-button.figma.json <<'EOF'
-{ "fileKey": "<из URL Figma-файла>", "nodeIds": ["123:456", "123:789"],
-  "referenceScreenshots": ["asset_<sha256>", "asset_<sha256>"], "lastSyncedAt": "<ISO now>" }
+{ "fileKey": "<из URL Figma>", "nodeIds": ["123:456"],
+  "referenceScreenshots": ["asset_<sha256>"], "lastSyncedAt": "<ISO now>" }
 EOF
 node driver.mjs component pay-button PayButton pay-button.tsx \
   --design-system yandex-pay-v2 --intent "Primary action button for payment flows" \
   --figma pay-button.figma.json
 ```
 
-**`--figma` опционален**: provenance **наследуется** между ревизиями (резолв при чтении), поэтому update или `component-move` без флага её не обнуляют — флаг нужен ровно для того, чтобы задать ссылку одним вызовом при создании. Смена или очистка — верб `node driver.mjs provenance <componentId> <figma.json|null> [--rev N]`: без новой ревизии и без новой версии (`features.acceptanceProvenance`; `null` — явный tombstone). `api.mjs figma` — легаси-путь ретроактивного прикрепления через PUT + re-publish (лишняя версия), предпочитай верб `provenance`. Лимиты ассетов: 5 MiB и 16 Mpx на файл.
+Provenance наследуется между ревизиями; смена/очистка — верб `driver.mjs provenance <id> <figma.json|null>`. Перед публикацией — validate-префлайт головы (полный publish-набор проверок без версии): `node api.mjs send POST /components/pay-button/validate`. Повторный PUT с идентичным содержимым → `{"unchanged":true}` — норма. Правишь опубликованный после разрыва сессии — базой бери active-source с сервера, не локальный файл.
 
-Save проверяет синтаксис, **тип-ошибки ловит publish** (вывод tsc в ответе) — но ловить их publish'ем больше не нужно: перед публикацией прогоняй **validate-префлайт головы** (W2), он гоняет publish-набор проверок без создания версии и без изменения публичного состояния:
+### 4.6 Приёмка атома: драфт-цикл `preview`
 
-```bash
-node api.mjs send POST /components/pay-button/validate     # тела не нужно
-# {"ok":true,"cached":false,"sourceHash":"…","bundleHash":"…","hostAbiVersion":4,"themeVersion":3,"catalogRevision":"…","warnings":[]}
-```
-
-Префлайт проверяет typecheck/compile/import, извлечение definition со smoke-рендером, asset-refs и **поля provenance** (неподдерживаемое поле вроде `pageNodeId` приезжает 422 с указанием поля — а не после всей подготовки к публикации), плюс предупреждает о рассинхроне `.default()` схемы и `??`-fallback рендера. Чего receipt **не** покрывает: canonical-role и reuse-гейт — они каталого-временные и остаются на publish. Результат кэшируется по `sourceHash` и переиспользуется самим publish'ем (второй раз за компиляцию не платим); при занятом слоте — `429 validate_in_flight`, при выключенном префлайте (`EASYUI_VALIDATE_DISABLED=1`) — 404.
-
-Правишь опубликованный — базой правки бери актуальный active-source с сервера (`GET /components/<id>/versions/<v>`), не локальный файл, если сессия прерывалась. Повторный PUT с идентичными `source`+`figma` ревизии не создаёт: ответ `{"unchanged":true,"rev":<head>}` (W2) — это норма, а не ошибка.
-
-### 4.6 Приёмка атома: `preview`; probe — со стадии молекул
-
-Одиночный атом принимается **без probe-дока** — verb `preview` снимает компонент напрямую, в двух режимах: сохранённая head-ревизия без публикации (`--rev head-draft`, W2) и опубликованная head-версия (по умолчанию):
+Итерация атома идёт на сохранённой голове без публикации:
 
 ```bash
-node driver.mjs preview pay-button --rev head-draft --example primary --dsf 2 --out shots/pay-button.png
-# preview pay-button draft rev 4 bundleHash=… designSystemMetaVersion=3 viewport=1280x800 dsf=2 theme=light
-node driver.mjs preview pay-button --example primary --dsf 2 --out shots/pay-button.png
-# preview pay-button v1 bundleHash=… designSystemMetaVersion=3 viewport=1280x800 dsf=2 theme=light
-```
-
-PNG — content-hug (воркер снимает сам элемент, не вьюпорт): размеры эталона и снапа сравниваются напрямую, без canvas-арифметики. `--probe geometry` вместо PNG отдаёт замер той же поверхности (вход для `expect`, §4.7). **Итоговый цикл атома: правка → save ревизии без публикации → `preview --rev head-draft` → `expect` (+`compare` с эталоном Figma) → validate-префлайт → `accept` по семье вариантов (§4.8, если вариантов больше одного) → `promote` ровно один раз (приёмка головы: validate+publish+auto-supersede одной командой, `features.acceptancePromote`; флаги `--candidate cand_… --acceptance-run acc_…` кладут ран приёмки в provenance версии, а без флагов единственный `promotionEligible`-ран кандидата головы выбирается автоматически). Ран под `pixel-strict-v1` публикуется **напрямую**: оба встроенных профиля допущены к promote, и «второй формальный ран под `default-v1` ради публикации» — устаревший обходной путь, делать его не нужно.** Промежуточных публикаций быть не должно: всё, что раньше требовало версии, делается на сохранённой голове. Verb `component` делает save+publish за вызов — он остаётся входом создания (reuse-гейт/discovery) и финальным publish'ем, а промежуточные сохранения идут через `api.mjs` (PUT гейт создания не проходит):
-
-```bash
-# промежуточная итерация (без публикации):
+# save ревизии без публикации (verb component — только для создания и финального publish):
 node api.mjs get /components/pay-button                     # headRev → baseRev для CAS
 jq -n --arg src "$(cat pay-button.tsx)" --argjson figma "$(cat pay-button.figma.json)" \
   '{source:$src, figma:$figma, baseRev:<headRev>, message:"iterate"}' > save.json
 node api.mjs send PUT /components/pay-button save.json      # → {"rev": N+1}
+
 node driver.mjs preview pay-button --rev head-draft --example primary --dsf 2 --out shots/pay-button.png
 node driver.mjs preview pay-button --rev head-draft --example primary --probe geometry --out actual.json
 node driver.mjs expect expected/pay-button.json actual.json          # числовой вердикт (§4.7)
 node compare.mjs figma-refs/pay-button@2x.png shots/pay-button.png diff/pay-button.png
-# приёмка сошлась → префлайт → единственная публикация:
-node api.mjs send POST /components/pay-button/validate
-# финал: PUT отвечает no-op unchanged (source+figma без изменений), драйвер публикует голову:
-node driver.mjs component pay-button PayButton pay-button.tsx \
-  --design-system yandex-pay-v2 --intent "Primary action button for payment flows" --figma pay-button.figma.json
+# сошлось → префлайт → publish (verb component) → promote; вариантов >1 → accept по семье (§4.8) до promote
 ```
 
-Драфт-съёмка идёт через candidate-bundle префлайта validate: провал (тип-ошибки tsc, битые asset-refs) приезжает тем же 422, что отдаёт publish, — итерация ловит те же дефекты, не плодя версий; при холодном кэше постановка собирает кандидата (заметное время) под троттлингом префлайта (429 `validate_in_flight` — повтор после завершения чужого прогона; `queue_full` драйвер ретраит сам). Asset-refs драфта обязаны существовать в реестре (422 `asset_not_found` до сборки), kill-switch `EASYUI_VALIDATE_DISABLED=1` гасит драфт-превью (published-режим работает). Пересохранений ради пинов нет: ревизия драфта — head, тема — всегда последняя (фактическая — в `designSystemMetaVersion` вывода, фиксируй её в REPORT). Честные ограничения: `--theme` — только light/dark, версия темы **не пинуется**; viewport 64..2000 × 64..4000 и `width × height × dsf² ≤ 20 000 000` — при `--dsf 3` потолок вьюпорта ~2,2 Mpx, для @2x-сверки бери `--dsf 2`; очередь скриншотов сервера — concurrency 1, cap 5 → возможен `429 queue_full`, драйвер ретраит сам (счётчик `queueRetries` в `--json`).
+PNG — content-hug (снимается сам элемент): размеры эталона и снапа сравниваются напрямую. Лимиты preview (viewport/dsf/очередь), механика драфт-съёмки через candidate-bundle и honest-ограничения — **`reference/verification.md`**.
 
-Probe-прототип остаётся **со стадии молекул** и для контекстных экранов (`ypv2-probe-molecules`, `ypv2-probe-organisms`, `ypv2-ref-*`), **по экрану на компонент**. Экран — стикершит вариантов, повторяющий раскладку Figma-эталона: `canvas` = размер экспортированного фрейма (допустимый диапазон 64–2000 × 64–4000), фон = фон фрейма, варианты разложены `pay-box`-ами с теми же координатами/gap. Шаблон — `templates/probe.json` (props в нём иллюстративные — сверяй со своей фактической схемой, незнакомый ключ = 422). Контракты host-типов (`Image`/`Hotspot`/`Overlay`/`@eui/FlowRoot`) — `reference/host-catalog.json`.
+**Не крути драфт-цикл бесконечно**: сошлись `expect` и compare в порогах — публикуй немедленно; не сходится после ~3 полировок — правило 4.
 
-```bash
-node driver.mjs prototype ypv2-probe-molecules.json
-node driver.mjs status ypv2-probe-molecules --all-screens
-node driver.mjs geometry ypv2-probe-molecules pay-payment-method-card
-node driver.mjs snap ypv2-probe-molecules ./shots --all-screens
-```
-
-**Probe-док объявляй служебным и трекающим головы — тогда пересохранения после каждой публикации компонента не нужны** (W3). `kind` и `track` — lifecycle-атрибуты прототипа (колонки, не поля документа), ставятся одним роутом сразу после создания дока:
+**Probe-галерея — витрина прогресса.** С первого атома веди `ypv2-probe-atoms` (стикершит опубликованных атомов), с молекул — `ypv2-probe-<level>` по экрану на компонент (раскладка повторяет Figma-эталон; шаблон — `templates/probe.json`, host-типы — `reference/host-catalog.json`). Объяви док служебным и трекающим головы — тогда пересохранять после каждой публикации компонента не нужно:
 
 ```bash
+node driver.mjs prototype ypv2-probe-atoms.json
 echo '{"kind":"component-gallery","track":"head"}' > lifecycle.json
-node api.mjs send POST /prototypes/ypv2-probe-molecules/lifecycle lifecycle.json
+node api.mjs send POST /prototypes/ypv2-probe-atoms/lifecycle lifecycle.json
+node driver.mjs snap ypv2-probe-atoms ./shots --all-screens
 ```
 
-- `track: "head"` разрешён только для служебных `kind` (`component-gallery`, `evidence`, `visual-reference`, `composition-fixture`) и только пока прототип не опубликован: иначе `422 track_requires_service_kind` / `track_requires_unpublished`. Для трекающего дока запрещены publish, share-грант, visual-baseline и bundle-export (`422 prototype_head_tracking`) — это цена за подвижные пины; probe-доки всё равно живут драфтами.
-- Скоуп резолва — **только компонентные пины**: DTO ревизии отдаёт последние active-публикации и `resolvedAt`, постановка снапа возвращает разрешённые пины в `components[]` (сверяй их с ожидаемыми версиями). **Версия темы остаётся пином ревизии** — после PATCH темы probe пересохранять всё равно нужно (§3.2, `stalePins`).
-- Галерея — это `kind: "component-gallery"`, выставленный тем же lifecycle-роутом, а не поле документа: формат документа не менялся.
-- **Warnings служебной галереи — не блокер.** У служебных `kind` readiness-отчёт идёт с `profile: "service"`: предупреждения (недостижимый экран, интерактивный компонент без handler) не поднимают статус и не блокируют. Не изобретай технические `Hotspot`'ы и `on`-биндинги ради нулевого warning-счётчика.
-
-Без `track: head` (обычный `pinned`-док, любой `kind`) правило прежнее: **ревизия пинует конкретные версии компонентов и версию темы, publish новой версии пины не двигает**, цикл итерации молекулы — publish компонента → `driver.mjs prototype ypv2-probe-<level>.json` (пере-пин) → `status` → `geometry` → `snap`. Пропустишь пересохранение — будешь гоняться за «диффом», которого уже нет в исходнике.
+`track: head` резолвит **только компонентные пины** (версия темы остаётся пином ревизии — после PATCH темы пересохранять всё равно, §3.2); ограничения lifecycle, readiness-профиль `service` (warnings галереи — не блокер) и правила pinned-доков — **`reference/verification.md`**.
 
 ### 4.7 Сверка
 
-Порядок жёсткий: **числовая приёмка до пиксельной**. Пиксельный дифф говорит «0,4% не совпало», числовая — «gap expected 8, got 6», то есть сразу называет правку.
+Порядок жёсткий: **числовая приёмка до пиксельной** (числовая сразу называет правку: «gap expected 8, got 6»).
 
-1. **Численно — `expect`**: замер geometry против выписки §4.1, допуск ±1px.
+1. **`expect`** — замер geometry против выписки §4.1, допуск ±1px. `expected.json` пишешь ты; формат (`key`/`size`/`gap`/`padding`/`tolerance`), семантика наблюдаемых зазоров и exit-коды — **`reference/verification.md`**.
+2. **`compare.mjs`** — pixelmatch: кластеры расхождений, AA-diagnostic (антиалиасинг ≠ дефект), `--region` с бюджетом, отчёт при несовпадении размеров. Цель: mismatch ≤ 2% и **весь** остаток объясним текстовым антиалиасингом; любое расхождение геометрии/цвета/радиуса/тени — дефект. Детали флагов — там же.
+3. **Глазами**: diff.png + пара эталон/снап. Кластеры по краям блоков = геометрия, по буквам = шрифт (проверь, что снялся YS Text, а не fallback).
 
-```bash
-# actual: замер компонентной поверхности прямо на draft-ревизии (PNG не создаётся)
-node driver.mjs preview pay-button --rev head-draft --example primary --probe geometry --out actual.json
-# actual для молекулы/экрана: прототипный geometry-probe
-node driver.mjs geometry ypv2-probe-molecules pay-payment-method-card --json > actual.json
-node driver.mjs expect expected/pay-button.json actual.json
-# expect expected/pay-button.json vs actual.json: 5 checks, 1 mismatch (tolerance ±1px)
-# ok   stack#0: width expected 328, got 328
-# FAIL stack#0: gap expected 8, got 6
-```
+### 4.8 Семья вариантов: серверная матричная приёмка
 
-`expected.json` пишешь ты из выписки Figma. Формат минимальный:
-
-```json
-{
-  "tolerance": 1,
-  "elements": [
-    { "key": "c",     "size": { "width": 328, "height": 56 } },
-    { "key": "stack", "instance": 0, "axis": "row", "gap": 8,
-      "padding": { "left": 16, "right": 16, "top": 12, "bottom": 12 }, "tolerance": 2 }
-  ]
-}
-```
-
-- `key`/`instance` — ключ маркера в замере (`instance` по умолчанию 0). У компонентной поверхности маркер ровно один — корневой элемент дерева съёмки с ключом `c`, поэтому для атома проверяется `size` (PNG и так content-hug); `gap`/`padding` меряются там, где маркеров несколько, — на probe-экране.
-- `size` — `{width?, height?}`, любое из полей опционально.
-- `gap` — число (все зазоры между соседними видимыми детьми равны ему) либо массив ожиданий по порядку. Ось берётся из `axis`, иначе из computed `flexDirection` layout owner'а, иначе выводится из самих rect'ов. Меряется **наблюдаемый зазор** между box'ами детей — он может отличаться от CSS gap на величину margin'ов.
-- `padding` — число (все четыре стороны) либо объект сторон; это наблюдаемый отступ между box'ом элемента и bounding box'ом его прямых детей.
-- `tolerance` — файловый дефолт (1 px), перекрывается per-element; `--tolerance N` перекрывает файловый дефолт, но не per-element.
-- Выход: 0 — всё сошлось, 2 — есть расхождения (каждое строкой `FAIL`), 1 — битый файл/формат. Верб оффлайновый, сети не касается.
-
-2. **Пиксельно**: `node compare.mjs figma-refs/pay-button@2x.png shots/pay-button.png diff/pay-button.png` — pixelmatch, порог чувствительности 0.1. Отчёт кроме процента печатает:
-   - **кластеры расхождений** — bounding-box'ы связных областей (`cluster 12x3 px @ (208,41) — 36 px differ`): координата и форма кластера говорят, что именно уехало (полоса по краю блока = геометрия, россыпь по буквам = шрифт);
-   - **AA-diagnostic** — второй прогон с порогом 0,25 в том же отчёте: сколько расхождения остаётся, если списать антиалиасинг. Если основной процент большой, а AA-диагностический ≈ 0 — это шрифтовой рендер, а не дефект;
-   - **отчёт о размерах** при их несовпадении (`size mismatch: candidate 328x56 vs ref 328x58 (dw 0, dh -2)`) — дифф всё равно считается по пересечению (exit 3), а не прерывается без диагностики;
-   - `--region x,y,w,h[:maxDiff%]` (повторяемый) — процент по зоне и необязательный бюджет: превышение → exit 1. Так фиксируются локальные исключения (например зона текста) без ослабления общего порога.
-   - `--json` отдаёт то же машинно; `--clusters N` меняет число печатаемых кластеров (по умолчанию 10). Raw-эталон никогда не мутируется — записывается только `diff.png`. Снап атома под @2x-эталон — `node driver.mjs preview pay-button --example <вариант> --dsf 2` (content-hug: размер PNG = элемент × dsf); снап probe-экрана — `node driver.mjs snap … --dsf 2` (поверхность = `canvas` экрана). Размеры PNG обязаны совпадать. Для probe-стикершитов бюджет: `surface × dsf² ≤ 16 Mpx` (проверяется до постановки) — очень длинный стикершит при `--dsf 2` дели на несколько экранов. Целевой mismatch ≤ 2% площади, и **весь** остаток объясним антиалиасингом текста (chromium ≠ Figma по субпиксельному рендеру — это единственная легальная разница). Любое расхождение геометрии, цвета заливки, радиуса, тени, межстрочника — дефект: чини компонент/тему и повторяй.
-3. **Глазами**: открой diff.png и пару эталон/снап рядом. Кластеры диффа по краям блоков = геометрия, по буквам = шрифт (проверь, что снялся YS Text, а не fallback: ширины строк в geometry совпадают с Figma; если нет — шрифт не доехал, пере-snap или проверь fonts темы).
-
-### 4.8 Семья вариантов: серверная матричная приёмка (`case-set` + `accept`)
-
-Ручной цикл §4.6–4.7 закрывает один кадр. Figma-компонент с несколькими осями вариантов (`family × state × size`) — это **матрица**, и её приёмку считает сервер: `case-set` описывает набор случаев с эталонами, `accept` снимает их все и выносит вердикт по гейтам (`render`, `readiness`, `geometry`, `visual`, `determinism`). Самописных matrix-скриптов писать не нужно.
+Figma-компонент с осями вариантов — матрица, её приёмку считает **сервер**; самописных matrix-скриптов не нужно. Перед первым case-set прочитай **`reference/acceptance.md`** — там манифест, правила эталонов (`referenceSurface: "content-hug"` + `expectedGeometry`, crop-lineage), профили порогов, чтение вердикта (`--summary`, remediation-группы, reuse-квитанции), алгебра `--refresh`/`--recapture` и промоут-линковка.
 
 ```bash
-node api.mjs upload figma-refs/pay-card-product-default@2x.png   # эталон каждой ячейки → asset_<sha256>
-node driver.mjs case-set validate matrix.json                    # dry-run манифеста без записи (локально → сервер)
+node api.mjs upload figma-refs/pay-card-product-default@2x.png   # эталон каждой ячейки
+node driver.mjs case-set validate matrix.json                    # dry-run манифеста
 node driver.mjs case-set put pay-payment-card matrix.json        # → caseSetId + coverage
-node driver.mjs case-set coverage cset_…                         # какие ячейки матрицы не закрыты
-node driver.mjs accept pay-payment-card --case-set cset_… \
-  --policy pixel-strict-v1 --summary                             # кандидат → ран → poll → компактный вердикт
-node driver.mjs accept-status acc_… --summary                    # тот же ран позже, компактно
-node driver.mjs accept-status acc_… --case card-product-default  # drill-down одного случая
-node driver.mjs accept-status acc_… --evidence run.zip           # вердикт + evidence-архив
+node driver.mjs accept pay-payment-card --case-set cset_… --policy pixel-strict-v1 --summary
+node driver.mjs accept-status acc_… --case <caseId>              # drill-down одного случая
 ```
 
-Манифест (`matrix.json`) — точный перенос Figma-матрицы: `dimensions` (оси и их значения), `cases[]` (`id`, `props`, `dims`, `referenceAssetId`, `referenceSurface`, `referencePlacement`, `expectedGeometry`, `cropLineage.rect` — если эталон вырезается из общего фрейма component set), `capture` (`viewport`/`deviceScaleFactor`/`theme` съёмки набора), `policy` (`profile: "pixel-strict-v1"` для pixel-perfect-пересборки + `perCase.<id>.maxRawDiffPct` для осознанных исключений). Правила, на которых спотыкаются:
+Минимум, чтобы не споткнуться: `case.id` — `[A-Za-z0-9._-]` (Figma `54863:9537` → `54863-9537`); эталон — сырой экспорт узла MCP, руками не паддить и не кропить; sparse-семья — **одна ось** до 64 значений, один набор и один ран; `null` в манифесте не бывает — необязательное поле опускается; лимиты — из `/capabilities → limits`.
 
-- `case.id` — `^[A-Za-z0-9._-]{1,64}$`: **Figma node id `54863:9537` не пройдёт**, санитизируй (`54863-9537`).
-- Эталон — id ассета реестра, а не байты; несуществующий → `422 asset_not_found`. Два случая с одинаковыми props → `422 duplicate_case_props`; осознанный дубликат помечается `aliasOf` (снимается один кадр; `policy.perCase` на алиас — `422`, вердикт алиаса всегда равен вердикту цели).
-- `caseSetId` контентный (`cset_<sha256>` манифеста): та же публикация идемпотентна, изменённая — **новый** набор, старые раны остаются воспроизводимыми.
-- **Sparse-семья — одна каноническая ось.** Матрица Figma с дырами описывается **одной** осью с перечислением состояний (`dimensions: {state: [… 49 значений …]}`), а не произведением осей, половина ячеек которого пустует: ось держит до `limits.caseSetMaxDimensionValues` (64) значений — больше ёмкости рана, поэтому **49 состояний — один case-set и один ран**, шардировать руками не нужно. Произведение всех осей выше `limits.caseSetMaxExpectedTuples` (4096) — `422 case_set_coverage_too_large`; `missingTuples` в ответе усечён до 64 ячеек, полное число — в `missingCount`. Лимиты читать из `GET /api/capabilities → limits`.
-- `componentId` в манифесте **обязателен** и совпадает с id компонента; `null` схема не принимает **нигде** — необязательное поле опускают, а не зануляют (`"cropLineage": null` — `422 validation_failed`, а не «нет lineage»). Проверять манифест до публикации: `case-set validate <matrix.json>` (локальные проверки идут до сети, серверные — без записи, ручка под `capabilities.features.caseSetValidate`).
-- **Экспорт узла Figma — это `referenceSurface: "content-hug"`.** Ассет реестра — **тот самый PNG, что отдал MCP**: паддить его до канвы съёмки, склеивать «derived»-варианты руками или подгонять размеры в графическом редакторе **запрещено рецептом**. Объяви `referenceSurface: "content-hug"` (+`expectedGeometry` случая) — и сервер сам положит эталон в прозрачную канву `(корень + 2×margin) × dsf`, по умолчанию со смещением `margin × dsf` (иное — `referencePlacement {x,y}` в device px). Дефолт поля — `"paint"`, то есть «ассет уже каноническая канва»: именно ради него поле и объявляют явно. **`expectedGeometry` при этом обязателен по смыслу**: без него корень канвы берётся из `layoutBounds`, измеренного в этом же ране, и случай с переиспользованным кадром (re-diff) получает `indeterminate reference_canvas_unresolved` — набор проходит на холодном кэше и падает на первом повторе (PUT предупреждает об этом в `warnings[]`, но не отказывает).
-- **Crop применяется максимум один раз.** Если эталон вырезается из общего фрейма component set, `cropLineage.sourceSurface` отвечает, надо ли резать: `figma-node` (дефолт при отсутствии поля) — резать по `rect`; `content-hug`/`paint` — ассет **уже** вырезан, `rect` остаётся provenance'ом. Именно повторный crop делал из эталона `136×32` картинку `116×12`; теперь такой конфликт нельзя ни выразить (`referenceSurface: "content-hug"` + `cropLineage` без `sourceSurface: "figma-node"` → `422 crop_lineage_conflict`), ни промахнуться мимо ассета (`rect` вне его размеров → `422 crop_rect_out_of_bounds` вместо тихого клампа). Все поля происхождения эталона — входы `comparisonFingerprint`: их правка стоит **re-diff**, а не пересъёмки.
-- Профили порогов: `pixel-strict-v1` — `maxRawDiffPct` 0.5 %, расхождение габаритов после crop > 4 px даёт `indeterminate` (метрик нет вовсе, а не выдуманный процент); `default-v1` — 2 % и 8 px, визуальный гейт там необязателен, если в манифесте нет `requireVisual: true`. Профиль набора задаётся `policy.profile` манифеста, профиль конкретного рана — флагом `accept --policy <id>` (допустимые значения — `capabilities.acceptance.policyProfiles`); именно профиль **рана** проверяет promote.
+### 4.9 Фиксация и каденс
 
-**Как читать отчёт.** Канон вывода для агента — `--summary` (`accept … --summary`, позже `accept-status <runId> --summary`): полный ран упавшей семьи на 25 случаев — около 1800 строк (в каждом провале повторяются `metrics`/`regions`), сводка — меньше 100: `progress` со всеми счётчиками reuse, строка на гейт, `failedCases [{caseId, gate, raw, aa, cause}]`, группы ремедиаций и адрес evidence. За подробностями **одного** случая идти в `accept-status <runId> --case <caseId>` (его гейты с `detail`, классифицированные причины, артефакты и квитанция reuse), а не выкачивать ран целиком. Флаг строго opt-in и **смысла `--json` не меняет**: полный `--json` остаётся инструментом отладки. Источник сводки — `?view=summary` сервера при `features.acceptanceSummaryView`, иначе та же форма, сведённая драйвером локально (`summarySource` в `--json`); записи кэша (link/receipt) в обоих случаях строятся из полного рана.
-
-Что смотреть в самом вердикте (то же приезжает в `--json` и в evidence-архиве):
-
-- **`readiness`** — обязательный гейт: `met:false` (шрифт/иконка/ассет не доехали до кадра) означает, что сравнивающие гейты случая честно отдали `indeterminate`. Чинить ресурс (тема, реестр ассетов), а не компонент; `pendingRequests` в `detail` называет виновника. Наблюдённые `themeResources` кадра — вход импакт-анализа (см. ниже).
-- **`geometry`** меряет краску, а не только коробки: `layoutBounds` (union in-flow потомков), `paintBounds` (ink-bbox по альфе), `effectSources[]` (кто красит за коробкой — `filter`/`box-shadow`/`outline`/`transform`/`position:absolute|fixed`), `clipChain[]`. Вердикт `clean | paint-overflow-clipped | paint-overflow-not-clipped | layout-overflow | indeterminate`; `fail` невозможен без названного источника. Ожидаемые тень/свечение и обрезка объявляются допусками случая (`allowPaintOverflow`, `expectedClip`, `expectedGeometry`) — это и есть замена «на глаз, тень вроде так и должна торчать».
-- **`visual`** — `rawDiffPct` (вердикт), `aaDiffPct` (структурный остаток), `bestOffset {dx,dy,residualPct}` («съехало на N px» ≠ «перерисовано»), `regions[]`. Провал/`indeterminate` несёт `causes[]`: `surface-tint`, `edge-radius-stroke`, `geometry-shift`, `text-raster-residual`, `missing-late-asset`, `alpha-compositing`, `effect-overflow`, `descendant-outside-mask`, `unclassified`.
-- **`remediationGroups`** терминального рана — случаи, сгруппированные по общей причине (виновник `elementKey` либо сигнатура области + `variantFamily` — пересечение `dims`). Одна сломанная иконка в 20 состояниях = **одна** группа с одним `suggestion`: чини по группам, а не по случаям.
-- **Уровни reuse** — `progress` считает их раздельно: `reused` (полный reuse по отпечатку случая), `frameReused` (кадр не снимался — надмножество `reused`), `verdictRecomputed` (решение пересчитано по новым порогам над сохранёнными метриками), `rediffed` (сохранённый кадр пере-сравнён с новым эталоном), `failed`. У каждого случая есть **квитанция** `reuseReceipt` — `{reuse: {candidate, frame, readiness, geometry, visualMetrics, verdict}, fingerprints: {frame, comparison, verdictPolicy, case}}`, `hit`/`miss` по уровням; она печатается строкой `reuse: …` в `accept-status --case`, лежит в `/cases` и в манифесте evidence. Именно она отвечает на вопрос «это точно пересчитали?» — счётчик `reused` этого по построению не различает (`null` в квитанции = случай старше миграции v29).
-
-**Алгебра refresh: `--refresh` выбирает случаи, `--recapture` — глубину.** Пересъёмка после правки не обязана стоить полной матрицы. `--refresh none|failed|all|id,id2` отвечает на вопрос «какие случаи обновить», и по умолчанию это **переоценка вердикта**, а не съёмка: сервер переиспользует уже снятый кадр и пересчитывает по нему решение. Отсюда три штатных исхода, ни один из которых не является сбоем:
-
-- сменились только пороги (новый `policy`/`perCase` в case-set) → `verdictRecomputed` без единой пересъёмки, **`recapture=0` — норма**;
-- сменился эталон или его происхождение (`referenceAssetId`, `referenceSurface`, `referencePlacement`, `expectedGeometry`, `cropLineage`) → `rediffed`: сохранённый кадр пере-сравнивается с новым эталоном, chromium не запускается;
-- сменился кандидат (новая ревизия), поверхность съёмки или рендерер → честная пересъёмка.
-
-`--recapture` поднимает скоуп выбранных случаев до кадра — принудительная пересъёмка (флейк рендера, подозрение на протухший кадр); `--refresh none --recapture` — противоречие и ошибка аргументов. Что применилось на самом деле, видно строкой `refresh: requested=… impact=… effective=…` (и полем `refresh` в `--json`): агент просит скоуп, импакт может его расширить, решает сервер; сборка без алгебры refresh строку не отдаёт вовсе. Ран, чей явный скоуп не дал ни одной переоценки, завершается терминальным `error` со `statusReason: "refresh_scope_empty"` — это ответ «обновлять было нечего», а не сбой съёмки.
-
-`--baseline-run acc_…` включает импакт-анализ — `impact <id> --candidate cand_… --baseline-run acc_…` заранее печатает базис (`asset-only` — сменился только ассет, переснимаются случаи с этим ассетом в `themeResources`; `theme-only` — сменилась версия темы, переснимаются применившие изменившиеся токены/иконки, смена шрифта = все; `conservative` — снимается всё, `reason` называет причину). Случай без readiness-evidence всегда считается затронутым.
-
-Приёмка привязывается к публикации: `promote rating-stars --candidate cand_… --acceptance-run acc_…` (флаги верба; драйвер сверяет `rev`/`sourceHash` кандидата с validate-receipt и принадлежность рана кандидату **до** мутации и печатает связку строкой `acceptance link: …`). Без флагов связка выбирается автоматически: драйвер читает кандидата головы и его `runs[]` **прямым сетевым** запросом (мимо клиентского кэша) и берёт единственный ран с `promotionEligible: true`; ноль таких ранов — `warning` и публикация без линковки, два и больше — локальная ошибка со списком ранов и без POST (выбирать свидетельство за агента нельзя). Скалярный `candidate.acceptanceRunId` — «последний поставленный» ран, а не принятый; на него не опираться. **Профиль публикации не мешает строгой приёмке**: promote допускает любой ран, чей `policyProfileId` входит в `capabilities.acceptance.promotionPolicyProfiles` (сегодня это оба встроенных профиля), поэтому `pixel-strict-v1`-ран публикуется как есть — переснимать семью «формальным» `default-v1`-раном ради publish не нужно и запрещено рецептом. Несовместимый профиль — `422 acceptance_policy_mismatch {runPolicyProfileId, allowed}`; ужесточение определения профиля после рана даёт warning и оба хэша в provenance версии, а не отказ. Если семья принималась **несколькими** ранами (легаси-шардирование или осознанное разделение light/dark), передавай набор: `--acceptance-run a --acceptance-run b` или `--acceptance-runs a,b` (до 8; требует `features.acceptanceMultiRunPromote`, иначе локальная ошибка до POST) плюс `--expected-cases N` для сверки суммарного покрытия. Шарды обязаны быть дизъюнктны по `(propsHash, surface)` (одинаковые props на разных поверхностях законны, пересечение внутри одной — `422 acceptance_coverage_overlap`), исполнены одним профилем и одним рендерером; сервер сортирует набор сам, а `acceptanceRunId` версии становится его первым элементом. Ручное шардирование семьи ради лимитов — путь **устаревший**: ось держит 64 значения, 49 состояний идут одним набором и одним раном (см. выше), и набор ранов остаётся только для уже существующих легаси-случаев. Ран обязан быть терминальным `pass`/`pass_with_exceptions` **этого же** кандидата, иначе `422 acceptance_run_mismatch`/`acceptance_run_not_passed`; при живом ране — `409 acceptance_run_in_flight` (второй ран не ставить, добирать `accept-status`). Exit `accept`: 0 — `pass`/`pass_with_exceptions`, 2 — `fail`/`error`/`cancelled` и клиентский таймаут (`--timeout-sec`, дефолт 1800; ран продолжается на сервере). Evidence по умолчанию не качается — печатается адрес архива; `--evidence run.zip` сохраняет его (`manifest.json` + `SHA256SUMS` + `paint.png`/`diff.png`/`geometry.json`/`visual.json`/`readiness.json` по случаям), распаковывать только с проверкой имён записей (абсолютные пути и `..` отвергать).
-
-`compare.mjs` остаётся для одиночных сверок и разбора конкретного кадра; для семьи вариантов авторитет — серверный ран (он же единственный воспроизводимый: отпечаток случая включает рендерер, тему, политику readiness и допуски).
-
-### 4.9 Фиксация
-
-В `BUILD_ORDER.md` статус `done` + строка в `REPORT.md`: `pay-button v1 | figma 123:456 | diff 0.8% | probe ypv2-probe-atoms/pay-button`. Только после этого — следующий компонент.
+Публикация (`promote` — validate+publish+auto-supersede одной командой, с линковкой acceptance-рана) идёт **сразу** по итогам приёмки — не копи «пачку на потом». После публикации: строка в `REPORT.md` (`pay-button v1 | figma 123:456 | diff 0.8% | gallery ypv2-probe-atoms`), статус `done` в `BUILD_ORDER.md`, атом виден в галерее. Только после этого — следующий компонент.
 
 ## 5. Приёмка компонента (обязательный чек-лист)
 
-- [ ] выписка §4.1 существует, каждый вариант Figma представлен пропом и примером;
+- [ ] выписка §4.1 существует; каждый вариант Figma представлен пропом и примером;
 - [ ] reuse-гейт пройден (search до создания; 409 не обходился);
-- [ ] каждый `.default()` схемы имеет парный `??` в рендере; `{}` (пустые props) рендерится дефолтным видом Figma;
-- [ ] цвета/тени — через `color()` с точным Figma-литералом в fallback; spacing — `space()`/union;
-- [ ] атом принят через `preview --rev head-draft` + `expect` (draft rev N, bundleHash/designSystemMetaVersion из вывода зафиксированы в REPORT) **до** первой публикации; validate-префлайт головы зелёный; publish — один раз по итогам приёмки; для молекул и выше — probe с `track: head` (или пересохранён после последней публикации компонента) и обязательно пересохранён после последнего PATCH темы (пины видно в выводе `driver.mjs prototype` и в `components[]` постановки снапа);
-- [ ] `expect`: размеры/gap/паддинги ±1px от Figma (0 mismatches); compare: mismatch ≤2%, остаток — только текстовый антиалиасинг (подтверждается AA-diagnostic), кластеры расхождений объяснены;
-- [ ] компонент с несколькими вариантами: манифест прошёл `case-set validate` (dry-run) до публикации, опубликован `case-set` по Figma-матрице (эталон, `referenceSurface: "content-hug"` + `expectedGeometry` и `dims` на каждую ячейку, `coverage` без `missingTuples`, вся семья — один набор и один ран) и есть терминальный `accept`-ран `pass`/`pass_with_exceptions` под `--policy pixel-strict-v1` по нему; `indeterminate`-случаи разобраны (readiness/габариты/`reference_canvas_unresolved`), а не списаны; runId и `caseSetId` — в `REPORT.md`, и они же переданы в `promote` флагами `--candidate`/`--acceptance-run` (несколько шардов — повтором флага либо `--acceptance-runs a,b`) (либо выбраны автовыбором и напечатаны строкой `acceptance link: …`);
-- [ ] интерактив: typed events объявлены и `emit` работает (проверь в плеере `?debug=1`);
-- [ ] definition: честный `atomicLevel`, продуктовый `description`, `examples`, при согласованной роли — `canonicalFor`;
-- [ ] Figma-provenance прикреплён (`--figma` при создании либо верб `provenance`; между ревизиями наследуется), эталонные PNG в реестре ассетов;
-- [ ] запись в `BUILD_ORDER.md`/`REPORT.md`.
+- [ ] каждый `.default()` имеет парный `??`; `{}` рендерится дефолтным видом Figma;
+- [ ] цвета/тени — `color()` с точным Figma-литералом; spacing — `space()`/union;
+- [ ] атом принят через `preview --rev head-draft` + `expect` **до** первой публикации; префлайт зелёный; publish по итогам приёмки (или по правилу 4 с зафиксированным known-gap);
+- [ ] `expect`: ±1px, 0 mismatches; compare: ≤2%, остаток — только антиалиасинг (AA-diagnostic), кластеры объяснены;
+- [ ] вариантов >1: манифест прошёл `case-set validate`, coverage без дыр, терминальный `accept`-ран `pass`/`pass_with_exceptions` под `pixel-strict-v1`; `indeterminate` разобраны, не списаны; runId/caseSetId в `REPORT.md` и переданы в `promote` (`acceptance link: …` в выводе);
+- [ ] интерактив: typed events объявлены, `emit` работает (плеер `?debug=1`);
+- [ ] definition: честный `atomicLevel`, продуктовый `description`, `examples`;
+- [ ] Figma-provenance прикреплён, эталонные PNG в реестре;
+- [ ] компонент опубликован и виден в probe-галерее; запись в `BUILD_ORDER.md`/`REPORT.md`.
 
 ## 6. Phase 2 — молекулы и организмы
 
-Тот же цикл §4 с дополнениями. Граница «composition vs TSX» выучена дорого (прод-дедупликация 2026-08: 295 кандидатов, 42 в головах) — соблюдай её с рождения каждого компонента:
+Тот же цикл §4. Граница «composition vs TSX» выучена дорого — соблюдай с рождения; полные правила и composition v3 (параметры, `when`/`$switch`/`repeatParam`, слоты, `layout`, `variants`) — **`reference/composition.md`**. Скелет:
 
-- **Composition не умеет владеть CSS.** Её элементы — только host-примитивы и опубликованные компоненты; она — декларативное дерево без собственных стилей. Значит компонент, владеющий хотя бы одним из: скролл-вьюпорт/маска/snap, `position: fixed/sticky`, safe-area, анимация/transition/transform, состояние (`useState`/`useEffect`/`useRef`), измерение DOM, скелетон-анатомия загрузки — это **TSX**. Контент-блок, разложимый готовыми атомами, — **composition**. Спорный случай `overflow: hidden` ради скругления — НЕ владение геометрией: `pay-box` обязан уметь радиус и клип, такой блок — composition.
-- **Границу считает сервер, не интуиция**: `node api.mjs send POST /compositions/analyze body.json` c `{doc, designSystem}` отдаёт вердикт `composition` | `extend-component` | `needs-ownership-component`, список `unsupported[]` (`timer`, `async-data`, `scroll`, `dom-measurement`, `custom-action`, `business-state`, `dynamic-directive`, лимиты) и `dependencyImpact`. Ручка read-only и не зависит от kill-switch'а записи — спрашивай её до того, как писать TSX «на всякий случай». Тот же вердикт с указанием готового артефакта даёт workbench: `POST /catalog/candidates` c `proposed.kind:"composition"` и черновым `compositionDoc` → `outcome`/`explanation`/`matches` (для композиций исход рекомендательный, `409` не бывает).
-- **Composition v3** (включена на проде) снимает старые ограничения: типизованные параметры (`enum`/`object`/`array`/`action`), `element.when` — необязательные ветки, `{"$switch":{param,cases,default}}` в значении пропа, **`repeatParam`** — клонирование поддерева по элементам `array`-параметра (`{"$item":"field"}`/`{"$index":true}` внутри), слоты с метаданными (`required`/`allowedTypes`/`allowedRoles`/`cardinality`/`fallback`), токенный `layout` (закрытые фасеты `flow`/`gap`/`padding`/`align`/`justify`/`sizing`/`radius`/`clip`/`background` → пропы layout-контракта v1) и `variants` (оси + легальные кортежи, выбор через `props.variant`). Списочный блок больше **не** обязан выражаться фиксированной арностью параметров: `array`-параметр + `repeatParam` — штатная форма, а `repeat` по `doc.state` хоста остаётся отдельным механизмом для настоящего рантайм-списка. Всё v3-ветвление статическое: раскрывается на сохранении прототипа, в сохранённом документе не остаётся ни `when`, ни `$switch`, ни `$param`; рантайм-условия — по-прежнему только `$cond` над `doc.state`.
-- Перед записью v3-композиции прогоняй раскрытие: `POST /compositions/:id/preview-tree` c `{params?, variant?}` показывает взятые ветки, выбранные `$switch`-case'ы, число клонов `repeatParam`, привязки слотов, во что скомпилировался `layout`, `expandedTree` и `issues[]` — это тот же экспандер, что в save-пути, а не его копия.
-- `@eui/Composition` не принимает `repeat` и `region`; глубина вложенности композиций ≤5; раскрытое дерево экрана — те же 500 элементов и глубина 50.
-- Новый TSX уровня molecule/organism обязан нести `ownership: { reason: "<чем он владеет: скролл/sticky/анимация/состояние — почему это не composition>" }` — без него publish падает с `422 atomic_policy_violation`, а с пустой отпиской компонент позже механически попадёт в dedup-аудит как composition-candidate и породит дорогой триаж. Пиши конкретное владение сразу.
-- Дети-инстансы в Figma → named slots или композиция в документе; **не** перерисовывай готовый атом внутри молекулы заново.
-- Сверка стикершитом — как у атомов; для организмов добавь probe-экран «в контексте» (организм на реальном фоне экрана из Figma).
+- Компонент, владеющий скроллом/маской, `fixed/sticky`, анимацией, состоянием, измерением DOM или скелетон-анатомией — **TSX** с обязательным `ownership: { reason: "<чем владеет>" }` (без него `422 atomic_policy_violation`). Контент-блок из готовых атомов — **composition**.
+- **Границу считает сервер**: `POST /compositions/analyze` с `{doc, designSystem}` → `composition | extend-component | needs-ownership-component` + `unsupported[]`. Спрашивай его до того, как писать TSX «на всякий случай».
+- v3-композицию перед записью прогоняй через `POST /compositions/:id/preview-tree`.
+- Дети-инстансы Figma → named slots или composition; **не** перерисовывай готовый атом внутри молекулы.
+- Сверка стикершитом как у атомов; организмам — плюс probe «в контексте» (на реальном фоне экрана из Figma).
 
-## 7. Phase 3 — эталонные экраны (acceptance всей системы)
+## 7. Phase 3 — эталонные экраны
 
-Возьми 2–3 полных пользовательских флоу из Figma (например: чекаут, выбор способа оплаты, успех) и собери их как настоящие кликабельные прототипы `ypv2-ref-<flow>`:
+2–3 полных флоу из Figma (чекаут, выбор способа оплаты, успех) как кликабельные прототипы `ypv2-ref-<flow>`:
 
-- эталонный экран — **flow-экран без `canvas`** (canvas и `region:` несовместимы — валидация отвергнет): фиксированные области — через `@eui/FlowRoot` + `region: "statusBar"|"header"|"footer"`, snap выйдет каноническим вьюпортом устройства (mobile 390×844) — Figma-фрейм для сверки экспортируй/кропь ровно под этот размер;
-- **контракт регионов**: `region` — только на прямых детях root'а типа `@eui/FlowRoot`, не более одного элемента на kind; `region` несовместим с `repeat` и `slot` на самом элементе, запрещён на `Overlay`/`Hotspot`, `Hotspot` внутри region-поддерева нельзя. FlowRoot нейтрален и **ничего не даёт детям** (ни padding, ни цвет, ни шрифт) — каждый бар стилизуется целиком внутри собственного поддерева (self-contained). Следствие для авторинга компонентов: header/footer/tab-bar-компоненты **не делают `position: fixed/sticky` сами** — якорение к вьюпорту принадлежит region-механизму, компонент рисует только содержимое бара;
-- **имитацию OS-статус-бара не вшивать в контент**: только атом статус-бара под `region: "statusBar"` — в мобильной презентации он автоматически скрывается (реальный телефон показывает свой), в плеере у зрителя есть тумблер. Вшитый в контент статус-бар будет двоиться на устройстве;
-- интерактив по-настоящему: `state`/`$cond`/`repeat`, переходы `navigate`, `flows[]` с главной линией;
-- snap каждого экрана против экспорта соответствующего Figma-фрейма через `compare.mjs` — тот же порог; **capture рендерит регионы inline** и складывает контент+футер в один длинный PNG (низ футера может уйти за фолд — артефакт снимка), тогда как плеер и презентация пиннят header/footer к краям телефонного фрейма 390×844, а контент скроллят между ними. Финальную приёмку пиннед-поведения и скролла делай глазами в плеере (`/p/<id>`, `?debug=1`) — десктопный плеер держит фрейм канонического размера даже для длинных canvas-экранов (контент скроллится «внутри телефона»), так что длинный экран — не дефект;
-- расхождение на экране, которого не было на стикершите = дефект интеграции (обычно рост/сжатие контейнера) — чинить компонент, не подпирать документ.
+- flow-экран **без `canvas`**; фиксированные области — `@eui/FlowRoot` + `region: "statusBar"|"header"|"footer"`; snap — канонический вьюпорт (mobile 390×844), Figma-фрейм кропь под него. Контракт регионов (self-contained бары, без `fixed/sticky` в компонентах, статус-бар только регионом) — `reference/easy-ui-authoring.md`.
+- Интерактив по-настоящему: `state`/`$cond`/`repeat`, `navigate`, `flows[]`.
+- Snap каждого экрана против Figma-фрейма (`compare.mjs`, тот же порог). Capture рендерит регионы inline (низ футера может уйти за фолд — артефакт снимка); пиннед-поведение и скролл принимай глазами в плеере (`/p/<id>`, `?debug=1`).
+- Расхождение, которого не было на стикершите, = дефект интеграции — чини компонент, не подпирай документ.
 
-Probe- и ref-прототипы живут **драфтами** — snap/geometry/status читают драфт, `publish` прототипа нужен только если человеку нужна стабильная версия-ссылка.
+Probe/ref-прототипы живут драфтами; `publish` прототипа — только если нужна стабильная ссылка для человека.
 
-Система готова, когда: все строки `BUILD_ORDER.md` в `done`, эталонные экраны проходят сверку, `node driver.mjs audit --design-system yandex-pay-v2` не находит deprecated-компонентов в использовании, а ручной проход по `catalog list yandex-pay-v2 --json` подтверждает описания/примеры у каждого компонента; `REPORT.md` содержит полную таблицу соответствия Figma → компонент → diff%.
+Система готова: все строки `BUILD_ORDER.md` в `done`, экраны проходят сверку, `driver.mjs audit --design-system yandex-pay-v2` чист, `REPORT.md` — полная таблица Figma → компонент → diff%.
 
-## 8. Грабли (выучены на старой системе — не повторять)
+## 8. Грабли — минимальный набор
 
-- **Renderer не применяет Zod-дефолты** — см. правило 5. Симптомы: краш на `.map`, NaN-геометрия, неверная ветка варианта при валидном документе.
-- **Рост контейнеров**: flex-ребёнок с `flex:1` по умолчанию раздувает ряды на свободную высоту. `PayBox` — hug по умолчанию; проверяй `geometry` (высота ряда = высоте контента).
-- **Faux-bold**: вес, которого нет среди загруженных начертаний, браузер синтезирует — жирнее и шире Figma. Только реальные веса.
-- **Шрифт-fallback на снапе**: если PNG снят до загрузки YS Text, все ширины врут. Признак — текстовые ширины в geometry ≠ Figma при верных паддингах. На приёмке (§4.8) это ловит гейт `readiness` (`met:false`, `reason`), и такой кадр вообще не получает визуального вердикта — не читай его `indeterminate` как «компонент сломан».
-- **`renderer_mismatch` на джобе съёмки** — фактический браузер образа разошёлся с объявленным манифестом рендерера: кадра нет, клиентский ретрай бесполезен, это вопрос к владельцу инстанса. И наоборот: апгрейд браузера меняет `renderer.fingerprint` и честно обнуляет reuse снятых случаев — после него матрицы переснимаются целиком, это не баг.
-- **`recapture=0` — не пропущенная работа.** Правка порогов даёт `verdictRecomputed`, правка эталона — `rediffed`; кадры при этом законно переиспользуются. Читать это как «сервер меня обманул» и добивать `--recapture` — терять минуты на каждую итерацию. Что именно произошло, называет квитанция `reuse` случая (`accept-status --case`), а не счётчик `reused`.
-- **Эталон руками не готовят.** Паддинг PNG под paint-канву, ручной crop и «derived»-копии — источник ловушки двойного crop (`136×32` → `116×12`). В реестр уезжает сырой экспорт узла, а канву строит сервер по `referenceSurface: "content-hug"` + `expectedGeometry` (§4.8).
-- **Полный `--json` рана — только для отладки.** Отчёт упавшей семьи на 25 случаев в полном виде — около 1800 строк; штатный вывод агента — `--summary`, разбор одного случая — `accept-status <runId> --case <caseId>`.
-- **Union-spacing**: если проп принимает и токен, и число px — сохраняй числовой литерал в схеме как есть (пере-вывод типа ломает re-pin существующих документов).
-- **Тема append-only после принятия**: правка значения токена задним числом молча меняет все готовые компоненты — пере-проверяй их снапы; и помни, что ревизии прототипов пинуют версию темы — сначала пересохранить probe, потом snap (§3.2).
-- **`state` прототипа** — обычный вложенный объект, ключи без слэша; пойнтеры директив — абсолютные (`/method`). Warnings при save = неработающая директива, не игнорировать.
-- **Snap с FlowRoot-футером** может срезать низ на capture-поверхности — это артефакт снимка, в плеере регионы пинятся корректно; сверяй такие зоны интерактивно (`?debug=1`) или скриншотом плеера.
-- **Login rate-limit 429** — в норме не случается (кэш сессии на диске, §1); если случился — проверь `EASYUI_SESSION_CACHE`, подожди минуту.
-- **CAS 409 (`revision_conflict`)** при прерванной сессии — повторить вызов драйвера (перечитает `headRev`).
-- Тестовый мусор удалять (`driver.mjs delete prototypes <id>`); probe- и ref-прототипы — не мусор, они живут как визуальный контракт системы.
+Полный список — **`reference/gotchas.md`** (читай при любом «странном» симптоме). Всегда держи в голове:
+
+- **Renderer не применяет Zod-дефолты** (правило 6): краш на `.map`, NaN-геометрия при валидном документе.
+- **Hug по умолчанию**: `flex:1` раздувает ряды — проверяй geometry.
+- **Faux-bold / шрифт-fallback**: несуществующий вес или PNG до загрузки YS Text = все ширины врут; на матричной приёмке это ловит гейт `readiness`.
+- **`recapture=0` — не пропущенная работа**: правка порогов → `verdictRecomputed`, эталона → `rediffed`; кадры законно переиспользуются.
+- **Эталон руками не готовят**: в реестр — сырой экспорт узла, канву строит сервер.
+- **Пины**: ревизия прототипа пинует версии компонентов и темы — пересохраняй probe после PATCH темы (и после publish, если док без `track: head`), иначе гоняешься за «диффом», которого нет.
+- **CAS 409** при прерванной сессии — повторить вызов (перечитает `headRev`); тестовый мусор удалять, probe/ref-доки — не мусор.
+
+## 9. Карта справочников (читать по мере надобности)
+
+| Файл | Когда читать |
+|---|---|
+| `reference/server-features.md` | первый запуск на инстансе; странности кэша/404 |
+| `reference/theme.md` | перед первым PATCH темы; 422 темы; откат шкалы |
+| `reference/verification.md` | перед первым preview/probe; формат expected.json; флаги compare |
+| `reference/acceptance.md` | перед первым case-set; разбор вердикта/reuse; promote-линковка |
+| `reference/composition.md` | перед первой молекулой |
+| `reference/gotchas.md` | любой «странный» симптом |
+| `reference/easy-ui-authoring.md` | грамматика документа, директивы, регионы, troubleshooting — секциями |
+| `reference/canonical-roles.md` | если обсуждается `canonicalFor` |
+| `templates/`, `examples/` | шаблон атома, probe-док, образцы TSX/доков |
