@@ -298,7 +298,7 @@ function assertRunSetCoherent(repo: AcceptanceRepo, runs: AcceptanceRunRow[], ex
       const overlap = [...left.keys].filter((key) => right.keys.has(key));
       if (overlap.length > 0) {
         throw new ApiError(422, "acceptance_coverage_overlap",
-          `Acceptance runs ${left.runId} and ${right.runId} cover the same ${overlap.length} case(s) of this component; shards of one family must be disjoint by (propsHash, surface)`,
+          `Acceptance runs ${left.runId} and ${right.runId} cover the same ${overlap.length} case(s) of this component; shards of one family must be disjoint by (propsHash, slotsHash, surface)`,
           { runIds: [left.runId, right.runId], overlap: overlap.slice(0, 20), overlapCount: overlap.length });
       }
       const sharedKeys = [...left.caseKeys].filter((key) => right.caseKeys.has(key));

@@ -437,8 +437,8 @@ Meta-ответы прототипов и компонентов additively не
 - **один кандидат**: каждый ран принадлежит указанному (или выведенному из первого рана) кандидату — иначе `422 acceptance_run_mismatch`;
 - **единый `policy_profile_id`** у всех ранов — иначе `422 acceptance_policy_mismatch` с `{runIds, policyProfileIds}`. Половина семьи под `default-v1` и половина под `pixel-strict-v1` — не одна приёмка, а две;
 - **единый `renderer_fingerprint`** (колонка `acceptance_runs.renderer_fingerprint`, v30; пишется на постановке рана) — иначе `422 acceptance_renderer_mismatch` с `{runIds, rendererFingerprints}`. Раны до v30 несут `NULL`: «неизвестно» ≠ «разошлось», поэтому для них проверка пропускается с warning;
-- **дизъюнктность покрытия по `(propsHash, surface)`** — иначе `422 acceptance_coverage_overlap` с `{runIds, overlap, overlapCount}`. Поверхность — `capture` (viewport/dsf/theme) **набора**, а не случая, поэтому шардирование light/dark законно даёт одинаковые props и даже одинаковые `caseId` в разных наборах; совпадение `caseKey` между наборами — **warning, не ошибка**;
-- **полнота** (только при `expectedCases`): суммарное покрытие считается **кадрами** — различными парами `(propsHash, surface)`, поэтому алиасы дублей учитываются один раз. Несовпадение → `422 acceptance_coverage_incomplete` с `{expectedCases, coveredCases, runs[]}`.
+- **дизъюнктность покрытия по `(propsHash, slotsHash, surface)`** — иначе `422 acceptance_coverage_overlap` с `{runIds, overlap, overlapCount}`. Поверхность — `capture` (viewport/dsf/theme) **набора**, а не случая, поэтому шардирование light/dark законно даёт одинаковые props и даже одинаковые `caseId` в разных наборах; совпадение `caseKey` между наборами — **warning, не ошибка**. `slotsHash` вошёл в ключ с миграцией v31: два случая с одинаковыми props и разными детьми слотов — **два разных кадра**, а не ложное пересечение (раньше они схлопывались в один элемент покрытия и давали заниженный `coveredCases`). Раны без слотов (`slots_hash` NULL) сохраняют доv31-мощности множеств и попарные пересечения побайтово;
+- **полнота** (только при `expectedCases`): суммарное покрытие считается **кадрами** — различными тройками `(propsHash, slotsHash, surface)`, поэтому алиасы дублей учитываются один раз. Число кадров набора видно заранее: `frames.count` у `case-sets/validate` и `coverage.frameCases` у `/coverage`. Несовпадение → `422 acceptance_coverage_incomplete` с `{expectedCases, coveredCases, runs[]}`.
 
 **Хранение и порядок (v30).** `component_publishes.acceptance_run_ids` — плоская TEXT-колонка с JSON-массивом **без FK** (инвариант A9). Сервер сортирует набор по `(created_at, run_id)`, поэтому порядок аргументов запроса на хранение не влияет, а легаси-скаляр `acceptance_run_id` — **первый элемент отсортированного массива**. Массив пишется всегда, когда ран есть (одиночный promote даёт `[run]`), поэтому новым читателям не нужно различать «одиночная версия» и «набор». Чтение до-миграционных строк: `acceptance_run_ids IS NULL` ⇒ `[acceptance_run_id]` (пусто, если и он `NULL`) — backfill'а нет намеренно.
 
@@ -513,6 +513,8 @@ CLI: `driver.mjs reject <candidateId> --reason <text>`.
 
 **Квитанция reuse (`reuseReceipt`)** отвечает на вопрос «что именно переиспользовано» **по уровням**, а не одним счётчиком: `{reuse: {candidate, frame, readiness, geometry, visualMetrics, verdict}, fingerprints: {frame, comparison, verdictPolicy, case}, reuseReason?}`. Она есть у каждого случая в `/cases` (`null` — строка старше миграции v29) и в манифесте evidence. Именно она различает «ничего не считали заново» и «вердикт пересчитан по новому порогу над переиспользованным кадром» — то, чего `progress.reused` по построению не различает.
 
+Манифест evidence несёт по случаю со слотами ещё и **разрешённое дерево слотов** — `slotBindings: [{slot, children: [{componentId, name, version, bundleHash, props, propsHash}]}]` в порядке рендера — и его `slotsHash`. Пишет их тот же расчёт `casesOfRun`, что и отпечатки, поэтому доказательство и кадр не могут разъехаться; promote связывает `evidenceManifestHashes`, так что дерево слотов становится promote-bound доказательством. Версия манифеста рана остаётся `1`, а у бесслотового рана манифест **побайтово** прежний: поля пишутся только при непустых биндингах.
+
 Манифест evidence с этой волны несёт по случаю ещё и **эффективную вердиктную политику** — `verdictPolicy {hash, snapshot}`. Пара, а не один хэш: снимок отвечает читателю, каким порогом мерили, хэш проверяет, что снимок — тот самый (тот же валидатор, что у `acceptance_case_results.verdict_policy_json`).
 
 **`GET /acceptance-runs/:runId/evidence`** — ZIP: `manifest.json`, `SHA256SUMS` (формат `sha256sum`, строки `"<sha256>  <caseId>/<name>"`) и сами артефакты по путям `<caseId>/<name>` (`render.png`, `geometry.json`, `determinism.png`, …). Манифест пишется при терминализации рана; до неё — `409 evidence_not_ready`. Сырьё тяжелее `limits.evidenceMaxBytes` — `413 evidence_too_large` (проверяется по размерам из манифеста, до чтения байтов). Артефакт, уже вычищенный GC evidence, остаётся строкой в `SHA256SUMS`, но отсутствует в архиве: `sha256sum -c` покажет ровно то, чего не хватает.
@@ -541,15 +543,19 @@ CLI: `driver.mjs impact <id> --candidate <candidateId> --baseline-run <runId>` (
 
 #### Трёхслойный отпечаток случая, каскад reuse и алгебра refresh (волна W1, план 2026-08-04)
 
-Плоский `case_fingerprint` смешивал в одном хэше три разнородные вещи — вход съёмки, вход сравнения и вход вердикта, — поэтому смена **одного числа** в политике («порог 2% → 0.5%») инвалидировала весь накопленный reuse и стоила полной пересъёмки матрицы. С этой волны отпечаток расслоён; `CASE_FINGERPRINT_ALGO_VERSION` поднят 5 → 6 (накопленный прод-кэш инвалидируется один раз, первый ран после деплоя — холодный).
+Плоский `case_fingerprint` смешивал в одном хэше три разнородные вещи — вход съёмки, вход сравнения и вход вердикта, — поэтому смена **одного числа** в политике («порог 2% → 0.5%») инвалидировала весь накопленный reuse и стоила полной пересъёмки матрицы. С этой волны отпечаток расслоён; `CASE_FINGERPRINT_ALGO_VERSION` поднят 5 → 6 (накопленный прод-кэш инвалидируется один раз, первый ран после деплоя — холодный). Волна слот-приёмки (2026-08-05) подняла его **6 → 7**, добавив `slotBindings` во frame-слой.
 
 | Слой | Что в нём | Что означает совпадение |
 |---|---|---|
-| `frameFingerprint` | `candidateId`, `caseKey`, `propsHash`, поверхность (viewport/dsf/theme), `readinessPolicyHash`, `rendererFingerprint` | пересъёмка даст те же пиксели ⇒ кадр из CAS можно переиспользовать |
+| `frameFingerprint` | `candidateId`, `caseKey`, `propsHash`, поверхность (viewport/dsf/theme), `readinessPolicyHash`, `rendererFingerprint`, `slotBindings` — разрешённые дети слотов `[{slot,index,componentId,version,bundleHash,propsHash}]` в порядке рендера (алго 7) | пересъёмка даст те же пиксели ⇒ кадр из CAS можно переиспользовать |
 | `comparisonFingerprint` | `referenceAssetId`, `cropLineage` (вкл. `sourceSurface`), `expectedGeometry`, `maxDimensionDeltaPx`, параметры канвы (`paintMargin`, `dsf`); `referenceSurface`/`referencePlacement` (W5) | метрики расхождения остаются в силе ⇒ пересчёт по ним законен |
 | `verdictPolicyHash` | профиль и его пороги (`maxRawDiffPct`, geometry-допуски), `perCase`-оверрайды, `requireVisual`, состав и роли гейтов, `allowPaintOverflow`/`expectedClip`, `expectedGeometry`, `policy.profile` манифеста | решение по тем же метрикам будет тем же |
 
-`case_fingerprint = sha256({algo: 6, frame, comparison, verdictPolicy})`. **`expectedGeometry` — двухслойное поле**: оно и допуск вердикта геометрии, и (с волны W5) `padTo` нормализации content-hug эталона, поэтому его смена уводит визуал в re-diff, а не в пересчёт по старым метрикам. Разбиение полей по слоям — типизированное и **тотальное**: новое поле политики или случая не соберётся, пока ему не назначен слой (значение `report-only` — обоснованное «ни в одном», а не пропуск).
+`case_fingerprint = sha256({algo: 7, frame, comparison, verdictPolicy})`. **`expectedGeometry` — двухслойное поле**: оно и допуск вердикта геометрии, и (с волны W5) `padTo` нормализации content-hug эталона, поэтому его смена уводит визуал в re-diff, а не в пересчёт по старым метрикам. Разбиение полей по слоям — типизированное и **тотальное**: новое поле политики или случая не соберётся, пока ему не назначен слой (значение `report-only` — обоснованное «ни в одном», а не пропуск).
+
+**Что стоил bump 6 → 7.** Слоты вошли в **frame**-слой по значению (версия, `bundleHash` и `propsHash` каждого ребёнка, плюс его позиция), поэтому смена ребёнка, его версии, его props или **порядка** детей — это пересъёмка, а не пересчёт. Бесслотовый случай хешируется в тот же кадр, что и до волны, **побайтово**: разрешённые биндинги пишутся в пре-образ только когда они есть (отсутствуют, а не `[]`/`null`). Сам bump алгоритма при этом инвалидирует накопленный **вердиктный** reuse глобально и один раз: раны после деплоя переоценивают вердикт и пере-диффят по сохранённым кадрам — **пересъёмки не происходит**, но ровно до тех пор, пока включён `EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE=1`. С `0` каскад короткий: любой промах `case_fingerprint` — это пересъёмка, и первый ран после деплоя снимет всё заново. Строки с `algo: 6` остаются в `acceptance_case_results` до GC.
+
+`slotsHash` — **производная** величина и живёт в слое `report-only`: каждый пиксельно значимый вход слотов уже захэширован по значению во frame-слое, поэтому вторичный хэш в отпечаток не входит. Его роль — ключ покрытия, handshake капчура и запись в evidence.
 
 Examples-путь больше не хэширует заглушку `CASE_POLICY_HASH_V0`: вердиктный слой строится из **реальной эффективной политики рана**, поэтому `--policy pixel-strict-v1` инвалидирует reuse и на examples-, и на case-set-пути.
 
@@ -595,7 +601,7 @@ Examples-путь больше не хэширует заглушку `CASE_POLI
 | Метод | Путь | Ответ |
 |---|---|---|
 | `PUT` | `/components/:id/case-sets` | `200` `{caseSetId, componentId, designSystem, cases, cached, coverage, warnings}` |
-| `POST` | `/components/:id/case-sets/validate` | `200` `{caseSetId, componentId, designSystem, cases {count, ids}, coverage, warnings, wouldBeCached}` — dry-run без записи |
+| `POST` | `/components/:id/case-sets/validate` | `200` `{caseSetId, componentId, designSystem, cases {count, ids}, frames {count, ids}, coverage, warnings, wouldBeCached}` — dry-run без записи |
 | `GET` | `/case-sets/:caseSetId` | `200` строка набора + `manifest` |
 | `GET` | `/case-sets/:caseSetId/coverage` | `200` покрытие измерений |
 
@@ -655,11 +661,11 @@ Examples-путь больше не хэширует заглушку `CASE_POLI
 
 Charset `case.id` совпадает с charset имён записей evidence-архива (защита от zip-slip), поэтому **Figma node id вида `54863:9537` не проходит** — санитизировать на клиенте.
 
-**Отказы `PUT`** (все `422`): `validation_failed` (схема, charset, `cropLineage.rect` с отрицательными координатами или нулевым размером), `case_set_component_mismatch` (манифест описывает другой `componentId`), `case_set_too_large` (больше `limits.acceptanceMaxCasesPerRun` случаев), `case_set_coverage_too_large` (декартово произведение `dimensions` больше `limits.caseSetMaxExpectedTuples`; считается перемножением длин осей до материализации), `duplicate_case_id`, `duplicate_case_props` (одинаковые props без `aliasOf`), `invalid_alias_target` (цель отсутствует, сама является алиасом или имеет другие props), `asset_not_found` (эталона нет в реестре), `crop_rect_out_of_bounds` (применяемый `rect` не помещается в размеры ассета — раньше воркер молча клампил вырезку и сравнивал не то, что объявлено), `crop_lineage_conflict` (`referenceSurface: "content-hug"` вместе с `cropLineage` требует `sourceSurface: "figma-node"`: «ассет уже вырезан» и «вырежи из него» — взаимоисключающие утверждения об одном ассете).
+**Отказы `PUT`** (все `422`): `validation_failed` (схема, charset, `cropLineage.rect` с отрицательными координатами или нулевым размером), `case_set_component_mismatch` (манифест описывает другой `componentId`), `case_set_too_large` (больше `limits.acceptanceMaxCasesPerRun` случаев), `case_set_coverage_too_large` (декартово произведение `dimensions` больше `limits.caseSetMaxExpectedTuples`; считается перемножением длин осей до материализации), `duplicate_case_id`, `duplicate_case_props` (одинаковые props без `aliasOf`), `invalid_alias_target` (цель отсутствует, сама является алиасом или имеет другие props), `asset_not_found` (эталона нет в реестре), `crop_rect_out_of_bounds` (применяемый `rect` не помещается в размеры ассета — раньше воркер молча клампил вырезку и сравнивал не то, что объявлено), `crop_lineage_conflict` (`referenceSurface: "content-hug"` вместе с `cropLineage` требует `sourceSurface: "figma-node"`: «ассет уже вырезан» и «вырежи из него» — взаимоисключающие утверждения об одном ассете). Отказы слот-биндингов — `slot_component_not_published`, `slot_component_design_system_mismatch`, `slot_self_reference`, `slot_props_invalid`, `slot_props_dynamic` — [ниже](#slotbindings-дети-слотов-случая-план-2026-08-05-a).
 
 **Предупреждения, а не отказы** (`warnings[]`): `expectedGeometry`, равный размерам эталона и похожий на padded-канву (`корень + 2×64`) — тот самый способ уронить геометрию 12/12; `referenceSurface: "content-hug"` без `expectedGeometry` (канва будет выведена из измеренного `layoutBounds`); неполные/недекларированные `dims` и расхождение props со схемой опубликованной версии компонента — схема головы законно отличается от последней публикации, а манифест часто готовится до правки компонента.
 
-**Coverage** (`GET /case-sets/:caseSetId/coverage`): `dimensions`, `expectedTuples` (декартово произведение), `presentTuples` (различные tuples из `cases[].dims`), `missingTuples[]` (не более **64** ячеек), `missingCount` (полное число незакрытых ячеек), `truncated` и `duplicates[] {tuple, caseIds}`. Считать пропуски по `missingTuples.length` нельзя — на больших семьях список усечён; истина в `missingCount`. Манифест без `dimensions` получает тривиальный отчёт (`expectedTuples: 0`, `presentTuples` = число случаев): фиктивное произведение по неполной Figma-матрице не выдумывается.
+**Coverage** (`GET /case-sets/:caseSetId/coverage`): `dimensions`, `expectedTuples` (декартово произведение), `presentTuples` (различные tuples из `cases[].dims`), `missingTuples[]` (не более **64** ячеек), `missingCount` (полное число незакрытых ячеек), `truncated`, `duplicates[] {tuple, caseIds}` и `frameCases` — число случаев набора, которые реально снимаются (не-алиасы). `frameCases` появился вместе со `slotBindings`: мощность кадров перестала выводиться из числа случаев, и именно по нему считается `expectedCases` для multi-run promote. Считать пропуски по `missingTuples.length` нельзя — на больших семьях список усечён; истина в `missingCount`. Манифест без `dimensions` получает тривиальный отчёт (`expectedTuples: 0`, `presentTuples` = число случаев): фиктивное произведение по неполной Figma-матрице не выдумывается.
 
 **Лимиты набора** (все — в `GET /api/capabilities` → `limits`, волна 2026-08-04 W6):
 
@@ -670,6 +676,8 @@ Charset `case.id` совпадает с charset имён записей evidence
 | `caseSetMaxDimensions` | `8` | число осей `dimensions` |
 | `caseSetMaxDimensionValues` | `64` | значений в одной оси; **≥ `acceptanceMaxCasesPerRun` by design** — одна каноническая ось обязана вмещать целый ран, иначе семья из 49 состояний шардируется только из-за схемы |
 | `caseSetMaxExpectedTuples` | `4096` | потолок декартова произведения `dimensions`; превышение — `422 case_set_coverage_too_large` |
+| `caseSetMaxSlotChildren` | `12` | детей в одном слоте случая (продуктовая планка — карусель на 9 детей) |
+| `caseSetMaxSlotsPerCase` | `8` | слотов в одном случае; кардинальность самого слота сервер не проверяет |
 
 Потолок произведения проверяется **перемножением длин осей**, до построения хотя бы одной ячейки: 8 осей по 64 значения — это 2.8·10^14 tuples, и материализация такого произведения убила бы процесс. Отказ приходит на обоих путях — при `PUT`/`validate` манифеста и при чтении `/coverage`.
 
@@ -677,7 +685,62 @@ Charset `case.id` совпадает с charset имён записей evidence
 
 **Подсказки схемы, на которых чаще всего спотыкаются.** `componentId` — **обязательное** поле манифеста и обязано совпадать с id в пути (`422 case_set_component_mismatch`). `null` схема не принимает **нигде**: необязательное поле надо **опускать**, а не занулять — `"cropLineage": null` это `422 validation_failed`, а не «нет lineage» (то же верно для `expectedGeometry`, `referenceSurface`, `dims`, `aliasOf`, `source`, `policy`).
 
-**Dry-run: `POST /components/:id/case-sets/validate`.** Те же проверки, что у `PUT`, **без записи**: ответ несёт вычисленный `caseSetId`, `cases {count, ids}` (набор случаев рана в том виде, в каком его построил бы оркестратор — с алиасами и отказом `empty_case_set`), `coverage`, `warnings` и `wouldBeCached` (набор с таким адресом уже опубликован, то есть `PUT` был бы идемпотентным повтором). Гейт возможности — `capabilities.features.caseSetValidate`; авторизация и коды отказов — как у `PUT`. Раньше единственным способом узнать вердикт сервера была мутирующая публикация, и черновой манифест оставлял в базе `cset_`-строку навсегда.
+#### `slotBindings`: дети слотов случая (план 2026-08-05 §A)
+
+Именованный слот и неявный `children` до этой волны были **непокрываемы приёмкой**: сервер строил capture-дерево из одного элемента, и любые два состояния, различающиеся только содержимым слота, приезжали на съёмку с пустыми слотами и одинаковым `propsHash`. Случай описывает своих детей полем `slotBindings` (гейт возможности — `capabilities.features.caseSetSlotBindings`):
+
+```jsonc
+{
+  "id": "sms-two-fields",
+  "props": { "state": "input" },
+  "slotBindings": {
+    "fields":   [ { "type": "PaySmsField",  "version": 3, "props": { "filled": true } },
+                  { "type": "PaySmsField",  "version": 3 } ],
+    "default":  [ { "type": "PayMethodTile", "version": 7, "props": { "brand": "mir" } } ]
+  }
+}
+```
+
+**Ключ пина — имя и точная версия.** `type` — имя опубликованного компонента (глобально уникально и никогда не переименовывается), `version` — **обязательный точный** пин. «Последняя активная» здесь недопустима принципиально: набор контентно адресован, и такой пин сделал бы смысл `cset_` зависимым от момента прогона. `bundleHash` в манифесте **нет** — он резолвится сервером из неизменяемой строки публикации и входит уже в отпечаток кадра, а не в адрес набора.
+
+**Глубина 1.** Ребёнок своих детей не несёт (`strictObject` отвергает вложенность). Дерево глубже одного уровня — это композиция, и её место в прототипе, а не в наборе случаев компонента.
+
+**Default-слот (§A2a).** Ключ `default` **зарезервирован и легален**: он биндит неявный слот `children`, который в этом кодовом дереве не объявляется в `definition.slots` вовсе (`slotOf(child) ?? "default"`). Поэтому `default` **освобождён** и от проверки членства в `extracted.meta.slots`, и от гейта `capabilities.namedSlots` — любой компонент, который рендерит `children`, квалифицируется; `slot_unknown`/`slot_bindings_unsupported` относятся только к **именованным** ключам. В capture-дерево дети default-слота уезжают **без** поля `slot` (каноническое представление; рантайм схлопывает обе формы в `slotIndices.default`). Если последняя опубликованная версия субъекта не объявляет ни `capabilities.namedSlots`, ни рендер `children`, `PUT` отвечает предупреждением, а не отказом: точно решить это по метаданным нельзя. Именно default-слот разблокировал карусель способов оплаты — 9 детей одним случаем.
+
+**Отказы: `PUT`/`validate` против старта рана.** Граница проведена по природе факта, а не по удобству.
+
+| Код (422) | Когда | Где |
+|---|---|---|
+| `slot_component_not_published` | имени нет, версии нет, компонент удалён, версия в `archived\|rejected\|staging\|failed` | `PUT` **и** старт рана |
+| `slot_component_design_system_mismatch` | ребёнок из другой дизайн-системы | `PUT` |
+| `slot_self_reference` | ребёнок резолвится в сам субъект набора | `PUT` |
+| `slot_props_invalid` | props ребёнка не проходят `propsJsonSchema` пиннутой версии | `PUT` |
+| `slot_props_dynamic` | props ребёнка содержат `$`-директиву или `__eui`-ключ на любой глубине | `PUT` + повторно в `pushDraftCapture` |
+| `slot_unknown` | **именованного** слота нет в `definition.slots` кандидата | старт рана (warning на `PUT`) |
+| `slot_bindings_unsupported` | есть **именованные** ключи, а кандидат не объявил `capabilities.namedSlots` | старт рана (warning на `PUT`) |
+
+Опубликованный факт (ребёнок существует, версия такая-то, props по схеме) известен уже на публикации набора и отказывает сразу. Факт **головы кандидата** (набор именованных слотов, `namedSlots`) на момент `PUT` может относиться к другой ревизии, чем та, которую потом снимут, — поэтому там это предупреждение, а жёсткий отказ приезжает на старте рана, где кандидат наконец известен. `props` случая — литеральный JSON, директив прототипа в них нет и не будет: `slot_props_dynamic` проверяется рекурсивно и **повторно** на входе капчура (манифест неизменяем, но пояс и подтяжки).
+
+**Статус-политика пинов — симметричная.** На обоих путях принимаются `active|deprecated|superseded`; не-`active` дают предупреждения `slot_pin_deprecated`/`slot_pin_superseded`. Жёсткий `slot_component_not_published` — только на отсутствующей строке, удалённом компоненте и статусах `archived|rejected|staging|failed`. Асимметричный гейт (строже на `PUT`) сломал бы документированный идемпотентный повтор `PUT` того же манифеста в тот момент, когда promote авто-суперсидит прежнюю версию любого ребёнка. Компонент с `deleted_at` не резолвится вовсе: зарезервированное имя надгробия не должно указывать на живой пин.
+
+**Дедуп и алиасы: ключ — пара (props, slots).** Раньше два случая с одинаковыми props были `422 duplicate_case_props`, и обойти это `aliasOf` было нельзя (алиас переиспользует **один** кадр). Теперь:
+
+- одинаковые props + **разные** биндинги — законны, и это **два кадра**;
+- одинаковые props **и** одинаковые биндинги — по-прежнему `422 duplicate_case_props`;
+- `aliasOf` обязан повторять **и** props, **и** биндинги (иначе `422 invalid_alias_target`);
+- `props: {}` и отсутствующий `props` в ключе нормализуются в одно и то же, как и раньше.
+
+Второй, неявный дедуп — **внутри построения набора** (`buildCasesFromManifest`) — переведён на тот же ключ. Без этого манифест проходил `PUT`, а на ране всё равно схлопывался в один кадр: инвариант теперь читается как «пара (props, slots) не снимается дважды», а не «пара props».
+
+**Две разные хеш-величины, которые нельзя путать.** Ключ дедупа `PUT`-времени считается по **манифесту** (`{type, version, propsHash}` каждого ребёнка), живёт только в памяти валидации и никогда не персистится. `slotsHash` (колонка `acceptance_cases.slots_hash`, миграция v31) считается по **разрешённому** списку `[{slot,index,componentId,version,bundleHash,propsHash}]` — тот же пре-образ, что уходит в отпечаток кадра, — и именно он входит в ключ покрытия, в handshake капчура и в evidence.
+
+**Лимиты** — в `GET /api/capabilities → limits`: `caseSetMaxSlotChildren` (**12**; продуктовая планка — 9 детей карусели) и `caseSetMaxSlotsPerCase` (**8**). **Кардинальность слота сервер не проверяет**: сколько детей осмысленно принимает конкретный слот — свойство компонента, а не набора, и объявленного контракта на это нет. Лимиты схемы — единственный потолок.
+
+**Откат сборки (blast radius).** Манифест со `slotBindings`, записанный этой сборкой, **не читается** сборкой до неё: чтение строки — повторный `strictObject`-разбор. Такой откат деградирует не в непрозрачную 500, а в именованный `422 case_set_manifest_unreadable` с адресом набора — на всех путях, где манифест читается из строки: `GET /case-sets/:id/coverage`, старт рана, durable-реконструкция случаев рана и `runCoverage` → `promote`. То же латентное свойство уже вносили `referenceSurface` и `cropLineage.sourceSurface`.
+
+**Коллизия имён.** `slotBindings` case-set-манифеста — **не** то же самое, что `slotBindings` в DTO `POST /compositions/analyze`: там это отчёт анализатора о слотах кандидата-композиции, здесь — вход капчура. Общего кода и общей схемы у них нет.
+
+**Dry-run: `POST /components/:id/case-sets/validate`.** Те же проверки, что у `PUT`, **без записи**: ответ несёт вычисленный `caseSetId`, `cases {count, ids}` (набор случаев рана в том виде, в каком его построил бы оркестратор — с алиасами и отказом `empty_case_set`), `frames {count, ids}` (случаи **без** алиасов, то есть то, что действительно снимается: два состояния с одинаковыми props и разными `slotBindings` обязаны быть здесь двумя записями), `coverage`, `warnings` и `wouldBeCached` (набор с таким адресом уже опубликован, то есть `PUT` был бы идемпотентным повтором). Гейт возможности — `capabilities.features.caseSetValidate`; авторизация и коды отказов — как у `PUT`. Раньше единственным способом узнать вердикт сервера была мутирующая публикация, и черновой манифест оставлял в базе `cset_`-строку навсегда.
 
 **Ран по набору.** `POST /acceptance-runs {candidateId, caseSetId}` строит случаи из манифеста: `capture` задаёт поверхность съёмки, `referenceAssetId`/`referenceSurface`/`referencePlacement`/`expectedGeometry`/`cropLineage` уезжают в durable-строки случаев, `policy.profile` + `policy.perCase[caseId]` дают `case_policy_hash`, который входит в `case_fingerprint` — правка допуска одного случая инвалидирует reuse ровно его. Эталон и его нормализацию потребляет [визуальный гейт](#минимальный-визуальный-гейт-приёмки-волна-w5a-план-2026-08-03-2-a5); все поля происхождения эталона — входы `comparisonFingerprint`, поэтому их правка даёт **re-diff** (пересравнение сохранённого кадра), а не пересъёмку и не пересчёт по старым метрикам.
 
@@ -1166,19 +1229,22 @@ Cursor — каноническая строка `<ISO-8601>~<asset_id>`, нап
 
 ## Скриншоты
 
-Асинхронный job-API рендерит экран прототипа (либо компонент — опубликованную версию или сохранённую head-ревизию) через headless Chromium (playwright) в отдельном node-подпроцессе. Обычный режим создаёт PNG и складывает его в реестр ассетов (D); geometry probe возвращает только DOM-геометрию и не создаёт PNG/asset. Оба режима требуют `SERVE_DIST` **и** установленного chromium; иначе POST сразу отвечает `501 screenshot_unavailable`.
+Асинхронный job-API рендерит экран прототипа (либо компонент — опубликованную версию или сохранённую head-ревизию) через headless Chromium (playwright) в отдельном node-подпроцессе. Обычный режим создаёт PNG и складывает его в реестр ассетов (D); байтовый режим отдаёт PNG вызывающему и **не** ингестит его (приёмка и overlay кандидата); geometry probe возвращает только DOM-геометрию и не создаёт PNG/asset. Оба режима требуют `SERVE_DIST` **и** установленного chromium; иначе POST сразу отвечает `501 screenshot_unavailable`.
 
 | Метод и путь | Тело / ответ |
 |---|---|
-| `POST /prototypes/:id/screens/:screenId/screenshot` | `{rev?\|version?, viewport{width,height}, deviceScaleFactor?, theme?, waitForFonts?, probe?:"geometry"}` → `202 {jobId}` |
+| `POST /prototypes/:id/screens/:screenId/screenshot` | `{rev?\|version?, viewport{width,height}, deviceScaleFactor?, theme?, waitForFonts?, probe?:"geometry", candidateOverrides?}` → `202 {jobId, components[]}`; `candidateOverrides` — [overlay кандидата](#overlay-кандидата-в-прототипном-кадре-план-2026-08-05-b) |
 | `POST /components/:id/versions/:version/screenshot` | `{props?\|exampleName?, viewport, deviceScaleFactor?, theme?, waitForFonts?, probe?:"geometry"}` → `202 {jobId}`; `props` и `exampleName` взаимоисключающие |
 | `POST /components/:id/head/screenshot` | То же тело; снимает сохранённую **неопубликованную** head-ревизию → `202 {jobId}`. См. [Draft-preview](#draft-preview-head-ревизии-компонента) |
 | `GET /screenshot-jobs/:jobId` | `{status: queued\|running\|done\|error, result?, error?}` |
 | `GET /screenshot-jobs/:jobId/receipt` | `{receiptSha256, receipt}` — capture receipt кадра, см. [Capture receipt](#capture-receipt-волна-r5-план-2026-08-03-renderer-contract-2) |
+| `GET /screenshot-jobs/:jobId/bytes` | `image/png` — байты кадра байтовой джобы (`result.kind: "image-bytes"`), пока жив результат (10 минут) |
 
-Прототипная постановка additively возвращает `components[]` — разрешённые на момент enqueue пины (`{id,name,version,bundleHash}`). Для [head-tracking](#head-tracking-служебных-прототипов) дока это единственный момент, когда клиент узнаёт, какие версии компонентов реально пойдут в кадр. Постановка требует владения ресурсом; `GET /screenshot-jobs/:jobId` перепроверяет доступ по цели джобы — read-доступ к прототипу для прототипных и владение компонентом для компонентных, включая draft-джобы.
+Прототипная постановка additively возвращает `components[]` — разрешённые на момент enqueue пины (`{id,name,version,bundleHash}`, у подменённого — ещё `status: "candidate"` и `candidate {candidateId, rev, sourceHash}`). Для [head-tracking](#head-tracking-служебных-прототипов) дока это единственный момент, когда клиент узнаёт, какие версии компонентов реально пойдут в кадр. Постановка требует владения ресурсом; `GET /screenshot-jobs/:jobId` (и `…/bytes`) перепроверяет доступ по цели джобы — read-доступ к прототипу для прототипных и владение компонентом для компонентных, включая draft-джобы; у overlay-джобы к этому добавляется владение **каждым** подменённым компонентом.
 
 `result` (при `done`) — discriminated union. Image-ветка сохраняет прежние поля и получает discriminator: `{kind:"image", imageUrl, assetId, width, height, consoleErrors, pageErrors, rendererBuild, browserVersion, componentPins?|bundleHash?}`. Draft-джоба (`/head/screenshot`) дополнительно несёт `draftRev` — номер снятой head-ревизии.
+
+**Байтовая ветка результата** (`{kind:"image-bytes", width, height, byteLength, pngSha256, imageProduced, consoleErrors, pageErrors, rendererBuild, browserVersion, …}`) принадлежит джобам, кадр которых **не ингестится в реестр ассетов**: capture'ам приёмки и overlay-джобам. Ни `assetId`, ни `imageUrl` у неё нет — байты живут в памяти процесса до истечения `RESULT_TTL` (10 минут) и читаются ручкой `GET /screenshot-jobs/:jobId/bytes` (`image/png`; у джобы без байтов — `404`). Сами байты в JSON-конверте статуса **не едут никогда**: санитизация стоит на HTTP-границе и применяется ко **всем** байтовым исходам, включая candidate-джобы приёмки (их статус раньше отдавал numeric-keyed массив на мегабайты); in-process потребитель (гейт капчура) продолжает получать байты тем же аксессором. `pngSha256` — тот же адрес кадра, что пишет в capture receipt воркер, и клиент обязан сверять им скачанное тело.
 
 **Capture-контракт (волна 7.1, аддитивно).** Обе ветки результата дополнительно несут `captureClean`, `productErrors[]`, `infraNoise[]`, `runtimeWarnings[]`; image-ветка ещё и `imageProduced: true`. `consoleErrors`/`pageErrors` остаются прежними (полный сырой список) — старые клиенты не ломаются. Классификация — единый allowlist в `server/screenshot/noise.ts`: `favicon.ico`, origin'ы браузерных расширений (`chrome-|moz-|safari-web-extension://`), `ERR_NETWORK_CHANGED`, `ResizeObserver loop …`, а также любое сообщение, все абсолютные URL которого ведут не на capture origin. Всё остальное — `productErrors`, то есть дефект самого прототипа; `captureClean === productErrors.length === 0`. `runtimeWarnings` — console-warning'и страницы (`[overlay] …` и подобные), они никогда не являются причиной провала.
 
@@ -1243,6 +1309,37 @@ Geometry-ветка дискриминирована по `surface`: `"prototype
 ```
 
 `version` и `draftRev` взаимоисключающие: published-джоба отдаёт `version`, draft-джоба (`/head/screenshot`) — `draftRev`. `designSystemMetaVersion` и `resolvedSpaceScale` берутся из **последней** версии темы системы компонента (компонентная съёмка версию темы не пинует, в отличие от прототипной, которая читает пин ревизии); шкала резолвится тем `spacingResolver`, который записан в этой версии темы — см. [Тема](#тема-дизайн-системы-tokensfontsicons-и-версии). Ролей экрана у одиночного компонента нет, поэтому `roleRects` обычно пуст, а `frame` приходит из capture-поверхности.
+
+#### Overlay кандидата в прототипном кадре (план 2026-08-05 §B)
+
+Компонент проверяется в одиночку (`preview`), а ломается в композиции. `POST /prototypes/:id/screens/:screenId/screenshot` принимает `candidateOverrides: [{candidateId}]` — на время съёмки пины ревизии подменяются бандлами acceptance-кандидатов, и новая ревизия уже опубликованного компонента проверяется внутри живого экрана до публикации. Гейт возможности — `capabilities.features.prototypeCandidateOverlay`.
+
+**Прекондиция: это swap пина, а не вставка.** Документ сохраняется только с `status='active'` пинами, поэтому подменить можно **лишь тот компонент, у которого уже есть пин в ревизии**. Компонент без публикации в документе не пиннут вовсе, и подменять там нечего — `422 candidate_component_not_in_prototype` (отдельный код, а не общее «не используется», именно чтобы сообщение объяснило прекондицию). **Первая публикация компонента через overlay не проверяется** — для неё есть [`slotBindings`](#slotbindings-дети-слотов-случая-план-2026-08-05-a). Ценность overlay'я — композитные и интерактивные проверки **новых ревизий** уже опубликованных компонентов.
+
+```jsonc
+// запрос
+{ "viewport": {"width":390,"height":844}, "candidateOverrides": [{ "candidateId": "cand_…" }] }
+// 202
+{ "jobId": "job_…",
+  "components": [
+    { "id": "pay-sms-module", "name": "PaySmsModule", "version": 4,
+      "bundleHash": "<bundleHash КАНДИДАТА>", "status": "candidate",
+      "candidate": { "candidateId": "cand_…", "rev": 12, "sourceHash": "…" } },
+    { "id": "pay-button", "name": "PayButton", "version": 9, "bundleHash": "…" }
+  ] }
+```
+
+**Сигнал детекции — в ответе, а не в вере в флаг.** Подменённый пин приезжает со `status: "candidate"`, ссылкой `candidate {candidateId, rev, sourceHash}` и **кандидатским** `bundleHash`. Пин, чей `bundleHash` остался опубликованным, означает, что подмена не применилась (старая сборка, выключенная фича) — клиент обязан упасть громко, а не молча принять published-кадр за кандидатский.
+
+**Доставка — только байты.** Overlay-джоба форсит `deliver: "bytes"`: кадр не попадает ни в реестр ассетов, ни в визуальные эталоны, и «capture-only» — буквальная правда, а не обещание. PNG читается `GET /screenshot-jobs/:jobId/bytes`, пока жив результат (**10 минут**); статус отдаёт метаданные (`byteLength`, `pngSha256`). Capture receipt для overlay-джоб **не пишется** вовсе: его 7-суточная ссылка `ownerKey=prototype:<id>` переживает саму джобу и не смогла бы нести пер-подменную авторизацию — `GET …/receipt` у overlay-джобы отвечает `404`.
+
+**Handshake.** `componentManifestHash` считается **той же** published-формулой, но по подменённому списку пинов, один раз, и присваивается и `expected.componentManifestHash`, и `captureManifestHash` джобы (расхождение этих двух значений было бы молчаливым провалом сверки поверхности). Никакой пары `{base, overrides}` в handshake нет. Хэш overlay-джобы **не равен** хэшу сохранённой ревизии — это ожидаемо и является следствием подмены, а не ошибкой.
+
+**Авторизация.** `requirePrototypeOwner` на постановке, затем на **каждую** подмену — владение компонентом кандидата (админ проходит, как и везде). Несуществующий и **чужой** кандидат дают один и тот же `404 not_found`, байт в байт, включая сообщение: `requireResourceOwner` здесь не используется намеренно — его `403` на чужой ресурс сам был бы оракулом существования чужих сборок. То же отображение — на чтении: `GET /screenshot-jobs/:jobId` и `…/bytes` overlay-джобы требуют read-доступа к прототипу **и** владения каждым подменённым компонентом; одного `requirePrototypeRead` мало, потому что на опубликованном прототипе он пропускает и share-принципала, а кадр показывает неопубликованный код.
+
+**Отказы.** `400 invalid_request` — форма, превышение `limits.prototypeCandidateOverlayMax` (**2**), две подмены одного компонента; `404 not_found` — неизвестный либо чужой `candidateId`, а также выключенная фича; `422 candidate_component_not_in_prototype`; `409 candidate_stale` — пара `{rev, sourceHash}` больше не описывает ту ревизию; `409 candidate_evicted` — бандл кандидата вытеснен из кэша (пересоздать кандидата). Бандл пинуется против GC арендой, которая берётся **до** чтения и снимается на любом непоставившем выходе, поэтому проигранная гонка выглядит отказом, а не пустым кадром.
+
+**Что overlay НЕ делает.** Не даёт вердикта и не запускает ран приёмки; не пишет evidence; ничего не promote'ит; не пишет capture receipt; не создаёт ассет и не становится визуальным эталоном; **не меняет документ прототипа** (пин ревизии остаётся опубликованным); не умеет наложить компонент, у которого нет ни одной публикации. Доказательство, годное для публикации, даёт только приёмка — а для первой публикации семьи со слотами используется `slotBindings`.
 
 #### Draft-preview head-ревизии компонента
 
@@ -1784,6 +1881,8 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
   "limits": { "elements": 500, "depth": 50, "bodyMiB": 1, "sourceKiB": 256, "assetMiB": 5, "repeatBudget": 2000, "repeatPerScreen": 20, "screenshotQueue": 5, "geometryRects": 2000, "flows": 24, "flowSteps": 50, "flowTotalSteps": 320, "flowDepth": 4, "compositionDepth": 5,
     "computedEntries": 20, "computedFields": 4, "computedTerms": 8, "surfaces": 2,
     "acceptanceMaxCasesPerRun": 64, "acceptanceMaxJobsPerRun": 128, "acceptanceCaseTtlHours": 336, "evidenceMaxBytes": 268435456,
+    "caseSetManifestVersion": 1, "caseSetMaxCases": 512, "caseSetMaxDimensions": 8, "caseSetMaxDimensionValues": 64, "caseSetMaxExpectedTuples": 4096,
+    "caseSetMaxSlotChildren": 12, "caseSetMaxSlotsPerCase": 8, "prototypeCandidateOverlayMax": 2,
     "validateUserConcurrent": 1, "validateGlobalConcurrent": 2, "validateCacheTtlHours": 24, "validateCacheMiB": 32 },
   "designSystems": ["shadcn", "wireframe", "..."],
   "resolvedSpaceScales": { "shadcn": { "none": "0px", "xs": "4px", "sm": "8px", "md": "12px", "lg": "16px", "xl": "24px", "2xl": "32px", "3xl": "48px", "4xl": "64px" } },
@@ -1791,7 +1890,9 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
   "features": { "renderStatus": true, "screenshots": true, "visualRegression": true, "assets": true, "typedEvents": true, "repeat": true, "namedSlots": true, "themeVersions": true, "layoutContract": true, "flows": true, "computed": true, "screenRegions": true, "bundleExport": true, "bundleImport": true, "componentReuseGate": true, "compositionV2": true, "catalogMigration": true,
     "componentValidate": true, "componentGeometry": true, "componentDraftPreview": true, "prototypeHeadTracking": true, "readinessProfile": true, "themeDryRun": true, "themeSparseOps": true, "themeSpacingResolverV2": true,
     "surfaces": true, "surfacesWrite": false,
-    "acceptanceMatrix": false, "acceptanceCandidates": false, "acceptanceRuns": false },
+    "acceptanceMatrix": false, "acceptanceCandidates": false, "acceptanceRuns": false,
+    "caseSetValidate": false, "acceptanceMultiRunPromote": false, "acceptanceSummaryView": false,
+    "caseSetSlotBindings": false, "prototypeCandidateOverlay": false },
   "acceptance": { "policyProfiles": ["default-v1", "pixel-strict-v1"], "defaultPolicyProfile": "default-v1", "promotionPolicyProfiles": ["default-v1", "pixel-strict-v1"] },
   "renderer": { "rendererSchema": 2, "rendererVersion": "r2", "fingerprint": "<sha256>", "policyHash": "<sha256 дефолтной readiness-политики>",
     "os": "linux", "arch": "x64", "nodeVersion": "24.x.y", "playwrightVersion": "1.61.1",
@@ -1832,6 +1933,8 @@ CAS двухмерный: `prototypeInstanceId` защищает от delete/rec
 | `acceptanceRuns` | доступны `/acceptance-runs*` (постановка, poll, cases, evidence, cancel) | тот же флаг |
 | `acceptanceMultiRunPromote` | promote принимает `acceptanceRunIds[]` — [набор ранов шардированной семьи](#multi-run-promote-шардированная-семья-волна-w7-план-2026-08-04) | тот же флаг; сборка до W7 отвечает на массив `400 invalid_request` |
 | `acceptanceSummaryView` | `GET /acceptance-runs/:runId?view=summary` — [компактная сводка рана](#компактная-сводка-рана-и-квитанция-reuse-волна-w8-план-2026-08-04) | тот же флаг; сборка до W8 **молча** игнорирует query и отдаёт полный ран, поэтому клиент дополнительно проверяет маркер `view` в теле |
+| `caseSetSlotBindings` | case-set-манифест принимает [`cases[].slotBindings`](#slotbindings-дети-слотов-случая-план-2026-08-05-a) — детей именованных и default-слота с точным пином версии | тот же флаг; сборка до этой волны отвергает такой манифест `422 validation_failed` (strictObject), поэтому флаг читается **до** публикации набора |
+| `prototypeCandidateOverlay` | прототипная съёмка принимает [`candidateOverrides`](#overlay-кандидата-в-прототипном-кадре-план-2026-08-05-b) — подмену пина опубликованного компонента бандлом кандидата | гаснет **двумя** ключами: `EASYUI_ACCEPTANCE_MATRIX=0` (кандидатов нет) и `EASYUI_VALIDATE_DISABLED=1` (candidate-bundle не собирается); выключенная фича отвечает на `candidateOverrides` `404 not_found` |
 
 `EASYUI_SURFACES` — единственный switch с **обратной** полярностью: пустое значение означает «запись выключена» (`surfacesWrite: false`), а не «разрешено». Он читается на запросе, поэтому discovery и поведение ручки совпадают по определению. Остальные kill-switch'и (`EASYUI_VALIDATE_DISABLED`, `EASYUI_ACCEPTANCE_DISABLED`, `EASYUI_ACCEPTANCE_MATRIX`, `EASYUI_THEME_RESOLVER_V2_DISABLED`), как и `REUSE_GATE`, читаются один раз на входе процесса, поэтому discovery и поведение ручек не могут разойтись. Флаг `false` означает «выключено на этом инстансе», а отсутствие ключа — «образ старше этой волны»; клиент обязан различать эти случаи. Лимиты `validateUserConcurrent`/`validateGlobalConcurrent` описывают, когда прилетит `429 validate_in_flight`/`429 queue_full`, а `validateCacheTtlHours`/`validateCacheMiB` — срок жизни и потолок candidate-кэша (после вытеснения следующий draft-preview просто пересоберёт кандидата).
 

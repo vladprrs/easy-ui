@@ -478,7 +478,7 @@
                 }
               }
             },
-            "description": "empty_case_set | case_set_too_large | duplicate_case_id | unknown_policy_profile | unknown_case_id (refresh.caseIds names a case that is not part of this run's case set) | case_set_mismatch (the case set describes another component than the candidate) | baseline_run_mismatch (baselineRunId names a run of another component) | unsupported_option (cases.concurrency / manifestAssetId are not supported)"
+            "description": "empty_case_set | case_set_too_large | duplicate_case_id | unknown_policy_profile | unknown_case_id (refresh.caseIds names a case that is not part of this run's case set) | case_set_mismatch (the case set describes another component than the candidate) | baseline_run_mismatch (baselineRunId names a run of another component) | unsupported_option (cases.concurrency / manifestAssetId are not supported) | slot_unknown (slotBindings names a slot that the candidate's definition does not declare (the reserved key `default` is always legal)) | slot_bindings_unsupported (slotBindings names NAMED slots while the candidate does not declare capabilities.namedSlots) | slot_component_not_published (a pinned slot child is missing, deleted or in a non-renderable status by the time the run starts) | case_set_manifest_unreadable (the stored case-set manifest cannot be parsed by this server build (a newer manifest after a rollback, or a hand-edited row))"
           },
           "503": {
             "content": {
@@ -3703,6 +3703,9 @@
                         "captureReadiness": {
                           "type": "boolean"
                         },
+                        "caseSetSlotBindings": {
+                          "type": "boolean"
+                        },
                         "caseSetValidate": {
                           "type": "boolean"
                         },
@@ -3740,6 +3743,9 @@
                           "type": "boolean"
                         },
                         "namedSlots": {
+                          "type": "boolean"
+                        },
+                        "prototypeCandidateOverlay": {
                           "type": "boolean"
                         },
                         "prototypeHeadTracking": {
@@ -3823,7 +3829,9 @@
                         "acceptanceProvenance",
                         "caseSetValidate",
                         "acceptanceMultiRunPromote",
-                        "acceptanceSummaryView"
+                        "acceptanceSummaryView",
+                        "caseSetSlotBindings",
+                        "prototypeCandidateOverlay"
                       ],
                       "type": "object"
                     },
@@ -3864,6 +3872,12 @@
                         "caseSetMaxExpectedTuples": {
                           "type": "number"
                         },
+                        "caseSetMaxSlotChildren": {
+                          "type": "number"
+                        },
+                        "caseSetMaxSlotsPerCase": {
+                          "type": "number"
+                        },
                         "compositionDepth": {
                           "type": "number"
                         },
@@ -3898,6 +3912,9 @@
                           "type": "number"
                         },
                         "geometryRects": {
+                          "type": "number"
+                        },
+                        "prototypeCandidateOverlayMax": {
                           "type": "number"
                         },
                         "repeatBudget": {
@@ -3959,6 +3976,9 @@
                         "caseSetMaxDimensionValues",
                         "caseSetMaxExpectedTuples",
                         "caseSetManifestVersion",
+                        "caseSetMaxSlotChildren",
+                        "caseSetMaxSlotsPerCase",
+                        "prototypeCandidateOverlayMax",
                         "surfaces"
                       ],
                       "type": "object"
@@ -4511,6 +4531,9 @@
                     "expectedTuples": {
                       "type": "number"
                     },
+                    "frameCases": {
+                      "type": "number"
+                    },
                     "missingCount": {
                       "type": "number"
                     },
@@ -4542,7 +4565,8 @@
                     "missingTuples",
                     "missingCount",
                     "truncated",
-                    "duplicates"
+                    "duplicates",
+                    "frameCases"
                   ],
                   "type": "object"
                 }
@@ -4579,6 +4603,16 @@
               }
             },
             "description": "method_not_allowed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "case_set_manifest_unreadable (the stored manifest cannot be parsed by this server build (a newer manifest after a rollback, or a hand-edited row))"
           }
         },
         "summary": "Coverage report of a case set: the declared `dimensions`, the size of their Cartesian product (`expectedTuples`), how many distinct tuples the cases actually cover (`presentTuples`), the `missingTuples` and the tuples covered by more than one case (`duplicates`). A manifest without `dimensions` reports a trivial coverage (expectedTuples 0, presentTuples = number of cases): no fake Cartesian product is invented for an incomplete Figma matrix. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
@@ -9732,6 +9766,9 @@
                         "expectedTuples": {
                           "type": "number"
                         },
+                        "frameCases": {
+                          "type": "number"
+                        },
                         "missingCount": {
                           "type": "number"
                         },
@@ -9761,7 +9798,8 @@
                         "missingTuples",
                         "missingCount",
                         "truncated",
-                        "duplicates"
+                        "duplicates",
+                        "frameCases"
                       ],
                       "type": "object"
                     },
@@ -9848,10 +9886,10 @@
                 }
               }
             },
-            "description": "validation_failed | case_set_component_mismatch (the manifest names another componentId than the route) | case_set_too_large (the manifest declares more cases than limits.acceptanceMaxCasesPerRun) | case_set_coverage_too_large (the Cartesian product of `dimensions` exceeds limits.caseSetMaxExpectedTuples (checked by multiplying axis lengths, before any tuple is built)) | duplicate_case_id | duplicate_case_props (two cases declare identical props without aliasOf) | invalid_alias_target (aliasOf names a missing case, an alias, or a case with different props) | asset_not_found (a referenceAssetId is not in the asset registry) | crop_rect_out_of_bounds (cropLineage.rect does not fit the referenced asset) | crop_lineage_conflict (referenceSurface \"content-hug\" with a cropLineage requires cropLineage.sourceSurface \"figma-node\")"
+            "description": "validation_failed | case_set_component_mismatch (the manifest names another componentId than the route) | case_set_too_large (the manifest declares more cases than limits.acceptanceMaxCasesPerRun) | case_set_coverage_too_large (the Cartesian product of `dimensions` exceeds limits.caseSetMaxExpectedTuples (checked by multiplying axis lengths, before any tuple is built)) | duplicate_case_id | duplicate_case_props (two cases declare identical props without aliasOf) | invalid_alias_target (aliasOf names a missing case, an alias, or a case with different props) | asset_not_found (a referenceAssetId is not in the asset registry) | crop_rect_out_of_bounds (cropLineage.rect does not fit the referenced asset) | crop_lineage_conflict (referenceSurface \"content-hug\" with a cropLineage requires cropLineage.sourceSurface \"figma-node\") | slot_component_not_published (a slotBindings child names an unknown component, an unpublished/deleted version, or a version in a non-renderable status (archived|rejected|staging|failed)) | slot_component_design_system_mismatch (a slotBindings child belongs to another design system than the subject component) | slot_self_reference (a slotBindings child resolves to the subject component itself) | slot_props_invalid (a slotBindings child's props fail the propsJsonSchema of the pinned version) | slot_props_dynamic (a slotBindings child's props carry a `$`-directive or a `__eui`-prefixed key at any depth; case-set props are literal JSON)"
           }
         },
-        "summary": "Publish a case-set manifest for a component: the durable, content-addressed source of an acceptance run's cases (`caseSetId` = \"cset_\" + sha256 of the canonical manifest, so republishing the same manifest is idempotent and returns the same id with cached:true; an edited manifest is a NEW set and never overwrites the old one, so runs stay reproducible). The server validates the manifest as a product entity: schema (manifestVersion 1, strict objects, case ids matching ^[A-Za-z0-9._-]{1,64}$), the declared componentId, the per-run case ceiling, unique case ids, existence of every referenceAssetId in the asset registry (422 asset_not_found), duplicate props without `aliasOf` (422 duplicate_case_props), alias targets (must be another non-alias case with identical props), and crop-lineage rectangles. Dimension coverage gaps and props that disagree with the published component schema come back as `warnings`, never as failures. The reference contract is TWO-PART (wave 2026-08-04 W5): `expectedGeometry` is the LAYOUT ROOT in CSS px, while the comparison canvas is the padded paint surface (`root + 2 x 64px margin, x deviceScaleFactor`). Declare `referenceSurface: \"content-hug\"` (plus optional `referencePlacement {x,y}` in canvas device px, default `margin x dsf`) to hand the server a plain Figma export and let it build that canvas itself — no hand-padded PNGs. `cropLineage.sourceSurface` (`figma-node` | `content-hug` | `paint`) says which surface `rect` addresses, so an already-cropped asset is never cropped a second time; omitting it keeps today's `figma-node` semantics. Rectangles that do not fit their asset are 422 crop_rect_out_of_bounds, and `content-hug` + `cropLineage` without `sourceSurface: \"figma-node\"` is 422 crop_lineage_conflict. An `expectedGeometry` that looks like a padded canvas is a warning. A single canonical axis may carry up to `limits.caseSetMaxDimensionValues` (64) values, so a 49-state family is ONE case set and ONE run — no manual sharding; the Cartesian product of all axes is capped at `limits.caseSetMaxExpectedTuples` (422 case_set_coverage_too_large, computed by multiplying axis lengths before any tuple is materialized) and `coverage.missingTuples` carries at most 64 cells with `missingCount` and `truncated` alongside. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
+        "summary": "Publish a case-set manifest for a component: the durable, content-addressed source of an acceptance run's cases (`caseSetId` = \"cset_\" + sha256 of the canonical manifest, so republishing the same manifest is idempotent and returns the same id with cached:true; an edited manifest is a NEW set and never overwrites the old one, so runs stay reproducible). The server validates the manifest as a product entity: schema (manifestVersion 1, strict objects, case ids matching ^[A-Za-z0-9._-]{1,64}$), the declared componentId, the per-run case ceiling, unique case ids, existence of every referenceAssetId in the asset registry (422 asset_not_found), duplicate props without `aliasOf` (422 duplicate_case_props), alias targets (must be another non-alias case with identical props), and crop-lineage rectangles. Dimension coverage gaps and props that disagree with the published component schema come back as `warnings`, never as failures. The reference contract is TWO-PART (wave 2026-08-04 W5): `expectedGeometry` is the LAYOUT ROOT in CSS px, while the comparison canvas is the padded paint surface (`root + 2 x 64px margin, x deviceScaleFactor`). Declare `referenceSurface: \"content-hug\"` (plus optional `referencePlacement {x,y}` in canvas device px, default `margin x dsf`) to hand the server a plain Figma export and let it build that canvas itself — no hand-padded PNGs. `cropLineage.sourceSurface` (`figma-node` | `content-hug` | `paint`) says which surface `rect` addresses, so an already-cropped asset is never cropped a second time; omitting it keeps today's `figma-node` semantics. Rectangles that do not fit their asset are 422 crop_rect_out_of_bounds, and `content-hug` + `cropLineage` without `sourceSurface: \"figma-node\"` is 422 crop_lineage_conflict. An `expectedGeometry` that looks like a padded canvas is a warning. A single canonical axis may carry up to `limits.caseSetMaxDimensionValues` (64) values, so a 49-state family is ONE case set and ONE run — no manual sharding; the Cartesian product of all axes is capped at `limits.caseSetMaxExpectedTuples` (422 case_set_coverage_too_large, computed by multiplying axis lengths before any tuple is materialized) and `coverage.missingTuples` carries at most 64 cells with `missingCount` and `truncated` alongside. SLOT BINDINGS (plan 2026-08-05 §A, `capabilities.features.caseSetSlotBindings`): a case may declare `slotBindings: {\"<slot>\": [{type, version, props?}]}` — up to `limits.caseSetMaxSlotsPerCase` slots of up to `limits.caseSetMaxSlotChildren` children each, depth 1, children pinned to an EXACT published version by component name. The reserved key `default` binds the implicit children slot and is exempt from both the named-slot membership check and the `capabilities.namedSlots` gate. Published facts about a child refuse at PUT (422 slot_component_not_published / slot_component_design_system_mismatch / slot_self_reference / slot_props_invalid / slot_props_dynamic); facts that depend on the candidate's head — an unknown named slot, a subject without `capabilities.namedSlots` — are warnings here and 422 slot_unknown / slot_bindings_unsupported at run start. A child pinned to a `deprecated`/`superseded` version is accepted with a `slot_pin_deprecated`/`slot_pin_superseded` warning, so republishing a byte-identical manifest keeps working after promote auto-supersedes a child. Two cases with equal props and DIFFERENT bindings are no longer `duplicate_case_props`: the dedup key is (props, slots), and both become capture targets. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
         "x-easyui-validated": false
       }
     },
@@ -9963,6 +10001,9 @@
                         "expectedTuples": {
                           "type": "number"
                         },
+                        "frameCases": {
+                          "type": "number"
+                        },
                         "missingCount": {
                           "type": "number"
                         },
@@ -9992,12 +10033,32 @@
                         "missingTuples",
                         "missingCount",
                         "truncated",
-                        "duplicates"
+                        "duplicates",
+                        "frameCases"
                       ],
                       "type": "object"
                     },
                     "designSystem": {
                       "type": "string"
+                    },
+                    "frames": {
+                      "additionalProperties": {},
+                      "properties": {
+                        "count": {
+                          "type": "number"
+                        },
+                        "ids": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "count",
+                        "ids"
+                      ],
+                      "type": "object"
                     },
                     "warnings": {
                       "items": {
@@ -10014,6 +10075,7 @@
                     "componentId",
                     "designSystem",
                     "cases",
+                    "frames",
                     "coverage",
                     "warnings",
                     "wouldBeCached"
@@ -10082,7 +10144,7 @@
                 }
               }
             },
-            "description": "validation_failed | case_set_component_mismatch (the manifest names another componentId than the route) | case_set_too_large (the manifest declares more cases than limits.acceptanceMaxCasesPerRun) | case_set_coverage_too_large (the Cartesian product of `dimensions` exceeds limits.caseSetMaxExpectedTuples (checked by multiplying axis lengths, before any tuple is built)) | duplicate_case_id | duplicate_case_props (two cases declare identical props without aliasOf) | invalid_alias_target (aliasOf names a missing case, an alias, or a case with different props) | asset_not_found (a referenceAssetId is not in the asset registry) | crop_rect_out_of_bounds (cropLineage.rect does not fit the referenced asset) | crop_lineage_conflict (referenceSurface \"content-hug\" with a cropLineage requires cropLineage.sourceSurface \"figma-node\")"
+            "description": "validation_failed | case_set_component_mismatch (the manifest names another componentId than the route) | case_set_too_large (the manifest declares more cases than limits.acceptanceMaxCasesPerRun) | case_set_coverage_too_large (the Cartesian product of `dimensions` exceeds limits.caseSetMaxExpectedTuples (checked by multiplying axis lengths, before any tuple is built)) | duplicate_case_id | duplicate_case_props (two cases declare identical props without aliasOf) | invalid_alias_target (aliasOf names a missing case, an alias, or a case with different props) | asset_not_found (a referenceAssetId is not in the asset registry) | crop_rect_out_of_bounds (cropLineage.rect does not fit the referenced asset) | crop_lineage_conflict (referenceSurface \"content-hug\" with a cropLineage requires cropLineage.sourceSurface \"figma-node\") | slot_component_not_published (a slotBindings child names an unknown component, an unpublished/deleted version, or a version in a non-renderable status (archived|rejected|staging|failed)) | slot_component_design_system_mismatch (a slotBindings child belongs to another design system than the subject component) | slot_self_reference (a slotBindings child resolves to the subject component itself) | slot_props_invalid (a slotBindings child's props fail the propsJsonSchema of the pinned version) | slot_props_dynamic (a slotBindings child's props carry a `$`-directive or a `__eui`-prefixed key at any depth; case-set props are literal JSON)"
           }
         },
         "summary": "Dry-run a case-set manifest: exactly the checks of PUT /api/components/{id}/case-sets (schema, componentId, per-run ceiling, Cartesian ceiling, unique ids, reference assets, aliases, crop lineage, duplicate props) WITHOUT writing anything. Returns the content address the manifest would get (`caseSetId`), the run's case list as the orchestrator would build it (`cases {count, ids}` — aliases included, same `empty_case_set` refusal), `coverage`, `warnings`, and `wouldBeCached` (true when that exact manifest is already published, i.e. a PUT would be an idempotent repeat). Owner or admin, same authorization as PUT. Gated by `capabilities.features.caseSetValidate`; requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
@@ -11182,7 +11244,7 @@
                 }
               }
             },
-            "description": "validation_failed | asset_not_found | atomic_policy_violation | event_schema_not_serializable | acceptance_matrix_disabled (candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off) | acceptance_run_mismatch (the acceptance run belongs to another candidate (with EASYUI_PROMOTE_POLICY_STRICT=1 also: its policy profile hash differs from the candidate stamp)) | acceptance_policy_mismatch (the acceptance run ran under a policy profile that may not back a promotion; details carry {runPolicyProfileId, allowed}) | acceptance_run_not_passed (the acceptance run is not a terminal pass/pass_with_exceptions) | acceptance_renderer_mismatch (W7: the runs of a multi-run promote were captured by different renderers; details carry {runIds, rendererFingerprints}) | acceptance_coverage_overlap (W7: two runs of a multi-run promote cover the same (propsHash, surface) case; details carry {runIds, overlap, overlapCount}) | acceptance_coverage_incomplete (W7: the union coverage of the runs does not match the requested expectedCases; details carry {expectedCases, coveredCases, runs})"
+            "description": "validation_failed | asset_not_found | atomic_policy_violation | event_schema_not_serializable | acceptance_matrix_disabled (candidateId/acceptanceRunId were sent while EASYUI_ACCEPTANCE_MATRIX is off) | acceptance_run_mismatch (the acceptance run belongs to another candidate (with EASYUI_PROMOTE_POLICY_STRICT=1 also: its policy profile hash differs from the candidate stamp)) | acceptance_policy_mismatch (the acceptance run ran under a policy profile that may not back a promotion; details carry {runPolicyProfileId, allowed}) | acceptance_run_not_passed (the acceptance run is not a terminal pass/pass_with_exceptions) | acceptance_renderer_mismatch (W7: the runs of a multi-run promote were captured by different renderers; details carry {runIds, rendererFingerprints}) | acceptance_coverage_overlap (W7: two runs of a multi-run promote cover the same (propsHash, slotsHash, surface) frame; details carry {runIds, overlap, overlapCount}) | case_set_manifest_unreadable (a run of this promote references a case-set manifest this server build cannot parse (a newer manifest after a rollback, or a hand-edited row)) | acceptance_coverage_incomplete (W7: the union coverage of the runs does not match the requested expectedCases; details carry {expectedCases, coveredCases, runs})"
           },
           "429": {
             "content": {
@@ -11195,7 +11257,7 @@
             "description": "validate_in_flight (a validate/promote build is already in flight for this user) | queue_full (global validate concurrency cap reached)"
           }
         },
-        "summary": "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate (422 acceptance_run_mismatch), must have been executed under a promotion policy profile (`capabilities.acceptance.promotionPolicyProfiles`, otherwise 422 acceptance_policy_mismatch with `{runPolicyProfileId, allowed}`) and must carry a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). The candidate's own `policyProfileHash` is an informational stamp and is NOT compared with the run: candidate identity excludes policy, so requiring equality made every pixel-strict-v1 run unpromotable (defect P0-2, fixed 2026-08-04; EASYUI_PROMOTE_POLICY_STRICT=1 restores the old equality as an emergency rollback). A run whose `policy_profile_hash` no longer matches the current definition of its profile is accepted with a warning and both hashes reported in `acceptancePolicy` and in the audit event. Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`. MULTI-RUN (W7, `capabilities.features.acceptanceMultiRunPromote`): a family that does not fit one run is promoted with `acceptanceRunIds` (1..8, mutually exclusive with `acceptanceRunId` — sending both is 400). Every run must belong to the same candidate, be a terminal pass under the SAME promotion policy profile (otherwise 422 acceptance_policy_mismatch) and carry the same `renderer_fingerprint` (422 acceptance_renderer_mismatch; runs predating schema v30 have none and are skipped with a warning). Coverage must be PAIRWISE DISJOINT by (propsHash, surface) — the surface is the case-set `capture` (viewport/dsf/theme), so sharding light/dark legitimately repeats props and even case ids; an intersection is 422 acceptance_coverage_overlap, while a repeated caseKey across shards is only a warning. Optional `expectedCases` compares the union coverage (distinct (propsHash, surface) frames, so aliases count once) and answers 422 acceptance_coverage_incomplete on a mismatch. The stored array is sorted by (created_at, run_id) regardless of argument order and `acceptanceRunId` is its FIRST element; the response carries `acceptanceRunIds` and `evidenceManifestHashes` of the whole set.",
+        "summary": "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate (422 acceptance_run_mismatch), must have been executed under a promotion policy profile (`capabilities.acceptance.promotionPolicyProfiles`, otherwise 422 acceptance_policy_mismatch with `{runPolicyProfileId, allowed}`) and must carry a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). The candidate's own `policyProfileHash` is an informational stamp and is NOT compared with the run: candidate identity excludes policy, so requiring equality made every pixel-strict-v1 run unpromotable (defect P0-2, fixed 2026-08-04; EASYUI_PROMOTE_POLICY_STRICT=1 restores the old equality as an emergency rollback). A run whose `policy_profile_hash` no longer matches the current definition of its profile is accepted with a warning and both hashes reported in `acceptancePolicy` and in the audit event. Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`. MULTI-RUN (W7, `capabilities.features.acceptanceMultiRunPromote`): a family that does not fit one run is promoted with `acceptanceRunIds` (1..8, mutually exclusive with `acceptanceRunId` — sending both is 400). Every run must belong to the same candidate, be a terminal pass under the SAME promotion policy profile (otherwise 422 acceptance_policy_mismatch) and carry the same `renderer_fingerprint` (422 acceptance_renderer_mismatch; runs predating schema v30 have none and are skipped with a warning). Coverage must be PAIRWISE DISJOINT by (propsHash, slotsHash, surface) — the surface is the case-set `capture` (viewport/dsf/theme), so sharding light/dark legitimately repeats props and even case ids, and since migration v31 two cases with equal props but different `slotBindings` are two distinct frames instead of one; an intersection is 422 acceptance_coverage_overlap, while a repeated caseKey across shards is only a warning. Optional `expectedCases` compares the union coverage (distinct (propsHash, slotsHash, surface) frames, so aliases count once) and answers 422 acceptance_coverage_incomplete on a mismatch. The stored array is sorted by (created_at, run_id) regardless of argument order and `acceptanceRunId` is its FIRST element; the response carries `acceptanceRunIds` and `evidenceManifestHashes` of the whole set.",
         "x-easyui-validated": false
       }
     },
@@ -30353,6 +30415,22 @@
             "application/json": {
               "schema": {
                 "properties": {
+                  "candidateOverrides": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "candidateId": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "candidateId"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
                   "deviceScaleFactor": {
                     "maximum": 9007199254740991,
                     "minimum": -9007199254740991,
@@ -30421,10 +30499,35 @@
                           "bundleHash": {
                             "type": "string"
                           },
+                          "candidate": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "candidateId": {
+                                "type": "string"
+                              },
+                              "rev": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991,
+                                "type": "integer"
+                              },
+                              "sourceHash": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "candidateId",
+                              "rev",
+                              "sourceHash"
+                            ],
+                            "type": "object"
+                          },
                           "id": {
                             "type": "string"
                           },
                           "name": {
+                            "type": "string"
+                          },
+                          "status": {
                             "type": "string"
                           },
                           "version": {
@@ -30465,7 +30568,7 @@
                 }
               }
             },
-            "description": "invalid_request"
+            "description": "invalid_request (malformed body, or candidateOverrides that is not an array / exceeds limits.prototypeCandidateOverlayMax / targets the same component twice)"
           },
           "404": {
             "content": {
@@ -30475,7 +30578,17 @@
                 }
               }
             },
-            "description": "prototype_not_found | screen_not_found | version_not_found | revision_not_found"
+            "description": "prototype_not_found | screen_not_found | version_not_found | revision_not_found | not_found (candidate overlay: an unknown OR foreign candidateId (one identical refusal by design), or the feature is disabled)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "candidate_evicted (the candidate bundle is gone from the cache; re-create the candidate) | candidate_stale (the candidate {rev, sourceHash} pair no longer describes that revision)"
           },
           "422": {
             "content": {
@@ -30485,7 +30598,7 @@
                 }
               }
             },
-            "description": "invalid_viewport (viewport/dsf bounds violated)"
+            "description": "candidate_component_not_in_prototype (the candidate's component has no pin in the resolved revision: an overlay substitutes a published pin and cannot add a component) | invalid_viewport (viewport/dsf bounds violated)"
           },
           "429": {
             "content": {
@@ -30508,7 +30621,7 @@
             "description": "screenshot_unavailable (no SERVE_DIST or chromium)"
           }
         },
-        "summary": "Enqueue a prototype-screen screenshot job; resolves the target snapshot atomically.",
+        "summary": "Enqueue a prototype-screen screenshot job; resolves the target snapshot atomically. CANDIDATE OVERLAY (plan 2026-08-05 §B, `capabilities.features.prototypeCandidateOverlay`): `candidateOverrides: [{candidateId}]` (at most `limits.prototypeCandidateOverlayMax`) substitutes the component pins of the resolved revision with the candidate bundles of those acceptance candidates, so a new revision of an ALREADY PUBLISHED component can be checked inside a composite screen before it is published. It is a pin SWAP, not an insertion: a component with no pin in that revision is 422 candidate_component_not_in_prototype, and a never-published component cannot be overlaid at all (use case-set `slotBindings` for first publishes). An overlay job is delivered as BYTES ONLY — its result is `{kind:\"image-bytes\", width, height, byteLength, pngSha256}` with no assetId and no imageUrl, the PNG is read from GET /api/screenshot-jobs/{jobId}/bytes while the result lives (10 min), nothing is written to the asset registry, no capture receipt is stored and the prototype document is untouched. Unknown and foreign candidates map to ONE identical 404 not_found (no existence oracle); two overrides of the same component are 400 invalid_request; reading the job status and its bytes requires prototype read access AND ownership of every overridden component. The response pins carry `status:\"candidate\"`, `candidate {candidateId, rev, sourceHash}` and the CANDIDATE bundleHash — a pin whose bundleHash still equals the published one means the override did not apply and the client must fail loudly. With the feature off, sending `candidateOverrides` is 404 not_found.",
         "x-easyui-validated": false
       }
     },
@@ -32691,6 +32804,104 @@
                     "__schema0": {
                       "additionalProperties": false,
                       "properties": {
+                        "browserExecutableSha256": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "browserName": {
+                          "type": "string"
+                        },
+                        "browserRevision": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "browserVersion": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "colorProfile": {
+                          "const": "srgb",
+                          "type": "string"
+                        },
+                        "contextOptionsHash": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fingerprint": {
+                          "type": "string"
+                        },
+                        "launchDeterminismArgsHash": {
+                          "type": "string"
+                        },
+                        "launchedExecutable": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "rendererSchema": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        },
+                        "rendererVersion": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "manifest",
+                            "fallback"
+                          ],
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "rendererVersion",
+                        "rendererSchema",
+                        "fingerprint",
+                        "browserName",
+                        "browserVersion",
+                        "browserRevision",
+                        "launchedExecutable",
+                        "browserExecutableSha256",
+                        "contextOptionsHash",
+                        "launchDeterminismArgsHash",
+                        "colorProfile",
+                        "source"
+                      ],
+                      "type": "object"
+                    },
+                    "__schema1": {
+                      "additionalProperties": false,
+                      "properties": {
                         "2xl": {
                           "type": "string"
                         },
@@ -32732,7 +32943,7 @@
                       ],
                       "type": "object"
                     },
-                    "__schema1": {
+                    "__schema2": {
                       "additionalProperties": false,
                       "properties": {
                         "height": {
@@ -32752,10 +32963,10 @@
                       ],
                       "type": "object"
                     },
-                    "__schema2": {
+                    "__schema3": {
                       "type": "number"
                     },
-                    "__schema3": {
+                    "__schema4": {
                       "items": {
                         "additionalProperties": false,
                         "properties": {
@@ -32846,15 +33057,15 @@
                       },
                       "type": "array"
                     },
-                    "__schema4": {
+                    "__schema5": {
                       "type": "boolean"
                     },
-                    "__schema5": {
+                    "__schema6": {
                       "maximum": 9007199254740991,
                       "minimum": 0,
                       "type": "integer"
                     },
-                    "__schema6": {
+                    "__schema7": {
                       "type": "string"
                     }
                   },
@@ -32983,102 +33194,7 @@
                               "type": "string"
                             },
                             "renderer": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "browserExecutableSha256": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "browserName": {
-                                  "type": "string"
-                                },
-                                "browserRevision": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "browserVersion": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "colorProfile": {
-                                  "const": "srgb",
-                                  "type": "string"
-                                },
-                                "contextOptionsHash": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "fingerprint": {
-                                  "type": "string"
-                                },
-                                "launchDeterminismArgsHash": {
-                                  "type": "string"
-                                },
-                                "launchedExecutable": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "rendererSchema": {
-                                  "exclusiveMinimum": 0,
-                                  "maximum": 9007199254740991,
-                                  "type": "integer"
-                                },
-                                "rendererVersion": {
-                                  "type": "string"
-                                },
-                                "source": {
-                                  "enum": [
-                                    "manifest",
-                                    "fallback"
-                                  ],
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "rendererVersion",
-                                "rendererSchema",
-                                "fingerprint",
-                                "browserName",
-                                "browserVersion",
-                                "browserRevision",
-                                "launchedExecutable",
-                                "browserExecutableSha256",
-                                "contextOptionsHash",
-                                "launchDeterminismArgsHash",
-                                "colorProfile",
-                                "source"
-                              ],
-                              "type": "object"
+                              "$ref": "#/$defs/__schema0"
                             },
                             "rendererBuild": {
                               "anyOf": [
@@ -33100,6 +33216,107 @@
                             "assetId",
                             "width",
                             "height",
+                            "consoleErrors",
+                            "pageErrors",
+                            "rendererBuild",
+                            "browserVersion"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "browserVersion": {
+                              "type": "string"
+                            },
+                            "bundleHash": {
+                              "type": "string"
+                            },
+                            "byteLength": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "componentPins": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "bundleHash": {
+                                    "type": "string"
+                                  },
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "version": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "version",
+                                  "bundleHash"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "consoleErrors": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "draftRev": {
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                              "type": "integer"
+                            },
+                            "height": {
+                              "type": "number"
+                            },
+                            "imageProduced": {
+                              "type": "boolean"
+                            },
+                            "kind": {
+                              "const": "image-bytes",
+                              "type": "string"
+                            },
+                            "pageErrors": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "pngSha256": {
+                              "type": "string"
+                            },
+                            "receiptSha256": {
+                              "type": "string"
+                            },
+                            "renderer": {
+                              "$ref": "#/$defs/__schema0"
+                            },
+                            "rendererBuild": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "width": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "width",
+                            "height",
+                            "byteLength",
+                            "pngSha256",
+                            "imageProduced",
                             "consoleErrors",
                             "pageErrors",
                             "rendererBuild",
@@ -33150,7 +33367,7 @@
                                   ]
                                 },
                                 "dpr": {
-                                  "$ref": "#/$defs/__schema2"
+                                  "$ref": "#/$defs/__schema3"
                                 },
                                 "kind": {
                                   "const": "geometry",
@@ -33160,10 +33377,10 @@
                                   "type": "string"
                                 },
                                 "receiptSha256": {
-                                  "$ref": "#/$defs/__schema6"
+                                  "$ref": "#/$defs/__schema7"
                                 },
                                 "rects": {
-                                  "$ref": "#/$defs/__schema3"
+                                  "$ref": "#/$defs/__schema4"
                                 },
                                 "resolvedRev": {
                                   "exclusiveMinimum": 0,
@@ -33171,20 +33388,20 @@
                                   "type": "integer"
                                 },
                                 "resolvedSpaceScale": {
-                                  "$ref": "#/$defs/__schema0"
+                                  "$ref": "#/$defs/__schema1"
                                 },
                                 "surface": {
                                   "const": "prototype",
                                   "type": "string"
                                 },
                                 "total": {
-                                  "$ref": "#/$defs/__schema5"
+                                  "$ref": "#/$defs/__schema6"
                                 },
                                 "truncated": {
-                                  "$ref": "#/$defs/__schema4"
+                                  "$ref": "#/$defs/__schema5"
                                 },
                                 "viewport": {
-                                  "$ref": "#/$defs/__schema1"
+                                  "$ref": "#/$defs/__schema2"
                                 }
                               },
                               "required": [
@@ -33225,7 +33442,7 @@
                                   ]
                                 },
                                 "dpr": {
-                                  "$ref": "#/$defs/__schema2"
+                                  "$ref": "#/$defs/__schema3"
                                 },
                                 "draftRev": {
                                   "exclusiveMinimum": 0,
@@ -33237,23 +33454,23 @@
                                   "type": "string"
                                 },
                                 "receiptSha256": {
-                                  "$ref": "#/$defs/__schema6"
+                                  "$ref": "#/$defs/__schema7"
                                 },
                                 "rects": {
-                                  "$ref": "#/$defs/__schema3"
+                                  "$ref": "#/$defs/__schema4"
                                 },
                                 "resolvedSpaceScale": {
-                                  "$ref": "#/$defs/__schema0"
+                                  "$ref": "#/$defs/__schema1"
                                 },
                                 "surface": {
                                   "const": "component",
                                   "type": "string"
                                 },
                                 "total": {
-                                  "$ref": "#/$defs/__schema5"
+                                  "$ref": "#/$defs/__schema6"
                                 },
                                 "truncated": {
-                                  "$ref": "#/$defs/__schema4"
+                                  "$ref": "#/$defs/__schema5"
                                 },
                                 "version": {
                                   "exclusiveMinimum": 0,
@@ -33261,7 +33478,7 @@
                                   "type": "integer"
                                 },
                                 "viewport": {
-                                  "$ref": "#/$defs/__schema1"
+                                  "$ref": "#/$defs/__schema2"
                                 }
                               },
                               "required": [
@@ -33313,7 +33530,52 @@
             "description": "job_not_found"
           }
         },
-        "summary": "Poll a screenshot job (queued|running|done|error) and read its result. Terminal jobs additionally carry `outcome` (job taxonomy: ok|worker_crash|timeout|queue_full|subprocess_error|renderer_mismatch|surface_missing — only `ok`, `renderer_mismatch` and `surface_missing` are terminal for a client, the rest are infrastructure and may be retried) and, when the cause is typed, `failure` with a `CaptureFailureCode`. The legacy `error` object is unchanged.",
+        "summary": "Poll a screenshot job (queued|running|done|error) and read its result. Terminal jobs additionally carry `outcome` (job taxonomy: ok|worker_crash|timeout|queue_full|subprocess_error|renderer_mismatch|surface_missing — only `ok`, `renderer_mismatch` and `surface_missing` are terminal for a client, the rest are infrastructure and may be retried) and, when the cause is typed, `failure` with a `CaptureFailureCode`. The legacy `error` object is unchanged. A bytes-delivery job (acceptance candidate captures and candidate-overlay frames) reports `result {kind:\"image-bytes\", width, height, byteLength, pngSha256, …}`: the JSON envelope NEVER carries the pixels — read them from GET /api/screenshot-jobs/{jobId}/bytes while the result lives (10 min).",
+        "x-easyui-validated": false
+      }
+    },
+    "/api/screenshot-jobs/{jobId}/bytes": {
+      "get": {
+        "operationId": "get_screenshot_jobs_jobId_bytes",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "jobId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {}
+            },
+            "description": "Success"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "job_not_found | not_found (the job has no image bytes, or the principal may not read one of the overridden candidates)"
+          }
+        },
+        "summary": "Download the PNG of a bytes-delivery screenshot job (`result.kind === \"image-bytes\"`): candidate-overlay frames and acceptance candidate captures never enter the asset registry, so this is the ONLY way to read their pixels. The bytes live exactly as long as the job result does (RESULT_TTL, 10 minutes) — there is no store behind this handle and no address-by-sha. 404 not_found when the job produced an asset-delivery image or a geometry probe instead. Authorization repeats the enqueue check: prototype read access for prototype jobs, component ownership for component jobs, AND ownership of every overridden component for candidate-overlay jobs (an unknown or foreign candidate yields one identical 404).",
         "x-easyui-validated": false
       }
     },

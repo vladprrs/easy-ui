@@ -20,7 +20,7 @@ export const DEVICE_VIEWPORTS = Object.freeze({
 });
 export const MAX_SCREENSHOT_PIXELS = 20_000_000;
 
-const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set validate <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] [--summary] | accept-status <runId> [--evidence <file.zip>] [--summary] [--case <caseId>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh; accept/accept-status --summary print the compact agent report (server ?view=summary when features.acceptanceSummaryView is on, otherwise the same shape summarised locally) and accept-status --case <caseId> drills into one case with its gates, causes and reuse receipt — --json keeps its meaning in every case\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
+const usageLine = "usage: driver.mjs component <id> <Name> <src.tsx> [--design-system <id>] [--intent <text>] [--figma <figma.json>] [--force-new --reason <text>] | component-move <id> --design-system <id> | composition <id> <doc.json> --design-system <id> | composition publish <id> | design-system <id> <name> <description> | prototype <doc.json> | catalog <system> [out.json] [--full] | catalog list <system> | catalog search <system> --intent <text> [--limit N] [--kind component|composition] [--doc <composition.json>] | catalog get <system> <artifact...> | diff <protoId> [revA] [revB] | baseline <protoId> [outDir] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] | check <protoId> [--threshold N] | geometry <protoId> <screenId> | expect <expected.json> <actual.json> [--tolerance N] | get <kind> [id] | delete <kind> <id> (prototypes/components/compositions/design-systems; design-system → ретайр) | shoot <prototypeId> [outDir] (deprecated alias of snap --all-screens) | snap <prototypeId> [outDir] [--all-screens] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--receipt <file.json>] [--candidate <candidateId>]... | preview <componentId> [props.json] [--example <name>] [--rev head-draft] [--probe geometry] [--viewport WxH] [--theme light|dark] [--dsf 1|2|3] [--out file] [--receipt <file.json>] | status <prototypeId> [screenId] [--all-screens] | readiness <protoId> | publish <protoId> [--verify] [--force] | usages <componentId> [--tree] | promote <componentId> [--supersede auto|none] [--strict-catalog] [--candidate <candidateId>] [--acceptance-run <runId>]... [--acceptance-runs <runId,runId>] [--expected-cases N] | provenance <componentId> <figma.json|null> [--rev N] | case-set put <componentId> <manifest.json> | case-set validate <manifest.json> | case-set get <caseSetId> | case-set coverage <caseSetId> | accept <componentId> [--case-set <caseSetId>] [--policy <id>] [--refresh none|failed|all|id,id2] [--recapture] [--baseline-run <runId>] [--timeout-sec N] [--evidence <file.zip>] [--summary] | accept-status <runId> [--evidence <file.zip>] [--summary] [--case <caseId>] | reject <candidateId> --reason <text> | impact <componentId> --candidate <candidateId> --baseline-run <runId> | audit --design-system <id> | audit --versions [--design-system <id>] | audit reuse [--design-system <id>] [--actor <id>] [--since <iso>] [--limit N] [--min-attempts N]\npromote --candidate/--acceptance-run link the published version to a durable acceptance candidate and run (both ids are checked against the validate receipt before the mutation and printed with it); a sharded family is promoted with a SET of runs (--acceptance-run repeated or --acceptance-runs a,b; needs features.acceptanceMultiRunPromote): shards must be disjoint by (propsHash, slotsHash, surface), the server sorts the set and --expected-cases N asserts the union coverage; accept --refresh failed = re-evaluate the verdict only (a captured frame may be reused), accept --recapture = force a re-capture of those cases (frame scope) instead of a verdict-only refresh; accept/accept-status --summary print the compact agent report (server ?view=summary when features.acceptanceSummaryView is on, otherwise the same shape summarised locally) and accept-status --case <caseId> drills into one case with its gates, causes and reuse receipt — --json keeps its meaning in every case\nevery verb accepts --json and the global cache flags --cache-dir <dir> (env EASYUI_CACHE_DIR) / --cache-refresh (force miss); snap --candidate <candidateId> (repeatable, needs features.prototypeCandidateOverlay) swaps the pin of an ALREADY PUBLISHED component for that acceptance candidate's bundle for the duration of the frame: the PNG is bytes-only (no asset, no baseline, no receipt), the driver reads it from /screenshot-jobs/:id/bytes and aborts if the server did not apply every override; snap/preview print receiptSha256 + renderer.rendererFingerprint + codes[] in --json and write the capture receipt with --receipt; snap/preview exit 0 (PNG, no product errors), 2 (PNG + product errors), 1 (no PNG); readiness/publish/audit and terminal reuse STOPs exit 2 on product-level failure";
 
 /** Exit codes are part of the CLI contract: 0 ok, 2 product errors with an artifact, 1 everything else. */
 export const EXIT = Object.freeze({ ok: 0, failed: 1, productErrors: 2 });
@@ -98,6 +98,13 @@ const allScreensFlag = { "--all-screens": { value: false, key: "allScreens" } };
  * `preview` — receipt единственной джобы; форма описана в `docs/server-api.md` (секция драйвера).
  */
 const receiptFlag = { "--receipt": { value: true, key: "receipt" } };
+/**
+ * `--candidate <candidateId>` у `snap`/`shoot` (план 2026-08-05 §B): подмена пина уже
+ * опубликованного компонента бандлом acceptance-кандидата на время съёмки. Повторяемый —
+ * потолок объявлен сервером (`limits.prototypeCandidateOverlayMax`), и локально не дублируется.
+ * Кадр такой джобы **не** попадает в реестр ассетов: он качается из `/screenshot-jobs/:id/bytes`.
+ */
+const overlayCandidateFlag = { "--candidate": { value: true, key: "candidate", repeat: true } };
 const catalogLimitFlag = {
   value: true,
   key: "limit",
@@ -267,8 +274,8 @@ export const flagSpecs = Object.freeze({
   get: { ...jsonFlag },
   delete: { ...jsonFlag },
   // R8a: `shoot` — алиас `snap --all-screens`, поэтому и контракт флагов у него снаповский.
-  shoot: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag },
-  snap: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag },
+  shoot: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag, ...overlayCandidateFlag },
+  snap: { ...jsonFlag, ...allScreensFlag, ...surfaceFlags, ...receiptFlag, ...overlayCandidateFlag },
   preview: {
     ...jsonFlag,
     ...surfaceFlags,
@@ -1352,6 +1359,7 @@ async function snapScreen(id, screenId, outputDir, surface, wantReceipt = false)
     viewport: surface.viewport,
     ...(surface.deviceScaleFactor === undefined ? {} : { deviceScaleFactor: surface.deviceScaleFactor }),
     ...(surface.theme === undefined ? {} : { theme: surface.theme }),
+    ...(surface.candidateOverrides === undefined ? {} : { candidateOverrides: surface.candidateOverrides }),
   };
   for (let attempt = 1; attempt <= SNAP_ATTEMPTS; attempt++) {
     const queued = await call("POST", `/prototypes/${encoded}/screens/${encodeURIComponent(screenId)}/screenshot`, body, { retries: 1 });
@@ -1365,7 +1373,14 @@ async function snapScreen(id, screenId, outputDir, surface, wantReceipt = false)
     if (state.status !== "done") { failure = `screenshot ${state.status}: ${JSON.stringify(state)}`; continue; }
     const summary = summarizeCapture(state.result);
     const path = `${outputDir}/${screenId}.png`;
-    if (summary.imageProduced) await downloadImage(state.result.imageUrl, path);
+    if (summary.imageProduced) await downloadJobFrame(jobId, state.result, path);
+    // §B2.3, сигнал детекции overlay'я: подменённый пин обязан приехать со статусом `candidate` и
+    // bundleHash кандидата. Совпал с опубликованным ⇒ подмена не применилась (старая сборка,
+    // выключенная фича), и молча отдать published-кадр под именем кандидатского нельзя.
+    const overlayPins = (queued.json.components ?? []).filter((pin) => pin.candidate !== undefined);
+    if (body.candidateOverrides !== undefined && overlayPins.length !== body.candidateOverrides.length) {
+      throw new CliError(`${screenId}: server applied ${overlayPins.length} of ${body.candidateOverrides.length} candidate override(s); the frame is not a candidate frame`);
+    }
     // Свидетельство происхождения кадра (R8b) — на том же jobId, что и сам кадр.
     // Документ receipt тянем только под --receipt: в --json коды readiness и отпечаток берутся
     // из результата джобы, а лишний HTTP-раунд на каждый экран делал горячий путь флаки (R8b).
@@ -1376,12 +1391,13 @@ async function snapScreen(id, screenId, outputDir, surface, wantReceipt = false)
       path: summary.imageProduced ? path : null, ...summary,
       jobId, receiptSha256: evidence.receiptSha256, renderer: evidence.renderer, codes: evidence.codes,
       receiptDocument: evidence.document,
+      candidateOverlay: overlayPins.map((pin) => ({ componentId: pin.id, candidateId: pin.candidate.candidateId, rev: pin.candidate.rev, bundleHash: pin.bundleHash })),
     };
   }
   return {
     screenId, attempts: SNAP_ATTEMPTS, viewport: surface.viewport, failure, path: null,
     imageProduced: false, captureClean: false, productErrors: [], infraNoise: [], runtimeWarnings: [],
-    jobId: null, receiptSha256: null, renderer: null, codes: [], receiptDocument: null,
+    jobId: null, receiptSha256: null, renderer: null, codes: [], receiptDocument: null, candidateOverlay: [],
   };
 }
 
@@ -1391,6 +1407,8 @@ async function snapScreen(id, screenId, outputDir, surface, wantReceipt = false)
  * заданий: превышение лимита ингеста ассетов иначе всплыло бы 413 после съёмки.
  */
 export function buildSnapPlan(draft, flags = {}) {
+  // §B: подмены общие для всех экранов плана — они описывают ревизию, а не кадр.
+  const candidateOverrides = flags.candidate === undefined ? undefined : flags.candidate.map((candidateId) => ({ candidateId }));
   return draft.doc.screens.map((screen) => {
     const viewport = resolveViewport(screen, flags.viewport, screenDevice(draft.doc, screen));
     try {
@@ -1399,7 +1417,7 @@ export function buildSnapPlan(draft, flags = {}) {
     } catch (error) {
       throw new Error(`${screen.id}: ${error.message}`);
     }
-    return { screenId: screen.id, viewport, deviceScaleFactor: flags.dsf, theme: flags.theme };
+    return { screenId: screen.id, viewport, deviceScaleFactor: flags.dsf, theme: flags.theme, candidateOverrides };
   });
 }
 
@@ -1464,6 +1482,8 @@ async function runSnap(args, flags, command = "snap") {
       command, prototypeId: id, outputDir, rev: draft.rev, exitCode,
       // Применённые значения: сервер по умолчанию снимает dsf 1 в светлой теме.
       dsf: flags.dsf ?? 1, theme: flags.theme ?? "light",
+      // §B: подмены кадра — часть provenance отчёта, а не деталь вызова; `null` = обычная съёмка.
+      candidateOverrides: flags.candidate ?? null,
       receipt: wantReceipt ? flags.receipt : null, screens: rows,
     });
   }
@@ -1678,6 +1698,31 @@ async function runStatus(args, flags) {
   if (jsonMode) report(null, { command: "status", prototypeId: id, screens: rows });
   const broken = rows.filter((row) => !row.renderable).map((row) => row.screenId);
   if (broken.length) throw new CliError(`prototype screen is not renderable: ${broken.join(", ")}`);
+}
+
+/**
+ * Кадр джобы на диск, независимо от канала доставки (план 2026-08-05 §B2.1).
+ *
+ * `kind: "image"` — кадр лежит в реестре ассетов, качается по `imageUrl`. `kind: "image-bytes"`
+ * — кадра в реестре **нет** и не будет (overlay-джоба и capture'ы приёмки не ингестятся), у
+ * результата нет ни `assetId`, ни `imageUrl`: байты читаются ручкой `/bytes`, пока жив результат
+ * (10 минут). Молчаливо считать такую джобу «без кадра» нельзя — именно ради этих байтов её и
+ * ставили.
+ */
+async function downloadJobFrame(jobId, result, outputPath) {
+  if (result?.kind === "image-bytes") {
+    const response = await client.request(`/screenshot-jobs/${encodeURIComponent(jobId)}/bytes`);
+    if (!response.ok) throw new CliError(`download bytes of job ${jobId} failed (${response.status}); the job result lives 10 minutes`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    // sha кадра объявлен в статусе — сверяем, а не доверяем: тело могло приехать от другой джобы.
+    if (typeof result.pngSha256 === "string" && result.pngSha256.length === 64) {
+      const actual = createHash("sha256").update(bytes).digest("hex");
+      if (actual !== result.pngSha256) throw new CliError(`job ${jobId}: downloaded bytes hash ${actual} != declared pngSha256 ${result.pngSha256}`);
+    }
+    await writeFile(outputPath, bytes);
+    return;
+  }
+  await downloadImage(result.imageUrl, outputPath);
 }
 
 async function downloadImage(imageUrl, outputPath) {
@@ -2668,6 +2713,8 @@ export const CASE_SET_LIMITS = Object.freeze({
   maxDimensions: 8,
   maxDimensionValues: 64,
   maxExpectedTuples: 4096,
+  maxSlotChildren: 12,
+  maxSlotsPerCase: 8,
 });
 
 /** Лимиты из ответа `/capabilities` поверх дефолтов: сервер — источник истины, драйвер — эхо. */
@@ -2681,7 +2728,41 @@ export function caseSetLimits(capabilities) {
     maxDimensions: number(limits.caseSetMaxDimensions, CASE_SET_LIMITS.maxDimensions),
     maxDimensionValues: number(limits.caseSetMaxDimensionValues, CASE_SET_LIMITS.maxDimensionValues),
     maxExpectedTuples: number(limits.caseSetMaxExpectedTuples, CASE_SET_LIMITS.maxExpectedTuples),
+    maxSlotChildren: number(limits.caseSetMaxSlotChildren, CASE_SET_LIMITS.maxSlotChildren),
+    maxSlotsPerCase: number(limits.caseSetMaxSlotsPerCase, CASE_SET_LIMITS.maxSlotsPerCase),
   };
+}
+
+/**
+ * Локальная проверка `slotBindings` случая (план 2026-08-05 §A1/§A2): только форма и потолки.
+ * Всё, что требует базы — существование пина, его статус, ДС, схема props ребёнка, — остаётся
+ * сервером: `slot_component_not_published`, `slot_props_invalid`, `slot_props_dynamic` и прочие
+ * `422` драйвер не предсказывает и не имитирует.
+ */
+function slotBindingIssues(bindings, where, limits) {
+  const issues = [];
+  if (!isPlainObject(bindings)) return [`${where}.slotBindings must be an object of slot -> children[]`];
+  const slots = Object.entries(bindings);
+  if (slots.length === 0) issues.push(`${where}.slotBindings must not be empty (omit the field instead)`);
+  if (slots.length > limits.maxSlotsPerCase) issues.push(`${where}.slotBindings: at most ${limits.maxSlotsPerCase} slots (got ${slots.length})`);
+  for (const [slot, children] of slots) {
+    if (!CASE_SET_SLOT_KEY.test(slot) || slot.length > 32) {
+      issues.push(`${where}.slotBindings["${slot}"]: slot key must match ^[a-z0-9]+(?:-[a-z0-9]+)*$ (<=32 chars); "default" binds the implicit children slot`);
+    }
+    if (!Array.isArray(children) || children.length === 0) { issues.push(`${where}.slotBindings["${slot}"] must be a non-empty array of children`); continue; }
+    if (children.length > limits.maxSlotChildren) issues.push(`${where}.slotBindings["${slot}"]: at most ${limits.maxSlotChildren} children (got ${children.length})`);
+    for (const [index, child] of children.entries()) {
+      const at = `${where}.slotBindings["${slot}"][${index}]`;
+      if (!isPlainObject(child)) { issues.push(`${at} must be an object {type, version, props?}`); continue; }
+      for (const key of Object.keys(child)) if (!["type", "version", "props"].includes(key)) issues.push(`${at}: unknown field "${key}"`);
+      if (typeof child.type !== "string" || child.type.length === 0) issues.push(`${at}.type must be the published component name`);
+      // Точный пин версии — обязателен: набор контентно адресован, и «последняя активная»
+      // сделала бы его смысл зависимым от момента прогона.
+      if (!Number.isInteger(child.version) || child.version < 1) issues.push(`${at}.version must be an exact published version (a positive integer), not "latest"`);
+      if (child.props !== undefined && !isPlainObject(child.props)) issues.push(`${at}.props must be an object`);
+    }
+  }
+  return issues;
 }
 
 const CASE_SET_ID_CHARSET = /^[A-Za-z0-9._-]{1,64}$/;
@@ -2689,7 +2770,12 @@ const CASE_SET_TOP_LEVEL_KEYS = new Set(["manifestVersion", "componentId", "sour
 const CASE_SET_CASE_KEYS = new Set([
   "id", "props", "referenceAssetId", "expectedGeometry", "cropLineage", "referenceSurface",
   "referencePlacement", "aliasOf", "dims",
+  // План 2026-08-05 §A1: дети слотов случая. Держать ключ в allowlist обязательно — иначе
+  // локальная проверка отвергала бы легальный манифест, до сети и без шанса на объяснение.
+  "slotBindings",
 ]);
+/** Ключ слота — тот же kebab-charset, что и у `definition.slots`; `default` зарезервирован (§A2a). */
+const CASE_SET_SLOT_KEY = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const isPlainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Каждый `null` в манифесте — ошибка: схема сервера не принимает `null` **нигде**. */
@@ -2774,6 +2860,7 @@ export function caseSetManifestIssues(manifest, limits = CASE_SET_LIMITS) {
     if (item.referenceAssetId !== undefined && !/^asset_[0-9a-f]{64}$/.test(String(item.referenceAssetId))) {
       issues.push(`cases[${index}].referenceAssetId must be an asset registry id (asset_<sha256>), not bytes or a path`);
     }
+    if (item.slotBindings !== undefined) issues.push(...slotBindingIssues(item.slotBindings, `cases[${index}]`, limits));
   }
   for (const item of cases) {
     if (!isPlainObject(item) || item.aliasOf === undefined) continue;
@@ -2861,6 +2948,11 @@ async function runCaseSetValidate(args) {
     await call("POST", `/components/${encodeURIComponent(componentId)}/case-sets/validate`, { manifest }));
   report([
     `case-set validate ok for ${result.componentId}: ${result.cases?.count ?? manifest.cases.length} cases,`
+    // `frames` — сколько случаев РЕАЛЬНО снимается (не-алиасы, план 2026-08-05 §A5). С момента,
+    // когда одинаковые props с разными `slotBindings` перестали схлопываться в один кадр, число
+    // случаев больше не отвечает на вопрос «сколько кадров будет» — и `--expected-cases`
+    // у promote считается именно по кадрам.
+    + (result.frames === undefined ? "" : ` ${result.frames.count} frames,`)
     + ` caseSetId ${result.caseSetId}${result.wouldBeCached ? " (already published: a PUT would be an idempotent repeat)" : " (not published yet)"}`,
     ...(result.caseSetId !== caseSetId
       ? [`warning: the server computed a different caseSetId (${result.caseSetId}) than this client (${caseSetId})`]

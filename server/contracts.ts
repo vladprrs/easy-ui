@@ -304,13 +304,36 @@ export const jobAcceptedSchema = z.object({ jobId: z.string() });
 export const prototypeScreenshotContract = registerContract({
   method: "POST",
   path: "/api/prototypes/{id}/screens/{screenId}/screenshot",
-  summary: "Enqueue a prototype-screen screenshot job; resolves the target snapshot atomically.",
+  summary: "Enqueue a prototype-screen screenshot job; resolves the target snapshot atomically. CANDIDATE OVERLAY (plan 2026-08-05 §B, `capabilities.features.prototypeCandidateOverlay`): `candidateOverrides: [{candidateId}]` (at most `limits.prototypeCandidateOverlayMax`) substitutes the component pins of the resolved revision with the candidate bundles of those acceptance candidates, so a new revision of an ALREADY PUBLISHED component can be checked inside a composite screen before it is published. It is a pin SWAP, not an insertion: a component with no pin in that revision is 422 candidate_component_not_in_prototype, and a never-published component cannot be overlaid at all (use case-set `slotBindings` for first publishes). An overlay job is delivered as BYTES ONLY — its result is `{kind:\"image-bytes\", width, height, byteLength, pngSha256}` with no assetId and no imageUrl, the PNG is read from GET /api/screenshot-jobs/{jobId}/bytes while the result lives (10 min), nothing is written to the asset registry, no capture receipt is stored and the prototype document is untouched. Unknown and foreign candidates map to ONE identical 404 not_found (no existence oracle); two overrides of the same component are 400 invalid_request; reading the job status and its bytes requires prototype read access AND ownership of every overridden component. The response pins carry `status:\"candidate\"`, `candidate {candidateId, rev, sourceHash}` and the CANDIDATE bundleHash — a pin whose bundleHash still equals the published one means the override did not apply and the client must fail loudly. With the feature off, sending `candidateOverrides` is 404 not_found.",
   status: 202,
-  requestSchema: z.object({ rev: z.number().int().optional(), version: z.number().int().optional(), viewport: viewportSchema, deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional(), probe: z.literal("geometry").optional() }),
+  requestSchema: z.object({
+    rev: z.number().int().optional(), version: z.number().int().optional(), viewport: viewportSchema,
+    deviceScaleFactor: z.number().int().optional(), theme: z.string().optional(), waitForFonts: z.boolean().optional(),
+    probe: z.literal("geometry").optional(),
+    /** §B1: подмены пинов кандидатами; ≤ `limits.prototypeCandidateOverlayMax`, по одному на компонент. */
+    candidateOverrides: z.array(z.strictObject({ candidateId: z.string().min(1) })).optional(),
+  }),
   // P2.3: постановка отдаёт разрешённые пины — для track:head-дока это единственный момент,
   // когда клиент узнаёт, какие версии компонентов реально пойдут в кадр.
-  responseSchema: jobAcceptedSchema.extend({ components: z.array(z.object({ id: z.string(), name: z.string(), version: z.number().int().positive(), bundleHash: z.string() })) }),
-  errors: [{ status: 400, code: "invalid_request" }, { status: 404, code: "prototype_not_found" }, { status: 404, code: "screen_not_found" }, { status: 404, code: "version_not_found" }, { status: 404, code: "revision_not_found" }, ...screenshotErrors],
+  // §B2.3: подменённый пин дополнительно несёт `status`/`candidate` — это и есть объявленный
+  // сигнал детекции overlay'я (совпал bundleHash с опубликованным ⇒ подмена не применилась).
+  responseSchema: jobAcceptedSchema.extend({
+    components: z.array(z.object({
+      id: z.string(), name: z.string(), version: z.number().int().positive(), bundleHash: z.string(),
+      status: z.string().optional(),
+      candidate: z.object({ candidateId: z.string(), rev: z.number().int().positive(), sourceHash: z.string() }).optional(),
+    })),
+  }),
+  errors: [
+    { status: 400, code: "invalid_request", description: "malformed body, or candidateOverrides that is not an array / exceeds limits.prototypeCandidateOverlayMax / targets the same component twice" },
+    { status: 404, code: "prototype_not_found" }, { status: 404, code: "screen_not_found" },
+    { status: 404, code: "version_not_found" }, { status: 404, code: "revision_not_found" },
+    { status: 404, code: "not_found", description: "candidate overlay: an unknown OR foreign candidateId (one identical refusal by design), or the feature is disabled" },
+    { status: 409, code: "candidate_evicted", description: "the candidate bundle is gone from the cache; re-create the candidate" },
+    { status: 409, code: "candidate_stale", description: "the candidate {rev, sourceHash} pair no longer describes that revision" },
+    { status: 422, code: "candidate_component_not_in_prototype", description: "the candidate's component has no pin in the resolved revision: an overlay substitutes a published pin and cannot add a component" },
+    ...screenshotErrors,
+  ],
 });
 
 // P1b (план 2026-08-02): тело компонентной съёмки едино для published и draft вариантов;
@@ -403,7 +426,31 @@ const screenshotComponentGeometryResultSchema = z.object({
   ...geometryMeasurementFields,
 });
 const screenshotGeometryResultSchema = z.discriminatedUnion("surface", [screenshotPrototypeGeometryResultSchema, screenshotComponentGeometryResultSchema]);
-export const screenshotJobResultSchema = z.union([screenshotImageResultSchema, screenshotGeometryResultSchema]);
+/**
+ * Байтовый исход джобы (план 2026-08-05 §B2.1, v3.1 F1). Кадр НЕ ингестится в реестр ассетов,
+ * поэтому ни `assetId`, ни `imageUrl` у него нет: сами байты живут в памяти процесса до
+ * истечения RESULT_TTL и читаются ручкой `GET /api/screenshot-jobs/{jobId}/bytes`.
+ *
+ * В JSON-конверте статуса байтов **нет никогда** — ни у overlay-джобы, ни у candidate-джоб
+ * приёмки (их статус раньше отдавал numeric-keyed массив на мегабайты). Вместо них — размер и
+ * адрес кадра: `byteLength` и `pngSha256` (тот же sha, что пишет в capture receipt воркер).
+ */
+const screenshotImageBytesResultSchema = z.object({
+  kind: z.literal("image-bytes"),
+  width: z.number(), height: z.number(),
+  /** Размер PNG в байтах и его sha256 — метаданные вместо самих байтов (санитизация HTTP-границы). */
+  byteLength: z.number().int().nonnegative(), pngSha256: z.string(),
+  imageProduced: z.boolean(),
+  consoleErrors: z.array(z.string()), pageErrors: z.array(z.string()),
+  bundleHash: z.string().optional(),
+  draftRev: z.number().int().positive().optional(),
+  componentPins: z.array(z.object({ id: z.string(), version: z.number(), bundleHash: z.string() })).optional(),
+  rendererBuild: z.string().nullable(), browserVersion: z.string(),
+  renderer: screenshotImageResultSchema.shape.renderer,
+  /** Overlay-джобы receipt'ов не пишут (§B2.6), поэтому у них поля не будет. */
+  receiptSha256: z.string().optional(),
+});
+export const screenshotJobResultSchema = z.union([screenshotImageResultSchema, screenshotImageBytesResultSchema, screenshotGeometryResultSchema]);
 
 /**
  * Типизированные исходы капчура (план 2026-08-03-renderer-contract-2 §3 E3, §5 R3). Словарь один
@@ -485,7 +532,7 @@ export const screenshotJobReceiptContract = registerContract({
 export const screenshotJobContract = registerContract({
   method: "GET",
   path: "/api/screenshot-jobs/{jobId}",
-  summary: "Poll a screenshot job (queued|running|done|error) and read its result. Terminal jobs additionally carry `outcome` (job taxonomy: ok|worker_crash|timeout|queue_full|subprocess_error|renderer_mismatch|surface_missing — only `ok`, `renderer_mismatch` and `surface_missing` are terminal for a client, the rest are infrastructure and may be retried) and, when the cause is typed, `failure` with a `CaptureFailureCode`. The legacy `error` object is unchanged.",
+  summary: "Poll a screenshot job (queued|running|done|error) and read its result. Terminal jobs additionally carry `outcome` (job taxonomy: ok|worker_crash|timeout|queue_full|subprocess_error|renderer_mismatch|surface_missing — only `ok`, `renderer_mismatch` and `surface_missing` are terminal for a client, the rest are infrastructure and may be retried) and, when the cause is typed, `failure` with a `CaptureFailureCode`. The legacy `error` object is unchanged. A bytes-delivery job (acceptance candidate captures and candidate-overlay frames) reports `result {kind:\"image-bytes\", width, height, byteLength, pngSha256, …}`: the JSON envelope NEVER carries the pixels — read them from GET /api/screenshot-jobs/{jobId}/bytes while the result lives (10 min).",
   responseSchema: z.object({
     status: z.enum(["queued", "running", "done", "error"]),
     result: screenshotJobResultSchema.optional(),
@@ -494,6 +541,22 @@ export const screenshotJobContract = registerContract({
     failure: z.object({ code: captureFailureCodeSchema, message: z.string() }).optional(),
   }),
   errors: [{ status: 404, code: "job_not_found" }],
+});
+
+/**
+ * Байты кадра байтовой джобы (план 2026-08-05 §B2.1). Контракт бинарный — `contentType` без
+ * `responseSchema`, как у `getComponentBundleContract`: тело это PNG, а не JSON.
+ */
+export const screenshotJobBytesContract = registerContract({
+  method: "GET",
+  path: "/api/screenshot-jobs/{jobId}/bytes",
+  summary: "Download the PNG of a bytes-delivery screenshot job (`result.kind === \"image-bytes\"`): candidate-overlay frames and acceptance candidate captures never enter the asset registry, so this is the ONLY way to read their pixels. The bytes live exactly as long as the job result does (RESULT_TTL, 10 minutes) — there is no store behind this handle and no address-by-sha. 404 not_found when the job produced an asset-delivery image or a geometry probe instead. Authorization repeats the enqueue check: prototype read access for prototype jobs, component ownership for component jobs, AND ownership of every overridden component for candidate-overlay jobs (an unknown or foreign candidate yields one identical 404).",
+  contentType: "image/png",
+  errors: [
+    { status: 403, code: "forbidden" },
+    { status: 404, code: "job_not_found" },
+    { status: 404, code: "not_found", description: "the job has no image bytes, or the principal may not read one of the overridden candidates" },
+  ],
 });
 
 // --- Visual regression (T7) ---
@@ -1449,7 +1512,7 @@ const componentPromoteConflictEnvelopeSchema = z.strictObject({
  */
 export const promoteComponentContract = registerContract({
   method: "POST", path: "/api/components/{id}/promote",
-  summary: "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate (422 acceptance_run_mismatch), must have been executed under a promotion policy profile (`capabilities.acceptance.promotionPolicyProfiles`, otherwise 422 acceptance_policy_mismatch with `{runPolicyProfileId, allowed}`) and must carry a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). The candidate's own `policyProfileHash` is an informational stamp and is NOT compared with the run: candidate identity excludes policy, so requiring equality made every pixel-strict-v1 run unpromotable (defect P0-2, fixed 2026-08-04; EASYUI_PROMOTE_POLICY_STRICT=1 restores the old equality as an emergency rollback). A run whose `policy_profile_hash` no longer matches the current definition of its profile is accepted with a warning and both hashes reported in `acceptancePolicy` and in the audit event. Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`. MULTI-RUN (W7, `capabilities.features.acceptanceMultiRunPromote`): a family that does not fit one run is promoted with `acceptanceRunIds` (1..8, mutually exclusive with `acceptanceRunId` — sending both is 400). Every run must belong to the same candidate, be a terminal pass under the SAME promotion policy profile (otherwise 422 acceptance_policy_mismatch) and carry the same `renderer_fingerprint` (422 acceptance_renderer_mismatch; runs predating schema v30 have none and are skipped with a warning). Coverage must be PAIRWISE DISJOINT by (propsHash, surface) — the surface is the case-set `capture` (viewport/dsf/theme), so sharding light/dark legitimately repeats props and even case ids; an intersection is 422 acceptance_coverage_overlap, while a repeated caseKey across shards is only a warning. Optional `expectedCases` compares the union coverage (distinct (propsHash, surface) frames, so aliases count once) and answers 422 acceptance_coverage_incomplete on a mismatch. The stored array is sorted by (created_at, run_id) regardless of argument order and `acceptanceRunId` is its FIRST element; the response carries `acceptanceRunIds` and `evidenceManifestHashes` of the whole set.",
+  summary: "Promote the validated head revision to a public version in one call: reruns the catalog-time publish checks (host primitive name, canonical role, atomic policy, asset refs), stages the candidate artifacts WITHOUT re-running typecheck/compile, import-verifies, then activates, pins assets, records validation and auto-supersedes the other active versions in one short transaction. `sourceHash` must match the head source; `expectedCatalogRevision` is an opt-in catalog CAS; `supersede: \"none\"` leaves parallel active versions alone. Disabled via EASYUI_ACCEPTANCE_DISABLED=1 (404). Optional `candidateId`/`acceptanceRunId` (EASYUI_ACCEPTANCE_MATRIX=1 only, 422 acceptance_matrix_disabled otherwise) bind the promotion to a durable acceptance candidate and its terminal run: the candidate must describe exactly {baseRev, sourceHash} (409 revision_conflict), must not hold a queued/running run (409 acceptance_run_in_flight), and the run must belong to that candidate (422 acceptance_run_mismatch), must have been executed under a promotion policy profile (`capabilities.acceptance.promotionPolicyProfiles`, otherwise 422 acceptance_policy_mismatch with `{runPolicyProfileId, allowed}`) and must carry a pass/pass_with_exceptions verdict (422 acceptance_run_not_passed). The candidate's own `policyProfileHash` is an informational stamp and is NOT compared with the run: candidate identity excludes policy, so requiring equality made every pixel-strict-v1 run unpromotable (defect P0-2, fixed 2026-08-04; EASYUI_PROMOTE_POLICY_STRICT=1 restores the old equality as an emergency rollback). A run whose `policy_profile_hash` no longer matches the current definition of its profile is accepted with a warning and both hashes reported in `acceptancePolicy` and in the audit event. Both ids are then written onto the published version as flat receipts and the candidate becomes `promoted`. MULTI-RUN (W7, `capabilities.features.acceptanceMultiRunPromote`): a family that does not fit one run is promoted with `acceptanceRunIds` (1..8, mutually exclusive with `acceptanceRunId` — sending both is 400). Every run must belong to the same candidate, be a terminal pass under the SAME promotion policy profile (otherwise 422 acceptance_policy_mismatch) and carry the same `renderer_fingerprint` (422 acceptance_renderer_mismatch; runs predating schema v30 have none and are skipped with a warning). Coverage must be PAIRWISE DISJOINT by (propsHash, slotsHash, surface) — the surface is the case-set `capture` (viewport/dsf/theme), so sharding light/dark legitimately repeats props and even case ids, and since migration v31 two cases with equal props but different `slotBindings` are two distinct frames instead of one; an intersection is 422 acceptance_coverage_overlap, while a repeated caseKey across shards is only a warning. Optional `expectedCases` compares the union coverage (distinct (propsHash, slotsHash, surface) frames, so aliases count once) and answers 422 acceptance_coverage_incomplete on a mismatch. The stored array is sorted by (created_at, run_id) regardless of argument order and `acceptanceRunId` is its FIRST element; the response carries `acceptanceRunIds` and `evidenceManifestHashes` of the whole set.",
   status: 201,
   requestSchema: z.strictObject({
     ...casBody,
@@ -1511,7 +1574,8 @@ export const promoteComponentContract = registerContract({
     { status: 422, code: "acceptance_policy_mismatch", description: "the acceptance run ran under a policy profile that may not back a promotion; details carry {runPolicyProfileId, allowed}" },
     { status: 422, code: "acceptance_run_not_passed", description: "the acceptance run is not a terminal pass/pass_with_exceptions" },
     { status: 422, code: "acceptance_renderer_mismatch", description: "W7: the runs of a multi-run promote were captured by different renderers; details carry {runIds, rendererFingerprints}" },
-    { status: 422, code: "acceptance_coverage_overlap", description: "W7: two runs of a multi-run promote cover the same (propsHash, surface) case; details carry {runIds, overlap, overlapCount}" },
+    { status: 422, code: "acceptance_coverage_overlap", description: "W7: two runs of a multi-run promote cover the same (propsHash, slotsHash, surface) frame; details carry {runIds, overlap, overlapCount}" },
+    { status: 422, code: "case_set_manifest_unreadable", description: "a run of this promote references a case-set manifest this server build cannot parse (a newer manifest after a rollback, or a hand-edited row)" },
     { status: 422, code: "acceptance_coverage_incomplete", description: "W7: the union coverage of the runs does not match the requested expectedCases; details carry {expectedCases, coveredCases, runs}" },
     { status: 429, code: "validate_in_flight", description: "a validate/promote build is already in flight for this user" },
     { status: 429, code: "queue_full", description: "global validate concurrency cap reached" },
@@ -1814,6 +1878,13 @@ export const createAcceptanceRunContract = registerContract({
     { status: 422, code: "case_set_mismatch", description: "the case set describes another component than the candidate" },
     { status: 422, code: "baseline_run_mismatch", description: "baselineRunId names a run of another component" },
     { status: 422, code: "unsupported_option", description: "cases.concurrency / manifestAssetId are not supported" },
+    // Слот-биндинги на старте рана (план 2026-08-05 §A2/§A5): факты головы кандидата становятся
+    // жёсткими отказами здесь, а статус-политика пинов проверяется повторно — набор контентно
+    // адресован и мог быть опубликован задолго до рана.
+    { status: 422, code: "slot_unknown", description: "slotBindings names a slot that the candidate's definition does not declare (the reserved key `default` is always legal)" },
+    { status: 422, code: "slot_bindings_unsupported", description: "slotBindings names NAMED slots while the candidate does not declare capabilities.namedSlots" },
+    { status: 422, code: "slot_component_not_published", description: "a pinned slot child is missing, deleted or in a non-renderable status by the time the run starts" },
+    { status: 422, code: "case_set_manifest_unreadable", description: "the stored case-set manifest cannot be parsed by this server build (a newer manifest after a rollback, or a hand-edited row)" },
     { status: 503, code: "maintenance_in_progress", description: "a catalog migration holds the maintenance lock" },
   ],
 });
@@ -1888,11 +1959,18 @@ const caseSetCoverageSchema = z.looseObject({
   missingTuples: z.array(z.record(z.string(), z.string())),
   missingCount: z.number(), truncated: z.boolean(),
   duplicates: z.array(z.looseObject({ tuple: z.record(z.string(), z.string()), caseIds: z.array(z.string()) })),
+  /**
+   * Сколько случаев набора реально СНИМАЕТСЯ (план 2026-08-05 §A5): не-алиасы. С появлением
+   * `slotBindings` мощность кадров перестала выводиться из числа случаев — два состояния с
+   * одинаковыми props и разным содержимым слотов больше не схлопываются в один кадр, — и
+   * `expectedCases` для multi-run promote считается именно по кадрам.
+   */
+  frameCases: z.number(),
 });
 
 export const putComponentCaseSetContract = registerContract({
   method: "PUT", path: "/api/components/{id}/case-sets",
-  summary: "Publish a case-set manifest for a component: the durable, content-addressed source of an acceptance run's cases (`caseSetId` = \"cset_\" + sha256 of the canonical manifest, so republishing the same manifest is idempotent and returns the same id with cached:true; an edited manifest is a NEW set and never overwrites the old one, so runs stay reproducible). The server validates the manifest as a product entity: schema (manifestVersion 1, strict objects, case ids matching ^[A-Za-z0-9._-]{1,64}$), the declared componentId, the per-run case ceiling, unique case ids, existence of every referenceAssetId in the asset registry (422 asset_not_found), duplicate props without `aliasOf` (422 duplicate_case_props), alias targets (must be another non-alias case with identical props), and crop-lineage rectangles. Dimension coverage gaps and props that disagree with the published component schema come back as `warnings`, never as failures. The reference contract is TWO-PART (wave 2026-08-04 W5): `expectedGeometry` is the LAYOUT ROOT in CSS px, while the comparison canvas is the padded paint surface (`root + 2 x 64px margin, x deviceScaleFactor`). Declare `referenceSurface: \"content-hug\"` (plus optional `referencePlacement {x,y}` in canvas device px, default `margin x dsf`) to hand the server a plain Figma export and let it build that canvas itself — no hand-padded PNGs. `cropLineage.sourceSurface` (`figma-node` | `content-hug` | `paint`) says which surface `rect` addresses, so an already-cropped asset is never cropped a second time; omitting it keeps today's `figma-node` semantics. Rectangles that do not fit their asset are 422 crop_rect_out_of_bounds, and `content-hug` + `cropLineage` without `sourceSurface: \"figma-node\"` is 422 crop_lineage_conflict. An `expectedGeometry` that looks like a padded canvas is a warning. A single canonical axis may carry up to `limits.caseSetMaxDimensionValues` (64) values, so a 49-state family is ONE case set and ONE run — no manual sharding; the Cartesian product of all axes is capped at `limits.caseSetMaxExpectedTuples` (422 case_set_coverage_too_large, computed by multiplying axis lengths before any tuple is materialized) and `coverage.missingTuples` carries at most 64 cells with `missingCount` and `truncated` alongside. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
+  summary: "Publish a case-set manifest for a component: the durable, content-addressed source of an acceptance run's cases (`caseSetId` = \"cset_\" + sha256 of the canonical manifest, so republishing the same manifest is idempotent and returns the same id with cached:true; an edited manifest is a NEW set and never overwrites the old one, so runs stay reproducible). The server validates the manifest as a product entity: schema (manifestVersion 1, strict objects, case ids matching ^[A-Za-z0-9._-]{1,64}$), the declared componentId, the per-run case ceiling, unique case ids, existence of every referenceAssetId in the asset registry (422 asset_not_found), duplicate props without `aliasOf` (422 duplicate_case_props), alias targets (must be another non-alias case with identical props), and crop-lineage rectangles. Dimension coverage gaps and props that disagree with the published component schema come back as `warnings`, never as failures. The reference contract is TWO-PART (wave 2026-08-04 W5): `expectedGeometry` is the LAYOUT ROOT in CSS px, while the comparison canvas is the padded paint surface (`root + 2 x 64px margin, x deviceScaleFactor`). Declare `referenceSurface: \"content-hug\"` (plus optional `referencePlacement {x,y}` in canvas device px, default `margin x dsf`) to hand the server a plain Figma export and let it build that canvas itself — no hand-padded PNGs. `cropLineage.sourceSurface` (`figma-node` | `content-hug` | `paint`) says which surface `rect` addresses, so an already-cropped asset is never cropped a second time; omitting it keeps today's `figma-node` semantics. Rectangles that do not fit their asset are 422 crop_rect_out_of_bounds, and `content-hug` + `cropLineage` without `sourceSurface: \"figma-node\"` is 422 crop_lineage_conflict. An `expectedGeometry` that looks like a padded canvas is a warning. A single canonical axis may carry up to `limits.caseSetMaxDimensionValues` (64) values, so a 49-state family is ONE case set and ONE run — no manual sharding; the Cartesian product of all axes is capped at `limits.caseSetMaxExpectedTuples` (422 case_set_coverage_too_large, computed by multiplying axis lengths before any tuple is materialized) and `coverage.missingTuples` carries at most 64 cells with `missingCount` and `truncated` alongside. SLOT BINDINGS (plan 2026-08-05 §A, `capabilities.features.caseSetSlotBindings`): a case may declare `slotBindings: {\"<slot>\": [{type, version, props?}]}` — up to `limits.caseSetMaxSlotsPerCase` slots of up to `limits.caseSetMaxSlotChildren` children each, depth 1, children pinned to an EXACT published version by component name. The reserved key `default` binds the implicit children slot and is exempt from both the named-slot membership check and the `capabilities.namedSlots` gate. Published facts about a child refuse at PUT (422 slot_component_not_published / slot_component_design_system_mismatch / slot_self_reference / slot_props_invalid / slot_props_dynamic); facts that depend on the candidate's head — an unknown named slot, a subject without `capabilities.namedSlots` — are warnings here and 422 slot_unknown / slot_bindings_unsupported at run start. A child pinned to a `deprecated`/`superseded` version is accepted with a `slot_pin_deprecated`/`slot_pin_superseded` warning, so republishing a byte-identical manifest keeps working after promote auto-supersedes a child. Two cases with equal props and DIFFERENT bindings are no longer `duplicate_case_props`: the dedup key is (props, slots), and both become capture targets. Requires EASYUI_ACCEPTANCE_MATRIX=1 (404 otherwise).",
   requestSchema: z.strictObject({ manifest: z.unknown() }),
   responseSchema: z.looseObject({
     caseSetId: z.string(), componentId: z.string(), designSystem: z.string(),
@@ -1915,6 +1993,14 @@ export const putComponentCaseSetContract = registerContract({
       status: 422, code: "crop_lineage_conflict",
       description: "referenceSurface \"content-hug\" with a cropLineage requires cropLineage.sourceSurface \"figma-node\"",
     },
+    // Слот-биндинги (план 2026-08-05 §A2). Опубликованные факты про ребёнка — жёсткий 422 уже
+    // на PUT; факты головы кандидата (`slot_unknown`/`slot_bindings_unsupported`) здесь только
+    // warning и превращаются в 422 на старте рана, где кандидат наконец известен.
+    { status: 422, code: "slot_component_not_published", description: "a slotBindings child names an unknown component, an unpublished/deleted version, or a version in a non-renderable status (archived|rejected|staging|failed)" },
+    { status: 422, code: "slot_component_design_system_mismatch", description: "a slotBindings child belongs to another design system than the subject component" },
+    { status: 422, code: "slot_self_reference", description: "a slotBindings child resolves to the subject component itself" },
+    { status: 422, code: "slot_props_invalid", description: "a slotBindings child's props fail the propsJsonSchema of the pinned version" },
+    { status: 422, code: "slot_props_dynamic", description: "a slotBindings child's props carry a `$`-directive or a `__eui`-prefixed key at any depth; case-set props are literal JSON" },
   ],
 });
 
@@ -1930,6 +2016,8 @@ export const validateComponentCaseSetContract = registerContract({
   responseSchema: z.looseObject({
     caseSetId: z.string(), componentId: z.string(), designSystem: z.string(),
     cases: z.looseObject({ count: z.number(), ids: z.array(z.string()) }),
+    /** Кадры набора (§A5): случаи без `aliasOfCaseId` — то, что действительно снимается. */
+    frames: z.looseObject({ count: z.number(), ids: z.array(z.string()) }),
     coverage: caseSetCoverageSchema, warnings: z.array(z.string()), wouldBeCached: z.boolean(),
   }),
   errors: putComponentCaseSetContract.errors,
@@ -1950,7 +2038,10 @@ export const getCaseSetCoverageContract = registerContract({
   method: "GET", path: "/api/case-sets/{caseSetId}/coverage",
   summary: "Coverage report of a case set: the declared `dimensions`, the size of their Cartesian product (`expectedTuples`), how many distinct tuples the cases actually cover (`presentTuples`), the `missingTuples` and the tuples covered by more than one case (`duplicates`). A manifest without `dimensions` reports a trivial coverage (expectedTuples 0, presentTuples = number of cases): no fake Cartesian product is invented for an incomplete Figma matrix. Requires EASYUI_ACCEPTANCE_MATRIX=1.",
   responseSchema: z.looseObject({ caseSetId: z.string(), componentId: z.string(), ...caseSetCoverageSchema.shape }),
-  errors: [...acceptanceAuthErrors],
+  errors: [
+    ...acceptanceAuthErrors,
+    { status: 422, code: "case_set_manifest_unreadable", description: "the stored manifest cannot be parsed by this server build (a newer manifest after a rollback, or a hand-edited row)" },
+  ],
 });
 
 export const listComponentVersionsContract = registerContract({
@@ -2805,6 +2896,13 @@ export const capabilitiesResponseSchema = z.object({
      */
     caseSetMaxCases: z.number(), caseSetMaxDimensions: z.number(), caseSetMaxDimensionValues: z.number(),
     caseSetMaxExpectedTuples: z.number(), caseSetManifestVersion: z.number(),
+    /**
+     * Слот-биндинги случая (план 2026-08-05 §A1): детей на один слот и слотов на случай.
+     * Кардинальность самого слота сервер не проверяет — это свойство компонента, а не набора.
+     */
+    caseSetMaxSlotChildren: z.number(), caseSetMaxSlotsPerCase: z.number(),
+    /** Подмен кандидатов на один прототипный кадр (план 2026-08-05 §B1). */
+    prototypeCandidateOverlayMax: z.number(),
     /** `doc.surfaces` (план 2026-08-02 multi-surface-flows, D1): число поверхностей документа (v1 — ровно две). */
     surfaces: z.number(),
   }),
@@ -2879,6 +2977,19 @@ export const capabilitiesResponseSchema = z.object({
      * `view:"summary"` в теле ответа.
      */
     acceptanceSummaryView: z.boolean(),
+    /**
+     * `cases[].slotBindings` в case-set-манифесте (план 2026-08-05 §A9): дети именованных и
+     * default-слота с точным пином версии. Сборка до этой волны отвергает такой манифест как
+     * `422 validation_failed` (strictObject), поэтому флаг читается **до** публикации набора.
+     */
+    caseSetSlotBindings: z.boolean(),
+    /**
+     * `candidateOverrides` у `POST /prototypes/:id/screens/:screenId/screenshot` (план 2026-08-05
+     * §B3): подмена пина уже опубликованного компонента бандлом кандидата, только байты, без
+     * ассета и без вердикта. Гаснет двумя ключами — `EASYUI_ACCEPTANCE_MATRIX=0` и
+     * `EASYUI_VALIDATE_DISABLED=1`; выключенная фича отвечает на `candidateOverrides` `404`.
+     */
+    prototypeCandidateOverlay: z.boolean(),
   }),
   /**
    * Фаза гейта переиспользования. Читается агентом **до** `POST /api/components`: в `shadow`

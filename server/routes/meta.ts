@@ -38,8 +38,9 @@ import {
 } from "../acceptance/policies";
 import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
-  CASE_SET_MAX_EXPECTED_TUPLES,
+  CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN,
 } from "../../src/acceptance/caseSetSchema";
+import { prototypeCandidateOverlayMax } from "./screenshots";
 
 // Discovery endpoints (plan §G): /api/openapi.json, /api/schemas/*, /api/capabilities.
 // The OpenAPI document is the committed artifact generated from server/contracts.ts;
@@ -126,6 +127,15 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       caseSetMaxDimensionValues: CASE_SET_MAX_DIMENSION_VALUES,
       caseSetMaxExpectedTuples: CASE_SET_MAX_EXPECTED_TUPLES,
       caseSetManifestVersion: CASE_SET_MANIFEST_VERSION,
+      // Слот-биндинги случая (план 2026-08-05 §A1/§A9): детей на один слот и слотов на случай.
+      // Потолок детей выведен из продуктового требования (карусель способов оплаты — 9 детей),
+      // а не из круглого числа; кардинальность слота **не** валидируется сервером (это свойство
+      // компонента, а не набора), поэтому лимит схемы — единственный объявленный потолок.
+      caseSetMaxSlotChildren: CASE_SET_MAX_SLOT_CHILDREN,
+      caseSetMaxSlotsPerCase: CASE_SET_MAX_SLOTS_PER_CASE,
+      // Подмен кандидатов на один прототипный кадр (§B1): overlay — точечная проверка ревизии
+      // уже опубликованного компонента в композиции, а не способ собрать кадр из черновиков.
+      prototypeCandidateOverlayMax,
       // `doc.surfaces`: сколько поверхностей несёт документ (v1 — ровно две).
       // Импорт из места энфорса (`src/prototype/schema`), канон docs/server-api.md#capabilities.
       surfaces: SURFACES_LIMIT,
@@ -213,6 +223,17 @@ export function capabilities(db: Database, reuseGateMode: ReuseGateMode = DEFAUL
       // просто игнорирует незнакомый query и отдаёт полный ран на 1800 строк. Клиент обязан и
       // проверить флаг, и убедиться в маркере `view:"summary"` в теле ответа.
       acceptanceSummaryView: options.acceptanceMatrix === true,
+      // План 2026-08-05 §A9: case-set-манифест принимает `cases[].slotBindings` — детей именованных
+      // и default-слота с точным пином версии. Отдельный флаг по тому же правилу, что и
+      // `caseSetValidate`: сборка до этой волны с включённой матрицей отвергнет манифест со
+      // `slotBindings` как `422 validation_failed` (strictObject), и клиент обязан узнать это до
+      // публикации набора, а не по коду ошибки уже отправленного PUT.
+      caseSetSlotBindings: options.acceptanceMatrix === true,
+      // План 2026-08-05 §B3: `candidateOverrides` у прототипной съёмки — подмена пина
+      // опубликованного компонента бандлом кандидата. Гаснет **двумя** ключами, ровно как ручка
+      // (`routes/screenshots.ts`): без матричной приёмки кандидатов не существует, а
+      // `EASYUI_VALIDATE_DISABLED` гасит сборку candidate-бандла целиком (аргумент draft-preview).
+      prototypeCandidateOverlay: options.acceptanceMatrix === true && options.validateDisabled !== true,
       // План 2026-08-02 (computed-state): top-level `doc.computed` — производные значения
       // стейта, read-only, читаются обычным `$state` по bare-ключу. Набор операций —
       // в `computedOps`, лимиты — в `limits.computed*`.

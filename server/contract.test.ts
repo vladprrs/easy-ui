@@ -44,8 +44,9 @@ import { AcceptanceOrchestrator } from "./acceptance/orchestrator";
 import { caseSetIdOf } from "./acceptance/caseSets";
 import {
   CASE_SET_MANIFEST_VERSION, CASE_SET_MAX_CASES, CASE_SET_MAX_DIMENSION_VALUES, CASE_SET_MAX_DIMENSIONS,
-  CASE_SET_MAX_EXPECTED_TUPLES, caseSetManifestSchema,
+  CASE_SET_MAX_EXPECTED_TUPLES, CASE_SET_MAX_SLOTS_PER_CASE, CASE_SET_MAX_SLOT_CHILDREN, caseSetManifestSchema,
 } from "../src/acceptance/caseSetSchema";
+import { prototypeCandidateOverlayMax as PROTOTYPE_CANDIDATE_OVERLAY_MAX } from "./routes/screenshots";
 import type { AcceptanceCaptureService } from "./acceptance/gates/types";
 
 // Contract test (plan §G): every registered route contract is exercised through
@@ -241,6 +242,9 @@ function orderedCases(): [string, Case][] {
     // Receipt существует только у снятого кадра (R5); в контрактном стенде capture-сервиса нет —
     // проверяется типизированный конверт отказа, как и у прочих screenshot-ручек.
     ["GET /api/screenshot-jobs/{jobId}/receipt", { run: () => call("GET", "/api/screenshot-jobs/nope/receipt"), expected: err(404, "receipt_not_found") }],
+    // Байты кадра (план 2026-08-05 §B2.1) живут ровно столько, сколько живёт результат джобы;
+    // capture-сервиса в контрактном стенде нет, поэтому проверяется тот же типизированный отказ.
+    ["GET /api/screenshot-jobs/{jobId}/bytes", { run: () => call("GET", "/api/screenshot-jobs/nope/bytes"), expected: err(404, "job_not_found") }],
     // Visual references (DB-backed happy paths; check requires the capture pipeline)
     ["PUT /api/visual-references", { run: () => call("PUT", "/api/visual-references", { fingerprint: { scope: "prototype-screen", prototypeId: "contract-proto", screenId: state.screenId, refRevision: 1, viewport: { width: 320, height: 480 }, deviceScaleFactor: 1, theme: "light" }, assetId: state.assetId }), expected: ok() }],
     ["GET /api/visual-references", { run: () => call("GET", "/api/visual-references?scope=prototype-screen"), expected: ok() }],
@@ -700,8 +704,15 @@ describe("route contracts", () => {
       caseSetMaxDimensionValues: CASE_SET_MAX_DIMENSION_VALUES,
       caseSetMaxExpectedTuples: CASE_SET_MAX_EXPECTED_TUPLES,
       caseSetManifestVersion: CASE_SET_MANIFEST_VERSION,
+      // План 2026-08-05 §A9: потолки слот-биндингов случая и подмен кандидатов на кадр.
+      caseSetMaxSlotChildren: CASE_SET_MAX_SLOT_CHILDREN,
+      caseSetMaxSlotsPerCase: CASE_SET_MAX_SLOTS_PER_CASE,
+      prototypeCandidateOverlayMax: PROTOTYPE_CANDIDATE_OVERLAY_MAX,
       surfaces: SURFACES_LIMIT,
     });
+    // Продуктовая прекондиция §A2a: карусель способов оплаты — 9 детей default-слота, поэтому
+    // потолок детей обязан её вмещать; иначе фича не закрывает то, ради чего сделана.
+    expect(value.limits.caseSetMaxSlotChildren).toBeGreaterThanOrEqual(9);
     // Инвариант P1-7: одна каноническая ось обязана вмещать целый ран, иначе семья на
     // `acceptanceMaxCasesPerRun` состояний шардируется исключительно из-за лимита схемы.
     expect(value.limits.caseSetMaxDimensionValues).toBeGreaterThanOrEqual(value.limits.acceptanceMaxCasesPerRun);
@@ -751,6 +762,10 @@ describe("route contracts", () => {
       caseSetValidate: true,
       acceptanceMultiRunPromote: true,
       acceptanceSummaryView: true,
+      // План 2026-08-05 §A9/§B3: слот-биндинги живут на том же kill-switch'е, что и матрица;
+      // overlay дополнительно гаснет `EASYUI_VALIDATE_DISABLED` (в тесте префлайт включён).
+      caseSetSlotBindings: true,
+      prototypeCandidateOverlay: true,
       computed: true,
       surfaces: true,
       // Write-политика мульти-поверхностных документов — kill-switch EASYUI_SURFACES (D16).
