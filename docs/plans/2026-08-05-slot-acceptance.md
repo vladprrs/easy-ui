@@ -1,4 +1,4 @@
-# Slot-aware acceptance: caseSetSlotBindings + prototypeCandidateOverlay
+# Slot-aware acceptance: caseSetSlotBindings + prototypeCandidateOverlay (v2, после Stage 2 раунд 1)
 
 ## Context
 
@@ -10,17 +10,19 @@
 
 The feedback asks for **both** mechanisms: slot bindings in case-sets (A) and candidate overrides for prototype fixtures (B). Verified against source; the two cited `artifacts/**.json` files are not in this repo (external workspace evidence) — everything they claim is confirmed directly in code.
 
-**Decisions taken (were the plan agent's open questions; recommended defaults adopted):**
-- **B v1 = capture-time overlay only** — no acceptance run/verdict/promote binding. Rendering by the server from the server's candidate bundle under the server's allowlist, with the existing capture receipt recording overlay pins, is real provenance; a verdict would need a second run kind + coverage model (deferred v2: `capture.fixture` case-set extension). A delivers promote-bound evidence for component matrices.
-- **Migration v31 is accepted** (`acceptance_cases.slots_hash TEXT`, additive/nullable/no-backfill) — promote coverage must not depend on silently-degrading reconstruction from manifests.
+**Scope decisions:**
+- **B v1 = capture-time overlay only** — no acceptance run/verdict/promote binding, and (v2) **no durable asset**: overlay jobs force `deliver:"bytes"`, so the frame cannot enter the asset registry or become a visual baseline. Provenance = the enqueue/status response (pins with candidate bundleHash + `candidateOverlay` block). Deferred v2: `capture.fixture` case-set extension for promote-bound composite fixtures.
+- **Migration v31 accepted** (`acceptance_cases.slots_hash TEXT`, additive/nullable/no-backfill) — promote coverage and the baseline-carry guard must not depend on silently-degrading reconstruction from manifests.
 
 ## Design invariants (bind every task)
 
-- Case-set manifests are content-addressed: new fields `.optional()` **without** `.default()` (`caseSetSchema.ts:157-163` C6/C25 rule; golden test `caseSets.test.ts:562` must stay untouched and green).
-- `FIELD_LAYERS` totality guard (`ids.ts:376-427`): every new `AcceptanceCase` field must be assigned a layer explicitly.
-- `frameFingerprint` is not algo-versioned: slot-free cases must produce **byte-identical** frame hashes after the change (hash new inputs conditionally via the `definedOnly` pattern) — so the ALGO bump costs verdict-reuse recompute, not a global re-shoot.
-- `readyToExpected` in `scripts/screenshot-worker.mjs:108-115` is an explicit whitelist: add new fields **conditionally** so legacy jobs map byte-identically.
-- Candidate-head-dependent facts (slot names, namedSlots capability) = **warning at PUT, hard 422 at run start**; published facts (child exists/version/props) = hard 422 at PUT (house style `caseSets.ts:17-20,99-115`).
+- Case-set manifests are content-addressed: new fields `.optional()` **without** `.default()` (`caseSetSchema.ts:157-163` C6/C25; golden test `caseSets.test.ts:562` stays untouched and green).
+- `FIELD_LAYERS` totality guard (`ids.ts:376-427`): every new `AcceptanceCase` field gets an explicit layer. **The guard proves declaration only** — the field must ALSO be added to `CaseFingerprintCase` (`ids.ts:251-263`) and threaded through `caseFingerprintsOf` (`ids.ts:318-347`, conditional-spread style of `:330-333`), or it silently never reaches a hash. Differential tests must sit at the `caseFingerprintsOf` level, not at `frameFingerprint` directly.
+- `frameFingerprint` is not algo-versioned: slot-free cases must produce **byte-identical** frame hashes. Golden captured at pre-change HEAD (e3a93fc): `frameFingerprint({candidateId:'cand_golden-fixture', caseKey:'alpha', propsHash:'props-1', surface:{viewport:{width:390,height:844},dsf:2,theme:'light'}, readinessPolicyHash:'readiness-fixture', rendererFingerprint:'renderer-fixture'})` = **`f29b0c498389404e5e426486bbb6050add243c6c0d97eff579ef127ec9fabeb1`**. T1.2 asserts equality to this literal, plus the negative: a case with `slotBindings` present must NOT equal it. Resolved bindings must be **absent, never `[]`/`null`** — `canonicalStringify` drops only `undefined`; enforce with conditional spread and test that `[]` is normalized to absent.
+- Other byte-identity criteria (T2.2 `readyToExpected`, T3.3 evidence manifest) use **test-first goldens**: the task writes the golden test against UNMODIFIED code, proves it green, then implements — never computes the reference after the change.
+- `readyToExpected` (`scripts/screenshot-worker.mjs:108-115`) is an explicit whitelist: new fields added **conditionally**.
+- Candidate-head-dependent facts (named-slot names, namedSlots capability) = warning at PUT, hard 422 at run start; published facts (child exists/version/props) = hard 422 at PUT.
+- **Rollback policy (stated, accepted):** a stored manifest carrying `slotBindings` is unreadable by pre-change builds (strictObject reparse on read, `caseSets.ts:374-377`) — same latent property `referenceSurface`/`cropLineage.sourceSurface` already introduced. Mitigation: `manifestOfRow` throws a **named** `ApiError` (`case_set_manifest_unreadable`, with caseSetId) instead of a bare Error, so a future rollback degrades into a typed refusal, not an opaque 500 inside promote. W5 documents the blast radius (all `manifestOfRow` call sites: routes, `surfaceKeyOf`/runCoverage→promote, orchestrator :314/:478/:673).
 
 ## Feature A — slotBindings in case-sets
 
@@ -30,114 +32,159 @@ The feedback asks for **both** mechanisms: slot bindings in case-sets (A) and ca
 export const CASE_SET_MAX_SLOT_CHILDREN = 12; // carousel needs 9
 export const CASE_SET_MAX_SLOTS_PER_CASE = 8;
 caseSetSlotChildSchema = z.strictObject({
-  type: z.string().min(1).max(64),      // published component name (globally unique)
-  version: z.number().int().positive(), // exact pin, REQUIRED — "active" would float the cset_ meaning
+  type: z.string().min(1).max(64),      // published component name (globally unique, never renamed)
+  version: z.number().int().positive(), // exact pin, REQUIRED
   props: z.record(z.string(), z.unknown()).optional(),
 });
-caseSetSlotBindingsSchema = z.record(slotName /* ^[a-z0-9]+(-[a-z0-9]+)*$, ≤32 */,
-  z.array(caseSetSlotChildSchema).min(1).max(CASE_SET_MAX_SLOT_CHILDREN))
+caseSetSlotBindingsSchema = z.record(slotKey, z.array(caseSetSlotChildSchema).min(1).max(CASE_SET_MAX_SLOT_CHILDREN))
   .refine(≤ CASE_SET_MAX_SLOTS_PER_CASE slots);
 // caseSetCaseSchema += slotBindings: caseSetSlotBindingsSchema.optional()  (no .default())
 ```
 
-- `bundleHash` NOT in manifest — server resolves it from the immutable `(name, version)` publish row.
-- **Depth-1 only** (children have no own slotBindings/children — strictObject refuses): all blocked components are depth-1; deep/interactive composition is Feature B's job; v2 can add nesting additively.
-- **Cardinality not validated** (nothing declares it; `slots?: string[]` in `server/components/types.ts:32`) — documented as not-a-server-contract; future `slotCardinality` out of scope.
+- `slotKey` = named-slot pattern `^[a-z0-9]+(?:-[a-z0-9]+)*$` (≤32). **The literal key `default` is reserved and legal** — see A2a.
+- `bundleHash` NOT in manifest — resolved server-side from the immutable publish row.
+- Depth-1 only (strictObject refuses nesting); cardinality not validated (documented as not-a-server-contract).
 
-### A2. Validation (`server/acceptance/caseSets.ts#validateManifest`, after aliases / before duplicate-props)
+### A2. Validation (`validateManifest`, after aliases / before duplicate-props)
 
 | Code | When | Where |
 |---|---|---|
-| `slot_component_not_published` 422 | type unknown / version missing / deleted | PUT + run start |
+| `slot_component_not_published` 422 | type unknown / version missing / deleted / status not accepted | PUT + run start |
 | `slot_component_design_system_mismatch` 422 | child from another DS | PUT |
 | `slot_self_reference` 422 | child resolves to subject component | PUT |
 | `slot_props_invalid` 422 | child props fail pinned version's propsJsonSchema | PUT |
-| `slot_unknown` 422 | slot not in candidate's `extracted.meta.slots` | run start (warning at PUT) |
-| `slot_bindings_unsupported` 422 | candidate lacks `capabilities.namedSlots` | run start (warning at PUT) |
+| `slot_props_dynamic` 422 | child props contain `$`- or `__eui`-prefixed keys at any depth | PUT + re-checked in `pushDraftCapture` |
+| `slot_unknown` 422 | **named** slot not in candidate's `extracted.meta.slots` | run start (warning at PUT) |
+| `slot_bindings_unsupported` 422 | **named** keys present but candidate lacks `capabilities.namedSlots` | run start (warning at PUT) |
 
-Child pin lookup mirrors `componentPinByVersion` (`server/repos/compositions.ts:309-316`); factor a shared helper if DS-scoping matches.
+- **Accepted publish statuses:** `active` only at PUT (hard 422); `active|deprecated|superseded` at run start — so a pinned-but-since-deprecated child doesn't brick re-runs of an already-published matrix.
+- Child pin lookup: **new** `publishedPinByNameAndVersion(db, name, version, designSystem)` (neither `componentPinByVersion` (id-keyed, any status) nor the name-based active-latest sibling does name+exact-version). Memoize per `(name, version)` within one `validateManifest` call.
+- **JSON-safety** (`slot_props_dynamic`): the same recursive `$`-walk as `validatePropsAgainstSchema` (`service.ts:1216-1231`) plus `__eui`-prefix refusal, applied at PUT AND re-applied in `pushDraftCapture` before child props enter `slotChildren`/bootstrap (manifests are immutable once published — belt and braces). Tests bind `{"$asset":…}` and `{"$cond":…}`.
 
-### A3. duplicate_case_props fix
+### A2a. Default slot contract
 
-- `slotsHashOf(bindings) = bindings === undefined ? null : sha256(canonicalStringify(bindings))`.
-- Dedup key in `validateManifest:291-301` and `buildCasesFromManifest` → `${propsHash}:${slotsHash ?? "-"}`. Equal props + different bindings now pass (SMS Focused/Typing fix); equal props **and** equal bindings still refuse.
-- Alias must repeat both props **and** bindings (`invalid_alias_target` otherwise) — alias inherits a frame; a different slot tree is a different frame.
-- `propsHash` itself unchanged (browser handshake + persisted column).
+The default slot is **implicit** in this codebase (`runtimeSpec.ts:253` `slotOf(child) ?? "default"`; components do not declare `default` in `definition.slots`; extraction excludes it). Contract:
+- `slotBindings.default` is accepted and **exempt** from the `extracted.meta.slots` membership check and from the `capabilities.namedSlots` gate (any component that renders `children` qualifies; `slot_unknown`/`slot_bindings_unsupported` apply to named keys only).
+- A6 emits default-slot children **without a `slot` field** (canonical representation; `runtimeSpec` collapses both forms into `slotIndices.default`, so this is a representation choice, documented).
+- PUT-time warning if the subject's last published version declares neither `capabilities.namedSlots` nor renders children (undecidable precisely — warning, not refusal).
+- Done-criteria (T3.1 + W5 e2e) include a **9-child default-slot carousel** capture. This is what unblocks PayPaymentMethodCarousel.
+
+### A3. duplicate_case_props fix + hash identities
+
+Two DISTINCT hash values, never compared to each other (named explicitly to avoid drift):
+- **PUT-time dedup key** (in-memory only, never persisted): `${propsHashOf(props)}:${dedupSlotsKey ?? "-"}` where `dedupSlotsKey` hashes the **normalized** manifest bindings — each child as `{type, version, propsHash: propsHashOf(child.props)}` — so `props: {}` vs absent collide as they should.
+- **`slotsHash`** (persisted v31 column, coverage key, handshake, evidence): sha256 of the **resolved** tuple list `[{slot,index,componentId,version,bundleHash,propsHash}]` — the same pre-image as the frame-fingerprint input, computed once in `resolveSlotBindings`. Binding the resolved value into the handshake mirrors the prototype path's frozen-pins rationale (`protocol.ts:177-186`).
+
+Dedup rules: equal props + different bindings pass (SMS fix); equal props AND equal bindings refuse `duplicate_case_props` (message updated); alias must repeat both props and bindings (`invalid_alias_target` otherwise). `propsHash` itself unchanged.
 
 ### A4. AcceptanceCase + fingerprint (`cases.ts`, `ids.ts`)
 
-- `AcceptanceCase += slotBindings?: ResolvedSlotBinding[]` (`{slot,index,componentId,name,version,bundleHash,props,propsHash}`, ordered — order is render order) and `slotsHash?: string`.
-- `FrameFingerprintInput += slotBindings?` (subset `{slot,index,componentId,version,bundleHash,propsHash}`), hashed **conditionally** → slot-free frame hashes byte-identical.
-- `FIELD_LAYERS`: `slotBindings: ["frame"]`; `slotsHash: ["report-only"]` (derivative, justification comment like `casePolicyHash`).
-- **`CASE_FINGERPRINT_ALGO_VERSION = 6 → 7`** + honest history paragraph ("a case's frame may contain pinned published children"). Consequence: global verdict-reuse invalidation (recompute + re-diff, no recapture — asserted by test). Update `ids.test.ts` / `capture/renderer.test.ts` (`=== 6` → `=== 7`).
+- `AcceptanceCase += slotBindings?: ResolvedSlotBinding[]` (`{slot,index,componentId,name,version,bundleHash,props,propsHash}`, ordered — render order) and `slotsHash?: string`. Absent, never `[]`.
+- `FrameFingerprintInput += slotBindings?` (subset `{slot,index,componentId,version,bundleHash,propsHash}`), hashed conditionally (`definedOnly`).
+- **`CaseFingerprintCase += slotBindings?`** and `caseFingerprintsOf` threads it with conditional spread — explicitly in scope of T1.2 (the totality guard alone cannot catch its omission).
+- `FIELD_LAYERS`: `slotBindings: ["frame"]`; `slotsHash: ["report-only"]` (derivative — every pixel-relevant input already hashed by value in the frame layer).
+- **ALGO 6 → 7** + honest history paragraph. Consequences: global verdict-reuse invalidation; recompute + re-diff, no recapture — **valid only while `EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE=1`** (kill-switch short-circuits the cascade at `runner.ts:485`); W5 deploy checklist verifies the flag before rollout. Old algo-6 rows linger in `acceptance_case_results` until GC (noted).
+- Differential tests at `caseFingerprintsOf` level: slot-free case === golden `f29b0c49…`; frame moves on child `bundleHash` change alone and on child ORDER change alone; `slotBindings: []` normalized to absent.
 
-### A5. Run start (`orchestrator.createRun`)
+### A5. Run start + durable reconstruction (blocker fix)
 
-New `resolveSlotBindings(db, componentId, ds, candidateEntry, cases)` in `caseSets.ts`: re-resolve pins, check names vs `extracted.meta.slots` (`slot_unknown`), check `capabilities.namedSlots` (`slot_bindings_unsupported`), fill bundleHash/propsHash/slotsHash. `baselineVerdictPolicies` stays resolution-free (slots are frame-layer only) — add a guard comment.
+Slot resolution is a property of **case construction, not one call site**. New `casesOfRun(manifest|run, candidateEntry, resolver)` in `caseSets.ts` wraps `buildCasesFromManifest` + `resolveSlotBindings`; raw `buildCasesFromManifest` is forbidden outside it (comment + lint-style test). Every consumer goes through it: `startRun`/createRun (`orchestrator.ts:316-318`), the durable reconstruction fallback `runCases` (`orchestrator.ts:481-482` — manifest is the authoritative durable source), and evidence `manifestOf`. `resolveSlotBindings`: re-resolve pins (`slot_component_not_published` if a publish vanished), check named-slot membership (`slot_unknown`), namedSlots capability (`slot_bindings_unsupported`), fill bundleHash/propsHash/slotsHash. `baselineVerdictPolicies` (`orchestrator.ts:675`) stays resolution-free — justified per call site (verdict snapshot reads no slot field), guard comment added. **Regression test:** execute a run with the in-memory `caseSets` map entry deleted (restart simulation) and assert the recomputed frame fingerprint equals the persisted `acceptance_cases.frame_fingerprint`.
+
+### A5a. Baseline-carry / impact guard (blocker fix)
+
+`carryBaselineCase` (`runner.ts:787-800`) deliberately skips the frame layer, and `computeImpact` knows nothing about case-sets — a changed slot child would silently carry a stale verdict and poison the cross-run cache under the new fingerprint. Two guards:
+1. `carryBaselineCase` refuses the carry when `baseline.slots_hash !== item.slotsHash` (NULL-safe; uses the v31 column) — same refusal style as the NULL-layers bail at `runner.ts:789-791`.
+2. `computeImpact` returns the `conservative` basis whenever the new run's `case_set_id` differs from the baseline run's (also closes the pre-existing same-hole-for-props, which this plan refuses to inherit knowingly).
+Regression test in W5: run A (case-set X, child v1) → run B (case-set Y, same case ids/props, child v2, baseline A) must NOT carry.
 
 ### A6. Capture path
 
 - `gates/capture.ts` + `gates/types.ts`: pass `slotBindings` (conditional spread) into `enqueueComponentCandidate`.
-- `server/screenshot/service.ts`: `enqueueComponentCandidate`/`pushDraftCapture` accept bindings; `InternalJob += slotChildren?: CapturePin[]`, `slotTree?`; `expected` (component-draft) `+= slotsHash?`; `draftComponentAllowedUrls` += per child: `/api/components/:childId/versions/:v/bundle.js`, component DTO URLs, child version assets — nothing else; bootstrap `+= slots: {children, tree}`.
+- `service.ts`: `enqueueComponentCandidate`/`pushDraftCapture` accept bindings (re-run the `$`-walk here); `InternalJob += slotChildren?: CapturePin[]`, `slotTree?`; component-draft `expected += slotsHash?` (**resolved** hash, A3); `draftComponentAllowedUrls` += per distinct child: `/api/components/:childId/versions/:v/bundle.js` + `ComponentRepo.assets(childId, v)` asset URLs — **no child DTO URLs** (loader consumes only `{name,bundleUrl,bundleHash}`; meta rides in bootstrap; DTO would expose published `source` to the capture page). T2.2 asserts the allowlist as an **exact set**, not `toContain`.
+- Bootstrap `+= slots: {children: CapturePin[], tree: [{slot?,index,name,props}]}` (default-slot entries carry no `slot`).
 - `src/capture/protocol.ts`: optional `slotsHash` on ComponentDraftExpected/Ready; typed bootstrap `slots`.
-- `scripts/screenshot-worker.mjs`: conditional `slotsHash` in `readyToExpected`.
-- `src/capture/CaptureComponent.tsx`: multi-element runtimeSpec (`c` + `s0…sN` children with `slot` fields, customTypes = parent + child names) — `runtimeSpec` slotIndices + `easyUiRuntime` routing already work; load parent draft bundle + child published bundles in one `loadCustomComponents` call; publish `slotsHash` in `ready`.
+- `scripts/screenshot-worker.mjs`: conditional `slotsHash` in `readyToExpected` (test-first golden for the slot-free byte-identity).
+- `CaptureComponent.tsx`: multi-element runtimeSpec (`c` + `s0…sN`; named children get `slot`, default children don't; customTypes = parent + child names); one `loadCustomComponents` call for parent draft + child published bundles; `ready` echoes `slotsHash` from `bootstrap.expected` (house pattern — rev/sourceHash/bundleHash are already echoed, only propsHash is recomputed).
 
-### A7. Evidence (`server/acceptance/evidence.ts`, `orchestrator.manifestOf`)
+### A7. Evidence
 
-`EvidenceCaseEntry += slotBindings?` (resolved tree incl. props) and `slotsHash?` — written from the same computation as the fingerprint input. RunManifest version stays 1 (additive optional). Promote already binds `evidenceManifestHashes` → slot tree becomes promote-bound proof with no promote change beyond A8.
+`EvidenceCaseEntry += slotBindings?` (resolved tree incl. child props) and `slotsHash?` — written by `manifestOf` from the same `casesOfRun` computation as the fingerprints. RunManifest version stays 1. Promote binds `evidenceManifestHashes` — slot tree becomes promote-bound proof. Test-first golden: slot-free manifest byte-identical.
 
 ### A8. Coverage + migration v31
 
-- **Migration v31**: `ALTER TABLE acceptance_cases ADD COLUMN slots_hash TEXT` (additive/nullable/no-backfill); written by `repo.insertCase`.
-- `repo.runCoverage` key → `${props_hash}:${slots_hash ?? "-"}@${surfaceKey}` — legacy keys byte-identical; multi-run promote of same-props/different-slots runs no longer trips `acceptance_coverage_overlap`; `expectedCases` counts them separately (`promote.ts` `assertRunSetCoherent` semantics otherwise unchanged).
+- Migration v31: `ALTER TABLE acceptance_cases ADD COLUMN slots_hash TEXT`; written by `repo.insertCase`.
+- `runCoverage` key → `${props_hash}:${slots_hash ?? "-"}@${surfaceKey}`. Keys are in-memory, never persisted — the byte format may change; the **behavioural** invariant (T2.3 done-criterion): for slot-free runs, coverage SETS have the same cardinality and pairwise intersections as before, and `expectedCases` verdicts for an existing promote are unchanged. Same-props/different-slots runs stop colliding in `assertRunSetCoherent`.
 
-### A9. Capabilities/docs
+### A9. Capabilities/contracts/docs
 
-- `features.caseSetSlotBindings` (= `acceptanceMatrix === true`), `limits.caseSetMaxSlotChildren: 12`, `caseSetMaxSlotsPerCase: 8` (`routes/meta.ts`), + `contracts.ts` capabilitiesResponseSchema, `openapi.json`, `docs/server-api.md` (schema, pinning rationale, depth-1, extended dedup/alias semantics, 422 table PUT-vs-run, ALGO-7 note, cardinality disclaimer). Note naming collision with composition analyze DTO's `slotBindings` (different shape, different resource).
+- `features.caseSetSlotBindings` (= `acceptanceMatrix === true`), `limits.caseSetMaxSlotChildren: 12`, `caseSetMaxSlotsPerCase: 8`.
+- `server/contracts.ts`: capabilities schema + **`errors` arrays for all new refusal codes** on the affected contracts (undeclared codes never reach generated OpenAPI). `openapi.json` is **generated**: run `npm run generate:openapi`, verify `npm run verify:openapi` — never hand-edit.
+- `docs/server-api.md`: slotBindings subsection (schema, pinning rationale, depth-1, default-slot contract, dedup/alias semantics, status policy, 422 table PUT-vs-run, both limits, ALGO-7 + recompute-flag note, cardinality disclaimer, rollback note, naming collision with composition analyze DTO).
 
-## Feature B — prototypeCandidateOverlay (v1: capture-only)
+## Feature B — prototypeCandidateOverlay (v1: capture-only, bytes-only)
 
 ### B1. API
 
-`POST /api/prototypes/:id/screens/:screenId/screenshot` body += `candidateOverrides: [{candidateId}]` (≤ `prototypeCandidateOverlayMax: 2`). Array of candidateIds, not a name→id map (candidateId already resolves to component/rev/sourceHash/bundleHash; a map key would be a second source of truth). Refusals: `invalid_request` 400 (shape/limit/dup componentId), `not_found` 404 (unknown candidate / not visible / feature off), `candidate_override_unused` 422 (component not among screen's pins), `candidate_evicted` 409 (bundle GC'd). Authz: `requirePrototypeOwner` **plus** `requireResourceOwner(components, candidate.component_id)` per override.
+`POST /api/prototypes/:id/screens/:screenId/screenshot` body += `candidateOverrides: [{candidateId}]` (≤ `prototypeCandidateOverlayMax: 2`). Refusals: `invalid_request` 400 (shape/limit/dup componentId); **uniform `not_found` 404** for unknown candidate AND foreign candidate (order: validate id shape → prototype ownership → resolve candidate → authz; no 403/404 oracle distinguishing existence); `candidate_override_unused` 422; `candidate_evicted` 409; 404 when feature off. Authz: `requirePrototypeOwner` + `requireResourceOwner(components, candidate.component_id)` per override; **admin short-circuit documented** (admin may render another user's candidate).
 
-### B2. Server (`enqueuePrototypeFrozen` region of `service.ts`, `routes/screenshots.ts`)
+### B2. Server
 
-1. Swap matching `CapturePin`: `bundleUrl = /api/components/:id/draft/:sourceHash/bundle.js`, candidate bundleHash, `status: "candidate"`, `candidate: {candidateId, rev, sourceHash}`.
-2. Overlay handshake: `componentManifestHash' = sha256(canonicalStringify({base, overrides: [{componentId, candidateId, bundleHash}]}))` in expected/bootstrap/response; optional `candidateOverlay` on PrototypeExpected/Ready + conditional `readyToExpected` entry.
-3. Allowlist: overridden pin gets draft bundle URL + candidate assetIds; the shadowed published version's URLs are **not** added (minimality is a security property).
-4. GC pinning: `ScreenshotService.pinnedCandidateSourceHashes()` (queued+running override jobs), composed as a union with the orchestrator's provider at `setCandidatePinProvider` registration in `main.ts`.
-5. Browser: `CapturePrototype.tsx` consumes pins verbatim; only echoes `candidateOverlay` in ready.
-- Capture receipt (`GET /api/screenshot-jobs/:jobId/receipt`) records overlay pins → auditable provenance "these pixels came from candidate X". Explicitly **not** a verdict.
+1. **Bytes-only:** overlay jobs force `deliver:"bytes"` (the acceptance path's existing mode) — the frame never enters the asset registry, cannot become a visual baseline (`POST /api/visual-references` / `PUT /api/visual-baselines/...` take assetIds; no asset → no poisoning path), and "capture-only" is literally true. Response shape for overlay calls documented accordingly.
+2. Pin swap in `enqueuePrototypeFrozen`: draft bundleUrl, candidate bundleHash, `status:"candidate"`, `candidate:{candidateId,rev,sourceHash}`.
+3. **Handshake:** `componentManifestHash` keeps its **published derivation** (`manifestHash(pins)`, `repos/prototypes.ts:199-203`) computed over the **overridden** pin list — same formula, changes exactly when rendered bundles change; no `{base, overrides}` re-derivation. Plus optional `candidateOverlay: [{componentId,candidateId,bundleHash}]` on PrototypeExpected/Ready + conditional `readyToExpected` entry. Client detection signal (documented): the response's pin for the overridden component carries the candidate bundleHash; unchanged bundleHash ⇒ override not applied ⇒ fail loudly.
+4. Allowlist: overridden pin → draft bundle URL + candidate assetIds only; shadowed published version's URLs NOT added.
+5. **GC pinning, pin-before-resolve:** register the sourceHash in the overlay pin set (short-lived, released on terminal job state) BEFORE reading the candidate bundle — closes the resolve→enqueue TOCTOU; provider filters `status ∈ {queued, running}`; union with the orchestrator provider at registration; drop the explicit `{pinned:…}` arg at `main.ts:270` so the startup GC uses the union. Test: GC called between resolve and enqueue.
+6. **Read-path authz (blocker fix):** overlay jobs record the overridden componentIds; `GET /api/screenshot-jobs/:jobId` (and receipt handle, if any exists for bytes jobs) require `requirePrototypeRead` **AND** `requireResourceOwner(components, componentId)` for each override — candidate pixels must not leak to share-link/published-prototype principals. Tests: non-owner on published prototype, share principal — both refused.
+7. Browser: `CapturePrototype.tsx` consumes frozen pins verbatim; echoes `candidateOverlay` into ready.
 
 ### B3. Capabilities/docs
 
-`features.prototypeCandidateOverlay` (= acceptanceMatrix && !validateDisabled), `limits.prototypeCandidateOverlayMax: 2`; docs subsection incl. "что overlay НЕ делает" (no verdict/evidence/promote/persistence; use slotBindings for publish-backing proof).
+`features.prototypeCandidateOverlay` (= acceptanceMatrix && !validateDisabled), `limits.prototypeCandidateOverlayMax: 2`; docs subsection: request/response (bytes delivery), refusal codes, manifest-hash semantics, detection signal, admin note, and "что overlay НЕ делает": no verdict, no evidence run, no promote, no persistence (bytes-only), not in the prototype document; use `slotBindings` for publish-backing proof.
 
-## Execution (project workflow)
+## Stage 2 review triage (round 1: 3 reviewers + adversarial verify, wf_819455de-ce6)
 
-**Stage 1 (after approval):** save this plan to `docs/plans/2026-08-05-slot-acceptance.md`, commit.
-**Stage 2:** adversarial plan review — Workflow with 2-3 Opus reviewers (lenses: fingerprint/reuse correctness; API-contract/compat; security/allowlist+authz) + triage recorded in the plan; iterate until no blockers.
-**Stage 3:** delegated execution (Opus subagents), waves below; orchestrator verifies done-criteria and commits per zone.
+**Accepted (fix in plan):**
+1. [blocker→major] Durable reconstruction slot-blind → A5 `casesOfRun` + restart-simulation test.
+2. [blocker] Baseline-carry skips frame layer → A5a two guards + regression test (also closes pre-existing props hole via conservative basis).
+3. [major] `CaseFingerprintCase` omission uncatchable by FIELD_LAYERS → A4/T1.2 explicit, tests at `caseFingerprintsOf` level.
+4. [major] Golden frame hash didn't exist → captured at HEAD e3a93fc (`f29b0c49…`); test-first goldens for other byte-identity criteria.
+5. [blocker] Default slot unbindable (Carousel stays blocked) → A2a default-slot contract + 9-child done-criteria.
+6. [major] `componentManifestHash` re-derivation breaks published contract → B2.3 same-formula-over-overridden-pins (verifier's improvement over the reviewer's own fix).
+7. [major] Rollback 500s on slotBindings manifests → stated policy + named `case_set_manifest_unreadable` ApiError.
+8. [blocker] Read-path authz leak of candidate pixels → B2.6 dual authz on reads.
+9. [major] "No persistence" false / baseline poisoning → B2.1 bytes-only delivery (kills the asset path entirely; stronger than provenance-gating two reference routes).
+10. [major] `$`-directive gate bypass → `slot_props_dynamic` at PUT + re-check in capture.
+11. [major→minor] GC pin TOCTOU + startup-GC bypass → B2.5 pin-before-resolve, union at startup.
+
+**Accepted minors:** absent-not-`[]` invariant; behavioural (not byte) coverage-key criteria; dedup normalization (`props:{}` ≡ absent); publish-status set + `publishedPinByNameAndVersion` + memoization; recompute-kill-switch note in W5; contracts `errors` arrays + generated openapi workflow; resolved-tree slotsHash in handshake (folded into A3); uniform-404 + admin doc; provenance ownership (superseded by bytes-only); drop child DTO URLs from allowlist; render-cost measurement of the maximal legal case added to W5 (limits revisited if the 60 s job deadline is threatened).
+
+**Rejected (refuted by verify pass, recorded):**
+- "slotsHash three incompatible definitions / unimplementable browser-side" — echo-from-bootstrap is the house pattern; residue folded into A3's explicit two-identity naming.
+- "Old server silently ignores candidateOverrides" — flag-off returns 404 per B1; response pins already echo bundleHash (detection signal now documented in B2.3).
+- "1 MB PUT → tens of thousands of lookups" — product ceiling is 64 cases (`acceptanceMaxCasesPerRun`), real ceiling ~6k lookups; residue = memoization (accepted above).
+
+## Execution
+
+**Stage 2 round 2:** targeted re-review (2 Opus reviewers: amended A-sections A2a/A3/A5/A5a; amended B-sections B1/B2) — substantial changes require it per workflow. Iterate until no blocking objections, then Stage 3.
 
 ### Waves and file ownership (no file in two concurrent tasks)
 
 - **W1 (parallel):**
-  - T1.1+T1.3 (one agent, sequenced): `src/acceptance/caseSetSchema.ts` → `server/acceptance/caseSets.ts` + `caseSets.test.ts` (schema, limits, slotsHashOf, identity key, alias rule). Done: golden `cset_` test untouched-green; slot-free manifest hashes to historic id; equal-props/different-slots passes; equal/equal refuses; alias mismatch refuses.
-  - T1.2: `server/acceptance/ids.ts` + `ids.test.ts` + `capture/renderer.test.ts` + field declarations in `cases.ts`. Done: ALGO===7; slot-free frame hash equals hardcoded historic value; hash changes on child bundleHash and on child order.
+  - T1.1+T1.3 (one agent, sequenced): `src/acceptance/caseSetSchema.ts` → `server/acceptance/caseSets.ts` + `caseSets.test.ts` — schema incl. `default` key, limits, `publishedPinByNameAndVersion` (+memo), `$`-walk (`slot_props_dynamic`), dedup key (normalized), `slotsHashOf` (resolved), alias rule, `case_set_manifest_unreadable`. Done: golden `cset_` untouched-green; slot-free manifest hashes to historic id; equal-props/different-slots passes; equal/equal refuses; alias mismatch refuses; `$asset`/`$cond` refused; `props:{}`≡absent collides.
+  - T1.2: `server/acceptance/ids.ts` + `ids.test.ts` + `capture/renderer.test.ts` + field declarations in `cases.ts` — incl. `CaseFingerprintCase` + `caseFingerprintsOf` threading. Done: ALGO===7; `caseFingerprintsOf` slot-free frame === `f29b0c498389404e5e426486bbb6050add243c6c0d97eff579ef127ec9fabeb1`; moves on child bundleHash alone and order alone; `[]` normalized to absent.
 - **W2 (after W1):**
-  - T2.1: `resolveSlotBindings` in `caseSets.ts` + `orchestrator.ts` createRun/comment. Done: run-start refusals slot_unknown/slot_bindings_unsupported against candidate fixture; orchestrator tests green.
-  - T2.2: `gates/capture.ts`, `gates/types.ts`, `screenshot/service.ts` (draft path), `scripts/screenshot-worker.mjs`, `src/capture/protocol.ts`. Done: service-acceptance tests assert job carries child pins, allowlist exact, slot-free readyToExpected byte-identical.
-  - T2.3: `migrations.ts` + `migrations.test.ts` + `acceptance/repo.ts`. Done: populated-DB v31 test; legacy runCoverage keys byte-identical.
-  - T2.4 (after T2.2 — shares service.ts; owns prototype path): `routes/screenshots.ts`, `components/candidates.ts` provider union, `main.ts`, `enqueuePrototypeFrozen`. Done: new `prototype-candidate-overlay.test.ts` covers all refusal codes, overlay hash, allowlist delta, pin-provider union.
+  - T2.1: `casesOfRun` + `resolveSlotBindings` in `caseSets.ts`, `orchestrator.ts` (createRun, runCases fallback, guard comments). Done: run-start refusals; restart-simulation fingerprint-equality test; orchestrator tests green.
+  - T2.2: `gates/capture.ts`, `gates/types.ts`, `service.ts` (draft path incl. `$`-recheck), `scripts/screenshot-worker.mjs`, `src/capture/protocol.ts`. Done: job carries child pins; allowlist exact-set (no DTO URLs); test-first golden for slot-free `readyToExpected`.
+  - T2.3: `migrations.ts` + `migrations.test.ts` + `acceptance/repo.ts`. Done: populated-DB v31 test; behavioural coverage invariant for slot-free runs.
+  - T2.5: `server/acceptance/runner.ts` (carry guard) + `server/acceptance/impact.ts` (conservative basis on case_set_id mismatch) + their tests. Done: two-run carry regression test refuses.
+  - T2.4 (after T2.2 — service.ts prototype path): `routes/screenshots.ts`, `components/candidates.ts`, `main.ts`, `enqueuePrototypeFrozen` — bytes-only, pin-before-resolve, dual read authz, uniform 404. Done: new `prototype-candidate-overlay.test.ts` covers refusal codes incl. oracle test, manifest hash over overridden pins, allowlist delta, GC-between-resolve-and-enqueue, non-owner/share-principal read refusals, no asset created.
 - **W3 (parallel):**
-  - T3.1: `src/capture/CaptureComponent.tsx` + tests + `named-slots.test.ts` extension. Done: draft parent + 2 children in named slot renders routed; slotsHash published.
-  - T3.2: `components/promote.ts` + tests. Done: two-run promote same-props/different-slots no longer trips coverage_overlap; expectedCases counts two.
-  - T3.3 (after T2.1 — shares orchestrator.ts): `evidence.ts` + tests + `manifestOf`. Done: slot run manifest carries resolved tree; slot-free manifest byte-identical.
-- **W4 (single agent):** `routes/meta.ts`, `contracts.ts`, `openapi.json`, `docs/server-api.md`, affected skill docs. Done: capabilities validates; docs checklist covers all new codes/limits/flags/ALGO-7/B-limitations.
-- **W5 verification (orchestrator):** `npm run verify`; `bun test server/` (caseSets, ids, acceptance-routes, service-acceptance, named-slots, migrations, screenshot-worker, orchestrator); `npm run e2e` + new e2e (publish child → candidate for slot parent → case-set with two slot-differing cases → run → two distinct frames → promote); prior-build-vs-v31-DB reverse-compat check; runtime pass per `/verify` skill.
+  - T3.1: `src/capture/CaptureComponent.tsx` + tests + `named-slots.test.ts` extension. Done: named-slot 2-child routing; **9-child default-slot** rendering; `slotsHash` echoed.
+  - T3.2: `components/promote.ts` + tests. Done: same-props/different-slots two-run promote passes; `expectedCases` counts two.
+  - T3.3 (after T2.1): `evidence.ts` + tests + `manifestOf`. Done: slot run manifest carries resolved tree; test-first golden slot-free byte-identity.
+- **W4 (single agent):** `routes/meta.ts`, `contracts.ts` (+`errors` arrays), regenerate `openapi.json`, `docs/server-api.md`, affected skill docs. Done: `npm run verify:openapi` green; docs checklist complete.
+- **W5 (orchestrator):** `npm run verify`; `bun test server/`; `npm run e2e` + new e2e (publish child → slot-parent candidate → case-set with two slot-differing cases → run → two distinct frames → promote; + carousel default-slot capture); reverse-compat: prior build vs v31 DB starts; measure worst legal slot case (12×8) against the 60 s job deadline — lower limits if threatened; deploy checklist: `EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE=1` confirmed before rollout.
 
 ## Critical files
 
-`src/acceptance/caseSetSchema.ts` · `server/acceptance/caseSets.ts` · `server/acceptance/ids.ts` · `server/acceptance/cases.ts` · `server/acceptance/orchestrator.ts` · `server/acceptance/evidence.ts` · `server/acceptance/repo.ts` · `server/screenshot/service.ts` · `server/acceptance/gates/capture.ts` · `src/capture/CaptureComponent.tsx` · `src/capture/protocol.ts` · `scripts/screenshot-worker.mjs` · `server/components/promote.ts` · `server/routes/screenshots.ts` · `server/components/candidates.ts` · `server/migrations.ts` · `server/routes/meta.ts` · `server/contracts.ts` · `docs/server-api.md`
+`src/acceptance/caseSetSchema.ts` · `server/acceptance/caseSets.ts` · `server/acceptance/ids.ts` · `server/acceptance/cases.ts` · `server/acceptance/orchestrator.ts` · `server/acceptance/runner.ts` · `server/acceptance/impact.ts` · `server/acceptance/evidence.ts` · `server/acceptance/repo.ts` · `server/screenshot/service.ts` · `server/acceptance/gates/capture.ts` · `src/capture/CaptureComponent.tsx` · `src/capture/protocol.ts` · `scripts/screenshot-worker.mjs` · `server/components/promote.ts` · `server/routes/screenshots.ts` · `server/components/candidates.ts` · `server/migrations.ts` · `server/routes/meta.ts` · `server/contracts.ts` · `docs/server-api.md`
