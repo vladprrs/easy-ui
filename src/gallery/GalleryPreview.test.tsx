@@ -8,7 +8,7 @@ import { prototypeDocSchema } from "../prototype/schema";
 const mocks = vi.hoisted(() => ({ getThemeVersion: vi.fn(), getLatestTheme: vi.fn() }));
 vi.mock("../api/client", async (original) => ({ ...(await original()), getDesignSystemVersion: mocks.getThemeVersion, getDesignSystemById: mocks.getLatestTheme }));
 
-import { GalleryPreviewErrorBoundary, GalleryPreviewFrame } from "./GalleryPreview";
+import { GALLERY_MINI_TILE, GalleryPreviewErrorBoundary, GalleryPreviewFrame, GalleryPreviewStrip } from "./GalleryPreview";
 
 class ThrowPreview extends Component<{ children?: ReactNode }> {
   render(): ReactNode { throw new Error("broken preview"); }
@@ -48,13 +48,36 @@ describe("GalleryPreviewErrorBoundary", () => {
     render(<GalleryPreviewFrame draft={draft} />);
     const stage = document.querySelector<HTMLElement>("[data-eui-stage-viewport='gallery']")!;
     await waitFor(() => expect(stage.querySelector("[data-eui-host-primitive='Overlay']")).not.toBeNull());
-    expect(stage.style.transform).toBe("scale(0.42)");
-    expect(stage.parentElement!.style.transform).toContain("scale(0.666666");
+    expect(stage.style.transform).toBe(`scale(${GALLERY_MINI_TILE.width / 1000})`);
     expect(stage.style.getPropertyValue("--eui-space-md")).toBe("18px");
     expect(stage.hasAttribute("inert")).toBe(true);
-    expect(Number.parseFloat(screen.getByTestId("gallery-preview-gallery-overlay").style.height)).toBeLessThanOrEqual(200);
+    const tile = screen.getByTestId("gallery-preview-screen-gallery-overlay-home");
+    expect(Number.parseFloat(tile.style.height)).toBeLessThanOrEqual(GALLERY_MINI_TILE.height);
+    expect(Number.parseFloat(tile.style.width)).toBe(GALLERY_MINI_TILE.width);
     expect(mocks.getThemeVersion).toHaveBeenCalledWith("shadcn", 1, expect.any(AbortSignal));
     expect(mocks.getLatestTheme).not.toHaveBeenCalled();
+  });
+
+  it("shows up to three mini-screens starting from the start screen (макет 01)", () => {
+    const spec = (text: string) => ({ root: "t", elements: { t: { type: "Text", props: { text } } } });
+    const doc = prototypeDocSchema.parse({
+      version: 1, id: "gallery-strip", name: "Strip", designSystem: "custom-only", device: "mobile", startScreen: "s2", state: {},
+      screens: [
+        { id: "s1", name: "S1", spec: spec("S1") },
+        { id: "s2", name: "S2", spec: spec("S2") },
+        { id: "s3", name: "S3", spec: spec("S3") },
+        { id: "s4", name: "S4", spec: spec("S4") },
+      ],
+    });
+    render(<GalleryPreviewStrip draft={{ doc, rev: 1, builtinCatalogHash: "b", componentManifestHash: "m", components: [] }} manageTheme={false} />);
+    const strip = screen.getByTestId("gallery-preview-gallery-strip");
+    const tiles = [...strip.querySelectorAll("[data-testid^='gallery-preview-screen-']")].map((tile) => tile.getAttribute("data-testid"));
+    // Стартовый экран — первым, дальше по порядку документа, всего не больше трёх.
+    expect(tiles).toEqual([
+      "gallery-preview-screen-gallery-strip-s2",
+      "gallery-preview-screen-gallery-strip-s1",
+      "gallery-preview-screen-gallery-strip-s3",
+    ]);
   });
 
   it("renders a pinned custom component when the loaded runtime is supplied", () => {
@@ -105,11 +128,11 @@ describe("GalleryPreviewFrame на дуо-доке (multi-surface)", () => {
         { id: "app", name: "Дом", surface: "app", spec: { root: "t", elements: { t: { type: "Text", props: { text: "Дом" } } } } },
       ],
     });
-    render(<GalleryPreviewFrame draft={{ doc, rev: 1, builtinCatalogHash: "b", componentManifestHash: "m", components: [], designSystemMetaVersion: 1 }} />);
+    render(<GalleryPreviewStrip draft={{ doc, rev: 1, builtinCatalogHash: "b", componentManifestHash: "m", components: [], designSystemMetaVersion: 1 }} />);
     const badge = screen.getByTestId("gallery-preview-surfaces");
     expect(badge.textContent).toBe("2 поверхности");
     expect(badge.getAttribute("title")).toBe("Поверхности: КСО, Приложение");
-    // Кадр — стартовый экран primary-поверхности, то есть КСО с его холстом.
+    // Первый тайл — стартовый экран primary-поверхности, то есть КСО с его холстом.
     expect(document.querySelector<HTMLElement>("[data-eui-stage-viewport='gallery']")!.style.width).toBe("1080px");
   });
 
@@ -118,7 +141,7 @@ describe("GalleryPreviewFrame на дуо-доке (multi-surface)", () => {
       version: 1, id: "plain-gallery", name: "Plain", designSystem: "shadcn", device: "mobile", startScreen: "home", state: {},
       screens: [{ id: "home", name: "Дом", spec: { root: "t", elements: { t: { type: "Text", props: { text: "Дом" } } } } }],
     });
-    render(<GalleryPreviewFrame draft={{ doc, rev: 1, builtinCatalogHash: "b", componentManifestHash: "m", components: [], designSystemMetaVersion: 1 }} />);
+    render(<GalleryPreviewStrip draft={{ doc, rev: 1, builtinCatalogHash: "b", componentManifestHash: "m", components: [], designSystemMetaVersion: 1 }} />);
     expect(screen.queryByTestId("gallery-preview-surfaces")).toBeNull();
   });
 });

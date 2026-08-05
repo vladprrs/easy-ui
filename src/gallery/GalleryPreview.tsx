@@ -1,7 +1,7 @@
 import { JSONUIProvider, Renderer } from "@json-render/react";
 import { Component, type ErrorInfo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createCjmRegistry } from "../cjm/cjmRegistry";
-import { previewNativeWidth, previewTileSizes } from "../designSystems/deviceMetrics";
+import { previewNativeWidth } from "../designSystems/deviceMetrics";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
 import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
 import { loadCustomComponents } from "../customComponents/loader";
@@ -23,6 +23,11 @@ import { gallery } from "../app/strings/gallery";
 
 export const GALLERY_PREVIEWS_ENABLED = true;
 export const GALLERY_PREVIEW_LOAD_LIMIT = 4;
+/**
+ * Мини-экран превью-зоны (макет 01): ширина совпадает с тайлом ленты «Сценарии»
+ * (`sheetStripTile`), высота — превью-зона 196px минус её pt-4, тайлов не больше трёх.
+ */
+export const GALLERY_MINI_TILE = { width: 132, height: 180, count: 3 } as const;
 
 type QueueEntry<T> = {
   signal: AbortSignal;
@@ -83,14 +88,14 @@ export class GalleryPreviewErrorBoundary extends Component<{ prototypeId: string
   }
 }
 
-export function GalleryPreviewFrame({ draft, custom, themeContent: suppliedThemeContent, manageTheme = true }: { draft: PrototypeDraft; custom?: CustomPlayerRuntime; themeContent?: ThemeContent | null; manageTheme?: boolean }) {
+export function GalleryPreviewFrame({ draft, screenId, custom, themeContent: suppliedThemeContent, manageTheme = true }: { draft: PrototypeDraft; screenId?: string; custom?: CustomPlayerRuntime; themeContent?: ThemeContent | null; manageTheme?: boolean }) {
   const { doc } = draft;
   const [stageHost, setStageHost] = useState<HTMLDivElement | null>(null);
   const stageHostRef = useMemo(() => ({ current: stageHost }), [stageHost]);
   const setStageHostRef = useCallback((node: HTMLDivElement | null) => setStageHost(node), []);
   const loadedThemeContent = useDesignSystemTheme(manageTheme ? doc.designSystem : undefined, manageTheme ? draft.designSystemMetaVersion : null);
   const themeContent = manageTheme ? loadedThemeContent : (suppliedThemeContent ?? null);
-  const screen = doc.screens.find((candidate) => candidate.id === doc.startScreen);
+  const screen = doc.screens.find((candidate) => candidate.id === (screenId ?? doc.startScreen));
   const runtime = useMemo(() => createPlayerRuntime({ navigate() {}, back() {}, openUrl() {}, restart() {} }, custom, doc.designSystem), [custom, doc.designSystem]);
   const registry = useMemo(() => createCjmRegistry(runtime.registry), [runtime.registry]);
   const tree = useMemo<RuntimeTree | null>(() => {
@@ -108,15 +113,40 @@ export function GalleryPreviewFrame({ draft, custom, themeContent: suppliedTheme
   if (!screen || !tree || !specs) return null;
 
   const nativeWidth = screen.canvas?.width ?? previewNativeWidth[doc.device];
-  const tileSize = previewTileSizes[doc.device];
-  const galleryWidth = previewTileSizes.mobile.width;
-  const deviceScale = tileSize.width / nativeWidth;
-  const galleryScale = galleryWidth / tileSize.width;
-  const scaledHeight = screen.canvas?.height === undefined
-    ? tileSize.fallbackHeight * galleryScale
-    : Math.min(screen.canvas.height * deviceScale, tileSize.heightCap) * galleryScale;
-  const height = Math.min(scaledHeight, 200);
+  const scale = GALLERY_MINI_TILE.width / nativeWidth;
+  const height = screen.canvas?.height === undefined
+    ? GALLERY_MINI_TILE.height
+    : Math.min(screen.canvas.height * scale, GALLERY_MINI_TILE.height);
   const key = `${doc.id}:${draft.rev}:${screen.id}`;
+
+  return <>{manageTheme ? <ThemeStyle content={themeContent} /> : null}<div className="relative shrink-0 overflow-hidden rounded-t-[13px] bg-white text-foreground" style={{ width: GALLERY_MINI_TILE.width, height }} data-testid={`gallery-preview-screen-${doc.id}-${screen.id}`}>
+    <SurfaceSpacingScope systemId={doc.designSystem} themeTokens={themeContent?.tokens}>
+    <div ref={setStageHostRef} inert data-eui-stage-viewport="gallery" style={{ position: "relative", width: nativeWidth, ...(screen.canvas?.height === undefined ? {} : { height: screen.canvas.height }), transform: `scale(${scale})`, transformOrigin: "top left" }}>
+      <JSONUIProvider key={key} registry={registry} handlers={runtime.handlers} initialState={initialState}>
+        <HostStageSurface stageHostRef={stageHostRef}><div inert>
+          <EasyUiRuntimeProvider value={runtimeValue}>
+            {screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}
+          </EasyUiRuntimeProvider>
+        </div></HostStageSurface>
+      </JSONUIProvider>
+    </div>
+    </SurfaceSpacingScope>
+  </div></>;
+}
+
+/**
+ * Превью-зона карточки по макету 01 (handoff «Easy-UI Redesign», раздел «01 Галерея»):
+ * до трёх мини-экранов — белые тайлы с верхним радиусом 13px, прижатые к низу зоны и
+ * «выглядывающие» из неё (низ кадрирует кромка зоны). Первый тайл — стартовый экран,
+ * дальше экраны документа по порядку; живой рендер вместо плейсхолдер-плашек макета.
+ */
+export function GalleryPreviewStrip({ draft, custom, themeContent: suppliedThemeContent, manageTheme = true }: { draft: PrototypeDraft; custom?: CustomPlayerRuntime; themeContent?: ThemeContent | null; manageTheme?: boolean }) {
+  const { doc } = draft;
+  const loadedThemeContent = useDesignSystemTheme(manageTheme ? doc.designSystem : undefined, manageTheme ? draft.designSystemMetaVersion : null);
+  const themeContent = manageTheme ? loadedThemeContent : (suppliedThemeContent ?? null);
+  const start = doc.screens.find((candidate) => candidate.id === doc.startScreen);
+  const screens = [...(start ? [start] : []), ...doc.screens.filter((candidate) => candidate.id !== doc.startScreen)].slice(0, GALLERY_MINI_TILE.count);
+  if (screens.length === 0) return null;
 
   // Превью дуо-дока меряется по primary-поверхности (D3) — как и остальные непереведённые
   // читатели `doc.device`/`doc.designSystem`. Бейдж говорит, что за кадром есть вторая панель.
@@ -129,21 +159,9 @@ export function GalleryPreviewFrame({ draft, custom, themeContent: suppliedTheme
       >{gallery.surfacesBadge(surfaces.length)}</span>
     : null;
 
-  return <>{manageTheme ? <ThemeStyle content={themeContent} /> : null}<div className="relative mx-auto max-w-full overflow-hidden rounded-inset bg-background text-foreground" style={{ width: galleryWidth, height }} data-testid={`gallery-preview-${doc.id}`}>
+  return <>{manageTheme ? <ThemeStyle content={themeContent} /> : null}<div className="relative flex w-full items-end justify-center gap-3 overflow-hidden" data-testid={`gallery-preview-${doc.id}`}>
     {surfacesBadge}
-    <div style={{ width: tileSize.width, height: height / galleryScale, transform: `scale(${galleryScale})`, transformOrigin: "top left" }}>
-      <SurfaceSpacingScope systemId={doc.designSystem} themeTokens={themeContent?.tokens}>
-      <div ref={setStageHostRef} inert data-eui-stage-viewport="gallery" style={{ position: "relative", width: nativeWidth, ...(screen.canvas?.height === undefined ? {} : { height: screen.canvas.height }), transform: `scale(${deviceScale})`, transformOrigin: "top left" }}>
-        <JSONUIProvider key={key} registry={registry} handlers={runtime.handlers} initialState={initialState}>
-          <HostStageSurface stageHostRef={stageHostRef}><div inert>
-            <EasyUiRuntimeProvider value={runtimeValue}>
-              {screen.canvas ? <CanvasLayers canvas={screen.canvas} specs={specs} registry={registry} /> : <>{specs.content ? <Renderer registry={registry} spec={specs.content} /> : null}{specs.overlays.map((overlaySpec) => <Renderer registry={registry} spec={overlaySpec} key={overlaySpec.root} />)}</>}
-            </EasyUiRuntimeProvider>
-          </div></HostStageSurface>
-        </JSONUIProvider>
-      </div>
-      </SurfaceSpacingScope>
-    </div>
+    {screens.map((item) => <GalleryPreviewFrame key={item.id} draft={draft} screenId={item.id} custom={custom} themeContent={themeContent} manageTheme={false} />)}
   </div></>;
 }
 
@@ -175,7 +193,7 @@ function LoadedGalleryPreview({ prototypeId }: { prototypeId: string }) {
       : draft.data.renderable === false ? <ArchivedPrototype />
         : custom.status === "loading"
         ? <div className="h-44 rounded-inset bg-white/70 pay-skeleton motion-reduce:animate-none" data-gallery-preview-state="loading" />
-        : <GalleryPreviewFrame draft={draft.data} custom={custom.data} themeContent={themeContent} manageTheme={false} />}
+        : <GalleryPreviewStrip draft={draft.data} custom={custom.data} themeContent={themeContent} manageTheme={false} />}
   </>;
 }
 

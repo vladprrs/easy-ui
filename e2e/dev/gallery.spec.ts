@@ -29,8 +29,9 @@ test.describe("gallery discovery and previews", () => {
     await expect(card.locator("[data-gallery-preview]")).toHaveCount(1);
     expect(customDraftRequests.length).toBeGreaterThan(0);
     // Превью — живой рендер: пинованный бандл кастомного компонента реально отрисован
-    // (регрессия «белых квадратов»: реестр превью без custom-компонентов).
-    // CSS-локатор, не getByRole: превью инертно и выключено из accessibility tree.
-    await expect(card.locator(`[data-testid="gallery-preview-${CUSTOM_DS_PROTOTYPE_ID}"] button`)).toHaveText("★★★");
+    // (регрессия «белых квадратов»: реестр превью без custom-компонентов). Первый
+    // мини-тайл — стартовый экран (value: 3). CSS-локатор, не getByRole: превью
+    // инертно и выключено из accessibility tree.
+    await expect(card.locator(`[data-testid="gallery-preview-${CUSTOM_DS_PROTOTYPE_ID}"] button`).first()).toHaveText("★★★");
   });
 });
