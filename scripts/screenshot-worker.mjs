@@ -108,7 +108,10 @@ export const WORKER_FAILURE_CODES = Object.freeze({
 export function readyToExpected(ready) {
   // `designSystem` — резолвнутая ДС снимаемого экрана (multi-surface D14): пара
   // `(designSystem, dsMetaVersion)` сверяется целиком, иначе дрейф темы второй ДС невидим.
-  if (ready.kind === "prototype") return { kind: "prototype", prototypeInstanceId: ready.prototypeInstanceId, rev: ready.revision, componentManifestHash: ready.componentManifestHash, builtinCatalogHash: ready.builtinCatalogHash, designSystem: ready.designSystem ?? null, dsMetaVersion: ready.dsMetaVersion, rendererBuild: ready.rendererBuild };
+  // `candidateOverlay` (план 2026-08-05 §B2.3) добавляется **условно** по той же причине, что и
+  // `slotsHash` ниже: whitelist сравнения — часть контракта, и у джобы без подмен пре-образ
+  // обязан остаться байт-в-байт прежним.
+  if (ready.kind === "prototype") return { kind: "prototype", prototypeInstanceId: ready.prototypeInstanceId, rev: ready.revision, componentManifestHash: ready.componentManifestHash, builtinCatalogHash: ready.builtinCatalogHash, designSystem: ready.designSystem ?? null, dsMetaVersion: ready.dsMetaVersion, rendererBuild: ready.rendererBuild, ...(ready.candidateOverlay !== undefined ? { candidateOverlay: ready.candidateOverlay } : {}) };
   // Draft-вариант handshake (P1b): rev + sourceHash вместо published version.
   // `slotsHash` (план 2026-08-05 §A6) добавляется **условно**: whitelist сравнения — часть
   // контракта, и у бесслотового случая пре-образ обязан остаться байт-в-байт прежним.

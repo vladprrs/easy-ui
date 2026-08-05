@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { JOB_DEADLINE_MS } from "../screenshot/sessions";
 import type { ExtractResult } from "./extract-subprocess";
 
 /**
@@ -128,6 +129,48 @@ export async function writeCandidate(dataDir: string, entry: CandidateEntry, bun
   await writeAtomic(resolve(dir, "result.json"), JSON.stringify({ ...entry, componentIds }));
   await gcCandidates(dataDir);
 }
+
+/**
+ * Аренда пина кандидата под prototypeCandidateOverlay (план 2026-08-05 §B2.5).
+ *
+ * Между «резолвом кандидата» и «постановкой джобы» лежат отказы, которые обнаруживаются только
+ * после чтения бандла (`candidate_component_not_in_prototype`, `queue_full`, любой throw), а
+ * `gcCandidates` может пройти в любой момент — в том числе GC-on-write от чужого validate.
+ * Поэтому роут регистрирует аренду **до** чтения бандла и снимает её в `finally` на каждом
+ * непоставившем выходе; на успешной постановке пин подхватывает сама джоба (её `status ∈
+ * {queued, running}`), и аренда становится избыточной.
+ *
+ * Аренда **истекает сама**: брошенный (не снятый из-за краха) пин не должен держать запись
+ * кандидата вечно. Срок — дедлайн джобы плюс запас на постановку и вытеснение из очереди.
+ */
+export const OVERLAY_LEASE_SLACK_MS = 30_000;
+export const OVERLAY_LEASE_TTL_MS = JOB_DEADLINE_MS + OVERLAY_LEASE_SLACK_MS;
+
+const overlayLeases = new Map<string, { sourceHash: string; expiresAt: number }>();
+
+export function registerOverlayLease(sourceHash: string, options: { ttlMs?: number; now?: number } = {}): string {
+  const leaseId = `lease_${crypto.randomUUID()}`;
+  overlayLeases.set(leaseId, {
+    sourceHash,
+    expiresAt: (options.now ?? Date.now()) + (options.ttlMs ?? OVERLAY_LEASE_TTL_MS),
+  });
+  return leaseId;
+}
+
+export function releaseOverlayLease(leaseId: string): void { overlayLeases.delete(leaseId); }
+
+/** Незапротухшие аренды. Истёкшие снимаются безусловно — это и есть их смысл. */
+export function overlayLeasePins(now = Date.now()): Set<string> {
+  const pins = new Set<string>();
+  for (const [leaseId, lease] of overlayLeases) {
+    if (lease.expiresAt <= now) { overlayLeases.delete(leaseId); continue; }
+    pins.add(lease.sourceHash);
+  }
+  return pins;
+}
+
+/** Только для тестов: снять все аренды (реестр процесс-широкий, как и провайдер пинов). */
+export function __clearOverlayLeasesForTest(): void { overlayLeases.clear(); }
 
 /**
  * Процесс-широкий провайдер пинов для GC-on-write (A10): без него интерактивный validate

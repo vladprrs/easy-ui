@@ -58,6 +58,21 @@ export function themePinsOf(db: Database, id: string, rev: number, doc: Prototyp
 // в дереве компонентов редактора. Поле аддитивное, старые клиенты его игнорируют.
 type Pin = { id: string; name: string; version: number; bundleUrl: string; bundleHash: string; status: string };
 export type ResolvedPin = Pin;
+/**
+ * `componentManifestHash` ревизии — sha256 стабильной тройки `(id, version, bundleHash)` каждого
+ * пина в их порядке. Экспортируется (план 2026-08-05 §B2.3), потому что prototypeCandidateOverlay
+ * считает **тот же** хэш по подменённому списку пинов: у overlay-джобы и `expected`, и
+ * `captureManifestHash` обязаны быть одной величиной, а формула — прежней (иначе handshake
+ * поверхности сравнивал бы значения, вычисленные разными правилами).
+ *
+ * Пустой список сохраняет своё особое значение (`emptyComponentManifestHash`): это исторический
+ * контракт read-путей, а не деталь реализации.
+ */
+export function componentManifestHashOf(pins: { id: string; version: number; bundleHash: string }[]): string {
+  if (!pins.length) return emptyComponentManifestHash;
+  const stable = pins.map(({ id, version, bundleHash }) => ({ id, version, bundleHash }));
+  return new Bun.CryptoHasher("sha256").update(JSON.stringify(stable)).digest("hex");
+}
 export type BundleReadiness = { resolvedPins: ResolvedPin[]; bundles: boolean; bundleStatus: "ready" | "failed"; warnings: { code: string; message: string }[]; errors: { code: string; message: string }[] };
 // Statuses that still render (K adds deprecated/superseded later; tolerated ahead of that migration).
 const RENDERABLE_PIN_STATUS = new Set(["active", "deprecated", "superseded"]);
@@ -196,11 +211,7 @@ export class PrototypeRepo {
     if(!classification.renderable) { readiness.bundles=false; readiness.bundleStatus="failed"; }
     return { rev, version, document, publishedVersion, ...readiness };
   }
-  private manifestHash(pins: Pin[]): string {
-    if (!pins.length) return emptyComponentManifestHash;
-    const stable = pins.map(({id,version,bundleHash}) => ({id,version,bundleHash}));
-    return new Bun.CryptoHasher("sha256").update(JSON.stringify(stable)).digest("hex");
-  }
+  private manifestHash(pins: Pin[]): string { return componentManifestHashOf(pins); }
   // Pins the latest design-system theme version onto the revision (diagnostic, like builtinCatalogHash).
   // `metaVersion` is undefined for fresh saves (resolve latest now) and explicit for restore (copy source pin).
   private insertRevision(id:string, rev:number, doc:PrototypeDoc, message:string|null, createdAt:string, metaVersion?:number|null, figmaJson:string|null=null, themePins?:Record<string,number|null>): void {

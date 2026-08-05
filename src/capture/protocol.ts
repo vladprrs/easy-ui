@@ -25,6 +25,20 @@ export interface PrototypeExpected {
   /** Пиннутая версия темы **этой** ДС (карта `prototype_revision_theme_pins`, миграция v24). */
   dsMetaVersion: number | null;
   rendererBuild: string | null;
+  /**
+   * Подменённые кандидатами пины прототипа (план 2026-08-05 §B2.3, `prototypeCandidateOverlay`).
+   * Присутствует ровно тогда, когда постановка приняла `candidateOverrides` — у обычной джобы
+   * поля нет, и её handshake обязан остаться байт-в-байт прежним. `componentManifestHash` рядом
+   * уже посчитан **по подменённому** списку пинов, поэтому этот блок — провенанс, а не вход хэша.
+   */
+  candidateOverlay?: PrototypeCandidateOverlayEntry[];
+}
+
+/** Один подменённый пин overlay-джобы: чей компонент, каким кандидатом и с каким бандлом. */
+export interface PrototypeCandidateOverlayEntry {
+  componentId: string;
+  candidateId: string;
+  bundleHash: string;
 }
 
 export interface ComponentExpected {
@@ -150,6 +164,12 @@ export interface PrototypeReady extends CaptureReadyExtras {
   designSystem: string | null;
   dsMetaVersion: number | null;
   rendererBuild: string | null;
+  /**
+   * Эхо `bootstrap.expected.candidateOverlay` (домашний паттерн: manifest/catalog-хэши поверхность
+   * тоже эхорит). Отсутствует у джобы без подмен — сравнение `readyToExpected` ↔ `expected`
+   * остаётся прежним пре-образом.
+   */
+  candidateOverlay?: PrototypeCandidateOverlayEntry[];
 }
 
 export interface ComponentReady extends CaptureReadyExtras {

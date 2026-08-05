@@ -10,6 +10,8 @@ import { assetRefsOf, sourceShapeHashOf, writeCandidate, type CandidateEntry } f
 import type { CaptureProbe, JobOutcome, JobStatus, ScreenshotResult } from "../screenshot/service";
 import type { CaptureCode } from "../../src/capture/failureCodes";
 import type { InkBboxResult } from "./inkBbox";
+import { caseSetManifestSchema, type CaseSetManifest } from "../../src/acceptance/caseSetSchema";
+import { CaseSetRepo } from "./caseSets";
 import { computeImpact } from "./impact";
 import { normalizeThemeResources, observedResourcesOfRun, themeTokenCssVar } from "./resources";
 import type { AcceptanceCaptureService, CandidateSubject } from "./gates/types";
@@ -455,6 +457,108 @@ test("перенос отказан, если вердиктную полити�
   expect(second.impact?.basis).toBe("asset-only");
   expect(Object.values(reuseReasons(harness, second.run.run_id)).every((reason) => reason === null)).toBe(true);
   expect(harness.service.calls.length).toBeGreaterThan(before);
+  harness.db.close();
+});
+
+/**
+ * Per-case guard входов кадра при переносе baseline (план 2026-08-05 §A5a).
+ *
+ * Импакт рассуждает **только о кандидате** — исходник, ассеты, тема; про набор он не знает ничего.
+ * Значит, случай с тем же `case_id`, но другими props или другой версией ребёнка слота, для импакта
+ * «незатронут», и до этой волны его вердикт переносился бы молча, да ещё и записывался в кэш под
+ * новым отпечатком. Guard сравнивает ровно те входы кадра, которые приходят из набора.
+ */
+
+/** Опубликованный ребёнок слота (три таблицы, которые читает `publishedPinByNameAndVersion`). */
+function seedChild(harness: Harness, version: number): void {
+  if (!harness.db.query("SELECT 1 ok FROM components WHERE id='pay-child'").get()) {
+    harness.db.run("INSERT INTO components (id,name,head_rev,design_system,deleted_at,created_at,updated_at) VALUES ('pay-child','PayChild',?,?,NULL,'now','now')", [version, DS]);
+  }
+  harness.db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,message,created_at) VALUES ('pay-child',?,'src',?,NULL,'now')", [version, DS]);
+  harness.db.run(`INSERT INTO component_publishes
+    (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,message,published_at)
+    VALUES ('pay-child',?,?,'active','js','{}',?,?,4,NULL,'now')`,
+    [version, version, `sh-pay-child-${version}`, `bh-pay-child-${version}`]);
+}
+
+/**
+ * Набор из двух случаев, оба «смотрят» на ASSET_B (то есть незатронуты подменой ASSET_A → ASSET_C):
+ * `slotted` биндит дефолтный слот версией `childVersion`, `plain` слотов не имеет вовсе.
+ */
+const slotManifestOf = (childVersion: number): CaseSetManifest => caseSetManifestSchema.parse({
+  manifestVersion: 1,
+  componentId: COMPONENT_ID,
+  capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "light" },
+  cases: [
+    {
+      id: "slotted", props: { asset: ASSET_B, token: "--eui-color-fg" },
+      slotBindings: { default: [{ type: "PayChild", version: childVersion }] },
+    },
+    { id: "plain", props: { asset: ASSET_B, token: "--eui-color-accent" } },
+  ],
+});
+
+const runSetFor = async (harness: Harness, candidate: CandidateRow, manifest: CaseSetManifest, baselineRunId?: string) => {
+  const { row } = new CaseSetRepo(harness.db).put({
+    componentId: COMPONENT_ID, designSystem: DS, manifest, createdBy: "user_a",
+  });
+  const started = await harness.orchestrator.startRun({
+    candidateId: candidate.candidate_id, createdBy: "user_a", caseSetId: row.case_set_id,
+    ...(baselineRunId === undefined ? {} : { baselineRunId }),
+  });
+  const run = await harness.orchestrator.executeRun(started.run.run_id);
+  return { run, impact: started.impact };
+};
+
+test("сменился ребёнок слота: незатронутый импактом случай не переносится, остальная семья переносится", async () => {
+  const harness = await setup();
+  seedChild(harness, 1);
+  seedChild(harness, 2);
+
+  const baseCandidate = await harness.candidateFor({ rev: 1, source: SOURCE_A });
+  const first = await runSetFor(harness, baseCandidate, slotManifestOf(1));
+  const baselineRows = Object.fromEntries(harness.repo.cases(first.run.run_id).map((row) => [row.case_id, row]));
+  expect(baselineRows.slotted!.slots_hash).toMatch(/^[0-9a-f]{64}$/);
+  expect(baselineRows.plain!.slots_hash).toBeNull();
+  const before = harness.service.calls.length;
+
+  // Новый кандидат отличается ровно подменой ASSET_A → ASSET_C: оба случая смотрят на ASSET_B и для
+  // импакта незатронуты. Но набор сменился — `slotted` биндит уже вторую версию ребёнка.
+  const next = await harness.candidateFor({ rev: 2, source: SOURCE_A_SWAPPED });
+  const second = await runSetFor(harness, next, slotManifestOf(2), first.run.run_id);
+  expect(second.impact?.basis).toBe("asset-only");
+  expect(second.impact?.affectedCases).toEqual([]);
+  expect(second.impact?.unaffectedCases).toEqual(["plain", "slotted"].sort());
+
+  // Guard: кадровые входы `slotted` разошлись (другой `slots_hash`) — случай снят заново; `plain`
+  // остался слот-free с обеих сторон (NULL === undefined) и перенесён как прежде.
+  expect(reuseReasons(harness, second.run.run_id)).toEqual({ slotted: null, plain: "impact:asset-only" });
+  // Снимался ровно один случай — `slotted` (его props узнаются по токену); determinism-сэмпл может
+  // дать несколько вызовов на случай, поэтому считаются не вызовы, а множество снятых props.
+  expect([...new Set(harness.service.calls.slice(before).map((call) => String(call.props?.token ?? "")))])
+    .toEqual(["--eui-color-fg"]);
+  const rows = Object.fromEntries(harness.repo.cases(second.run.run_id).map((row) => [row.case_id, row]));
+  expect(rows.slotted!.slots_hash).not.toBe(baselineRows.slotted!.slots_hash);
+  expect(JSON.parse(second.run.progress_json).reused).toBe(1);
+  harness.db.close();
+});
+
+test("guard закрывает и props-дыру: тот же case_id с другим props_hash не переносится", async () => {
+  const harness = await setup();
+  const baseCandidate = await harness.candidateFor({ rev: 1, source: SOURCE_A });
+  const first = await runFor(harness, baseCandidate);
+  // Строка baseline описывает **другой** кадр (props-хэш чужой) — до guard'а её вердикт уезжал бы
+  // в новый ран по одному лишь совпадению `case_id`.
+  harness.db.run("UPDATE acceptance_cases SET props_hash='deadbeef' WHERE run_id=? AND case_id='b1'", [first.run.run_id]);
+  const before = harness.service.calls.length;
+
+  const next = await harness.candidateFor({ rev: 2, source: SOURCE_A_SWAPPED });
+  const second = await runFor(harness, next, first.run.run_id);
+  expect(second.impact?.unaffectedCases).toEqual(["b1", "b2"]);
+  expect(reuseReasons(harness, second.run.run_id).b1).toBeNull();
+  expect(reuseReasons(harness, second.run.run_id).b2).toBe("impact:asset-only");
+  // Сняты затронутые (a1, a2) плюс b1: перенос ему запрещён.
+  expect(harness.service.capturedAssetsSince(before)).toEqual([ASSET_A, ASSET_B].sort());
   harness.db.close();
 });
 

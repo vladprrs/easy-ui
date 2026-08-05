@@ -17,7 +17,7 @@ import { ApiError } from "../http";
 import { ensureDraftCandidate, getCandidateForRev, type DraftCandidate } from "../components/validate";
 import { AssetRepo } from "../repos/assets";
 import { ComponentRepo } from "../repos/components";
-import { docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
+import { componentManifestHashOf, docDesignSystems, PrototypeRepo, themePinsOf } from "../repos/prototypes";
 import { surfaceDesignSystem, surfaceOf } from "../../src/prototype/surfaces";
 import { resolveCaptureMode } from "../capture/modes";
 import { buildCaptureReceipt, type CaptureReceipt, type CaptureReceiptOutput, type CaptureReceiptTarget } from "../../src/capture/receipt";
@@ -29,7 +29,30 @@ import { CaptureSessionStore, JOB_DEADLINE_MS } from "./sessions";
 
 export interface Viewport { width: number; height: number }
 /** Пин компонента, замороженный на enqueue и отданный поверхности через `bootstrap.target`. */
-export interface CapturePin { id: string; name: string; version: number; bundleUrl: string; bundleHash: string; status: string }
+export interface CapturePin {
+  id: string; name: string; version: number; bundleUrl: string; bundleHash: string; status: string;
+  /**
+   * Подмена пина кандидатом (план 2026-08-05 §B2.2, `prototypeCandidateOverlay`). Присутствует
+   * только у подменённого пина: `status` у него `"candidate"`, `bundleUrl` — content-addressed
+   * путь draft-бандла, `bundleHash` — хэш кандидата. Клиент детектирует применённую подмену
+   * именно по расхождению `bundleHash` с опубликованным (§B2.3).
+   */
+  candidate?: { candidateId: string; rev: number; sourceHash: string };
+}
+/**
+ * Разрешённая подмена пина прототипа кандидатом (§B1/B2). Кандидат уже прочитан из кэша
+ * (`resolveCandidateOverride`), поэтому постановка джобы остаётся синхронной, а бандл — доказанно
+ * существующим на момент резолва (за окно до постановки отвечает аренда пина, §B2.5).
+ */
+export interface ResolvedCandidateOverride {
+  candidateId: string;
+  componentId: string;
+  rev: number;
+  sourceHash: string;
+  bundleHash: string;
+  /** Ассеты **кандидата** (из его исходника): опубликованные ассеты затенённой версии не едут. */
+  assetIds: string[];
+}
 /**
  * Разрешённая слот-привязка случая приёмки (план 2026-08-05 §A6). Структурно — `ResolvedSlotBinding`
  * (`server/acceptance/cases.ts`); объявлена здесь, потому что screenshot-слой про приёмку не знает
@@ -335,6 +358,14 @@ interface InternalJob {
    */
   capturePins?: CapturePin[];
   captureManifestHash?: string;
+  /**
+   * Маркер overlay-джобы (план 2026-08-05 §B2.6): какие компоненты подменены кандидатами.
+   * Присутствие поля — и есть признак «этот кадр показывает неопубликованный код»: по нему
+   * read-путь требует владения каждым подменённым компонентом, receipt не пишется вовсе
+   * (7-суточная ссылка `prototype:<id>` не умеет нести per-override авторизацию), а
+   * `sourceHash` пинует бандл кандидата от GC, пока джоба не терминальна.
+   */
+  candidateOverlay?: { componentId: string; candidateId: string; bundleHash: string; sourceHash: string }[];
   /** Draft-capture extras (P1b): what the bootstrap carries instead of a published DTO. */
   draft?: { name: string; designSystem: string; bundleUrl: string; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>> };
   /**
@@ -562,9 +593,39 @@ export class ScreenshotService {
    * Ответ enqueue отдаёт разрешённые пины (P2.3/P5.2): для track:head-дока это единственный
    * момент, когда клиент узнаёт, какие версии компонентов реально пойдут в кадр.
    */
-  enqueuePrototype(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry" }): { jobId: string; components: { id: string; name: string; version: number; bundleHash: string }[] } {
+  enqueuePrototype(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry"; candidateOverrides?: ResolvedCandidateOverride[] }): { jobId: string; components: { id: string; name: string; version: number; bundleHash: string; status?: string; candidate?: { candidateId: string; rev: number; sourceHash: string } }[] } {
     const {jobId,components}=this.enqueuePrototypeFrozen(id,screenId,opts);
-    return {jobId,components:(components??[]).map((pin)=>({id:pin.id,name:pin.name,version:pin.version,bundleHash:pin.bundleHash}))};
+    // Подменённый пин отдаётся наружу вместе со статусом и ссылкой на кандидата: это и есть
+    // объявленный сигнал детекции (§B2.3) — совпал bundleHash с опубликованным ⇒ подмена не
+    // применилась, и клиент обязан упасть громко, а не молча снять published-кадр.
+    return {jobId,components:(components??[]).map((pin)=>({id:pin.id,name:pin.name,version:pin.version,bundleHash:pin.bundleHash,...(pin.candidate?{status:pin.status,candidate:pin.candidate}:{})}))};
+  }
+
+  /**
+   * Пины кандидатов, которые нельзя вытеснять GC (§B2.5): `sourceHash` всех **нетерминальных**
+   * overlay-джоб. Терминальная джоба живёт ещё `RESULT_TTL_MS` ради чтения байтов, но её бандл
+   * больше не нужен — держать его до конца TTL значило бы пинить кэш на десять минут после кадра.
+   */
+  pinnedCandidateSourceHashes(): Set<string> {
+    const pins = new Set<string>();
+    for (const job of this.jobs.values()) {
+      if (job.candidateOverlay === undefined) continue;
+      if (job.status !== "queued" && job.status !== "running") continue;
+      if (job.resultExpiresAt !== undefined) continue;
+      for (const entry of job.candidateOverlay) pins.add(entry.sourceHash);
+    }
+    return pins;
+  }
+
+  /**
+   * Резолв одной подмены (§B1): проверяет, что пара `{rev, sourceHash}` кандидата всё ещё
+   * описывает ту ревизию (`409 candidate_stale`) и что его бандл жив (`409 candidate_evicted`),
+   * и достаёт ассеты **кандидатского** исходника. Асинхронно, поэтому вызывается роутом до
+   * синхронной постановки — и после того, как роут уже зарегистрировал аренду пина (§B2.5).
+   */
+  async resolveCandidateOverride(input: { candidateId: string; componentId: string; rev: number; sourceHash: string; bundleHash: string }): Promise<ResolvedCandidateOverride> {
+    const draft = await getCandidateForRev(this.deps.db, this.deps.dataDir, input.componentId, input.rev, input.sourceHash);
+    return { candidateId: input.candidateId, componentId: input.componentId, rev: input.rev, sourceHash: input.sourceHash, bundleHash: input.bundleHash, assetIds: draft.assetIds };
   }
 
   enqueueWithExpected(target:FrozenTarget,opts:{viewport:unknown;deviceScaleFactor?:unknown;theme?:string;waitForFonts?:boolean}):FrozenEnqueue {
@@ -573,7 +634,7 @@ export class ScreenshotService {
       : this.enqueueComponentFrozen(target.id,target.version,{...opts,props:target.props});
   }
 
-  private enqueuePrototypeFrozen(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry" }): FrozenEnqueue {
+  private enqueuePrototypeFrozen(id: string, screenId: string, opts: { rev?: number; version?: number; viewport: unknown; deviceScaleFactor?: unknown; theme?: string; waitForFonts?: boolean; probe?: "geometry"; candidateOverrides?: ResolvedCandidateOverride[] }): FrozenEnqueue {
     this.requireAvailable();
     const { viewport, dsf } = validateViewport(opts.viewport, opts.deviceScaleFactor);
     this.guardQueue();
@@ -581,7 +642,16 @@ export class ScreenshotService {
     // Atomic snapshot: resolve rev now so a later save cannot move the target.
     const snap = repo.screenRenderStatus(id, screenId, { rev: opts.rev, version: opts.version });
     const full = repo.revision(id, snap.rev);
-    const componentPins = full.components.map((p) => ({ id: p.id, version: p.version, bundleHash: p.bundleHash }));
+    // Подмена — это swap **уже существующего** пина ревизии (§B1 precondition): компонент без
+    // публикации в документе не пиннут вовсе, и подменять там нечего.
+    const overrides = new Map((opts.candidateOverrides ?? []).map((item) => [item.componentId, item]));
+    for (const override of overrides.values()) {
+      if (!full.components.some((pin) => pin.id === override.componentId)) {
+        throw new ApiError(422, "candidate_component_not_in_prototype",
+          `Component ${override.componentId} has no pin in revision ${snap.rev} of prototype ${id};`
+          + " a candidate overlay substitutes an already-published pin and cannot add a component");
+      }
+    }
     // Пины темы — карта по всем ДС документа (миграция v24; read-правило покрывает старые ревизии).
     const themePins = themePinsOf(this.deps.db, id, snap.rev, full.doc, full.designSystemMetaVersion ?? null);
     // ДС **снимаемого экрана**: у мульти-поверхностного дока это ДС его поверхности (D14).
@@ -599,22 +669,47 @@ export class ScreenshotService {
     const fonts = fontManifestOf(themeContent ?? null);
     const geometryRoleKeys = opts.probe === "geometry" ? geometryRoleKeysOf(full.doc, screenId) : undefined;
     const theme = opts.theme === "dark" ? "dark" : "light";
-    const expected: CaptureExpected = { kind: "prototype", prototypeInstanceId:full.prototypeInstanceId, rev: snap.rev, componentManifestHash: full.componentManifestHash, builtinCatalogHash: full.builtinCatalogHash, designSystem: screenDesignSystem ?? null, dsMetaVersion: screenMetaVersion, rendererBuild: this.rendererBuild };
+    // Пины джобы: подменённые — на content-addressed бандл кандидата (§B2.2).
+    const capturePins: CapturePin[] = full.components.map((p) => {
+      const override = overrides.get(p.id);
+      if (!override) return { id: p.id, name: p.name, version: p.version, bundleUrl: p.bundleUrl, bundleHash: p.bundleHash, status: p.status };
+      return {
+        id: p.id, name: p.name, version: p.version,
+        bundleUrl: `/api/components/${encodeURIComponent(p.id)}/draft/${override.sourceHash}/bundle.js`,
+        bundleHash: override.bundleHash,
+        status: "candidate",
+        candidate: { candidateId: override.candidateId, rev: override.rev, sourceHash: override.sourceHash },
+      };
+    });
+    // §B2.3: manifest-hash считается **один раз** по подменённому списку той же формулой, что и
+    // published-derivation, и присваивается обоим местам записи — `expected` и `captureManifestHash`.
+    // Разъезд этих двух значений был бы молчаливым провалом handshake'а поверхности.
+    const captureManifestHash = componentManifestHashOf(capturePins);
+    const candidateOverlay = overrides.size === 0
+      ? undefined
+      : capturePins.filter((pin) => pin.candidate !== undefined)
+        .map((pin) => ({ componentId: pin.id, candidateId: pin.candidate!.candidateId, bundleHash: pin.bundleHash, sourceHash: pin.candidate!.sourceHash }));
+    const componentPins = capturePins.map((p) => ({ id: p.id, version: p.version, bundleHash: p.bundleHash }));
+    const expected: CaptureExpected = { kind: "prototype", prototypeInstanceId:full.prototypeInstanceId, rev: snap.rev, componentManifestHash: captureManifestHash, builtinCatalogHash: full.builtinCatalogHash, designSystem: screenDesignSystem ?? null, dsMetaVersion: screenMetaVersion, rendererBuild: this.rendererBuild, ...(candidateOverlay === undefined ? {} : { candidateOverlay: candidateOverlay.map(({ componentId, candidateId, bundleHash }) => ({ componentId, candidateId, bundleHash })) }) };
     const allowedUrls = this.prototypeAllowedUrls(
       id,
       screenId,
-      full.components,
+      capturePins,
       full.assets.map((a) => a.id),
       // Allowlist — объединение тем всех ДС документа с их пиннутыми версиями (D14).
       docDesignSystems(full.doc).map((designSystem) => ({ designSystem, metaVersion: themePins[designSystem] ?? null })),
       opts.version !== undefined ? `/api/prototypes/${id}/versions/${opts.version}` : `/api/prototypes/${id}/revisions/${snap.rev}`,
+      opts.candidateOverrides,
     );
     const query = new URLSearchParams();
     if (opts.version !== undefined) query.set("version", String(opts.version)); else query.set("rev", String(snap.rev));
     query.set("theme", theme); query.set("dsf", String(dsf));
     const captureUrl = `/capture/${encodeURIComponent(id)}/s/${encodeURIComponent(screenId)}?${query}`;
-    const capturePins: CapturePin[] = full.components.map((p) => ({ id: p.id, name: p.name, version: p.version, bundleUrl: p.bundleUrl, bundleHash: p.bundleHash, status: p.status }));
-    const {jobId}=this.push({ kind: "prototype", owner: { kind: "prototype", id }, expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins, capturePins, captureManifestHash: full.componentManifestHash, fonts, ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
+    const {jobId}=this.push({ kind: "prototype", owner: { kind: "prototype", id }, expected, allowedUrls, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false, componentPins, capturePins, captureManifestHash, fonts,
+      // §B2.1: кадр с неопубликованным кодом не попадает в asset-store вовсе — «capture-only»
+      // здесь буквально, а не по договорённости: у ассета нет ни GC, ни per-override авторизации.
+      ...(candidateOverlay === undefined ? {} : { candidateOverlay, deliver: "bytes" as const }),
+      ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale, geometryRoleKeys } : {}) });
     return {jobId,expected,components:capturePins};
   }
 
@@ -805,13 +900,17 @@ export class ScreenshotService {
   private prototypeAllowedUrls(
     id: string,
     screenId: string,
-    pins: { id: string; version: number }[],
+    // Пины джобы уже после подмены (§B2.4): у подменённого сюда едет candidate-ветка, и ни
+    // бандл, ни ассеты затенённой опубликованной версии в allowlist не попадают.
+    pins: { id: string; version: number; bundleUrl?: string; candidate?: { sourceHash: string } }[],
     docAssetIds: string[],
     // Все ДС документа с их пиннутыми версиями темы (multi-surface D14): одна запись у
     // обычного дока — тот же набор URL, что и раньше.
     themes: { designSystem?: string; metaVersion: number | null }[],
     snapshotUrl?: string,
+    candidateOverrides?: ResolvedCandidateOverride[],
   ): string[] {
+    const overrides = new Map((candidateOverrides ?? []).map((item) => [item.componentId, item]));
     const set = new Set<string>();
     set.add(`/capture/${id}/s/${screenId}`);
     for (const { designSystem, metaVersion } of themes) {
@@ -826,10 +925,23 @@ export class ScreenshotService {
     // enqueuePrototype always freezes the selector into the capture URL, so the shell
     // needs exactly one immutable DTO endpoint rather than broad prototype read access.
     if(snapshotUrl) set.add(snapshotUrl);
-    for (const p of pins) set.add(`/api/components/${p.id}/versions/${p.version}/bundle.js`);
+    // Кандидат приносит только свой content-addressed бандл; бандл затенённой опубликованной
+    // версии в allowlist не попадает вовсе.
+    for (const p of pins) {
+      const override = overrides.get(p.id);
+      set.add(override
+        ? `/api/components/${encodeURIComponent(p.id)}/draft/${override.sourceHash}/bundle.js`
+        : `/api/components/${p.id}/versions/${p.version}/bundle.js`);
+    }
     for (const assetId of docAssetIds) set.add(`/api/assets/${assetId}`);
     const componentRepo = new ComponentRepo(this.deps.db);
-    for (const p of pins) for (const a of componentRepo.assets(p.id, p.version)) set.add(`/api/assets/${a.id}`);
+    // Ассеты подменённого пина — из исходника **кандидата**: то, что затенённая версия
+    // публиковала, кадру недоступно.
+    for (const p of pins) {
+      const override = overrides.get(p.id);
+      if (override) { for (const assetId of override.assetIds) set.add(`/api/assets/${assetId}`); continue; }
+      for (const a of componentRepo.assets(p.id, p.version)) set.add(`/api/assets/${a.id}`);
+    }
     set.add("/api/shims/");
     for (const s of buildStaticAllowedUrls(this.deps.serveDist)) set.add(s);
     return [...set];
@@ -1183,6 +1295,12 @@ export class ScreenshotService {
    */
   private async storeReceipt(job: InternalJob, result: WorkerOk, quality: CaptureQuality, mismatch: string | null): Promise<string | undefined> {
     if (receiptsDisabled()) return undefined;
+    // §B2.6: overlay-джоба receipt'ов не пишет. Ссылка `jobId → receipt` живёт 7 суток и несёт
+    // ровно один ключ владения (`prototype:<id>`), поэтому дополнительную проверку владения
+    // каждым подменённым компонентом на ней выразить нечем — а без неё ручка receipt'а стала бы
+    // каналом утечки факта существования и происхождения чужого кандидата. Ручка после этого
+    // естественно отвечает 404: ссылки просто нет.
+    if (job.candidateOverlay !== undefined) return undefined;
     try {
       const readiness = this.readinessOf(result);
       const png = "pngBase64" in result;

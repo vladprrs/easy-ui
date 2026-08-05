@@ -738,9 +738,20 @@ export async function executeCase(deps: CaseRunnerDeps, item: AcceptanceCase, op
  * импакта. Артефакты при этом не осиротеют — union-refcount GC (`artifactStillReferenced`) видит
  * и строки `acceptance_cases` нового рана, и строку кэша.
  */
+/**
+ * Снимок baseline-случая. `props_hash`/`slots_hash` — **входы кадра**, по которым идёт per-case
+ * guard переноса (§A5a): импакт рассуждает только о кандидате (исходник/тема), а props и слот-пины
+ * приходят из набора, и без явного сравнения перенос протащил бы вердикт чужого кадра.
+ *
+ * Оба поля объявлены необязательными (а не просто nullable) намеренно: у настоящей строки
+ * `AcceptanceCaseRow` они есть всегда, но вызывающая сторона имеет право подставить «пустой»
+ * снимок отсутствующего baseline-случая, не перечисляя входы кадра. Отсутствие читается как
+ * `null` — то есть «неизвестно», и guard в этом случае честно отказывает в переносе.
+ */
 export type BaselineCaseSnapshot = Pick<AcceptanceCaseRow,
   "verdict" | "status" | "gates_json" | "capture_quality_json"
-  | "frame_fingerprint" | "comparison_fingerprint" | "verdict_policy_hash">;
+  | "frame_fingerprint" | "comparison_fingerprint" | "verdict_policy_hash">
+  & { props_hash?: string | null; slots_hash?: string | null };
 
 export interface CarryBaselineOptions {
   /**
@@ -789,6 +800,17 @@ export async function carryBaselineCase(
   if (baseline.frame_fingerprint === null || baseline.comparison_fingerprint === null || baseline.verdict_policy_hash === null) {
     return null;
   }
+  // Per-case guard входов кадра (§A5a). Кадровый слой целиком сравнить нельзя (см. ниже), но его
+  // **входы из набора** — props и разрешённые слот-пины — импакт не анализирует вовсе: он
+  // рассуждает только о кандидате (исходник, ассеты, тема). Набор же между ранами меняется
+  // независимо от кандидата: тот же `case_id` может прийти с другими props или с другой версией
+  // ребёнка слота, и перенос молча выдал бы вердикт baseline за вердикт другого кадра, записав его
+  // в кэш под новым отпечатком. Сравнение — с явным `?? null` с обеих сторон: в строке это NULL,
+  // в случае — `undefined` (инвариант «отсутствует, а не пусто»). Guard пер-случайный: разошедшийся
+  // случай уходит на честную съёмку, остальная семья набора переносится как прежде.
+  const sameFrameInputs = (baseline.props_hash ?? null) === (item.propsHash ?? null)
+    && (baseline.slots_hash ?? null) === (item.slotsHash ?? null);
+  if (!sameFrameInputs) return null;
   // Кадровый слой здесь **намеренно не сравнивается**: он содержит `candidateId`, а перенос
   // существует ровно потому, что кандидат сменился (D6). Доказательством эквивалентности кадра
   // тут служит импакт-анализ («этот случай не мог измениться»), а не отпечаток; сравниваются

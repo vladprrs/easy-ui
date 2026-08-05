@@ -33,7 +33,7 @@ import { LoginRateLimiter, routeAuth } from "./routes/auth";
 import { routeUsers } from "./routes/users";
 import { assertOwnersPresent, ensureBootstrapAdmin } from "./users";
 import { sweepStagingModules } from "./components/pipeline";
-import { gcCandidates, setCandidatePinProvider } from "./components/candidates";
+import { gcCandidates, overlayLeasePins, setCandidatePinProvider } from "./components/candidates";
 import { gcReceipts, setReceiptPinProvider } from "./capture/receiptStore";
 import { DEFAULT_REUSE_GATE_MODE, resolveReuseGateMode, type ReuseGateMode } from "./catalog/gate";
 import { assertMutationAllowed } from "./maintenance";
@@ -193,7 +193,7 @@ export function createHandler(db:Database,options:HandlerOptions={}):(request:Re
         const auth=await routeAuth(request,db,segments.slice(1),{principal,publicOrigin,clientAddress,limiter}); if(auth) return finish(auth);
         assertMutationAllowed(db,request.method,decodedPath);
         const users=await routeUsers(request,db,segments.slice(1),principal); if(users) return finish(users);
-        const shot=await routeScreenshots(request,db,options.screenshots,segments.slice(1),principal,{validateDisabled:options.validateDisabled===true}); if(shot) return finish(shot);
+        const shot=await routeScreenshots(request,db,options.screenshots,segments.slice(1),principal,{validateDisabled:options.validateDisabled===true,acceptanceMatrix:options.acceptance!==undefined}); if(shot) return finish(shot);
         const vis=await routeVisual(request,db,options.dataDir??process.env.DATA_DIR??"data",segments.slice(1),principal,options.visual); if(vis) return finish(vis);
         const share=await routeShares(request,db,segments.slice(1),principal,{publicOrigin,serveDist:options.serveDist}); if(share) return finish(share);
         const bundles=await routeBundles(request,db,segments.slice(1),principal,options.dataDir??process.env.DATA_DIR??"data",options.reuseGateMode??DEFAULT_REUSE_GATE_MODE); if(bundles) return finish(bundles);
@@ -265,9 +265,19 @@ export async function startServer(options:{port?:number;database?:string;serveDi
       ? new AcceptanceOrchestrator({db,dataDir,service:screenshots})
       : undefined;
     // A10: пины действуют и для GC-on-write (writeCandidate) — не только для стартового вызова.
-    setCandidatePinProvider(acceptance?acceptance.candidatePins:null);
-    // P8: GC candidate-кэша на старте (TTL/потолок байт) и при каждой записи.
-    await gcCandidates(dataDir,acceptance?{pinned:acceptance.candidatePins}:{});
+    // Провайдер процесса — **объединение** трёх источников (план 2026-08-05 §B2.5): кандидаты
+    // нетерминальных acceptance-ранов, кандидаты нетерминальных overlay-джоб и незакрытые аренды
+    // роута (окно между резолвом кандидата и постановкой джобы). Композиция здесь, а не в
+    // candidates.ts: провайдер один на процесс, и его состав — решение точки сборки.
+    setCandidatePinProvider(async()=>{
+      const pins=new Set<string>(overlayLeasePins());
+      for(const sha of screenshots.pinnedCandidateSourceHashes()) pins.add(sha);
+      if(acceptance) for(const sha of await acceptance.candidatePins()) pins.add(sha);
+      return pins;
+    });
+    // P8: GC candidate-кэша на старте (TTL/потолок байт) и при каждой записи. Явный `pinned`
+    // не передаётся намеренно: стартовый проход обязан видеть то же объединение, что и GC-on-write.
+    await gcCandidates(dataDir);
     // R5: свипер receipt'ов — та же схема, что у кандидатов (GC на старте и при записи), с пином
     // живых job-результатов: пока джоба жива, её receipt обязан быть читаем ручкой.
     // Пины: живые job-результаты **и** адреса, на которые ссылаются per-run манифесты приёмки —
