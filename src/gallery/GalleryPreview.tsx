@@ -3,7 +3,8 @@ import { Component, type ErrorInfo, type ReactNode, useCallback, useEffect, useM
 import { createCjmRegistry } from "../cjm/cjmRegistry";
 import { previewNativeWidth, previewTileSizes } from "../designSystems/deviceMetrics";
 import { EasyUiRuntimeProvider, type EasyUiRuntimeValue } from "../player/easyUiRuntime";
-import { createPlayerRuntime } from "../catalog/runtime";
+import { createPlayerRuntime, type CustomPlayerRuntime } from "../catalog/runtime";
+import { loadCustomComponents } from "../customComponents/loader";
 import { loadPrototypeDraft } from "../prototype/loader";
 import { applyComputed } from "../prototype/computed";
 import { mergeScreenState } from "../prototype/stateOverrides";
@@ -82,7 +83,7 @@ export class GalleryPreviewErrorBoundary extends Component<{ prototypeId: string
   }
 }
 
-export function GalleryPreviewFrame({ draft, themeContent: suppliedThemeContent, manageTheme = true }: { draft: PrototypeDraft; themeContent?: ThemeContent | null; manageTheme?: boolean }) {
+export function GalleryPreviewFrame({ draft, custom, themeContent: suppliedThemeContent, manageTheme = true }: { draft: PrototypeDraft; custom?: CustomPlayerRuntime; themeContent?: ThemeContent | null; manageTheme?: boolean }) {
   const { doc } = draft;
   const [stageHost, setStageHost] = useState<HTMLDivElement | null>(null);
   const stageHostRef = useMemo(() => ({ current: stageHost }), [stageHost]);
@@ -90,7 +91,7 @@ export function GalleryPreviewFrame({ draft, themeContent: suppliedThemeContent,
   const loadedThemeContent = useDesignSystemTheme(manageTheme ? doc.designSystem : undefined, manageTheme ? draft.designSystemMetaVersion : null);
   const themeContent = manageTheme ? loadedThemeContent : (suppliedThemeContent ?? null);
   const screen = doc.screens.find((candidate) => candidate.id === doc.startScreen);
-  const runtime = useMemo(() => createPlayerRuntime({ navigate() {}, back() {}, openUrl() {}, restart() {} }, undefined, doc.designSystem), [doc.designSystem]);
+  const runtime = useMemo(() => createPlayerRuntime({ navigate() {}, back() {}, openUrl() {}, restart() {} }, custom, doc.designSystem), [custom, doc.designSystem]);
   const registry = useMemo(() => createCjmRegistry(runtime.registry), [runtime.registry]);
   const tree = useMemo<RuntimeTree | null>(() => {
     if (!screen) return null;
@@ -102,7 +103,7 @@ export function GalleryPreviewFrame({ draft, themeContent: suppliedThemeContent,
     if (!tree) return null;
     return buildScreenRenderPlan(tree, { canvas: screen?.canvas });
   }, [screen?.canvas, tree]);
-  const runtimeValue = useMemo<EasyUiRuntimeValue>(() => ({ metadata: specs?.metadata ?? {}, runtime: null, definitions: {} }), [specs]);
+  const runtimeValue = useMemo<EasyUiRuntimeValue>(() => ({ metadata: specs?.metadata ?? {}, runtime: null, definitions: custom?.definitions ?? {} }), [custom, specs]);
   const initialState = useMemo(() => applyComputed(mergeScreenState(doc.state, screen?.stateOverrides), doc.computed), [doc.computed, doc.state, screen?.stateOverrides]);
   if (!screen || !tree || !specs) return null;
 
@@ -150,19 +151,31 @@ function LoadedGalleryPreview({ prototypeId }: { prototypeId: string }) {
   const draft = useApi((signal) => previewLoads.run(() => loadPrototypeDraft(prototypeId, signal), signal), [prototypeId]);
   const readyDraft = draft.status === "ready" ? draft.data : null;
   const themeContent = useDesignSystemTheme(readyDraft?.doc.designSystem, readyDraft?.designSystemMetaVersion);
+  // Пинованные бандлы компонентов идут через ту же очередь, что и драфты: бюджет
+  // конкурентности превью общий. Архивная ревизия бандлы не запрашивает (гейт как
+  // в PrototypeLoader), сами модули кэшируются в loadCustomComponents по URL.
+  const renderableDraft = readyDraft && readyDraft.renderable !== false ? readyDraft : null;
+  const custom = useApi(
+    (signal) => renderableDraft?.components.length
+      ? previewLoads.run(() => loadCustomComponents(renderableDraft.components), signal)
+      : Promise.resolve(undefined),
+    [renderableDraft?.componentManifestHash],
+  );
   return <>
     {/* This owner exists while the draft/theme are still loading, so network resolve order cannot set priority. */}
     <ThemeStyle content={themeContent} />
-    {draft.status === "error"
+    {draft.status === "error" || custom.status === "error"
       ? <div className="flex h-44 flex-col items-center justify-center gap-3 rounded-inset bg-white/70 px-4 text-center" data-gallery-preview-state="error" role="status">
         <p className="text-[13px] text-eui-slate-500">{gallery.previewUnavailable}</p>
         {/* z-10: у карточки есть перекрывающая ссылка-хитбокс, иначе «Повторить» некликабельна. */}
-        <button type="button" className={`${pillGhost} relative z-10`} onClick={draft.reload}>{common.retry}</button>
+        <button type="button" className={`${pillGhost} relative z-10`} onClick={draft.status === "error" ? draft.reload : custom.reload}>{common.retry}</button>
       </div>
       : draft.status === "loading"
       ? <div className="h-44 rounded-inset bg-white/70 pay-skeleton motion-reduce:animate-none" data-gallery-preview-state="loading" />
       : draft.data.renderable === false ? <ArchivedPrototype />
-        : <GalleryPreviewFrame draft={draft.data} themeContent={themeContent} manageTheme={false} />}
+        : custom.status === "loading"
+        ? <div className="h-44 rounded-inset bg-white/70 pay-skeleton motion-reduce:animate-none" data-gallery-preview-state="loading" />
+        : <GalleryPreviewFrame draft={draft.data} custom={custom.data} themeContent={themeContent} manageTheme={false} />}
   </>;
 }
 

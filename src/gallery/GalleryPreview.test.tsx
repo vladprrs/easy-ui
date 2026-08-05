@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { Component, type ReactNode } from "react";
+import { Component, type ComponentType, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { PrototypeDraft } from "../api/client";
 import { prototypeDocSchema } from "../prototype/schema";
 
@@ -54,6 +55,21 @@ describe("GalleryPreviewErrorBoundary", () => {
     expect(Number.parseFloat(screen.getByTestId("gallery-preview-gallery-overlay").style.height)).toBeLessThanOrEqual(200);
     expect(mocks.getThemeVersion).toHaveBeenCalledWith("shadcn", 1, expect.any(AbortSignal));
     expect(mocks.getLatestTheme).not.toHaveBeenCalled();
+  });
+
+  it("renders a pinned custom component when the loaded runtime is supplied", () => {
+    const doc = prototypeDocSchema.parse({
+      version: 1, id: "gallery-custom", name: "Gallery custom", designSystem: "e2e-custom-ds", device: "mobile", startScreen: "home", state: {},
+      screens: [{ id: "home", name: "Home", spec: { root: "stars", elements: {
+        stars: { type: "RatingStars", props: { value: 3 } },
+      } } }],
+    });
+    const custom = {
+      definitions: { RatingStars: { props: z.strictObject({ value: z.number() }), description: "Stars" } },
+      components: { RatingStars: (({ props }: { props: { value: number } }) => <button type="button">{"★".repeat(props.value)}</button>) as unknown as ComponentType },
+    };
+    render(<GalleryPreviewFrame draft={{ doc, rev: 1, builtinCatalogHash: "host", componentManifestHash: "stars", components: [] }} custom={custom} manageTheme={false} />);
+    expect(screen.getByRole("button", { name: "★★★" })).toBeTruthy();
   });
 
   it("renders host Image and canvas-split Hotspot for a custom-only prototype", () => {
