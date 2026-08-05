@@ -45,7 +45,7 @@ function seedRun(repo: AcceptanceRepo, id: string, extra: Record<string, unknown
 
 test("v25 lands on a database migrated from scratch and leaves no foreign-key violations", () => {
   const db = dbForRepo();
-  expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(30);
+  expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(31);
   expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   // Partial unique index — первый в проекте; его наличие и есть механизм «≤1 нетерминальный run».
   const index = db.query("SELECT sql FROM sqlite_master WHERE type='index' AND name='acceptance_runs_one_in_flight'").get() as { sql: string } | null;
@@ -457,5 +457,95 @@ test("the sweeper never deletes a rejected candidate: the tombstone outlives the
   expect(repeated.cached).toBe(true);
   expect(repeated.candidate.candidate_id).toBe(candidate.candidate_id);
   expect(repo.decision(repeated.candidate.candidate_id)).toBeDefined();
+  db.close();
+});
+
+// -------------------------------------------------------------- покрытие (v31)
+
+/**
+ * Ран с произвольным набором случаев. Кандидат уникален по `componentId`, поэтому partial unique
+ * index «≤1 нетерминальный ран» не мешает завести несколько ранов в одном тесте.
+ */
+function runWithCases(repo: AcceptanceRepo, componentId: string, cases: { caseId: string; propsHash: string; slotsHash?: string | null }[]) {
+  const { candidate } = repo.createCandidate(candidateInput({ componentId }));
+  const { run } = repo.createRun({
+    candidateId: candidate.candidate_id,
+    componentId: candidate.component_id,
+    policyProfileId: policy.id,
+    policyProfileHash: profileHash,
+    createdBy: "user_a",
+    cases: cases.map((item) => ({
+      caseId: item.caseId, caseKey: item.caseId, propsHash: item.propsHash,
+      casePolicyHash: "case-policy-v0", caseFingerprint: `fp-${componentId}-${item.caseId}`,
+      ...(item.slotsHash === undefined ? {} : { slotsHash: item.slotsHash }),
+    })),
+  });
+  return run;
+}
+
+/**
+ * Поведенческий инвариант ключа покрытия (§A8). Ключ живёт только в памяти, поэтому его байтовый
+ * формат не проверяется; проверяется то, ради чего promote его читает: **для бесслотовых ранов
+ * (`slots_hash` NULL) мощности множеств и их попарные пересечения те же, что до v31**. Ожидание
+ * посчитано вручную по старой функции `${props_hash}@${surfaceKey}`: два случая с props-1/props-1
+ * дают ОДИН ключ, три случая с props-1/props-2/props-3 — ТРИ, пересечение — ровно props-1.
+ */
+test("runCoverage keeps slot-free cardinality and intersections: NULL slots_hash collapses to the pre-v31 key set", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const left = runWithCases(repo, "yp-cov-left", [
+    { caseId: "alpha", propsHash: "props-1" },
+    { caseId: "beta", propsHash: "props-1" },
+  ]);
+  const right = runWithCases(repo, "yp-cov-right", [
+    { caseId: "alpha", propsHash: "props-1" },
+    { caseId: "beta", propsHash: "props-2" },
+    { caseId: "gamma", propsHash: "props-3" },
+  ]);
+
+  const leftCoverage = repo.runCoverage(left);
+  const rightCoverage = repo.runCoverage(right);
+  // Строки на месте, но покрытие считается кадрами: две строки с одинаковыми props — один ключ.
+  expect(leftCoverage.cases).toBe(2);
+  expect(leftCoverage.keys.size).toBe(1);
+  expect(rightCoverage.keys.size).toBe(3);
+  // Поверхность у обоих ранов дефолтная (набора нет), поэтому ключи сравнимы между ранами.
+  expect(leftCoverage.surfaceKey).toBe(rightCoverage.surfaceKey);
+  const intersection = [...leftCoverage.keys].filter((key) => rightCoverage.keys.has(key));
+  expect(intersection).toEqual([...leftCoverage.keys]);
+  expect(intersection.length).toBe(1);
+  // Объединение двух ранов покрывает ровно три props-кадра — как и до v31.
+  expect(new Set([...leftCoverage.keys, ...rightCoverage.keys]).size).toBe(3);
+  db.close();
+});
+
+/**
+ * Ровно та коллизия, ради которой колонка заведена (§A3, кейс SMS): одинаковые props, разные дети
+ * слотов — два разных кадра. До v31 они схлопывались в один элемент покрытия, и
+ * `assertRunSetCoherent` видел ложное пересечение ранов.
+ */
+test("runCoverage separates two cases that differ only in slots_hash", () => {
+  const db = dbForRepo();
+  const repo = new AcceptanceRepo(db);
+  const run = runWithCases(repo, "yp-cov-slots", [
+    { caseId: "alpha", propsHash: "props-1", slotsHash: "slots-a" },
+    { caseId: "beta", propsHash: "props-1", slotsHash: "slots-b" },
+  ]);
+
+  const coverage = repo.runCoverage(run);
+  expect(coverage.cases).toBe(2);
+  expect(coverage.keys.size).toBe(2);
+  // Строки действительно разошлись по колонке, а не по props.
+  expect(repo.cases(run.run_id).map((row) => [row.props_hash, row.slots_hash]))
+    .toEqual([["props-1", "slots-a"], ["props-1", "slots-b"]]);
+
+  // NULL — «случай без слотов» — не совпадает ни с одним слотовым кадром, но совпадает сам с собой.
+  const other = runWithCases(repo, "yp-cov-slotless", [
+    { caseId: "alpha", propsHash: "props-1" },
+    { caseId: "beta", propsHash: "props-1", slotsHash: null },
+  ]);
+  const otherCoverage = repo.runCoverage(other);
+  expect(otherCoverage.keys.size).toBe(1);
+  expect([...otherCoverage.keys].filter((key) => coverage.keys.has(key))).toEqual([]);
   db.close();
 });

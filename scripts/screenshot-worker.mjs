@@ -110,7 +110,9 @@ export function readyToExpected(ready) {
   // `(designSystem, dsMetaVersion)` сверяется целиком, иначе дрейф темы второй ДС невидим.
   if (ready.kind === "prototype") return { kind: "prototype", prototypeInstanceId: ready.prototypeInstanceId, rev: ready.revision, componentManifestHash: ready.componentManifestHash, builtinCatalogHash: ready.builtinCatalogHash, designSystem: ready.designSystem ?? null, dsMetaVersion: ready.dsMetaVersion, rendererBuild: ready.rendererBuild };
   // Draft-вариант handshake (P1b): rev + sourceHash вместо published version.
-  if (ready.kind === "component-draft") return { kind: "component-draft", componentId: ready.componentId, rev: ready.rev, sourceHash: ready.sourceHash, bundleHash: ready.bundleHash, propsHash: ready.propsHash, dsMetaVersion: ready.dsMetaVersion, rendererBuild: ready.rendererBuild };
+  // `slotsHash` (план 2026-08-05 §A6) добавляется **условно**: whitelist сравнения — часть
+  // контракта, и у бесслотового случая пре-образ обязан остаться байт-в-байт прежним.
+  if (ready.kind === "component-draft") return { kind: "component-draft", componentId: ready.componentId, rev: ready.rev, sourceHash: ready.sourceHash, bundleHash: ready.bundleHash, propsHash: ready.propsHash, dsMetaVersion: ready.dsMetaVersion, rendererBuild: ready.rendererBuild, ...(ready.slotsHash !== undefined ? { slotsHash: ready.slotsHash } : {}) };
   return { kind: "component", componentId: ready.componentId, version: ready.version, bundleHash: ready.bundleHash, propsHash: ready.propsHash, dsMetaVersion: ready.dsMetaVersion, rendererBuild: ready.rendererBuild };
 }
 

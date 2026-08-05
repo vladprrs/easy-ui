@@ -138,6 +138,10 @@ export async function captureCase(
           // W4: политику readiness приносит профиль приёмки — «подождать подольше» перестаёт
           // быть решением клиента, а её хэш обязан совпасть с тем, что войдёт в отпечаток случая.
           readinessPolicy: ctx.policy.readiness,
+          // Слоты случая (план 2026-08-05 §A6). Условным спредом, а не `?? []`: отсутствие —
+          // самостоятельный факт, и оно обязано оставлять постановку бесслотовой байт-в-байт.
+          ...(ctx.case.slotBindings === undefined ? {} : { slotBindings: ctx.case.slotBindings }),
+          ...(ctx.case.slotsHash === undefined ? {} : { slotsHash: ctx.case.slotsHash }),
           // Paint-джоба тоже отдаёт байты: кадр — половина её исхода, и он уезжает в CAS.
           ...(options.probe === undefined ? { deliver: "bytes" as const } : { probe: options.probe }),
           ...(options.probe === "paint"

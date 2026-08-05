@@ -9,6 +9,7 @@ import { sha256 } from "../components/pipeline";
 import { candidateBundlePresent, candidatesRoot, gcCandidates, setCandidatePinProvider, writeCandidate } from "../components/candidates";
 import { classifyJobFailure, jobOutcomeOfError, MAX_QUEUE, ScreenshotService, type RunJob } from "./service";
 import { ApiError } from "../http";
+import { canonicalStringify, readyToExpected } from "../../scripts/screenshot-worker.mjs";
 
 // W1a (план 2026-08-03, §2 A4/A10 + §4 пп.5–7): байтовый канал мимо asset-store,
 // постановка по явной ревизии кандидата, резервирование очереди, таксономия jobOutcome
@@ -231,5 +232,203 @@ describe("candidate GC pins (A10)", () => {
     }
     await gcCandidates(dir, { ttlMs: -1 });
     expect(await candidateBundlePresent(dir, COMPONENT_ID, pinnedHash)).toBe(false);
+  });
+});
+
+/**
+ * Байт-идентичность handshake'а бесслотового драфта (план 2026-08-05 §«Design invariants»,
+ * T2.2). Голден снят на НЕИЗМЕНЁННОМ коде до появления `slotsHash`: `readyToExpected` —
+ * явный whitelist, и новое поле обязано добавляться **условно**, иначе каждый бесслотовый
+ * капчур получил бы новый пре-образ сравнения и все закэшированные джобы разъехались бы.
+ */
+describe("readyToExpected golden (slot-free component-draft)", () => {
+  const SLOT_FREE_DRAFT_READY = {
+    status: "ready",
+    kind: "component-draft",
+    componentId: "acc-capture",
+    rev: 3,
+    sourceHash: "s".repeat(64),
+    bundleHash: "b".repeat(64),
+    propsHash: "p".repeat(64),
+    dsMetaVersion: 2,
+    rendererBuild: null,
+    // Поля W4 едут рядом и в сравнение не входят — они и не должны попасть в голден.
+    readiness: { met: true, policyHash: "ph", elapsedMs: 1, evidence: {} },
+  };
+  // Канонический пре-образ, которым воркер сравнивает ready и expected (screenshot-worker.mjs:221).
+  const GOLDEN_CANONICAL = '{"bundleHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","componentId":"acc-capture","dsMetaVersion":2,"kind":"component-draft","propsHash":"pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp","rendererBuild":null,"rev":3,"sourceHash":"ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"}';
+  // Порядок ключей самого объекта тоже зафиксирован: «байт-идентично» — это про него тоже.
+  const GOLDEN_RAW = '{"kind":"component-draft","componentId":"acc-capture","rev":3,"sourceHash":"ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss","bundleHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","propsHash":"pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp","dsMetaVersion":2,"rendererBuild":null}';
+
+  test("slot-free draft handshake stays byte-identical", () => {
+    expect(canonicalStringify(readyToExpected(SLOT_FREE_DRAFT_READY))).toBe(GOLDEN_CANONICAL);
+    expect(JSON.stringify(readyToExpected(SLOT_FREE_DRAFT_READY))).toBe(GOLDEN_RAW);
+    expect(readyToExpected(SLOT_FREE_DRAFT_READY)).toEqual({
+      kind: "component-draft",
+      componentId: "acc-capture",
+      rev: 3,
+      sourceHash: "s".repeat(64),
+      bundleHash: "b".repeat(64),
+      propsHash: "p".repeat(64),
+      dsMetaVersion: 2,
+      rendererBuild: null,
+    });
+    // `slotsHash` отсутствует, а не пуст — иначе `canonicalStringify` включил бы его в пре-образ.
+    expect("slotsHash" in readyToExpected(SLOT_FREE_DRAFT_READY)).toBe(false);
+  });
+
+  // Голден для explicit-undefined: у бесслотового случая сервер кладёт поле условно, но и
+  // прямой `undefined` в ready не имеет права протечь в сравнение.
+  test("explicit undefined slotsHash does not enter the pre-image", () => {
+    expect(canonicalStringify(readyToExpected({ ...SLOT_FREE_DRAFT_READY, slotsHash: undefined })))
+      .toBe(GOLDEN_CANONICAL);
+  });
+});
+
+/**
+ * Слоты в кандидатном капчуре (план 2026-08-05 §A6, T2.2). Проверяется ровно серверная половина:
+ * пины детей, дерево рендера, `slotsHash` в handshake и **точное множество** allowlist'а —
+ * поверхность (`CaptureComponent.tsx`) приезжает волной W3.
+ */
+describe("slot bindings in candidate capture (§A6)", () => {
+  const CHILD_ID = "acc-slot-child";
+  const OTHER_ID = "acc-slot-other";
+  const CHILD_ASSET = "asset_" + "1".repeat(64);
+  const OTHER_ASSET = "asset_" + "2".repeat(64);
+  const SLOTS_HASH = "d".repeat(64);
+
+  /** Опубликованный ребёнок без реальной сборки — тот же каркас, что `seedPublished` в draft-preview. */
+  function seedPublishedChild(db: Database, id: string, name: string, bundleHash: string, assetId: string) {
+    const definitionMeta = JSON.stringify({
+      description: "seeded slot child", events: [], slots: [],
+      propsJsonSchema: { type: "object", properties: { label: { type: "string" } } },
+    });
+    db.query("INSERT INTO components (id,name,head_rev,design_system,deleted_at,owner_id,created_at,updated_at) VALUES (?,?,1,'yandex-pay',NULL,?,'now','now')").run(id, name, BOOTSTRAP_ADMIN_ID);
+    db.query("INSERT INTO component_revisions (component_id,rev,source,design_system,created_at) VALUES (?,1,'export default null','yandex-pay','now')").run(id);
+    db.query("INSERT INTO component_publishes (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,published_at) VALUES (?,1,1,'active','',?,'sh',?,2,'now')").run(id, definitionMeta, bundleHash);
+    db.run("INSERT INTO assets (id,sha256,mime,size,width,height,original_name,created_at) VALUES (?,?,?,?,?,?,?,?)",
+      [assetId, assetId.slice(6), "image/png", 1, 1, 1, "dot.png", "now"]);
+    db.run("INSERT INTO component_publish_assets (component_id,version,asset_id) VALUES (?,1,?)", [id, assetId]);
+  }
+
+  const bindings = () => [
+    { slot: "header", index: 0, componentId: CHILD_ID, name: "AccSlotChild", version: 1, bundleHash: "child-hash", props: { label: "a" }, propsHash: "p1" },
+    { slot: "default", index: 0, componentId: CHILD_ID, name: "AccSlotChild", version: 1, bundleHash: "child-hash", props: { label: "b" }, propsHash: "p2" },
+    { slot: "default", index: 1, componentId: OTHER_ID, name: "AccSlotOther", version: 1, bundleHash: "other-hash", props: {}, propsHash: "p0" },
+  ];
+
+  test("slot job freezes child pins, the render tree and the resolved slotsHash", async () => {
+    const { db, service, sourceHash } = await setupCandidate(neverResolves);
+    seedPublishedChild(db, CHILD_ID, "AccSlotChild", "child-hash", CHILD_ASSET);
+    seedPublishedChild(db, OTHER_ID, "AccSlotOther", "other-hash", OTHER_ASSET);
+    const shot = { viewport: { width: 320, height: 200 }, deliver: "bytes" as const };
+
+    const slotFree = await service.enqueueComponentCandidate(COMPONENT_ID, { rev: 1, sourceHash }, shot);
+    const slotted = await service.enqueueComponentCandidate(COMPONENT_ID, { rev: 1, sourceHash }, { ...shot, slotBindings: bindings(), slotsHash: SLOTS_HASH });
+
+    const free = service.peek(slotFree.jobId)!;
+    const job = service.peek(slotted.jobId)!;
+
+    // Один пин на различную пару `(componentId, version)`: повторный ребёнок бандл не дублирует.
+    expect(job.slotChildren).toEqual([
+      { id: CHILD_ID, name: "AccSlotChild", version: 1, bundleUrl: `/api/components/${CHILD_ID}/versions/1/bundle.js`, bundleHash: "child-hash", status: "active" },
+      { id: OTHER_ID, name: "AccSlotOther", version: 1, bundleUrl: `/api/components/${OTHER_ID}/versions/1/bundle.js`, bundleHash: "other-hash", status: "active" },
+    ]);
+    // §A2a: дети дефолтного слота едут **без** ключа `slot`; именованные — с ним.
+    expect(job.slotTree).toEqual([
+      { slot: "header", index: 0, name: "AccSlotChild", props: { label: "a" } },
+      { index: 0, name: "AccSlotChild", props: { label: "b" } },
+      { index: 1, name: "AccSlotOther", props: {} },
+    ]);
+    expect(Object.hasOwn(job.slotTree![1]!, "slot")).toBe(false);
+    expect(job.expected).toMatchObject({ kind: "component-draft", slotsHash: SLOTS_HASH });
+    expect(slotted.expected).toMatchObject({ slotsHash: SLOTS_HASH });
+
+    // Allowlist — **точное** множество: бандл каждого различного ребёнка и ассеты именно этой
+    // версии, и ничего больше. DTO ребёнка (`/api/components/:id`, `/versions/:v`) в него не
+    // входит намеренно: он отдал бы поверхности опубликованный `source`.
+    expect(new Set(job.allowedUrls)).toEqual(new Set([
+      ...free.allowedUrls,
+      `/api/components/${CHILD_ID}/versions/1/bundle.js`,
+      `/api/components/${OTHER_ID}/versions/1/bundle.js`,
+      `/api/assets/${CHILD_ASSET}`,
+      `/api/assets/${OTHER_ASSET}`,
+    ]));
+    for (const leaked of [`/api/components/${CHILD_ID}`, `/api/components/${CHILD_ID}/versions/1`, `/api/components/${OTHER_ID}/versions/1`]) {
+      expect(job.allowedUrls).not.toContain(leaked);
+    }
+
+    // Бесслотовая джоба не изменилась ни в handshake, ни в allowlist, ни в bootstrap-полях.
+    expect("slotsHash" in free.expected).toBe(false);
+    expect(free.slotChildren).toBeUndefined();
+    expect(free.slotTree).toBeUndefined();
+    expect(canonicalStringify(free.expected)).toBe(canonicalStringify({
+      kind: "component-draft", componentId: COMPONENT_ID, rev: 1, sourceHash,
+      bundleHash: (free.expected as { bundleHash: string }).bundleHash,
+      propsHash: (free.expected as { propsHash: string }).propsHash,
+      dsMetaVersion: (free.expected as { dsMetaVersion: number | null }).dsMetaVersion,
+      rendererBuild: (free.expected as { rendererBuild: string | null }).rendererBuild,
+    }));
+    db.close();
+  });
+
+  test("an empty slotBindings array leaves the job slot-free (absent, never empty)", async () => {
+    const { db, service, sourceHash } = await setupCandidate(neverResolves);
+    const shot = { viewport: { width: 320, height: 200 }, deliver: "bytes" as const };
+    const baseline = service.peek((await service.enqueueComponentCandidate(COMPONENT_ID, { rev: 1, sourceHash }, shot)).jobId)!;
+    const empty = service.peek((await service.enqueueComponentCandidate(COMPONENT_ID, { rev: 1, sourceHash }, { ...shot, slotBindings: [] })).jobId)!;
+    expect(empty.slotChildren).toBeUndefined();
+    expect(empty.slotTree).toBeUndefined();
+    expect(new Set(empty.allowedUrls)).toEqual(new Set(baseline.allowedUrls));
+    db.close();
+  });
+
+  test("bootstrap carries slots for a slot job and stays untouched for a slot-free one", async () => {
+    const { db, dir, sourceHash } = await setupCandidate();
+    seedPublishedChild(db, CHILD_ID, "AccSlotChild", "child-hash", CHILD_ASSET);
+    seedPublishedChild(db, OTHER_ID, "AccSlotOther", "other-hash", OTHER_ASSET);
+    const seen: Record<string, unknown>[] = [];
+    const service = makeService(db, dir, async (workerJob) => { seen.push(workerJob.bootstrap as unknown as Record<string, unknown>); return imageOk; });
+    const shot = { viewport: { width: 320, height: 200 }, deliver: "bytes" as const };
+
+    const slotted = await service.enqueueComponentCandidate(COMPONENT_ID, { rev: 1, sourceHash }, { ...shot, slotBindings: bindings(), slotsHash: SLOTS_HASH });
+    expect((await waitDone(service, slotted.jobId)).status).toBe("done");
+    const slotBootstrap = seen.at(-1)!;
+    expect(slotBootstrap.slots).toEqual({
+      children: [
+        { id: CHILD_ID, name: "AccSlotChild", version: 1, bundleUrl: `/api/components/${CHILD_ID}/versions/1/bundle.js`, bundleHash: "child-hash", status: "active" },
+        { id: OTHER_ID, name: "AccSlotOther", version: 1, bundleUrl: `/api/components/${OTHER_ID}/versions/1/bundle.js`, bundleHash: "other-hash", status: "active" },
+      ],
+      tree: [
+        { slot: "header", index: 0, name: "AccSlotChild", props: { label: "a" } },
+        { index: 0, name: "AccSlotChild", props: { label: "b" } },
+        { index: 1, name: "AccSlotOther", props: {} },
+      ],
+    });
+    expect(slotBootstrap.expected).toMatchObject({ slotsHash: SLOTS_HASH });
+
+    const free = await service.enqueueComponentCandidate(COMPONENT_ID, { rev: 1, sourceHash }, shot);
+    expect((await waitDone(service, free.jobId)).status).toBe("done");
+    expect("slots" in seen.at(-1)!).toBe(false);
+    db.close();
+  });
+
+  // §A2: манифест неизменен после PUT, но между PUT и капчуром лежит durable-реконструкция —
+  // директива рендерера в props ребёнка обязана отказать и здесь, до попадания в bootstrap.
+  test("$- and __eui-prefixed child props are refused at pushDraftCapture", async () => {
+    const { db, service, sourceHash } = await setupCandidate(neverResolves);
+    seedPublishedChild(db, CHILD_ID, "AccSlotChild", "child-hash", CHILD_ASSET);
+    const shot = { viewport: { width: 320, height: 200 }, deliver: "bytes" as const };
+    const dynamic = (props: Record<string, unknown>) => [
+      { slot: "default", index: 0, componentId: CHILD_ID, name: "AccSlotChild", version: 1, bundleHash: "child-hash", props, propsHash: "p1" },
+    ];
+    await expect(service.enqueueComponentCandidate(COMPONENT_ID, { rev: 1, sourceHash }, { ...shot, slotBindings: dynamic({ $asset: "asset_x" }) }))
+      .rejects.toMatchObject({ status: 422, code: "slot_props_dynamic" });
+    // Вложенная директива — тот же отказ: обход рекурсивный, а не по верхнему уровню.
+    await expect(service.enqueueComponentCandidate(COMPONENT_ID, { rev: 1, sourceHash }, { ...shot, slotBindings: dynamic({ items: [{ $cond: true }] }) }))
+      .rejects.toMatchObject({ status: 422, code: "slot_props_dynamic" });
+    await expect(service.enqueueComponentCandidate(COMPONENT_ID, { rev: 1, sourceHash }, { ...shot, slotBindings: dynamic({ __euiRef: 1 }) }))
+      .rejects.toMatchObject({ status: 422, code: "slot_props_dynamic" });
+    db.close();
   });
 });

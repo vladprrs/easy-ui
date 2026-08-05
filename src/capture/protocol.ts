@@ -53,6 +53,13 @@ export interface ComponentDraftExpected {
   propsHash: string;
   dsMetaVersion: number | null;
   rendererBuild: string | null;
+  /**
+   * Слот-привязки случая приёмки (план 2026-08-05 §A3): sha256 **разрешённого** кортежа
+   * `[{slot,index,componentId,version,bundleHash,propsHash}]`. Присутствует ровно тогда, когда
+   * случай что-то положил в слоты — бесслотовый handshake обязан остаться байт-в-байт прежним
+   * (§«Design invariants»), поэтому поле опционально и никогда не едет как `null`/пустая строка.
+   */
+  slotsHash?: string;
 }
 
 export type CaptureExpected = PrototypeExpected | ComponentExpected | ComponentDraftExpected;
@@ -166,6 +173,11 @@ export interface ComponentDraftReady extends CaptureReadyExtras {
   propsHash: string;
   dsMetaVersion: number | null;
   rendererBuild: string | null;
+  /**
+   * Эхо `bootstrap.expected.slotsHash` (домашний паттерн: rev/sourceHash/bundleHash поверхность
+   * тоже эхорит, пересчитывается только `propsHash`). Отсутствует у бесслотового кадра.
+   */
+  slotsHash?: string;
 }
 
 export interface CaptureErrorReady extends CaptureReadyExtras {
@@ -186,6 +198,37 @@ export interface PrototypeBootstrapTarget {
   rev: number;
   componentManifestHash?: string;
   components?: { id: string; name: string; version: number; bundleUrl: string; bundleHash: string; status?: string }[];
+}
+
+/**
+ * Опубликованный ребёнок слота, замороженный на постановке (план 2026-08-05 §A6). Форма — та же,
+ * что у пинов прототипа: поверхность грузит бандл по `bundleUrl` и сверяет `bundleHash`.
+ */
+export interface CaptureSlotChildPin {
+  id: string;
+  name: string;
+  version: number;
+  bundleUrl: string;
+  bundleHash: string;
+  status: string;
+}
+
+/**
+ * Один ребёнок в порядке рендера. `slot` **отсутствует** у детей неявного слота `children`
+ * (§A2a: канон дефолтного слота — запись без ключа; `runtimeSpec` схлопывает обе формы в
+ * `slotIndices.default`). `name` — имя опубликованного компонента, оно же ключ `customTypes`.
+ */
+export interface CaptureSlotTreeEntry {
+  slot?: string;
+  index: number;
+  name: string;
+  props: Record<string, unknown>;
+}
+
+/** Слот-содержимое capture-джобы: пины бандлов + дерево рендера (план 2026-08-05 §A6). */
+export interface CaptureSlotsBootstrap {
+  children: CaptureSlotChildPin[];
+  tree: CaptureSlotTreeEntry[];
 }
 
 /** Worker-injected bootstrap. Absent in browser (Library) preview mode. */
@@ -218,6 +261,11 @@ export interface CaptureBootstrap {
    * шрифтов: у ДС без темы (`fonts: []`) требовать нечего (K3-оговорка §5 R4).
    */
   fonts?: CaptureFontManifest;
+  /**
+   * Слот-содержимое кандидатного капчура (план 2026-08-05 §A6). Отсутствует — поверхность строит
+   * одноэлементное дерево, как и до волны: бесслотовый кадр не меняется ни на пиксель.
+   */
+  slots?: CaptureSlotsBootstrap;
   expected: CaptureExpected;
 }
 

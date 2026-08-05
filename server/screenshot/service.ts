@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import type { CaptureExpected, CaptureFontFaceDeclaration, CaptureFontManifest } from "../../src/capture/protocol";
+import type { CaptureExpected, CaptureFontFaceDeclaration, CaptureFontManifest, CaptureSlotTreeEntry } from "../../src/capture/protocol";
 import {
   codesFromReadinessReason, isCaptureFailureCode, sanitizeCaptureCodes,
   type CaptureCode, type CaptureFailureCode,
@@ -30,6 +30,23 @@ import { CaptureSessionStore, JOB_DEADLINE_MS } from "./sessions";
 export interface Viewport { width: number; height: number }
 /** Пин компонента, замороженный на enqueue и отданный поверхности через `bootstrap.target`. */
 export interface CapturePin { id: string; name: string; version: number; bundleUrl: string; bundleHash: string; status: string }
+/**
+ * Разрешённая слот-привязка случая приёмки (план 2026-08-05 §A6). Структурно — `ResolvedSlotBinding`
+ * (`server/acceptance/cases.ts`); объявлена здесь, потому что screenshot-слой про приёмку не знает
+ * и знать не должен: он получает уже опубликованные пины, а не манифест case-set'а.
+ */
+export interface CaptureSlotBinding {
+  /** Ключ слота; `default` — неявный слот `children` (§A2a). */
+  slot: string;
+  /** Позиция внутри слота, с нуля: порядок рендера входит в кадр. */
+  index: number;
+  componentId: string;
+  name: string;
+  version: number;
+  bundleHash: string;
+  props: Record<string, unknown>;
+  propsHash: string;
+}
 /**
  * Additive capture-quality contract (wave 7.1): `consoleErrors`/`pageErrors`
  * stay populated verbatim for backward compatibility, while `productErrors` /
@@ -320,6 +337,13 @@ interface InternalJob {
   captureManifestHash?: string;
   /** Draft-capture extras (P1b): what the bootstrap carries instead of a published DTO. */
   draft?: { name: string; designSystem: string; bundleUrl: string; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>> };
+  /**
+   * Слот-содержимое кандидатного капчура (план 2026-08-05 §A6): **опубликованные** пины детей
+   * (по одному на различную пару `(componentId, version)`) и дерево рендера. Присутствуют вместе
+   * либо отсутствуют вместе; у бесслотовой джобы обоих полей нет, и bootstrap не меняется.
+   */
+  slotChildren?: CapturePin[];
+  slotTree?: CaptureSlotTreeEntry[];
   probe?: CaptureProbe; resolvedSpaceScale?: Record<SpaceToken, string>; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
   /** W3: поле paint-режима, CSS px. Присутствует ровно тогда, когда `probe === "paint"`. */
   paintMargin?: number;
@@ -661,6 +685,10 @@ export class ScreenshotService {
       geometryDetailKeys?: string[];
       /** Политика readiness случая (W4); по умолчанию — дефолтная политика. */
       readinessPolicy?: ReadinessPolicy;
+      /** Слоты случая (план 2026-08-05 §A6): уже разрешённые до опубликованных пинов дети. */
+      slotBindings?: CaptureSlotBinding[];
+      /** sha256 разрешённого слот-кортежа (§A3) — часть handshake'а кандидатного кадра. */
+      slotsHash?: string;
     },
   ): Promise<FrozenEnqueue> {
     this.requireAvailable();
@@ -684,6 +712,8 @@ export class ScreenshotService {
       props?: Record<string, unknown>; exampleName?: string; theme?: string; waitForFonts?: boolean;
       probe?: CaptureProbe; deliver?: "asset" | "bytes"; paintMargin?: number; geometryDetailKeys?: string[];
       readinessPolicy?: ReadinessPolicy;
+      slotBindings?: CaptureSlotBinding[];
+      slotsHash?: string;
     },
   ): FrozenEnqueue {
     const repo = new ComponentRepo(this.deps.db);
@@ -698,9 +728,12 @@ export class ScreenshotService {
     const propsHash = propsHashOf(props);
     const theme = opts.theme === "dark" ? "dark" : "light";
     const themeContent = getLatestDesignSystemContent(this.deps.db, draft.designSystem);
-    const expected: CaptureExpected = { kind: "component-draft", componentId: id, rev: draft.rev, sourceHash: draft.sourceHash, bundleHash: draft.entry.bundleHash!, propsHash, dsMetaVersion: themeContent.latestMetaVersion, rendererBuild: this.rendererBuild };
+    // Слоты резолвятся до сборки handshake'а: их отсутствие обязано оставить и `expected`, и
+    // allowlist дословно прежними (§«Design invariants», байт-идентичность бесслотовой джобы).
+    const slots = this.slotCaptureOf(opts.slotBindings);
+    const expected: CaptureExpected = { kind: "component-draft", componentId: id, rev: draft.rev, sourceHash: draft.sourceHash, bundleHash: draft.entry.bundleHash!, propsHash, dsMetaVersion: themeContent.latestMetaVersion, rendererBuild: this.rendererBuild, ...(opts.slotsHash === undefined ? {} : { slotsHash: opts.slotsHash }) };
     const bundleUrl = `/api/components/${encodeURIComponent(id)}/draft/${draft.sourceHash}/bundle.js`;
-    const allowedUrls = this.draftComponentAllowedUrls(id, draft.sourceHash, draft.assetIds, draft.designSystem);
+    const allowedUrls = this.draftComponentAllowedUrls(id, draft.sourceHash, draft.assetIds, draft.designSystem, slots?.children);
     const query = new URLSearchParams({ theme, dsf: String(dsf) });
     const captureUrl = `/capture/component/${encodeURIComponent(id)}/draft?${query}`;
     const resolvedSpaceScale = opts.probe ? resolveSpacingScale(draft.designSystem, themeContent.tokens, themeContent.spacingResolver) : undefined;
@@ -715,12 +748,58 @@ export class ScreenshotService {
       // Драфт и кандидат приёмки: компонент не пинует тему, поэтому манифест — от последней версии
       // темы его ДС, той же, что уже дала `dsMetaVersion` handshake'а.
       fonts: fontManifestOf(themeContent),
+      ...(slots === undefined ? {} : { slotChildren: slots.children, slotTree: slots.tree }),
       ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}),
       ...(paintMargin === undefined ? {} : { paintMargin, geometryDetailKeys: (opts.geometryDetailKeys ?? []).slice(0, 20) }),
       ...(opts.deliver ? { deliver: opts.deliver } : {}),
       ...(opts.readinessPolicy ? { readinessPolicy: opts.readinessPolicy } : {}),
     });
     return { jobId, expected };
+  }
+
+  /**
+   * Слот-привязки → пины бандлов + дерево рендера (план 2026-08-05 §A6).
+   *
+   * JSON-безопасность props ребёнка перепроверяется **здесь**, хотя `validateManifest` уже
+   * отказала бы на PUT: манифест неизменен после публикации, но между PUT и капчуром лежит
+   * durable-реконструкция случая, и директива рендерера (`$asset`/`$cond`) или служебный ключ
+   * (`__eui…`), просочившиеся в bootstrap, исполнились бы как разметка, а не как данные.
+   *
+   * Пины дедуплицируются по паре `(componentId, version)`: у карусели из девяти одинаковых
+   * детей бандл ровно один, а дерево остаётся девятиэлементным.
+   */
+  private slotCaptureOf(bindings: CaptureSlotBinding[] | undefined): { children: CapturePin[]; tree: CaptureSlotTreeEntry[] } | undefined {
+    if (bindings === undefined || bindings.length === 0) return undefined;
+    const children = new Map<string, CapturePin>();
+    const tree: CaptureSlotTreeEntry[] = [];
+    for (const binding of bindings) {
+      const props = binding.props ?? {};
+      if (!jsonSafeSlotProps(props)) {
+        throw new ApiError(422, "slot_props_dynamic",
+          `Slot "${binding.slot}" child ${binding.name} declares $- or __eui-prefixed props;`
+          + " slot children take plain JSON data, not renderer directives");
+      }
+      const key = `${binding.componentId}@${binding.version}`;
+      if (!children.has(key)) {
+        children.set(key, {
+          id: binding.componentId, name: binding.name, version: binding.version,
+          bundleUrl: `/api/components/${binding.componentId}/versions/${binding.version}/bundle.js`,
+          bundleHash: binding.bundleHash,
+          status: this.publishStatusOf(binding.componentId, binding.version),
+        });
+      }
+      // Дефолтный слот — канонически **без** ключа `slot` (§A2a): `runtimeSpec` схлопывает обе
+      // формы в `slotIndices.default`, и одна форма в протоколе избавляет от выбора у поверхности.
+      tree.push({ ...(binding.slot === "default" ? {} : { slot: binding.slot }), index: binding.index, name: binding.name, props });
+    }
+    return { children: [...children.values()], tree };
+  }
+
+  /** Статус публикации ребёнка — факт БД, а не догадка: пин мог быть deprecated/superseded (§A2). */
+  private publishStatusOf(componentId: string, version: number): string {
+    const row = this.deps.db.query("SELECT status FROM component_publishes WHERE component_id=? AND version=?")
+      .get(componentId, version) as { status: string } | null;
+    return row?.status ?? "unknown";
   }
 
   private prototypeAllowedUrls(
@@ -781,8 +860,13 @@ export class ScreenshotService {
    * catalog/latest-active resolution и в bundle-export он не попадает никогда: те читают
    * только publishes. Asset-ссылки — из исходника драфта; published-DTO (`/api/components/:id`,
    * `/versions/:v`) драфту не нужны: meta/props-схема едут в bootstrap.
+   *
+   * Дети слотов (план 2026-08-05 §A6) добавляют ровно две вещи на различный пин: бандл версии и
+   * ассеты **этой** версии. DTO ребёнка не добавляется намеренно: загрузчику нужны только
+   * `{name, bundleUrl, bundleHash}` (meta едет в bootstrap), а `/versions/:v` отдал бы поверхности
+   * опубликованный `source` — расширение поверхности утечки ради удобства, которого нет.
    */
-  private draftComponentAllowedUrls(id: string, sourceHash: string, assetIds: string[], designSystem: string): string[] {
+  private draftComponentAllowedUrls(id: string, sourceHash: string, assetIds: string[], designSystem: string, slotChildren?: CapturePin[]): string[] {
     const set = new Set<string>();
     set.add(`/capture/component/${id}/draft`);
     set.add(`/api/design-systems/${designSystem}`);
@@ -792,6 +876,13 @@ export class ScreenshotService {
     }
     set.add(`/api/components/${id}/draft/${sourceHash}/bundle.js`);
     for (const assetId of assetIds) set.add(`/api/assets/${assetId}`);
+    if (slotChildren !== undefined && slotChildren.length > 0) {
+      const componentRepo = new ComponentRepo(this.deps.db);
+      for (const child of slotChildren) {
+        set.add(child.bundleUrl);
+        for (const asset of componentRepo.assets(child.id, child.version)) set.add(`/api/assets/${asset.id}`);
+      }
+    }
     set.add("/api/shims/");
     for (const s of buildStaticAllowedUrls(this.deps.serveDist)) set.add(s);
     return [...set];
@@ -860,6 +951,9 @@ export class ScreenshotService {
           // Драфт: published-DTO не существует, поэтому схема/examples едут в bootstrap (P1b).
           ...(job.draft?.propsJsonSchema !== undefined ? { propsJsonSchema: job.draft.propsJsonSchema } : {}),
           ...(job.draft?.examples !== undefined ? { examples: job.draft.examples } : {}),
+          // Слоты (§A6): поверхность строит многоэлементный runtimeSpec из этого дерева. Поля нет
+          // у бесслотовой джобы — её bootstrap обязан остаться прежним байт-в-байт.
+          ...(job.slotChildren === undefined ? {} : { slots: { children: job.slotChildren, tree: job.slotTree ?? [] } }),
           expected: job.expected,
         },
         allowedUrls: job.allowedUrls, viewport: job.viewport, deviceScaleFactor: job.dsf, colorScheme: job.theme, waitForFonts: job.waitForFonts, expected: job.expected,
@@ -1216,6 +1310,27 @@ export class ScreenshotService {
  * `type` mismatches. Lenient beyond that (avoids false rejects on the full
  * JSON-Schema surface); the trusted-code model is the real boundary.
  */
+/**
+ * JSON-безопасность props ребёнка слота (план 2026-08-05 §A2): тот же обход, что в
+ * {@link validatePropsAgainstSchema}, плюс отказ на префикс `__eui` — служебные ключи рантайма
+ * в bootstrap ребёнка так же недопустимы, как директивы рендерера `$…`.
+ */
+export function jsonSafeSlotProps(node: unknown): boolean {
+  if (node === null) return true;
+  const kind = typeof node;
+  if (kind === "string" || kind === "boolean") return true;
+  if (kind === "number") return Number.isFinite(node as number);
+  if (Array.isArray(node)) return node.every(jsonSafeSlotProps);
+  if (kind === "object") {
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key.startsWith("$") || key.startsWith("__eui")) return false;
+      if (!jsonSafeSlotProps(value)) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
 export function validatePropsAgainstSchema(props: unknown, schema: unknown): void {
   if (props === null || typeof props !== "object" || Array.isArray(props)) throw new ApiError(422, "invalid_props", "props must be a JSON object");
   const record = props as Record<string, unknown>;

@@ -23,7 +23,7 @@ import { ApiError } from "../http";
 import { ComponentRepo } from "../repos/components";
 import { getCandidateForRev } from "../components/validate";
 import { buildCases, DEFAULT_CASE_SURFACE, type AcceptanceCase } from "./cases";
-import { buildCasesFromManifest, CaseSetRepo, manifestOfRow, surfaceOfManifest } from "./caseSets";
+import { buildCasesFromManifest, casesOfRun, CaseSetRepo, manifestOfRow, surfaceOfManifest } from "./caseSets";
 import { writeRunManifest, type EvidenceCaseEntry, type RunManifest } from "./evidence";
 import type { RunInkBbox } from "./inkBbox";
 import type { RunNormalizedDiff } from "../visual/diff-runner";
@@ -313,8 +313,18 @@ export class AcceptanceOrchestrator {
     }
     const manifest = caseSet ? manifestOfRow(caseSet) : null;
     const surface = input.surface ?? (manifest ? surfaceOfManifest(manifest) : DEFAULT_CASE_SURFACE);
+    // Слот-пины разрешаются **здесь** и в режиме `"gating"` (§A5): постановка — единственный
+    // момент, когда голова кандидата зафиксирована и ещё ничего не снято, поэтому именно она
+    // отвечает за `slot_unknown`/`slot_bindings_unsupported`/`slot_component_not_published`.
     const cases = manifest
-      ? buildCasesFromManifest(manifest)
+      ? casesOfRun({
+        db: this.deps.db,
+        componentId: candidateRow.component_id,
+        designSystem: candidateRow.design_system,
+        candidateEntry: subject.entry,
+        manifest,
+        mode: "gating",
+      })
       : buildCases(subject.entry, input.cases ? { cases: input.cases } : {});
     const refresh = normalizeRefresh(input.refresh);
     // Валидация `{caseIds}` — до создания строки рана: неизвестный id обязан отказать постановке,
@@ -381,6 +391,10 @@ export class AcceptanceOrchestrator {
           referenceAssetId: item.referenceAssetId ?? null,
           expectedGeometry: item.expectedGeometry ?? null,
           aliasOfCaseId: item.aliasOfCaseId,
+          // `slots_hash` (миграция v31, T2.3) — ключ покрытия и рукопожатия капчура. Пишется
+          // условным спредом: инвариант «отсутствует, а не пусто» доезжает до колонки как NULL,
+          // и slot-free строки остаются побайтово прежними.
+          ...(item.slotsHash === undefined ? {} : { slotsHash: item.slotsHash }),
         };
       }),
     });
@@ -478,8 +492,33 @@ export class AcceptanceOrchestrator {
     const storedManifest = run.case_set_id === null ? null : manifestOfRow(new CaseSetRepo(this.deps.db).require(run.case_set_id));
     const policy = effectivePolicy(profile, storedManifest);
     const surface = this.surfaces.get(run.run_id) ?? (storedManifest ? surfaceOfManifest(storedManifest) : DEFAULT_CASE_SURFACE);
-    const cases = this.caseSets.get(run.run_id)
-      ?? (storedManifest ? buildCasesFromManifest(storedManifest) : buildCases(subject.entry));
+    // Реконструкция набора (§A5): слот-пины разрешаются в режиме `"reconstruction"` — статус- и
+    // надгробие-слепом. Ран уже поставлен, его отпечатки персистированы, и «ребёнка заархивировали
+    // пока мы снимали» обязано ронять **съёмку** названным отказом капчура, а не подменять набор
+    // (и уж тем более не давать другой `frame_fingerprint`, чем лежит в `acceptance_cases`).
+    let cases: AcceptanceCase[];
+    try {
+      cases = this.caseSets.get(run.run_id)
+        ?? (storedManifest
+          ? casesOfRun({
+            db: this.deps.db,
+            componentId: run.component_id,
+            designSystem: candidateRow.design_system,
+            candidateEntry: subject.entry,
+            manifest: storedManifest,
+            mode: "reconstruction",
+          })
+          : buildCases(subject.entry));
+    } catch (error) {
+      // Отказ реконструкции — терминал с **названной** причиной, а не голая строка в `gates.error`:
+      // «набор рана больше не восстановим» обязано читаться из `status_reason` отчёта.
+      if (error instanceof ApiError && error.code.startsWith("slot_")) {
+        return this.repo.terminalizeRun(run.run_id, {
+          status: "error", statusReason: error.code, gates: { error: error.message },
+        });
+      }
+      throw error;
+    }
     // Алгебра refresh персистентна (v29): план рана переживает рестарт процесса и читается
     // отчётом, а не восстанавливается из памяти «как получится».
     const algebra = refreshAlgebraOfRun(run);
@@ -672,6 +711,11 @@ export class AcceptanceOrchestrator {
       ? null
       : manifestOfRow(new CaseSetRepo(this.deps.db).require(run.case_set_id));
     const policy = effectivePolicy(profile, manifest);
+    // **Единственный легальный вызов `buildCasesFromManifest` мимо `casesOfRun`** (§A5), и он
+    // осознан: снимок вердиктной политики (`verdictPolicySnapshotOf`) не читает ни `slotBindings`,
+    // ни `slotsHash` — только props-независимые допуски, `expectedGeometry` и профиль. Разрешать
+    // здесь пины значило бы ходить в БД за фактами, которые никуда не войдут, и получать отказ по
+    // чужому, давно завершённому baseline-рану — то есть ронять живой ран из-за истории.
     const cases = manifest ? buildCasesFromManifest(manifest) : null;
     if (cases === null) {
       // Examples-путь: у случая нет ни эталона, ни допусков — снимок политики одинаков для всех.

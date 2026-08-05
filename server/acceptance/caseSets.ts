@@ -30,7 +30,8 @@ import {
   type CaseSetCase, type CaseSetManifest, type CaseSetSlotBindings, type CropSourceSurface,
 } from "../../src/acceptance/caseSetSchema";
 import { ApiError } from "../http";
-import { propsHashOf, type AcceptanceCase } from "./cases";
+import type { CandidateEntry } from "../components/candidates";
+import { propsHashOf, type AcceptanceCase, type ResolvedSlotBinding } from "./cases";
 import { COMPARISON_PAINT_MARGIN_PX, type CaseSurface } from "./ids";
 import { acceptanceMaxCasesPerRun } from "./policies";
 
@@ -149,16 +150,21 @@ export interface PublishedSlotPin {
  *
  * `designSystem === null` — «не фильтровать» (нужно, чтобы отличить «не опубликован» от «чужая ДС»
  * и выдать правильный код отказа).
+ *
+ * `options.includeDeleted` снимает фильтр надгробия — им пользуется **только** режим
+ * `"reconstruction"` (§A5, T2.1): пины уже были авторизованы на постановке рана, и soft-delete
+ * ребёнка посреди рана не имеет права превратить существующую строку публикации в «отсутствующую».
  */
 export function publishedPinByNameAndVersion(
   db: Database, name: string, version: number, designSystem: string | null,
+  options: { includeDeleted?: boolean } = {},
 ): PublishedSlotPin | null {
   const select = `SELECT c.id componentId, c.name name, cp.version version, cp.status status,
       cp.bundle_hash bundleHash, cp.definition_meta definitionMeta, cr.design_system designSystem
     FROM components c
     JOIN component_publishes cp ON cp.component_id=c.id AND cp.version=?
     JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
-    WHERE c.name=? AND c.deleted_at IS NULL`;
+    WHERE c.name=?${options.includeDeleted === true ? "" : " AND c.deleted_at IS NULL"}`;
   const row = designSystem === null
     ? db.query(select).get(version, name)
     : db.query(`${select} AND cr.design_system=?`).get(version, name, designSystem);
@@ -780,6 +786,11 @@ export function coverageOf(manifest: CaseSetManifest): CoverageReport {
 /**
  * Набор случаев рана из манифеста (аналог `buildCases` для examples-пути).
  *
+ * **Не вызывать напрямую** (§A5): единственные легальные вызывающие — `casesOfRun` (все пути
+ * оркестратора и evidence) и dry-run роут, который зовёт `casesOfRun` же. Разрешение слот-пинов —
+ * свойство **построения набора**, а не одной точки вызова: раз забытое на одном из четырёх путей,
+ * оно превращается в кадр, снятый с пустыми слотами, при том же `frame_fingerprint`.
+ *
  * Алиасы: явный `aliasOf` манифеста, плюс дедуп поверх — на случай, когда манифест объявил алиас, а
  * пара совпала ещё с чьей-то (валидация выше это уже запретила, но набор строится оборонительно:
  * **пара (props, слоты) никогда не снимается дважды**, A7 + план 2026-08-05 §A3).
@@ -827,4 +838,146 @@ export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCas
     throw new ApiError(422, "empty_case_set", "Every case aliased away; nothing to capture");
   }
   return cases;
+}
+
+// ------------------------------------------- разрешение слот-пинов набора (§A5, T2.1)
+
+/**
+ * Режим разрешения биндингов (§A5). Два режима — не оптимизация, а два **разных вопроса**:
+ *
+ * - `"gating"` (постановка рана, dry-run/PUT-parity): «можно ли вообще снимать эту матрицу?».
+ *   Полная политика статусов §A2 плюс факты головы кандидата — принадлежность именованного слота
+ *   `extracted.meta.slots` и объявленный `capabilities.namedSlots`. Отказ — 422 до создания рана.
+ * - `"reconstruction"` (восстановление набора уже бегущего рана после потери памяти процесса):
+ *   «чем этот ран был поставлен?». Пины были авторизованы на постановке, поэтому режим **слеп к
+ *   статусу и к надгробию**: архивация или soft-delete ребёнка посреди рана не имеет права
+ *   изменить отпечатки уже созданных случаев — иначе восстановленный набор считал бы другой
+ *   `frame_fingerprint`, чем персистированный, и весь durable-инвариант рассыпался бы. Отказ —
+ *   только на физически отсутствующей строке публикации (строки публикаций не удаляются; отказ
+ *   оборонительный).
+ *
+ * v3.1/F3: съёмка архивированного ребёнка всё равно невозможна (`ComponentRepo.bundle` не отдаёт
+ * нерендерабельные статусы) — и это правильно: реконструкция отвечает за отпечатки и evidence, а
+ * невозможность снять кадр обязана всплыть **именованным** отказом капчур-гейта
+ * (`slot_component_not_published` в `gates[].detail` случая), а не тихо подменить набор.
+ */
+export type SlotResolutionMode = "gating" | "reconstruction";
+
+export interface ResolveSlotBindingsInput {
+  db: Database;
+  /** Субъект приёмки: его ДС фильтрует пины, а совпадение с ребёнком — self-reference (ловится при PUT). */
+  componentId: string;
+  designSystem: string | null;
+  /**
+   * Голова кандидата — источник фактов о слотах. `null` означает «кандидата нет» (dry-run): его
+   * факты проверять нечем, и они остаются warning'ами PUT, а не отказом (§A5, dry-run).
+   */
+  candidateEntry: CandidateEntry | null;
+  manifest: CaseSetManifest;
+  cases: AcceptanceCase[];
+  mode: SlotResolutionMode;
+}
+
+/**
+ * Разрешает объявленные манифестом биндинги в `ResolvedSlotBinding[]` + `slotsHash` (§A3/§A5).
+ *
+ * Порядок — это кадр: слоты обходятся в порядке ключей манифеста, дети — в порядке массива, а
+ * `index` — позиция ребёнка **внутри своего слота**. Дефолтный слот участвует наравне с
+ * именованными (§A2a) и в дереве съёмки представляется отсутствием `slot`.
+ *
+ * Инвариант «отсутствует, а не пусто»: случай без биндингов возвращается **тем же объектом**, а
+ * пустой объект биндингов (`{}`, схема его допускает) не создаёт ни `slotBindings`, ни `slotsHash` —
+ * иначе slot-free наборы сменили бы кадровый отпечаток (§A4).
+ */
+export function resolveSlotBindings(input: ResolveSlotBindingsInput): AcceptanceCase[] {
+  const bindingsById = new Map(input.manifest.cases
+    .filter((item) => item.slotBindings !== undefined)
+    .map((item) => [item.id, item.slotBindings!] as const));
+  if (bindingsById.size === 0) return input.cases;
+
+  // Мемоизация в пределах одного разрешения — та же мера, что в `validateSlotBindings`: потолок
+  // набора (64 × 8 × 12) иначе дал бы тысячи одинаковых запросов на каждую постановку рана.
+  const memo = new Map<string, PublishedSlotPin | null>();
+  const pinOf = (name: string, version: number): PublishedSlotPin | null => {
+    const key = `${version} ${name}`;
+    if (!memo.has(key)) {
+      memo.set(key, input.mode === "gating"
+        ? publishedPinByNameAndVersion(input.db, name, version, input.designSystem)
+        // Реконструкция: без ДС-фильтра, без фильтра надгробия и без разбора статуса — вопрос
+        // ровно один, «существует ли строка публикации».
+        : publishedPinByNameAndVersion(input.db, name, version, null, { includeDeleted: true }));
+    }
+    return memo.get(key) ?? null;
+  };
+
+  const meta = input.candidateEntry?.extracted?.meta ?? null;
+  const declaredSlots = new Set<string>(Array.isArray(meta?.slots) ? meta.slots : []);
+  const namedSlotsCapable = meta?.capabilities?.namedSlots === true;
+
+  return input.cases.map((item) => {
+    const bindings = bindingsById.get(item.caseId);
+    if (bindings === undefined) return item;
+    const resolved: ResolvedSlotBinding[] = [];
+    for (const [slot, children] of Object.entries(bindings)) {
+      // Факты головы кандидата — жёсткий отказ **на старте рана** (при PUT это были warning'и):
+      // здесь голова уже зафиксирована кандидатом, и снимать матрицу, чей слот компонент не
+      // объявляет, значит снимать пустой слот и объявить матрицу пройденной. Дефолтный слот из
+      // обеих проверок исключён целиком (§A2a).
+      if (input.mode === "gating" && meta !== null && slot !== DEFAULT_SLOT_KEY) {
+        if (!namedSlotsCapable) {
+          throw new ApiError(422, "slot_bindings_unsupported",
+            `Case ${item.caseId} binds the named slot "${slot}", but candidate ${input.componentId} declares no`
+            + " capabilities.namedSlots; only the default slot can be bound for this component");
+        }
+        if (!declaredSlots.has(slot)) {
+          throw new ApiError(422, "slot_unknown",
+            `Case ${item.caseId} binds the slot "${slot}", which is not among the named slots of candidate`
+            + ` ${input.componentId} (${[...declaredSlots].sort().join(", ") || "none"})`);
+        }
+      }
+      children.forEach((child, index) => {
+        const pin = pinOf(child.type, child.version);
+        if (!pin) {
+          throw new ApiError(422, "slot_component_not_published",
+            `Case ${item.caseId}: slot "${slot}" binds ${child.type} v${child.version}, which is not a published`
+            + " component version");
+        }
+        if (input.mode === "gating" && !SLOT_PIN_ACCEPTED_STATUS.has(pin.status)) {
+          throw new ApiError(422, "slot_component_not_published",
+            `Case ${item.caseId}: slot "${slot}" binds ${child.type} v${child.version}, whose publish status is`
+            + ` ${pin.status} and does not render`);
+        }
+        const props = child.props ?? {};
+        resolved.push({
+          slot, index,
+          componentId: pin.componentId,
+          name: pin.name,
+          version: pin.version,
+          bundleHash: pin.bundleHash,
+          props,
+          propsHash: propsHashOf(props),
+        });
+      });
+    }
+    if (resolved.length === 0) return item;
+    return { ...item, slotBindings: resolved, slotsHash: slotsHashOf(resolved) };
+  });
+}
+
+export type CasesOfRunInput = Omit<ResolveSlotBindingsInput, "cases">;
+
+/**
+ * **Единственный** легальный способ построить набор случаев рана из манифеста (§A5).
+ *
+ * `buildCasesFromManifest` + `resolveSlotBindings` — одна операция, потому что случай без
+ * разрешённых пинов это не «случай попроще», а случай с другим кадром: тот же
+ * `frame_fingerprint`, но пустые слоты на картинке. Все потребители обязаны звать именно эту
+ * функцию: постановка рана (`orchestrator.startRun`), durable-реконструкция (`orchestrator.runCases`),
+ * evidence (`manifestOf`) и dry-run (`routes/caseSets.ts`). Исключение ровно одно и оно
+ * задокументировано у места вызова — `baselineVerdictPolicies`: снимок вердиктной политики не
+ * читает ни одного слот-поля, и разрешать там пины значило бы ходить в БД за фактами, которые
+ * никуда не войдут (и отказывать по чужому, давно завершённому рану).
+ */
+export function casesOfRun(input: CasesOfRunInput): AcceptanceCase[] {
+  return resolveSlotBindings({ ...input, cases: buildCasesFromManifest(input.manifest) });
 }

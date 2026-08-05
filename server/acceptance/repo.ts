@@ -31,7 +31,8 @@ import { ApiError } from "../http";
 import { buildFingerprint, candidateId as computeCandidateId, runId as newRunId } from "./ids";
 import { acceptanceCandidateTtlHours } from "./policies";
 // Поверхность набора нужна GC-соседям только косвенно, а multi-run promote (W7) — прямо:
-// `runCoverage` обязан нормализовать (propsHash, surface) одной и той же функцией, что и раннер.
+// `runCoverage` обязан нормализовать (propsHash, slotsHash, surface) одной и той же функцией,
+// что и раннер.
 import { CaseSetRepo, manifestOfRow, surfaceOfManifest } from "./caseSets";
 import { DEFAULT_CASE_SURFACE } from "./cases";
 
@@ -136,6 +137,12 @@ export interface AcceptanceCaseRow {
   verdict_policy_hash: string | null;
   /** Квитанция reuse (форма W8); пишется с W1, читается evidence'ом с W8. */
   reuse_receipt_json: string | null;
+  /**
+   * Хэш разрешённых slot-биндингов случая (v31, §A3): sha256 списка
+   * `[{slot,index,componentId,version,bundleHash,propsHash}]`. NULL — случай **без слотов**
+   * (в том числе любая до-миграционная строка), а не «неизвестно»: слотов до v31 не было.
+   */
+  slots_hash: string | null;
 }
 
 export interface AcceptanceCaseResultRow {
@@ -200,6 +207,8 @@ export interface NewCaseInput {
   frameFingerprint?: string | null;
   comparisonFingerprint?: string | null;
   verdictPolicyHash?: string | null;
+  /** Хэш разрешённых слотов (v31, §A3); опущен — колонка остаётся NULL («случай без слотов»). */
+  slotsHash?: string | null;
 }
 
 export interface CasePatch {
@@ -510,11 +519,12 @@ export class AcceptanceRepo {
     this.db.query(`INSERT INTO acceptance_cases
       (run_id,case_id,case_key,props_hash,case_fingerprint,case_policy_hash,reference_asset_id,expected_geometry_json,
        status,verdict,gates_json,severity_json,capture_quality_json,alias_of_case_id,reuse_reason,started_at,finished_at,
-       frame_fingerprint,comparison_fingerprint,verdict_policy_hash,reuse_receipt_json)
-      VALUES (?,?,?,?,?,?,?,?,'pending',NULL,NULL,NULL,NULL,?,NULL,NULL,NULL,?,?,?,NULL)`)
+       frame_fingerprint,comparison_fingerprint,verdict_policy_hash,reuse_receipt_json,slots_hash)
+      VALUES (?,?,?,?,?,?,?,?,'pending',NULL,NULL,NULL,NULL,?,NULL,NULL,NULL,?,?,?,NULL,?)`)
       .run(runId, item.caseId, item.caseKey, item.propsHash, item.caseFingerprint, item.casePolicyHash,
         item.referenceAssetId ?? null, jsonOrNull(item.expectedGeometry), item.aliasOfCaseId ?? null,
-        item.frameFingerprint ?? null, item.comparisonFingerprint ?? null, item.verdictPolicyHash ?? null);
+        item.frameFingerprint ?? null, item.comparisonFingerprint ?? null, item.verdictPolicyHash ?? null,
+        item.slotsHash ?? null);
   }
 
   cases(runId: string): AcceptanceCaseRow[] {
@@ -714,8 +724,15 @@ export class AcceptanceRepo {
   }
 
   /**
-   * Покрытие рана для multi-run promote (W7, D12): множество ключей **(propsHash, surface)** и
-   * `caseKey` его случаев.
+   * Покрытие рана для multi-run promote (W7, D12): множество ключей
+   * **(propsHash, slotsHash, surface)** и `caseKey` его случаев.
+   *
+   * Слоты входят в ключ с v31 (§A8): два случая с одинаковыми props и разными детьми слотов —
+   * это два разных кадра, и до v31 они схлопывались в один элемент покрытия, из-за чего
+   * `assertRunSetCoherent` видел ложное пересечение. Ключ живёт только в памяти (никогда не
+   * персистится), поэтому его байтовый формат — не контракт; контракт — поведение: у бесслотовых
+   * ранов (`slots_hash` NULL ⇒ подстановка `"-"`) мощности и попарные пересечения множеств те же,
+   * что до изменения.
    *
    * Поверхность — свойство **набора**, а не случая (`capture` манифеста: viewport/dsf/theme),
    * поэтому она читается один раз из `component_case_sets` и приклеивается ко всем props рана.
@@ -732,7 +749,7 @@ export class AcceptanceRepo {
     const keys = new Set<string>();
     const caseKeys = new Set<string>();
     for (const row of rows) {
-      keys.add(`${row.props_hash}@${surfaceKey}`);
+      keys.add(`${row.props_hash}:${row.slots_hash ?? "-"}@${surfaceKey}`);
       caseKeys.add(row.case_key);
     }
     return { surfaceKey, keys, caseKeys, cases: rows.length };

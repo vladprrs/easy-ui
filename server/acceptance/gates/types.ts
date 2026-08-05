@@ -15,7 +15,7 @@ import type { RunNormalizedDiff } from "../../visual/diff-runner";
 import type { VisualCause } from "../../visual/causes";
 import type { AcceptancePolicy, GateName } from "../policies";
 import type { CaseSurface } from "../ids";
-import type { AcceptanceCase } from "../cases";
+import type { AcceptanceCase, ResolvedSlotBinding } from "../cases";
 
 /**
  * `indeterminate` — не «ошибка гейта», а «вердикт не выдан»: он блокирует `pass` обязательного
@@ -73,6 +73,14 @@ export interface AcceptanceCaptureService {
       paintMargin?: number; geometryDetailKeys?: string[];
       /** W4: политика readiness, которую обязана исполнить поверхность. */
       readinessPolicy?: ReadinessPolicy;
+      /**
+       * Слот-привязки случая (план 2026-08-05 §A6): разрешённые до опубликованных пинов дети,
+       * в порядке рендера. Отсутствуют у бесслотового случая — «пустой массив» и «слотов нет»
+       * различаются и в отпечатке, и в handshake.
+       */
+      slotBindings?: ResolvedSlotBinding[];
+      /** sha256 разрешённого слот-кортежа (§A3): едет в `expected` и сверяется поверхностью. */
+      slotsHash?: string;
     },
   ): Promise<{ jobId: string }>;
   get(jobId: string): JobStatus;

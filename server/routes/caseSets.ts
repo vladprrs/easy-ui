@@ -28,7 +28,7 @@ import { ApiError, json, noStore, readJson } from "../http";
 import { ComponentRepo } from "../repos/components";
 import type { AcceptanceOrchestrator } from "../acceptance/orchestrator";
 import {
-  buildCasesFromManifest, CaseSetRepo, caseSetIdOf, coverageOf, manifestOfRow, validateManifest, type CaseSetRow,
+  casesOfRun, CaseSetRepo, caseSetIdOf, coverageOf, manifestOfRow, validateManifest, type CaseSetRow,
 } from "../acceptance/caseSets";
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -85,8 +85,8 @@ async function putCaseSet(request: Request, db: Database, componentId: string, p
  * `wouldBeCached` — существует ли такой набор уже (то есть был бы PUT идемпотентным повтором).
  *
  * `cases` здесь — не число, а `{count, ids}`: dry-run обязан показать **набор случаев рана**,
- * который построил бы оркестратор (`buildCasesFromManifest` — тот же код, включая отказ
- * `empty_case_set`), а не только его мощность.
+ * который построил бы оркестратор (`casesOfRun` — тот же код, включая разрешение слот-пинов и
+ * отказ `empty_case_set`), а не только его мощность.
  */
 async function validateCaseSet(request: Request, db: Database, componentId: string, principal: Principal): Promise<Response> {
   if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Method not allowed");
@@ -99,16 +99,21 @@ async function validateCaseSet(request: Request, db: Database, componentId: stri
   if (body.manifest === undefined) throw new ApiError(400, "invalid_request", "manifest is required");
 
   const { manifest, warnings } = validateManifest(db, componentId, body.manifest);
+  const designSystem = new ComponentRepo(db).row(componentId).design_system;
   // PUT-parity: тот же `validateManifest` и то же построение набора, что у публикации и старта
   // рана. Плата за расхождение — dry-run, который «проходит», а ран отказывает (или наоборот).
-  // T2.1 заменит вызов на `casesOfRun` (разрешение слот-пинов) — контракт ручки от этого не меняется.
-  const cases = buildCasesFromManifest(manifest);
+  //
+  // Режим `"gating"` при `candidateEntry: null` (§A5): политика статусов пинов применяется —
+  // она про **опубликованные** факты и одинакова при PUT и на старте рана, — а факты головы
+  // кандидата (`slot_unknown`/`slot_bindings_unsupported`) остаются warning'ами `validateManifest`:
+  // у dry-run кандидата нет вовсе, и отказывать по несуществующему факту нельзя.
+  const cases = casesOfRun({ db, componentId, designSystem, candidateEntry: null, manifest, mode: "gating" });
   const caseSetId = caseSetIdOf(manifest);
   const frames = cases.filter((item) => item.aliasOfCaseId === null);
   return json({
     caseSetId,
     componentId,
-    designSystem: new ComponentRepo(db).row(componentId).design_system,
+    designSystem,
     cases: { count: cases.length, ids: cases.map((item) => item.caseId) },
     // Кадры набора (план 2026-08-05 §A5): случаи, которые действительно снимаются. Два состояния с
     // одинаковыми props и разным содержимым слотов обязаны быть здесь **двумя** записями — ровно

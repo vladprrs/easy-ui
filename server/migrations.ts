@@ -957,6 +957,32 @@ export const migrations = [
     db.run("ALTER TABLE component_publishes ADD COLUMN acceptance_run_ids TEXT");
     db.run("ALTER TABLE acceptance_runs ADD COLUMN renderer_fingerprint TEXT");
   },
+  (db: Database) => {
+    // v31: слоты случая приёмки — `acceptance_cases.slots_hash`
+    // (план `docs/plans/2026-08-05-slot-acceptance.md`, §A3/§A8, волна W2).
+    //
+    // Форма — **одна аддитивная nullable-колонка, без backfill и без индекса**:
+    //
+    // 1. **Хранение, а не реконструкция.** `slotsHash` — sha256 разрешённого списка
+    //    `[{slot,index,componentId,version,bundleHash,propsHash}]`. Восстановить его из манифеста
+    //    набора задним числом можно только повторив резолв пинов, а он зависит от текущего
+    //    состояния публикаций: пин, отмеченный `superseded` после съёмки, дал бы другой ответ,
+    //    и вырожденная реконструкция молча выдала бы «слоты не менялись». Покрытие promote (A8) и
+    //    guard переноса эталона (A5a) обязаны читать зафиксированное значение, а не догадку.
+    // 2. **NULL = «случай без слотов».** До этой миграции слотов не существовало вовсе, поэтому
+    //    здесь, в отличие от v29, NULL не «неизвестно»: ключ покрытия подставляет `"-"`, а guard
+    //    переноса сравнивает `?? null` с `?? null` — легаси-строка совпадает с бесслотовым
+    //    случаем и переносится, как переносилась. Backfill'а нет, потому что backfill'ить нечего.
+    // 3. **Индекса нет намеренно.** Колонка не участвует ни в одном lookup'е: ключи покрытия
+    //    строятся в памяти по строкам одного рана (`runCoverage`), а reuse ищется по слоям
+    //    отпечатка (`frame_fingerprint`), куда слоты уже входят по значению (`FIELD_LAYERS`).
+    //
+    // Откат образа переживается: v30-код читает `acceptance_cases` через `SELECT *` и собирает
+    // ответы по именованным полям, поэтому лишняя колонка ему не мешает (тот же инвариант, что у
+    // v28/v29/v30). Обратная сторона отката — манифесты со `slotBindings` (см. план, «Rollback
+    // policy»); это свойство хранилища манифестов, а не этой колонки.
+    db.run("ALTER TABLE acceptance_cases ADD COLUMN slots_hash TEXT");
+  },
 ] as const;
 
 function assertRegistryIntegrity(db:Database):void {

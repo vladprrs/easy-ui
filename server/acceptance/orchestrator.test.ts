@@ -120,16 +120,27 @@ class FakeCapture implements AcceptanceCaptureService {
   hasBackgroundCapacity(): boolean { return true; }
 }
 
-const candidateEntry = (): CandidateEntry => ({
+/**
+ * Голова кандидата. `slots`/`namedSlots` — факты, по которым старт рана судит слот-биндинги
+ * (план 2026-08-05 §A5): дефолт (пустые слоты, без capability) сохраняет прежнее поведение всех
+ * тестов файла байт-в-байт.
+ */
+const candidateEntry = (options: SlotHead = {}): CandidateEntry => ({
   version: 1, sourceHash: "src-hash", componentIds: [COMPONENT_ID], createdAt: new Date().toISOString(), ok: true,
   extracted: {
     ok: true, warnings: [],
-    meta: { events: [], slots: [], description: "probe", examples: { alpha: { label: "a" }, beta: { label: "b" } }, propsJsonSchema: { type: "object" } },
+    meta: {
+      events: [], slots: options.slots ?? [], description: "probe",
+      ...(options.namedSlots === true ? { capabilities: { namedSlots: true } } : {}),
+      examples: { alpha: { label: "a" }, beta: { label: "b" } }, propsJsonSchema: { type: "object" },
+    },
   } as unknown as CandidateEntry["extracted"],
   parityWarnings: [], bundleHash: "bundle", hostAbiVersion: 4,
 });
 
-async function setup() {
+interface SlotHead { slots?: string[]; namedSlots?: boolean }
+
+async function setup(head: SlotHead = {}) {
   const dir = await mkdtemp(resolve(process.cwd(), ".acc-cascade-test-"));
   dirs.push(dir);
   const db = new Database(":memory:");
@@ -141,7 +152,7 @@ async function setup() {
     hostAbiVersion: 4, themeVersion: 1, observedCatalogRevision: "cat",
     policyProfileHash: policyProfileHash(ACCEPTANCE_POLICIES["default-v1"]), createdBy: "user_a",
   });
-  const entry = candidateEntry();
+  const entry = candidateEntry(head);
   const service = new FakeCapture();
   const subject = (row: CandidateRow): CandidateSubject => ({
     candidateId: row.candidate_id, componentId: row.component_id, designSystem: row.design_system, rev: row.rev,
@@ -549,5 +560,206 @@ test("квитанция reuse пишется на каждый случай в 
   expect(receipt.reuse).toMatchObject({ frame: true, verdict: true });
   expect(receipt.fingerprints.frame).toMatch(/^[0-9a-f]{64}$/);
   expect(receipt.fingerprints.case).toBe(harness.repo.cases(run.run_id)[0]!.case_fingerprint);
+  harness.db.close();
+});
+
+// ------------------------------------------- слот-биндинги: старт рана и реконструкция (§A5)
+
+/**
+ * Опубликованный ребёнок слота: строка каталога + ревизия + публикация. Ровно эти три таблицы
+ * читает `publishedPinByNameAndVersion`, и ДС берётся у **ревизии**.
+ */
+function seedChild(harness: Harness, input: { id: string; name: string; version?: number; status?: string }): void {
+  const version = input.version ?? 1;
+  if (!harness.db.query("SELECT 1 ok FROM components WHERE id=?").get(input.id)) {
+    harness.db.run("INSERT INTO components (id,name,head_rev,design_system,deleted_at,created_at,updated_at) VALUES (?,?,?,'yandex-pay',NULL,'now','now')",
+      [input.id, input.name, version]);
+  }
+  harness.db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,message,created_at) VALUES (?,?,'src','yandex-pay',NULL,'now')",
+    [input.id, version]);
+  harness.db.run(`INSERT INTO component_publishes
+    (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,message,published_at)
+    VALUES (?,?,?,?,'js','{}',?,?,4,NULL,'now')`,
+    [input.id, version, version, input.status ?? "active", `sh-${input.id}-${version}`, `bh-${input.id}-${version}`]);
+}
+
+/** Манифест со слот-биндингами: без эталонов и без `requireVisual` — предмет тестов здесь набор, а не пиксели. */
+function slotManifest(cases: { id: string; props: Record<string, unknown>; slotBindings?: Record<string, { type: string; version: number; props?: Record<string, unknown> }[]> }[]): CaseSetManifest {
+  return caseSetManifestSchema.parse({
+    manifestVersion: 1,
+    componentId: COMPONENT_ID,
+    capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "light" },
+    cases,
+  });
+}
+
+const putSet = (harness: Harness, manifest: CaseSetManifest): string =>
+  new CaseSetRepo(harness.db).put({ componentId: COMPONENT_ID, designSystem: "yandex-pay", manifest, createdBy: "user_a" }).row.case_set_id;
+
+const startFailure = async (harness: Harness, manifest: CaseSetManifest): Promise<ApiError> => {
+  const error = await harness.orchestrator.startRun({
+    candidateId: harness.candidateId, createdBy: "user_a", caseSetId: putSet(harness, manifest),
+  }).then(() => null, (reason: unknown) => reason);
+  expect(error).toBeInstanceOf(ApiError);
+  return error as ApiError;
+};
+
+/** Стирание набора из памяти процесса — симуляция рестарта: набор придётся восстановить из манифеста. */
+const forgetCases = (harness: Harness, runId: string): void => {
+  (harness.orchestrator as unknown as { caseSets: Map<string, unknown> }).caseSets.delete(runId);
+  (harness.orchestrator as unknown as { surfaces: Map<string, unknown> }).surfaces.delete(runId);
+};
+
+test("старт рана отказывает по фактам головы кандидата: slot_unknown и slot_bindings_unsupported", async () => {
+  // Кандидат объявляет `items`, манифест биндит `extra` — при PUT это был warning (голова могла
+  // поменяться), на старте рана голова зафиксирована, и снимать пустой слот нельзя.
+  const known = await setup({ slots: ["items"], namedSlots: true });
+  seedChild(known, { id: "pay-child", name: "PayChild" });
+  const unknownSlot = await startFailure(known, slotManifest([
+    { id: "alpha", props: { label: "a" }, slotBindings: { extra: [{ type: "PayChild", version: 1 }] } },
+  ]));
+  expect(unknownSlot.code).toBe("slot_unknown");
+  expect(unknownSlot.status).toBe(422);
+  known.db.close();
+
+  // Тот же манифест против кандидата без `capabilities.namedSlots` — другой отказ: именованные
+  // слоты компонент не поддерживает вовсе, и предлагать «объяви слот» бессмысленно.
+  const incapable = await setup({ slots: ["items"] });
+  seedChild(incapable, { id: "pay-child", name: "PayChild" });
+  const unsupported = await startFailure(incapable, slotManifest([
+    { id: "alpha", props: { label: "a" }, slotBindings: { items: [{ type: "PayChild", version: 1 }] } },
+  ]));
+  expect(unsupported.code).toBe("slot_bindings_unsupported");
+
+  // Дефолтный слот (§A2a) из обеих проверок исключён: он неявный, его не объявляет никто.
+  const started = await incapable.orchestrator.startRun({
+    candidateId: incapable.candidateId, createdBy: "user_a",
+    caseSetId: putSet(incapable, slotManifest([
+      { id: "alpha", props: { label: "a" }, slotBindings: { default: [{ type: "PayChild", version: 1 }] } },
+    ])),
+  });
+  expect(started.cases[0]!.slotBindings).toHaveLength(1);
+  expect(started.cases[0]!.slotBindings![0]).toMatchObject({ slot: "default", index: 0, name: "PayChild", bundleHash: "bh-pay-child-1" });
+  incapable.db.close();
+});
+
+test("старт рана отказывает по нерендерабельному статусу пина (slot_component_not_published)", async () => {
+  const harness = await setup({ slots: ["items"], namedSlots: true });
+  seedChild(harness, { id: "pay-child", name: "PayChild", status: "archived" });
+  const refusal = await startFailure(harness, slotManifest([
+    { id: "alpha", props: { label: "a" }, slotBindings: { items: [{ type: "PayChild", version: 1 }] } },
+  ]));
+  expect(refusal.code).toBe("slot_component_not_published");
+  expect(refusal.message).toContain("archived");
+  harness.db.close();
+});
+
+test("два случая с одинаковыми props и разными слотами — два кадра с разными отпечатками (репро SMS)", async () => {
+  const harness = await setup({ slots: ["items"], namedSlots: true });
+  seedChild(harness, { id: "pay-child", name: "PayChild" });
+  const manifest = slotManifest([
+    { id: "one-message", props: { label: "a" }, slotBindings: { items: [{ type: "PayChild", version: 1, props: { text: "one" } }] } },
+    { id: "two-messages", props: { label: "a" }, slotBindings: { items: [{ type: "PayChild", version: 1, props: { text: "one" } }, { type: "PayChild", version: 1, props: { text: "two" } }] } },
+  ]);
+  const started = await harness.orchestrator.startRun({
+    candidateId: harness.candidateId, createdBy: "user_a", caseSetId: putSet(harness, manifest),
+  });
+  await harness.orchestrator.executeRun(started.run.run_id);
+
+  const rows = harness.repo.cases(started.run.run_id);
+  expect(rows).toHaveLength(2);
+  // Ни один не схлопнулся в алиас: props одинаковые, но кадр — разный.
+  expect(rows.every((row) => row.alias_of_case_id === null)).toBe(true);
+  expect(rows[0]!.props_hash).toBe(rows[1]!.props_hash);
+  expect(rows[0]!.frame_fingerprint).not.toBe(rows[1]!.frame_fingerprint);
+  expect(rows[0]!.slots_hash).not.toBe(rows[1]!.slots_hash);
+  expect(rows[0]!.slots_hash).toMatch(/^[0-9a-f]{64}$/);
+  harness.db.close();
+});
+
+test("реконструкция набора после рестарта даёт тот же frame_fingerprint, что персистирован", async () => {
+  const harness = await setup({ slots: ["items"], namedSlots: true });
+  seedChild(harness, { id: "pay-child", name: "PayChild" });
+  const started = await harness.orchestrator.startRun({
+    candidateId: harness.candidateId, createdBy: "user_a",
+    caseSetId: putSet(harness, slotManifest([
+      { id: "alpha", props: { label: "a" }, slotBindings: { items: [{ type: "PayChild", version: 1, props: { text: "one" } }] } },
+    ])),
+  });
+  const persisted = harness.repo.cases(started.run.run_id)[0]!;
+
+  // Память процесса потеряна — набор восстанавливается из durable-манифеста вместе с пинами.
+  forgetCases(harness, started.run.run_id);
+  const run = await harness.orchestrator.executeRun(started.run.run_id);
+  expect(run.status_reason).toBeNull();
+  const result = harness.repo.caseResult(persisted.case_fingerprint);
+  // Пересчитанный кадр обязан совпасть с персистированным: иначе восстановленный ран снимал бы
+  // не тот случай, что описан в `acceptance_cases`, и reuse промахивался бы всегда.
+  expect(result).toBeDefined();
+  expect(result!.frame_fingerprint).toBe(persisted.frame_fingerprint);
+  harness.db.close();
+});
+
+test("ребёнок заархивирован и удалён посреди рана — реконструкция всё равно строит тот же набор", async () => {
+  const harness = await setup({ slots: ["items"], namedSlots: true });
+  seedChild(harness, { id: "pay-child", name: "PayChild" });
+  const started = await harness.orchestrator.startRun({
+    candidateId: harness.candidateId, createdBy: "user_a",
+    caseSetId: putSet(harness, slotManifest([
+      { id: "alpha", props: { label: "a" }, slotBindings: { items: [{ type: "PayChild", version: 1 }] } },
+    ])),
+  });
+  const persisted = harness.repo.cases(started.run.run_id)[0]!;
+
+  // Статус и надгробие меняются **после** постановки: пины уже авторизованы, и режим
+  // `"reconstruction"` слеп к обоим — иначе отпечатки уехали бы у уже созданных строк.
+  harness.db.run("UPDATE component_publishes SET status='archived' WHERE component_id='pay-child'");
+  harness.db.run("UPDATE components SET deleted_at='now' WHERE id='pay-child'");
+  forgetCases(harness, started.run.run_id);
+  const run = await harness.orchestrator.executeRun(started.run.run_id);
+
+  expect(run.status_reason).toBeNull();
+  expect(run.status).not.toBe("error");
+  expect(harness.repo.caseResult(persisted.case_fingerprint)!.frame_fingerprint).toBe(persisted.frame_fingerprint);
+  harness.db.close();
+});
+
+test("реконструкция отказывает названной причиной, когда строки публикации нет физически", async () => {
+  const harness = await setup({ slots: ["items"], namedSlots: true });
+  seedChild(harness, { id: "pay-child", name: "PayChild" });
+  const started = await harness.orchestrator.startRun({
+    candidateId: harness.candidateId, createdBy: "user_a",
+    caseSetId: putSet(harness, slotManifest([
+      { id: "alpha", props: { label: "a" }, slotBindings: { items: [{ type: "PayChild", version: 1 }] } },
+    ])),
+  });
+  // Строки публикаций не удаляются (v8-rebuild только копирует) — отказ оборонительный, но он
+  // обязан быть **названным**: «набор рана больше не восстановим» читается из `status_reason`.
+  harness.db.run("DELETE FROM component_publishes WHERE component_id='pay-child'");
+  forgetCases(harness, started.run.run_id);
+  const run = await harness.orchestrator.executeRun(started.run.run_id);
+  expect(run.status).toBe("error");
+  expect(run.status_reason).toBe("slot_component_not_published");
+  harness.db.close();
+});
+
+test("названный отказ постановки капчур-джобы доезжает до гейта случая, а не маскируется (v3.1 F3)", async () => {
+  const harness = await setup({ slots: ["items"], namedSlots: true });
+  seedChild(harness, { id: "pay-child", name: "PayChild" });
+  const started = await harness.orchestrator.startRun({
+    candidateId: harness.candidateId, createdBy: "user_a",
+    caseSetId: putSet(harness, slotManifest([
+      { id: "alpha", props: { label: "a" }, slotBindings: { items: [{ type: "PayChild", version: 1 }] } },
+    ])),
+  });
+  // Съёмка архивированного ребёнка невозможна (`ComponentRepo.bundle` не отдаёт нерендерабельные
+  // статусы): доменный отказ постановки джобы не ретраится и обязан стать **продуктовым**
+  // провалом случая с читаемой причиной, а не инфраструктурным `error` без имени.
+  harness.service.enqueueComponentCandidate = () => Promise.reject(new ApiError(422, "slot_component_not_published",
+    "Slot child PayChild v1 is not published in a renderable status"));
+  const run = await harness.orchestrator.executeRun(started.run.run_id);
+  expect(run.status).toBe("fail");
+  const details = gatesOfCase(harness, run.run_id, "alpha").map((gate) => gate.detail ?? "").join("\n");
+  expect(details).toContain("PayChild");
   harness.db.close();
 });
