@@ -99,13 +99,21 @@ async function validateCaseSet(request: Request, db: Database, componentId: stri
   if (body.manifest === undefined) throw new ApiError(400, "invalid_request", "manifest is required");
 
   const { manifest, warnings } = validateManifest(db, componentId, body.manifest);
+  // PUT-parity: тот же `validateManifest` и то же построение набора, что у публикации и старта
+  // рана. Плата за расхождение — dry-run, который «проходит», а ран отказывает (или наоборот).
+  // T2.1 заменит вызов на `casesOfRun` (разрешение слот-пинов) — контракт ручки от этого не меняется.
   const cases = buildCasesFromManifest(manifest);
   const caseSetId = caseSetIdOf(manifest);
+  const frames = cases.filter((item) => item.aliasOfCaseId === null);
   return json({
     caseSetId,
     componentId,
     designSystem: new ComponentRepo(db).row(componentId).design_system,
     cases: { count: cases.length, ids: cases.map((item) => item.caseId) },
+    // Кадры набора (план 2026-08-05 §A5): случаи, которые действительно снимаются. Два состояния с
+    // одинаковыми props и разным содержимым слотов обязаны быть здесь **двумя** записями — ровно
+    // это отличает исправленный дедуп от прежнего схлопывания в один кадр.
+    frames: { count: frames.length, ids: frames.map((item) => item.caseId) },
     coverage: coverageOf(manifest),
     warnings,
     // Существование строки — единственное, что отличает dry-run от последующего PUT: набор

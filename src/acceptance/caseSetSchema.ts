@@ -162,6 +162,49 @@ export const caseSetCropLineageSchema = z.strictObject({
   sourceSurface: z.enum(CROP_SOURCE_SURFACES).optional(),
 });
 
+/**
+ * **Слот-биндинги случая** (план `docs/plans/2026-08-05-slot-acceptance.md` §A1).
+ *
+ * До этого приёмочный контур умел ровно одно — рендерить кандидата с **пустыми слотами**: манифест
+ * описывал только собственные props, поэтому два состояния Figma, отличающиеся содержимым слота,
+ * приезжали на сервер с одинаковыми props и схлопывались в `422 duplicate_case_props`. Биндинги
+ * описывают, чем набивается слот, и делают эти два состояния двумя разными кадрами.
+ *
+ * Инварианты именно схемы:
+ *
+ * 1. **Пин точный и обязательный** (`version`). Ребёнок — уже опубликованный компонент, и «последняя
+ *    активная версия» сделала бы кадр случая зависящим от чужих публикаций: набор контентно
+ *    адресован, а его смысл молча уезжал бы. `bundleHash` в манифесте **нет** — он резолвится
+ *    сервером из иммутабельной строки публикации (§A1), иначе клиент диктовал бы байты.
+ * 2. **Глубина 1.** `strictObject` ребёнка не знает поля вложенных слотов, поэтому дерево глубже
+ *    одного уровня — отказ схемы, а не тихо игнорируемое поле.
+ * 3. **Ключ `default` легален** (§A2a): дефолтный слот в этой кодовой базе неявный
+ *    (`runtimeSpec.ts` — `slotOf(child) ?? "default"`), компоненты его не объявляют, и без него
+ *    карусель из 9 детей осталась бы невыразимой. Проверки принадлежности `extracted.meta.slots` и
+ *    гейт `capabilities.namedSlots` его не касаются — они про **именованные** ключи.
+ */
+export const CASE_SET_MAX_SLOT_CHILDREN = 12;
+export const CASE_SET_MAX_SLOTS_PER_CASE = 8;
+/** Неявный слот `children`; в манифесте он именуется явно, в дереве съёмки — отсутствием `slot`. */
+export const DEFAULT_SLOT_KEY = "default";
+/** Тот же charset, что у `definition.slots` (`routes/meta.ts` JSON-схема компонента). */
+export const SLOT_KEY_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+const slotKey = z.string().max(32).regex(SLOT_KEY_PATTERN, "slot key must match ^[a-z0-9]+(?:-[a-z0-9]+)*$");
+
+export const caseSetSlotChildSchema = z.strictObject({
+  /** Имя опубликованного компонента (`components.name` уникально глобально и не переименовывается). */
+  type: z.string().min(1).max(64),
+  /** Точный пин версии: обязателен по построению (см. инвариант 1). */
+  version: z.number().int().positive(),
+  props: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const caseSetSlotBindingsSchema = z
+  .record(slotKey, z.array(caseSetSlotChildSchema).min(1).max(CASE_SET_MAX_SLOT_CHILDREN))
+  .refine((value) => Object.keys(value).length <= CASE_SET_MAX_SLOTS_PER_CASE,
+    `at most ${CASE_SET_MAX_SLOTS_PER_CASE} slots per case`);
+
 export const caseSetCaseSchema = z.strictObject({
   id: caseId,
   props: z.record(z.string(), z.unknown()),
@@ -193,6 +236,12 @@ export const caseSetCaseSchema = z.strictObject({
   aliasOf: caseId.optional(),
   /** Координаты случая в измерениях семьи (`dimensions`) — вход coverage и variant family (W5b). */
   dims: z.record(dimensionName, dimensionValue).optional(),
+  /**
+   * Содержимое слотов случая (§A1). Строго `.optional()` **без** `.default()` (C6/C25, тот же
+   * инвариант, что у `cropLineage.sourceSurface`): `caseSetIdOf` хэширует `parsed.data`, и любой
+   * zod-дефолт сменил бы контентный адрес **всех** уже опубликованных манифестов.
+   */
+  slotBindings: caseSetSlotBindingsSchema.optional(),
 });
 
 export const caseSetManifestSchema = z.strictObject({
@@ -219,3 +268,5 @@ export type CaseSetManifest = z.infer<typeof caseSetManifestSchema>;
 export type CaseSetCase = z.infer<typeof caseSetCaseSchema>;
 export type CaseSetCapture = z.infer<typeof caseSetCaptureSchema>;
 export type CaseSetCasePolicy = z.infer<typeof caseSetCasePolicySchema>;
+export type CaseSetSlotChild = z.infer<typeof caseSetSlotChildSchema>;
+export type CaseSetSlotBindings = z.infer<typeof caseSetSlotBindingsSchema>;

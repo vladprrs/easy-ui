@@ -8,8 +8,9 @@ import {
   type CaseSetManifest,
 } from "../../src/acceptance/caseSetSchema";
 import {
-  buildCasesFromManifest, CaseSetRepo, casePolicyHashOf, caseSetIdOf, coverageOf, manifestOfRow,
-  surfaceOfManifest, validateManifest,
+  buildCasesFromManifest, CaseSetRepo, caseDedupKeyOf, casePolicyHashOf, caseSetIdOf, coverageOf,
+  dedupSlotsKeyOf, manifestOfRow, publishedPinByNameAndVersion, slotsHashOf, surfaceOfManifest,
+  validateManifest,
 } from "./caseSets";
 import {
   CASE_FINGERPRINT_ALGO_VERSION,
@@ -251,7 +252,7 @@ test("a manifest without dimensions gets a trivial coverage, not an invented pro
   const { manifest: parsed } = validateManifest(db, "yp-badge", manifest());
   expect(coverageOf(parsed)).toEqual({
     dimensions: {}, expectedTuples: 0, presentTuples: 2,
-    missingTuples: [], missingCount: 0, truncated: false, duplicates: [],
+    missingTuples: [], missingCount: 0, truncated: false, duplicates: [], frameCases: 2,
   });
   db.close();
 });
@@ -398,7 +399,8 @@ test("algoVersion bump invalidates every fingerprint accumulated by earlier wave
   // readiness/env вместо заглушек, в W5a — визуальный гейт. Версия 6 (план 2026-08-04, D-B) —
   // расслоение отпечатка на кадр/сравнение/вердикт: это другая **модель** случая, а не другие
   // значения внутри прежней, поэтому прод-кэш инвалидируется целиком (санкционировано планом).
-  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(6);
+  // Версия 7 (план 2026-08-05 §A4) — слот-биндинги во входах кадра: тот же класс события.
+  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(7);
   const frame = frameFingerprint({
     candidateId: `cand_${"0".repeat(64)}`, caseKey: "alpha", propsHash: "props-1",
     surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
@@ -586,5 +588,277 @@ test("W5: голден-неизменность — исторический м�
     ],
   });
   expect(hug.caseSetId).not.toBe(caseSetId);
+  db.close();
+});
+
+// ------------------------------------------- слот-биндинги (план 2026-08-05 §A1–A3, T1.1)
+
+/**
+ * Публикация компонента «как настоящая»: строка каталога + ревизия + публикация с `definition_meta`.
+ * Ровно эти три таблицы читает `publishedPinByNameAndVersion`, и ДС берётся у **ревизии**.
+ */
+const seedPublish = (db: Database, input: {
+  id: string; name: string; version?: number; status?: string; designSystem?: string;
+  deleted?: boolean; meta?: Record<string, unknown>;
+}): void => {
+  const version = input.version ?? 1;
+  const designSystem = input.designSystem ?? "yandex-pay";
+  if (!db.query("SELECT 1 ok FROM components WHERE id=?").get(input.id)) {
+    db.run(`INSERT INTO components (id,name,head_rev,design_system,deleted_at,created_at,updated_at)
+      VALUES (?,?,?,?,?,'now','now')`, [input.id, input.name, version, designSystem, input.deleted ? "now" : null]);
+  } else if (input.deleted) {
+    db.run("UPDATE components SET deleted_at='now' WHERE id=?", [input.id]);
+  }
+  db.run("INSERT INTO component_revisions (component_id,rev,source,design_system,message,created_at) VALUES (?,?,'src',?,NULL,'now')",
+    [input.id, version, designSystem]);
+  db.run(`INSERT INTO component_publishes
+    (component_id,version,rev,status,compiled_js,definition_meta,source_hash,bundle_hash,host_abi_version,message,published_at)
+    VALUES (?,?,?,?,'js',?,?,?,2,NULL,'now')`,
+    [input.id, version, version, input.status ?? "active", JSON.stringify(input.meta ?? {}),
+      `sh-${input.id}-${version}`, `bh-${input.id}-${version}`]);
+};
+
+/** Субъект (`yp-badge`) с именованным слотом `items` + один опубликованный ребёнок. */
+const dbWithSlotFamily = (): Database => {
+  const db = dbWithAsset();
+  seedPublish(db, {
+    id: "yp-badge", name: "YpBadge",
+    meta: { slots: ["items"], capabilities: { namedSlots: true } },
+  });
+  seedPublish(db, {
+    id: "pay-child", name: "PayChild",
+    meta: { propsJsonSchema: { type: "object", properties: { label: { type: "string" } }, required: ["label"] } },
+  });
+  return db;
+};
+
+const slotManifest = (cases: unknown[]): Record<string, unknown> =>
+  manifest({ cases } as unknown as Partial<CaseSetManifest>);
+
+const child = (label: string, version = 1) => ({ type: "PayChild", version, props: { label } });
+
+test("§A3: одинаковые props с разным содержимым слота — два случая, а не duplicate_case_props", () => {
+  // Ровно репро фидбэка (PaySmsModule): два состояния Figma отличаются только детьми слота, у
+  // родителя props идентичны. До §A3 такой манифест отвергался при PUT, а обойдя PUT — схлопывался
+  // в один кадр внутри `buildCasesFromManifest`, и матрица «проходила», ничего не сняв.
+  const db = dbWithSlotFamily();
+  const { manifest: parsed, warnings } = validateManifest(db, "yp-badge", slotManifest([
+    { id: "one-message", props: { title: "SMS" }, slotBindings: { items: [child("a")] } },
+    { id: "two-messages", props: { title: "SMS" }, slotBindings: { items: [child("a"), child("b")] } },
+  ]));
+  expect(warnings).toEqual([]);
+  const cases = buildCasesFromManifest(parsed);
+  expect(cases.map((item) => [item.caseId, item.aliasOfCaseId]))
+    .toEqual([["one-message", null], ["two-messages", null]]);
+  // Число кадров едет наружу: агент берёт его как `expectedCases` promote'а.
+  expect(coverageOf(parsed).frameCases).toBe(2);
+  // Порядок детей — порядок рендера: перестановка это другой кадр, а не тот же набор.
+  const swapped = validateManifest(db, "yp-badge", slotManifest([
+    { id: "one-message", props: { title: "SMS" }, slotBindings: { items: [child("b"), child("a")] } },
+  ]));
+  expect(dedupSlotsKeyOf(swapped.manifest.cases[0]!.slotBindings))
+    .not.toBe(dedupSlotsKeyOf(parsed.cases[1]!.slotBindings));
+  db.close();
+});
+
+test("§A3: одинаковые props И одинаковые биндинги — по-прежнему duplicate_case_props", () => {
+  const db = dbWithSlotFamily();
+  fails(() => validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "SMS" }, slotBindings: { items: [child("a")] } },
+    { id: "two", props: { title: "SMS" }, slotBindings: { items: [child("a")] } },
+  ])), 422, "duplicate_case_props");
+  // И порядок ключей слотов на это не влияет: ключ дедупа канонизован, как и адрес набора.
+  fails(() => validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "SMS" }, slotBindings: { items: [child("a")], default: [child("b")] } },
+    { id: "two", props: { title: "SMS" }, slotBindings: { default: [child("b")], items: [child("a")] } },
+  ])), 422, "duplicate_case_props");
+  db.close();
+});
+
+test("§A3: `props: {}` у ребёнка эквивалентен отсутствию props — дедуп их схлопывает", () => {
+  const db = dbWithSlotFamily();
+  seedPublish(db, { id: "pay-plain", name: "PayPlain" });
+  fails(() => validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "t" }, slotBindings: { items: [{ type: "PayPlain", version: 1 }] } },
+    { id: "two", props: { title: "t" }, slotBindings: { items: [{ type: "PayPlain", version: 1, props: {} }] } },
+  ])), 422, "duplicate_case_props");
+  db.close();
+});
+
+test("§A3: алиас обязан повторить и props, и биндинги цели", () => {
+  const db = dbWithSlotFamily();
+  const ok = validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "t" }, slotBindings: { items: [child("a")] } },
+    { id: "copy", props: { title: "t" }, slotBindings: { items: [child("a")] }, aliasOf: "one" },
+  ]));
+  expect(buildCasesFromManifest(ok.manifest).map((item) => item.aliasOfCaseId)).toEqual([null, "one"]);
+
+  for (const bindings of [{ items: [child("b")] }, undefined]) {
+    fails(() => validateManifest(db, "yp-badge", slotManifest([
+      { id: "one", props: { title: "t" }, slotBindings: { items: [child("a")] } },
+      { id: "copy", props: { title: "t" }, ...(bindings ? { slotBindings: bindings } : {}), aliasOf: "one" },
+    ])), 422, "invalid_alias_target");
+  }
+  db.close();
+});
+
+test("§A2: `$`- и `__eui`-префиксы в props ребёнка — отказ slot_props_dynamic", () => {
+  const db = dbWithSlotFamily();
+  for (const props of [
+    { $asset: "asset_1" },
+    { $cond: { when: "x" } },
+    { __euiRef: 1 },
+    { label: "a", nested: { deep: [{ $asset: "asset_1" }] } },
+  ]) {
+    fails(() => validateManifest(db, "yp-badge", slotManifest([
+      { id: "one", props: { title: "t" }, slotBindings: { items: [{ type: "PayChild", version: 1, props }] } },
+    ])), 422, "slot_props_dynamic");
+  }
+  db.close();
+});
+
+test("§A2: пин ребёнка резолвится по имени и точной версии; надгробие не резолвится", () => {
+  const db = dbWithSlotFamily();
+  seedPublish(db, { id: "pay-gone", name: "PayGone", meta: {} , deleted: true });
+  expect(publishedPinByNameAndVersion(db, "PayChild", 1, "yandex-pay")).toMatchObject({
+    componentId: "pay-child", version: 1, status: "active", bundleHash: "bh-pay-child-1", designSystem: "yandex-pay",
+  });
+  // Soft-deleted компонент: имя зарезервировано, но пин обязан не резолвиться.
+  expect(publishedPinByNameAndVersion(db, "PayGone", 1, "yandex-pay")).toBeNull();
+  fails(() => validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "t" }, slotBindings: { items: [{ type: "PayGone", version: 1 }] } },
+  ])), 422, "slot_component_not_published");
+  // Несуществующая версия существующего компонента — тот же отказ.
+  fails(() => validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "t" }, slotBindings: { items: [child("a", 7)] } },
+  ])), 422, "slot_component_not_published");
+  db.close();
+});
+
+test("§A2: archived-ребёнок отвергается, superseded/deprecated проходят с warning'ом", () => {
+  const db = dbWithSlotFamily();
+  seedPublish(db, { id: "pay-old", name: "PayOld", version: 1, status: "superseded" });
+  seedPublish(db, { id: "pay-old", name: "PayOld", version: 2, status: "active" });
+  seedPublish(db, { id: "pay-dead", name: "PayDead", version: 1, status: "archived" });
+
+  // Промоут авто-supersede'ит прежние версии — асимметричный гейт сломал бы идемпотентный повтор
+  // PUT байт-в-байт того же манифеста ровно в момент выхода новой версии ребёнка.
+  const superseded = validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "t" }, slotBindings: { items: [{ type: "PayOld", version: 1 }] } },
+  ]));
+  expect(superseded.warnings.join("\n")).toContain("slot_pin_superseded");
+  // Повтор того же манифеста даёт тот же контентный адрес и тот же warning — публикация идемпотентна.
+  const again = validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "t" }, slotBindings: { items: [{ type: "PayOld", version: 1 }] } },
+  ]));
+  expect(again.caseSetId).toBe(superseded.caseSetId);
+
+  fails(() => validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "t" }, slotBindings: { items: [{ type: "PayDead", version: 1 }] } },
+  ])), 422, "slot_component_not_published");
+  db.close();
+});
+
+test("§A2: чужая ДС, ссылка на себя и props мимо схемы пина — три разных отказа", () => {
+  const db = dbWithSlotFamily();
+  seedPublish(db, { id: "sh-child", name: "ShChild", designSystem: "other-ds" });
+
+  fails(() => validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "t" }, slotBindings: { items: [{ type: "ShChild", version: 1 }] } },
+  ])), 422, "slot_component_design_system_mismatch");
+  fails(() => validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "t" }, slotBindings: { items: [{ type: "YpBadge", version: 1 }] } },
+  ])), 422, "slot_self_reference");
+  // Схема запиненной версии ребёнка требует строковый `label`.
+  fails(() => validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "t" }, slotBindings: { items: [{ type: "PayChild", version: 1, props: { label: 5 } }] } },
+  ])), 422, "slot_props_invalid");
+  fails(() => validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "t" }, slotBindings: { items: [{ type: "PayChild", version: 1, props: {} }] } },
+  ])), 422, "slot_props_invalid");
+  db.close();
+});
+
+test("§A2a: дефолтный слот легален и не требует объявления в slots компонента", () => {
+  const db = dbWithSlotFamily();
+  const nine = Array.from({ length: 9 }, (_, index) => child(`card-${index}`));
+  const { manifest: parsed, warnings } = validateManifest(db, "yp-badge", slotManifest([
+    { id: "carousel", props: { title: "t" }, slotBindings: { default: nine } },
+  ]));
+  expect(parsed.cases[0]!.slotBindings?.default).toHaveLength(9);
+  // Ни `slot_unknown`, ни `slot_bindings_unsupported` (и их PUT-warning'ов) на дефолтном слоте нет.
+  expect(warnings).toEqual([]);
+  // Именованный слот вне объявленных — warning при PUT (жёсткий отказ — на старте рана, T2.1).
+  const named = validateManifest(db, "yp-badge", slotManifest([
+    { id: "one", props: { title: "t" }, slotBindings: { footer: [child("a")] } },
+  ]));
+  expect(named.warnings.join("\n")).toContain('slot "footer" is not among the named slots');
+  db.close();
+});
+
+test("§A1: схема слот-биндингов — глубина 1, лимиты детей и слотов, charset ключа", () => {
+  const db = dbWithSlotFamily();
+  const cases = (slotBindings: unknown) => slotManifest([{ id: "one", props: { title: "t" }, slotBindings }]);
+  // Вложенность: `strictObject` ребёнка не знает полей поддерева.
+  fails(() => validateManifest(db, "yp-badge", cases({ items: [{ type: "PayChild", version: 1, slotBindings: { items: [child("a")] } }] })),
+    422, "validation_failed");
+  fails(() => validateManifest(db, "yp-badge", cases({ items: [{ type: "PayChild", version: 1, children: [child("a")] }] })),
+    422, "validation_failed");
+  // Версия обязательна и целая положительная.
+  for (const bad of [{ type: "PayChild" }, { type: "PayChild", version: 0 }, { type: "PayChild", version: 1.5 }]) {
+    fails(() => validateManifest(db, "yp-badge", cases({ items: [bad] })), 422, "validation_failed");
+  }
+  // Потолки: 12 детей в слоте, 8 слотов в случае, пустой слот.
+  fails(() => validateManifest(db, "yp-badge", cases({ items: Array.from({ length: 13 }, (_, i) => child(`c${i}`)) })),
+    422, "validation_failed");
+  fails(() => validateManifest(db, "yp-badge", cases({ items: [] })), 422, "validation_failed");
+  fails(() => validateManifest(db, "yp-badge", cases(Object.fromEntries(
+    Array.from({ length: 9 }, (_, i) => [`slot-${i}`, [child("a")]])))), 422, "validation_failed");
+  // Charset ключа слота — тот же, что у `definition.slots`.
+  for (const key of ["Items", "items_1", "-items", "items-", "i".repeat(33)]) {
+    fails(() => validateManifest(db, "yp-badge", cases({ [key]: [child("a")] })), 422, "validation_failed");
+  }
+  db.close();
+});
+
+test("§A3/C6: слот-free манифест ведёт себя ровно как раньше, а биндинги двигают адрес набора", () => {
+  const db = dbWithSlotFamily();
+  const plain = validateManifest(db, "yp-badge", manifest());
+  // Само существование поля в схеме адрес не двигает (`.optional()` без `.default()`).
+  expect(plain.caseSetId).toBe(caseSetIdOf(plain.manifest));
+  expect(Object.keys(plain.manifest.cases[0]!)).not.toContain("slotBindings");
+  expect(caseDedupKeyOf(plain.manifest.cases[0]!)).toBe(`${buildCasesFromManifest(plain.manifest)[0]!.propsHash}:-`);
+  // Тот же манифест со слотом — другой набор.
+  const bound = validateManifest(db, "yp-badge", slotManifest([
+    { id: "default", props: { tone: "neutral" }, slotBindings: { items: [child("a")] } },
+    { id: "accent", props: { tone: "accent" } },
+  ]));
+  expect(bound.caseSetId).not.toBe(plain.caseSetId);
+  db.close();
+});
+
+test("§A3: slotsHash считается по резолвнутому кортежу и не зависит от лишних полей", () => {
+  const resolved = [
+    { slot: "items", index: 0, componentId: "pay-child", version: 1, bundleHash: "bh-1", propsHash: "ph-1" },
+    { slot: "items", index: 1, componentId: "pay-child", version: 1, bundleHash: "bh-1", propsHash: "ph-2" },
+  ];
+  const hash = slotsHashOf(resolved);
+  expect(hash).toMatch(/^[0-9a-f]{64}$/);
+  // Проекция явная: `name`/`props` в прообраз не входят.
+  expect(slotsHashOf(resolved.map((item) => ({ ...item, name: "PayChild", props: { label: "a" } })))).toBe(hash);
+  // Порядок и байты ребёнка — входят.
+  expect(slotsHashOf([resolved[1]!, resolved[0]!])).not.toBe(hash);
+  expect(slotsHashOf([{ ...resolved[0]!, bundleHash: "bh-2" }, resolved[1]!])).not.toBe(hash);
+  expect(slotsHashOf([])).not.toBe(hash);
+});
+
+test("откат сборки: нечитаемый сохранённый манифест — именованный отказ, а не голая 500", () => {
+  const db = dbWithAsset();
+  const { manifest: parsed } = validateManifest(db, "yp-badge", manifest());
+  const { row } = new CaseSetRepo(db).put({ componentId: "yp-badge", designSystem: "yandex-pay", manifest: parsed, createdBy: "user_a" });
+  // Ровно то, что увидела бы сборка, выпущенная до этой волны, прочитав манифест со `slotBindings`.
+  db.run("UPDATE component_case_sets SET manifest_json=? WHERE case_set_id=?",
+    [JSON.stringify({ ...parsed, unknownFutureField: 1 }), row.case_set_id]);
+  fails(() => manifestOfRow(new CaseSetRepo(db).require(row.case_set_id)), 422, "case_set_manifest_unreadable");
   db.close();
 });

@@ -47,11 +47,23 @@ const hashOf = (payload: unknown): string => sha256(canonicalStringify(payload))
  *   профиля рана. Это другая модель случая, а не другие значения внутри прежней, поэтому
  *   накопленный прод-кэш обязан быть инвалидирован — плата признана планом (D-B, §W1).
  *
+ * - **Версия 7 — санкционированный третий bump** (план `docs/plans/2026-08-05-slot-acceptance.md`,
+ *   §A4). Кадр случая перестал быть кадром одиночного компонента: в него может входить дерево
+ *   **запинованных опубликованных детей** слотов (`slotBindings`). Ни один прежний вход при этом
+ *   не поменял ни имени, ни значения — slot-free случай хэшируется байт-в-байт как раньше
+ *   (`frameFingerprint` не версионируется, инвариант закреплён golden-тестом
+ *   `f29b0c49…` в `ids.test.ts`), — поэтому формально можно было бы номер не двигать. Двигаем
+ *   осознанно: модель случая расширилась, и накопленные вердикты сняты **без** знания о детях;
+ *   держать их валидными значило бы обещать, что старый вердикт учитывал слоты. Плата —
+ *   глобальная инвалидация reuse; она отрабатывает пересчётом и re-diff'ом без пересъёмки, но
+ *   **только пока включён `EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE=1`** (иначе каскад
+ *   короткозамыкается в `runner.ts`, и семьи уедут в полную пересъёмку).
+ *
  * Инвариант «в пакете renderer-contract-2 bump ровно один» остался верен для **того** пакета;
- * этот bump принадлежит другому плану и закреплён тестами `server/capture/renderer.test.ts` и
- * `server/acceptance/ids.test.ts` уже как «версия === 6».
+ * bump'ы 6 и 7 принадлежат другим планам и закреплены тестами `server/capture/renderer.test.ts` и
+ * `server/acceptance/ids.test.ts` уже как «версия === 7».
  */
-export const CASE_FINGERPRINT_ALGO_VERSION = 6;
+export const CASE_FINGERPRINT_ALGO_VERSION = 7;
 
 /**
  * Хэш readiness-политики (W4) — тот же алгоритм, что у клиента
@@ -158,17 +170,49 @@ export interface FrameFingerprintInput {
   surface: CaseSurface;
   readinessPolicyHash: string;
   rendererFingerprint: string;
+  /**
+   * Дети слотов (план 2026-08-05 §A4), в порядке рендера. Подмножество `ResolvedSlotBinding`:
+   * `name`/`props` сюда не едут — имя однозначно определяется `componentId`, а значения props уже
+   * представлены `propsHash`.
+   *
+   * **Хэшируется условно** (`definedOnly`): `frameFingerprint` не версионируется, поэтому
+   * slot-free вход обязан давать байт-в-байт тот же хэш, что до появления слотов. Пустой массив
+   * нормализуется в «поля нет» — иначе `[]` отличался бы от отсутствия и тихо инвалидировал бы
+   * прод-кэш (инвариант «отсутствует, а не пусто», `cases.ts#ResolvedSlotBinding`).
+   */
+  slotBindings?: readonly FrameSlotBinding[];
+}
+
+/** Кадровое подмножество разрешённой привязки слота (`ResolvedSlotBinding` без `name`/`props`). */
+export interface FrameSlotBinding {
+  slot: string;
+  index: number;
+  componentId: string;
+  version: number;
+  bundleHash: string;
+  propsHash: string;
 }
 
 export function frameFingerprint(input: FrameFingerprintInput): string {
-  return hashOf({
+  const slots = input.slotBindings !== undefined && input.slotBindings.length > 0
+    ? input.slotBindings.map((child) => ({
+      slot: child.slot,
+      index: child.index,
+      componentId: child.componentId,
+      version: child.version,
+      bundleHash: child.bundleHash,
+      propsHash: child.propsHash,
+    }))
+    : undefined;
+  return hashOf(definedOnly({
     candidateId: input.candidateId,
     caseKey: input.caseKey,
     propsHash: input.propsHash,
     surface: input.surface,
     readinessPolicyHash: input.readinessPolicyHash,
     rendererFingerprint: input.rendererFingerprint,
-  });
+    slotBindings: slots,
+  }));
 }
 
 /**
@@ -260,6 +304,14 @@ export interface CaseFingerprintCase {
   /** W5-слоты (см. `ComparisonFingerprintInput`). */
   referenceSurface?: string | null;
   referencePlacement?: { x: number; y: number } | null;
+  /**
+   * Дети слотов (план 2026-08-05 §A4). Поле обязано быть **и здесь, и в `caseFingerprintsOf`**:
+   * тотальность `FIELD_LAYERS` доказывает только то, что слой у поля объявлен, но не то, что поле
+   * доехало до хэша, — молчаливый пропуск здесь дал бы «классифицировано как frame, а кадр не
+   * двигает». Поэтому дифференциальные тесты стоят на уровне `caseFingerprintsOf`, а не
+   * `frameFingerprint`.
+   */
+  slotBindings?: readonly FrameSlotBinding[];
 }
 
 export function verdictPolicySnapshotOf(policy: AcceptancePolicy, item: CaseFingerprintCase): VerdictPolicySnapshot {
@@ -324,6 +376,10 @@ export function caseFingerprintsOf(input: CaseFingerprintsInput): CaseFingerprin
     surface: input.surface,
     readinessPolicyHash: readinessHash,
     rendererFingerprint: rendererFingerprint(readinessHash),
+    // Условный спред той же формы, что у W5-слотов сравнения ниже: поле, которого нет, не должно
+    // появиться ключом со значением `undefined` — и, что важнее, оно не должно быть **забыто**
+    // здесь (гейт `FIELD_LAYERS` этого не ловит). Пустой массив нормализует `frameFingerprint`.
+    ...(input.case.slotBindings === undefined ? {} : { slotBindings: input.case.slotBindings }),
   });
   const comparison = comparisonFingerprintOf({
     referenceAssetId: input.case.referenceAssetId ?? null,
@@ -419,6 +475,14 @@ export const FIELD_LAYERS = {
   // Координата случая в семье — ярлык отчёта (§W5b): ни кадра, ни метрик, ни вердикта.
   dims: ["report-only"],
   declaredPolicyProfile: ["verdict"],
+  // Дети слотов рисуются внутри кадра: их состав, версии, бандлы, props и **порядок** — прямые
+  // входы пикселей, значит кадровый слой (план 2026-08-05 §A4).
+  slotBindings: ["frame"],
+  // Хэш разрешённого дерева слотов — производная `slotBindings`, уже захэшированных по значениям
+  // кадровым слоем (та же логика, что у `casePolicyHash`). Он живёт как ключ покрытия, рукопожатия
+  // капчура и evidence, но входом отпечатка быть не должен: иначе один и тот же факт учитывался бы
+  // дважды, а рассинхрон хэша со своими же значениями стал бы неотличим от смены состава детей.
+  slotsHash: ["report-only"],
 
   // --- поверхность
   "surface.viewport": ["frame"],

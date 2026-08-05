@@ -34,11 +34,11 @@ const PLAIN = { caseKey: "alpha", propsHash: "props-1" };
 
 // ------------------------------------------------------- версия алгоритма
 
-test("версия алгоритма отпечатка случая === 6 (расслоение на кадр/сравнение/вердикт)", () => {
+test("версия алгоритма отпечатка случая === 7 (кадр может содержать запинованных детей слотов)", () => {
   // Литерал, а не ссылка на константу: тест обязан падать при **любом** изменении значения, в том
-  // числе случайном. Bump 5→6 санкционирован планом 2026-08-04 (D-B) — второй bump после пакета
-  // renderer-contract-2, и он принадлежит другому плану, чей инвариант «bump ровно один» не нарушен.
-  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(6);
+  // числе случайном. Bump 5→6 санкционирован планом 2026-08-04 (D-B), 6→7 — планом 2026-08-05 (§A4):
+  // модель случая расширилась слотами, и накопленные вердикты сняты без знания о детях.
+  expect(CASE_FINGERPRINT_ALGO_VERSION).toBe(7);
 });
 
 // ------------------------------------------------------------ слои и дельты
@@ -190,6 +190,97 @@ test("W5: поля content-hug классифицированы как compariso
   expect(layerOf("referencePlacement")).toEqual(["comparison"]);
 });
 
+// ------------------------------------------------------------- слоты (§A4)
+
+/**
+ * Дети слотов (план `docs/plans/2026-08-05-slot-acceptance.md` §A4).
+ *
+ * Все дифференциальные проверки стоят на уровне `caseFingerprintsOf`, а не `frameFingerprint`:
+ * тотальность `FIELD_LAYERS` доказывает лишь то, что слой у поля объявлен, — забыть протащить
+ * поле через `CaseFingerprintCase`/`caseFingerprintsOf` она не мешает, и именно этот молчаливый
+ * пропуск ловят тесты ниже.
+ */
+const CHILD = {
+  slot: "content", index: 0, componentId: "cmp_child", version: 3,
+  bundleHash: "bundle-a", propsHash: "child-props-1",
+};
+const SECOND_CHILD = { ...CHILD, index: 1, componentId: "cmp_second", bundleHash: "bundle-b", propsHash: "child-props-2" };
+
+/**
+ * Golden кадрового отпечатка, снятый на **до-слотовом** HEAD (e3a93fc) и зафиксированный планом
+ * (§«Design invariants»). `frameFingerprint` не версионируется — в отличие от `case_fingerprint`,
+ * у него нет ручки инвалидации, — поэтому появление слотов обязано быть байт-нейтральным для
+ * случая без слотов. Литерал, а не пересчёт: значение, вычисленное после изменения, доказывало бы
+ * только само себя.
+ */
+const GOLDEN_FRAME_INPUT = {
+  candidateId: "cand_golden-fixture",
+  caseKey: "alpha",
+  propsHash: "props-1",
+  surface: { viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" },
+  readinessPolicyHash: "readiness-fixture",
+  rendererFingerprint: "renderer-fixture",
+} as const;
+const GOLDEN_FRAME = "f29b0c498389404e5e426486bbb6050add243c6c0d97eff579ef127ec9fabeb1";
+
+test("слоты байт-нейтральны для случая без слотов: кадр === golden до-слотового HEAD", () => {
+  // Фикстура golden'а несёт синтетические `readinessPolicyHash`/`rendererFingerprint`, которые
+  // `caseFingerprintsOf` выводит из политики и подменить не даёт, поэтому сам литерал проверяется
+  // на `frameFingerprint`. Связка с рабочим путём — второй половиной теста: `caseFingerprintsOf`
+  // для slot-free случая собирает **ровно тот же объект входа** (без ключа `slotBindings`), значит
+  // байт-нейтральность golden'а распространяется и на него.
+  expect(frameFingerprint(GOLDEN_FRAME_INPUT)).toBe(GOLDEN_FRAME);
+
+  const readinessHash = readinessPolicyHashOf(DEFAULT.readiness);
+  expect(fingerprints(PLAIN).frame).toBe(frameFingerprint({
+    candidateId: CANDIDATE, caseKey: PLAIN.caseKey, propsHash: PLAIN.propsHash, surface: SURFACE,
+    readinessPolicyHash: readinessHash, rendererFingerprint: rendererFingerprint(readinessHash),
+  }));
+
+  // Негатив: случай **со** слотами обязан уехать с golden'а — иначе поле не доехало до хэша.
+  expect(frameFingerprint({ ...GOLDEN_FRAME_INPUT, slotBindings: [CHILD] })).not.toBe(GOLDEN_FRAME);
+});
+
+test("slotBindings доезжают до кадра через caseFingerprintsOf (а не только до FIELD_LAYERS)", () => {
+  const bare = fingerprints(PLAIN);
+  const withSlots = fingerprints({ ...PLAIN, slotBindings: [CHILD] });
+  expect(withSlots.frame).not.toBe(bare.frame);
+  // Слой — кадровый: сравнение и вердикт дети не трогают, значит смена состава слотов уводит в
+  // пересъёмку, а не в re-diff.
+  expect(withSlots.comparison).toBe(bare.comparison);
+  expect(withSlots.verdictPolicy).toBe(bare.verdictPolicy);
+  expect(withSlots.case).not.toBe(bare.case);
+  expect(FIELD_LAYERS.slotBindings).toEqual(["frame"]);
+});
+
+test("кадр двигает одна лишь смена bundleHash ребёнка", () => {
+  // Пин ребёнка — про пиксели: пересобранный бандл той же версии рисует иначе, и переиспользовать
+  // кадр нельзя, хотя имя, версия и props ребёнка не изменились.
+  const before = fingerprints({ ...PLAIN, slotBindings: [CHILD] });
+  const after = fingerprints({ ...PLAIN, slotBindings: [{ ...CHILD, bundleHash: "bundle-rebuilt" }] });
+  expect(after.frame).not.toBe(before.frame);
+});
+
+test("кадр двигает один лишь порядок детей", () => {
+  // Тот же набор детей в другом порядке — другая картинка. Хэш массива обязан быть
+  // позиционно-чувствительным, а не множественным.
+  const forward = fingerprints({ ...PLAIN, slotBindings: [CHILD, SECOND_CHILD] });
+  const reversed = fingerprints({
+    ...PLAIN,
+    slotBindings: [{ ...SECOND_CHILD, index: 0 }, { ...CHILD, index: 1 }],
+  });
+  expect(reversed.frame).not.toBe(forward.frame);
+});
+
+test("`slotBindings: []` нормализуется в отсутствие поля", () => {
+  // Контракт `AcceptanceCase` — «отсутствует, а не пусто», но `canonicalStringify` выбрасывает
+  // только `undefined`: пустой массив прошёл бы в пре-образ и молча инвалидировал бы весь reuse
+  // slot-free наборов. Нормализация живёт в `frameFingerprint` — единственной точке, через которую
+  // поле попадает в хэш, поэтому нарушителю контракта вверх по стеку она тоже помогает.
+  expect(fingerprints({ ...PLAIN, slotBindings: [] }).frame).toBe(fingerprints(PLAIN).frame);
+  expect(frameFingerprint({ ...GOLDEN_FRAME_INPUT, slotBindings: [] })).toBe(GOLDEN_FRAME);
+});
+
 test("расчёт отпечатков детерминирован и собирается из своих же слоёв", () => {
   const item = { ...PLAIN, referenceAssetId: ASSET_A };
   const first = fingerprints(item);
@@ -230,6 +321,10 @@ const CASE_SAMPLE: Required<AcceptanceCase> = {
   referencePlacement: { x: 0, y: 0 },
   dims: {},
   geometryDetailKeys: [],
+  // §A4: дети слотов — кадровый слой, их хэш — производная (report-only). В боевом случае оба поля
+  // либо отсутствуют, либо непусты; здесь это лишь образец полноты типа.
+  slotBindings: [],
+  slotsHash: "slots-hash",
 };
 
 test("каждое поле политики, случая и поверхности классифицировано по слоям (D3)", () => {

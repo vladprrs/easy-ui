@@ -46,6 +46,33 @@ export function propsHashOf(props: unknown): string {
   return sha256(canonicalStringify(props ?? {}));
 }
 
+/**
+ * Разрешённая привязка ребёнка слота (план `docs/plans/2026-08-05-slot-acceptance.md` §A3/A4).
+ *
+ * Манифест case-set объявляет ребёнка **по имени и точной версии** (`{type, version, props}`), а
+ * сервер разрешает пин в неизменяемую строку публикации: отсюда `componentId`/`bundleHash`, без
+ * которых кадр невоспроизводим (то же соображение, что у замороженных пинов прототипа,
+ * `src/capture/protocol.ts`). `index` — позиция ребёнка внутри своего слота, то есть **порядок
+ * рендера**: два одинаковых набора детей в разном порядке дают разные пиксели и обязаны давать
+ * разные отпечатки.
+ *
+ * `name` и `props` в кадровый отпечаток не входят (их представляют `componentId`+`version` и
+ * `propsHash`), но нужны потребителям: bootstrap капчур-поверхности и evidence.
+ */
+export interface ResolvedSlotBinding {
+  /** Ключ слота; `default` — неявный слот `children` (§A2a). */
+  slot: string;
+  /** Позиция внутри слота, с нуля: порядок рендера входит в кадр. */
+  index: number;
+  componentId: string;
+  /** Имя опубликованного компонента (глобально уникально, не переименовывается). */
+  name: string;
+  version: number;
+  bundleHash: string;
+  props: Record<string, unknown>;
+  propsHash: string;
+}
+
 export interface AcceptanceCase {
   caseId: string;
   caseKey: string;
@@ -99,6 +126,22 @@ export interface AcceptanceCase {
    * потребителем, а не «на всякий случай».
    */
   geometryDetailKeys?: string[];
+  /**
+   * Разрешённые дети слотов (§A4), в порядке рендера. **Инвариант: отсутствует, а не `[]`/`null`** —
+   * `canonicalStringify` выбрасывает только `undefined`, поэтому пустой массив дал бы другой
+   * кадровый отпечаток, чем случай вовсе без слотов, и молча инвалидировал бы весь накопленный
+   * reuse slot-free наборов. Заполняет поле только `resolveSlotBindings` (case-set-путь);
+   * examples-путь слотов не знает.
+   */
+  slotBindings?: ResolvedSlotBinding[];
+  /**
+   * sha256 разрешённого кортежа `[{slot,index,componentId,version,bundleHash,propsHash}]` — тот же
+   * пре-образ, что у кадрового слоя отпечатка (§A3). Персистится (`acceptance_cases.slots_hash`,
+   * миграция v31) и служит ключом покрытия, рукопожатия капчура и evidence. В отпечатки **не
+   * входит**: он производная уже захэшированных по значениям входов кадра. Тот же инвариант
+   * «отсутствует, а не пусто».
+   */
+  slotsHash?: string;
 }
 
 /** `caseId` из имени example: сам ключ, если он в charset, иначе стабильный хэш-суррогат. */

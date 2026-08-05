@@ -25,8 +25,9 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import {
-  CASE_SET_MAX_EXPECTED_TUPLES, COVERAGE_MISSING_TUPLES_LIMIT, caseSetManifestSchema, expectedTuplesOf,
-  type CaseSetManifest, type CropSourceSurface,
+  CASE_SET_MAX_EXPECTED_TUPLES, COVERAGE_MISSING_TUPLES_LIMIT, DEFAULT_SLOT_KEY, caseSetManifestSchema,
+  expectedTuplesOf,
+  type CaseSetCase, type CaseSetManifest, type CaseSetSlotBindings, type CropSourceSurface,
 } from "../../src/acceptance/caseSetSchema";
 import { ApiError } from "../http";
 import { propsHashOf, type AcceptanceCase } from "./cases";
@@ -112,6 +113,273 @@ function propsWarnings(manifest: CaseSetManifest, schema: ReturnType<typeof publ
     }
   }
   return warnings;
+}
+
+// --------------------------------------------------------- слот-биндинги (план 2026-08-05 §A1–A3)
+
+/**
+ * Статусы публикации ребёнка, принимаемые **симметрично** при PUT и на старте рана (§A2).
+ *
+ * Асимметричный гейт («только active при PUT») сломал бы документированный идемпотентный повтор
+ * PUT: promote авто-supersede'ит предыдущие версии, поэтому байт-в-байт тот же манифест переставал
+ * бы приниматься в тот момент, когда любой ребёнок получает новую версию. Тот же набор статусов,
+ * что у рендерабельных пинов прототипа (`repos/prototypes.ts` — `RENDERABLE_PIN_STATUS`).
+ */
+const SLOT_PIN_ACCEPTED_STATUS = new Set(["active", "deprecated", "superseded"]);
+
+export interface PublishedSlotPin {
+  componentId: string;
+  name: string;
+  version: number;
+  status: string;
+  bundleHash: string;
+  designSystem: string;
+  definitionMeta: string;
+}
+
+/**
+ * Пин ребёнка по **имени и точной версии** (§A2). Ни `componentPinByVersion` (адресуется id и любым
+ * статусом), ни name-based «последняя активная» из `validation.ts:205-208` этого не делают.
+ *
+ * Форма запроса повторяет `snapshotDefinitions` (`server/validation.ts:200-208`):
+ * - `c.deleted_at IS NULL` — зарезервированное имя soft-deleted компонента резолвиться не должно,
+ *   иначе пин указывал бы на надгробие;
+ * - дизайн-система берётся у **ревизии** (`cr.design_system`), а не у компонента: это единственный
+ *   источник, по которому судит и снапшот прототипа.
+ *
+ * `designSystem === null` — «не фильтровать» (нужно, чтобы отличить «не опубликован» от «чужая ДС»
+ * и выдать правильный код отказа).
+ */
+export function publishedPinByNameAndVersion(
+  db: Database, name: string, version: number, designSystem: string | null,
+): PublishedSlotPin | null {
+  const select = `SELECT c.id componentId, c.name name, cp.version version, cp.status status,
+      cp.bundle_hash bundleHash, cp.definition_meta definitionMeta, cr.design_system designSystem
+    FROM components c
+    JOIN component_publishes cp ON cp.component_id=c.id AND cp.version=?
+    JOIN component_revisions cr ON cr.component_id=cp.component_id AND cr.rev=cp.rev
+    WHERE c.name=? AND c.deleted_at IS NULL`;
+  const row = designSystem === null
+    ? db.query(select).get(version, name)
+    : db.query(`${select} AND cr.design_system=?`).get(version, name, designSystem);
+  return (row as PublishedSlotPin | null) ?? null;
+}
+
+/** JSON-безопасность props ребёнка: тот же обход, что `validatePropsAgainstSchema` (`screenshot/service.ts`). */
+function jsonSafeChildProps(node: unknown): boolean {
+  if (node === null) return true;
+  const kind = typeof node;
+  if (kind === "string" || kind === "boolean") return true;
+  if (kind === "number") return Number.isFinite(node as number);
+  if (Array.isArray(node)) return node.every(jsonSafeChildProps);
+  if (kind === "object") {
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      // `$…` — директивы рендерера (`$asset`/`$cond`/…), `__eui…` — служебные ключи рантайма.
+      // Их нельзя вносить в bootstrap ребёнка: они исполнились бы как код разметки, а не данные.
+      if (key.startsWith("$") || key.startsWith("__eui")) return false;
+      if (!jsonSafeChildProps(value)) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Консервативная сверка props ребёнка со схемой **запиненной** версии: object-ность, `required`,
+ * типы примитивов верхнего уровня. Тот же объём, что у `validatePropsAgainstSchema` — шире
+ * проверять нельзя без полного JSON-Schema валидатора, а уже это ловит опечатку в имени prop'а.
+ */
+function childPropsIssue(props: Record<string, unknown>, meta: unknown): string | null {
+  const schema = (meta as { propsJsonSchema?: unknown } | null)?.propsJsonSchema;
+  if (!schema || typeof schema !== "object") return null;
+  const shape = schema as { required?: unknown; properties?: Record<string, { type?: unknown }> };
+  if (Array.isArray(shape.required)) {
+    for (const key of shape.required) {
+      if (typeof key === "string" && !(key in props)) return `missing required prop: ${key}`;
+    }
+  }
+  for (const [key, definition] of Object.entries(shape.properties ?? {})) {
+    if (!(key in props) || definition?.type === undefined || typeof definition.type !== "string") continue;
+    const value = props[key];
+    const matches = definition.type === "string" ? typeof value === "string"
+      : definition.type === "number" || definition.type === "integer" ? typeof value === "number"
+      : definition.type === "boolean" ? typeof value === "boolean"
+      : definition.type === "array" ? Array.isArray(value)
+      : definition.type === "object" ? value !== null && typeof value === "object" && !Array.isArray(value)
+      : definition.type === "null" ? value === null
+      : true;
+    if (!matches) return `prop ${key} must be of type ${definition.type}`;
+  }
+  return null;
+}
+
+/** `definition_meta` последней активной публикации компонента (общий вход warning-проверок). */
+function publishedDefinitionMeta(db: Database, componentId: string): Record<string, unknown> | null {
+  const row = db.query(`SELECT definition_meta FROM component_publishes
+    WHERE component_id=? AND status='active' ORDER BY version DESC LIMIT 1`).get(componentId) as { definition_meta: string } | null;
+  if (!row) return null;
+  try {
+    const meta = JSON.parse(row.definition_meta) as unknown;
+    return meta !== null && typeof meta === "object" ? meta as Record<string, unknown> : null;
+  } catch { return null; }
+}
+
+/**
+ * Проверки слот-биндингов (§A2). Разделение труда с рантаймом:
+ *
+ * - **Опубликованные факты** (ребёнок существует, версия запинена, статус рендерабелен, ДС та же,
+ *   props сходятся со схемой пина, props JSON-безопасны) — жёсткие 422 **здесь**: они не зависят
+ *   ни от головы кандидата, ни от момента запуска.
+ * - **Факты головы кандидата** (есть ли такой именованный слот, объявлен ли `capabilities.namedSlots`)
+ *   — при PUT только warning'и: голова кандидата законно отличается от последней публикации, а
+ *   манифест часто готовится **до** правки компонента. Жёсткий отказ по ним — на старте рана (T2.1).
+ * - **Дефолтный слот целиком вне обеих проверок членства** (§A2a): он неявный, компоненты его не
+ *   объявляют, и требовать его в `slots` значило бы запретить карусель из 9 детей.
+ */
+function validateSlotBindings(db: Database, manifest: CaseSetManifest, componentId: string, warnings: string[]): void {
+  const bound = manifest.cases.filter((item) => item.slotBindings !== undefined);
+  if (bound.length === 0) return;
+
+  const subject = db.query("SELECT design_system FROM components WHERE id=?")
+    .get(componentId) as { design_system: string } | null;
+  // Компонента нет в БД (валидация манифеста в тестах/дорутовых путях) — ДС не с чем сверять;
+  // выдумывать отказ по несуществующему факту хуже, чем не проверять его.
+  const designSystem = subject?.design_system ?? null;
+
+  // Мемоизация в пределах одного вызова: потолок набора — 64 случая × 8 слотов × 12 детей, и без
+  // неё один PUT давал бы тысячи одинаковых запросов (триаж раунда 1, «accepted minors»).
+  const memo = new Map<string, PublishedSlotPin | null>();
+  const pinOf = (name: string, version: number): PublishedSlotPin | null => {
+    const key = `${version} ${name}`;
+    if (!memo.has(key)) memo.set(key, publishedPinByNameAndVersion(db, name, version, designSystem));
+    return memo.get(key) ?? null;
+  };
+
+  const meta = publishedDefinitionMeta(db, componentId);
+  const declaredSlots = new Set(Array.isArray(meta?.slots) ? (meta!.slots as unknown[]).filter((s): s is string => typeof s === "string") : []);
+  const namedSlotsCapable = (meta?.capabilities as { namedSlots?: unknown } | undefined)?.namedSlots === true;
+
+  for (const item of bound) {
+    for (const [slot, children] of Object.entries(item.slotBindings!)) {
+      children.forEach((child, index) => {
+        const at = ["cases", item.id, "slotBindings", slot, index];
+        const props = child.props ?? {};
+        if (!jsonSafeChildProps(props)) {
+          throw new ApiError(422, "slot_props_dynamic",
+            `Case ${item.id}: slot "${slot}" child ${child.type} declares $- or __eui-prefixed props;`
+            + " slot children take plain JSON data, not renderer directives",
+            { issues: [issue([...at, "props"], "props must be JSON-safe and free of $-/__eui-prefixed keys")] });
+        }
+        const pin = pinOf(child.type, child.version);
+        if (!pin) {
+          // Строка нашлась бы без фильтра по ДС — значит ребёнок из другой системы, и это другой
+          // отказ: «не опубликован» увёл бы автора искать несуществующую публикацию.
+          const foreign = designSystem === null ? null : publishedPinByNameAndVersion(db, child.type, child.version, null);
+          if (foreign) {
+            throw new ApiError(422, "slot_component_design_system_mismatch",
+              `Case ${item.id}: slot "${slot}" binds ${child.type} v${child.version} from design system`
+              + ` ${foreign.designSystem}, but ${componentId} belongs to ${designSystem}`,
+              { issues: [issue(at, `child design system ${foreign.designSystem} != ${designSystem}`)] });
+          }
+          throw new ApiError(422, "slot_component_not_published",
+            `Case ${item.id}: slot "${slot}" binds ${child.type} v${child.version}, which is not a published component version`,
+            { issues: [issue(at, `unknown or unpublished component version: ${child.type} v${child.version}`)] });
+        }
+        if (!SLOT_PIN_ACCEPTED_STATUS.has(pin.status)) {
+          throw new ApiError(422, "slot_component_not_published",
+            `Case ${item.id}: slot "${slot}" binds ${child.type} v${child.version}, whose publish status is`
+            + ` ${pin.status} and does not render`,
+            { issues: [issue(at, `publish status ${pin.status} is not renderable`)] });
+        }
+        if (pin.componentId === componentId) {
+          throw new ApiError(422, "slot_self_reference",
+            `Case ${item.id}: slot "${slot}" binds ${child.type} v${child.version}, which is the subject component itself`,
+            { issues: [issue(at, "a case cannot bind its own component into a slot")] });
+        }
+        const propsIssue = childPropsIssue(props, JSON.parse(pin.definitionMeta) as unknown);
+        if (propsIssue !== null) {
+          throw new ApiError(422, "slot_props_invalid",
+            `Case ${item.id}: slot "${slot}" child ${child.type} v${child.version} has invalid props — ${propsIssue}`,
+            { issues: [issue([...at, "props"], propsIssue)] });
+        }
+        // Коды warning'ов — часть контракта (`slot_pin_deprecated`/`slot_pin_superseded`, дом. паттерн
+        // `repos/prototypes.ts:155-158`); поверхность здесь — строки, поэтому код идёт префиксом.
+        if (pin.status === "deprecated") {
+          warnings.push(`slot_pin_deprecated: case ${item.id}: slot "${slot}" pins ${child.type} v${child.version}, which is deprecated`);
+        } else if (pin.status === "superseded") {
+          warnings.push(`slot_pin_superseded: case ${item.id}: slot "${slot}" pins ${child.type} v${child.version}, which is superseded`);
+        }
+      });
+
+      // Факты головы кандидата — warning'и (жёсткий отказ на старте рана). Дефолтный слот из этой
+      // проверки исключён целиком: он неявный и в `slots` не объявляется никогда.
+      if (slot === DEFAULT_SLOT_KEY || meta === null) continue;
+      if (!namedSlotsCapable) {
+        warnings.push(`case ${item.id}: slot "${slot}" is a named slot, but the last published version of`
+          + ` ${componentId} declares no capabilities.namedSlots; the candidate head is authoritative and this is`
+          + " re-checked as a refusal when the run starts");
+      } else if (!declaredSlots.has(slot)) {
+        warnings.push(`case ${item.id}: slot "${slot}" is not among the named slots of the last published version of`
+          + ` ${componentId} (${[...declaredSlots].sort().join(", ") || "none"}); re-checked as a refusal when the run starts`);
+      }
+    }
+
+    // §A2a: дефолтный слот доступен любому компоненту, который рендерит `children`, а «рендерит ли»
+    // по метаданным неразрешимо. Поэтому — warning, а не отказ: он лишь напоминает проверить, что
+    // компонент вообще что-то делает с детьми.
+    if (item.slotBindings![DEFAULT_SLOT_KEY] && meta !== null && !namedSlotsCapable && declaredSlots.size === 0) {
+      warnings.push(`case ${item.id}: binds the default slot, but the last published version of ${componentId}`
+        + " declares neither named slots nor a slot capability — make sure the component renders its children");
+    }
+  }
+}
+
+/**
+ * **Ключ дедупа PUT-времени** (§A3). Живёт только в памяти и никогда не персистится: нормализованные
+ * биндинги манифеста — по ребёнку `{type, version, propsHash}` — поэтому `props: {}` и отсутствующий
+ * `props` схлопываются, как и должны. Порядок ключей слотов не важен (`canonicalStringify`), порядок
+ * детей внутри слота — важен: это порядок рендера, и он меняет кадр.
+ *
+ * Не путать с `slotsHash` (`slotsHashOf`): тот считается по **резолвнутым** пинам, персистится и
+ * входит в отпечаток кадра. Две разные величины, которые никогда не сравниваются друг с другом.
+ */
+export function dedupSlotsKeyOf(slotBindings: CaseSetSlotBindings | undefined): string | null {
+  if (slotBindings === undefined) return null;
+  const normalized = Object.fromEntries(Object.entries(slotBindings).map(([slot, children]) => [
+    slot, children.map((child) => ({ type: child.type, version: child.version, propsHash: propsHashOf(child.props) })),
+  ]));
+  // Пустой объект биндингов ничем не отличается от их отсутствия — иначе он давал бы «другой» кадр
+  // при одинаковых props (та же нормализация, что `props: {}` ≡ absent).
+  if (Object.keys(normalized).length === 0) return null;
+  return sha256(canonicalStringify(normalized));
+}
+
+/** Ключ дедупа случая: props + биндинги. Слот-free манифест вырождается ровно в сегодняшний `propsHash`. */
+export function caseDedupKeyOf(item: Pick<CaseSetCase, "props" | "slotBindings">): string {
+  return `${propsHashOf(item.props)}:${dedupSlotsKeyOf(item.slotBindings) ?? "-"}`;
+}
+
+/** Резолвнутый ребёнок слота — ровно те поля, которые входят в `slotsHash` и в отпечаток кадра. */
+export interface ResolvedSlotTuple {
+  slot: string;
+  index: number;
+  componentId: string;
+  version: number;
+  bundleHash: string;
+  propsHash: string;
+}
+
+/**
+ * **`slotsHash`** (§A3): sha256 списка резолвнутых кортежей — тот же прообраз, что у входа
+ * отпечатка кадра. Проекция явная: вызывающий может передать более богатый объект (с `name`/`props`),
+ * и хэш от этого не сдвинется. Само разрешение биндингов приезжает в T2.1 — здесь живёт только
+ * функция хэширования, потому что её прообраз обязан быть определён в одном месте.
+ */
+export function slotsHashOf(bindings: readonly ResolvedSlotTuple[]): string {
+  return sha256(canonicalStringify(bindings.map((binding) => ({
+    slot: binding.slot, index: binding.index, componentId: binding.componentId,
+    version: binding.version, bundleHash: binding.bundleHash, propsHash: binding.propsHash,
+  }))));
 }
 
 /**
@@ -274,6 +542,13 @@ export function validateManifest(db: Database, componentId: string, raw: unknown
       throw new ApiError(422, "invalid_alias_target",
         `Case ${item.id} aliases ${item.aliasOf} but declares different props; an alias must repeat its target's props`);
     }
+    // §A3: алиас наследует **кадр** цели, а кадр теперь зависит и от содержимого слотов. Алиас с
+    // другими биндингами объявлял бы «сними один раз» про два разных изображения.
+    if (dedupSlotsKeyOf(target.slotBindings) !== dedupSlotsKeyOf(item.slotBindings)) {
+      throw new ApiError(422, "invalid_alias_target",
+        `Case ${item.id} aliases ${item.aliasOf} but declares different slotBindings;`
+        + " an alias must repeat both the props and the slot bindings of its target");
+    }
   }
 
   // Per-case политика на алиасе (D16, план 2026-08-04): вердикт алиаса **всегда** идентичен
@@ -288,19 +563,27 @@ export function validateManifest(db: Database, componentId: string, raw: unknown
     }
   }
 
+  const warnings: string[] = [];
+  // Слот-биндинги: опубликованные факты — жёсткие отказы, факты головы кандидата — warning'и (§A2).
+  // Место в порядке проверок не случайно: после алиасов (их правило про биндинги уже применено) и
+  // **до** дедупа — дедуп ниже опирается на биндинги, и опираться на непроверенные нельзя.
+  validateSlotBindings(db, manifest, componentId, warnings);
+
   // Дубли props без `aliasOf`: явный отказ. Матрица обязана платить за каждый кадр осознанно.
-  const firstByPropsHash = new Map<string, string>();
+  // Ключ — пара (props, слоты) (§A3): два состояния Figma, отличающиеся только содержимым слота,
+  // это два разных кадра, и схлопывать их в `duplicate_case_props` было прямой причиной того, что
+  // SMS-модуль не проходил приёмку. Манифест без биндингов вырождается ровно в прежний `propsHash`.
+  const firstByDedupKey = new Map<string, string>();
   for (const item of manifest.cases) {
-    const hash = propsHashOf(item.props);
-    const first = firstByPropsHash.get(hash);
-    if (first === undefined) { firstByPropsHash.set(hash, item.id); continue; }
+    const key = caseDedupKeyOf(item);
+    const first = firstByDedupKey.get(key);
+    if (first === undefined) { firstByDedupKey.set(key, item.id); continue; }
     if (item.aliasOf === undefined) {
       throw new ApiError(422, "duplicate_case_props",
-        `Cases ${first} and ${item.id} declare identical props; mark the duplicate with aliasOf: "${first}"`);
+        `Cases ${first} and ${item.id} declare identical props and slot bindings; mark the duplicate with aliasOf: "${first}"`);
     }
   }
 
-  const warnings: string[] = [];
   // `dims` вне объявленных измерений — предупреждение, а не отказ: coverage покажет это честно
   // (недостающие tuples), а форвард-совместимость важнее строгости на необязательном поле.
   const dimensions = manifest.dimensions;
@@ -369,11 +652,22 @@ export class CaseSetRepo {
 
 /**
  * Манифест из строки. Хранится он всегда уже провалидированным, поэтому повторный `parse` —
- * защита от ручной правки БД, а не рабочий путь; провал = 500-уровневая ошибка данных.
+ * защита от ручной правки БД, а не рабочий путь.
+ *
+ * Отказ — **именованный** `ApiError`, а не голый `Error` (план 2026-08-05, «Rollback policy»):
+ * манифест со `slotBindings` не читается сборкой, выпущенной до этой волны (`strictObject` при
+ * повторном разборе), и такой откат обязан деградировать в типизованный отказ с адресом набора, а
+ * не в непрозрачную 500 где-то внутри promote. Статус — 422: запрос ссылается на набор, который
+ * эта сборка сервера прочитать не может, и повтор запроса ничего не изменит.
  */
 export function manifestOfRow(row: CaseSetRow): CaseSetManifest {
   const parsed = caseSetManifestSchema.safeParse(JSON.parse(row.manifest_json));
-  if (!parsed.success) throw new Error(`Stored case-set manifest is invalid: ${row.case_set_id}`);
+  if (!parsed.success) {
+    throw new ApiError(422, "case_set_manifest_unreadable",
+      `Stored case-set manifest ${row.case_set_id} cannot be read by this server build`
+      + " (it was written by a newer build, or the row was edited by hand)",
+      { issues: parsed.error.issues });
+  }
   return parsed.data;
 }
 
@@ -387,6 +681,30 @@ export interface CoverageReport {
   /** `true` — список ячеек усечён (план 2026-08-04 §W6): читать `missingCount`, а не `.length`. */
   truncated: boolean;
   duplicates: { tuple: Record<string, string>; caseIds: string[] }[];
+  /**
+   * **Слот-осведомлённое** число кадров набора (§A5): случаи, которые действительно снимаются, то
+   * есть не схлопнулись в алиас ни явным `aliasOf`, ни дедупом по паре (props, слоты). Ровно это
+   * число агент подставляет в `expectedCases` promote'а — до слот-биндингов оно совпадало с числом
+   * различных props, а теперь два состояния с одинаковыми props и разными слотами дают два кадра.
+   */
+  frameCases: number;
+}
+
+/**
+ * Эффективная цель алиаса для каждого случая (`null` — случай снимается сам). Единственный источник
+ * правды и для `buildCasesFromManifest`, и для `frameCases` покрытия: разъехавшись, они дали бы
+ * `expectedCases`, не совпадающий с числом реально снятых кадров.
+ */
+function aliasTargetsOf(manifest: CaseSetManifest): Map<string, string | null> {
+  const firstByDedupKey = new Map<string, string>();
+  const targets = new Map<string, string | null>();
+  for (const item of manifest.cases) {
+    const key = caseDedupKeyOf(item);
+    const first = firstByDedupKey.get(key);
+    if (first === undefined && item.aliasOf === undefined) firstByDedupKey.set(key, item.id);
+    targets.set(item.id, item.aliasOf ?? first ?? null);
+  }
+  return targets;
 }
 
 /**
@@ -400,10 +718,11 @@ export interface CoverageReport {
 export function coverageOf(manifest: CaseSetManifest): CoverageReport {
   const dimensions = manifest.dimensions ?? {};
   const names = Object.keys(dimensions).sort();
+  const frameCases = [...aliasTargetsOf(manifest).values()].filter((target) => target === null).length;
   if (names.length === 0) {
     return {
       dimensions: {}, expectedTuples: 0, presentTuples: manifest.cases.length,
-      missingTuples: [], missingCount: 0, truncated: false, duplicates: [],
+      missingTuples: [], missingCount: 0, truncated: false, duplicates: [], frameCases,
     };
   }
   // Первым делом — арифметика (C5/C16). Ниже стоит перебор произведения, и он допустим ровно
@@ -454,15 +773,22 @@ export function coverageOf(manifest: CaseSetManifest): CoverageReport {
     missingCount,
     truncated: missingCount > missingTuples.length,
     duplicates,
+    frameCases,
   };
 }
 
 /**
  * Набор случаев рана из манифеста (аналог `buildCases` для examples-пути).
  *
- * Алиасы: явный `aliasOf` манифеста, плюс дедуп по `propsHash` поверх — на случай, когда манифест
- * объявил алиас, а props совпали ещё с чьими-то (валидация выше это уже запретила, но набор
- * строится оборонительно: одна и та же props-пара **никогда** не снимается дважды, A7).
+ * Алиасы: явный `aliasOf` манифеста, плюс дедуп поверх — на случай, когда манифест объявил алиас, а
+ * пара совпала ещё с чьей-то (валидация выше это уже запретила, но набор строится оборонительно:
+ * **пара (props, слоты) никогда не снимается дважды**, A7 + план 2026-08-05 §A3).
+ *
+ * Ключ дедупа — тот же `caseDedupKeyOf`, что у отказа `duplicate_case_props`. До слот-биндингов он
+ * был только `propsHash`, и этого хватало, чтобы набор, прошедший PUT с двумя состояниями одних
+ * props и разных слотов, всё равно схлопывался здесь в один кадр (алиасы не снимаются вовсе,
+ * `orchestrator.ts:517`) — то есть матрица выглядела бы пройденной, ничего не проверив.
+ * Ключ считается по **манифесту**, до разрешения пинов, поэтому порядок построения не меняется.
  */
 export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCase[] {
   if (manifest.cases.length > acceptanceMaxCasesPerRun) {
@@ -470,17 +796,15 @@ export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCas
       `Case set exceeds the per-run limit of ${acceptanceMaxCasesPerRun} cases (${manifest.cases.length} declared)`);
   }
   const cases: AcceptanceCase[] = [];
-  const byPropsHash = new Map<string, string>();
+  const targets = aliasTargetsOf(manifest);
   for (const item of manifest.cases) {
     const propsHash = propsHashOf(item.props);
-    const firstWithProps = byPropsHash.get(propsHash);
-    if (firstWithProps === undefined && item.aliasOf === undefined) byPropsHash.set(propsHash, item.id);
     cases.push({
       caseId: item.id,
       caseKey: item.id,
       props: item.props,
       propsHash,
-      aliasOfCaseId: item.aliasOf ?? firstWithProps ?? null,
+      aliasOfCaseId: targets.get(item.id) ?? null,
       referenceAssetId: item.referenceAssetId ?? null,
       expectedGeometry: item.expectedGeometry ?? null,
       casePolicyHash: casePolicyHashOf(manifest, item.id),
