@@ -9,7 +9,10 @@ vi.mock("../api/client", async (importOriginal) => {
   const original = await importOriginal<typeof import("../api/client")>();
   return { ...original, getCatalogManifest: vi.fn(), getPrototypeDraft: vi.fn(), listDesignSystems: vi.fn(), listPrototypes: vi.fn(), listPrototypeVersions: vi.fn(), setPrototypeLifecycle: vi.fn(), setPrototypeStatus: vi.fn() };
 });
-vi.mock("../auth", () => ({ useAuth: () => ({ user: { userId: "user-me", name: "Я", isAdmin: false }, loading: false }) }));
+// Мок сделан мутируемым: раздел «Все» существует только для админа, и тот же набор
+// тестов должен проверять обе роли (план 2026-08-05 T4).
+const auth = vi.hoisted(() => ({ user: { userId: "user-me", name: "Я", isAdmin: false } }));
+vi.mock("../auth", () => ({ useAuth: () => ({ user: auth.user, loading: false }) }));
 vi.mock("./GalleryShareDialog", () => ({
   GalleryShareDialog: ({ prototypeId, latestVersion, onClose }: { prototypeId: string; latestVersion: number; onClose: () => void }) => <div role="dialog" aria-label={`QR ${prototypeId} v${latestVersion}`}><button type="button" onClick={onClose}>Закрыть QR</button></div>,
 }));
@@ -61,6 +64,7 @@ function openCardMenu(card: HTMLElement) {
 
 describe("GalleryPage", () => {
   beforeEach(() => {
+    auth.user = { userId: "user-me", name: "Я", isAdmin: false };
     vi.mocked(listPrototypes).mockReset();
     vi.mocked(listDesignSystems).mockReset();
     vi.mocked(listPrototypeVersions).mockReset();
@@ -297,6 +301,23 @@ describe("GalleryPage", () => {
     expect(ids("service")).toEqual(["evidence", "fixture"]);
     expect(ids("mine", "experiment")).toEqual(["experiment"]);
     expect(ids("service", "evidence")).toEqual(["evidence"]);
+    // «Все» — сквозной раздел: и служебные виды, и чужие/ничьи прототипы любого статуса.
+    expect(ids("all")).toEqual(["evidence", "experiment", "fixture", "flow", "legacy-no-kind"]);
+    expect(ids("all", "evidence")).toEqual(["evidence"]);
+  });
+
+  it("keeps ownerless prototypes out of the owner tabs", () => {
+    const rows: PrototypeSummary[] = [
+      { ...summary, id: "orphan-private", name: "Orphan", status: "private", owner: { id: "", name: "Unknown" } },
+      { ...summary, id: "orphan-archived", name: "Orphan archived", status: "archived", owner: { id: "", name: "Unknown" } },
+    ];
+    const ids = (tab: GalleryTab, userId: string) => filterAndSortPrototypes(rows, { tab, userId, systemId: null, query: "", sort: "name" }).map(({ id }) => id);
+    for (const userId of ["user-me", ""]) {
+      expect(ids("mine", userId)).toEqual([]);
+      expect(ids("archive", userId)).toEqual([]);
+      expect(ids("service", userId)).toEqual([]);
+    }
+    expect(ids("all", "user-me")).toEqual(["orphan-private", "orphan-archived"]);
   });
 
   it("filters the grid by kind and shows the kind chip on the card", async () => {
@@ -359,6 +380,38 @@ describe("GalleryPage", () => {
     const confirm = screen.getByRole("dialog", { name: "Снять с публикации?" });
     fireEvent.click(within(confirm).getByRole("button", { name: "Снять с публикации" }));
     await waitFor(() => expect(setPrototypeStatus).toHaveBeenCalledWith("own", "private"));
+  });
+
+  it("hides the admin-only «Все» tab from an ordinary user", async () => {
+    vi.mocked(listPrototypes).mockResolvedValue([summary]);
+    renderGallery();
+    await screen.findByRole("heading", { name: "Hello World" });
+    expect(screen.queryByRole("button", { name: "Все" })).toBeNull();
+    expect(vi.mocked(listPrototypes).mock.calls.every(([, , options]) => options === undefined)).toBe(true);
+  });
+
+  it("lets an admin open «Все» and requests the admin scope for it", async () => {
+    auth.user = { userId: "user-me", name: "Я", isAdmin: true };
+    const foreign: PrototypeSummary = { ...summary, id: "foreign", name: "Чужой", status: "private", owner: { id: "user-other", name: "Анна" } };
+    const orphaned: PrototypeSummary = { ...summary, id: "orphaned", name: "Ничей", status: "private", owner: { id: "", name: "Unknown" } };
+    vi.mocked(listPrototypes).mockImplementation(async (_signal, _kinds, options) => options?.scope === "all" ? [summary, foreign, orphaned] : [summary]);
+    renderGallery();
+    await screen.findByRole("heading", { name: "Hello World" });
+    expect(screen.queryByRole("heading", { name: "Чужой" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Все" }));
+    expect(await screen.findByRole("heading", { name: "Чужой" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Ничей" })).toBeTruthy();
+    await waitFor(() => expect(vi.mocked(listPrototypes).mock.calls.some(([, , options]) => options?.scope === "all")).toBe(true));
+    // Чужая карточка остаётся чужой: бейдж владельца на месте, мутаций нет.
+    const foreignCard = screen.getByRole("heading", { name: "Чужой" }).closest("li")!;
+    expect(within(foreignCard).getByText("Владелец: Анна")).toBeTruthy();
+    const foreignMenu = within(openCardMenu(foreignCard));
+    expect(foreignMenu.queryByRole("menuitem", { name: "Редактор" })).toBeNull();
+    expect(foreignMenu.queryByRole("menuitem", { name: "В архив" })).toBeNull();
+    // Прототип без владельца не считается своим и в «Мои» не попадает.
+    fireEvent.click(screen.getByRole("button", { name: "Мои" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Ничей" })).toBeNull());
   });
 
   it("shows the typed 409 message when an archived head is not renderable", async () => {

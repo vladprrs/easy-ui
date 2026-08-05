@@ -468,9 +468,18 @@ export async function uploadAsset(file: File, signal?: AbortSignal): Promise<Upl
 const prototypePath = (id: string) => `/api/prototypes/${encodeURIComponent(id)}`;
 const componentPath = (id: string) => `/api/components/${encodeURIComponent(id)}`;
 
-/** `kinds` сериализуется в CSV-параметр `?kind=` (см. docs/server-api.md). */
-export const listPrototypes = (signal?: AbortSignal, kinds?: readonly PrototypeKind[]) =>
-  request<PrototypeSummary[]>(kinds?.length ? `/api/prototypes?kind=${encodeURIComponent(kinds.join(","))}` : "/api/prototypes", { signal });
+/**
+ * `kinds` сериализуется в CSV-параметр `?kind=` (см. docs/server-api.md).
+ * `scope: "all"` — админская выдача (чужие private/archived и прототипы без владельца);
+ * не-админу сервер отвечает 403 `admin_required`, поэтому параметр шлёт только вкладка «Все».
+ */
+export const listPrototypes = (signal?: AbortSignal, kinds?: readonly PrototypeKind[], options?: { scope?: "all" }) => {
+  const query = new URLSearchParams();
+  if (kinds?.length) query.set("kind", kinds.join(","));
+  if (options?.scope) query.set("scope", options.scope);
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return request<PrototypeSummary[]>(`/api/prototypes${suffix}`, { signal });
+};
 export const listDesignSystems = (signal?: AbortSignal) => request<{designSystems: DesignSystemSummary[]}>("/api/design-systems", { signal });
 export const getCapabilities = (signal?: AbortSignal) => request<Capabilities>("/api/capabilities", { signal });
 export const getCatalogManifest = (signal?: AbortSignal) => request<CatalogManifest>("/api/catalog/manifest", { signal });

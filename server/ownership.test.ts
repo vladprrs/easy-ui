@@ -14,11 +14,11 @@ async function fixture(){
   const dir=await mkdtemp(resolve(process.cwd(),".ownership-test-"));dirs.push(dir);
   const db=openDatabase(":memory:");createTestHandler(db,{dataDir:dir});
   const at=new Date().toISOString();
-  db.query("INSERT INTO users (id,name,password_hash,is_admin,created_at) VALUES (?,?,?,?,?),(?,?,?,?,?)")
-    .run("user_alice","Alice","unused",0,at,"user_bob","Bob","unused",0,at);
-  const users=new UserRepo(db),alice=users.createSession("user_alice").token,bob=users.createSession("user_bob").token;
+  db.query("INSERT INTO users (id,name,password_hash,is_admin,created_at) VALUES (?,?,?,?,?),(?,?,?,?,?),(?,?,?,?,?)")
+    .run("user_alice","Alice","unused",0,at,"user_bob","Bob","unused",0,at,"user_root","Root","unused",1,at);
+  const users=new UserRepo(db),tokens={alice:users.createSession("user_alice").token,bob:users.createSession("user_bob").token,root:users.createSession("user_root").token};
   const handler=createHandler(db,{dataDir:dir,publicOrigin:"http://test"});
-  const call=(who:"alice"|"bob",method:string,path:string,body?:unknown)=>handler(new Request(`http://test/api${path}`,{method,headers:{cookie:`easyui_session=${who==="alice"?alice:bob}`,...(body===undefined?{}:{"content-type":"application/json",origin:"http://test"})},body:body===undefined?undefined:JSON.stringify(body)}));
+  const call=(who:keyof typeof tokens,method:string,path:string,body?:unknown)=>handler(new Request(`http://test/api${path}`,{method,headers:{cookie:`easyui_session=${tokens[who]}`,...(body===undefined?{}:{"content-type":"application/json",origin:"http://test"})},body:body===undefined?undefined:JSON.stringify(body)}));
   const base=prototypeDocSchema.parse(await Bun.file("test/fixtures/host-content.json").json());
   const doc={...base,id:"owned-proto",name:"Owned proto"};
   const created=await call("alice","POST","/prototypes",{doc,figma:{fileKey:"file_1",nodeIds:["1:2"]}});expect(created.status).toBe(201);
@@ -56,6 +56,42 @@ describe("prototype principal/status matrix",()=>{
     expect(scoped.status).toBe(200);expect(Object.hasOwn(await scoped.json() as object,"figma")).toBe(false);
     expect((await call("alice","POST","/prototypes/owned-proto/status",{status:"private"})).status).toBe(200);
     expect(db.query("SELECT actor_id FROM audit_events WHERE action='prototype.status.changed' ORDER BY at DESC LIMIT 1").get()).toEqual({actor_id:"user_alice"});
+  });
+
+  // План 2026-08-05 «Admin visibility»: админ читает всё, мутирует по-прежнему только своё.
+  test("gives admins a read-only scope=all list without touching the default one",async()=>{
+    const {db,call,doc}=await fixture();
+    expect((await call("alice","POST","/prototypes",{doc:{...doc,id:"orphan-proto",name:"Orphan proto"}})).status).toBe(201);
+    db.query("UPDATE prototypes SET owner_id=NULL WHERE id='orphan-proto'").run();
+
+    type Item={id:string;owner:{id:string;name:string}};
+    const list=async(who:"alice"|"bob"|"root",query="")=>{const r=await call(who,"GET",`/prototypes${query}`);expect(r.status).toBe(200);return await r.json() as Item[];};
+    // Дефолтная выдача не изменилась ни для кого: прототип без владельца невидим, админ — обычный.
+    expect((await list("alice")).map(x=>x.id)).toEqual(["owned-proto"]);
+    expect(await list("bob")).toEqual([]);
+    expect(await list("root")).toEqual([]);
+
+    const all=await list("root","?scope=all");
+    expect(all.map(x=>x.id).sort()).toEqual(["orphan-proto","owned-proto"]);
+    expect(all.find(x=>x.id==="orphan-proto")!.owner).toEqual({id:"",name:"Unknown"});
+    expect(all.find(x=>x.id==="owned-proto")!.owner).toEqual({id:"user_alice",name:"Alice"});
+    // Фильтр по виду продолжает работать поверх админского скоупа.
+    expect((await list("root","?scope=all&kind=product-flow")).length).toBe(2);
+    expect(await list("root","?scope=all&kind=evidence")).toEqual([]);
+
+    const forbidden=await call("bob","GET","/prototypes?scope=all");
+    expect(forbidden.status).toBe(403);expect((await forbidden.json() as {error:{code:string}}).error.code).toBe("admin_required");
+    expect((await call("root","GET","/prototypes?scope=mine")).status).toBe(400);
+
+    // Чтение чужого приватного — 200, но owner-only поля (figma) остаются закрытыми.
+    const read=await call("root","GET","/prototypes/owned-proto");
+    expect(read.status).toBe(200);expect(Object.hasOwn(await read.json() as object,"figma")).toBe(false);
+    expect((await call("root","GET","/prototypes/owned-proto/draft")).status).toBe(200);
+    // Мутации остаются за владельцем: приватный чужой прототип для админа по-прежнему «не найден».
+    expect((await call("root","PUT","/prototypes/owned-proto",{baseRev:1,doc:{}})).status).toBe(404);
+    expect((await call("root","POST","/prototypes/owned-proto/status",{status:"published"})).status).toBe(404);
+    expect((await call("root","DELETE","/prototypes/owned-proto",{baseRev:1})).status).toBe(404);
+    expect(db.query("SELECT COUNT(*) count FROM prototypes WHERE id='owned-proto'").get()).toEqual({count:1});
   });
 
   test("enforces component/design-system conjunction and protects pinned active bundles",async()=>{

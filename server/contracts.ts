@@ -900,10 +900,10 @@ const prototypeListItemSchema = z.looseObject({
 
 export const listPrototypesContract = registerContract({
   method: "GET", path: "/api/prototypes",
-  summary: "List prototypes with head revision and latest published version; optional CSV lifecycle-kind filter.",
-  query: z.object({ kind: z.string().optional() }),
+  summary: "List prototypes with head revision and latest published version; optional CSV lifecycle-kind filter. `scope=all` (admin only) lists every prototype, including other users' private/archived ones and prototypes without an owner.",
+  query: z.object({ kind: z.string().optional(), scope: z.literal("all").optional() }),
   responseSchema: z.array(prototypeListItemSchema),
-  errors: [errorCatalog.validationFailed, errorCatalog.methodNotAllowed],
+  errors: [errorCatalog.invalidRequest, { status: 403, code: "admin_required", description: "scope=all is admin-only" }, errorCatalog.validationFailed, errorCatalog.methodNotAllowed],
 });
 
 export const createPrototypeContract = registerContract({

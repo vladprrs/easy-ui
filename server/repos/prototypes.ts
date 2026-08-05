@@ -379,7 +379,11 @@ export class PrototypeRepo {
   })(); }
   // `kinds` — необязательный фильтр по lifecycle-виду (?kind= CSV на роуте). Пустой/отсутствующий
   // список означает «все виды», поэтому старые клиенты видят ровно то же, что и раньше.
-  list(principal?: Principal, kinds?: readonly string[]) {
+  // `includeAll` — админский `?scope=all` (план 2026-08-05): снимает owner/status-предикат целиком.
+  // Дефолтная ветка обязана отдавать ровно прежнюю выдачу, поэтому `u.id IS NOT NULL` повторяет
+  // отсев orphaned-прототипов, который раньше делал INNER JOIN users.
+  list(principal?: Principal, kinds?: readonly string[], options?: {includeAll?:boolean}) {
+    const includeAll=options?.includeAll===true;
     const userId=principal?.kind==="user"?principal.userId:"";
     const filter=kinds?.length?` AND COALESCE(p.kind,'${DEFAULT_PROTOTYPE_KIND}') IN (${kinds.map(()=>"?").join(",")})`:"";
     // `flow_count` считается json1 прямо по документу головной ревизии: сценарии нужны
@@ -388,10 +392,10 @@ export class PrototypeRepo {
     const rows=this.db.query(`SELECT p.*,u.id owner_user_id,u.name owner_name,
       (SELECT MAX(version) FROM prototype_publishes x WHERE x.prototype_id=p.id) latest_version,
       COALESCE((SELECT json_array_length(r.doc,'$.flows') FROM prototype_revisions r WHERE r.prototype_id=p.id AND r.rev=p.head_rev),0) flow_count
-      FROM prototypes p JOIN users u ON u.id=p.owner_id
-      WHERE (?=1 OR p.owner_id=? OR p.status='published')${filter} ORDER BY p.updated_at DESC,p.id`)
-      .all(principal?0:1,userId,...(kinds??[])) as (PrototypeRow&{latest_version:number|null;flow_count:number;owner_user_id:string;owner_name:string})[];
-    return rows.map(r=>({id:r.id,name:r.name,description:r.description??undefined,device:r.device,designSystem:r.design_system,screenCount:r.screen_count,flowCount:r.flow_count,headRev:r.head_rev,latestVersion:r.latest_version,updatedAt:r.updated_at,status:r.status,owner:{id:r.owner_user_id,name:r.owner_name},...lifecycleOf(r)}));
+      FROM prototypes p LEFT JOIN users u ON u.id=p.owner_id
+      WHERE (?=1 OR (u.id IS NOT NULL AND (?=1 OR p.owner_id=? OR p.status='published')))${filter} ORDER BY p.updated_at DESC,p.id`)
+      .all(includeAll?1:0,principal?0:1,userId,...(kinds??[])) as (PrototypeRow&{latest_version:number|null;flow_count:number;owner_user_id:string|null;owner_name:string|null})[];
+    return rows.map(r=>({id:r.id,name:r.name,description:r.description??undefined,device:r.device,designSystem:r.design_system,screenCount:r.screen_count,flowCount:r.flow_count,headRev:r.head_rev,latestVersion:r.latest_version,updatedAt:r.updated_at,status:r.status,owner:{id:r.owner_user_id??"",name:r.owner_name??"Unknown"},...lifecycleOf(r)}));
   }
   meta(id:string,principal?:Principal) {
     const access=principal?requirePrototypeRead(this.db,id,principal):{owner:true};

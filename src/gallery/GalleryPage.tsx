@@ -24,11 +24,15 @@ export function GalleryPage() {
   useDocumentTitle(gallery.title);
   const { user, loading: authLoading } = useAuth();
   const location = useLocation();
-  const prototypes = useApi(listPrototypes, []);
+  const [tab, setTab] = useState<GalleryTab>("mine");
+  // Админский раздел «Все» — единственный потребитель `?scope=all`: остальные вкладки (и все
+  // прочие потребители списка) ходят прежним запросом, поэтому смена вкладки перезапрашивает
+  // список только на переходе в/из «Все».
+  const adminScope = tab === "all";
+  const prototypes = useApi((signal) => adminScope ? listPrototypes(signal, undefined, { scope: "all" }) : listPrototypes(signal), [adminScope]);
   const designSystems = useApi(listDesignSystems, []);
   const catalog = useApi(getCatalogManifest, []);
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
-  const [tab, setTab] = useState<GalleryTab>("mine");
   const [selectedKind, setSelectedKind] = useState<PrototypeKind | null>(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<GallerySort>("updated");
@@ -94,6 +98,7 @@ export function GalleryPage() {
       sort={sort}
       onSortChange={setSort}
       showSearch={prototypes.status === "ready" && prototypes.data.length > 0}
+      isAdmin={user?.isAdmin === true}
     /> : null}
     {!loading && !failed && visiblePrototypes.length ? <ul className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
       {visiblePrototypes.map((prototype, index) => <PrototypeCard

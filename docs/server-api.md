@@ -58,7 +58,7 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 
 | Метод и путь | Тело / ответ |
 |---|---|
-| `GET /prototypes?kind=` | свои прототипы любого статуса + чужие `published`; `PrototypeListItem[]`: `{id,name,description?,device,designSystem,screenCount,flowCount,headRev,latestVersion,status,owner:{id,name},updatedAt,kind,tags,derivedFrom,track}`; `kind` — CSV-фильтр по видам (см. [Lifecycle](#lifecycle-прототипа)) |
+| `GET /prototypes?kind=&scope=` | свои прототипы любого статуса + чужие `published`; `PrototypeListItem[]`: `{id,name,description?,device,designSystem,screenCount,flowCount,headRev,latestVersion,status,owner:{id,name},updatedAt,kind,tags,derivedFrom,track}`; `kind` — CSV-фильтр по видам (см. [Lifecycle](#lifecycle-прототипа)); `scope=all` — админская выдача (см. [Видимость для админа](#видимость-для-админа)) |
 | `POST /prototypes` | `{doc,message?,kind?,tags?,derivedFrom?}` → 201 `{id,rev,warnings,screens}` и `Location` |
 | `GET /prototypes/:id` | `{id,name,designSystem,headRev,latestVersion:number|null,versions:PrototypeVersion[],updatedAt,draftRevision,validatedRevision,publishedVersion,renderable,kind,tags,derivedFrom,track}` |
 | `GET /prototypes/:id/draft` | `{doc,rev,builtinCatalogHash,componentManifestHash,components:ComponentPin[],compositions:CompositionPin[],assets:AssetPin[]}` |
@@ -105,6 +105,16 @@ Endpoints auth (здесь и далее API-пути могут быть пок
 `GET /prototypes?kind=` фильтрует список: значение — **CSV** (`?kind=evidence,experiment`); повторение параметра не поддерживается (побеждает последнее вхождение). Пустое значение (`?kind=`) означает «фильтра нет». Неизвестный вид в списке → `422 validation_failed`.
 
 Галерея использует ту же таксономию: служебные виды (`composition-fixture`, `component-gallery`, `evidence`, `visual-reference`) скрыты из табов «Мои»/«Общие» и живут в табе «Служебные»; `derivedFrom` показывается строкой на карточке.
+
+### Видимость для админа
+
+Админ (`users.is_admin=1`) **читает** любой прототип, но не получает прав на его изменение (план `docs/plans/2026-08-05-admin-visibility.md`).
+
+- `GET /prototypes?scope=all` — список без owner/status-предиката: чужие `private`/`archived` и прототипы без владельца (`owner_id IS NULL`, например после удаления пользователя) — у них `owner: {id:"",name:"Unknown"}`. Совмещается с `?kind=`.
+- `scope=all` от не-админа (в том числе от share/capture-принципала) → `403 admin_required`; любое другое значение `scope` → `400 invalid_request`. Запрос **без** `scope` отдаёт ровно прежнюю выдачу всем, включая админов: прототипы без владельца в неё не попадают.
+- `GET /prototypes/:id`, `/draft`, `/revisions/:rev`, `/versions/:version` и прочие read-пути открыты админу на чужом приватном прототипе. Owner-only поля ответа при этом закрыты: `figma` в мете и черновик в экспорте бандла остаются у настоящего владельца.
+- Мутации (`PUT`, `DELETE`, `/status`, `/lifecycle`, `/share`, `/scenarios`, визуальные baselines) — по-прежнему owner-only: на чужом приватном прототипе админ получает `404 prototype_not_found`, на опубликованном — `403 forbidden`. Исключение прежнее: прототип без владельца считается админским.
+- Компоненты, дизайн-системы и композиции в ownership-фильтрации списка не участвовали и раньше — их видят все аутентифицированные пользователи.
 
 #### Head-tracking служебных прототипов
 

@@ -39,6 +39,17 @@ function kindFilter(url:URL):string[]|undefined {
   return parseWith(z.array(prototypeKindSchema),kinds,"Query parameters are invalid");
 }
 
+// `?scope=all` — админская выдача списка (план 2026-08-05): без параметра предикат видимости
+// прежний для всех, включая админов; не-админу параметр отвечает 403 admin_required, а не молча
+// деградирует, чтобы клиент не показал урезанный список как полный.
+function includeAllScope(url:URL,principal:Principal):boolean {
+  const raw=url.searchParams.get("scope");
+  if(raw===null) return false;
+  if(raw!=="all") throw new ApiError(400,"invalid_request","scope must be 'all'");
+  if(principal.kind!=="user"||!principal.isAdmin) throw new ApiError(403,"admin_required","Only an admin may list all prototypes");
+  return true;
+}
+
 const bodyObject = z.record(z.string(),z.unknown());
 function objectBody(value:unknown): Record<string,unknown> { const p=bodyObject.safeParse(value); if(!p.success) throw new ApiError(400,"invalid_request","Request body must be an object"); return p.data; }
 function integer(value:unknown,name:string):number { if(typeof value!=="number"||!Number.isInteger(value)||value<1) throw new ApiError(400,"invalid_request",`${name} must be a positive integer`); return value; }
@@ -122,7 +133,7 @@ export async function updatePrototypeFromDoc(db:Database,repo:PrototypeRepo,id:s
 export async function routePrototypes(request:Request,db:Database,segments:string[],principal:Principal,dataDir=process.env.DATA_DIR||"data",serveDist?:string):Promise<Response> {
   const repo=new PrototypeRepo(db);
   if(segments.length===1) {
-    if(request.method==="GET") return json(repo.list(principal,kindFilter(new URL(request.url))),200,noStore);
+    if(request.method==="GET") { const url=new URL(request.url); return json(repo.list(principal,kindFilter(url),{includeAll:includeAllScope(url,principal)}),200,noStore); }
     if(request.method==="POST") { const actor=requireUser(principal); const b=objectBody(await readJson(request)); const doc=parseDoc(b.doc); const result=await createPrototypeFromDoc(db,repo,doc,dataDir,actor.userId,{message:message(b),figmaInput:b.figma,lifecycle:lifecycleFields(b)}); return json({...result,screens:headScreens(doc)},201,{...noStore,location:`/api/prototypes/${encodeURIComponent(result.id)}`}); }
     throw new ApiError(405,"method_not_allowed","Method not allowed");
   }

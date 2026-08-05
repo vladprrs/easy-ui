@@ -2,7 +2,12 @@ import type { Database } from "bun:sqlite";
 import type { Principal, UserPrincipal } from "./auth";
 import { ApiError } from "./http";
 
-export type PrototypeAccess = { ownerId: string | null; status: "private" | "published" | "archived"; owner: boolean; scoped: boolean };
+/**
+ * `adminRead` — админ видит любой прототип (план 2026-08-05 «Admin visibility», T2).
+ * Признак сознательно отделён от `owner`: чтение расширяется, мутации (`requirePrototypeOwner`)
+ * и owner-only поля ответа (figma, экспорт черновика) остаются за настоящим владельцем.
+ */
+export type PrototypeAccess = { ownerId: string | null; status: "private" | "published" | "archived"; owner: boolean; scoped: boolean; adminRead: boolean };
 
 export function requireUser(principal: Principal): UserPrincipal {
   if (principal.kind !== "user") throw new ApiError(403, "forbidden", "This operation requires a user account");
@@ -14,12 +19,13 @@ export function prototypeAccess(db: Database, id: string, principal: Principal):
   if (!row) throw new ApiError(404, "prototype_not_found", "Prototype not found");
   const owner = principal.kind === "user" && (principal.userId === row.ownerId || (principal.isAdmin && row.ownerId===null));
   const scoped = (principal.kind === "share" && principal.scope.prototypeId === id) || principal.kind === "capture";
-  return { ownerId: row.ownerId, status: row.status, owner, scoped };
+  const adminRead = principal.kind === "user" && principal.isAdmin;
+  return { ownerId: row.ownerId, status: row.status, owner, scoped, adminRead };
 }
 
 export function requirePrototypeRead(db: Database, id: string, principal: Principal): PrototypeAccess {
   const access = prototypeAccess(db, id, principal);
-  if (!access.owner && !access.scoped && access.status !== "published") throw new ApiError(404, "prototype_not_found", "Prototype not found");
+  if (!access.owner && !access.scoped && !access.adminRead && access.status !== "published") throw new ApiError(404, "prototype_not_found", "Prototype not found");
   return access;
 }
 

@@ -21527,6 +21527,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "const": "all",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -21655,6 +21664,26 @@
             },
             "description": "Success"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "invalid_request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "admin_required (scope=all is admin-only)"
+          },
           "405": {
             "content": {
               "application/json": {
@@ -21676,7 +21705,7 @@
             "description": "validation_failed"
           }
         },
-        "summary": "List prototypes with head revision and latest published version; optional CSV lifecycle-kind filter.",
+        "summary": "List prototypes with head revision and latest published version; optional CSV lifecycle-kind filter. `scope=all` (admin only) lists every prototype, including other users' private/archived ones and prototypes without an owner.",
         "x-easyui-validated": false
       },
       "post": {

@@ -17,6 +17,8 @@ export interface GalleryToolbarProps {
   sort: GallerySort;
   onSortChange: (sort: GallerySort) => void;
   showSearch: boolean;
+  /** Админу доступен сквозной раздел «Все» (чужие приватные прототипы). */
+  isAdmin?: boolean;
 }
 
 const TABS: readonly [GalleryTab, string][] = [
@@ -25,6 +27,10 @@ const TABS: readonly [GalleryTab, string][] = [
   ["archive", gallery.tabArchive],
   ["service", gallery.tabService],
 ];
+
+function tabsFor(isAdmin: boolean): readonly [GalleryTab, string][] {
+  return isAdmin ? [...TABS, ["all", gallery.tabAll]] : TABS;
+}
 
 /** Белая пилюля-селект: выбранное значение читается прямо в пилюле, раскрывать нечего. */
 function FilterSelect(props: { label: string; value: string; onChange: (value: string) => void; children: ReactNode }): ReactElement {
@@ -45,14 +51,15 @@ function FilterSelect(props: { label: string; value: string; onChange: (value: s
  * Фильтр вида показывается, только когда в текущем разделе есть из чего выбирать.
  */
 export function GalleryToolbar(props: GalleryToolbarProps): ReactElement {
-  const { tab, onTabChange, systems, selectedSystem, onSystemChange, kind, onKindChange, query, onQueryChange, sort, onSortChange, showSearch } = props;
-  // Архив показывает прототипы любого вида, поэтому фильтр там перечисляет всю таксономию.
-  const kinds = tab === "archive" ? [...PROTOTYPE_KINDS] : kindsForTab(tab, PROTOTYPE_KINDS);
+  const { tab, onTabChange, systems, selectedSystem, onSystemChange, kind, onKindChange, query, onQueryChange, sort, onSortChange, showSearch, isAdmin = false } = props;
+  // Архив и «Все» показывают прототипы любого вида, поэтому фильтр там перечисляет всю таксономию.
+  const kinds = kindsForTab(tab, PROTOTYPE_KINDS);
+  const tabs = tabsFor(isAdmin);
 
   return (
     <section className="flex flex-wrap items-center gap-3">
       <div className={`${segmentTrack} max-w-full flex-nowrap overflow-x-auto`} aria-label={gallery.tabsAria}>
-        {TABS.map(([id, label]) => (
+        {tabs.map(([id, label]) => (
           <button key={id} type="button" aria-pressed={tab === id} onClick={() => onTabChange(id)} className={tab === id ? segmentActive : segmentIdle}>
             {label}
           </button>

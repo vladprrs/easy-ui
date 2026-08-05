@@ -32,6 +32,8 @@ export const gallery = {
   tabShared: "Общие",
   tabArchive: "Архив",
   tabService: "Служебные",
+  // Раздел «Все» видят только админы: он показывает и чужие приватные прототипы.
+  tabAll: "Все",
   // Lifecycle-виды прототипа (волна 0).
   kindsAria: "Виды прототипов",
   allKinds: "Все виды",
