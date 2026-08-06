@@ -8,9 +8,10 @@ import { putArtifact, readArtifact } from "../evidence";
 import { ACCEPTANCE_POLICIES } from "../policies";
 import { spawnNormalizedDiffWorker } from "../../visual/diff-runner";
 import type { CandidateSubject, GateContext } from "./types";
-import type { CropSourceSurface, ReferenceSurface } from "../../../src/acceptance/caseSetSchema";
+import type { CropSourceSurface, ReferenceSurface, TextAaBudget } from "../../../src/acceptance/caseSetSchema";
+import { CAUSE_THRESHOLDS } from "../../visual/causes";
 import { geometryFactsKey, paintShaKey, type GeometryFacts } from "./geometry2";
-import { referenceCanvasOf, visualGate, visualSeverityClass } from "./visual";
+import { TEXT_AA_PRESETS, referenceCanvasOf, visualGate, visualSeverityClass } from "./visual";
 
 /**
  * Гейт `visual` (план 2026-08-03 §2 A5, §5 W5a).
@@ -83,6 +84,9 @@ interface ContextOptions {
   /** Факты кадра, которые в бою кладёт гейт `geometry` (W5-фолбэк канвы). */
   geometryFacts?: GeometryFacts;
   dsf?: number;
+  /** W4: контракт сравнения и именованный пресет бюджета растрового текста. */
+  comparison?: { matte?: string };
+  textAaBudget?: TextAaBudget;
 }
 
 async function context(options: ContextOptions = {}) {
@@ -112,6 +116,8 @@ async function context(options: ContextOptions = {}) {
       ...(options.referenceSurface ? { referenceSurface: options.referenceSurface } : {}),
       ...(options.referencePlacement ? { referencePlacement: options.referencePlacement } : {}),
       ...(options.expectedGeometry ? { expectedGeometry: options.expectedGeometry } : {}),
+      ...(options.comparison ? { comparison: options.comparison } : {}),
+      ...(options.textAaBudget ? { textAaBudget: options.textAaBudget } : {}),
     },
     surface: { viewport: { width: 390, height: 844 }, dsf: options.dsf ?? 2, theme: "light" },
     determinismSampled: false,
@@ -363,5 +369,124 @@ test("W5: канва считается в device px, а placement по умол
   // Явный placement перекрывает умолчание — на нём же держится смена comparison-отпечатка (C12).
   ctx.case.referencePlacement = { x: 100, y: 90 };
   expect(referenceCanvasOf(ctx)!.placement).toEqual({ x: 100, y: 90 });
+  db.close();
+});
+
+// --------------------------------------- matte и пресет live-text (план 2026-08-06 §W4)
+
+/** Эталон «как из Figma»: тот же компонент, но поверх непрозрачного белого. */
+const OPAQUE_REFERENCE = (() => {
+  const png = new PNG({ width: 40, height: 32 });
+  for (let index = 0; index < 40 * 32; index += 1) {
+    const offset = index * 4;
+    png.data[offset] = 255; png.data[offset + 1] = 255; png.data[offset + 2] = 255; png.data[offset + 3] = 255;
+  }
+  for (let y = 6; y < 18; y += 1) {
+    for (let x = 8; x < 24; x += 1) {
+      const offset = (y * 40 + x) * 4;
+      png.data[offset] = INK[0]; png.data[offset + 1] = INK[1]; png.data[offset + 2] = INK[2]; png.data[offset + 3] = INK[3];
+    }
+  }
+  return PNG.sync.write(png);
+})();
+
+test("§W4: прозрачный кандидат против непрозрачного эталона проходит только с matte", async () => {
+  // Без matte вердикт говорит о фоне, которого у кандидата нет вовсе: капчур прозрачный
+  // (`omitBackground:true`), эталон — экспорт поверх белого.
+  const bare = await context({ policyId: "pixel-strict-v1" });
+  bare.ctx.case.referenceAssetId = await putAsset(bare.db, bare.dir, OPAQUE_REFERENCE);
+  const failed = await visualGate.run(bare.ctx);
+  expect(failed.status).toBe("fail");
+  expect(failed.metrics!.rawDiffPct as number).toBeGreaterThan(50);
+  expect(failed.metrics).not.toHaveProperty("matteApplied");
+  bare.db.close();
+
+  const matted = await context({ policyId: "pixel-strict-v1", comparison: { matte: "#FFFFFF" } });
+  matted.ctx.case.referenceAssetId = await putAsset(matted.db, matted.dir, OPAQUE_REFERENCE);
+  const passed = await visualGate.run(matted.ctx);
+  expect(passed.status).toBe("pass");
+  expect(passed.metrics).toMatchObject({ rawDiffPct: 0, matteApplied: "#ffffff" });
+  // Матированный эталон уезжает в evidence — иначе «сравнили с чем-то» осталось бы недоказуемым.
+  expect(passed.artifacts?.map((item) => item.name).sort())
+    .toEqual(["diff.png", "normalized-candidate.png", "normalized-reference.png", "visual.json"]);
+  matted.db.close();
+
+  // `matte: "none"` — объявленное «не матировать»: путь ровно доволновой.
+  const none = await context({ policyId: "pixel-strict-v1", comparison: { matte: "none" } });
+  none.ctx.case.referenceAssetId = await putAsset(none.db, none.dir, OPAQUE_REFERENCE);
+  const untouched = await visualGate.run(none.ctx);
+  expect(untouched.status).toBe("fail");
+  expect(untouched.metrics).not.toHaveProperty("matteApplied");
+  none.db.close();
+});
+
+/**
+ * Пара «живой текст» / «перекрашенный блок» (§W4 T4b).
+ *
+ * Глиф — маленькая фигура, сдвинутая на 1 px: весь остаток лежит на её собственных контурах.
+ * Перекраска — блок **внутри** залитой области, где у эталона нет градиента вовсе, поэтому
+ * остаток вне edge-маски. Оба расхождения по проценту почти одинаковы — и различает их только
+ * геометрия остатка, ради которой пресет и существует.
+ */
+const GLYPH_REFERENCE = framePng(100, 100, { x: 10, y: 10, width: 8, height: 8, color: INK });
+const GLYPH_SHIFTED = framePng(100, 100, { x: 11, y: 10, width: 8, height: 8, color: INK });
+const FILLED_REFERENCE = framePng(100, 100, { x: 10, y: 10, width: 40, height: 40, color: INK });
+const FILLED_RECOLOURED = (() => {
+  const png = PNG.sync.read(FILLED_REFERENCE);
+  for (let y = 25; y < 31; y += 1) {
+    for (let x = 25; x < 31; x += 1) {
+      const offset = (y * 100 + x) * 4;
+      png.data[offset] = 0xc0; png.data[offset + 1] = 0x20; png.data[offset + 2] = 0x20; png.data[offset + 3] = 0xff;
+    }
+  }
+  return PNG.sync.write(png);
+})();
+
+test("§W4: пресет live-text-v1 спасает растровый остаток и не спасает перекраску блока", async () => {
+  // Бюджет случая заведомо ниже расхождения: оба случая до пресета — `fail`.
+  const glyph = await context({ candidate: GLYPH_SHIFTED, casePolicy: { maxRawDiffPct: 0.05 }, textAaBudget: "live-text-v1" });
+  glyph.ctx.case.referenceAssetId = await putAsset(glyph.db, glyph.dir, GLYPH_REFERENCE);
+  const rescued = await visualGate.run(glyph.ctx);
+  expect(rescued.status).toBe("pass");
+  expect(rescued.metrics!.rawDiffPct as number).toBeGreaterThan(0.05);
+  expect(rescued.metrics!.rawDiffPct as number).toBeLessThanOrEqual(TEXT_AA_PRESETS["live-text-v1"].maxRawDiffPct);
+  expect(rescued.metrics!.textAaBudget).toMatchObject({ preset: "live-text-v1", applied: true });
+  expect(rescued.detail).toContain("live-text-v1");
+  glyph.db.close();
+
+  // Тот же кадр **без** объявленного пресета судится ровно бюджетом: пресет не включается сам.
+  const unclaimed = await context({ candidate: GLYPH_SHIFTED, casePolicy: { maxRawDiffPct: 0.05 } });
+  unclaimed.ctx.case.referenceAssetId = await putAsset(unclaimed.db, unclaimed.dir, GLYPH_REFERENCE);
+  const strict = await visualGate.run(unclaimed.ctx);
+  expect(strict.status).toBe("fail");
+  expect(strict.metrics).not.toHaveProperty("textAaBudget");
+  unclaimed.db.close();
+
+  // Перекраска внутри залитой области: тот же порядок процентов, но остаток лежит вне контуров.
+  const recoloured = await context({ candidate: FILLED_RECOLOURED, casePolicy: { maxRawDiffPct: 0.05 }, textAaBudget: "live-text-v1" });
+  recoloured.ctx.case.referenceAssetId = await putAsset(recoloured.db, recoloured.dir, FILLED_REFERENCE);
+  const rejected = await visualGate.run(recoloured.ctx);
+  expect(rejected.status).toBe("fail");
+  expect(rejected.metrics!.rawDiffPct as number).toBeLessThanOrEqual(TEXT_AA_PRESETS["live-text-v1"].maxRawDiffPct);
+  expect(rejected.metrics!.textAaBudget).toMatchObject({ preset: "live-text-v1", applied: false });
+  expect((rejected.metrics!.edgeResidual as { insidePct: number }).insidePct)
+    .toBeLessThan(TEXT_AA_PRESETS["live-text-v1"].minEdgeResidualPct);
+  recoloured.db.close();
+});
+
+test("§W4: порог пресета — та же константа, что у классификатора причин (один источник правды)", () => {
+  // Разъехавшись, вердикт и его объяснение противоречили бы друг другу: гейт спасал бы случай как
+  // растровый остаток, а таксономия называла бы его регрессией (или наоборот).
+  expect(TEXT_AA_PRESETS["live-text-v1"].minEdgeResidualPct).toBe(CAUSE_THRESHOLDS.edgeResidualInsidePct);
+  expect(TEXT_AA_PRESETS["live-text-v1"].maxRawDiffPct).toBe(0.75);
+});
+
+test("§W4: edge-сигнал приезжает в метрики каждого случая, а вердикт без пресета не меняется", async () => {
+  const { ctx, db, dir } = await context({ policyId: "pixel-strict-v1" });
+  ctx.case.referenceAssetId = await putAsset(db, dir, CANDIDATE);
+  const result = await visualGate.run(ctx);
+  expect(result.status).toBe("pass");
+  // Кадры совпали побайтно: остатка нет, и доли у пустого множества тоже нет.
+  expect(result.metrics!.edgeResidual).toMatchObject({ residualPixels: 0, insidePct: null });
   db.close();
 });

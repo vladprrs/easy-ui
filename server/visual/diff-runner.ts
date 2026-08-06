@@ -49,6 +49,19 @@ export interface NormalizedDiffJob {
     aaThreshold?: number;
     maxRegions?: number;
     offsetWindow?: number;
+    /**
+     * Matte сравнения (план 2026-08-06 §W4 T4a): `"none"` либо `"#RRGGBB"`. Обе картинки
+     * компонуются над этим цветом **после** crop/placement/pad и **до** любой метрики; альфа
+     * результата ≡ 255. Отсутствие поля = `"none"` — дефолт применяет воркер, не сервер.
+     */
+    matte?: string;
+    /**
+     * Явный запрос edge-сигнала (`edgeResidual` в метриках). Опция сильнее env-флага процесса
+     * `EASYUI_VISUAL_SIGNALS_V2`: приёмка обязана получать `edgeResidual` независимо от того,
+     * включён ли флаг у визуальных ранов, — на нём стоит пресет `live-text-v1` (§W4 T4b) и
+     * классификатор `text-raster-residual`.
+     */
+    edge?: boolean;
   };
 }
 export interface DiffRegion { bbox: { x: number; y: number; width: number; height: number }; areaPct: number; meanDelta: number }
@@ -67,8 +80,17 @@ export interface DiffChannelStats {
 }
 export interface NormalizedDiffMetrics {
   rawDiffPct: number; aaDiffPct: number;
-  /** R7a: остаток относительно edge-маски эталона. Аддитивно и **только** под `EASYUI_VISUAL_SIGNALS_V2=1`. */
+  /**
+   * R7a: остаток относительно edge-маски эталона. Аддитивно; считается при `options.edge === true`
+   * (так его просит гейт приёмки, §W4 T4b) либо под `EASYUI_VISUAL_SIGNALS_V2=1`.
+   */
   edgeResidual?: EdgeResidual;
+  /**
+   * Цвет применённого matte (`"#rrggbb"`) — ключ присутствует **только** когда матирование
+   * состоялось (§W4 T4a). После него альфа обеих картинок ≡ 255, поэтому альфа-расхождений не
+   * бывает by construction: этим фактом обесточивается классификатор `alpha-compositing`.
+   */
+  matteApplied?: string;
   rawDiffPixels: number; aaDiffPixels: number; totalPixels: number;
   maxChannelDelta: number;
   channelStats?: DiffChannelStats;

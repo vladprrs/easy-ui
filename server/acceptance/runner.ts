@@ -258,6 +258,26 @@ const isDiagnosable = (gate: GateResult | undefined): boolean =>
  * `diff.png` из CAS не требуется: статистика маски (`channelStats`) приходит из того же
  * подпроцесса, который маску и построил.
  */
+/**
+ * Статистика маски для классификаторов, с одной поправкой (§W4-4).
+ *
+ * Матированный случай (`matteApplied`) сравнивается **над непрозрачным цветом**: альфа обеих
+ * картинок после matte ≡ 255, поэтому «расхождение по альфе» в нём не событие, а невозможность.
+ * Оставить `alphaDominantPct`/`semiTransparentPct` как есть значило бы позволить классификатору
+ * `alpha-compositing` назвать причину, которой по построению нет. Обнуляем ровно эти две доли —
+ * остальная статистика (`meanMaxDelta`/`stdMaxDelta`, вход `surface-tint`) остаётся честной, и
+ * причина «залили другим цветом» на matte-кейсе по-прежнему называется.
+ *
+ * Правка живёт здесь, а не в `server/visual/causes.ts`: таксономия причин — не место для знания о
+ * том, как готовился вход сравнения.
+ */
+function channelStatsForCauses(visualMetrics: Record<string, unknown>): CauseVisualMetrics["channelStats"] {
+  if (!isObject(visualMetrics.channelStats)) return null;
+  const stats = visualMetrics.channelStats as unknown as NonNullable<CauseVisualMetrics["channelStats"]>;
+  if (typeof visualMetrics.matteApplied !== "string") return stats;
+  return { ...stats, alphaDominantPct: 0, semiTransparentPct: 0 };
+}
+
 export function causeInputOf(gates: GateResult[], deviceScaleFactor: number): CauseInput {
   const visualMetrics = gateOf(gates, "visual")?.metrics ?? {};
   const geometryMetrics = gateOf(gates, "geometry")?.metrics ?? {};
@@ -274,9 +294,12 @@ export function causeInputOf(gates: GateResult[], deviceScaleFactor: number): Ca
         ? visualMetrics.bestOffset as unknown as CauseVisualMetrics["bestOffset"]
         : { dx: 0, dy: 0, residualPct: 0 },
       canvas: isObject(visualMetrics.canvas) ? visualMetrics.canvas as unknown as { width: number; height: number } : null,
-      channelStats: isObject(visualMetrics.channelStats)
-        ? visualMetrics.channelStats as unknown as NonNullable<CauseVisualMetrics["channelStats"]>
-        : null,
+      // W4: остаток по edge-маске эталона — вход `text-raster-residual`. Гейт просит его у воркера
+      // всегда (`options.edge`), но метрики доволновых строк его не несут: поле остаётся условным.
+      ...(isObject(visualMetrics.edgeResidual)
+        ? { edgeResidual: visualMetrics.edgeResidual as unknown as NonNullable<CauseVisualMetrics["edgeResidual"]> }
+        : {}),
+      channelStats: channelStatsForCauses(visualMetrics),
     }
     : null;
 
@@ -450,6 +473,10 @@ function frameCarriesVisualVerdict(gates: GateResult[]): boolean {
  * Каждый шаг вниз честно дороже предыдущего и честно дешевле пересъёмки. Ни один из них не
  * переносит вердикт «на глаз»: отсутствие доказательства (снимка политики, кадра в CAS,
  * пересчитываемости гейта) — всегда пересъёмка, никогда stale-carry.
+ *
+ * Шаги **не** короткозамыкаются друг на друга (план 2026-08-06 §W4, W4-2): отказ пересчёта на
+ * шаге 2 откладывает свою причину и пропускает случай на шаг 3 — «пересчитать нельзя» и «сравнить
+ * заново нельзя» это разные утверждения, и первое из них не доказывает второго.
  */
 async function attemptReuse(
   deps: CaseRunnerDeps,
@@ -484,6 +511,14 @@ async function attemptReuse(
 
   if (!verdictRecomputeEnabled()) return {};
 
+  /**
+   * Причина пересъёмки, **отложенная** до исчерпания более дешёвых шагов (план 2026-08-06 §W4,
+   * находки W4-1/W4-2). До волны отказ пересчёта на шаге 2 возвращался сразу — и кадр, который
+   * шаг 3 законно пересравнил бы без chromium, уезжал в пересъёмку. Это било ровно по тем полям,
+   * чей отказ **означает** «измерь заново» (`textAaBudget` без `edgeResidual` в старых метриках).
+   */
+  let deferredRecapture: string | null = null;
+
   // 2. Recompute: кадр и сравнение те же, политика другая.
   const comparisonRow = deps.repo.caseResultForFrameComparison(fps.frame, fps.comparison, componentId);
   if (comparisonRow && comparisonRow.case_fingerprint !== fps.case) {
@@ -493,33 +528,46 @@ async function attemptReuse(
     const cached = await loadCached(deps, comparisonRow);
     if (cached) {
       const result = reevaluateGates(cached.gates, oldPolicy, fps.verdictPolicySnapshot);
-      if (!result.reevaluable) return { recaptureReason: "recapture:policy_delta" };
-      // Verdict-скоуп без дельты — эскалация до пересъёмки (D4).
-      if (scope === "verdict" && result.delta.length === 0) return { recaptureReason: "recapture:no_verdict_delta" };
-      const gates = result.changed
-        ? await rewriteDerivedArtifacts(deps.context.dataDir, result.gates, result.recomputedGates)
-        : result.gates;
-      return { execution: finishReused(deps, item, fps, gates, cached.captureQuality, { verdictRecomputed: true, reuseReason: "recompute:policy" }) };
+      // Отказ пересчёта — не приговор кадру: сначала шаг 3 (re-diff того же кадра, где метрики
+      // считаются заново), и только если он невозможен — эта причина становится пересъёмкой.
+      if (!result.reevaluable) deferredRecapture = "recapture:policy_delta";
+      else {
+        // Verdict-скоуп без дельты — эскалация до пересъёмки (D4).
+        if (scope === "verdict" && result.delta.length === 0) return { recaptureReason: "recapture:no_verdict_delta" };
+        const gates = result.changed
+          ? await rewriteDerivedArtifacts(deps.context.dataDir, result.gates, result.recomputedGates)
+          : result.gates;
+        return { execution: finishReused(deps, item, fps, gates, cached.captureQuality, { verdictRecomputed: true, reuseReason: "recompute:policy" }) };
+      }
     }
   }
 
+  /**
+   * Выход из каскада без reuse. Своя причина шага 3 (она про сам кадр) сильнее отложенной причины
+   * шага 2; отсутствие обеих — это «кэша просто не было», а не осознанная пересъёмка.
+   */
+  const giveUp = (reason?: string): CascadeOutcome =>
+    reason !== undefined ? { recaptureReason: reason }
+      : deferredRecapture !== null ? { recaptureReason: deferredRecapture }
+        : {};
+
   // 3. Re-diff: кадр тот же, сравнение другое.
   const frameRow = deps.repo.caseResultForFrame(fps.frame, componentId);
-  if (!frameRow || frameRow.case_fingerprint === fps.case) return {};
+  if (!frameRow || frameRow.case_fingerprint === fps.case) return giveUp();
   const oldPolicy = verdictPolicyOfRow(frameRow);
-  if (oldPolicy === null) return { recaptureReason: "recapture:policy_snapshot_missing" };
+  if (oldPolicy === null) return giveUp("recapture:policy_snapshot_missing");
   const cached = await loadCached(deps, frameRow);
-  if (!cached) return { recaptureReason: "recapture:frame_missing" };
+  if (!cached) return giveUp("recapture:frame_missing");
   const paint = paintArtifactOf(cached.artifacts);
   if (!paint || !(await artifactPresent(deps.context.dataDir, paint.sha256))) {
-    return { recaptureReason: "recapture:frame_missing" };
+    return giveUp("recapture:frame_missing");
   }
-  if (!frameCarriesVisualVerdict(cached.gates)) return { recaptureReason: "recapture:frame_not_ready" };
+  if (!frameCarriesVisualVerdict(cached.gates)) return giveUp("recapture:frame_not_ready");
 
   // Остальные гейты переезжают через ту же дельта-карту: сменившийся `expectedGeometry` — это и
   // comparison-промах (re-diff), и вердиктная дельта геометрии (пересчёт), и оба обязаны сойтись.
   const carried = reevaluateGates(cached.gates.filter((gate) => gate.gate !== "visual"), oldPolicy, fps.verdictPolicySnapshot);
-  if (!carried.reevaluable) return { recaptureReason: "recapture:policy_delta" };
+  if (!carried.reevaluable) return giveUp("recapture:policy_delta");
 
   const ctx = gateContextOf(deps, item, determinismSampled);
   const visual = await rediffCase(ctx, paint.sha256);

@@ -190,6 +190,38 @@ test("W5: поля content-hug классифицированы как compariso
   expect(layerOf("referencePlacement")).toEqual(["comparison"]);
 });
 
+test("§W4: matte и textAaBudget доезжают до comparisonFingerprint (а не только до FIELD_LAYERS)", () => {
+  // Дифференциальная проверка стоит на `caseFingerprintsOf` намеренно (V5): тотальность
+  // `FIELD_LAYERS` доказывает лишь объявленный слой, но не то, что поле доехало до пре-образа
+  // хэша, — а «классифицировано как comparison, но кадр/сравнение не двигает» и есть тихий stale.
+  const paint = { ...PLAIN, referenceAssetId: ASSET_A };
+  const base = fingerprints(paint);
+
+  const matte = fingerprints({ ...paint, comparison: { matte: "#ffffff" } });
+  expect(matte.frame).toBe(base.frame);
+  expect(matte.verdictPolicy).toBe(base.verdictPolicy);
+  expect(matte.comparison).not.toBe(base.comparison);
+  expect(matte.case).not.toBe(base.case);
+  // Другой цвет — другое сравнение: matte это вход диффа, а не булев тумблер.
+  expect(fingerprints({ ...paint, comparison: { matte: "#000000" } }).comparison).not.toBe(matte.comparison);
+  // `"none"` — объявленное «не матировать»: манифест другой, значит и отпечаток честно другой.
+  expect(fingerprints({ ...paint, comparison: { matte: "none" } }).comparison).not.toBe(base.comparison);
+
+  // Пресет — двухслойный: он и вход сравнения (требует edgeResidual), и вход вердикта.
+  const preset = fingerprints({ ...paint, textAaBudget: "live-text-v1" });
+  expect(preset.frame).toBe(base.frame);
+  expect(preset.comparison).not.toBe(base.comparison);
+  expect(preset.verdictPolicy).not.toBe(base.verdictPolicy);
+  expect(preset.verdictPolicySnapshot.textAaBudget).toBe("live-text-v1");
+
+  // Инвариант неизменности: случай без новых полей — байт-в-байт прежние слои и прежний ключ.
+  expect(fingerprints(paint)).toEqual(base);
+  expect(base.verdictPolicySnapshot.textAaBudget).toBeUndefined();
+  const layerOf = (field: LayeredField): readonly string[] => (FIELD_LAYERS as Record<string, readonly string[]>)[field]!;
+  expect(layerOf("comparison")).toEqual(["comparison"]);
+  expect(layerOf("textAaBudget")).toEqual(["comparison", "verdict"]);
+});
+
 // ------------------------------------------------------------- слоты (§A4)
 
 /**
@@ -374,6 +406,9 @@ const CASE_SAMPLE: Required<AcceptanceCase> = {
   // comparison по инварианту D1 (проверка слоя — тестом ниже).
   referenceSurface: "paint",
   referencePlacement: { x: 0, y: 0 },
+  // W4: контракт сравнения (matte) и именованный пресет растрового текста.
+  comparison: {},
+  textAaBudget: "live-text-v1",
   dims: {},
   geometryDetailKeys: [],
   // §A4: дети слотов — кадровый слой, их хэш — производная (report-only). В боевом случае оба поля

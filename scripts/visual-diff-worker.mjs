@@ -7,7 +7,8 @@
 // Три режима, все через тот же stdin-контракт:
 //   * по умолчанию (`compare`) — сравнение кадр-в-кадр, историческая семантика VDC v1;
 //   * `mode: "normalize"` (`normalizeAndCompare`, план 2026-08-03 §5 W5a) — crop эталона по
-//     `cropLineage`, pad до общего холста и полный набор метрик случая приёмки;
+//     `cropLineage`, pad до общего холста, опциональный matte (план 2026-08-06 §W4) и полный
+//     набор метрик случая приёмки;
 //   * `mode: "signals"` (`compareWithSignals`, план 2026-08-03-renderer-contract-2 §3 E6, §5 R7a) —
 //     четыре сигнала визуального рана (`dims`/`exact`/`perceptual`/`edgeResidual`) плюс метрики,
 //     которых требует классификатор причин. Включается флагом `EASYUI_VISUAL_SIGNALS_V2=1`.
@@ -138,6 +139,55 @@ export function padPng(png, width, height) {
     png.data.copy(out.data, row * width * 4, from, from + cols * 4);
   }
   return out;
+}
+
+// ------------------------------------------------------------------ matte (план 2026-08-06 §W4 T4a)
+//
+// Зачем. Капчур снимается **прозрачным** (`omitBackground:true`), а Figma-экспорт эталона почти
+// всегда лежит поверх непрозрачного холста. На таких парах каждый пиксель полупрозрачной тени,
+// скругления и AA расходится по альфе — и вердикт говорит о фоне, которого у кандидата нет, а не
+// о компоненте. Matte снимает ровно этот класс: обе картинки кладутся на **один объявленный
+// цвет**, и дальше меряется то, что видно.
+//
+// Где. Только на сравнении и ровно один раз: после crop/placement/pad, до любой метрики. Раньше
+// placement — матировали бы не ту область; позже метрик — метрики считались бы по разным входам.
+//
+// Что после. Альфа обеих картинок ≡ 255 по построению, поэтому альфа-расхождений не остаётся
+// вовсе (это и обесточивает классификатор `alpha-compositing`: см. `matteApplied`).
+
+/** `"#rrggbb"` → `{r,g,b}`; `"none"`/пусто/мусор → `null` (дефолт «не матировать» — здесь). */
+export function parseMatte(value) {
+  if (typeof value !== "string" || value === "none") return null;
+  if (!/^#[0-9a-fA-F]{6}$/.test(value)) return null;
+  return {
+    r: parseInt(value.slice(1, 3), 16),
+    g: parseInt(value.slice(3, 5), 16),
+    b: parseInt(value.slice(5, 7), 16),
+    hex: `#${value.slice(1).toLowerCase()}`,
+  };
+}
+
+/**
+ * Композитинг «source over opaque background» по **straight** (не premultiplied) альфе:
+ * `out = src·a + bg·(1−a)`, альфа результата 255. PNG отдаёт straight-альфу, поэтому домножать
+ * на неё повторно нельзя — иначе полупрозрачный пиксель темнел бы дважды.
+ *
+ * Мутирует переданный буфер: обе картинки к этому моменту уже собственные копии воркера
+ * (`padPng`/`placePng`), а лишний проход по кадру 780×1688 — это чистая цена без читателя.
+ * Идемпотентна: после первого прохода `a = 1`, и второй ничего не меняет.
+ */
+export function matteOver(data, total, color) {
+  for (let index = 0; index < total; index += 1) {
+    const offset = index * 4;
+    const alpha = data[offset + 3] / 255;
+    if (alpha === 1) continue;
+    const inverse = 1 - alpha;
+    data[offset] = Math.round(data[offset] * alpha + color.r * inverse);
+    data[offset + 1] = Math.round(data[offset + 1] * alpha + color.g * inverse);
+    data[offset + 2] = Math.round(data[offset + 2] * alpha + color.b * inverse);
+    data[offset + 3] = 255;
+  }
+  return data;
 }
 
 /** Максимальная по-канальная дельта одного пикселя (включая альфу). */
@@ -479,6 +529,14 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
   const paddedCand = padPng(candidate, width, height);
   const total = width * height;
 
+  // Matte — последний шаг нормализации и первый шаг перед метриками (§W4 T4a): обе картинки, один
+  // цвет, один проход. Порядок `crop → place/pad → matte → метрики` фиксирован именно здесь.
+  const matte = parseMatte(options.matte);
+  if (matte) {
+    matteOver(paddedRef.data, total, matte);
+    matteOver(paddedCand.data, total, matte);
+  }
+
   const rawThreshold = options.rawThreshold ?? RAW_THRESHOLD;
   const aaThreshold = options.aaThreshold ?? AA_THRESHOLD;
   const diff = new PNG({ width, height });
@@ -538,12 +596,17 @@ export function normalizeAndCompare(referencePng, candidatePng, options = {}) {
       }),
       thresholds: { raw: rawThreshold, aa: aaThreshold },
       ...(edgeResidual === null ? {} : { edgeResidual }),
+      // Факт матирования — в метриках, а не только в задании: по нему потребитель отличает
+      // «альфа совпала» от «альфы больше нет вовсе» (обесточенный `alpha-compositing`, §W4-4).
+      // Условный ключ: без matte результат воркера обязан остаться доволновым байт-в-байт.
+      ...(matte ? { matteApplied: matte.hex } : {}),
     },
     diffPngBase64: PNG.sync.write(diff).toString("base64"),
     normalizedCandidatePngBase64: PNG.sync.write(paddedCand).toString("base64"),
-    // Дериват эталона отдаётся **только** когда сервер действительно строил канву: для legacy-пути
-    // лишний PNG-энкод на случай — это чистая цена без читателя (D13: доволновое поведение).
-    ...(padTo ? { normalizedReferencePngBase64: PNG.sync.write(paddedRef).toString("base64") } : {}),
+    // Дериват эталона отдаётся, когда сервер действительно **строил** эталон: собрал канву
+    // (`padTo`) либо матировал его (§W4-5). Для legacy-пути без обоих лишний PNG-энкод на случай —
+    // чистая цена без читателя (D13: доволновое поведение).
+    ...(padTo || matte ? { normalizedReferencePngBase64: PNG.sync.write(paddedRef).toString("base64") } : {}),
   };
 }
 

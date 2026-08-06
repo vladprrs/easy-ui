@@ -271,6 +271,42 @@ export const caseSetSlotBindingsSchema: z.ZodType<CaseSetSlotBindings> = z.lazy(
   .refine((value) => Object.keys(value).length <= CASE_SET_MAX_SLOTS_PER_CASE,
     `at most ${CASE_SET_MAX_SLOTS_PER_CASE} slots per node`));
 
+/**
+ * **Matte сравнения** (план 2026-08-06 §W4 T4a, строка 7 фидбэка).
+ *
+ * Капчур остаётся прозрачным (`omitBackground:true` — кадровый слой, его этот контракт не
+ * трогает вовсе). Matte — декларация **сравнения**: «прежде чем мерить расхождение, положи обе
+ * картинки на этот цвет». Она закрывает случай «эталон экспортирован из Figma поверх белого, а
+ * кандидат снят прозрачным»: без matte каждый полупрозрачный пиксель эталона расходится с
+ * кандидатом по альфе, и вердикт говорит о фоне, а не о компоненте.
+ *
+ * `"none"` — явное «не матировать», то же, что отсутствие поля (дефолт применяет **потребитель**,
+ * `scripts/visual-diff-worker.mjs`, а не схема — C6/C25: `caseSetIdOf` хэширует `parsed.data`, и
+ * zod-дефолт сменил бы контентный адрес всех уже опубликованных манифестов).
+ */
+export const COMPARISON_MATTE_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
+export const caseSetComparisonSchema = z.strictObject({
+  matte: z.union([
+    z.literal("none"),
+    z.string().regex(COMPARISON_MATTE_PATTERN, "matte must be \"none\" or a #RRGGBB colour"),
+  ]).optional(),
+});
+
+/**
+ * **Именованные пресеты бюджета растрового текста** (план 2026-08-06 §1.2/§W4 T4b, строка 5
+ * фидбэка «Timer»).
+ *
+ * Поле объявляет **имя** профиля, а не числа: эталон приёмки — Figma-ассет, у него нет renderer
+ * fingerprint, поэтому «один шрифтовой стек на паре PNG ↔ живой капчур» недостижим, и остаётся
+ * вторая ветка фидбэка — документированный scoped profile. Пороги (`maxRawDiffPct` и
+ * `minEdgeResidualPct`) владеет **сервер** (`server/acceptance/gates/visual.ts`): свободные числа
+ * в манифесте отняли бы у пресета его единственный смысл — официальность. Тюнинг порогов = новый
+ * пресет `live-text-v2`, а не другое число под тем же именем.
+ */
+export const TEXT_AA_BUDGETS = ["live-text-v1"] as const;
+export type TextAaBudget = (typeof TEXT_AA_BUDGETS)[number];
+
 export const caseSetCaseSchema = z.strictObject({
   id: caseId,
   props: z.record(z.string(), z.unknown()),
@@ -308,6 +344,19 @@ export const caseSetCaseSchema = z.strictObject({
    * zod-дефолт сменил бы контентный адрес **всех** уже опубликованных манифестов.
    */
   slotBindings: caseSetSlotBindingsSchema.optional(),
+  /**
+   * Декларативный контракт **сравнения** случая (§W4 T4a). Уровень кейса, а не `policy.perCase`:
+   * matte меняет входы диффа, а не порог вердикта, — это слой `comparison`, и его смена честно
+   * даёт re-diff сохранённого кадра без пересъёмки.
+   */
+  comparison: caseSetComparisonSchema.optional(),
+  /**
+   * Именованный пресет бюджета растрового текста (§W4 T4b). Тоже уровень кейса и тоже слой
+   * `comparison` (плюс `verdict`): пресет требует `edgeResidual`, которого в доволновых метриках
+   * нет вовсе, поэтому его появление обязано пересчитаться через re-diff, а не через recompute по
+   * сохранённым числам.
+   */
+  textAaBudget: z.enum(TEXT_AA_BUDGETS).optional(),
 });
 
 export const caseSetManifestSchema = z.strictObject({
@@ -334,5 +383,6 @@ export type CaseSetManifest = z.infer<typeof caseSetManifestSchema>;
 export type CaseSetCase = z.infer<typeof caseSetCaseSchema>;
 export type CaseSetCapture = z.infer<typeof caseSetCaptureSchema>;
 export type CaseSetCasePolicy = z.infer<typeof caseSetCasePolicySchema>;
+export type CaseSetComparison = z.infer<typeof caseSetComparisonSchema>;
 // `CaseSetSlotChild`/`CaseSetSlotBindings` объявлены выше вручную: рекурсивная схема (`z.lazy`)
 // инференс не переживает, а экспортируемый тип обязан оставаться читаемым.

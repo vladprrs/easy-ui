@@ -299,3 +299,46 @@ test("снимок политики без хэша, с чужим хэшем и
   // Хэш есть, но он не про этот снимок — считать по нему дельту нельзя.
   expect(verdictPolicyOfRow({ verdict_policy_json: json, verdict_policy_hash: "f".repeat(64) })).toBeNull();
 });
+
+// ------------------------------------------- пресет live-text (план 2026-08-06 §W4)
+
+test("§W4: пресет пересчитывается по сохранённому edgeResidual и флипает вердикт", () => {
+  const withEdge = (insidePct: number, rawDiffPct: number): GateResult => {
+    const gate = visualGateResult(rawDiffPct, rawDiffPct, "fail");
+    gate.metrics!.edgeResidual = { residualPixels: 200, insidePixels: 199, outsidePixels: 1, insidePct };
+    return gate;
+  };
+  const strict = withRequiredVisual(withThreshold(DEFAULT, 0.05));
+  const before = verdictPolicySnapshotOf(strict, CASE);
+  const after = verdictPolicySnapshotOf(strict, { ...CASE, textAaBudget: "live-text-v1" });
+  expect(verdictPolicyDelta(before, after)).toEqual(["textAaBudget"]);
+  expect(GATES_BY_POLICY_FIELD.textAaBudget).toEqual(["visual"]);
+
+  // Остаток лежит на контурах эталона ⇒ пресет применяется: fail → pass, без единого пикселя.
+  const rescued = reevaluateGates([...structuralGates(), withEdge(99, 0.4)], before, after);
+  expect(rescued.reevaluable).toBe(true);
+  expect(rescued.changed).toBe(true);
+  expect(rescued.gates.find((gate) => gate.gate === "visual")!.status).toBe("pass");
+  expect(rescued.gates.find((gate) => gate.gate === "visual")!.metrics!.textAaBudget)
+    .toMatchObject({ preset: "live-text-v1", applied: true });
+
+  // Остаток вне контуров — пресет молчит, вердикт остаётся провальным.
+  const kept = reevaluateGates([...structuralGates(), withEdge(40, 0.4)], before, after);
+  expect(kept.gates.find((gate) => gate.gate === "visual")!.status).toBe("fail");
+  // …и расхождение выше потолка самого пресета тоже не спасается.
+  const tooBig = reevaluateGates([...structuralGates(), withEdge(100, 5)], before, after);
+  expect(tooBig.gates.find((gate) => gate.gate === "visual")!.status).toBe("fail");
+});
+
+test("§W4: пресет без edgeResidual в сохранённых метриках — отказ пересчёта, а не выдумка", () => {
+  // Метрики сняты до волны: остатка по edge-маске в них нет вовсе. «Пересчитать» пресет по
+  // числам, которых не измеряли, невозможно — вызывающий обязан сравнить заново (re-diff).
+  const strict = withRequiredVisual(withThreshold(DEFAULT, 0.05));
+  const result = reevaluateGates(
+    [...structuralGates(), visualGateResult(0.4, 0.4, "fail")],
+    verdictPolicySnapshotOf(strict, CASE),
+    verdictPolicySnapshotOf(strict, { ...CASE, textAaBudget: "live-text-v1" }),
+  );
+  expect(result.reevaluable).toBe(false);
+  expect(result.reason).toContain("edgeResidual");
+});

@@ -190,6 +190,8 @@ interface CaseSpec {
   maxRawDiffPct?: number;
   expectedGeometry?: { width: number; height: number };
   cropLineage?: { rect: [number, number, number, number] };
+  /** W4: именованный пресет бюджета растрового текста (уровень кейса, не policy.perCase). */
+  textAaBudget?: "live-text-v1";
 }
 
 /** Манифест набора: `requireVisual` делает визуальный гейт обязательным (иначе пороги ни на что не влияют). */
@@ -209,6 +211,7 @@ function manifestOf(cases: CaseSpec[]): CaseSetManifest {
       referenceAssetId: item.referenceAssetId,
       ...(item.expectedGeometry ? { expectedGeometry: item.expectedGeometry } : {}),
       ...(item.cropLineage ? { cropLineage: item.cropLineage } : {}),
+      ...(item.textAaBudget ? { textAaBudget: item.textAaBudget } : {}),
     })),
   });
 }
@@ -794,8 +797,15 @@ const manifestShapeHash = (manifest: unknown): string =>
  * `manifestOf` научился писать `slotBindings`/`slotsHash`. Оба поля пишутся условным спредом,
  * поэтому у рана без слотов манифест обязан остаться прежним побайтово: `evidence_manifest_hash`
  * связан промоутом (`promote.ts:239`), и сдвиг формы обесценил бы уже принятые раны.
+ *
+ * **Санкционированный сдвиг W4** (план 2026-08-06 §W4, «Риски»): гейт `visual` просит у воркера
+ * edge-сигнал всегда, поэтому `visual.json` каждого нового рана несёт ещё и `edgeResidual` — его
+ * размер входит в нормализованный манифест (`bytes` не заглушается). Вердикты при этом не
+ * меняются (отдельный тест «случай без textAaBudget судится ровно бюджетом»), а уже записанные
+ * манифесты принятых ранов лежат на диске неизменными: голден описывает **новый** ран, а не их.
+ * Слот-инвариант волны A7 держится дальше — условный спред полей проверяется строками выше.
  */
-const GOLDEN_SLOT_FREE_MANIFEST_SHAPE = "3001649a187ebe57a4103f21783604c86770f5dea00455ec976f3ecc0bf45a95";
+const GOLDEN_SLOT_FREE_MANIFEST_SHAPE = "b6d43008c0212d46c0965f57470eabb5722afdde7a15d9d90b4328f633d8f088";
 
 test("evidence-манифест slot-free рана не меняется от появления слот-полей (golden §A7)", async () => {
   const harness = await setup();
@@ -875,4 +885,40 @@ test("evidence_manifest_hash съезжает от одной лишь смен�
   // Пересобранный ребёнок — другое доказательство: приёмка, снятая со старым билдом, не описывает
   // новый, и промоут, связывающий `evidence_manifest_hash`, обязан это видеть.
   expect(await shapeOf("bh-child-a")).not.toBe(await shapeOf("bh-child-b"));
+});
+
+// -------------------------------- каскад: refuse пересчёта не равен пересъёмке (§W4, W4-2)
+
+test("§W4: отказ пересчёта при живом кадре пробует re-diff, а не пересъёмку", async () => {
+  const harness = await setup();
+  const shifted = await putAsset(harness, framePng({ label: "a" }, 3));
+  // Ран с объявленным пресетом: метрики случая несут `edgeResidual`, кадр снят.
+  const first = await runWith(harness, manifestOf([
+    { id: "alpha", props: { label: "a" }, referenceAssetId: shifted, textAaBudget: "live-text-v1", maxRawDiffPct: 90 },
+  ]));
+  expect(first.run.status).toBe("pass");
+  const capturedBefore = harness.service.calls.length;
+
+  // Строка кэша доволновой формы: `edgeResidual` в сохранённых метриках нет вовсе (ровно то, что
+  // лежит в проде после апгрейда). Пересчитать пресет по ней невозможно.
+  const row = harness.db.query<{ case_fingerprint: string; metrics_json: string }, []>(
+    "SELECT case_fingerprint, metrics_json FROM acceptance_case_results",
+  ).all()[0]!;
+  const stored = JSON.parse(row.metrics_json) as { gates: GateResult[] };
+  for (const gate of stored.gates) if (gate.gate === "visual") delete (gate.metrics as Record<string, unknown>).edgeResidual;
+  harness.db.run("UPDATE acceptance_case_results SET metrics_json=? WHERE case_fingerprint=?",
+    [JSON.stringify(stored), row.case_fingerprint]);
+
+  // Вердиктная дельта при неизменном сравнении: шаг 2 находит строку и отказывается…
+  const second = await runWith(harness, manifestOf([
+    { id: "alpha", props: { label: "a" }, referenceAssetId: shifted, textAaBudget: "live-text-v1", maxRawDiffPct: 80 },
+  ]));
+  // …а шаг 3 честно пересравнивает тот же кадр: chromium не запускался.
+  expect(harness.service.calls.length).toBe(capturedBefore);
+  expect(reuseReasons(harness, second.run.run_id).alpha).toBe("rediff:comparison");
+  const visual = gatesOfCase(harness, second.run.run_id, "alpha").find((gate) => gate.gate === "visual")!;
+  // Пересравнение вернуло сигнал, которого не хватало пересчёту.
+  expect(visual.metrics!.edgeResidual).toBeDefined();
+  expect(visual.metrics!.textAaBudget).toMatchObject({ preset: "live-text-v1" });
+  harness.db.close();
 });

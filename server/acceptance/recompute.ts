@@ -29,8 +29,10 @@ import {
   evaluateGeometryPolicy, geometryVerdictBlocks,
   type GeometryPolicyClipLink, type GeometryPolicyEffectSource, type GeometryPolicyRect, type GeometryTolerancesInput,
 } from "../../src/capture/geometryPolicy";
+import type { TextAaBudget } from "../../src/acceptance/caseSetSchema";
 import { putArtifact, readArtifact } from "./evidence";
 import { geometryCodes } from "./gates/geometry2";
+import { textAaBudgetApplies, textAaPresetOf } from "./gates/visual";
 import type { GateArtifactRef, GateResult } from "./gates/types";
 import type { VerdictPolicySnapshot } from "./ids";
 import type { GateName } from "./policies";
@@ -53,6 +55,7 @@ export type VerdictPolicyField =
   | "geometry.overflowPx" | "geometry.sizeDeltaPx" | "geometry.offsetPx"
   | "perCase.maxRawDiffPct" | "perCase.allowPaintOverflow" | "perCase.expectedClip"
   | "perCase.sizeDeltaPx" | "perCase.overflowBudgetPx"
+  | "textAaBudget"
   | "expectedGeometry" | "declaredPolicyProfile";
 
 /**
@@ -80,6 +83,10 @@ export const GATES_BY_POLICY_FIELD: Record<VerdictPolicyField, readonly GateName
   // них не зависят, поэтому смена бюджета пересчитывается по сохранённым метрикам.
   "perCase.sizeDeltaPx": ["geometry"],
   "perCase.overflowBudgetPx": ["geometry"],
+  // W4: пресет растрового текста — вторая инстанция визуального вердикта. Пересчитывается по
+  // сохранённым метрикам, **если** в них есть `edgeResidual`; если нет — `recomputeVisual`
+  // честно отказывается (см. ниже), и каскад уходит на re-diff.
+  textAaBudget: ["visual"],
   expectedGeometry: ["geometry"],
   declaredPolicyProfile: [],
 };
@@ -108,6 +115,7 @@ export function verdictPolicyDelta(oldPolicy: VerdictPolicySnapshot, newPolicy: 
   check("perCase.expectedClip", oldPolicy.perCase?.expectedClip, newPolicy.perCase?.expectedClip);
   check("perCase.sizeDeltaPx", oldPolicy.perCase?.sizeDeltaPx, newPolicy.perCase?.sizeDeltaPx);
   check("perCase.overflowBudgetPx", oldPolicy.perCase?.overflowBudgetPx, newPolicy.perCase?.overflowBudgetPx);
+  check("textAaBudget", oldPolicy.textAaBudget, newPolicy.textAaBudget);
   check("expectedGeometry", oldPolicy.expectedGeometry, newPolicy.expectedGeometry);
   check("declaredPolicyProfile", oldPolicy.declaredPolicyProfile, newPolicy.declaredPolicyProfile);
   return delta;
@@ -168,10 +176,11 @@ const maxRawDiffPctOf = (policy: VerdictPolicySnapshot): number =>
  *   ни один порог их не сдвинет: вердикт не выдан по причинам, к политике не относящимся. Гейт
  *   переносится как есть.
  */
-function recomputeVisual(gate: GateResult, newPolicy: VerdictPolicySnapshot): { gate: GateResult; changed: boolean } {
+function recomputeVisual(gate: GateResult, newPolicy: VerdictPolicySnapshot): { gate: GateResult; changed: boolean } | null {
   const metrics = gate.metrics ?? {};
   const required = newPolicy.gates.visual === "required";
   const maxRawDiffPct = maxRawDiffPctOf(newPolicy);
+  const preset = textAaPresetOf(newPolicy.textAaBudget as TextAaBudget | undefined);
 
   if (metrics.reason === "no_reference") {
     const status = required ? "indeterminate" as const : "skipped" as const;
@@ -191,12 +200,34 @@ function recomputeVisual(gate: GateResult, newPolicy: VerdictPolicySnapshot): { 
 
   const rawDiffPct = metrics.rawDiffPct;
   const aaDiffPct = typeof metrics.aaDiffPct === "number" ? metrics.aaDiffPct : 0;
-  const failed = rawDiffPct > maxRawDiffPct;
+  const overBudget = rawDiffPct > maxRawDiffPct;
+  const edgeResidual = isObject(metrics.edgeResidual) ? metrics.edgeResidual : null;
+  // W4 (§W4-1/W4-2): пресет судит по `edgeResidual`. Его нет в метриках, снятых до волны, — и
+  // «пересчитать» пресет по числам, которых не измеряли, невозможно. Отказ (`null`) — это всегда
+  // «сравни заново» у вызывающего: каскад пробует re-diff того же кадра, где edge считается
+  // честно, и только если и он невозможен — пересъёмку.
+  if (preset !== null && edgeResidual === null) return null;
+  const presetApplied = overBudget && preset !== null
+    && textAaBudgetApplies(preset, {
+      rawDiffPct,
+      edgeResidual: { insidePct: typeof edgeResidual?.insidePct === "number" ? edgeResidual.insidePct : null },
+    });
+  const failed = overBudget && !presetApplied;
   const severityClass = aaDiffPct <= maxRawDiffPct ? "aa" : "raw";
+  const presetMetrics = preset === null
+    ? {}
+    : {
+      textAaBudget: {
+        preset: preset.id,
+        maxRawDiffPct: preset.maxRawDiffPct,
+        minEdgeResidualPct: preset.minEdgeResidualPct,
+        applied: presetApplied,
+      },
+    };
   const next: GateResult = {
     ...gate,
     status: failed ? "fail" : "pass",
-    metrics: { ...metrics, required, maxRawDiffPct, severityClass },
+    metrics: { ...metrics, required, maxRawDiffPct, severityClass, ...presetMetrics },
     ...(failed
       ? {
         detail: `Visual diff ${rawDiffPct}% exceeds the ${maxRawDiffPct}% budget`
@@ -205,7 +236,11 @@ function recomputeVisual(gate: GateResult, newPolicy: VerdictPolicySnapshot): { 
       : {}),
   };
   if (!failed) delete next.detail;
-  return { gate: next, changed: next.status !== gate.status || metrics.severityClass !== severityClass };
+  return {
+    gate: next,
+    changed: next.status !== gate.status || metrics.severityClass !== severityClass
+      || !same(metrics.textAaBudget, presetMetrics.textAaBudget),
+  };
 }
 
 /**
@@ -323,6 +358,11 @@ export function reevaluateGates(
     if (!affected.has(gate.gate)) { next.push(gate); continue; }
     if (gate.gate === "visual") {
       const result = recomputeVisual(gate, newPolicy);
+      if (result === null) {
+        return refuse(gates, delta,
+          "the case declares a textAaBudget preset but the stored visual metrics carry no edgeResidual;"
+          + " the verdict cannot be recomputed without re-measuring the residual");
+      }
       next.push(result.gate);
       recomputedGates.push("visual");
       changed = changed || result.changed;

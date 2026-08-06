@@ -19,7 +19,8 @@ import { AcceptanceOrchestrator, type RefreshSpec } from "./orchestrator";
 import { readinessPolicyHashOf } from "./ids";
 import { ACCEPTANCE_POLICIES, policyProfileHash } from "./policies";
 import { AcceptanceRepo, type CandidateRow } from "./repo";
-import { caseVerdictOf, foldRunVerdict, progressOf, severityOf, type CaseExecution } from "./runner";
+import { causeInputOf, caseVerdictOf, foldRunVerdict, progressOf, severityOf, type CaseExecution } from "./runner";
+import { classifyVisualCauses } from "../visual/causes";
 
 // W1a (план 2026-08-03 §3 D10/D11, §5 W1a): исполнение случаев, reuse, авто-retry и свёртка.
 
@@ -747,4 +748,42 @@ test("W5b: прошедший ран не выдумывает групп", asyn
   expect(run.status).toBe("pass");
   expect((JSON.parse(run.progress_json) as { remediationGroups: unknown[] }).remediationGroups).toEqual([]);
   harness.db.close();
+});
+
+// ------------------------- вход таксономии причин (§W4-4: matte обесточивает alpha-compositing)
+
+test("§W4: matte-кейс не получает причину alpha-compositing, но остаётся объяснимым", () => {
+  // Метрики маски, на которых классификатор `alpha-compositing` сработал бы наверняка.
+  const channelStats = {
+    pixels: 100, meanDelta: { r: 2, g: 2, b: 2, a: 120 },
+    meanMaxDelta: 120, stdMaxDelta: 1, alphaDominantPct: 100, semiTransparentPct: 100,
+  };
+  const visualGate = (extra: Record<string, unknown>): GateResult => ({
+    gate: "visual", status: "fail",
+    metrics: {
+      rawDiffPct: 12, aaDiffPct: 12, maxChannelDelta: 120, regions: [], totalRegions: 0,
+      bestOffset: { dx: 0, dy: 0, residualPct: 100 }, canvas: { width: 40, height: 32 },
+      channelStats, ...extra,
+    },
+  });
+
+  // Без matte вход таксономии несёт статистику как есть — причина называется.
+  const bare = causeInputOf([visualGate({})], 2);
+  expect(bare.visual!.channelStats).toMatchObject({ alphaDominantPct: 100, semiTransparentPct: 100 });
+  expect(classifyVisualCauses(bare).map((cause) => cause.code)).toContain("alpha-compositing");
+
+  // После matte альфа обеих картинок ≡ 255: расхождения по альфе не бывает by construction, и
+  // называть его причиной значило бы объяснять вердикт событием, которого не было.
+  const matted = causeInputOf([visualGate({ matteApplied: "#ffffff" })], 2);
+  expect(matted.visual!.channelStats).toMatchObject({ alphaDominantPct: 0, semiTransparentPct: 0 });
+  expect(classifyVisualCauses(matted).map((cause) => cause.code)).not.toContain("alpha-compositing");
+  // Остальная статистика маски цела: «залили другим цветом» на matte-кейсе по-прежнему называется.
+  expect(matted.visual!.channelStats).toMatchObject({ meanMaxDelta: 120, stdMaxDelta: 1, pixels: 100 });
+
+  // Edge-остаток доезжает до входа классификатора (§W4 T4b), а без него поля просто нет.
+  const withEdge = causeInputOf([visualGate({
+    edgeResidual: { residualPixels: 10, insidePixels: 10, outsidePixels: 0, insidePct: 100 },
+  })], 2);
+  expect(withEdge.visual!.edgeResidual).toMatchObject({ insidePct: 100 });
+  expect(bare.visual!.edgeResidual).toBeUndefined();
 });

@@ -209,3 +209,82 @@ test("channelStats describe the mask itself: uniform tint vs alpha-only divergen
   expect(alpha.metrics.channelStats.semiTransparentPct).toBe(100);
   expect(alpha.metrics.channelStats.meanDelta.a).toBeGreaterThan(0);
 });
+
+// ------------------------------------------------------ matte сравнения (план 2026-08-06 §W4 T4a)
+
+test("§W4: matte кладёт обе картинки на объявленный цвет — прозрачность перестаёт быть расхождением", () => {
+  // Ровно продуктовый случай строки 7 фидбэка: эталон экспортирован поверх белого, кандидат снят
+  // прозрачным (`omitBackground:true`). Без matte расходится каждый пиксель поля — по альфе.
+  const reference = framePng(20, 20, { x: 4, y: 4, width: 8, height: 8, color: INK }, [255, 255, 255, 255]);
+  const candidate = framePng(20, 20, { x: 4, y: 4, width: 8, height: 8, color: INK }, [0, 0, 0, 0]);
+
+  const bare = normalizeAndCompare(reference, candidate);
+  if (bare.indeterminate) throw new Error(bare.reason);
+  expect(bare.metrics.rawDiffPct).toBeGreaterThan(50);
+  expect(bare.metrics.matteApplied).toBeUndefined();
+
+  const matted = normalizeAndCompare(reference, candidate, { matte: "#FFFFFF" });
+  if (matted.indeterminate) throw new Error(matted.reason);
+  expect(matted.metrics.rawDiffPct).toBe(0);
+  expect(matted.metrics.channelStats.pixels).toBe(0);
+  // Цвет нормализован к нижнему регистру: метрика — факт, а не эхо ввода.
+  expect(matted.metrics.matteApplied).toBe("#ffffff");
+  // Матированный эталон уезжает в evidence и **без** `padTo` (W4-5): сервер его действительно строил.
+  expect(matted.normalizedReferencePngBase64).toBeDefined();
+  const normalized = PNG.sync.read(Buffer.from(matted.normalizedReferencePngBase64!, "base64"));
+  for (let index = 3; index < normalized.data.length; index += 4) expect(normalized.data[index]).toBe(255);
+});
+
+test("§W4: matte над полупрозрачным пикселем — straight-alpha over, а не замена цвета", () => {
+  // Полупрозрачный синий над белым обязан дать ровно `src·a + bg·(1−a)`; проверяем оба слагаемых,
+  // иначе premultiplied-ошибка (двойное домножение на альфу) прошла бы незамеченной.
+  const translucent = framePng(4, 4, null, [0, 0, 255, 128]);
+  const expected = framePng(4, 4, null, [128, 128, 255, 255]);
+  const result = normalizeAndCompare(translucent, expected, { matte: "#ffffff" });
+  if (result.indeterminate) throw new Error(result.reason);
+  // 255·(1−128/255) = 127, 0·a + 255·(1−a) = 127 ⇒ округление даёт 127 против объявленных 128.
+  expect(result.metrics.maxChannelDelta).toBeLessThanOrEqual(1);
+
+  // Тот же вход без matte: полупрозрачность расходится с непрозрачностью на всём холсте.
+  const bare = normalizeAndCompare(translucent, expected);
+  if (bare.indeterminate) throw new Error(bare.reason);
+  expect(bare.metrics.channelStats.semiTransparentPct).toBe(100);
+  expect(bare.metrics.rawDiffPct).toBe(100);
+});
+
+test("§W4: matte идемпотентен и после него альфа ≡ 255 у обеих картинок", () => {
+  const reference = framePng(12, 12, { x: 2, y: 2, width: 4, height: 4, color: [255, 0, 0, 64] }, [0, 0, 0, 0]);
+  const candidate = framePng(12, 12, { x: 2, y: 2, width: 4, height: 4, color: [255, 0, 0, 64] }, [0, 0, 0, 0]);
+  const once = normalizeAndCompare(reference, candidate, { matte: "#102030" });
+  if (once.indeterminate) throw new Error(once.reason);
+  const matted = Buffer.from(once.normalizedCandidatePngBase64, "base64");
+  const decoded = PNG.sync.read(matted);
+  for (let index = 3; index < decoded.data.length; index += 4) expect(decoded.data[index]).toBe(255);
+
+  // Второй проход того же цвета ничего не меняет: над непрозрачным пикселем `a = 1`.
+  const twice = normalizeAndCompare(matted, matted, { matte: "#102030" });
+  if (twice.indeterminate) throw new Error(twice.reason);
+  expect(twice.metrics.rawDiffPct).toBe(0);
+  expect(PNG.sync.read(Buffer.from(twice.normalizedCandidatePngBase64, "base64")).data.equals(decoded.data)).toBe(true);
+
+  // `"none"` и мусор — это «не матировать», а не отказ: дефолт применяет потребитель.
+  const none = normalizeAndCompare(reference, candidate, { matte: "none" });
+  if (none.indeterminate) throw new Error(none.reason);
+  expect(none.metrics.matteApplied).toBeUndefined();
+  expect(none.normalizedReferencePngBase64).toBeUndefined();
+});
+
+test("§W4: порядок нормализации — crop → place/pad → matte → метрики", () => {
+  // Эталон content-hug (только сам компонент) кладётся в канву 20×20 со смещением (4,4); поле
+  // канвы после matte обязано совпасть с матированным прозрачным полем кандидата, то есть дать 0.
+  const hug = framePng(8, 8, null, [0, 0, 255, 255]);
+  const candidate = framePng(20, 20, { x: 4, y: 4, width: 8, height: 8, color: [0, 0, 255, 255] }, [0, 0, 0, 0]);
+  const placed = normalizeAndCompare(hug, candidate, {
+    padReferenceTo: { width: 20, height: 20 }, referencePlacement: { x: 4, y: 4 }, matte: "#ff00ff",
+  });
+  if (placed.indeterminate) throw new Error(placed.reason);
+  expect(placed.metrics.rawDiffPct).toBe(0);
+  expect(placed.metrics.matteApplied).toBe("#ff00ff");
+  // Матирование до размещения раскрасило бы поле канвы иначе у эталона и кандидата.
+  expect(placed.referenceNormalization!.placement).toEqual({ x: 4, y: 4 });
+});

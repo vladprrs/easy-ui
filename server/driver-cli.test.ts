@@ -2693,6 +2693,25 @@ describe("author driver case-set validate (W6)", () => {
       caseSetLimits({ limits: { caseSetMaxCaseSizeDeltaPx: 4 } })).join("\n")).toContain("integer 0..4");
   });
 
+  test("§W4: локальный валидатор принимает comparison.matte и textAaBudget кейса", () => {
+    const withCase = (extra: Record<string, unknown>) => validManifest({
+      dimensions: undefined,
+      cases: [{ id: "default", props: { state: "default" }, ...extra }],
+    });
+    // Легальные поля обязаны уехать: непринятое драйвером новое поле — отказ до сети (§1.5).
+    expect(caseSetManifestIssues(withCase({ comparison: { matte: "#FFFFFF" } }))).toEqual([]);
+    expect(caseSetManifestIssues(withCase({ comparison: { matte: "none" }, textAaBudget: "live-text-v1" }))).toEqual([]);
+    expect(caseSetManifestIssues(withCase({ comparison: {} }))).toEqual([]);
+    // …а нелегальные ловятся локально: цвет словом, свободное число вместо имени пресета,
+    // опечатка в имени поля сравнения.
+    expect(caseSetManifestIssues(withCase({ comparison: { matte: "white" } })).join("\n")).toContain("#RRGGBB");
+    expect(caseSetManifestIssues(withCase({ textAaBudget: 0.75 })).join("\n")).toContain("live-text-v1");
+    expect(caseSetManifestIssues(withCase({ textAaBudget: "live-text-v2" })).join("\n")).toContain("live-text-v1");
+    expect(caseSetManifestIssues(withCase({ comparison: { matteColor: "#fff000" } })).join("\n"))
+      .toContain('unknown field "matteColor"');
+    expect(caseSetManifestIssues(withCase({ matte: "#ffffff" })).join("\n")).toContain('unknown field "matte"');
+  });
+
   test("case-set validate takes exactly one positional and rejects the put-shaped call", () => {
     expect(parseArgs(["case-set", "validate", "matrix.json"]))
       .toMatchObject({ cmd: "case-set", args: ["validate", "matrix.json"] });

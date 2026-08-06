@@ -2852,11 +2852,47 @@ export function casePolicyIssues(policy, limits = CASE_SET_LIMITS) {
   return issues;
 }
 
+/** Пресеты бюджета растрового текста (план 2026-08-06 §1.2): **имена**, числа владеет сервер. */
+const TEXT_AA_BUDGETS = ["live-text-v1"];
+/** Matte сравнения: `"none"` либо `#RRGGBB` (§W4 T4a). Дефолт — «не матировать», у потребителя. */
+const COMPARISON_MATTE = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * Локальная проверка полей сравнения случая (§W4, §1.5).
+ *
+ * Ошибка здесь дешевле сети на порядок: манифест на 49 состояний с `matte: "white"` иначе уехал бы
+ * целиком, чтобы вернуться одним 422. Числа пресета драйвер **не** знает и знать не должен — он
+ * проверяет только имя из закрытого списка.
+ */
+function comparisonIssues(item, where) {
+  const issues = [];
+  if (item.comparison !== undefined) {
+    if (!isPlainObject(item.comparison)) issues.push(`${where}.comparison must be an object`);
+    else {
+      for (const key of Object.keys(item.comparison)) {
+        if (key !== "matte") issues.push(`${where}.comparison: unknown field "${key}"`);
+      }
+      const matte = item.comparison.matte;
+      if (matte !== undefined && matte !== "none" && !(typeof matte === "string" && COMPARISON_MATTE.test(matte))) {
+        issues.push(`${where}.comparison.matte must be "none" or a #RRGGBB colour (got ${JSON.stringify(matte)})`);
+      }
+    }
+  }
+  if (item.textAaBudget !== undefined && !TEXT_AA_BUDGETS.includes(item.textAaBudget)) {
+    issues.push(`${where}.textAaBudget must be one of ${TEXT_AA_BUDGETS.join(", ")}`
+      + " (a named server-owned preset, not a number: tuning the thresholds means a new preset)");
+  }
+  return issues;
+}
+
 const CASE_SET_ID_CHARSET = /^[A-Za-z0-9._-]{1,64}$/;
 const CASE_SET_TOP_LEVEL_KEYS = new Set(["manifestVersion", "componentId", "source", "capture", "dimensions", "requireVisual", "policy", "cases"]);
 const CASE_SET_CASE_KEYS = new Set([
   "id", "props", "referenceAssetId", "expectedGeometry", "cropLineage", "referenceSurface",
   "referencePlacement", "aliasOf", "dims",
+  // План 2026-08-06 §W4: контракт сравнения (`comparison.matte`) и именованный пресет растрового
+  // текста (`textAaBudget`). Оба — уровень **кейса**, а не `policy.perCase`.
+  "comparison", "textAaBudget",
   // План 2026-08-05 §A1: дети слотов случая. Держать ключ в allowlist обязательно — иначе
   // локальная проверка отвергала бы легальный манифест, до сети и без шанса на объяснение.
   "slotBindings",
@@ -2950,6 +2986,7 @@ export function caseSetManifestIssues(manifest, limits = CASE_SET_LIMITS) {
       issues.push(`cases[${index}].referenceAssetId must be an asset registry id (asset_<sha256>), not bytes or a path`);
     }
     if (item.slotBindings !== undefined) issues.push(...slotBindingIssues(item.slotBindings, `cases[${index}]`, limits));
+    issues.push(...comparisonIssues(item, `cases[${index}]`));
   }
   for (const item of cases) {
     if (!isPlainObject(item) || item.aliasOf === undefined) continue;

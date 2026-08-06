@@ -16,7 +16,7 @@
  */
 import { ApiError } from "../http";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import type { CropSourceSurface, ReferenceSurface } from "../../src/acceptance/caseSetSchema";
+import type { CaseSetComparison, CropSourceSurface, ReferenceSurface, TextAaBudget } from "../../src/acceptance/caseSetSchema";
 import type { CandidateEntry } from "../components/candidates";
 import type { CasePolicyValues, CaseSurface } from "./ids";
 import { acceptanceMaxCasesPerRun } from "./policies";
@@ -119,6 +119,18 @@ export interface AcceptanceCase {
   referenceSurface?: ReferenceSurface;
   /** Смещение content-hug эталона в канве, device px; по умолчанию `margin × dsf` (W5). */
   referencePlacement?: { x: number; y: number };
+  /**
+   * Декларативный контракт сравнения (план 2026-08-06 §W4 T4a): `comparison.matte` — цвет, над
+   * которым визуальный гейт компонует **обе** картинки перед метриками. Капчур остаётся
+   * прозрачным; матирование живёт только на сравнении, поэтому его смена — re-diff, не пересъёмка.
+   */
+  comparison?: CaseSetComparison;
+  /**
+   * Именованный пресет бюджета растрового текста (§W4 T4b): числа принадлежат серверу
+   * (`TEXT_AA_PRESETS`), манифест объявляет имя. Читает его визуальный гейт как вторую инстанцию
+   * вердикта, а `verdictPolicySnapshot` — как вердиктное поле.
+   */
+  textAaBudget?: TextAaBudget;
   /**
    * Координаты случая в измерениях семьи (`cases[].dims` манифеста W2). В `case_fingerprint` не
    * входят намеренно: смена координаты не меняет ни съёмку, ни вердикт — это ярлык для отчёта.

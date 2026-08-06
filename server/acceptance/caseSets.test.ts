@@ -1065,3 +1065,30 @@ test("§W6: вложенный слот судится по definition запи�
   }])).warnings).toEqual([]);
   db.close();
 });
+
+test("§W4: comparison.matte и textAaBudget доезжают до случая, а их отсутствие остаётся отсутствием", () => {
+  const db = dbWithAsset();
+  const parsed = validateManifest(db, "yp-badge", manifest({
+    cases: [
+      { id: "matted", props: { tone: "neutral" }, comparison: { matte: "#ffffff" }, textAaBudget: "live-text-v1" },
+      { id: "plain", props: { tone: "accent" } },
+    ],
+  } as unknown as Partial<CaseSetManifest>)).manifest;
+  const [matted, plain] = buildCasesFromManifest(parsed);
+  expect(matted).toMatchObject({ comparison: { matte: "#ffffff" }, textAaBudget: "live-text-v1" });
+  // Тот же инвариант отсутствия, что у W5-полей: дефолт применяет потребитель, не маппинг.
+  expect(Object.keys(plain!)).not.toContain("comparison");
+  expect(Object.keys(plain!)).not.toContain("textAaBudget");
+
+  // Схема строгая: цвет словом, неизвестное имя пресета и опечатка в поле — отказ, а не дефолт.
+  for (const bad of [
+    { comparison: { matte: "white" } },
+    { comparison: { matteColor: "#ffffff" } },
+    { textAaBudget: "live-text-v2" },
+  ]) {
+    fails(() => validateManifest(db, "yp-badge", manifest({
+      cases: [{ id: "default", props: { tone: "neutral" }, ...bad }],
+    } as unknown as Partial<CaseSetManifest>)), 422, "validation_failed");
+  }
+  db.close();
+});

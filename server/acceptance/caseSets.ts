@@ -954,6 +954,10 @@ export function buildCasesFromManifest(manifest: CaseSetManifest): AcceptanceCas
       // `comparisonFingerprint`, иначе legacy-манифесты сменили бы отпечаток (D13).
       ...(item.referenceSurface ? { referenceSurface: item.referenceSurface } : {}),
       ...(item.referencePlacement ? { referencePlacement: item.referencePlacement } : {}),
+      // W4: контракт сравнения (`comparison.matte`) и именованный пресет растрового текста. Тот же
+      // инвариант отсутствия: поле, не объявленное манифестом, не доезжает до отпечатков вовсе.
+      ...(item.comparison === undefined ? {} : { comparison: item.comparison }),
+      ...(item.textAaBudget === undefined ? {} : { textAaBudget: item.textAaBudget }),
       // W5b: координата случая в семье — вход `variantFamily` группировки ремедиаций.
       ...(item.dims ? { dims: item.dims } : {}),
     });

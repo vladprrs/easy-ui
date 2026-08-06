@@ -262,6 +262,18 @@ export interface ComparisonFingerprintInput {
   /** W5-слот: смещение эталона внутри канонической канвы. */
   referencePlacement?: { x: number; y: number } | null;
   cropLineage?: { parentNodeId?: string; rect: readonly number[]; sourceSurface?: string } | null;
+  /**
+   * W4-слот: декларативный контракт сравнения случая (`comparison.matte`). Матирование меняет
+   * **входы** диффа — обе картинки кладутся на объявленный цвет до любой метрики, — поэтому его
+   * смена обязана давать re-diff сохранённого кадра, а не пересчёт по старым числам.
+   */
+  comparison?: { matte?: string } | null;
+  /**
+   * W4-слот: именованный пресет бюджета растрового текста. Тоже слой сравнения, хотя читает его
+   * вердикт: пресет опирается на `edgeResidual`, которого в доволновых метриках нет вовсе, и
+   * «пересчитать» его по сохранённым числам невозможно — честный путь один, re-diff.
+   */
+  textAaBudget?: string | null;
   /** Ожидаемые габариты layout-корня: они же определяют `padTo` нормализации (D1). */
   expectedGeometry?: { width: number; height: number } | null;
   /** Допуск сводимости размеров профиля (`policy.visual.maxDimensionDeltaPx`). */
@@ -286,6 +298,10 @@ export function comparisonFingerprintOf(input: ComparisonFingerprintInput): stri
         rect: [...input.cropLineage.rect],
         sourceSurface: input.cropLineage.sourceSurface,
       }),
+    comparison: input.comparison === null || input.comparison === undefined
+      ? undefined
+      : definedOnly({ matte: input.comparison.matte }),
+    textAaBudget: input.textAaBudget ?? undefined,
     expectedGeometry: input.expectedGeometry ?? undefined,
     maxDimensionDeltaPx: input.maxDimensionDeltaPx,
     paintMarginPx: input.paintMarginPx,
@@ -328,6 +344,16 @@ export interface VerdictPolicySnapshot {
    * `overflowBudgetPx`. Оба — вердиктный слой: их смена пересчитывается без пересъёмки.
    */
   perCase: CasePolicyValues | null;
+  /**
+   * Именованный пресет бюджета растрового текста случая (W4). Двухслойное поле — как
+   * `expectedGeometry`: он и вход сравнения (требует `edgeResidual`), и вход вердикта (сдвигает
+   * `fail → pass`), поэтому его дельта обязана быть **видимой** пересчёту, а не только промахом
+   * `comparisonFingerprint`.
+   *
+   * Кладётся **условным спредом** в `verdictPolicySnapshotOf`: ключ со значением `null` у каждого
+   * случая сдвинул бы `verdictPolicyHash` всего накопленного прод-кэша.
+   */
+  textAaBudget?: string;
   /** Ожидаемые габариты: вход допусков геометрии (и, в W5, нормализации эталона — D1). */
   expectedGeometry: { width: number; height: number } | null;
   /** `policy.profile` манифеста: декларация набора, влияющая на смысл вердикта. */
@@ -350,6 +376,9 @@ export interface CaseFingerprintCase {
   /** W5-слоты (см. `ComparisonFingerprintInput`). */
   referenceSurface?: string | null;
   referencePlacement?: { x: number; y: number } | null;
+  /** W4-слоты сравнения (см. `ComparisonFingerprintInput`); `textAaBudget` ещё и вердиктный. */
+  comparison?: { matte?: string } | null;
+  textAaBudget?: string | null;
   /**
    * Дети слотов (план 2026-08-05 §A4). Поле обязано быть **и здесь, и в `caseFingerprintsOf`**:
    * тотальность `FIELD_LAYERS` доказывает только то, что слой у поля объявлен, но не то, что поле
@@ -369,6 +398,7 @@ export function verdictPolicySnapshotOf(policy: AcceptancePolicy, item: CaseFing
     maxRawDiffPct: policy.visual.maxRawDiffPct,
     geometry: { ...policy.geometry },
     perCase: item.casePolicy ? { ...item.casePolicy } : null,
+    ...(item.textAaBudget === undefined || item.textAaBudget === null ? {} : { textAaBudget: item.textAaBudget }),
     expectedGeometry: item.expectedGeometry ?? null,
     declaredPolicyProfile: item.declaredPolicyProfile ?? null,
   };
@@ -432,6 +462,10 @@ export function caseFingerprintsOf(input: CaseFingerprintsInput): CaseFingerprin
     ...(input.case.referenceSurface === undefined ? {} : { referenceSurface: input.case.referenceSurface }),
     ...(input.case.referencePlacement === undefined ? {} : { referencePlacement: input.case.referencePlacement }),
     ...(input.case.cropLineage === undefined ? {} : { cropLineage: input.case.cropLineage }),
+    // W4: тот же условный спред. Поле, которого нет, обязано отсутствовать вплоть до пре-образа
+    // хэша — иначе каждый уже снятый случай сменил бы `comparisonFingerprint` без единой причины.
+    ...(input.case.comparison === undefined ? {} : { comparison: input.case.comparison }),
+    ...(input.case.textAaBudget === undefined ? {} : { textAaBudget: input.case.textAaBudget }),
     expectedGeometry: input.case.expectedGeometry ?? null,
     maxDimensionDeltaPx: input.policy.visual.maxDimensionDeltaPx,
     paintMarginPx: COMPARISON_PAINT_MARGIN_PX,
@@ -507,6 +541,12 @@ export const FIELD_LAYERS = {
   // а значит comparison по инварианту D1. Кадр они не трогают: пересъёмка их не касается.
   referenceSurface: ["comparison"],
   referencePlacement: ["comparison"],
+  // W4: matte меняет **входы** сравнения (обе картинки ложатся на объявленный цвет до метрик) —
+  // чистый comparison-слой, кадр он не трогает.
+  comparison: ["comparison"],
+  // …а пресет — двухслойный: он читается вердиктом, но опирается на `edgeResidual`, которого в
+  // доволновых метриках нет, поэтому его появление обязано пройти re-diff, а не recompute.
+  textAaBudget: ["comparison", "verdict"],
   // D1: `expectedGeometry` — двухслойное поле. Оно и допуск вердикта геометрии, и (с W5) `padTo`
   // нормализации content-hug эталона, поэтому его смена обязана давать re-diff, а не recompute.
   expectedGeometry: ["comparison", "verdict"],

@@ -32,7 +32,8 @@ import {
   spawnNormalizedDiffWorker,
   type NormalizedDiffMetrics, type NormalizedDiffResult, type RunNormalizedDiff,
 } from "../../visual/diff-runner";
-import type { ReferenceSurface } from "../../../src/acceptance/caseSetSchema";
+import type { ReferenceSurface, TextAaBudget } from "../../../src/acceptance/caseSetSchema";
+import { CAUSE_THRESHOLDS } from "../../visual/causes";
 import { cropIsApplied } from "../caseSets";
 import { putArtifact, readArtifact } from "../evidence";
 import { COMPARISON_PAINT_MARGIN_PX } from "../ids";
@@ -43,6 +44,56 @@ import type { Gate, GateContext, GateResult } from "./types";
 export function maxRawDiffPctOf(ctx: GateContext): number {
   const perCase = ctx.case.casePolicy?.maxRawDiffPct;
   return typeof perCase === "number" ? perCase : ctx.policy.visual.maxRawDiffPct;
+}
+
+/**
+ * **Пресеты бюджета растрового текста** (план 2026-08-06 §1.2, §W4 T4b; строка 5 фидбэка).
+ *
+ * Числа принадлежат **серверу**, а манифест объявляет только имя: эталон приёмки — Figma-PNG, у
+ * него нет renderer fingerprint, поэтому «одинаковый шрифтовой стек» на паре «макет ↔ живой
+ * капчур» недостижим в принципе, и вместо свободной ручки продукт получает документированный
+ * профиль с фиксированной семантикой. Тюнинг = **новый** пресет (`live-text-v2`), потому что
+ * иначе одно и то же имя означало бы в разное время разное.
+ *
+ * `minEdgeResidualPct` — **та же самая** константа, что у классификатора `text-raster-residual`
+ * (`CAUSE_THRESHOLDS.edgeResidualInsidePct`), а не её копия (§W4-3): порог «остаток лежит на
+ * контурах эталона» ровно один, и разъехавшись, вердикт и объяснение вердикта противоречили бы
+ * друг другу. Синхронность закреплена тестом.
+ */
+export interface TextAaPreset {
+  id: TextAaBudget;
+  /** Потолок сырого расхождения, выше которого пресет не спасает: это уже не растровый шум. */
+  maxRawDiffPct: number;
+  /** Доля остатка внутри edge-маски эталона, с которой остаток признаётся растровым. */
+  minEdgeResidualPct: number;
+}
+
+export const TEXT_AA_PRESETS: Record<TextAaBudget, TextAaPreset> = {
+  "live-text-v1": {
+    id: "live-text-v1",
+    maxRawDiffPct: 0.75,
+    minEdgeResidualPct: CAUSE_THRESHOLDS.edgeResidualInsidePct,
+  },
+};
+
+export const textAaPresetOf = (budget: TextAaBudget | undefined): TextAaPreset | null =>
+  budget === undefined ? null : TEXT_AA_PRESETS[budget] ?? null;
+
+/**
+ * Спасает ли пресет случай, провалившийся по `rawDiffPct`.
+ *
+ * Два условия и оба обязательны: расхождение **мало** (иначе это не сглаживание живого текста, а
+ * другая вёрстка) и оно **лежит на контурах эталона** (иначе это перекрашенный блок, который
+ * случайно уложился в 0,75 %). Без `edgeResidual` пресет не применяется вовсе: «не измерено» —
+ * это не «в допуске».
+ */
+export function textAaBudgetApplies(
+  preset: TextAaPreset,
+  metrics: { rawDiffPct: number; edgeResidual?: { insidePct: number | null } },
+): boolean {
+  if (metrics.rawDiffPct > preset.maxRawDiffPct) return false;
+  const insidePct = metrics.edgeResidual?.insidePct;
+  return typeof insidePct === "number" && insidePct >= preset.minEdgeResidualPct;
 }
 
 /** Обязателен ли визуальный вердикт в этом ране (профиль либо `requireVisual` набора). */
@@ -85,6 +136,15 @@ const cropRectOf = (ctx: GateContext): number[] | null => {
 
 /** Поверхность эталона: дефолт применяет **потребитель**, а не схема (C6/C25). */
 export const referenceSurfaceOf = (ctx: GateContext): ReferenceSurface => ctx.case.referenceSurface ?? "paint";
+
+/**
+ * Цвет matte случая или `null` (§W4 T4a). Дефолт — «не матировать»: и отсутствие
+ * `comparison.matte`, и явное `"none"` дают один и тот же путь, ровно доволновой.
+ */
+export const matteOf = (ctx: GateContext): string | null => {
+  const matte = ctx.case.comparison?.matte;
+  return matte === undefined || matte === "none" ? null : matte;
+};
 
 export interface ReferenceCanvas {
   padTo: { width: number; height: number };
@@ -194,14 +254,20 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
       };
 
       const runDiff = ctx.runDiff ?? fallbackRunDiff;
+      const matte = matteOf(ctx);
       const diff: NormalizedDiffResult = await runDiff({
         mode: "normalize",
         referencePngBase64: Buffer.from(reference.bytes).toString("base64"),
         candidatePngBase64: Buffer.from(candidate).toString("base64"),
         options: {
           maxDimensionDeltaPx: ctx.policy.visual.maxDimensionDeltaPx,
+          // Edge-сигнал приёмке нужен **всегда**, а не под env-флагом визуальных ранов (§W4 T4b):
+          // на нём стоят и пресет `live-text-v1`, и классификатор `text-raster-residual`, и
+          // «сигнала нет» означало бы «пресет молча не сработал».
+          edge: true,
           ...(cropRect === null ? {} : { cropRect }),
           ...(canvas === null ? {} : { padReferenceTo: canvas.padTo, referencePlacement: canvas.placement }),
+          ...(matte === null ? {} : { matte }),
         },
       });
 
@@ -254,8 +320,27 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
       }
 
       const metrics: NormalizedDiffMetrics = diff.metrics;
-      const failed = metrics.rawDiffPct > maxRawDiffPct;
+      const overBudget = metrics.rawDiffPct > maxRawDiffPct;
+      /**
+       * Пресет — **вторая инстанция** вердикта, а не второй порог (§W4 T4b): он рассматривается
+       * только у случая, уже провалившегося по бюджету, и только сдвигает `fail → pass`, когда
+       * доказано, что весь остаток лежит на контурах эталона. Факт применения живёт в метриках
+       * гейта; в `causes` он не едет — их контракт («только fail/indeterminate») не трогается.
+       */
+      const preset = textAaPresetOf(ctx.case.textAaBudget);
+      const presetApplied = overBudget && preset !== null && textAaBudgetApplies(preset, metrics);
+      const failed = overBudget && !presetApplied;
       const severityClass = visualSeverityClass(metrics, maxRawDiffPct);
+      const presetMetrics = preset === null
+        ? {}
+        : {
+          textAaBudget: {
+            preset: preset.id,
+            maxRawDiffPct: preset.maxRawDiffPct,
+            minEdgeResidualPct: preset.minEdgeResidualPct,
+            applied: presetApplied,
+          },
+        };
 
       const diffPng = await putArtifact(ctx.dataDir, new Uint8Array(Buffer.from(diff.diffPngBase64, "base64")));
       const normalizedPng = await putArtifact(ctx.dataDir, new Uint8Array(Buffer.from(diff.normalizedCandidatePngBase64, "base64")));
@@ -273,6 +358,7 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
         verdict: failed ? "fail" : "pass",
         maxRawDiffPct,
         severityClass,
+        ...presetMetrics,
         canvas: diff.canvas,
         padded: diff.padded,
         referenceSource: { assetId, sha256: reference.sha256 },
@@ -300,6 +386,7 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
           canvas: diff.canvas,
           padded: diff.padded,
           severityClass,
+          ...presetMetrics,
           rawDiffPct: metrics.rawDiffPct,
           aaDiffPct: metrics.aaDiffPct,
           maxChannelDelta: metrics.maxChannelDelta,
@@ -310,6 +397,11 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
           rawDiffPixels: metrics.rawDiffPixels,
           aaDiffPixels: metrics.aaDiffPixels,
           totalPixels: metrics.totalPixels,
+          // Аддитивные ключи волны W4: остаток по edge-маске (вход пресета и классификатора) и
+          // факт матирования (вход обесточивания `alpha-compositing`). Оба — условные: случай без
+          // сигнала/без matte несёт ровно доволновой набор метрик.
+          ...(metrics.edgeResidual === undefined ? {} : { edgeResidual: metrics.edgeResidual }),
+          ...(metrics.matteApplied === undefined ? {} : { matteApplied: metrics.matteApplied }),
         },
         ...(failed
           ? {
@@ -318,7 +410,14 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
               + ` ${metrics.totalRegions} region(s), best offset ${metrics.bestOffset.dx}/${metrics.bestOffset.dy}px`
               + ` with ${metrics.bestOffset.residualPct}% residual)`,
           }
-          : {}),
+          : presetApplied
+            ? {
+              detail: `Visual diff ${metrics.rawDiffPct}% is over the ${maxRawDiffPct}% budget but within the`
+                + ` ${preset!.id} preset (≤${preset!.maxRawDiffPct}% with ${metrics.edgeResidual?.insidePct}% of the`
+                + ` residual on the reference's own edges, ≥${preset!.minEdgeResidualPct}% required):`
+                + " a live-text rasterisation residual, not a layout or colour change",
+            }
+            : {}),
       };
     },
   };

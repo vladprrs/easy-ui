@@ -37,11 +37,17 @@ declare module "*/visual-diff-worker.mjs" {
     regions: DiffRegion[]; totalRegions: number;
     bestOffset: { dx: number; dy: number; residualPct: number; sampledPixels: number; step: number };
     thresholds: { raw: number; aa: number };
+    /** §W4: цвет применённого matte; ключа нет вовсе, если матирования не было. */
+    matteApplied?: string;
   }
   interface NormalizeIndeterminate {
     ok: true; mode: "normalize"; indeterminate: true; reason: string;
     sourceDims: Dims; refDims: Dims; candDims: Dims; cropApplied: boolean;
     dimensionDelta?: { width: number; height: number; tolerancePx: number };
+  }
+  interface ReferenceNormalizationFacts {
+    sourceDims: Dims; cropApplied: boolean; croppedDims: Dims;
+    padTo: Dims | null; placement: { x: number; y: number } | null; refDims?: Dims;
   }
   interface NormalizeMeasured {
     ok: true; mode: "normalize"; indeterminate: false;
@@ -50,12 +56,19 @@ declare module "*/visual-diff-worker.mjs" {
     metrics: NormalizedMetrics;
     diffPngBase64: string;
     normalizedCandidatePngBase64: string;
+    referenceNormalization?: ReferenceNormalizationFacts;
+    /** Дериват эталона: сервер строил канву (`padReferenceTo`) либо матировал (§W4). */
+    normalizedReferencePngBase64?: string;
   }
   export function normalizeAndCompare(
     referencePng: Uint8Array | Buffer,
     candidatePng: Uint8Array | Buffer,
     options?: {
       cropRect?: [number, number, number, number] | number[];
+      /** W5: объявленная сервером каноническая канва и место эталона в ней. */
+      padReferenceTo?: Dims; referencePlacement?: { x: number; y: number };
+      /** §W4: matte сравнения — `"none"` либо `"#RRGGBB"`; применяется после placement/pad. */
+      matte?: string;
       maxDimensionDeltaPx?: number; rawThreshold?: number; aaThreshold?: number;
       maxRegions?: number; offsetWindow?: number;
       /** R7a: считать edge-сигнал явно (`true`/`false` сильнее env-флага `EASYUI_VISUAL_SIGNALS_V2`). */
@@ -109,6 +122,12 @@ declare module "*/visual-diff-worker.mjs" {
   export const MAX_REGIONS: number;
   export function cropPng(png: unknown, rect: number[]): unknown;
   export function padPng(png: unknown, width: number, height: number): unknown;
+  export function placePng(png: unknown, width: number, height: number, x: number, y: number): unknown;
+  /** §W4: разбор объявленного matte (`"none"`/мусор → `null`) и композитинг над ним. */
+  export function parseMatte(value: unknown): { r: number; g: number; b: number; hex: string } | null;
+  export function matteOver(
+    data: Uint8Array | Buffer, total: number, color: { r: number; g: number; b: number },
+  ): Uint8Array | Buffer;
   export function channelStatsOf(
     refData: Uint8Array | Buffer, candData: Uint8Array | Buffer, mask: Uint8Array, total: number,
   ): NormalizedMetrics["channelStats"];
