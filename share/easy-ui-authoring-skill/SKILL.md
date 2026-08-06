@@ -243,7 +243,8 @@ curl -u "$EASYUI_LEGACY_BASIC_AUTH" -b /tmp/easyui.cookies -X POST \
 node driver.mjs component rating-stars RatingStars examples/rating-stars.tsx \
   --design-system yandex-pay \
   --intent "Let a customer rate a product from one to five stars" \
-  --figma figma.json   # опционально: provenance {fileKey, nodeIds, referenceScreenshots?, lastSyncedAt?}
+  --figma figma.json   # опционально: provenance {fileKey, nodeIds, sources?: [{fileKey, nodeIds, role?}], referenceScreenshots?, lastSyncedAt?}
+                       # sources — 1..8 дополнительных документов lineage сверх primary; дубликат fileKey → 422
 # saved rating-stars rev 1 in yandex-pay
 # published rating-stars version 1 in yandex-pay
 ```

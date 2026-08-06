@@ -123,6 +123,7 @@ node driver.mjs catalog search yandex-pay-v2 --intent "<продуктовая �
 node api.mjs upload figma-refs/pay-button-primary.png     # эталонные PNG → asset_<sha256>
 cat > pay-button.figma.json <<'EOF'
 { "fileKey": "<из URL Figma>", "nodeIds": ["123:456"],
+  "sources": [{ "fileKey": "<второй документ>", "nodeIds": ["9:1"], "role": "pay-app" }],
   "referenceScreenshots": ["asset_<sha256>"], "lastSyncedAt": "<ISO now>" }
 EOF
 node driver.mjs component pay-button PayButton pay-button.tsx \
@@ -130,7 +131,7 @@ node driver.mjs component pay-button PayButton pay-button.tsx \
   --figma pay-button.figma.json
 ```
 
-Provenance наследуется между ревизиями; смена/очистка — верб `driver.mjs provenance <id> <figma.json|null>`. Перед публикацией — validate-префлайт головы (полный publish-набор проверок без версии): `node api.mjs send POST /components/pay-button/validate`. Повторный PUT с идентичным содержимым → `{"unchanged":true}` — норма. Правишь опубликованный после разрыва сессии — базой бери active-source с сервера, не локальный файл.
+`sources` (1..8, `role` — свободная метка) нужен, только когда компонент собран из нескольких документов: верхний `fileKey`/`nodeIds` — primary, дубликат `fileKey` внутри `sources` или совпадение с primary → `422`. Provenance наследуется между ревизиями; смена/очистка — верб `driver.mjs provenance <id> <figma.json|null>`. Перед публикацией — validate-префлайт головы (полный publish-набор проверок без версии): `node api.mjs send POST /components/pay-button/validate`. Повторный PUT с идентичным содержимым → `{"unchanged":true}` — норма. Правишь опубликованный после разрыва сессии — базой бери active-source с сервера, не локальный файл.
 
 ### 4.6 Приёмка атома: драфт-цикл `preview`
 

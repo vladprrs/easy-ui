@@ -103,6 +103,31 @@ describe("component validate preflight (P8)", () => {
     db.close();
   }, 30000);
 
+  // План 2026-08-06 §W1: расширение PayCard, собранное из Core + Pay App, проходит префлайт;
+  // хранимая запись с дубликатом fileKey (импорт бандла/ручная правка) ловится тем же 422.
+  test("validate accepts multi-source figma provenance and names a duplicate fileKey in a stored row", async () => {
+    const { db, handler } = await setup();
+    const source = await fixture("rating-stars.tsx");
+    const multi = { ...FIGMA, sources: [{ fileKey: "core-file", nodeIds: ["1:2"], role: "core" }, { fileKey: "pay-app-file", nodeIds: ["9:1", "9:2"], role: "pay-app" }] };
+    expect((await createStars(handler, source, { figma: multi })).status).toBe(201);
+    expect(await (await handler(req("/components/validate-stars"))).json()).toMatchObject({ figma: multi });
+
+    const ok = await handler(req("/components/validate-stars/validate", "POST"));
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ ok: true });
+
+    db.run("UPDATE component_provenance SET figma_json=? WHERE component_id=?", [JSON.stringify({ ...FIGMA, sources: [{ fileKey: FIGMA.fileKey, nodeIds: ["3:3"] }] }), "validate-stars"]);
+    const response = await handler(req("/components/validate-stars/validate", "POST"));
+    expect(response.status).toBe(422);
+    const body = await response.json() as { error: { code: string; issues: unknown[] } };
+    expect(body.error.code).toBe("validation_failed");
+    expect(body.error.issues).toContainEqual(expect.objectContaining({
+      path: ["figma", "sources", "0", "fileKey"],
+      pointer: "/figma/sources/0/fileKey",
+    }));
+    db.close();
+  }, 90000);
+
   test("validate and publish share stable codes for compile-time failures; failures are cached", async () => {
     const { dir, db, handler } = await setup();
     // Проходит POST/PUT (там только checkSource), но падает на typecheck — дыра, которую ловит префлайт.

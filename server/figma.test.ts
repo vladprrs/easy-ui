@@ -3,6 +3,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { openDatabase } from "./db";
+import { figmaSchema, parseFigmaStored } from "./figma";
+import { libraryCatalog } from "./routes/libraryCatalog";
 import { prototypeDocSchema } from "../src/prototype/schema";
 
 // Figma provenance end-to-end (plan §J): save/restore/read-back on both prototypes and
@@ -121,4 +123,75 @@ describe("figma provenance — components", () => {
     expect((await json(bad)).error).toMatchObject({ code: "validation_failed" });
     db.close();
   });
+});
+
+// Multi-source lineage (план 2026-08-06 §W1): компонент вроде PayCard-расширения собирается из
+// нескольких документов (Core + Pay App); primary остаётся верхнеуровневым, дубликат fileKey —
+// 422 с адресом в issues.
+const figmaMulti = {
+  fileKey: "core-file",
+  nodeIds: ["1:2"],
+  sources: [
+    { fileKey: "pay-app-file", nodeIds: ["10:20", "10:21"], role: "pay-app" },
+    { fileKey: "icons-file", nodeIds: ["7:7"] },
+  ],
+};
+
+describe("figma provenance — multi-source lineage (§W1)", () => {
+  test("schema: primary + 2 sources parses, duplicates are rejected with the offending path", () => {
+    const ok = figmaSchema.safeParse(figmaMulti);
+    expect(ok.success).toBe(true);
+    expect(ok.data?.sources).toHaveLength(2);
+
+    // Совпадение с primary.
+    const withPrimary = figmaSchema.safeParse({ ...figmaMulti, sources: [{ fileKey: "core-file", nodeIds: ["9:9"] }] });
+    expect(withPrimary.success).toBe(false);
+    expect(withPrimary.error?.issues[0]).toMatchObject({ path: ["sources", 0, "fileKey"], message: expect.stringContaining("primary") });
+
+    // Дубликат внутри sources — адресуется индексом второго вхождения.
+    const withinSources = figmaSchema.safeParse({ ...figmaMulti, sources: [{ fileKey: "dup-file", nodeIds: ["1:1"] }, { fileKey: "dup-file", nodeIds: ["2:2"] }] });
+    expect(withinSources.success).toBe(false);
+    expect(withinSources.error?.issues[0]).toMatchObject({ path: ["sources", 1, "fileKey"] });
+
+    // Границы: пустой список источников, пустые nodeIds, >8 источников и лишний ключ.
+    expect(figmaSchema.safeParse({ ...figmaMulti, sources: [] }).success).toBe(false);
+    expect(figmaSchema.safeParse({ ...figmaMulti, sources: [{ fileKey: "a", nodeIds: [] }] }).success).toBe(false);
+    expect(figmaSchema.safeParse({ ...figmaMulti, sources: Array.from({ length: 9 }, (_, i) => ({ fileKey: `f${i}`, nodeIds: ["1:1"] })) }).success).toBe(false);
+    expect(figmaSchema.safeParse({ ...figmaMulti, sources: [{ fileKey: "a", nodeIds: ["1:1"], page: "x" }] }).success).toBe(false);
+  });
+
+  test("stored legacy rows without sources keep parsing unchanged", () => {
+    // Байты, лежащие в figma_json до §W1, обязаны читаться как раньше — поле строго additive.
+    expect(parseFigmaStored(JSON.stringify(figmaA))).toEqual(figmaA);
+    expect(parseFigmaStored(JSON.stringify({ fileKey: "k", nodeIds: ["1:2"] }))?.sources).toBeUndefined();
+    expect(parseFigmaStored(JSON.stringify(figmaMulti))).toEqual(figmaMulti);
+  });
+
+  test("component create accepts primary + 2 sources, rejects a duplicate fileKey, and exposes sourceCount in the library catalog", async () => {
+    const { db, handler } = await setup();
+    const source = await Bun.file("server/fixtures/rating-stars.tsx").text();
+
+    const dup = await handler(req("/components", "POST", { designSystem: "yandex-pay", id: "figma-multi-dup", name: "FigmaMultiDup", source, intent: "Extends the pay card rating control across two Figma files", figma: { ...figmaMulti, sources: [...figmaMulti.sources, { fileKey: "core-file", nodeIds: ["4:4"] }] } }));
+    expect(dup.status).toBe(422);
+    const dupError = (await json(dup)).error as { code: string; issues: { path: (string | number)[] }[] };
+    expect(dupError).toMatchObject({ code: "validation_failed" });
+    // Путь issue — относительно объекта figma (как у остальных issue write-пути), с индексом источника.
+    expect(dupError.issues[0]?.path).toEqual(["sources", 2, "fileKey"]);
+
+    const created = await handler(req("/components", "POST", { designSystem: "yandex-pay", id: "figma-multi", name: "FigmaMulti", source, intent: "Extends the pay card rating control across two Figma files", figma: figmaMulti }));
+    expect(created.status).toBe(201);
+    expect((await json(await handler(req("/components/figma-multi")))).figma).toEqual(figmaMulti);
+
+    // Публикация не теряет источники, а проекция каталога показывает их количество.
+    expect((await handler(req("/components/figma-multi/publish", "POST", { baseRev: 1 }))).status).toBe(201);
+    expect((await json(await handler(req("/components/figma-multi/versions/1")))).figma).toEqual(figmaMulti);
+    expect(libraryCatalog(db).components.find((entry) => entry.id === "figma-multi")?.figma)
+      .toEqual({ fileKey: "core-file", nodeCount: 1, sourceCount: 2 });
+
+    // Provenance без sources сохраняет прежнюю форму проекции — поле опускается.
+    expect((await handler(req("/components/figma-multi/provenance", "PUT", { figma: figmaA }))).status).toBe(200);
+    expect(libraryCatalog(db).components.find((entry) => entry.id === "figma-multi")?.figma)
+      .toEqual({ fileKey: figmaA.fileKey, nodeCount: 2 });
+    db.close();
+  }, 90000);
 });

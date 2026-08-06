@@ -112,7 +112,9 @@ export interface ResourceOwner { id: string; name: string }
 export type PrototypeStatus = "private" | "published" | "archived";
 
 // Figma provenance (plan §J): an immutable per-revision link back to the source Figma file.
-export interface FigmaProvenance { fileKey: string; nodeIds: string[]; referenceScreenshots?: string[]; lastSyncedAt?: string }
+/** `sources` — дополнительные документы lineage сверх primary `fileKey`/`nodeIds` (план §W1). */
+export interface FigmaSource { fileKey: string; nodeIds: string[]; role?: string }
+export interface FigmaProvenance { fileKey: string; nodeIds: string[]; sources?: FigmaSource[]; referenceScreenshots?: string[]; lastSyncedAt?: string }
 
 export interface PrototypeRenderError { code: "prototype_not_renderable"; message: string; issues: { path: string; message: string }[] }
 export interface PrototypeVersionSummary { version: number; rev: number; publishedAt: string; renderable?: boolean; renderError?: PrototypeRenderError | null }
@@ -306,7 +308,7 @@ export interface LibraryCatalogEntry {
   bundleUrl: string; bundleHash: string; hostAbiVersion: number; description: string;
   atomicLevel?: AtomicLevel; layoutNeutral: boolean; scope?: ComponentScope; canonicalFor: string[]; replacement?: string;
   deprecated: boolean; headUsageCount: number; status: LibraryCatalogStatus;
-  figma: null | { fileKey: string; nodeCount: number };
+  figma: null | { fileKey: string; nodeCount: number; sourceCount?: number };
   preview: ComponentPreviewSelector | null;
 }
 export interface LibraryCatalogResponse {

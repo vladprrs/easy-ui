@@ -59,7 +59,7 @@ export function ComponentCard({ entry, systemName, showSystem, priority, preview
         {acceptance
           ? <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${acceptance.className}`} title={acceptance.title}>{acceptance.label}</span>
           : null}
-        {figma ? <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-eui-ink" title={figmaBadgeTitle(figma.fileKey, figma.nodeCount)}>Figma</span> : null}
+        {figma ? <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-eui-ink" title={figmaBadgeTitle(figma.fileKey, figma.nodeCount, figma.sourceCount)}>Figma</span> : null}
       </div>
     </div>
     <div className="flex min-w-0 flex-1 flex-col p-5">

@@ -9,11 +9,46 @@ import { ApiError } from "./http";
 
 const ASSET_ID = /^asset_[0-9a-f]{64}$/;
 
+const fileKeySchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/, "fileKey must be url-safe");
+const nodeIdsSchema = z.array(z.string().min(1).max(64).regex(/^[A-Za-z0-9:._-]+$/, "nodeId must be safe")).min(1).max(50);
+
+/**
+ * Дополнительный источник lineage (план 2026-08-06 §W1): компонент, собранный из нескольких
+ * Figma-документов (например Core + Pay App), перечисляет их здесь. `role` — свободная метка
+ * («core», «pay-app»), нужная человеку в аудите, а не машине.
+ */
+export const figmaSourceSchema = z.strictObject({
+  fileKey: fileKeySchema,
+  nodeIds: nodeIdsSchema,
+  role: z.string().min(1).max(64).optional(),
+});
+
 export const figmaSchema = z.strictObject({
-  fileKey: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/, "fileKey must be url-safe"),
-  nodeIds: z.array(z.string().min(1).max(64).regex(/^[A-Za-z0-9:._-]+$/, "nodeId must be safe")).min(1).max(50),
+  fileKey: fileKeySchema,
+  nodeIds: nodeIdsSchema,
+  // Multi-source lineage (§W1). Верхнеуровневые fileKey/nodeIds остаются primary-документом —
+  // ради обратной совместимости: существующие записи figma_json парсятся без изменений, а
+  // потребители, знающие только про primary, продолжают работать.
+  sources: z.array(figmaSourceSchema).min(1).max(8).optional(),
   referenceScreenshots: z.array(z.string().regex(ASSET_ID, "must be an asset id")).max(50).optional(),
   lastSyncedAt: z.string().min(1).max(40).refine((value) => !Number.isNaN(Date.parse(value)), "must be an ISO date").optional(),
+}).superRefine((value, ctx) => {
+  // Один документ — одна запись lineage: дубликат fileKey (внутри sources или против primary)
+  // делает «сколько источников» неоднозначным и почти всегда означает опечатку в наборе узлов.
+  const seen = new Set<string>([value.fileKey]);
+  (value.sources ?? []).forEach((source, index) => {
+    if (seen.has(source.fileKey)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["sources", index, "fileKey"],
+        message: source.fileKey === value.fileKey
+          ? `duplicate fileKey: ${source.fileKey} is already the primary document`
+          : `duplicate fileKey: ${source.fileKey} is already listed in sources`,
+      });
+      return;
+    }
+    seen.add(source.fileKey);
+  });
 });
 
 export type FigmaProvenance = z.infer<typeof figmaSchema>;

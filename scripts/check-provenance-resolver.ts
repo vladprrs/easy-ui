@@ -21,7 +21,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 
 /** Файл → сколько упоминаний `figma_json` в нём легально (для компонентных путей), и почему. */
 const ALLOWLIST: Record<string, { count?: number; why: string }> = {
-  "server/figma.ts": { count: 16, why: "сам резолвер: resolveProvenanceRaw/recordProvenance/resolveHeadProvenanceByComponent/provenanceAssetUsage (+доккоменты)" },
+  "server/figma.ts": { count: 17, why: "сам резолвер: resolveProvenanceRaw/recordProvenance/resolveHeadProvenanceByComponent/provenanceAssetUsage (+доккоменты, включая обратную совместимость multi-source, план 2026-08-06 §W1)" },
   "server/migrations.ts": { count: 10, why: "DDL v27 (component_provenance), backfill head-ревизий, ADD COLUMN v9 и прототипные перестройки" },
   "server/repos/components.ts": { count: 2, why: "write-пути правила B1: INSERT ревизии в create и save (колонка остаётся фолбэком резолвера)" },
   "server/migrationRunner.ts": { count: 7, why: "срезы таблиц в currentDataFingerprint и прототипная перезапись ревизий — снапшоты, не read-path" },

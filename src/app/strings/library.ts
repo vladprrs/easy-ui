@@ -134,8 +134,11 @@ export const compositions = {
   } as Record<string, string>,
 } as const;
 
-export const figmaBadgeTitle = (fileKey: string, nodeCount: number) =>
-  `Figma ${fileKey} · ${nodeCount} ${pluralRu(nodeCount, ["узел", "узла", "узлов"])}`;
+// `sourceCount` — дополнительные документы lineage сверх primary (план §W1); при их отсутствии
+// подпись остаётся прежней.
+export const figmaBadgeTitle = (fileKey: string, nodeCount: number, sourceCount = 0) =>
+  `Figma ${fileKey} · ${nodeCount} ${pluralRu(nodeCount, ["узел", "узла", "узлов"])}`
+  + (sourceCount > 0 ? ` · +${sourceCount} ${pluralRu(sourceCount, ["источник", "источника", "источников"])}` : "");
 
 // Заголовки секций по уровням Atomic Design. Ключи совпадают со структурой
 // atomicLevelLabel.
