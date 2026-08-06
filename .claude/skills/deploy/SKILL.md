@@ -61,6 +61,15 @@ curl -s -c "$jar" -X POST https://easy-ui.pay-offline.ru/api/auth/login \
 curl -s -b "$jar" https://easy-ui.pay-offline.ru/api/capabilities   # flags in .features, limits in .limits
 ```
 
+### Wave 2026-08-06 (feedback-3 platform capabilities)
+
+Smoke keys after that wave: `features.figmaMultiSource/geometryContractV2/overlayScrollOwnership` are unconditional `true`; `features.geometryCaseTolerances/comparisonMatte/nestedSlotBindings/captureViewportSurface` follow `EASYUI_ACCEPTANCE_MATRIX`; plus top-level `textAaPresets["live-text-v1"]` and `acceptance.geometryContractVersion: 2`. Post-deploy expectations, not defects:
+
+- **First acceptance run of any existing case-set is a full recapture** — `geometryContractVersion` is a frame-fingerprint input, every pre-wave frame is invalidated by design (~4-6 s/case cold).
+- Live-text/clip measurement changed: case-sets that pinned an exact `expectedGeometry` under the old semantics may now honestly fail geometry. Inventory them with `node scripts/audit-geometry-contract.mjs --db <copy-of-prod-db>` (logical backups don't carry case-sets — take the volume DB) and re-issue manifests with `policy.perCase.sizeDeltaPx` where the delta is proven.
+- `Overlay` overflow now clips (or scrolls with `scroll:true`) instead of leaking past the stage; the only pre-wave prod usage (hug-sheet below viewport) is unaffected, but audit new usages after content edits.
+- `builtinCatalogHash` shifted (new `scroll` prop is hashed): new prototype revisions get a new catalog hash and `renderInputDiff` legitimately reports it; pre-wave bundle imports decorate `formatTooNew` without blocking.
+
 ## Manual deploy / redeploy (no new commit)
 
 ```bash
