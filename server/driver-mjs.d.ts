@@ -274,9 +274,14 @@ declare module "*/author/driver.mjs" {
     maxSlotsPerCase: number;
     maxSlotDepth: number;
     maxSlotNodes: number;
+    /** Per-case допуски (план 2026-08-06 §W3): потолки `sizeDeltaPx` и сторон `overflowBudgetPx`. */
+    maxCaseSizeDeltaPx: number;
+    maxCaseOverflowBudgetPx: number;
   }
   export const CASE_SET_LIMITS: Readonly<DriverCaseSetLimits>;
   export function caseSetLimits(capabilities: unknown): DriverCaseSetLimits;
   export function caseSetManifestIssues(manifest: unknown, limits?: DriverCaseSetLimits): string[];
+  /** Локальная проверка `policy`/`policy.perCase` манифеста (план 2026-08-06 §W3). */
+  export function casePolicyIssues(policy: unknown, limits?: DriverCaseSetLimits): string[];
   export function caseSetIdOfManifest(manifest: unknown): string;
 }

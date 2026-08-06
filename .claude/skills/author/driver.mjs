@@ -2718,6 +2718,9 @@ export const CASE_SET_LIMITS = Object.freeze({
   // Вложенные слоты (план 2026-08-06 §W6): уровней от корня случая и узлов на случай целиком.
   maxSlotDepth: 3,
   maxSlotNodes: 96,
+  // Per-case допуски (план 2026-08-06 §W3): потолки `sizeDeltaPx` и сторон `overflowBudgetPx`.
+  maxCaseSizeDeltaPx: 64,
+  maxCaseOverflowBudgetPx: 256,
 });
 
 /** Лимиты из ответа `/capabilities` поверх дефолтов: сервер — источник истины, драйвер — эхо. */
@@ -2735,6 +2738,8 @@ export function caseSetLimits(capabilities) {
     maxSlotsPerCase: number(limits.caseSetMaxSlotsPerCase, CASE_SET_LIMITS.maxSlotsPerCase),
     maxSlotDepth: number(limits.caseSetMaxSlotDepth, CASE_SET_LIMITS.maxSlotDepth),
     maxSlotNodes: number(limits.caseSetMaxSlotNodes, CASE_SET_LIMITS.maxSlotNodes),
+    maxCaseSizeDeltaPx: number(limits.caseSetMaxCaseSizeDeltaPx, CASE_SET_LIMITS.maxCaseSizeDeltaPx),
+    maxCaseOverflowBudgetPx: number(limits.caseSetMaxCaseOverflowBudgetPx, CASE_SET_LIMITS.maxCaseOverflowBudgetPx),
   };
 }
 
@@ -2784,6 +2789,66 @@ function slotBindingIssues(bindings, where, limits) {
     }
   };
   level(bindings, `${where}.slotBindings`, 1);
+  return issues;
+}
+
+const CASE_POLICY_KEYS = new Set([
+  "maxRawDiffPct", "allowPaintOverflow", "expectedClip",
+  // План 2026-08-06 §W3: per-case допуск габаритов и per-side бюджет краски.
+  "sizeDeltaPx", "overflowBudgetPx",
+]);
+const OVERFLOW_BUDGET_SIDES = ["top", "right", "bottom", "left"];
+
+/**
+ * Локальная проверка `policy.perCase` (план 2026-08-06 §W3, §1.5).
+ *
+ * Драйвер обязан **принимать** легальные новые поля (иначе манифест не уедет и до сети) и
+ * **отвергать** объявленный конфликт до сети: `allowPaintOverflow` вместе с `overflowBudgetPx` —
+ * два разных намерения об одном вердикте, сервер отвечает на них 422 `case_policy_conflict`, и
+ * узнавать об этом round-trip'ом незачем. Всё, что требует базы (алиасы, существование случая),
+ * остаётся сервером.
+ */
+export function casePolicyIssues(policy, limits = CASE_SET_LIMITS) {
+  const issues = [];
+  if (policy === undefined) return issues;
+  if (!isPlainObject(policy)) return ["policy must be an object"];
+  for (const key of Object.keys(policy)) {
+    if (key !== "profile" && key !== "perCase") issues.push(`policy: unknown field "${key}"`);
+  }
+  if (policy.perCase === undefined) return issues;
+  if (!isPlainObject(policy.perCase)) return [...issues, "policy.perCase must be an object of caseId → per-case policy"];
+  for (const [caseId, item] of Object.entries(policy.perCase)) {
+    const at = `policy.perCase."${caseId}"`;
+    if (!isPlainObject(item)) { issues.push(`${at} must be an object`); continue; }
+    for (const key of Object.keys(item)) {
+      if (!CASE_POLICY_KEYS.has(key)) issues.push(`${at}: unknown field "${key}"`);
+    }
+    if (item.sizeDeltaPx !== undefined
+      && (!Number.isInteger(item.sizeDeltaPx) || item.sizeDeltaPx < 0 || item.sizeDeltaPx > limits.maxCaseSizeDeltaPx)) {
+      issues.push(`${at}.sizeDeltaPx must be an integer 0..${limits.maxCaseSizeDeltaPx} (CSS px)`);
+    }
+    if (item.overflowBudgetPx !== undefined) {
+      const budget = item.overflowBudgetPx;
+      if (!isPlainObject(budget)) issues.push(`${at}.overflowBudgetPx must be an object of sides`);
+      else {
+        const sides = Object.keys(budget);
+        for (const side of sides) {
+          if (!OVERFLOW_BUDGET_SIDES.includes(side)) { issues.push(`${at}.overflowBudgetPx: unknown side "${side}"`); continue; }
+          const value = budget[side];
+          if (!Number.isInteger(value) || value < 0 || value > limits.maxCaseOverflowBudgetPx) {
+            issues.push(`${at}.overflowBudgetPx.${side} must be an integer 0..${limits.maxCaseOverflowBudgetPx} (CSS px)`);
+          }
+        }
+        if (sides.length === 0) {
+          issues.push(`${at}.overflowBudgetPx must declare at least one side (an empty budget is a forgotten intent, not "zero")`);
+        }
+      }
+      if (item.allowPaintOverflow !== undefined) {
+        issues.push(`${at}: allowPaintOverflow and overflowBudgetPx are mutually exclusive (422 case_policy_conflict):`
+          + " keep the blanket allowance or the per-side budget, not both");
+      }
+    }
+  }
   return issues;
 }
 
@@ -2861,6 +2926,8 @@ export function caseSetManifestIssues(manifest, limits = CASE_SET_LIMITS) {
       }
     }
   }
+
+  issues.push(...casePolicyIssues(manifest.policy, limits));
 
   const cases = manifest.cases;
   if (!Array.isArray(cases) || cases.length === 0) return [...issues, "cases must be a non-empty array"];

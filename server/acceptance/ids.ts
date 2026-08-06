@@ -300,6 +300,19 @@ export function comparisonFingerprintOf(input: ComparisonFingerprintInput): stri
  * `acceptance_case_results.verdict_policy_json`, а его хэш — в `verdict_policy_hash` (валидатор
  * снимка: не сошёлся ⇒ снимок не наш ⇒ recapture).
  */
+/**
+ * Значения per-case политики манифеста (`policy.perCase.<id>`) — один тип на все три роли:
+ * вердиктный снимок, вход отпечатка и вход гейта. Держать три копии литерала было бы приглашением
+ * их разъехать (W3, план 2026-08-06).
+ */
+export interface CasePolicyValues {
+  maxRawDiffPct?: number;
+  allowPaintOverflow?: boolean;
+  expectedClip?: boolean;
+  sizeDeltaPx?: number;
+  overflowBudgetPx?: { top?: number; right?: number; bottom?: number; left?: number };
+}
+
 export interface VerdictPolicySnapshot {
   policyProfileId: string;
   /** Роли гейтов эффективной политики рана (`requireVisual` набора уже применён). */
@@ -309,8 +322,12 @@ export interface VerdictPolicySnapshot {
   /** Профильный потолок визуального расхождения. */
   maxRawDiffPct: number;
   geometry: { overflowPx: number; sizeDeltaPx: number; offsetPx: number };
-  /** Per-case допуски манифеста (W2) — они же перекрывают профильные. */
-  perCase: { maxRawDiffPct?: number; allowPaintOverflow?: boolean; expectedClip?: boolean } | null;
+  /**
+   * Per-case допуски манифеста (W2) — они же перекрывают профильные. W3 (план 2026-08-06)
+   * добавляет числа: `sizeDeltaPx` (побеждает `geometry.sizeDeltaPx`) и per-side
+   * `overflowBudgetPx`. Оба — вердиктный слой: их смена пересчитывается без пересъёмки.
+   */
+  perCase: CasePolicyValues | null;
   /** Ожидаемые габариты: вход допусков геометрии (и, в W5, нормализации эталона — D1). */
   expectedGeometry: { width: number; height: number } | null;
   /** `policy.profile` манифеста: декларация набора, влияющая на смысл вердикта. */
@@ -328,7 +345,7 @@ export interface CaseFingerprintCase {
   referenceAssetId?: string | null;
   expectedGeometry?: { width: number; height: number } | null;
   cropLineage?: { parentNodeId?: string; rect: readonly number[]; sourceSurface?: string } | null;
-  casePolicy?: { maxRawDiffPct?: number; allowPaintOverflow?: boolean; expectedClip?: boolean };
+  casePolicy?: CasePolicyValues;
   declaredPolicyProfile?: string | null;
   /** W5-слоты (см. `ComparisonFingerprintInput`). */
   referenceSurface?: string | null;

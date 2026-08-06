@@ -18,7 +18,7 @@ import { ApiError } from "../http";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
 import type { CropSourceSurface, ReferenceSurface } from "../../src/acceptance/caseSetSchema";
 import type { CandidateEntry } from "../components/candidates";
-import type { CaseSurface } from "./ids";
+import type { CasePolicyValues, CaseSurface } from "./ids";
 import { acceptanceMaxCasesPerRun } from "./policies";
 
 /**
@@ -104,7 +104,7 @@ export interface AcceptanceCase {
    * `allowPaintOverflow`/`expectedClip` как вход вердикта. Хэш остаётся ключом инвалидации reuse,
    * значения — входом политики; дублирования нет, это две разные роли одного объекта.
    */
-  casePolicy?: { allowPaintOverflow?: boolean; expectedClip?: boolean; maxRawDiffPct?: number };
+  casePolicy?: CasePolicyValues;
   /**
    * Происхождение эталона (§19.5 фидбэка): прямоугольник внутри родительского узла Figma. Читает
    * его нормализация размеров гейта `visual` (W5a) — эталон обрезается до кадра случая **до**

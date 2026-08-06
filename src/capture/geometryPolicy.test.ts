@@ -33,8 +33,8 @@ describe("geometry policy", () => {
     expect(result.overflow.sources[0]!.contribution.total).toBeCloseTo(69, 5);
     expect(result.reasons[0]).toContain("highlight");
     // Допуск случая переводит ожидаемое свечение в неблокирующее, вердикт при этом честный.
-    expect(geometryVerdictBlocks(result.policyVerdict)).toBe(true);
-    expect(geometryVerdictBlocks(result.policyVerdict, { allowPaintOverflow: true })).toBe(false);
+    expect(geometryVerdictBlocks(result.policyVerdict, result.overflow)).toBe(true);
+    expect(geometryVerdictBlocks(result.policyVerdict, result.overflow, { allowPaintOverflow: true })).toBe(false);
   });
 
   it("blur внутри overflow:hidden — чисто: краска не выходит за контур, клип назван", () => {
@@ -45,7 +45,7 @@ describe("geometry policy", () => {
     expect(result.policyVerdict).toBe("clean");
     expect(result.overflow.sources).toHaveLength(0);
     expect(result.clippedBy).toMatchObject({ key: "card", property: "overflow" });
-    expect(geometryVerdictBlocks(result.policyVerdict)).toBe(false);
+    expect(geometryVerdictBlocks(result.policyVerdict, result.overflow)).toBe(false);
   });
 
   it("краска выходит наружу и режется предком: paint-overflow-clipped, expectedClip снимает блокировку", () => {
@@ -57,8 +57,8 @@ describe("geometry policy", () => {
     });
     expect(result.policyVerdict).toBe("paint-overflow-clipped");
     expect(result.overflow.sources[0]!.cause).toBe("filter:blur(68px)");
-    expect(geometryVerdictBlocks(result.policyVerdict)).toBe(true);
-    expect(geometryVerdictBlocks(result.policyVerdict, { expectedClip: true })).toBe(false);
+    expect(geometryVerdictBlocks(result.policyVerdict, result.overflow)).toBe(true);
+    expect(geometryVerdictBlocks(result.policyVerdict, result.overflow, { expectedClip: true })).toBe(false);
   });
 
   it("расхождение с expectedGeometry названо отдельным вердиктом layout-overflow", () => {
@@ -75,7 +75,7 @@ describe("geometry policy", () => {
     });
     expect(drifted.policyVerdict).toBe("layout-overflow");
     expect(drifted.expectedGeometryDelta).toMatchObject({ widthDelta: 35, heightDelta: 0 });
-    expect(geometryVerdictBlocks(drifted.policyVerdict, { allowPaintOverflow: true })).toBe(true);
+    expect(geometryVerdictBlocks(drifted.policyVerdict, drifted.overflow, { allowPaintOverflow: true })).toBe(true);
   });
 
   it("dsf=2: нормализованные в CSS px измерения не дают ложного overflow ×2", () => {
@@ -95,7 +95,7 @@ describe("geometry policy", () => {
 
     expect(evaluate({ paintBounds: null, paintBoundsSource: null }).policyVerdict).toBe("indeterminate");
     expect(evaluate({ layoutBounds: null }).policyVerdict).toBe("indeterminate");
-    expect(geometryVerdictBlocks("indeterminate")).toBe(false);
+    expect(geometryVerdictBlocks("indeterminate", null)).toBe(false);
   });
 
   it("overflow без объяснимого источника не получает виновника — гейту нечем падать", () => {
@@ -127,5 +127,63 @@ describe("geometry policy", () => {
     const small = { elementKey: "badge", cause: "box-shadow:0 2px 4px", rect: { x: 60, y: 64, width: 148, height: 96 } };
     const result = evaluate({ effectSources: [small, blurSource] });
     expect(result.overflow.sources.map((item) => item.elementKey)).toEqual(["highlight", "badge"]);
+  });
+  // ------------------------------------------------ per-case бюджет overflow (план 2026-08-06 §W3)
+
+  it("overflow внутри бюджета не блокирует, но вердикт-класс в фактах сохраняется", () => {
+    const result = evaluate();
+    expect(result.policyVerdict).toBe("paint-overflow-not-clipped");
+    // Наблюдено left/right 17.5, top/bottom 17 — бюджет объявлен щедро по каждой стороне.
+    const budget = { left: 18, right: 18, top: 18, bottom: 18 };
+    expect(geometryVerdictBlocks(result.policyVerdict, result.overflow, { overflowBudgetPx: budget })).toBe(false);
+    // Факты не переписаны: бюджет отвечает «блокирует ли», а не «было ли».
+    expect(result.overflow).toMatchObject({ left: 17.5, right: 17.5, top: 17, bottom: 17 });
+    expect(result.overflow.sources[0]).toMatchObject({ elementKey: "highlight" });
+  });
+
+  it("граница бюджета включительна, превышение по любой стороне возвращает блокировку", () => {
+    const result = evaluate();
+    const exact = { left: 17.5, right: 17.5, top: 17, bottom: 17 };
+    expect(geometryVerdictBlocks(result.policyVerdict, result.overflow, { overflowBudgetPx: exact })).toBe(false);
+    for (const side of ["left", "right", "top", "bottom"] as const) {
+      const short = { ...exact, [side]: exact[side] - 0.5 };
+      expect(geometryVerdictBlocks(result.policyVerdict, result.overflow, { overflowBudgetPx: short })).toBe(true);
+    }
+  });
+
+  it("неназванная сторона имеет бюджет 0: односторонний бюджет не разрешает соседние стороны", () => {
+    // Краска вылезла только вправо на 20 px — ровно тот случай, ради которого бюджет per-side.
+    const rightOnly = evaluate({
+      paintBounds: { x: 64, y: 64, width: 160, height: 96 },
+      effectSources: [{ elementKey: "glow", cause: "filter:blur(20px)", rect: { x: 64, y: 64, width: 160, height: 96 } }],
+    });
+    expect(rightOnly.overflow).toMatchObject({ left: 0, right: 20, top: 0, bottom: 0 });
+    expect(geometryVerdictBlocks(rightOnly.policyVerdict, rightOnly.overflow, { overflowBudgetPx: { right: 20 } })).toBe(false);
+    // Тот же бюджет, но краска ушла влево — не разрешено: неназванная сторона это ноль.
+    const both = evaluate();
+    expect(geometryVerdictBlocks(both.policyVerdict, both.overflow, { overflowBudgetPx: { right: 20 } })).toBe(true);
+  });
+
+  it("бюджет без измерений overflow блокировку не снимает, а layout-overflow не смягчает вовсе", () => {
+    const generous = { top: 256, right: 256, bottom: 256, left: 256 };
+    expect(geometryVerdictBlocks("paint-overflow-not-clipped", null, { overflowBudgetPx: generous })).toBe(true);
+    expect(geometryVerdictBlocks("layout-overflow", { left: 0, right: 0, top: 0, bottom: 0 }, { overflowBudgetPx: generous })).toBe(true);
+    // Клипнутый overflow бюджет закрывает так же, как и неклипнутый.
+    const clipped = evaluate({ clipChain: [{ key: "card", property: "overflow", value: "hidden hidden", effective: true }] });
+    expect(clipped.policyVerdict).toBe("paint-overflow-clipped");
+    expect(geometryVerdictBlocks(clipped.policyVerdict, clipped.overflow, { overflowBudgetPx: generous })).toBe(false);
+  });
+
+  it("per-case sizeTolerancePx решает судьбу расхождения с expectedGeometry", () => {
+    const drift = (sizeTolerancePx: number) => evaluate({
+      layoutBounds: { ...layout, width: 146 },
+      paintBounds: { ...layout, width: 146 },
+      effectSources: [],
+      tolerances: { expectedGeometry: { width: 140, height: 96 }, sizeTolerancePx },
+    });
+    // Профильный допуск 1 px расхождение видит, per-case 8 px — прощает (то же расхождение, те же факты).
+    expect(drift(1).policyVerdict).toBe("layout-overflow");
+    expect(drift(6).policyVerdict).toBe("clean");
+    expect(drift(5).policyVerdict).toBe("layout-overflow");
   });
 });

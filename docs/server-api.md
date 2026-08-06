@@ -559,7 +559,7 @@ CLI: `driver.mjs impact <id> --candidate <candidateId> --baseline-run <runId>` (
 |---|---|---|
 | `frameFingerprint` | `candidateId`, `caseKey`, `propsHash`, поверхность (viewport/dsf/theme), `readinessPolicyHash`, `rendererFingerprint`, `slotBindings` — разрешённые дети слотов `[{slot,index,componentId,version,bundleHash,propsHash}]` в порядке рендера (алго 7) | пересъёмка даст те же пиксели ⇒ кадр из CAS можно переиспользовать |
 | `comparisonFingerprint` | `referenceAssetId`, `cropLineage` (вкл. `sourceSurface`), `expectedGeometry`, `maxDimensionDeltaPx`, параметры канвы (`paintMargin`, `dsf`); `referenceSurface`/`referencePlacement` (W5) | метрики расхождения остаются в силе ⇒ пересчёт по ним законен |
-| `verdictPolicyHash` | профиль и его пороги (`maxRawDiffPct`, geometry-допуски), `perCase`-оверрайды, `requireVisual`, состав и роли гейтов, `allowPaintOverflow`/`expectedClip`, `expectedGeometry`, `policy.profile` манифеста | решение по тем же метрикам будет тем же |
+| `verdictPolicyHash` | профиль и его пороги (`maxRawDiffPct`, geometry-допуски), `perCase`-оверрайды, `requireVisual`, состав и роли гейтов, `allowPaintOverflow`/`expectedClip`/`sizeDeltaPx`/`overflowBudgetPx`, `expectedGeometry`, `policy.profile` манифеста | решение по тем же метрикам будет тем же |
 
 `case_fingerprint = sha256({algo: 7, frame, comparison, verdictPolicy})`. **`expectedGeometry` — двухслойное поле**: оно и допуск вердикта геометрии, и (с волны W5) `padTo` нормализации content-hug эталона, поэтому его смена уводит визуал в re-diff, а не в пересчёт по старым метрикам. Разбиение полей по слоям — типизированное и **тотальное**: новое поле политики или случая не соберётся, пока ему не назначен слой (значение `report-only` — обоснованное «ни в одном», а не пропуск).
 
@@ -589,6 +589,7 @@ Examples-путь больше не хэширует заглушку `CASE_POLI
 - **Геометрия пересчитывается от сырых `layoutBounds`/`paintBounds`/`effectSources`**, а не от `overflow`, уже отфильтрованного прежним допуском: иначе ужесточение допуска молча не срабатывало бы.
 - **Кадр для re-diff — `paint.png` строки кэша**, с проверкой физического существования; нет кадра ⇒ `recapture:frame_missing`. Кадр, не прошедший readiness, визуального вердикта не получает и на re-diff (инвариант D5) ⇒ `recapture:frame_not_ready`.
 - **Производные артефакты переписываются.** `visual.json`/`geometry.json` пересчитанного случая пишутся новыми записями CAS с `recomputed: true` и `derivedFrom: <sha предыдущей>`; байтовые артефакты (`paint.png`, `diff.png`) переиспользуются. Манифест evidence и содержимое артефакта случая всегда согласованы.
+- **Per-case поля `sizeDeltaPx`/`overflowBudgetPx` — вердиктные листья снимка** (`perCase.sizeDeltaPx`, `perCase.overflowBudgetPx` → гейт `geometry`): смена бюджета пересчитывает вердикт над сохранённым кадром и сохранённым диффом.
 - **`policy.perCase`, адресующий случай с `aliasOf`, отвергается** `422 per_case_policy_on_alias`: вердикт алиаса идентичен вердикту цели, и такой допуск не был бы исполнен ничем.
 
 **Kill-switch `EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE`** (объявлен в `docker-compose.yml`, по умолчанию включён). `0` выключает **и** recompute, **и** re-diff: любой промах `case_fingerprint` уводит в пересъёмку — но никогда в перенос устаревшего вердикта. Откат флага не ретроактивен: уже записанные пересчитанные строки остаются годными (их чистка — bump `algoVersion`).
@@ -627,7 +628,12 @@ Examples-путь больше не хэширует заглушку `CASE_POLI
   "capture": { "viewport": {"width": 390, "height": 844}, "deviceScaleFactor": 2, "theme": "light" },
   "dimensions": { "family": ["Product", "Split"], "state": ["Default", "Disabled"] },  // опционально
   "requireVisual": false,                                              // намерение для гейта visual (W5a)
-  "policy": { "profile": "pixel-strict-v1", "perCase": { "split-disabled": { "maxRawDiffPct": 2 } } },
+  "policy": { "profile": "pixel-strict-v1", "perCase": {
+    "split-disabled": { "maxRawDiffPct": 2 },
+    // W3: допуск габаритов случая (побеждает профильный) и per-side бюджет paint-overflow;
+    // `overflowBudgetPx` несовместим с `allowPaintOverflow` (422 case_policy_conflict).
+    "product-default": { "sizeDeltaPx": 4, "overflowBudgetPx": { "bottom": 24 } }
+  } },
   "cases": [{
     "id": "product-default",                                           // ^[A-Za-z0-9._-]{1,64}$
     "props": { "family": "Product", "state": "Default" },
@@ -1471,6 +1477,24 @@ inline-block), поэтому ink-bbox по обычному кадру не и�
 и `contribution` по сторонам (источники ранжируются по вкладу). Допуски случая приходят из
 case-set-манифеста (`policy.perCase.<id>`): `allowPaintOverflow` (ожидаемая тень/свечение),
 `expectedClip` (ожидаемая обрезка), `expectedGeometry` (ожидаемые габариты layout-контура).
+
+**Per-case числа (план 2026-08-06 §W3).** К намерениям добавлены две величины, обе строго
+опциональные (манифест без них даёт прежний `cset_` id и прежний вердикт):
+
+- `policy.perCase.<id>.sizeDeltaPx` — целое `0..64` CSS px, допуск |Δw|,|Δh| к `expectedGeometry`.
+  **Побеждает** профильный `policy.geometry.sizeDeltaPx`: профиль задаёт норму семьи, случай —
+  объявленное исключение.
+- `policy.perCase.<id>.overflowBudgetPx` — `{top?, right?, bottom?, left?}`, целые `0..256`, хотя бы
+  одна сторона; неназванная сторона — бюджет `0`. Overflow стороны в пределах бюджета **не
+  блокирует** вердикт; за бюджетом блокирует ровно как раньше. Класс вердикта в фактах и метриках
+  при этом сохраняется (`paint-overflow-clipped|not-clipped`): бюджет отвечает на вопрос «блокирует
+  ли», а не «было ли». Без свежих величин overflow (метрики доволновой формы) бюджет не снимает
+  блокировку — снять её можно только доказанно.
+- Оба поля вместе с `allowPaintOverflow` на одном случае: `allowPaintOverflow` + `overflowBudgetPx`
+  — `422 case_policy_conflict` («всё можно» и «можно вот столько» — разные намерения об одном
+  вердикте, выбирать за автора сервер не вправе). `sizeDeltaPx` совместим с чем угодно.
+- Слой обоих — **вердиктный**: их смена входит в `verdict_policy_json`/`verdict_policy_hash` и
+  пересчитывается по сохранённым метрикам (`recompute:policy`), без единого нового пикселя.
 
 **Гейт `geometry`** в профилях `default-v1`/`pixel-strict-v1` стал `required` (advisory-фаза v1
 закончилась). Его инвариант: `fail` возможен **только** с непустым `overflow.sources[]` либо с названным

@@ -108,10 +108,41 @@ export const caseSetCaptureSchema = z.strictObject({
  * (`maxRawDiffPct`); в W2 они уже входят в `case_policy_hash`, поэтому смена допуска
  * инвалидирует reuse ровно того случая, которого касается.
  */
+export const CASE_POLICY_MAX_SIZE_DELTA_PX = 64;
+export const CASE_POLICY_MAX_OVERFLOW_BUDGET_PX = 256;
+
+/**
+ * Побочный допуск paint-overflow (план 2026-08-06 §W3, строка 6 фидбэка): «столько краски за
+ * контуром по этой стороне — это дизайн». Стороны опциональны, но объявить нужно хотя бы одну:
+ * пустой объект — это не «бюджет ноль», а забытое намерение, и молча принимать его нельзя.
+ * Неназванная сторона имеет бюджет 0 — декларация точечна по построению.
+ */
+const overflowBudgetPx = z.strictObject({
+  top: z.number().int().min(0).max(CASE_POLICY_MAX_OVERFLOW_BUDGET_PX).optional(),
+  right: z.number().int().min(0).max(CASE_POLICY_MAX_OVERFLOW_BUDGET_PX).optional(),
+  bottom: z.number().int().min(0).max(CASE_POLICY_MAX_OVERFLOW_BUDGET_PX).optional(),
+  left: z.number().int().min(0).max(CASE_POLICY_MAX_OVERFLOW_BUDGET_PX).optional(),
+}).refine((value) => Object.keys(value).length > 0, "declare at least one side");
+
 export const caseSetCasePolicySchema = z.strictObject({
   maxRawDiffPct: z.number().min(0).max(100).optional(),
   allowPaintOverflow: z.boolean().optional(),
   expectedClip: z.boolean().optional(),
+  /**
+   * Per-case допуск |Δw|,|Δh| к `expectedGeometry`, CSS px (W3, строка 8 фидбэка). Побеждает
+   * профильный `policy.geometry.sizeDeltaPx`: профиль задаёт норму семьи, случай — исключение,
+   * и наоборот быть не может. Имя — по существующей семантике `sizeDeltaPx`, а не «tolerancePx»
+   * (последнее уже занято per-side смыслом в `policy.geometry.overflowPx`).
+   */
+  sizeDeltaPx: z.number().int().min(0).max(CASE_POLICY_MAX_SIZE_DELTA_PX).optional(),
+  /**
+   * Декларативный бюджет paint-overflow по сторонам (W3, строка 6). Overflow стороны в пределах
+   * бюджета не блокирует вердикт; за бюджетом — блокирует ровно как раньше. Вердикт-класс
+   * (`paint-overflow-*`) при этом **сохраняется в фактах**: бюджет — про «блокирует ли», а не про
+   * «было ли». Вместе с `allowPaintOverflow` не объявляется (422 `case_policy_conflict`): «всё
+   * можно» и «можно вот столько» — два разных намерения, и молча выбирать одно из них нельзя.
+   */
+  overflowBudgetPx: overflowBudgetPx.optional(),
 });
 
 /**

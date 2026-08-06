@@ -2671,6 +2671,28 @@ describe("author driver case-set validate (W6)", () => {
       .toContain("limited to 2 levels below the case");
   });
 
+  test("§W3: локальный валидатор принимает per-case допуски и отвергает объявленный конфликт", () => {
+    const withPolicy = (perCase: unknown) => validManifest({
+      dimensions: undefined,
+      cases: [{ id: "default", props: { state: "default" } }],
+      policy: { profile: "default-v1", perCase },
+    });
+    // Легальный манифест обязан уехать: непринятое драйвером новое поле — отказ до сети.
+    expect(caseSetManifestIssues(withPolicy({ default: { sizeDeltaPx: 8, overflowBudgetPx: { top: 4, left: 0 } } }))).toEqual([]);
+    // Конфликт полей диагностируется локально — round-trip ради 422 не нужен.
+    expect(caseSetManifestIssues(withPolicy({ default: { allowPaintOverflow: true, overflowBudgetPx: { top: 4 } } })).join("\n"))
+      .toContain("case_policy_conflict");
+    // Потолки, пустой бюджет, неизвестная сторона и неизвестное поле — те же отказы, что у схемы.
+    expect(caseSetManifestIssues(withPolicy({ default: { sizeDeltaPx: 65 } })).join("\n")).toContain("integer 0..64");
+    expect(caseSetManifestIssues(withPolicy({ default: { overflowBudgetPx: { top: 257 } } })).join("\n")).toContain("integer 0..256");
+    expect(caseSetManifestIssues(withPolicy({ default: { overflowBudgetPx: {} } })).join("\n")).toContain("at least one side");
+    expect(caseSetManifestIssues(withPolicy({ default: { overflowBudgetPx: { middle: 4 } } })).join("\n")).toContain('unknown side "middle"');
+    expect(caseSetManifestIssues(withPolicy({ default: { sizeDelta: 8 } })).join("\n")).toContain('unknown field "sizeDelta"');
+    // Лимиты сервера перекрывают дефолты драйвера и здесь.
+    expect(caseSetManifestIssues(withPolicy({ default: { sizeDeltaPx: 8 } }),
+      caseSetLimits({ limits: { caseSetMaxCaseSizeDeltaPx: 4 } })).join("\n")).toContain("integer 0..4");
+  });
+
   test("case-set validate takes exactly one positional and rejects the put-shaped call", () => {
     expect(parseArgs(["case-set", "validate", "matrix.json"]))
       .toMatchObject({ cmd: "case-set", args: ["validate", "matrix.json"] });

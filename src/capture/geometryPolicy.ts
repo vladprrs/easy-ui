@@ -52,8 +52,17 @@ export interface GeometryTolerancesInput {
   expectedGeometry?: { width: number; height: number } | null;
   /** Допуск на сторону, CSS px (профиль: `policy.geometry.overflowPx`). */
   tolerancePx?: number;
-  /** Допуск расхождения с `expectedGeometry`, CSS px (профиль: `policy.geometry.sizeDeltaPx`). */
+  /**
+   * Допуск расхождения с `expectedGeometry`, CSS px (профиль: `policy.geometry.sizeDeltaPx`,
+   * перекрывается per-case `policy.perCase.<id>.sizeDeltaPx` — план 2026-08-06 §W3).
+   */
   sizeTolerancePx?: number;
+  /**
+   * Per-case бюджет paint-overflow по сторонам, CSS px (`policy.perCase.<id>.overflowBudgetPx`).
+   * Неназванная сторона — бюджет 0. Влияет **только** на `geometryVerdictBlocks`: вердикт-класс
+   * остаётся честным (`paint-overflow-*`), меняется лишь то, блокирует ли он.
+   */
+  overflowBudgetPx?: { top?: number; right?: number; bottom?: number; left?: number };
 }
 
 export interface GeometryPolicyInput {
@@ -264,10 +273,36 @@ export function evaluateGeometryPolicy(input: GeometryPolicyInput): GeometryPoli
  * Считает ли политика такой вердикт продуктовым провалом при данных допусках. Вынесено сюда, а не
  * в гейт: «что означает `paint-overflow-clipped`» — свойство контракта геометрии, и unit-тест на
  * него не должен поднимать БД и капчур-сервис.
+ *
+ * Величины overflow приходят параметром (а не выводятся из вердикта), потому что per-side бюджет
+ * `overflowBudgetPx` иначе невыразим: класс вердикта знает «краска вышла», но не «на сколько и с
+ * какой стороны» (план 2026-08-06 §W3, точка 6).
  */
-export function geometryVerdictBlocks(verdict: GeometryPolicyVerdict, tolerances: GeometryTolerancesInput = {}): boolean {
+export function geometryVerdictBlocks(
+  verdict: GeometryPolicyVerdict,
+  overflow: GeometryOverflowSides | null | undefined,
+  tolerances: GeometryTolerancesInput = {},
+): boolean {
   if (verdict === "layout-overflow") return true;
-  if (verdict === "paint-overflow-not-clipped") return tolerances.allowPaintOverflow !== true;
-  if (verdict === "paint-overflow-clipped") return tolerances.allowPaintOverflow !== true && tolerances.expectedClip !== true;
-  return false;
+  if (verdict !== "paint-overflow-not-clipped" && verdict !== "paint-overflow-clipped") return false;
+  if (tolerances.allowPaintOverflow === true) return false;
+  if (verdict === "paint-overflow-clipped" && tolerances.expectedClip === true) return false;
+  return !withinOverflowBudget(overflow, tolerances.overflowBudgetPx);
+}
+
+/** Стороны наблюдённого overflow — ровно то, что бюджет обязан сравнивать (CSS px). */
+export type GeometryOverflowSides = { left: number; right: number; top: number; bottom: number };
+
+/**
+ * Уложился ли наблюдённый overflow в объявленный бюджет. Бюджета нет — не уложился (сегодняшнее
+ * поведение). Бюджет есть, а измерений нет — тоже **не** уложился: бюджет снимает блокировку
+ * только доказанно, догадка здесь была бы тихим пропуском провала.
+ */
+function withinOverflowBudget(
+  overflow: GeometryOverflowSides | null | undefined,
+  budget: GeometryTolerancesInput["overflowBudgetPx"],
+): boolean {
+  if (!budget) return false;
+  if (!overflow) return false;
+  return (["left", "right", "top", "bottom"] as const).every((side) => overflow[side] <= (budget[side] ?? 0));
 }

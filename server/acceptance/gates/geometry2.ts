@@ -17,7 +17,7 @@
  */
 import {
   evaluateGeometryPolicy, geometryVerdictBlocks,
-  type GeometryPolicyRect, type GeometryPolicyVerdict, type GeometryTolerancesInput,
+  type GeometryOverflowSides, type GeometryPolicyRect, type GeometryPolicyVerdict, type GeometryTolerancesInput,
 } from "../../../src/capture/geometryPolicy";
 import type { CaptureCode } from "../../../src/capture/failureCodes";
 import type { GeometryDetail } from "../../../src/capture/geometry.mjs";
@@ -42,15 +42,21 @@ export interface GeometryFacts {
   deviceScaleFactor: number;
 }
 
-/** Допуски случая: профиль даёт пороги в px, манифест (W2) — намерения `allowPaintOverflow`/`expectedClip`. */
+/**
+ * Допуски случая: профиль даёт пороги в px, манифест (W2) — намерения
+ * `allowPaintOverflow`/`expectedClip`, а с W3 (план 2026-08-06) ещё и числа: `sizeDeltaPx`
+ * **побеждает** профильный (случай — объявленное исключение из нормы семьи) и `overflowBudgetPx`
+ * задаёт per-side допуск краски.
+ */
 export function geometryTolerancesOf(ctx: GateContext): GeometryTolerancesInput {
   const perCase = ctx.case.casePolicy ?? {};
   return {
     tolerancePx: ctx.policy.geometry.overflowPx,
-    sizeTolerancePx: ctx.policy.geometry.sizeDeltaPx,
+    sizeTolerancePx: perCase.sizeDeltaPx ?? ctx.policy.geometry.sizeDeltaPx,
     expectedGeometry: ctx.case.expectedGeometry ?? null,
     ...(perCase.allowPaintOverflow === undefined ? {} : { allowPaintOverflow: perCase.allowPaintOverflow }),
     ...(perCase.expectedClip === undefined ? {} : { expectedClip: perCase.expectedClip }),
+    ...(perCase.overflowBudgetPx === undefined ? {} : { overflowBudgetPx: perCase.overflowBudgetPx }),
   };
 }
 
@@ -74,11 +80,12 @@ function rootDetail(geometry: Record<string, unknown>): GeometryDetail | null {
  */
 export function geometryCodes(
   verdict: GeometryPolicyVerdict,
+  overflow: GeometryOverflowSides | null,
   tolerances: GeometryTolerancesInput,
   reasons: readonly string[],
 ): CaptureCode[] {
   if (verdict === "clean" || verdict === "indeterminate") return [];
-  const blocks = geometryVerdictBlocks(verdict, tolerances);
+  const blocks = geometryVerdictBlocks(verdict, overflow, tolerances);
   return [{
     code: "surface_overflow",
     severity: blocks ? "error" : "warning",
@@ -156,7 +163,7 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
       artifacts.push({ name: "geometry.json", sha256: artifact.sha256, bytes: artifact.bytes });
 
       const named = policy.overflow.sources.length > 0 || policy.expectedGeometryDelta !== null;
-      const blocks = geometryVerdictBlocks(policy.policyVerdict, tolerances);
+      const blocks = geometryVerdictBlocks(policy.policyVerdict, policy.overflow, tolerances);
       // Инвариант: провал обязан назвать виновника. Иначе — `indeterminate` (D10 всё равно не даст
       // такому случаю `pass`, но вердикт не будет ложно обвинять компонент).
       const status = policy.policyVerdict === "indeterminate" ? "indeterminate"
@@ -177,7 +184,7 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
           policyVerdict: policy.policyVerdict,
           // R3: тот же вердикт типизированным кодом — `surface_overflow` (плюс коды readiness
           // кадра, если поверхность их принесла: paint-джоба несёт доказательство).
-          codes: [...geometryCodes(policy.policyVerdict, tolerances, policy.reasons), ...(capture.readiness?.readinessCodes ?? [])],
+          codes: [...geometryCodes(policy.policyVerdict, policy.overflow, tolerances, policy.reasons), ...(capture.readiness?.readinessCodes ?? [])],
           layoutBounds: record.layoutBounds,
           paintBounds: record.paintBounds,
           paintBoundsSource: record.paintBoundsSource,
@@ -192,6 +199,10 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
           effectSources: record.effectSources,
           allowPaintOverflow: tolerances.allowPaintOverflow ?? false,
           expectedClip: tolerances.expectedClip ?? false,
+          // W3: объявленные per-case числа едут в метрики рядом с намерениями — иначе по
+          // сохранённому рану нельзя сказать, почему overflow не заблокировал вердикт.
+          overflowBudgetPx: tolerances.overflowBudgetPx ?? null,
+          sizeTolerancePx: tolerances.sizeTolerancePx ?? null,
           retries: capture.retries,
         },
         ...(capture.quality.runtimeWarnings.length + capture.quality.infraWarnings.length > 0

@@ -88,7 +88,7 @@ const ink = (bounds: { x: number; y: number; width: number; height: number } | n
     clamped: { left: false, right: false, top: false, bottom: false, ...clamped },
   });
 
-async function context(options: { result?: ScreenshotResult; inkBbox?: GateContext["inkBbox"]; expectedGeometry?: { width: number; height: number }; casePolicy?: Record<string, boolean>; policyId?: keyof typeof ACCEPTANCE_POLICIES } = {}) {
+async function context(options: { result?: ScreenshotResult; inkBbox?: GateContext["inkBbox"]; expectedGeometry?: { width: number; height: number }; casePolicy?: Record<string, unknown>; policyId?: keyof typeof ACCEPTANCE_POLICIES } = {}) {
   const dir = await mkdtemp(resolve(process.cwd(), ".geo2-test-"));
   dirs.push(dir);
   const service = new PaintCapture(options.result ?? paintResult());
@@ -195,6 +195,50 @@ test("allowPaintOverflow и expectedClip переводят ожидаемую �
   const clippedResult = await geometry2Gate.run(clipped.ctx);
   expect(clippedResult.status).toBe("pass");
   expect(clippedResult.metrics!.policyVerdict).toBe("paint-overflow-clipped");
+});
+
+/**
+ * План 2026-08-06 §W3 (строка 6 фидбэка): бюджет — декларация «столько краски за контуром по этой
+ * стороне ожидаемо». Он снимает блокировку, но не переписывает факты: вердикт-класс и величины
+ * overflow в метриках остаются теми же, что и без бюджета.
+ */
+test("overflowBudgetPx: краска в пределах бюджета — pass с сохранённым вердикт-классом", async () => {
+  const within = await context({
+    result: paintResult({ effectSources: [BLUR] }),
+    inkBbox: ink({ x: 46.5, y: 47, width: 175, height: 130 }),
+    casePolicy: { overflowBudgetPx: { left: 18, right: 18, top: 18, bottom: 18 } },
+  });
+  const result = await geometry2Gate.run(within.ctx);
+  expect(result.status).toBe("pass");
+  expect(result.metrics).toMatchObject({ policyVerdict: "paint-overflow-not-clipped", allowPaintOverflow: false });
+  expect(result.metrics!.overflow).toMatchObject({ left: 17.5, right: 17.5, top: 17, bottom: 17 });
+  expect(result.metrics!.overflowBudgetPx).toEqual({ left: 18, right: 18, top: 18, bottom: 18 });
+  expect((result.metrics!.codes as { severity: string }[])[0]!.severity).toBe("warning");
+
+  // За бюджетом по одной стороне — блокирует ровно как раньше, с названным виновником.
+  const over = await context({
+    result: paintResult({ effectSources: [BLUR] }),
+    inkBbox: ink({ x: 46.5, y: 47, width: 175, height: 130 }),
+    casePolicy: { overflowBudgetPx: { left: 18, right: 4, top: 18, bottom: 18 } },
+  });
+  const overResult = await geometry2Gate.run(over.ctx);
+  expect(overResult.status).toBe("fail");
+  expect((overResult.metrics!.codes as { severity: string }[])[0]!.severity).toBe("error");
+});
+
+test("per-case sizeDeltaPx побеждает профильный допуск габаритов", async () => {
+  // Профиль default-v1 терпит 2 px; layout 140 против заявленных 132 — это 8 px расхождения.
+  const strict = await context({ expectedGeometry: { width: 132, height: 96 } });
+  expect((await geometry2Gate.run(strict.ctx)).status).toBe("fail");
+
+  const tolerant = await context({
+    expectedGeometry: { width: 132, height: 96 },
+    casePolicy: { sizeDeltaPx: 8 },
+  });
+  const result = await geometry2Gate.run(tolerant.ctx);
+  expect(result.status).toBe("pass");
+  expect(result.metrics).toMatchObject({ policyVerdict: "clean", sizeTolerancePx: 8 });
+  expect(result.metrics!.expectedGeometryDelta).toBeNull();
 });
 
 test("expectedGeometry mismatch is a named failure even without any effect source", async () => {

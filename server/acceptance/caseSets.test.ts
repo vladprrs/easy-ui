@@ -185,6 +185,83 @@ test("per-case политика на алиасе отвергается: у а�
   db.close();
 });
 
+// --------------------------------------------- per-case допуски W3 (план 2026-08-06)
+
+test("W3: sizeDeltaPx и overflowBudgetPx принимаются, а их конфликт — 422 case_policy_conflict", () => {
+  const db = dbWithAsset();
+  const ok = validateManifest(db, "yp-badge", manifest({
+    policy: { perCase: { default: { sizeDeltaPx: 8, overflowBudgetPx: { top: 4, bottom: 12 } } } },
+  } as unknown as Partial<CaseSetManifest>));
+  expect(ok.manifest.policy?.perCase?.default).toEqual({ sizeDeltaPx: 8, overflowBudgetPx: { top: 4, bottom: 12 } });
+
+  // Бланкетное разрешение и per-side бюджет — два разных намерения об одном вердикте: выбрать
+  // за автора сервер не вправе, поэтому отказ, а не «бюджет побеждает».
+  fails(() => validateManifest(db, "yp-badge", manifest({
+    policy: { perCase: { default: { allowPaintOverflow: true, overflowBudgetPx: { top: 4 } } } },
+  } as unknown as Partial<CaseSetManifest>)), 422, "case_policy_conflict");
+  // По отдельности оба легальны, в том числе `allowPaintOverflow: false`… — конфликт объявлен по
+  // присутствию поля, а не по его значению (объявленное «нельзя» тоже спорит с бюджетом).
+  validateManifest(db, "yp-badge", manifest({
+    policy: { perCase: { default: { allowPaintOverflow: true, sizeDeltaPx: 8 } } },
+  } as unknown as Partial<CaseSetManifest>));
+  fails(() => validateManifest(db, "yp-badge", manifest({
+    policy: { perCase: { default: { allowPaintOverflow: false, overflowBudgetPx: { top: 4 } } } },
+  } as unknown as Partial<CaseSetManifest>)), 422, "case_policy_conflict");
+
+  // Схема: потолки и «хотя бы одна сторона» — отказ схемы, а не тихая нормализация.
+  for (const perCase of [
+    { default: { sizeDeltaPx: 65 } }, { default: { sizeDeltaPx: 1.5 } },
+    { default: { overflowBudgetPx: {} } }, { default: { overflowBudgetPx: { top: 257 } } },
+    { default: { overflowBudgetPx: { middle: 4 } } },
+  ]) {
+    fails(() => validateManifest(db, "yp-badge", manifest({ policy: { perCase } } as unknown as Partial<CaseSetManifest>)),
+      422, "validation_failed");
+  }
+  db.close();
+});
+
+test("W3: новые поля живут в вердиктном слое — кадр и сравнение случая не сдвигаются", () => {
+  const db = dbWithAsset();
+  const base = manifest({
+    cases: [{ id: "default", props: { tone: "neutral" }, referenceAssetId: ASSET, expectedGeometry: { width: 140, height: 96 } }],
+  } as unknown as Partial<CaseSetManifest>);
+  const withPolicy = manifest({
+    cases: [{ id: "default", props: { tone: "neutral" }, referenceAssetId: ASSET, expectedGeometry: { width: 140, height: 96 } }],
+    policy: { perCase: { default: { sizeDeltaPx: 8, overflowBudgetPx: { top: 4 } } } },
+  } as unknown as Partial<CaseSetManifest>);
+
+  const fingerprints = (source: Record<string, unknown>) => {
+    const [item] = buildCasesFromManifest(validateManifest(db, "yp-badge", source).manifest);
+    return caseFingerprintsOf({
+      candidateId: `cand_${"0".repeat(64)}`,
+      surface: surfaceOfManifest(validateManifest(db, "yp-badge", source).manifest),
+      policy: ACCEPTANCE_POLICIES["default-v1"],
+      case: item!,
+    });
+  };
+  const before = fingerprints(base);
+  const after = fingerprints(withPolicy);
+  // Кадр и сравнение обязаны совпасть байт-в-байт: допуски не двигают ни съёмку, ни канву.
+  expect(after.frame).toBe(before.frame);
+  expect(after.comparison).toBe(before.comparison);
+  // Вердиктный слой — единственное, что разъехалось, и он же двигает итоговый отпечаток.
+  expect(after.verdictPolicy).not.toBe(before.verdictPolicy);
+  expect(after.case).not.toBe(before.case);
+  db.close();
+});
+
+test("W3: манифест без новых полей даёт прежний cset_ id и прежний case_policy_hash", () => {
+  // Регресс контентной адресации: поля строго `.optional()` без `.default()`, поэтому существующие
+  // манифесты обязаны адресоваться теми же байтами, что и до волны.
+  const db = dbWithAsset();
+  const source = manifest({ policy: { perCase: { default: { maxRawDiffPct: 0.5 } } } } as unknown as Partial<CaseSetManifest>);
+  const result = validateManifest(db, "yp-badge", source);
+  // Значения сняты на коммите до волны (ff97ae6) — это и есть смысл регресса.
+  expect(result.caseSetId).toBe("cset_cc83bec97d9df4eff6ba762771067407a87df77f7d0795f34885e4c96029d2c0");
+  expect(casePolicyHashOf(result.manifest, "default")).toBe("aef33dbe0debf46e8007d62c9e9cc258d2d9613cb7135508d637b877912832c1");
+  db.close();
+});
+
 test("crop lineage rectangles must be non-negative with a positive size", () => {
   const db = dbWithAsset();
   const ok = validateManifest(db, "yp-badge", manifest({

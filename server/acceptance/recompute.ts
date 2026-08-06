@@ -52,6 +52,7 @@ export type VerdictPolicyField =
   | "policyProfileId" | "gates" | "requireVisual" | "allowExceptions" | "maxRawDiffPct"
   | "geometry.overflowPx" | "geometry.sizeDeltaPx" | "geometry.offsetPx"
   | "perCase.maxRawDiffPct" | "perCase.allowPaintOverflow" | "perCase.expectedClip"
+  | "perCase.sizeDeltaPx" | "perCase.overflowBudgetPx"
   | "expectedGeometry" | "declaredPolicyProfile";
 
 /**
@@ -75,6 +76,10 @@ export const GATES_BY_POLICY_FIELD: Record<VerdictPolicyField, readonly GateName
   "perCase.maxRawDiffPct": ["visual"],
   "perCase.allowPaintOverflow": ["geometry"],
   "perCase.expectedClip": ["geometry"],
+  // W3 (план 2026-08-06): оба per-case числа — чистый вердиктный слой. Ни съёмка, ни сравнение от
+  // них не зависят, поэтому смена бюджета пересчитывается по сохранённым метрикам.
+  "perCase.sizeDeltaPx": ["geometry"],
+  "perCase.overflowBudgetPx": ["geometry"],
   expectedGeometry: ["geometry"],
   declaredPolicyProfile: [],
 };
@@ -101,6 +106,8 @@ export function verdictPolicyDelta(oldPolicy: VerdictPolicySnapshot, newPolicy: 
   check("perCase.maxRawDiffPct", oldPolicy.perCase?.maxRawDiffPct, newPolicy.perCase?.maxRawDiffPct);
   check("perCase.allowPaintOverflow", oldPolicy.perCase?.allowPaintOverflow, newPolicy.perCase?.allowPaintOverflow);
   check("perCase.expectedClip", oldPolicy.perCase?.expectedClip, newPolicy.perCase?.expectedClip);
+  check("perCase.sizeDeltaPx", oldPolicy.perCase?.sizeDeltaPx, newPolicy.perCase?.sizeDeltaPx);
+  check("perCase.overflowBudgetPx", oldPolicy.perCase?.overflowBudgetPx, newPolicy.perCase?.overflowBudgetPx);
   check("expectedGeometry", oldPolicy.expectedGeometry, newPolicy.expectedGeometry);
   check("declaredPolicyProfile", oldPolicy.declaredPolicyProfile, newPolicy.declaredPolicyProfile);
   return delta;
@@ -226,10 +233,12 @@ function recomputeGeometry(gate: GateResult, newPolicy: VerdictPolicySnapshot): 
     : [];
   const tolerances: GeometryTolerancesInput = {
     tolerancePx: newPolicy.geometry.overflowPx,
-    sizeTolerancePx: newPolicy.geometry.sizeDeltaPx,
+    // Per-case `sizeDeltaPx` побеждает профильный — тот же порядок, что в `geometryTolerancesOf`.
+    sizeTolerancePx: newPolicy.perCase?.sizeDeltaPx ?? newPolicy.geometry.sizeDeltaPx,
     expectedGeometry: newPolicy.expectedGeometry,
     ...(newPolicy.perCase?.allowPaintOverflow === undefined ? {} : { allowPaintOverflow: newPolicy.perCase.allowPaintOverflow }),
     ...(newPolicy.perCase?.expectedClip === undefined ? {} : { expectedClip: newPolicy.perCase.expectedClip }),
+    ...(newPolicy.perCase?.overflowBudgetPx === undefined ? {} : { overflowBudgetPx: newPolicy.perCase.overflowBudgetPx }),
   };
   const policy = evaluateGeometryPolicy({
     layoutBounds,
@@ -242,7 +251,7 @@ function recomputeGeometry(gate: GateResult, newPolicy: VerdictPolicySnapshot): 
   });
 
   const named = policy.overflow.sources.length > 0 || policy.expectedGeometryDelta !== null;
-  const blocks = geometryVerdictBlocks(policy.policyVerdict, tolerances);
+  const blocks = geometryVerdictBlocks(policy.policyVerdict, policy.overflow, tolerances);
   // Тот же порядок решений, что в `gates/geometry2.ts`: провал обязан назвать виновника.
   const status = policy.policyVerdict === "indeterminate" ? "indeterminate" as const
     : !blocks ? "pass" as const
@@ -262,12 +271,14 @@ function recomputeGeometry(gate: GateResult, newPolicy: VerdictPolicySnapshot): 
     metrics: {
       ...metrics,
       policyVerdict: policy.policyVerdict,
-      codes: [...geometryCodes(policy.policyVerdict, tolerances, policy.reasons), ...carriedCodes],
+      codes: [...geometryCodes(policy.policyVerdict, policy.overflow, tolerances, policy.reasons), ...carriedCodes],
       overflow: policy.overflow,
       expectedGeometryDelta: policy.expectedGeometryDelta,
       clippedBy: policy.clippedBy,
       allowPaintOverflow: tolerances.allowPaintOverflow ?? false,
       expectedClip: tolerances.expectedClip ?? false,
+      overflowBudgetPx: tolerances.overflowBudgetPx ?? null,
+      sizeTolerancePx: tolerances.sizeTolerancePx ?? null,
     },
     ...(detail === undefined ? {} : { detail }),
   };

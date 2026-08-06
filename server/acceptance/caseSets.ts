@@ -677,11 +677,19 @@ export function validateManifest(db: Database, componentId: string, raw: unknown
   // вердикту цели (D10), своей съёмки и своего сравнения у него нет. Допуск, адресованный алиасу,
   // не может быть исполнен ничем — это не «мягкое игнорирование», а объявленное намерение, которое
   // никогда не сбудется, поэтому отказ, а не warning.
-  for (const caseId of Object.keys(manifest.policy?.perCase ?? {})) {
+  for (const [caseId, casePolicy] of Object.entries(manifest.policy?.perCase ?? {})) {
     const target = byId.get(caseId);
     if (target?.aliasOf !== undefined) {
       throw new ApiError(422, "per_case_policy_on_alias",
         `Case ${caseId} is an alias of ${target.aliasOf}; per-case policy must be declared on the alias target, not on the alias`);
+    }
+    // W3 (план 2026-08-06): «вся краска за контуром ожидаема» и «ожидаемо вот столько» — разные
+    // намерения об одном вердикте. Молча выбрать одно из них сервер не вправе: бюджет, тихо
+    // перекрытый `allowPaintOverflow: true`, никогда бы не сработал, и автор бы об этом не узнал.
+    if (casePolicy.allowPaintOverflow !== undefined && casePolicy.overflowBudgetPx !== undefined) {
+      throw new ApiError(422, "case_policy_conflict",
+        `Case ${caseId} declares both allowPaintOverflow and overflowBudgetPx; keep the blanket allowance or the per-side budget, not both`,
+        { issues: [issue(["policy", "perCase", caseId], "allowPaintOverflow and overflowBudgetPx are mutually exclusive")] });
     }
   }
 

@@ -198,6 +198,61 @@ test("expectedGeometry пересчитывает геометрию: расхо
   expect(geometry.metrics!.expectedGeometryDelta).toMatchObject({ widthDelta: -60 });
 });
 
+/**
+ * План 2026-08-06 §W3: per-case бюджет overflow — **вердиктный** слой. Его смена обязана
+ * пересчитываться по сохранённым метрикам (кадр и дифф уже сняты), а не уводить в пересъёмку.
+ */
+test("смена overflowBudgetPx флипает вердикт геометрии без единого нового пикселя", () => {
+  // Гейт снят строгим профилем: 2 px краски слева за контуром названы и заблокировали случай.
+  const strict: AcceptancePolicy = { ...DEFAULT, geometry: { overflowPx: 0, sizeDeltaPx: 0, offsetPx: 0 } };
+  const failed = reevaluateGates([...structuralGates(), geometryGateResult()], snapshot(DEFAULT), snapshot(strict));
+  expect(failed.gates.find((gate) => gate.gate === "geometry")!.status).toBe("fail");
+
+  const before = verdictPolicySnapshotOf(strict, CASE);
+  const after = verdictPolicySnapshotOf(strict, { ...CASE, casePolicy: { overflowBudgetPx: { left: 4, right: 4 } } });
+  expect(verdictPolicyDelta(before, after)).toEqual(["perCase.overflowBudgetPx"]);
+  expect(GATES_BY_POLICY_FIELD["perCase.overflowBudgetPx"]).toEqual(["geometry"]);
+
+  const budgeted = reevaluateGates(failed.gates, before, after);
+  expect(budgeted.reevaluable).toBe(true);
+  expect(budgeted.recomputedGates).toEqual(["geometry"]);
+  const geometry = budgeted.gates.find((gate) => gate.gate === "geometry")!;
+  expect(geometry.status).toBe("pass");
+  // Факты не переписаны: вердикт-класс и величины overflow остались честными.
+  expect(geometry.metrics!.policyVerdict).toBe("paint-overflow-not-clipped");
+  expect(geometry.metrics!.overflow).toMatchObject({ left: 2, right: 2, top: 0, bottom: 0 });
+  expect(geometry.metrics!.overflowBudgetPx).toEqual({ left: 4, right: 4 });
+  expect((geometry.metrics!.codes as { severity: string }[])[0]!.severity).toBe("warning");
+
+  // Бюджет уже, чем наблюдённая краска, — блокировка возвращается тем же пересчётом.
+  const tight = verdictPolicySnapshotOf(strict, { ...CASE, casePolicy: { overflowBudgetPx: { left: 1, right: 4 } } });
+  const back = reevaluateGates(budgeted.gates, after, tight);
+  expect(back.gates.find((gate) => gate.gate === "geometry")!.status).toBe("fail");
+});
+
+test("per-case sizeDeltaPx побеждает профильный и пересчитывается тем же контуром", () => {
+  // Краска ровно по контуру: предмет теста — только расхождение с `expectedGeometry`.
+  const clean = geometryGateResult();
+  clean.metrics!.paintBounds = { x: 64, y: 64, width: 140, height: 96 };
+  clean.metrics!.effectSources = [];
+  const gates = [...structuralGates(), clean];
+  const before = verdictPolicySnapshotOf(DEFAULT, { ...CASE, expectedGeometry: { width: 200, height: 96 } });
+  const after = verdictPolicySnapshotOf(DEFAULT, {
+    ...CASE, expectedGeometry: { width: 200, height: 96 }, casePolicy: { sizeDeltaPx: 64 },
+  });
+  expect(verdictPolicyDelta(before, after)).toEqual(["perCase.sizeDeltaPx"]);
+  expect(GATES_BY_POLICY_FIELD["perCase.sizeDeltaPx"]).toEqual(["geometry"]);
+
+  // Профиль терпит 2 px, расхождение 60 px — провал; per-case 64 px делает его объявленной нормой.
+  expect(reevaluateGates(gates, snapshot(DEFAULT), before).gates.find((gate) => gate.gate === "geometry")!.status).toBe("fail");
+  const tolerant = reevaluateGates(gates, before, after);
+  expect(tolerant.reevaluable).toBe(true);
+  const geometry = tolerant.gates.find((gate) => gate.gate === "geometry")!;
+  expect(geometry.status).toBe("pass");
+  expect(geometry.metrics!.expectedGeometryDelta).toBeNull();
+  expect(geometry.metrics!.sizeTolerancePx).toBe(64);
+});
+
 test("метрики доволновой формы пересчитать нельзя — отказ вместо выдумки", () => {
   const gates: GateResult[] = [{ gate: "geometry", status: "pass", metrics: { semantics: "v1-union" } }];
   const result = reevaluateGates(gates, snapshot(DEFAULT), snapshot({ ...DEFAULT, geometry: { overflowPx: 0, sizeDeltaPx: 0, offsetPx: 0 } }));
