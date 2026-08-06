@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { createPlayerRuntime } from "../runtime";
 import { HostStageSurface } from "./HostStageSurface";
 import { Overlay } from "./Overlay";
+import { overlayPlacements, type OverlayProps } from "./overlay.definition";
+import type { SpaceToken } from "../../designSystems/types";
 import { COMPOSITION_TYPE, extractionPrimitiveNames, FLOW_ROOT_TYPE, hostContentTypeNames, hostPrimitiveDefinitions, hostPrimitiveNames, SLOT_TYPE } from ".";
 
 const noopDeps = { navigate() {}, back() {}, openUrl() {}, restart() {} };
@@ -16,7 +18,7 @@ describe("Overlay host primitive", () => {
     // Волна 5 добавила композиционные примитивы: они раскрываются до рендера, но имена зарезервированы.
     expect(hostPrimitiveNames).toEqual(new Set(["Overlay", "Image", "Hotspot", COMPOSITION_TYPE, SLOT_TYPE, FLOW_ROOT_TYPE]));
     expect(hostPrimitiveDefinitions.Overlay).toMatchObject({ slots: ["default"], atomicLevel: "atom", layoutNeutral: true });
-    expect(hostPrimitiveDefinitions.Overlay.props.parse({ placement: "top" })).toEqual({ placement: "top", inset: "md", scrim: false });
+    expect(hostPrimitiveDefinitions.Overlay.props.parse({ placement: "top" })).toEqual({ placement: "top", inset: "md", scrim: false, scroll: false });
     expect(createPlayerRuntime(noopDeps, undefined, "shadcn").registry.Overlay).toBeDefined();
     expect(createPlayerRuntime(noopDeps, undefined, "yandex-pay").registry.Overlay).toBeDefined();
   });
@@ -28,7 +30,7 @@ describe("Overlay host primitive", () => {
     stageHostRef.current = host;
     const view = render(
       <HostStageSurface stageHostRef={stageHostRef}>
-        <Overlay props={{ placement: "top", inset: "md", scrim: true }} emit={() => {}} on={eventHandle as never}>
+        <Overlay props={{ placement: "top", inset: "md", scrim: true, scroll: false }} emit={() => {}} on={eventHandle as never}>
           <button type="button">Action</button>
         </Overlay>
       </HostStageSurface>,
@@ -53,8 +55,8 @@ describe("Overlay host primitive", () => {
     const stageHostRef = createRef<HTMLElement>();
     stageHostRef.current = host;
     const view = render(<HostStageSurface stageHostRef={stageHostRef}>
-      <Overlay props={{ placement: "center", inset: "sm", scrim: false }} emit={() => {}} on={eventHandle as never}>First</Overlay>
-      <Overlay props={{ placement: "bottom-right", inset: "lg", scrim: false }} emit={() => {}} on={eventHandle as never}>Second</Overlay>
+      <Overlay props={{ placement: "center", inset: "sm", scrim: false, scroll: false }} emit={() => {}} on={eventHandle as never}>First</Overlay>
+      <Overlay props={{ placement: "bottom-right", inset: "lg", scrim: false, scroll: false }} emit={() => {}} on={eventHandle as never}>Second</Overlay>
     </HostStageSurface>);
     const overlays = host.querySelectorAll<HTMLElement>("[data-eui-host-primitive='Overlay']");
     expect(overlays).toHaveLength(2);
@@ -64,5 +66,59 @@ describe("Overlay host primitive", () => {
     expect(host.querySelector("[data-eui-overlay-scrim]")).toBeNull();
     view.unmount();
     host.remove();
+  });
+
+  // --- W5 T5a (план 2026-08-06): высотный инвариант и владение прокруткой --------------------
+
+  const renderOverlay = (props: { placement: OverlayProps["placement"]; inset?: SpaceToken; scroll?: boolean }) => {
+    const host = document.createElement("section");
+    document.body.append(host);
+    const stageHostRef = createRef<HTMLElement>();
+    stageHostRef.current = host;
+    const view = render(
+      <HostStageSurface stageHostRef={stageHostRef}>
+        <Overlay props={{ placement: props.placement, inset: props.inset ?? "md", scrim: false, scroll: props.scroll ?? false }} emit={() => {}} on={eventHandle as never}>
+          <p>Sheet</p>
+        </Overlay>
+      </HostStageSurface>,
+    );
+    const content = host.querySelector<HTMLElement>("[data-eui-overlay-content]")!;
+    return { content, dispose: () => { view.unmount(); host.remove(); } };
+  };
+
+  it("каждое из семи placement ограничено высотой сцены минус вертикальные insets", () => {
+    // Строка 10 фидбэка: до волны контент выше вьюпорта вытекал за сцену, и приёмка мерила ленту.
+    for (const placement of overlayPlacements) {
+      const { content, dispose } = renderOverlay({ placement, inset: "lg" });
+      try {
+        expect(content.style.maxHeight, placement).toBe("calc(100% - var(--eui-space-lg, 16px) - var(--eui-space-lg, 16px))");
+      } finally { dispose(); }
+    }
+  });
+
+  it("scroll:true отдаёт прокрутку контенту оверлея, scroll:false клипает его", () => {
+    const scrolling = renderOverlay({ placement: "bottom", scroll: true });
+    try {
+      expect(scrolling.content.style.overflowY).toBe("auto");
+      expect(scrolling.content.style.overscrollBehavior).toBe("contain");
+      expect(scrolling.content.style.overflow).toBe("");
+    } finally { scrolling.dispose(); }
+    const clipping = renderOverlay({ placement: "bottom", scroll: false });
+    try {
+      expect(clipping.content.style.overflow).toBe("hidden");
+      expect(clipping.content.style.overscrollBehavior).toBe("");
+    } finally { clipping.dispose(); }
+  });
+
+  it("data-eui-overlay-content — стабильный контракт измерения на каждом placement", () => {
+    // По этому атрибуту geometry-сбор находит layout-корень оверлея (§W5 T5c.3): его пропажа
+    // превратила бы измерение модалки в измерение пустой сцены — молча, без единого отказа.
+    for (const placement of overlayPlacements) {
+      const { content, dispose } = renderOverlay({ placement });
+      try {
+        expect(content.getAttribute("data-eui-overlay-content"), placement).toBe("");
+        expect(content.parentElement?.getAttribute("data-eui-host-primitive")).toBe("Overlay");
+      } finally { dispose(); }
+    }
   });
 });

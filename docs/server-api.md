@@ -557,7 +557,7 @@ CLI: `driver.mjs impact <id> --candidate <candidateId> --baseline-run <runId>` (
 
 | Слой | Что в нём | Что означает совпадение |
 |---|---|---|
-| `frameFingerprint` | `candidateId`, `caseKey`, `propsHash`, поверхность (viewport/dsf/theme), `readinessPolicyHash`, `rendererFingerprint`, `slotBindings` — разрешённые дети слотов `[{slot,index,componentId,version,bundleHash,propsHash}]` в порядке рендера (алго 7) | пересъёмка даст те же пиксели ⇒ кадр из CAS можно переиспользовать |
+| `frameFingerprint` | `candidateId`, `caseKey`, `propsHash`, поверхность (viewport/dsf/theme + `mode` с W5 2026-08-06 — ключ появляется только у `capture.surface: "viewport"`), `readinessPolicyHash`, `rendererFingerprint`, `slotBindings` — разрешённые дети слотов `[{slot,index,componentId,version,bundleHash,propsHash}]` в порядке рендера (алго 7) | пересъёмка даст те же пиксели ⇒ кадр из CAS можно переиспользовать |
 | `comparisonFingerprint` | `referenceAssetId`, `cropLineage` (вкл. `sourceSurface`), `expectedGeometry`, `maxDimensionDeltaPx`, параметры канвы (`paintMargin`, `dsf`); `referenceSurface`/`referencePlacement` (W5); `comparison.matte` и `textAaBudget` (W4 2026-08-06) | метрики расхождения остаются в силе ⇒ пересчёт по ним законен |
 | `verdictPolicyHash` | профиль и его пороги (`maxRawDiffPct`, geometry-допуски), `perCase`-оверрайды, `requireVisual`, состав и роли гейтов, `allowPaintOverflow`/`expectedClip`/`sizeDeltaPx`/`overflowBudgetPx`, `expectedGeometry`, `policy.profile` манифеста | решение по тем же метрикам будет тем же |
 
@@ -626,7 +626,8 @@ Examples-путь больше не хэширует заглушку `CASE_POLI
   "manifestVersion": 1,
   "componentId": "pay-payment-card",
   "source": { "fileKey": "…", "componentSetNodeId": "54863:9518" },   // опционально
-  "capture": { "viewport": {"width": 390, "height": 844}, "deviceScaleFactor": 2, "theme": "light" },
+  "capture": { "viewport": {"width": 390, "height": 844}, "deviceScaleFactor": 2, "theme": "light",
+               "surface": "viewport" },                                // W5: "hug" (дефолт) | "viewport"
   "dimensions": { "family": ["Product", "Split"], "state": ["Default", "Disabled"] },  // опционально
   "requireVisual": false,                                              // намерение для гейта visual (W5a)
   "policy": { "profile": "pixel-strict-v1", "perCase": {
@@ -677,6 +678,42 @@ Examples-путь больше не хэширует заглушку `CASE_POLI
 опубликованных манифестов. Следствие-инвариант: манифест, который новых полей не объявляет,
 сравнивается **побайтово так же, как до W5** (паддинг — только при `content-hug`, crop — как
 сегодня), и его `cset_` не двигается.
+
+#### Поверхность съёмки `capture.surface` (волна 2026-08-06 §W5)
+
+`capture.surface` — `"hug"` (дефолт **потребителя**; поля в манифесте нет — поверхность обжимает
+компонент, ровно как до волны) либо `"viewport"`. На viewport-поверхности внутрь padded
+`#eui-capture-surface` добавляется узел точного размера `capture.viewport` (`position: relative`), и
+именно он становится stage host'ом (`HostStageSurface`): host-примитив `Overlay` наконец получает
+якорь в компонентном капчуре — без провайдера он возвращал `null`, то есть шит/модалка не снимались
+вовсе.
+
+**Известное ограничение.** Из TSX опубликованного компонента `Overlay` пока недостижим: ABI
+(`easy-ui/runtime`) экспортирует `token`/`space`/`color`/`Icon`, а имя `Overlay` резервировано для
+элементов **документа**, которых в компонентной приёмке нет. Компонент, воспроизводящий DOM-контракт
+оверлея (`[data-eui-overlay-content]` внутри stage host'а), измеряется этой веткой полностью; путь
+«custom TSX → host `Overlay`» требует расширения ABI и в эту волну не входит.
+
+| Что меняется | Значение |
+|---|---|
+| Кадр | `#eui-capture-surface` остаётся **внешним** padded-элементом: кадр = `(viewport + 2×margin) × dsf` |
+| `paintMargin` по умолчанию | **16** CSS px (не 64: кадр вьюпорта уже велик, а 64 по кругу — это ещё ~2.9× его пикселей в дифф и CAS) |
+| Layout-корень геометрии | единственный `[data-eui-overlay-content]` в поверхности; два оверлея (или ни одного) — корень остаётся маркерным |
+| Прокрутка оверлея | `overflow: auto|scroll` **у самого overlay-корня** режет его потомков: шит с длинной лентой внутри меряется своим боксом, а не лентой. Общая семантика измерения при этом не меняется — вне overlay-ветки `auto`/`scroll` клипом по-прежнему не считаются, поэтому существующие кадры остаются байт-в-байт прежними |
+| Канва сравнения | `referenceSurface: "paint"` → `padTo = (viewport + 2×margin) × dsf`, `placement = margin × dsf`; `referenceSurface: "content-hug"` → тот же `padTo`, а `placement = layoutBounds.{x,y} × dsf` (координаты уже отсчитаны от внешней поверхности — маргин в них учтён, прибавлять второй раз нельзя) |
+| Слой инвалидации | `frame` (`surface.mode`): hug-кадр не переиспользуется для viewport-случая; отсутствие поля (и явный `"hug"`) оставляет все существующие отпечатки байт-в-байт прежними |
+
+**Геометрия и краска позади оверлея.** Всё, что нарисовано **за** контентом оверлея — scrim, фон
+сцены, — лежит вне бокса контента и честно считается paint-overflow. Поэтому geometry-кейсы
+viewport-поверхности снимаются **пустой сценой** (только оверлей, `scrim: false`) либо объявляют
+`allowPaintOverflow`/`policy.perCase.overflowBudgetPx`. Варианты со scrim — предмет визуальных
+кейсов, а не геометрических.
+
+**Re-diff.** Для `content-hug` эталона на viewport-поверхности офсет берётся из **измеренных**
+фактов кадра; на re-diff без свежей геометрии его взять неоткуда (`expectedGeometry` несёт только
+`width`/`height`), и случай честно уходит в `indeterminate` с
+`reason: "reference_canvas_unresolved"`. Это ожидаемо чаще, чем у hug-кейсов: пересъёмка
+(`--recapture`) или явный `referencePlacement` — штатные ответы.
 
 #### Matte сравнения и пресет живого текста (волна 2026-08-06 §W4)
 

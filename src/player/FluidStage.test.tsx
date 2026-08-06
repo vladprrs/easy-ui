@@ -24,7 +24,7 @@ class ResizeObserverMock {
 
 const eventHandle = () => ({ shouldPreventDefault: false, emit() {} });
 const overlay = <Overlay
-  props={{ placement: "top-left", inset: "md", scrim: false }}
+  props={{ placement: "top-left", inset: "md", scrim: false, scroll: false }}
   emit={() => {}}
   on={eventHandle as never}
 >Overlay copy</Overlay>;

@@ -36,6 +36,7 @@ import type { ReferenceSurface, TextAaBudget } from "../../../src/acceptance/cas
 import { CAUSE_THRESHOLDS } from "../../visual/causes";
 import { cropIsApplied } from "../caseSets";
 import { putArtifact, readArtifact } from "../evidence";
+import { VIEWPORT_SURFACE_PAINT_MARGIN_PX } from "../../screenshot/service";
 import { COMPARISON_PAINT_MARGIN_PX } from "../ids";
 import { geometryFactsKey, paintShaKey, type GeometryFacts } from "./geometry2";
 import type { Gate, GateContext, GateResult } from "./types";
@@ -152,8 +153,16 @@ export interface ReferenceCanvas {
   marginPx: number;
   deviceScaleFactor: number;
   layoutRoot: { width: number; height: number };
-  layoutRootSource: "expectedGeometry" | "layoutBounds";
+  layoutRootSource: "expectedGeometry" | "layoutBounds" | "viewport";
 }
+
+/**
+ * Нужна ли этому случаю каноническая канва (§W5 T5c.5). Две причины, а не одна: content-hug эталон
+ * (эталон — бокс контента, кадр — padded поверхность) **и** viewport-поверхность (кадр — вьюпорт с
+ * полем, и даже paint-эталон вьюпорта ложится в него не в нулевой офсет).
+ */
+export const needsReferenceCanvas = (ctx: GateContext): boolean =>
+  referenceSurfaceOf(ctx) === "content-hug" || ctx.surface.mode === "viewport";
 
 /**
  * Каноническая канва сравнения для content-hug эталона (§W5).
@@ -170,6 +179,7 @@ export interface ReferenceCanvas {
 export function referenceCanvasOf(ctx: GateContext): ReferenceCanvas | null {
   const facts = ctx.shared.get(geometryFactsKey(ctx.case.caseId)) as GeometryFacts | undefined;
   const dsf = ctx.surface.dsf;
+  if (ctx.surface.mode === "viewport") return viewportReferenceCanvasOf(ctx, facts, dsf);
   const marginPx = facts?.paintMargin ?? COMPARISON_PAINT_MARGIN_PX;
   const expected = ctx.case.expectedGeometry ?? null;
   const layoutRoot = expected ?? facts?.layoutBounds ?? null;
@@ -184,6 +194,50 @@ export function referenceCanvasOf(ctx: GateContext): ReferenceCanvas | null {
     deviceScaleFactor: dsf,
     layoutRoot: { width: layoutRoot.width, height: layoutRoot.height },
     layoutRootSource: expected ? "expectedGeometry" : "layoutBounds",
+  };
+}
+
+/**
+ * Канва viewport-поверхности (§W5 T5c.5) — **две ветки по `referenceSurface`**, потому что кадр у
+ * них один и тот же (вьюпорт + поле), а эталоны разные:
+ *
+ * - `"paint"` — эталон экспортирован целым вьюпортом: канва `(viewport + 2×margin) × dsf`, эталон
+ *   кладётся в `margin × dsf`, то есть ровно туда, где вьюпорт лежит в кадре;
+ * - `"content-hug"` — эталон это бокс контента оверлея: канва та же, но офсет берётся из
+ *   **измеренного** `layoutBounds.{x,y}`. Эти координаты уже отсчитаны от внешнего
+ *   `#eui-capture-surface` (`boxOf` в `geometry.mjs`), то есть маргин в них уже есть — прибавлять
+ *   его второй раз значило бы сдвинуть эталон на поле.
+ *
+ * `null` — офсета нет: на re-diff без свежих фактов `expectedGeometry` его не заменяет (там только
+ * w/h). Это ожидаемо чаще, чем у hug-кейсов, и честнее наугад построенной канвы: случай уходит в
+ * `indeterminate reference_canvas_unresolved`, а не в вердикт по сравнению со сдвинутой картинкой.
+ */
+function viewportReferenceCanvasOf(ctx: GateContext, facts: GeometryFacts | undefined, dsf: number): ReferenceCanvas | null {
+  const marginPx = facts?.paintMargin ?? VIEWPORT_SURFACE_PAINT_MARGIN_PX;
+  const viewport = ctx.surface.viewport;
+  const padTo = {
+    width: Math.round((viewport.width + 2 * marginPx) * dsf),
+    height: Math.round((viewport.height + 2 * marginPx) * dsf),
+  };
+  if (referenceSurfaceOf(ctx) === "paint") {
+    return {
+      padTo,
+      placement: ctx.case.referencePlacement ?? { x: Math.round(marginPx * dsf), y: Math.round(marginPx * dsf) },
+      marginPx, deviceScaleFactor: dsf,
+      layoutRoot: { width: viewport.width, height: viewport.height },
+      layoutRootSource: "viewport",
+    };
+  }
+  const measured = facts?.layoutBounds ?? null;
+  const placement = ctx.case.referencePlacement
+    ?? (measured ? { x: Math.round(measured.x * dsf), y: Math.round(measured.y * dsf) } : null);
+  if (!placement) return null;
+  const layoutRoot = ctx.case.expectedGeometry ?? measured;
+  if (!layoutRoot) return null;
+  return {
+    padTo, placement, marginPx, deviceScaleFactor: dsf,
+    layoutRoot: { width: layoutRoot.width, height: layoutRoot.height },
+    layoutRootSource: ctx.case.expectedGeometry ? "expectedGeometry" : "layoutBounds",
   };
 }
 
@@ -231,12 +285,16 @@ export function createVisualGate(fallbackRunDiff: RunNormalizedDiff = spawnNorma
       const surface = referenceSurfaceOf(ctx);
       // Канва строится **только** для content-hug эталона: paint-манифест (в том числе всякий
       // манифест без нового поля) сравнивается ровно как до W5 — инвариант неизменности D13.
-      const canvas = surface === "content-hug" ? referenceCanvasOf(ctx) : null;
-      if (surface === "content-hug" && canvas === null) {
+      const canvas = needsReferenceCanvas(ctx) ? referenceCanvasOf(ctx) : null;
+      if (needsReferenceCanvas(ctx) && canvas === null) {
         return {
           ...base, status: "indeterminate",
-          detail: "Case declares a content-hug reference but neither expectedGeometry nor a measured layoutBounds is"
-            + " available, so the canonical comparison canvas cannot be derived; declare expectedGeometry on the case",
+          detail: ctx.surface.mode === "viewport"
+            ? "Case is captured on a viewport surface with a content-hug reference, but no measured layoutBounds offset is"
+              + " available in this run (a re-diff carries no fresh geometry facts), so the canonical comparison canvas"
+              + " cannot be placed; re-run the case with a capture (--recapture) or declare referencePlacement"
+            : "Case declares a content-hug reference but neither expectedGeometry nor a measured layoutBounds is"
+              + " available, so the canonical comparison canvas cannot be derived; declare expectedGeometry on the case",
           metrics: { ...base.metrics, reason: "reference_canvas_unresolved", referenceAssetId: assetId, referenceSurface: surface },
         };
       }

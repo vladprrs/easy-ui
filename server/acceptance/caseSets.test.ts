@@ -459,6 +459,37 @@ test("the capture block of the manifest becomes the run surface", () => {
   db.close();
 });
 
+test("§W5: capture.surface даёт ключ mode только у viewport — hug-наборы не двигают ни один хэш", () => {
+  const db = dbWithAsset();
+  const hug = validateManifest(db, "yp-badge", manifest()).manifest;
+  const declaredHug = validateManifest(db, "yp-badge", manifest({
+    capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "light", surface: "hug" },
+  } as unknown as Partial<CaseSetManifest>)).manifest;
+  const viewport = validateManifest(db, "yp-badge", manifest({
+    capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "light", surface: "viewport" },
+  } as unknown as Partial<CaseSetManifest>)).manifest;
+
+  // 1. Отсутствие поля и явный `"hug"` дают **одну и ту же** поверхность без ключа `mode`: пре-образ
+  //    `frameFingerprint` существующих наборов остаётся байт-в-байт прежним.
+  expect(surfaceOfManifest(hug)).toEqual({ viewport: { width: 390, height: 844 }, dsf: 2, theme: "light" });
+  expect(Object.hasOwn(surfaceOfManifest(declaredHug), "mode")).toBe(false);
+  expect(surfaceOfManifest(declaredHug)).toEqual(surfaceOfManifest(hug));
+  // 2. Кадры hug-случаев не сдвинулись волной: тот же случай — тот же frame_fingerprint.
+  const frameOf = (parsed: CaseSetManifest) => caseFingerprintsOf({
+    candidateId: "cand_surface", surface: surfaceOfManifest(parsed), policy: ACCEPTANCE_POLICIES["default-v1"],
+    case: buildCasesFromManifest(parsed)[0]!,
+  }).frame;
+  expect(frameOf(declaredHug)).toBe(frameOf(hug));
+  // 3. …а viewport-поверхность — другая сцена, и кадр обязан быть другим (иначе hug-кадр
+  //    переиспользовался бы для модалки).
+  expect(surfaceOfManifest(viewport)).toMatchObject({ mode: "viewport" });
+  expect(frameOf(viewport)).not.toBe(frameOf(hug));
+  // 4. Контентный адрес набора меняется вместе с полем — иначе два разных набора делили бы id.
+  expect(caseSetIdOf(declaredHug)).not.toBe(caseSetIdOf(hug));
+  expect(caseSetIdOf(viewport)).not.toBe(caseSetIdOf(hug));
+  db.close();
+});
+
 test("caseSetIdOf and the stored row agree on the address", () => {
   const db = dbWithAsset();
   const { manifest: parsed, caseSetId } = validateManifest(db, "yp-badge", manifest());

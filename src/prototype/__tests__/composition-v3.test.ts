@@ -894,6 +894,32 @@ describe("composition v3 — token layout", () => {
       .toEqual(withMap.doc.screens[0]!.spec.elements["screen$row"]!.props);
   });
 
+  /**
+   * W5 T5b (план 2026-08-06): потолок высоты и владение прокруткой. Компилируются **токенами**
+   * (`maxHeight:"viewport"`, `scroll:true`), а не CSS-строками: закрытые перечисления — единственная
+   * причина, по которой сырых px в композиции быть не может. Контракт v1 их не описывает, поэтому
+   * `layoutSupportIssues` о них молчит — ровно как о `radius`/`clip`/`background`.
+   */
+  it("компилирует sizing.maxHeight и scroll и не выдумывает по ним диагностики", () => {
+    const composition = stack({ sizing: { width: "full", maxHeight: "viewport" }, scroll: true });
+    const result = expandCompositions(screen("row"), {
+      compositions: { row: pinned(composition) },
+      componentLayouts: { Stack: { version: 1, spacing: ["gap"] } },
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.doc.screens[0]!.spec.elements["screen$row"]!.props)
+      .toEqual({ text: "x", width: "full", maxHeight: "viewport", scroll: true });
+    // Тот же результат без карты контрактов: клиентское раскрытие обязано дать то же дерево.
+    expect(expandCompositions(screen("row"), { compositions: { row: pinned(composition) } })
+      .doc.screens[0]!.spec.elements["screen$row"]!.props)
+      .toEqual({ text: "x", width: "full", maxHeight: "viewport", scroll: true });
+    // Значение закрыто одним токеном, а конфликт с авторским prop'ом ловится статически.
+    expect(parse({ params: {}, spec: { root: "row", elements: { row: { type: "Stack", props: {}, layout: { sizing: { maxHeight: "100%" } } } } } }).success).toBe(false);
+    expect(parse({ params: {}, spec: { root: "row", elements: { row: { type: "Stack", props: { scroll: false }, layout: { scroll: true } } } } }).success).toBe(false);
+    // `sizing: { maxHeight }` — непустой блок: refine больше не требует width/height/grow/basis.
+    expect(parse({ params: {}, spec: { root: "row", elements: { row: { type: "Stack", props: {}, layout: { sizing: { maxHeight: "viewport" } } } } } }).success).toBe(true);
+  });
+
   it("rejects raw values, empty blocks and props already taken by the compilation", () => {
     expect(parse({ params: {}, spec: { root: "row", elements: { row: { type: "Stack", props: {}, layout: { gap: "12px" } } } } }).success).toBe(false);
     expect(parse({ params: {}, spec: { root: "row", elements: { row: { type: "Stack", props: {}, layout: { background: "#ffffff" } } } } }).success).toBe(false);

@@ -45,7 +45,20 @@ export const compositionLayoutSchema = z.strictObject({
     height: sizeTokenSchema.optional(),
     grow: z.boolean().optional(),
     basis: sizeTokenSchema.optional(),
-  }).refine((sizing) => Object.keys(sizing).length > 0, "sizing must declare at least one of width, height, grow, basis").optional(),
+    /**
+     * Потолок высоты элемента (план 2026-08-06 §W5 T5b, строка 10 фидбэка). Единственное значение
+     * — `"viewport"`: «не выше stage-контейнера». Компилируется в одноимённый prop **токеном**, а
+     * не CSS-строкой `100%`: сырые px/проценты закрытые перечисления не пропускают by construction,
+     * и никакого измерения окна тут нет — потолок задаёт сам stage-контейнер (граница §19).
+     */
+    maxHeight: z.literal("viewport").optional(),
+  }).refine((sizing) => Object.keys(sizing).length > 0, "sizing must declare at least one of width, height, grow, basis, maxHeight").optional(),
+  /**
+   * Владение прокруткой (там же): элемент прокручивает **свой** контент, а не сцену за собой.
+   * Осмысленно вместе с `sizing.maxHeight` — потолок без прокрутки клипает, прокрутка без потолка
+   * ничего не ограничивает; связку выбирает автор, схема оба фасета оставляет независимыми.
+   */
+  scroll: z.boolean().optional(),
   radius: z.enum(COMPOSITION_RADIUS_TOKENS).optional(),
   clip: z.boolean().optional(),
   /** Роль/токен фона дизайн-системы, не сырой цвет. */
@@ -57,7 +70,7 @@ export type CompositionLayout = z.output<typeof compositionLayoutSchema>;
 /** Все props, которые может занять компиляция layout (для проверки конфликта с авторскими). */
 export const COMPOSITION_LAYOUT_PROPS = [
   "gap", "padding", "paddingX", "paddingY", "direction", "wrap",
-  "align", "justify", "width", "height", "grow", "basis", "radius", "clip", "background",
+  "align", "justify", "width", "height", "grow", "basis", "maxHeight", "scroll", "radius", "clip", "background",
 ] as const;
 
 const SPACING_FACETS = ["gap", "padding", "paddingX", "paddingY"] as const;
@@ -65,8 +78,8 @@ const SPACING_FACETS = ["gap", "padding", "paddingX", "paddingY"] as const;
 /**
  * Компиляция в props. Таблица фиксирована:
  * `gap`/`padding`/`paddingX`/`paddingY` — канонические имена контракта v1;
- * `flow` → `direction`/`wrap`; `sizing` → `width`/`height`/`grow`/`basis`;
- * остальные фасеты — одноимённые props.
+ * `flow` → `direction`/`wrap`; `sizing` → `width`/`height`/`grow`/`basis`/`maxHeight`;
+ * остальные фасеты (включая `scroll`) — одноимённые props.
  */
 export function compileLayout(layout: CompositionLayout): Record<string, unknown> {
   const props: Record<string, unknown> = {};
@@ -82,7 +95,9 @@ export function compileLayout(layout: CompositionLayout): Record<string, unknown
     if (layout.sizing.height !== undefined) props.height = layout.sizing.height;
     if (layout.sizing.grow !== undefined) props.grow = layout.sizing.grow;
     if (layout.sizing.basis !== undefined) props.basis = layout.sizing.basis;
+    if (layout.sizing.maxHeight !== undefined) props.maxHeight = layout.sizing.maxHeight;
   }
+  if (layout.scroll !== undefined) props.scroll = layout.scroll;
   if (layout.radius !== undefined) props.radius = layout.radius;
   if (layout.clip !== undefined) props.clip = layout.clip;
   if (layout.background !== undefined) props.background = layout.background;
@@ -101,6 +116,11 @@ export interface LayoutSupportIssue {
  * Диагностика поддержки: элемент, чей `type` не несёт layout-контракта v1, не может
  * получить token layout. Карта контрактов есть только у сервера (`definition_meta`),
  * поэтому проверка выполняется, лишь когда карта передана в раскрытие.
+ *
+ * Диагностируются ровно те фасеты, которые контракт v1 **умеет назвать**: spacing-props и flow.
+ * `radius`/`clip`/`background`, а с W5 также `sizing.maxHeight` и `scroll`, метаданными не
+ * описаны вовсе — выдумывать по ним отказ значило бы объявить неподдерживаемым всё подряд;
+ * их поддержку по-прежнему судит собственная схема props компонента.
  */
 export function layoutSupportIssues(
   type: string,

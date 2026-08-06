@@ -78,6 +78,9 @@ export function surfaceOfManifest(manifest: CaseSetManifest): CaseSurface {
     viewport: { width: manifest.capture.viewport.width, height: manifest.capture.viewport.height },
     dsf: manifest.capture.deviceScaleFactor ?? 2,
     theme: manifest.capture.theme ?? "light",
+    // W5 (§T5c.2): «нет поля» и `"hug"` — один и тот же факт, поэтому ключ не появляется вовсе.
+    // Иначе каждый существующий набор сменил бы `frameFingerprint` и переснялся бы без причины.
+    ...(manifest.capture.surface === "viewport" ? { mode: "viewport" as const } : {}),
   };
 }
 
@@ -562,6 +565,10 @@ function paddedCanvasWarnings(manifest: CaseSetManifest, assetDims: Map<string, 
   const dsf = manifest.capture.deviceScaleFactor ?? 2;
   const margin = COMPARISON_PAINT_MARGIN_PX;
   const warnings: string[] = [];
+  // W5 (§T5c.6): на viewport-поверхности `expectedGeometry` описывает бокс контента оверлея, а
+  // канва кадра выводится из вьюпорта — эвристика «размер эталона равен expectedGeometry» здесь
+  // не про padded-канву и давала бы ложный совет вычесть маргин.
+  if (manifest.capture.surface === "viewport") return warnings;
   for (const item of manifest.cases) {
     const expected = item.expectedGeometry;
     if (!expected || item.referenceSurface === "content-hug") continue;

@@ -148,7 +148,7 @@ export function analyzeGeometry({ frame, content, scroll, roleRects } = {}) {
  * serializes this function for page.evaluate, so it must not close over module
  * bindings. The same function is imported by DOM unit tests.
  */
-export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys } = {}) {
+export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys, overlayAwareRoot = false } = {}) {
   const markerSelector = "[data-eui-key]";
   const surface = document.querySelector("#eui-capture-surface");
   if (!(surface instanceof Element)) throw new Error("#eui-capture-surface not found");
@@ -355,6 +355,22 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys } = {}
     const clips = clipping(overflowX) || clipping(overflowY);
     return clips || clipPath ? { overflowX, overflowY, clipPath } : null;
   };
+  /**
+   * Прокручиваемый бокс (`overflow: auto|scroll`) — клип **только для overlay-корня** (W5).
+   *
+   * Общая семантика W2 этой волной не пересматривается: `auto`/`scroll` по-прежнему не считаются
+   * клипом ни для одного существующего измерения, поэтому кадры не сдвигаются и версия контракта
+   * не бампается. Но у модалки, которая владеет своей прокруткой (`Overlay scroll:true`), контур —
+   * это её бокс, а не двухметровая лента внутри: без этой ветки приёмка мерила бы ленту и
+   * «modal scroll ownership» осталось бы неизмеримым.
+   */
+  const scrollClipOf = (style) => {
+    const shorthand = style.overflow ?? "";
+    const overflowX = style.overflowX || shorthand || "visible";
+    const overflowY = style.overflowY || shorthand || "visible";
+    const scrolls = (value) => value.split(/\s+/).some((part) => part === "auto" || part === "scroll");
+    return scrolls(overflowX) || scrolls(overflowY) ? { overflowX, overflowY, clipPath: null } : null;
+  };
   /** Пересечение бокса со стеком клипающих предков; `null` — клип съел его целиком. */
   const clipBox = (rect, clips) => {
     let left = rect.left, top = rect.top, right = rect.right, bottom = rect.bottom;
@@ -370,7 +386,7 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys } = {}
   // Range нужен ради текстовых узлов: у них нет border-box, и до W2 строка, лежащая прямо в
   // маркере или в обёртке `display:contents`, не существовала для layout-измерения вовсе.
   const textRange = typeof document.createRange === "function" ? document.createRange() : null;
-  const detailOf = (marker) => {
+  const detailOf = (marker, { scrollAwareRoot = false } = {}) => {
     const boxes = [];
     const sources = [];
     const push = (element, cause, rect) => {
@@ -397,7 +413,7 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys } = {}
         }
       }
     };
-    const visit = (element, inFlow, clips) => {
+    const visit = (element, inFlow, clips, isRoot = false) => {
       if (isHidden(element)) return;
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
@@ -413,7 +429,11 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys } = {}
       if (style.outlineStyle && style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth || "0") > 0) {
         push(element, `outline:${style.outlineWidth} ${style.outlineStyle}`, rect);
       }
-      const keeps = inFlow && !outOfFlow && !transformed;
+      // Фильтр «в потоке» действует на **потомках**: сам корень измерения дисквалифицировать
+      // нельзя. Для маркера (display:contents, static) обе формулы совпадают дословно, а для
+      // overlay-корня (`position:absolute`, у `center` ещё и `transform`) старая форма отбрасывала
+      // весь бокс и мерила пустоту (§W5 T5c.3).
+      const keeps = isRoot || (inFlow && !outOfFlow && !transformed);
       if (keeps && style.display !== "contents" && (rect.right - rect.left > 0 || rect.bottom - rect.top > 0)) {
         keep({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, clips);
       }
@@ -423,13 +443,15 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys } = {}
       // внутри поддерева, а её флаг `effective` считается из уже собранной краски.
       // `display:contents` не порождает бокса и потому не клипает ничего: его нулевой
       // `getBoundingClientRect` съел бы всё поддерево.
-      const declaration = keeps && style.display !== "contents" ? clipDeclarationOf(style) : null;
+      const declaration = keeps && style.display !== "contents"
+        ? clipDeclarationOf(style) ?? (isRoot && scrollAwareRoot ? scrollClipOf(style) : null)
+        : null;
       const childClips = declaration
         ? [...clips, { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }]
         : clips;
       for (const child of element.children) visit(child, keeps, childClips);
     };
-    visit(marker, true, []);
+    visit(marker, true, [], true);
     const union = rectUnion(boxes);
     const sourceBoxes = sources.map((item) => ({
       left: item.rect.x + surfaceRect.left, top: item.rect.y + surfaceRect.top,
@@ -465,10 +487,26 @@ export function collectGeometry({ limit = 2000, roleKeys = {}, detailKeys } = {}
       clipChain,
     };
   };
-  const details = requestedKeys.map((key) => {
-    const marker = markers.find((candidate) => (candidate.getAttribute("data-eui-key") ?? "") === key);
-    return marker ? detailOf(marker) : { key, instance: 0, layoutBounds: null, effectSources: [], clipChain: [] };
-  });
+  /**
+   * Overlay-aware layout root (план 2026-08-06 §W5 T5c.3). Опция включается **только** съёмкой
+   * viewport-поверхности: без неё каждая ветка ниже мертва, и результат остаётся байт-в-байт
+   * доволновым (поэтому `GEOMETRY_CONTRACT_VERSION` эта волна не двигает — семантика существующих
+   * измерений не меняется, добавляется новая опция сбора).
+   *
+   * Корнем становится контентная обёртка оверлея, и только когда она в поверхности **ровно одна**:
+   * два оверлея — это две модалки, и молча выбирать из них первую значило бы мерить наугад.
+   * Явно запрошенные `detailKeys` сильнее: автор назвал маркеры сам.
+   */
+  const overlayContents = overlayAwareRoot && wantDetails && detailKeys.length === 0
+    ? [...surface.querySelectorAll("[data-eui-overlay-content]")]
+    : [];
+  const overlayRoot = overlayContents.length === 1 ? overlayContents[0] : null;
+  const details = overlayRoot
+    ? [{ ...detailOf(overlayRoot, { scrollAwareRoot: true }), rootSource: "overlay" }]
+    : requestedKeys.map((key) => {
+      const marker = markers.find((candidate) => (candidate.getAttribute("data-eui-key") ?? "") === key);
+      return marker ? detailOf(marker) : { key, instance: 0, layoutBounds: null, effectSources: [], clipChain: [] };
+    });
 
   const bounded = Math.max(0, Math.floor(limit));
   return {

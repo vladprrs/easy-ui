@@ -37,7 +37,13 @@ export const paintShaKey = (caseId: string): string => `geometry.paint.sha:${cas
  */
 export const geometryFactsKey = (caseId: string): string => `geometry.facts:${caseId}`;
 export interface GeometryFacts {
-  layoutBounds: { width: number; height: number } | null;
+  /**
+   * Бокс layout-корня в CSS px **относительно внешнего `#eui-capture-surface`**, то есть вместе с
+   * маргином поля. `x`/`y` добавлены волной W5 (§T5c.5): на viewport-поверхности content-hug эталон
+   * кладётся в канву именно туда, где корень оказался в кадре, — у hug-кейса это `margin×dsf`, а у
+   * оверлея координата произвольная и вывести её из `expectedGeometry` (там только w/h) нельзя.
+   */
+  layoutBounds: { x: number; y: number; width: number; height: number } | null;
   paintMargin: number | null;
   deviceScaleFactor: number;
 }
@@ -154,7 +160,9 @@ export function createGeometry2Gate(fallbackInkBbox: RunInkBbox = spawnInkBboxWo
       };
       // W5: факты кадра — вход канонической канвы визуального сравнения (см. `geometryFactsKey`).
       ctx.shared.set(geometryFactsKey(ctx.case.caseId), {
-        layoutBounds: isRect(record.layoutBounds) ? { width: record.layoutBounds.width, height: record.layoutBounds.height } : null,
+        layoutBounds: isRect(record.layoutBounds)
+          ? { x: record.layoutBounds.x, y: record.layoutBounds.y, width: record.layoutBounds.width, height: record.layoutBounds.height }
+          : null,
         paintMargin: record.paintMargin,
         deviceScaleFactor: ctx.surface.dsf,
       } satisfies GeometryFacts);

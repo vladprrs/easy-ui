@@ -95,11 +95,29 @@ const figmaNodeId = z.string().min(1).max(64).regex(/^[A-Za-z0-9:._-]+$/, "nodeI
 /** Габариты в CSS px: целые, положительные, в пределах разумного холста капчура. */
 const dimensionPx = z.number().int().positive().max(8192);
 
+/**
+ * Поверхности съёмки набора (план 2026-08-06 §W5 T5c). `"hug"` — историческая (и единственная до
+ * волны) семантика: поверхность обжимает компонент. `"viewport"` — поверхность размером
+ * `capture.viewport` со stage host'ом, на котором живёт host-примитив `Overlay`.
+ */
+export const CASE_SURFACES = ["hug", "viewport"] as const;
+export type CaseSetSurface = (typeof CASE_SURFACES)[number];
+
 export const caseSetCaptureSchema = z.strictObject({
   viewport: z.strictObject({ width: dimensionPx, height: dimensionPx }),
   /** Плотность пикселей съёмки; по умолчанию 2 (канон `DEFAULT_CASE_SURFACE`). */
   deviceScaleFactor: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   theme: z.enum(["light", "dark"]).optional(),
+  /**
+   * Поверхность съёмки (план 2026-08-06 §W5 T5c.1, строка 10 фидбэка).
+   *
+   * `"hug"` (дефолт **у потребителя**, не в схеме — C6/C25: `.default()` сменил бы контентный адрес
+   * всех уже опубликованных наборов) — поверхность обжимает компонент, как и до волны.
+   * `"viewport"` — внутрь поверхности добавляется узел точного размера `capture.viewport`, на нём
+   * монтируется stage host, и host-примитив `Overlay` наконец получает якорь: модалку/шит можно
+   * снять и измерить по контентной обёртке, а не по пустой сцене.
+   */
+  surface: z.enum(CASE_SURFACES).optional(),
 });
 
 /**

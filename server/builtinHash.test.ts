@@ -17,9 +17,15 @@ test("host primitives participate in the v4 compatibility hash",()=>{
 });
 
 test("legacy v2 hashes remain reproducible and immutable",()=>{
+  // Ретайрнутые системы пинованы картой `retiredBuiltinV2Hashes` — их значения историчны и
+  // неподвижны, что бы ни случилось с определениями.
   expect(legacyBuiltinCatalogHashFor("shadcn")).toBe("5d28a8faa2c8fb2016c78f52cfdf3cda1606e37f6d0c81a692a6410ecec77e41");
   expect(legacyBuiltinCatalogHashFor("wireframe")).toBe("790b74a019635c4807b303b582bcbb3e4a5d9b5b556b6a80b3b87df7e4b5308d");
-  expect(legacyBuiltinCatalogHashFor("custom",{})).toBe("e8f4e1df955e480da9d097101ab5dd2100e326c176637b0f64221b6b5cd5e279");
+  // …а вот `custom` пересчитывается **живьём** по extraction-примитивам, поэтому значение движется
+  // вместе с определением `Overlay`. Сдвиг 2026-08-06 (§W5 T5a): у примитива появился prop
+  // `scroll`. Это сентинел регрессий, а не историческое значение хранимых ревизий: у реальной
+  // custom-ДС в пре-образ едут её собственные определения.
+  expect(legacyBuiltinCatalogHashFor("custom",{})).toBe("d7c15a048e99f868163a1aee7ff93a606f7d1175e6399680a49f531c6f67acff");
 });
 
 test("resolved spacing scale participates in the compatibility hash",()=>{

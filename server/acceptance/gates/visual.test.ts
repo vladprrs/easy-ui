@@ -84,6 +84,10 @@ interface ContextOptions {
   /** Факты кадра, которые в бою кладёт гейт `geometry` (W5-фолбэк канвы). */
   geometryFacts?: GeometryFacts;
   dsf?: number;
+  /** W5 T5c: режим поверхности съёмки (`"viewport"` — сцена размера вьюпорта с оверлеем). */
+  surfaceMode?: "viewport";
+  /** Вьюпорт поверхности: у viewport-сцены он же задаёт канву сравнения. */
+  viewport?: { width: number; height: number };
   /** W4: контракт сравнения и именованный пресет бюджета растрового текста. */
   comparison?: { matte?: string };
   textAaBudget?: TextAaBudget;
@@ -119,7 +123,10 @@ async function context(options: ContextOptions = {}) {
       ...(options.comparison ? { comparison: options.comparison } : {}),
       ...(options.textAaBudget ? { textAaBudget: options.textAaBudget } : {}),
     },
-    surface: { viewport: { width: 390, height: 844 }, dsf: options.dsf ?? 2, theme: "light" },
+    surface: {
+      viewport: options.viewport ?? { width: 390, height: 844 }, dsf: options.dsf ?? 2, theme: "light",
+      ...(options.surfaceMode === undefined ? {} : { mode: options.surfaceMode }),
+    },
     determinismSampled: false,
     shared,
     sleep: () => Promise.resolve(),
@@ -264,6 +271,8 @@ test("severity-класс: расхождение в пределах AA-бюд�
  */
 const HUG_REFERENCE = framePng(136, 32, { x: 0, y: 0, width: 136, height: 32, color: INK });
 const PAINT_CANDIDATE = framePng(264, 160, { x: 64, y: 64, width: 136, height: 32, color: INK });
+/** Бокс контента оверлея (W5): ровно то, что кладётся в кадр вьюпорта по измеренному офсету. */
+const OVERLAY_HUG_REFERENCE = framePng(16, 12, { x: 0, y: 0, width: 16, height: 12, color: INK });
 
 test("W5: content-hug 136×32 сравнивается с paint-канвой 264×160 без ручного паддинга", async () => {
   const { ctx, db, dir } = await context({
@@ -340,7 +349,7 @@ test("W5: crop не применяется дважды — 136×32 не пре�
 test("W5: без expectedGeometry канва берётся из измеренного layoutBounds, а без обоих — indeterminate", async () => {
   const measured = await context({
     policyId: "pixel-strict-v1", candidate: PAINT_CANDIDATE, dsf: 1, referenceSurface: "content-hug",
-    geometryFacts: { layoutBounds: { width: 136, height: 32 }, paintMargin: 64, deviceScaleFactor: 1 },
+    geometryFacts: { layoutBounds: { x: 64, y: 64, width: 136, height: 32 }, paintMargin: 64, deviceScaleFactor: 1 },
   });
   measured.ctx.case.referenceAssetId = await putAsset(measured.db, measured.dir, HUG_REFERENCE);
   const result = await visualGate.run(measured.ctx);
@@ -369,6 +378,68 @@ test("W5: канва считается в device px, а placement по умол
   // Явный placement перекрывает умолчание — на нём же держится смена comparison-отпечатка (C12).
   ctx.case.referencePlacement = { x: 100, y: 90 };
   expect(referenceCanvasOf(ctx)!.placement).toEqual({ x: 100, y: 90 });
+  db.close();
+});
+
+// ------------------------------- viewport-поверхность: две ветки канвы (план 2026-08-06 §W5)
+
+test("§W5: viewport-поверхность строит канву кадра для обеих поверхностей эталона", async () => {
+  // Ветка (а): эталон — экспорт всего вьюпорта. Канва = (viewport + 2×margin) × dsf, эталон
+  // ложится в margin × dsf, то есть ровно туда, где вьюпорт лежит внутри padded-кадра.
+  const paint = await context({
+    candidate: null, dsf: 2, surfaceMode: "viewport", referenceSurface: "paint",
+    geometryFacts: { layoutBounds: { x: 16, y: 560, width: 366, height: 268 }, paintMargin: 16, deviceScaleFactor: 2 },
+  });
+  expect(referenceCanvasOf(paint.ctx)).toMatchObject({
+    padTo: { width: 844, height: 1752 }, placement: { x: 32, y: 32 },
+    marginPx: 16, layoutRoot: { width: 390, height: 844 }, layoutRootSource: "viewport",
+  });
+  paint.db.close();
+
+  // Ветка (б): эталон — бокс контента оверлея. Канва та же (кадр один), а офсет берётся из
+  // измеренного layoutBounds: координаты уже от **внешней** поверхности, маргин в них учтён — его
+  // нельзя прибавлять второй раз.
+  const hug = await context({
+    candidate: null, dsf: 2, surfaceMode: "viewport", referenceSurface: "content-hug",
+    geometryFacts: { layoutBounds: { x: 28, y: 576, width: 366, height: 268 }, paintMargin: 16, deviceScaleFactor: 2 },
+  });
+  expect(referenceCanvasOf(hug.ctx)).toMatchObject({
+    padTo: { width: 844, height: 1752 }, placement: { x: 56, y: 1152 },
+    layoutRoot: { width: 366, height: 268 }, layoutRootSource: "layoutBounds",
+  });
+  // Объявленный placement по-прежнему сильнее умолчания.
+  hug.ctx.case.referencePlacement = { x: 10, y: 20 };
+  expect(referenceCanvasOf(hug.ctx)!.placement).toEqual({ x: 10, y: 20 });
+  hug.db.close();
+
+  // Re-diff без свежих фактов: офсета нет и вывести его неоткуда (в `expectedGeometry` только w/h).
+  const blind = await context({
+    dsf: 2, surfaceMode: "viewport", referenceSurface: "content-hug", expectedGeometry: { width: 366, height: 268 },
+  });
+  blind.ctx.case.referenceAssetId = await putAsset(blind.db, blind.dir, HUG_REFERENCE);
+  const unresolved = await visualGate.run(blind.ctx);
+  expect(unresolved.status).toBe("indeterminate");
+  expect(unresolved.metrics).toMatchObject({ reason: "reference_canvas_unresolved" });
+  blind.db.close();
+});
+
+test("§W5: viewport-кейс сравнивается с эталоном, а не падает в dimensions_irreconcilable", async () => {
+  // Кадр кандидата — 40×32 = (виртуальный вьюпорт 24×16 + 2×8 поля); эталон — 16×12 бокс контента
+  // оверлея. Канва обязана положить его в измеренный офсет и дать сводимое сравнение, а не отказ
+  // «размеры несводимы», которым до волны заканчивался любой оверлейный кейс.
+  const { ctx, db, dir } = await context({
+    dsf: 1, surfaceMode: "viewport", referenceSurface: "content-hug", viewport: { width: 24, height: 16 },
+    geometryFacts: { layoutBounds: { x: 8, y: 6, width: 16, height: 12 }, paintMargin: 8, deviceScaleFactor: 1 },
+  });
+  ctx.case.referenceAssetId = await putAsset(db, dir, OVERLAY_HUG_REFERENCE);
+  const result = await visualGate.run(ctx);
+  expect(result.metrics!.reason).toBeUndefined();
+  expect(result.metrics!.referenceNormalization).toMatchObject({
+    padTo: { width: 40, height: 32 }, placement: { x: 8, y: 6 }, layoutRootSource: "layoutBounds",
+  });
+  expect(JSON.stringify(result.metrics)).not.toContain("dimensions_irreconcilable");
+  expect(result.metrics!.rawDiffPct).toBe(0);
+  expect(result.status).toBe("pass");
   db.close();
 });
 

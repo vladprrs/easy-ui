@@ -251,6 +251,22 @@ export interface CaptureSlotTreeEntry {
   children?: number[];
 }
 
+/**
+ * Поверхность съёмки компонента (план 2026-08-06 §W5 T5c.1). Отсутствует — **hug**: поверхность
+ * обжимает компонент, и капчур остаётся байт-в-байт доволновым.
+ *
+ * `mode:"viewport"` добавляет **внутрь** `#eui-capture-surface` вложенный узел точного размера
+ * `width×height` (`position:relative`) и монтирует на нём `HostStageSurface`: только так
+ * host-примитив `Overlay` вообще получает якорь в компонентном капчуре (иначе он возвращает
+ * `null`). Сам `#eui-capture-surface` остаётся **внешним** padded-элементом — на нём завязаны и
+ * кадр (element-screenshot), и системы координат `layoutBounds`/ink-bbox (V2).
+ */
+export interface CaptureSurfaceBootstrap {
+  mode: "viewport";
+  width: number;
+  height: number;
+}
+
 /** Слот-содержимое capture-джобы: пины бандлов + дерево рендера (план 2026-08-05 §A6). */
 export interface CaptureSlotsBootstrap {
   children: CaptureSlotChildPin[];
@@ -277,6 +293,12 @@ export interface CaptureBootstrap {
    * во всех прочих режимах — они не меняются ни на пиксель.
    */
   paint?: { marginPx: number };
+  /**
+   * Поверхность съёмки (§W5 T5c.1). Отсутствие = `"hug"`, то есть ровно доволновая поверхность:
+   * поле никогда не едет как `{mode:"hug"}` — «нет поля» и «hug» обязаны быть одним фактом, иначе
+   * bootstrap бесповерхностной джобы перестал бы быть прежним.
+   */
+  surface?: CaptureSurfaceBootstrap;
   /**
    * Политика readiness джобы (W4). Отсутствует — поверхность берёт дефолт
    * (`DEFAULT_READINESS_POLICY`), то есть интерактивные пути ведут себя как раньше.

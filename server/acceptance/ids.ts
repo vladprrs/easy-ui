@@ -154,6 +154,16 @@ export interface CaseSurface {
   viewport: { width: number; height: number };
   dsf: number;
   theme: string;
+  /**
+   * Режим поверхности (план 2026-08-06 §W5 T5c.2). Внутренний ключ намеренно называется `mode`, а
+   * не `surface`: поле манифеста — `capture.surface`, и `surface.surface` в `FIELD_LAYERS` читалось
+   * бы как опечатка.
+   *
+   * **Отсутствует** у hug-поверхности (и у всякого доволнового набора) — кладётся условным спредом
+   * в `surfaceOfManifest`, поэтому пре-образ `frameFingerprint` существующих кейсов остаётся
+   * байт-в-байт прежним, а хеши не сдвигаются.
+   */
+  mode?: "viewport";
 }
 
 // ------------------------------------------------ три слоя отпечатка (D-B)
@@ -574,6 +584,9 @@ export const FIELD_LAYERS = {
   "surface.viewport": ["frame"],
   "surface.dsf": ["frame", "comparison"],
   "surface.theme": ["frame"],
+  // W5: режим поверхности меняет саму сцену съёмки (внутренний узел вьюпорта, stage host, маргин
+  // кадра) — чистый кадровый слой; переиспользовать hug-кадр для viewport-кейса нельзя.
+  "surface.mode": ["frame"],
 } as const satisfies Record<LayeredField, readonly FieldLayer[]>;
 
 /** `"acc_" + uuid` (RFC §3.3). Формат валидируется на чтении — из `runId` выводится путь evidence (D4). */

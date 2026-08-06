@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { canonicalStringify } from "../../src/capture/canonicalJson";
-import type { CaptureExpected, CaptureFontFaceDeclaration, CaptureFontManifest, CaptureSlotTreeEntry } from "../../src/capture/protocol";
+import type { CaptureExpected, CaptureFontFaceDeclaration, CaptureFontManifest, CaptureSlotTreeEntry, CaptureSurfaceBootstrap } from "../../src/capture/protocol";
 import {
   codesFromReadinessReason, isCaptureFailureCode, sanitizeCaptureCodes,
   type CaptureCode, type CaptureFailureCode,
@@ -162,6 +162,12 @@ export interface RendererOnJob {
 export const DEFAULT_PAINT_MARGIN_PX = 64;
 /** Потолок поля: 20 Мпикс-бюджет кадра тратится и на него. */
 export const MAX_PAINT_MARGIN_PX = 256;
+/**
+ * Поле вокруг **viewport**-поверхности (план 2026-08-06 §W5 T5c.1). 16, а не 64: кадр вьюпорта уже
+ * велик (390×844), и 64 по кругу — это ещё ~2.9× пикселей вьюпорта в дифф и в CAS. Element-screenshot
+ * снимает и то, что лежит за границей страницы, поэтому поле здесь — только про краску у края.
+ */
+export const VIEWPORT_SURFACE_PAINT_MARGIN_PX = 16;
 
 /** Классификация провала джобы по сообщению воркер-раннера/исключения execute. */
 export function classifyJobFailure(message: string): Exclude<JobOutcome, "ok" | "queue_full"> {
@@ -313,7 +319,7 @@ export type ScreenshotResult = ScreenshotImageResult | ScreenshotGeometryResult 
 
 export interface WorkerJob {
   captureOrigin: string; captureUrl: string; token: string;
-  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: { marginPx: number }; readiness?: ReadinessPolicy; fonts?: CaptureFontManifest; expected: CaptureExpected };
+  bootstrap: { kind: "prototype" | "component" | "component-draft"; target: Record<string, unknown>; props?: Record<string, unknown>; propsJsonSchema?: unknown; examples?: Record<string, Record<string, unknown>>; paint?: { marginPx: number }; surface?: CaptureSurfaceBootstrap; readiness?: ReadinessPolicy; fonts?: CaptureFontManifest; expected: CaptureExpected };
   allowedUrls: string[]; viewport: Viewport; deviceScaleFactor: number; colorScheme: "light" | "dark"; waitForFonts: boolean; expected: CaptureExpected;
   probe?: CaptureProbe; geometryLimit?: number; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
   /** ≤20 ключей маркеров для детальных измерений; пустой массив — корневой маркер (W3). */
@@ -378,6 +384,11 @@ interface InternalJob {
   slotChildren?: CapturePin[];
   slotTree?: CaptureSlotTreeEntry[];
   probe?: CaptureProbe; resolvedSpaceScale?: Record<SpaceToken, string>; geometryRoleKeys?: Partial<Record<GeometryRole, string>>;
+  /**
+   * W5: поверхность съёмки. Присутствует только у viewport-джобы (`"hug"` — отсутствие поля):
+   * поверхность строит внутри себя узел размера вьюпорта и монтирует на нём stage host.
+   */
+  captureSurface?: "viewport";
   /** W3: поле paint-режима, CSS px. Присутствует ровно тогда, когда `probe === "paint"`. */
   paintMargin?: number;
   geometryDetailKeys?: string[];
@@ -779,6 +790,8 @@ export class ScreenshotService {
       theme?: string; waitForFonts?: boolean; probe?: CaptureProbe; deliver?: "asset" | "bytes"; background?: boolean;
       /** Поле paint-режима, CSS px; игнорируется в прочих режимах (W3). */
       paintMargin?: number;
+      /** Поверхность съёмки (W5): `"viewport"` даёт сцену размера вьюпорта со stage host'ом. */
+      surface?: "viewport";
       geometryDetailKeys?: string[];
       /** Политика readiness случая (W4); по умолчанию — дефолтная политика. */
       readinessPolicy?: ReadinessPolicy;
@@ -807,7 +820,7 @@ export class ScreenshotService {
     dsf: number,
     opts: {
       props?: Record<string, unknown>; exampleName?: string; theme?: string; waitForFonts?: boolean;
-      probe?: CaptureProbe; deliver?: "asset" | "bytes"; paintMargin?: number; geometryDetailKeys?: string[];
+      probe?: CaptureProbe; deliver?: "asset" | "bytes"; paintMargin?: number; surface?: "viewport"; geometryDetailKeys?: string[];
       readinessPolicy?: ReadinessPolicy;
       slotBindings?: CaptureSlotBinding[];
       slotsHash?: string;
@@ -836,8 +849,11 @@ export class ScreenshotService {
     const resolvedSpaceScale = opts.probe ? resolveSpacingScale(draft.designSystem, themeContent.tokens, themeContent.spacingResolver) : undefined;
     // Поле paint-режима нормализуется здесь, а не у вызывающего: оно уезжает и в bootstrap
     // поверхности, и в результат джобы — расхождение сделало бы `paintBounds` несопоставимым.
+    // Дефолт поля зависит от поверхности (W5): у viewport-сцены он 16 — см.
+    // `VIEWPORT_SURFACE_PAINT_MARGIN_PX`. Явно переданное значение сильнее любого дефолта.
+    const defaultPaintMargin = opts.surface === "viewport" ? VIEWPORT_SURFACE_PAINT_MARGIN_PX : DEFAULT_PAINT_MARGIN_PX;
     const paintMargin = opts.probe === "paint"
-      ? Math.min(Math.max(Math.round(opts.paintMargin ?? DEFAULT_PAINT_MARGIN_PX), 0), MAX_PAINT_MARGIN_PX)
+      ? Math.min(Math.max(Math.round(opts.paintMargin ?? defaultPaintMargin), 0), MAX_PAINT_MARGIN_PX)
       : undefined;
     const { jobId } = this.push({
       kind: "component", owner: { kind: "component", id }, expected, allowedUrls, props, captureUrl, viewport, dsf, theme, waitForFonts: opts.waitForFonts !== false,
@@ -847,6 +863,7 @@ export class ScreenshotService {
       fonts: fontManifestOf(themeContent),
       ...(slots === undefined ? {} : { slotChildren: slots.children, slotTree: slots.tree }),
       ...(opts.probe ? { probe: opts.probe, resolvedSpaceScale } : {}),
+      ...(opts.surface === undefined ? {} : { captureSurface: opts.surface }),
       ...(paintMargin === undefined ? {} : { paintMargin, geometryDetailKeys: (opts.geometryDetailKeys ?? []).slice(0, 20) }),
       ...(opts.deliver ? { deliver: opts.deliver } : {}),
       ...(opts.readinessPolicy ? { readinessPolicy: opts.readinessPolicy } : {}),
@@ -1099,6 +1116,12 @@ export class ScreenshotService {
       };
       // Поле paint-режима едет поверхности через bootstrap: она и решает, рисовать ли фон.
       if (job.paintMargin !== undefined) workerJob.bootstrap.paint = { marginPx: job.paintMargin };
+      // W5 (§T5c.6): поверхность съёмки — bootstrap-поле, как и `paint.marginPx`, и **не** входит
+      // ни в `expected`, ни в `readyToExpected`: рукопожатие уже снятых кадров обязано остаться
+      // тем же пре-образом, иначе старые кадры перестали бы сходиться сами с собой.
+      if (job.captureSurface === "viewport") {
+        workerJob.bootstrap.surface = { mode: "viewport", width: job.viewport.width, height: job.viewport.height };
+      }
       // Политика readiness — туда же: поверхность исполняет её и публикует доказательство (W4).
       if (job.readinessPolicy !== undefined) workerJob.bootstrap.readiness = job.readinessPolicy;
       // R4: манифест шрифтов темы — вход правила required-faces (T-M10). Пустой манифест уезжает

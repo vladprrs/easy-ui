@@ -2887,6 +2887,9 @@ function comparisonIssues(item, where) {
 
 const CASE_SET_ID_CHARSET = /^[A-Za-z0-9._-]{1,64}$/;
 const CASE_SET_TOP_LEVEL_KEYS = new Set(["manifestVersion", "componentId", "source", "capture", "dimensions", "requireVisual", "policy", "cases"]);
+/** Блок `capture` строгий на сервере: опечатка в нём — отказ, а не умолчание (W5 добавил `surface`). */
+const CASE_SET_CAPTURE_KEYS = new Set(["viewport", "deviceScaleFactor", "theme", "surface"]);
+const CASE_SET_SURFACES = ["hug", "viewport"];
 const CASE_SET_CASE_KEYS = new Set([
   "id", "props", "referenceAssetId", "expectedGeometry", "cropLineage", "referenceSurface",
   "referencePlacement", "aliasOf", "dims",
@@ -2939,6 +2942,16 @@ export function caseSetManifestIssues(manifest, limits = CASE_SET_LIMITS) {
     || !Number.isInteger(viewport.width) || !Number.isInteger(viewport.height)
     || viewport.width <= 0 || viewport.height <= 0) {
     issues.push("capture.viewport {width, height} is required and must be positive integers (CSS px)");
+  }
+  if (isPlainObject(manifest.capture)) {
+    for (const key of Object.keys(manifest.capture)) {
+      if (!CASE_SET_CAPTURE_KEYS.has(key)) issues.push(`capture: unknown field "${key}" (the manifest schema is strict)`);
+    }
+    // План 2026-08-06 §W5: поверхность съёмки. `"viewport"` даёт сцену размера вьюпорта со stage
+    // host'ом — единственный способ снять host-примитив `Overlay` в компонентной приёмке.
+    if (manifest.capture.surface !== undefined && !CASE_SET_SURFACES.includes(manifest.capture.surface)) {
+      issues.push(`capture.surface must be one of ${CASE_SET_SURFACES.join(", ")} (omit it for the default hug surface)`);
+    }
   }
 
   const dimensions = manifest.dimensions;

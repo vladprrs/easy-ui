@@ -230,6 +230,90 @@ describe("layout bounds and attribution", () => {
     } finally { restore(); }
   });
 
+  // --- W5 (план 2026-08-06 §W5 T5c.3): overlay-aware layout root ------------------------------
+
+  /** Сцена viewport-поверхности: внешний padded surface, внутри вьюпорт со смонтированным оверлеем. */
+  const overlayScene = (contentStyle: string) => `<div id="eui-capture-surface" data-rect="surface">`
+    + `<div data-rect="viewport" data-eui-capture-viewport="" style="position:relative">`
+    + `<div data-eui-host-primitive="Overlay" style="position:absolute">`
+    + `<div data-eui-overlay-content="" data-rect="content" style="${contentStyle}">`
+    + `<div data-rect="inner"></div></div></div>`
+    + `<span data-eui-key="root" style="display:contents"></span></div></div>`;
+
+  it("контентная обёртка оверлея становится корнем измерения: placement bottom (absolute)", () => {
+    document.body.innerHTML = overlayScene("position:absolute;overflow:hidden");
+    const restore = installRects({
+      surface, viewport: box(16, 16, 390, 844), content: box(28, 560, 366, 300), inner: box(28, 560, 366, 260),
+    });
+    try {
+      const result = collectGeometry({ detailKeys: [], overlayAwareRoot: true });
+      const detail = result.details![0]!;
+      expect(detail.rootSource).toBe("overlay");
+      // Координаты — от **внешней** поверхности (padded): маргин уже внутри x/y, удваивать нечего.
+      expect(detail.layoutBounds).toEqual({ x: 28, y: 560, width: 366, height: 300 });
+      // Без опции корнем остаётся маркер — пустая сцена, и модалку никто не мерил бы.
+      expect(collectGeometry({ detailKeys: [] }).details![0]!.layoutBounds).toBeNull();
+    } finally { restore(); }
+  });
+
+  it("placement center: собственный transform корня его не дисквалифицирует", () => {
+    // `keeps = isRoot || (inFlow && !outOfFlow && !transformed)`: до правки абсолютный и
+    // трансформированный корень выбрасывался целиком вместе с поддеревом (V3).
+    document.body.innerHTML = overlayScene("position:absolute;transform:translate(-50%, -50%)");
+    const restore = installRects({
+      surface, viewport: box(16, 16, 390, 844), content: box(100, 300, 222, 180), inner: box(100, 320, 222, 140),
+    });
+    try {
+      const detail = collectGeometry({ detailKeys: [], overlayAwareRoot: true }).details![0]!;
+      expect(detail.layoutBounds).toEqual({ x: 100, y: 300, width: 222, height: 180 });
+      const causes = detail.effectSources.map((item) => item.cause);
+      expect(causes).toContain("position:absolute");
+      expect(causes.some((cause) => cause.startsWith("transform:"))).toBe(true);
+    } finally { restore(); }
+  });
+
+  it("прокручиваемый оверлей меряется своим боксом, а не лентой внутри", () => {
+    // Modal scroll ownership (строка 10 фидбэка): `overflow-y:auto` у **overlay-корня** режет
+    // потомков. Общая семантика W2 не трогается — `auto`/`scroll` по-прежнему не клип нигде,
+    // кроме этой ветки, поэтому существующие кадры не двигаются.
+    document.body.innerHTML = overlayScene("position:absolute;overflow-y:auto");
+    const restore = installRects({
+      surface, viewport: box(16, 16, 390, 844), content: box(32, 32, 358, 812), inner: box(32, 32, 358, 2000),
+    });
+    try {
+      const detail = collectGeometry({ detailKeys: [], overlayAwareRoot: true }).details![0]!;
+      expect(detail.layoutBounds).toEqual({ x: 32, y: 32, width: 358, height: 812 });
+      // Тот же `overflow-y:auto` на обычном маркерном корне лентой по-прежнему не режется.
+      document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface"><span data-eui-key="root" style="display:contents">`
+        + `<div data-rect="content" style="overflow-y:auto"><div data-rect="inner"></div></div></span></div>`;
+      expect(collectGeometry({ detailKeys: [] }).details![0]!.layoutBounds).toEqual({ x: 32, y: 32, width: 358, height: 2000 });
+    } finally { restore(); }
+  });
+
+  it("опция без единственного оверлея ничего не меняет: результаты байт-в-байт прежние", () => {
+    // Доказательство того, что `GEOMETRY_CONTRACT_VERSION` двигать не нужно: включённая опция на
+    // обычной сцене (и на сцене с двумя оверлеями) даёт **тот же** объект измерения.
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface"><span data-eui-key="root" style="display:contents">`
+      + `<div data-rect="body"></div><div data-rect="halo" style="position:absolute"></div></span></div>`;
+    const restore = installRects({ surface, body: box(64, 64, 140, 96), halo: box(46, 47, 175, 130) });
+    try {
+      expect(collectGeometry({ detailKeys: [], overlayAwareRoot: true }))
+        .toEqual(collectGeometry({ detailKeys: [] }));
+    } finally { restore(); }
+
+    document.body.innerHTML = `<div id="eui-capture-surface" data-rect="surface">`
+      + `<div data-eui-overlay-content="" data-rect="a" style="position:absolute"></div>`
+      + `<div data-eui-overlay-content="" data-rect="b" style="position:absolute"></div>`
+      + `<span data-eui-key="root" style="display:contents"><div data-rect="body"></div></span></div>`;
+    const restoreTwo = installRects({ surface, a: box(0, 0, 10, 10), b: box(20, 20, 10, 10), body: box(64, 64, 140, 96) });
+    try {
+      // Две модалки — выбирать наугад нельзя: корень остаётся маркерным.
+      const withOption = collectGeometry({ detailKeys: [], overlayAwareRoot: true });
+      expect(withOption).toEqual(collectGeometry({ detailKeys: [] }));
+      expect(withOption.details![0]!.key).toBe("root");
+    } finally { restoreTwo(); }
+  });
+
   it("версия контракта измерения объявлена и равна 2", () => {
     // Значение — кадровый вход `frameFingerprint` (§1.3): его сдвиг честно инвалидирует кадры.
     expect(GEOMETRY_CONTRACT_VERSION).toBe(2);

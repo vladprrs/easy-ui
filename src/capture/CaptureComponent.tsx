@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { useApi } from "../api/hooks";
 import { getComponentMeta, getComponentVersion, getDesignSystemById, type ComponentVersion, type ThemeContent } from "../api/client";
@@ -7,6 +7,7 @@ import type { CustomPlayerRuntime } from "../catalog/runtime";
 import { toRuntimeSpec } from "../prototype/runtimeSpec";
 import { ThemeStyle } from "../designSystems/theme";
 import { SurfaceSpacingScope } from "../designSystems/SurfaceSpacingScope";
+import { HostStageSurface } from "../catalog/hostPrimitives";
 import { CaptureSurface } from "./CaptureSurface";
 import { CaptureStyle, useCaptureTheme, usePublishError } from "./CaptureChrome";
 import { bootstrapRendererBuild, publishReady, readBootstrap, settleSurface } from "./readiness";
@@ -70,6 +71,39 @@ async function loadComponent(id: string, version: number, selection: PropsSelect
 function paintFieldMargin(): number | null {
   const margin = readBootstrap()?.paint?.marginPx;
   return typeof margin === "number" && Number.isFinite(margin) && margin >= 0 ? margin : null;
+}
+
+/**
+ * Поверхность съёмки (план 2026-08-06 §W5 T5c.1). `null` — hug: поверхность обжимает компонент,
+ * и путь остаётся доволновым **до последнего узла**. `"viewport"` — внутрь внешнего padded
+ * `#eui-capture-surface` добавляется узел точного размера вьюпорта, и он же становится stage host'ом
+ * `HostStageSurface`: без провайдера host-примитив `Overlay` в компонентном капчуре возвращал
+ * `null`, то есть модалку было нечем снять вовсе.
+ */
+function captureViewportSurface(): { width: number; height: number } | null {
+  const surface = readBootstrap()?.surface;
+  if (!surface || surface.mode !== "viewport") return null;
+  const { width, height } = surface;
+  return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? { width, height } : null;
+}
+
+/**
+ * Сцена компонента: на hug-поверхности — ровно то же дерево, что и до волны (никакого лишнего узла
+ * и никакого провайдера), на viewport-поверхности — узел точного размера вьюпорта со stage host'ом.
+ */
+function CaptureStage({ viewport, children }: { viewport: { width: number; height: number } | null; children: ReactNode }) {
+  // Тот же приём, что в `CapturePrototype`: узел-хост приезжает состоянием, а не ref'ом, иначе
+  // первый рендер отдал бы `Overlay` пустой `current` и портал не смонтировался бы никогда.
+  const [stageHost, setStageHost] = useState<HTMLDivElement | null>(null);
+  const stageHostRef = useMemo(() => ({ current: stageHost }), [stageHost]);
+  if (!viewport) return <>{children}</>;
+  return <div
+    ref={setStageHost}
+    data-eui-capture-viewport=""
+    style={{ position: "relative", width: `${viewport.width}px`, height: `${viewport.height}px` }}
+  >
+    <HostStageSurface stageHostRef={stageHostRef}>{children}</HostStageSurface>
+  </div>;
 }
 
 /**
@@ -143,6 +177,7 @@ function ComponentCaptureSurface({ name, designSystem, theme, props, custom, slo
   // Paint-режим: прозрачный фон (иначе `omitBackground` бессмыслен — краску закрывает
   // `bg-background`) плюс поле вокруг компонента, чтобы тень/блюр попали в кадр целиком.
   const paintMargin = paintFieldMargin();
+  const viewportSurface = captureViewportSurface();
   return <SurfaceSpacingScope systemId={designSystem} themeTokens={theme?.tokens}>
     <div
       ref={ref}
@@ -153,7 +188,9 @@ function ComponentCaptureSurface({ name, designSystem, theme, props, custom, slo
       {/* Прозрачный документ: без этого `omitBackground` бессмыслен — краску закрыл бы фон body. */}
       {paintMargin === null ? null : <style>{"html,body{background:transparent!important}"}</style>}
       <ThemeStyle content={theme} />
-      <CaptureSurface designSystem={designSystem} custom={custom} tree={tree} initialState={{}} screenIds={new Set()} />
+      <CaptureStage viewport={viewportSurface}>
+        <CaptureSurface designSystem={designSystem} custom={custom} tree={tree} initialState={{}} screenIds={new Set()} />
+      </CaptureStage>
     </div>
   </SurfaceSpacingScope>;
 }

@@ -135,6 +135,9 @@ export async function captureCase(
           deviceScaleFactor: ctx.surface.dsf,
           theme: ctx.surface.theme,
           background: true,
+          // W5 (§T5c.6): режим поверхности едет до браузера. Условным спредом — hug-джоба обязана
+          // остаться байт-в-байт прежней вплоть до bootstrap'а.
+          ...(ctx.surface.mode === undefined ? {} : { surface: ctx.surface.mode }),
           // W4: политику readiness приносит профиль приёмки — «подождать подольше» перестаёт
           // быть решением клиента, а её хэш обязан совпасть с тем, что войдёт в отпечаток случая.
           readinessPolicy: ctx.policy.readiness,

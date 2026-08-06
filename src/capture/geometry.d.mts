@@ -72,6 +72,12 @@ export interface GeometryDetail {
   layoutBounds: GeometryBox | null;
   effectSources: GeometryEffectSource[];
   clipChain: GeometryClipLink[];
+  /**
+   * `"overlay"` — корнем измерения стала контентная обёртка host-примитива `Overlay`
+   * (`[data-eui-overlay-content]`, план 2026-08-06 §W5 T5c.3). Поле присутствует только на этой
+   * ветке: у обычного маркерного корня его нет вовсе.
+   */
+  rootSource?: "overlay";
 }
 /** Raw browser-side measurements; `analyzeGeometry` derives ownership and issues from them. */
 export interface GeometryMeasurements {
@@ -116,4 +122,9 @@ export function collectGeometry(options?: {
   roleKeys?: Partial<Record<GeometryRole, string>>;
   /** ≤20 ключей маркеров для детального измерения; пустой массив — корневой маркер (W3). */
   detailKeys?: string[];
+  /**
+   * Искать layout-корень среди `[data-eui-overlay-content]` (W5, viewport-поверхность). Выключено
+   * — сбор ведёт себя ровно как до волны; включено и оверлей ровно один — корнем становится он.
+   */
+  overlayAwareRoot?: boolean;
 }): GeometryMeasurements;

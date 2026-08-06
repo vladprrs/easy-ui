@@ -205,6 +205,9 @@ async function captureWithContext(browser, job) {
         limit: job.geometryLimit,
         roleKeys: job.geometryRoleKeys ?? {},
         detailKeys: job.geometryDetailKeys ?? [],
+        // Эхо поверхности джобы (план 2026-08-06 §W5 T5c.6): на viewport-поверхности layout-корнем
+        // становится контентная обёртка оверлея. Отсутствие поля — hug, то есть доволновой сбор.
+        overlayAwareRoot: job.bootstrap?.surface?.mode === "viewport",
       });
       const paintGeometry = { ...measurements, ...analyzeGeometry(measurements) };
       const surface = await page.$("#eui-capture-surface");

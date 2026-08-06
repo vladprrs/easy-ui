@@ -491,12 +491,15 @@ The compilation table is **fixed** — it must not depend on catalog metadata, b
 | `align` / `justify` | same name | `start\|center\|end\|stretch\|baseline` / `start\|center\|end\|between\|around` |
 | `sizing.width\|height\|basis` | `width` / `height` / `basis` | `auto\|full\|1/2\|1/3\|2/3\|1/4\|3/4` |
 | `sizing.grow` | `grow` | boolean |
+| `sizing.maxHeight` | `maxHeight` | `viewport` only — "no taller than the stage container"; it is a token, never a CSS length, and nothing measures the window |
+| `scroll` | `scroll` | boolean — the element owns its own content scrolling |
 | `radius` | `radius` | `none … 4xl \| full` |
 | `clip` | `clip` | boolean |
 | `background` | `background` | a design-system token slug |
 
 - Raw pixels, colors and CSS strings are impossible by construction: every facet is a closed enum or a token slug.
 - A facet whose target prop the element already declares is rejected at authoring time (`layout compiles into props.gap, which the element already declares`).
+- `sizing.maxHeight` and `scroll` (like `radius`, `clip` and `background`) are not describable by layout contract v1 metadata, so they produce no `composition/layout-unsupported` diagnosis; whether the component accepts them is judged by its own props schema.
 - Support is diagnosed against the component's own `layout` metadata where it is known — that is, in the prototype **save path**, where the server passes the design system's contract map into expansion. A type without a layout contract v1, a spacing prop it does not declare, a fixed (non-prop-driven) flow direction, a direction prop that is not literally `direction`, or wrapping that is not `wrap: true` all produce the expansion issue `composition/layout-unsupported`. Client-side expansion compiles the same props without the diagnosis.
 
 #### `variants` — legal combinations of one composition
@@ -651,13 +654,18 @@ Its grammar is:
   "props": {
     "placement": "top | bottom | center | top-left | top-right | bottom-left | bottom-right",
     "inset": "none | xs | sm | md | lg | xl | 2xl | 3xl | 4xl",
-    "scrim": false
+    "scrim": false,
+    "scroll": false
   },
   "children": ["overlay-content"]
 }
 ```
 
 `placement` is required. `inset` defaults to `md` and is resolved through the selected design system's pinned spacing scale. `scrim` defaults to `false`. `top` and `bottom` stretch across the StageViewport minus the horizontal inset; `center` and the four corner placements shrink to fit, up to the available width. The default slot is the only slot. The primitive has atomic level `atom` and is layout-neutral.
+
+**Height invariant.** Every one of the seven placements is bounded by `max-height: calc(100% - inset - inset)` of the StageViewport, so overlay content can never spill past the stage. `scroll` (default `false`) decides who owns the excess: `false` clips it (`overflow: hidden`), `true` gives the overlay its own scroller (`overflow-y: auto`) with `overscroll-behavior: contain`, so a scroll gesture inside a sheet does not chain to the scene behind it. Before this contract, content taller than the viewport simply flowed out of the stage and a capture measured the ribbon instead of the modal.
+
+The content wrapper carries `data-eui-overlay-content` and that attribute is a **stable contract**: acceptance geometry uses it to find the overlay's layout root on a `capture.surface: "viewport"` case set (`docs/server-api.md`).
 
 An Overlay is viewport-sticky: it is anchored to the native-coordinate `StageViewport`, inside the same transform chain as screen content, and does not move relative to that viewport when a `ContentScroller` scrolls. Its inset is applied before preview transforms, so it scales with the content. It may contain normal builtin, host-independent custom, or repeated content. Anchoring to an element or to scrolling content is not supported in v1.
 
@@ -681,6 +689,7 @@ The four relevant boxes are distinct: `ClipViewport` provides outer clipping or 
 | 4 | Present, framed | The same `DeviceFrame` nodes as rows 1–2; uses `doc.device` with no preview override | As rows 1–2 | As rows 1–2 | As rows 1–2 | — | As rows 1–2 |
 | 5 | Present, mobile fluid | Flow: flex-column phone viewport host `div[data-eui-stage-viewport="present-fluid"]`; canvas: the transformed author-sized div with the same attribute | Flow: phone viewport (`h-dvh`); canvas: `canvas.width` × `canvas.height`, scaled to host width | Flow: flexing middle row between header/footer region slots; canvas: scale-to-width scroller | Flow content scrolls inside the viewport host; canvas scrolls as a scale-to-width spacer | — | Flow: absolute Overlay layer (`z-20`) above content (`z-0`) and region slots (`z-10`); canvas: shares the canvas transform and scales and scrolls with it |
 | 6 | Capture, mobile/tablet flow | Native `#eui-capture-surface`, without transform | Canonical device viewport | No in-surface scroller | No surface overflow rule | Worker captures this element; Overlay remains inside its bounds | Fixed to capture-surface edges; excess content does not move it |
+| 6a | Capture, component on `capture.surface: "viewport"` | `div[data-eui-capture-viewport]` **inside** the padded `#eui-capture-surface`, exactly `capture.viewport` in size, `position: relative` | `capture.viewport` (the outer surface adds the paint margin, 16 px by default) | None | Overlay content is bounded by the height invariant | Worker captures the outer `#eui-capture-surface`, i.e. `(viewport + 2 × margin) × dsf`; geometry measures the single `[data-eui-overlay-content]` box as the layout root | Anchored to the viewport node; the scene does not scroll |
 | 7 | Capture, canvas | `#eui-capture-surface` is the canvas box | `canvas.width` × `canvas.height` | None | None | As row 6 | Third `CanvasLayers` layer |
 | 8 | Capture, desktop flow | **Forbidden by validation**; the auto-height surface has no normative bottom anchor | — | — | — | Such a document cannot be saved for capture | — |
 | 9 | Editor, main canvas | Transformed `div[data-eui-stage-viewport="editor"]` | Native width; canvas or measured auto height | Outer editor section | Stage viewport clips | — | Portal child in the transformed stage; inset scales; the inert stage and Overlay move together |

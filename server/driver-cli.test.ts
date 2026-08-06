@@ -2642,6 +2642,19 @@ describe("author driver case-set validate (W6)", () => {
       .toBe(caseSetIdOfManifest({ manifestVersion: 1, componentId: "x" }));
   });
 
+  test("§W5: локальный валидатор принимает capture.surface и отвергает опечатку в блоке capture", () => {
+    // Легальный манифест обязан отправляться: неизвестное драйверу поле — это отказ до сети, то
+    // есть фича, которой на сервере нет только потому, что её не знает клиент (§1.5).
+    const withSurface = (capture: Record<string, unknown>) => validManifest({
+      capture: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, theme: "light", ...capture },
+    });
+    expect(caseSetManifestIssues(withSurface({ surface: "viewport" }))).toEqual([]);
+    expect(caseSetManifestIssues(withSurface({ surface: "hug" }))).toEqual([]);
+    expect(caseSetManifestIssues(withSurface({}))).toEqual([]);
+    expect(caseSetManifestIssues(withSurface({ surface: "fullscreen" })).join("\n")).toContain("capture.surface must be one of hug, viewport");
+    expect(caseSetManifestIssues(withSurface({ surfase: "viewport" })).join("\n")).toContain('capture: unknown field "surfase"');
+  });
+
   test("§W6: локальный валидатор принимает вложенные слоты и отвергает превышение глубины/тотала", () => {
     const nest = (depth: number): Record<string, unknown> => depth === 0
       ? { type: "PayButton", version: 1, props: { label: "Pay" } }
