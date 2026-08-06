@@ -1,53 +1,59 @@
-# Платформенные capabilities по фидбэку feedback-3 (v1)
+# Платформенные capabilities по фидбэку feedback-3 (v2)
 
 **Дата:** 2026-08-06 · **Источник:** `docs/feedback-3.md` (10 строк-требований от разработчиков renderer/acceptance/Composition v3/Overlay; ссылки 3.x/5.x/D.x — на внешний отчёт миграции, в репо его нет, таблица самодостаточна).
-**Статус:** v1 — Stage 1, до адверсариального ревью.
+**Статус:** v2 — после Stage 2 (раунд 1: 3 линзы + адверсариальная верификация, 22 подтверждённые находки; триаж — §5).
 
-Критерий из фидбэка: «для каждого platform fix достаточно новой capability/schema или renderer fingerprint и короткого changelog. Coordinator сам переиспользует сохранённые candidates/references и запускает только затронутые cases» — то есть каждый фикс обязан быть (а) декларативным (schema/capability), (б) корректно инвалидировать только затронутый слой fingerprint-каскада (frame / comparison / verdict).
+Критерий из фидбэка: «для каждого platform fix достаточно новой capability/schema или renderer fingerprint и короткого changelog. Coordinator сам переиспользует сохранённые candidates/references и запускает только затронутые cases» — каждый фикс обязан быть (а) декларативным (schema/capability), (б) корректно инвалидировать только затронутый слой каскада (frame / comparison / verdict).
 
 ## 0. Карта фидбэка → пакеты работ
 
 | # | Требование фидбэка | Пакет | Слой инвалидации |
 |---|---|---|---|
 | 1 | Nested slot bindings (глубже 1 уровня) **либо** first-publish overlay | W6 | frame (только кейсы с вложенными слотами) |
-| 2 | First-publish candidate overlay (fixture ссылается на unpublished candidate) | W6 (закрывается выбором nested slots — §1.1) | — |
+| 2 | First-publish candidate overlay (fixture ссылается на unpublished candidate) | **осознанно не покрыт** — §1.1, отказ фиксируется в changelog | — |
 | 3 | Multi-file Figma provenance | W1 | нет (metadata) |
-| 4 | Paint extraction не теряет live text | W2 | frame (ALGO bump) |
-| 5 | Canonical live-text raster policy (scoped AA budget) | W4 | comparison + verdict |
+| 4 | Paint extraction не теряет live text | W2 (диагностика-сначала, §W2-T0) | frame (`geometryContractVersion` — §1.3) |
+| 5 | Canonical live-text raster policy (пресет `live-text-v1`) | W4 | comparison (re-diff) |
 | 6 | Intentional paint overflow (декларативный budget) | W3 | verdict (recompute) |
 | 7 | Comparison matte / transparent-root normalization | W4 | comparison (re-diff) |
 | 8 | Geometry tolerances per-case | W3 | verdict (recompute) |
-| 9 | Content-hug clipped carousel (clip-aware layout root) | W2 | frame (ALGO bump) |
+| 9 | Content-hug clipped carousel (clip-aware layout root) | W2 | frame (`geometryContractVersion`) |
 | 10 | Overlay inset + modal scroll ownership | W5 | frame (только новые props/кейсы) |
 
-## 1. Ключевые решения (обсуждать на ревью в первую очередь)
+## 1. Ключевые решения
 
-### 1.1. Строки 1–2: выбираем **nested slotBindings**, а не first-publish prototype overlay
+### 1.1. Строки 1–2: **nested slotBindings**; строка 2 — осознанный отказ, зафиксированный для координатора
 
-Фидбэк явно даёт альтернативу («либо»). Аргументы за nested slots:
+Фидбэк в строке 1 даёт альтернативу («либо») — выбираем nested slotBindings:
 
-- Рантайм уже поддерживает произвольную глубину слотов (`src/prototype/runtimeSpec.ts:227-256`); depth-1 — ограничение контура case-set→капчур (`src/acceptance/caseSetSchema.ts:195-201` strictObject без поля детей; плоские `resolveSlotBindings`/`slotsHashOf`/`slotCaptureOf`/`CaptureComponent.captureRuntimeTree`), а не рендерера.
+- Рантайм уже поддерживает произвольную глубину слотов (`src/prototype/runtimeSpec.ts:227-256`); depth-1 — ограничение контура case-set→капчур (`src/acceptance/caseSetSchema.ts:195-201`; плоские `resolveSlotBindings`/`slotsHashOf`/`slotCaptureOf`/`captureRuntimeTree`), а не рендерера.
 - Проверяемый результат строки 1 («Lead Block acceptance получает реальное содержимое вложенной кнопки») достигается компонентным acceptance-путём: unpublished parent **candidate** + опубликованные дети уже работают (Feature A 2026-08-05), не хватает только глубины.
-- Проверяемый результат строки 2 («fixture с unpublished Lead Block рендерится без каталожной публикации») — это ровно component-candidate capture с slotBindings: кандидат не публикуется, кадры снимаются. Прототипный first-publish overlay упирается в фундамент: документ прототипа вообще не сохраняется с неопубликованным типом (`server/validation.ts:184-215`, `snapshotDefinitions` требует `component_publishes.status='active'` + серверная материализация из опубликованной ревизии). Обойти это — значит завести draft-документы прототипов с кандидатными пинами: отдельный большой проект с новой моделью данных, не оправданный, пока case-set-путь закрывает потребность.
-- Решение плана 2026-08-05 («first-publish = Feature A», §B1) сохраняется; prototypeCandidateOverlay остаётся pin-swap-only. В `docs/server-api.md` это уже задокументировано (`:1327`, `:1352`) — оставляем, дополняем ссылкой на nested slots.
 
-**Отвергнутая альтернатива:** first-publish prototype overlay (вставка кандидата в ревизию без пина). Причины: барьер `snapshotDefinitions` — инвариант целостности документов; вставка ломает `componentManifestHashOf`-handshake и allowlist-модель; ценность дублирует case-set-путь.
+Строка 2 («prototype/fixture ссылается на кандидата неопубликованного компонента») — самостоятельное требование, и оно **не реализуется в этом пакете** (триаж S4): документ прототипа не сохраняется с неопубликованным типом (`server/validation.ts:184-215`, `snapshotDefinitions` требует `component_publishes.status='active'` + серверная материализация из опубликованной ревизии); обход означает draft-документы прототипов с кандидатными пинами — отдельный проект. В changelog W7 фиксируем формулировку обхода для координатора: *«fixture-путь для unpublished компонента недоступен; сценарий 3.6 проверяется case-set'ом со слотами (включая вложенные), а прототипная регрессия — prototypeCandidateOverlay после первой публикации»*. Кандидат на будущее (не в скоупе): ephemeral fixture-джоба без сохранения документа, с резолвом типов из candidate-бандлов.
 
-### 1.2. Строка 5 (Timer): выбираем **documented scoped profile**, а не общий renderer fingerprint эталона
+### 1.2. Строка 5 (Timer): именованный платформенный пресет, а не свободная ручка
 
-В acceptance эталон — Figma-ассет из asset-store: у него нет и не может быть renderer fingerprint (`server/acceptance/gates/visual.ts:61-70`; сверка fingerprint существует только в visual-runs, `server/visual/service.ts:161-200`). «Один renderer/font fingerprint» для пары Figma-PNG ↔ живой капчур недостижим по построению. Реализуем вторую ветку фидбэка: компонентно-ограниченный AA-бюджет для live text, объявляемый в case-set и работающий на edge-маске (§W4).
+В acceptance эталон — Figma-ассет: у него нет renderer fingerprint (сверка fingerprint существует только в visual-runs, `server/visual/service.ts:161-200`), «один renderer/font fingerprint» для пары Figma-PNG ↔ живой капчур недостижим. Реализуем вторую ветку фидбэка — «документированный scoped profile»: per-case поле `textAaBudget: "live-text-v1"` — **именованный пресет, пороги которого владеет сервер** (не автор манифеста): `maxRawDiffPct` и `minEdgeResidualPct` зашиты в профиль и версионируются его именем (триаж S5 — свободные числа отклонены, иначе «официальность» теряется). Тюнинг порогов = новый пресет `live-text-v2`.
 
-### 1.3. Изменение семантики layoutBounds (строки 4 и 9) — один координированный ALGO bump 7→8
+### 1.3. Инвалидация W2: `geometryContractVersion` — кадровый вход, а не ALGO bump
 
-Обе правки (учёт текстовых узлов; clip-aware union) меняют результат измерения `layoutBounds`, от которого зависят geometry-вердикт и каноническая канва content-hug. Переиспользованный кадр хранит `geometry.json` со старой семантикой — reuse обязан инвалидироваться. Механизм: `CASE_FINGERPRINT_ALGO_VERSION` 7→8 (`server/acceptance/ids.ts:66`), обе правки едут **одной волной W2**, чтобы bump был один. Прод-последствие: первый ран после деплоя холодный (~6 с/case, замер 2026-08-04); `EASYUI_ACCEPTANCE_VERDICT_RECOMPUTE=1` не спасает (frame-слой). Это осознанная цена; второй bump в других волнах запрещён (W3/W4 — verdict/comparison-слои, W6 — conditional spread без сдвига хешей slot-free кейсов).
+Раунд 1 доказал (F1, blocker): `CASE_FINGERPRINT_ALGO_VERSION` **не входит** в frameFingerprint — его bump не инвалидирует кадры; после «ALGO 7→8» прод тихо перенёс бы вердикты со старой семантикой layoutBounds. Механизм v2:
+
+- В `FrameFingerprintInput` добавляется `geometryContractVersion` (константа `GEOMETRY_CONTRACT_VERSION = 2` рядом с семантикой `geometry.mjs`), через conditional spread `...(v > 1 ? {geometryContractVersion: v} : {})` — форма прообраза для гипотетического v1 не меняется, но фактически все новые fingerprints включают поле → все старые кадры честно инвалидируются (полная пересъёмка, это цель).
+- Golden `GOLDEN_FRAME` (`f29b0c49…`) при этом сдвигается — **единственный санкционированный сдвиг**, в паре с дифференциальным тестом «смена GEOMETRY_CONTRACT_VERSION ⇒ другой frame_fingerprint» (триаж M6 + F1). ALGO не бампается (он про состав/форму case_fingerprint, форма не меняется).
+- Прод-последствие: полная пересъёмка затронутых наборов при первом ране (честная стоимость; RECOMPUTE-каскад не участвует — frame-слой).
 
 ### 1.4. Matte (строка 7): декларативный контракт сравнения, без изменения капчура
 
-Капчур остаётся прозрачным (`omitBackground:true` — это frame-слой, не трогаем). Matte применяется **только при сравнении** в visual-diff-worker: обе картинки (нормализованный эталон и кандидат) компонуются над объявленным цветом до вычисления метрик. Один flatten, без повторного crop. Поле — comparison-слой fingerprint → каскад делает re-diff сохранённых paint.png без пересъёмки.
+Капчур остаётся прозрачным (`omitBackground:true` — frame-слой, не трогаем). Matte применяется **только при сравнении** в visual-diff-worker: обе картинки компонуются над объявленным цветом после placement/pad, до метрик. Один flatten, без повторного crop. Поле — comparison-слой → каскад re-diff сохранённых paint.png без пересъёмки.
+
+### 1.5. Сквозное правило: локальный валидатор драйвера — гейт каждой волны схемы
+
+`driver.mjs` несёт **собственный** локальный валидатор манифеста (закрытые allowlist'ы и лимиты, включая локальный `caseSetIdOfManifest`, `driver.mjs:2879`), копий три (`.claude/skills/author/driver.mjs`, `share/easy-ui-authoring-skill/`, `share/yp-figma-rebuild-skill/`). Любое новое поле манифеста без правки драйвера делает легальный манифест неотправляемым (отказ до сети). Поэтому **каждая волна W3/W4/W5/W6 включает под-задачу**: правка трёх копий драйвера + `server/driver-mjs.d.ts` (при новых экспортах) + публикация новых лимитов в `/api/capabilities.limits` + тест «драйвер локально принимает манифест с новым полем» (триаж S6/F6).
 
 ## 2. Пакеты работ
 
-Порядок: W1 ∥ W5 ∥ W6 (не пересекаются) → W2 → W3 → W4 (W3/W4 зависят от полей схемы и recompute; W2 до W3, чтобы geometry-политика была одна на новой семантике). Финал — W7 (доки/capabilities/верификация). Каждый пакет — отдельные коммиты по зонам владения.
+Порядок: W1 ∥ W5 ∥ W6 (не пересекаются) → W2 → W3 → W4 → W7. **Жёсткий инвариант деплоя: W2 и W3 едут одним деплоем** (иначе окно ложных fail на кейсах с точным `expectedGeometry` — триаж F8/R1). Файлы `caseSetSchema.ts` и `ids.ts` правит только одна волна за раз; оркестратор сериализует.
 
 ### W1. Multi-source Figma provenance (строка 3)
 
@@ -61,118 +67,135 @@ sources: z.array(z.strictObject({
 })).min(1).max(8).optional()
 ```
 
-Семантика: `fileKey`/`nodeIds` верхнего уровня — primary-документ (обратная совместимость, обязательность не меняется); `sources[]` — дополнительные источники lineage. Дубликат `fileKey` внутри `sources` и совпадение с primary — 422 `validation_failed` (issue с path). `referenceScreenshots` остаются общими.
+Семантика: `fileKey`/`nodeIds` верхнего уровня — primary-документ (обратная совместимость); `sources[]` — дополнительные источники lineage. Дубликат `fileKey` внутри `sources` или совпадение с primary — 422 `validation_failed`. `referenceScreenshots` общие.
 
-**Файлы:** `server/figma.ts` (схема + refine на дубликаты), `server/contracts.ts` (`figmaResponseSchema` и все места включения), `server/openapi.json` (регенерация, drift-гейт), `server/components/validate.ts` (проходит автоматически — validateStoredFigma парсит той же схемой; добавить тест «PayCard extension с Core + Pay App» → 200), `scripts/check-provenance-resolver.ts` (обновить пины количества упоминаний), `src/api/client.ts` (тип), `src/app/strings/library.ts:137-138` + `server/routes/libraryCatalog.ts:113-120` (тултип: primary fileKey + `+N источников`; проекция каталога не расширяется — перф-путь), `docs/server-api.md` §Figma provenance, `.claude/skills/author/SKILL.md` + зеркала `share/*/SKILL.md` (формат JSON).
+**Файлы:** `server/figma.ts` (схема + refine), `server/contracts.ts`, `server/openapi.json` (регенерация, drift-гейт), `server/components/validate.ts` (тест «PayCard extension с Core + Pay App» → publish-префлайт зелёный), `scripts/check-provenance-resolver.ts` (пины), `src/api/client.ts`, **проекция каталога расширяется одним полем `sourceCount`** (set-based запрос сохраняется; `server/routes/libraryCatalog.ts:113-120`, `server/contracts.ts:2508`) + тултип `src/app/strings/library.ts:137-138` «primary fileKey · +N источников» (триаж S8 — противоречие v1 снято выбором «расширить проекцию»), `docs/server-api.md`, `.claude/skills/author/SKILL.md` + зеркала.
 
-**Не делаем:** case-set `source` остаётся одиночным `{fileKey, componentSetNodeId?}` (провенанс продукта один; расширение не требуется фидбэком). `cropLineage` не трогаем. Миграций БД нет (`figma_json` — блоб). Драйвер не валидирует — правок в `driver.mjs` нет (только доки).
+**Не делаем:** case-set `source` остаётся одиночным; `cropLineage` не трогаем; миграций БД нет; `driver.mjs` figma не валидирует — правок кода драйвера нет.
 
-**Done:** тест validate принимает компонент с primary + 2 sources; 422 на дубликат fileKey; `npm run verify:provenance` зелёный; openapi без drift; существующие записи читаются без изменений.
+**Done:** validate принимает primary + 2 sources; 422 на дубликат; `npm run verify:provenance` зелёный; openapi без drift; существующие записи читаются; `sourceCount` в проекции и тултипе.
 
 ### W2. Layout bounds v2: live text + clip-aware root (строки 4, 9)
 
-Обе правки — в чистой функции `detailOf` (`src/capture/geometry.mjs:328-399`), юнит-тестируемой.
+**T2-0. Диагностика-сначала (гейт волны, триаж M7).** До любых правок: фикстура, воспроизводящая потерю текстовых строк типа Chart Info (текст в `display:contents`/непосредственно в маркере), прогон paint-капчура, зафиксировать фактические `layoutBounds`/`paintBounds`/параметры нормализации канвы и **точное место потери** (ink-bbox текст не теряет — alpha>0 считается краской; кандидаты: канва content-hug из заниженного layoutBounds, crop, padTo). Механизм T2a применяется только после подтверждения; если потеря окажется в другом месте — фикс смещается туда же, инвалидация пересматривается (стоп-точка: доложить оркестратору).
 
-**T2a. Текст в layoutBounds.** `visit()` дополнительно обходит **текстовые узлы** in-flow элементов: для каждого непустого текстового ребёнка берётся `Range.getBoundingClientRect()` (union client rects через `Range.getClientRects()` для многострочных), координаты попадают в `boxes` наравне с border-box'ами. Элементы `display:contents` перестают «терять» свой текст (сейчас они не дают коробки, а их текстовые дети не обходятся вовсе). `isHidden`-фильтр действует как раньше (текст скрытого элемента не считается). Результат: канва content-hug и `expectedGeometry`-сверка перестают отрезать живые текстовые строки → Chart Info сохраняет обе строки (проверяемый результат строки 4).
+**T2a. Текст в layoutBounds.** `visit()` (`src/capture/geometry.mjs:328-399`) дополнительно обходит текстовые узлы in-flow элементов: для каждого непустого (trimmed) текстового ребёнка — union client rects через `Range.getClientRects()`. Элементы `display:contents` перестают терять свой текст. `isHidden`-фильтр действует как раньше.
 
-**T2b. Clip-aware union.** При union'е коробка потомка пересекается с прямоугольниками **effective** clip-предков из его цепочки (та же логика, что `clipChain`, `geometry.mjs:366-392`, но применённая к каждому box до union). Скрытый overflow карусели больше не расширяет layout root → Suggest даёт ожидаемое `350×40` с сохранённым clip (строка 9). `effectSources`/`paintBounds` не меняются (ink-bbox по альфе как был). Поле `scroll` остаётся информационным.
+**T2b. Clip-aware union.** Механизм — **новый, нисходящий** (триаж M4; `clipChain` — восходящая диагностика от маркера, клипающий контейнер-потомок она не видит, а её флаг `effective` вычисляется из `painted` — циклическая зависимость при фильтрации): `visit()` несёт вниз стек clip-прямоугольников предков **внутри поддерева** (элементы с `overflow:hidden|clip`/`clip-path`, встреченные по пути от маркера); бокс каждого узла и его текстовых узлов пересекается с этим стеком до union. `clipChain` остаётся отдельной восходящей структурой для политики. Suggest даёт `350×40` с сохранённым clip.
 
-**Инвалидация:** `CASE_FINGERPRINT_ALGO_VERSION` 7→8 (`server/acceptance/ids.ts:66`, история `:50-53` дополняется). Golden-тест frame-хеша обновляется осознанно (это и есть цель — старые кадры невалидны). Прод-чеклист деплоя: предупредить о холодном ране.
+**Инвалидация:** `GEOMETRY_CONTRACT_VERSION = 2` как кадровый вход (§1.3). Дифференциальный тест на frame_fingerprint; `GOLDEN_FRAME` обновляется одним осознанным коммитом с обоснованием; пин `CASE_FINGERPRINT_ALGO_VERSION` остаётся `7` (тест не трогается — триаж M6).
 
-**Файлы:** `src/capture/geometry.mjs` (владелец — одна задача), `server/acceptance/ids.ts` (bump + история), тесты `src/capture/geometry*.test.*`, фикстуры с display:contents-текстом и клипнутой каруселью; `docs/server-api.md` (семантика layoutBounds).
+**Файлы:** `src/capture/geometry.mjs` (один владелец), `server/acceptance/ids.ts` (`geometryContractVersion` в FrameFingerprintInput, conditional spread), тесты geometry + ids, фикстуры (display:contents-текст; клипнутая карусель), `docs/server-api.md`.
 
-**Риски:** (1) `Range.getClientRects` у пустых/whitespace-узлов — фильтровать по непустому trimmed-тексту; (2) рост layoutBounds у существующих кейсов, где текст выступал за родительские border-box'ы (line-height) — это by design фидбэка, но упомянуть в changelog; (3) детерминизм — прогнать корпус детерминизма (12×20) после правки.
+**Риски:** whitespace-узлы — фильтр по trimmed-тексту; рост layoutBounds у кейсов с выступающим текстом — by design, в changelog; корпус детерминизма (12×20) после правки.
 
-**Done:** юнит-тесты обеих семантик; корпус детерминизма 0 mismatches; фикстура «текст в display:contents» даёт layoutBounds, включающий текст; фикстура «клипнутая карусель» даёт размер clip-рамки; ALGO=8, golden обновлён одним осознанным коммитом.
+**Done:** T2-0-отчёт с названным местом потери; юнит-тесты обеих семантик; корпус детерминизма 0 mismatches; дифференциальный fingerprint-тест; фикстуры дают ожидаемые размеры; деплой только вместе с W3.
+
+### W2-audit. Инвентаризация существующих case-sets (триаж S7, F8)
+
+Скрипт `scripts/audit-geometry-contract.mjs`: перечисляет case-sets с `expectedGeometry`/`referenceSurface:"content-hug"`, прогоняет измерение на новой семантике (dev, dry-run) и печатает дельты layoutBounds по кейсам. Прогон на прод-данных (read-only, через бэкап/копию БД) — **до** деплоя W2+W3; по каждому семейству с дельтой — решение: перевыпуск манифеста (новый `cset_` id, `tolerancePx`/пересъёмка эталонов) силами координатора, список — в changelog. План не берёт на себя автоматическую миграцию манифестов (контентная адресация делает её невозможной by design) — только инструмент и список.
 
 ### W3. Per-case geometry-допуски и overflow-бюджет (строки 6, 8)
 
-**Контракт схемы** (`src/acceptance/caseSetSchema.ts`, все поля строго `.optional()` без `.default()` — инвариант cset_):
+**Контракт** — оба поля в `caseSetCasePolicySchema` (`policy.perCase` — это `z.record(caseId, caseSetCasePolicySchema)`; триаж B2/M8/F2 — внутрь `expectedGeometry` не лезем, он comparison-слой и источник padTo):
 
-- `expectedGeometry` расширяется полем `tolerancePx?: int 0..64` — per-case допуск на |Δw|,|Δh| вместо глобального `policy.geometry.sizeDeltaPx` (per-case побеждает профиль).
-- `policy.perCase.overflowBudgetPx?: {top?, right?, bottom?, left?} (0..256)` — декларативный допуск paint-overflow по сторонам. Семантика: overflow стороны ≤ бюджета → не блокирует и вердикт остаётся `pass` (в отличие от blanket `allowPaintOverflow`, который глушит блокировку целиком); overflow > бюджета → блокирующий как раньше. `allowPaintOverflow` сохраняется (совместимость), при одновременном задании — 422 `case_policy_conflict`.
+- `sizeDeltaPx?: int 0..64` — per-case допуск |Δw|,|Δh| к `expectedGeometry`; побеждает `policy.geometry.sizeDeltaPx` профиля. Имя — по существующей семантике `sizeTolerancePx`/`geometry.sizeDeltaPx` (не «tolerancePx», занято смыслом per-side).
+- `overflowBudgetPx?: {top?, right?, bottom?, left?} (0..256)` — декларативный допуск paint-overflow по сторонам: overflow стороны ≤ бюджета → pass; больше → блокирующий. `allowPaintOverflow` сохраняется; одновременное задание — 422 `case_policy_conflict`.
 
-**Политика:** `src/capture/geometryPolicy.ts` — `evaluateGeometryPolicy` принимает новые допуски; `layout-overflow` перестаёт быть безусловно блокирующим только в пределах `tolerancePx` (сам вердикт-класс сохраняется в фактах). Payment Schedule описывает точный layout box (`expectedGeometry` + tolerancePx) и отдельно paint (`overflowBudgetPx`) — проверяемый результат строки 8; Image Loader chips объявляют edge-overflow бюджетом — строка 6.
+Оба — строго `.optional()` без `.default()`.
 
-**Инвалидация:** оба поля — verdict-слой (`server/acceptance/ids.ts` FIELD_LAYERS: `verdict`), добавить в recompute-список (`server/acceptance/recompute.ts:52-105`) → смена бюджета пересчитывает вердикт без пересъёмки.
+**Проброс (все 5 точек, триаж M8/F3):** `VerdictPolicySnapshot.perCase` (`server/acceptance/ids.ts`, литеральный тип), `VerdictPolicyField` + `verdictPolicyDelta` + `GATES_BY_POLICY_FIELD` (`server/acceptance/recompute.ts:51-105`), построение `tolerances` в `recomputeGeometry`; `FIELD_LAYERS` не расширяется точечно — per-case поля идут через verdictPolicy-контур (в плане это явная замена формулировке v1 «добавить в FIELD_LAYERS»); `geometryTolerancesOf` (`server/acceptance/gates/geometry2.ts:46-56`) читает per-case поверх профиля.
 
-**Файлы:** `src/acceptance/caseSetSchema.ts`, `src/capture/geometryPolicy.ts` (+юнит-тесты), `server/acceptance/gates/geometry2.ts` (`geometryTolerancesOf`), `server/acceptance/ids.ts` (FIELD_LAYERS, conditional spread — отсутствие поля не сдвигает существующие хеши), `server/acceptance/recompute.ts`, `server/acceptance/caseSets.ts` (валидация конфликта, warnings), `server/contracts.ts`, `docs/server-api.md`.
+**Политика:** `src/capture/geometryPolicy.ts` — `sizeTolerancePx` берётся per-case при наличии; overflow сверяется с бюджетом по сторонам (вердикт-классы сохраняются в фактах).
 
-**Done:** юнит-тесты политики (внутри/на границе/за бюджетом; конфликт полей); recompute-тест «смена overflowBudgetPx → пересчёт без recapture»; существующие манифесты без новых полей дают байт-в-байт те же cset_ id и вердикты.
+**Драйвер (§1.5):** три копии + лимиты в capabilities.
 
-### W4. Comparison matte + scoped live-text AA budget (строки 5, 7)
+**Done:** юнит-тесты политики (внутри/на границе/за бюджетом; конфликт полей); регресс-тест «новые поля не меняют `comparisonFingerprint`»; recompute-тест «смена `overflowBudgetPx` → пересчёт без recapture» (verdict-контур); существующие манифесты — байт-в-байт те же `cset_` id и вердикты; драйвер принимает новые поля.
 
-**T4a. Matte.** Схема case: `comparison?: { matte?: "none" | "#RRGGBB" }` (default-семантика «none» у потребителя, не в схеме). При задании matte visual-diff-worker (`scripts/visual-diff-worker.mjs`) компонует **обе** картинки над цветом (straight-alpha over) после placement/pad, до всех метрик; альфа-канал после matte = 255 → `alphaDominantPct`-шум исчезает. Opaque Figma-leaf ↔ transparent candidate сравниваются в одной surface-семантике (строка 7: Arrow Button, Payment Schedule). Один flatten, crop не повторяется (порядок: crop → place/pad → matte → метрики).
+### W4. Comparison matte + пресет live-text (строки 5, 7)
 
-**T4b. Scoped AA budget для live text.** Двухходовка:
-1. Прокинуть edge-сигнал в acceptance: гейт `server/acceptance/gates/visual.ts` передаёт воркеру опцию `edge: true` (не env), кладёт `edgeResidual` в метрики гейта и в `causeInputOf` (`server/acceptance/runner.ts:261-303`) — классификатор `text-raster-residual` начинает работать по маске, а не по AA-эвристике.
-2. Поле схемы `policy.perCase.textAaBudget?: { maxRawDiffPct: 0..5, minEdgeResidualPct?: int 80..100 (default-семантика 95 у потребителя) }`. Вердикт: если `rawDiffPct ≤ maxRawDiffPct` **и** `edgeResidual.insidePct ≥ minEdgeResidualPct` (расхождения сосредоточены на глифовых рёбрах эталона) → visual pass с зафиксированной причиной `text-raster-residual` в метриках. Это и есть «документированный scoped profile» (§1.2): бюджет объявляется per-case, área действия ограничена edge-маской. Timer проходит с ним; произвольная перекраска/сдвиг контента бюджетом не пролезает (расхождения вне маски).
+**T4a. Matte.** Схема case: `comparison?: { matte?: "none" | "#RRGGBB" }` (`.optional()`, default-семантика «none» у потребителя). visual-diff-worker компонует обе картинки над цветом (straight-alpha over) после placement/pad, до метрик; альфа после matte = 255. Порядок: crop → place/pad → matte → метрики.
 
-**Инвалидация:** `comparison.matte` и `textAaBudget` — comparison/verdict-слои (FIELD_LAYERS: matte → `comparison` (меняет метрики) — каскад re-diff сохранённых paint.png; textAaBudget → `verdict` + требует `edgeResidual` в метриках: если метрики старые (без edge) — recompute невозможен, честный fallback re-diff). Прописать в `server/acceptance/recompute.ts`.
+**T4b. Пресет `live-text-v1`.** Двухходовка:
+1. Edge-сигнал в acceptance: `server/acceptance/gates/visual.ts` передаёт воркеру `edge: true` (опция, не env), кладёт `edgeResidual` в метрики гейта и в `causeInputOf` (`server/acceptance/runner.ts:261-303`) — классификатор `text-raster-residual` работает по маске.
+2. Поле `policy.perCase.textAaBudget?: "live-text-v1"` — именованный пресет (§1.2): сервер владеет порогами (`maxRawDiffPct` ≤ 0.75, `minEdgeResidualPct` 95 — стартовые из калибровки T=95 R7a; уточняются на реальном Timer до фиксации, изменение = новый пресет). Вердикт: `rawDiffPct ≤ пресет` **и** `edgeResidual.insidePct ≥ пресет` → visual pass, факт применения пресета — в метриках гейта (не в causes — их контракт «только fail/indeterminate» не трогаем).
 
-**Файлы:** `scripts/visual-diff-worker.mjs` (matte-композит; edge уже есть — включение по опции), `server/acceptance/gates/visual.ts`, `server/acceptance/runner.ts` (causeInput), `server/visual/causes.ts` (порог берётся из бюджета, если задан), `src/acceptance/caseSetSchema.ts`, `server/acceptance/ids.ts`, `server/acceptance/recompute.ts`, `server/contracts.ts`, `docs/server-api.md`.
+**Инвалидация (триаж F4):** оба поля — **comparison-слой** (`matte` меняет входы сравнения; `textAaBudget` требует `edgeResidual`, которого нет в старых метриках — recompute невозможен, а fallback recompute→re-diff в каскаде отсутствует; comparison честно даёт re-diff сохранённых paint.png, где edge считается заново). FIELD_LAYERS: новые top-level поля кейса `comparison`, `textAaBudget`… — `textAaBudget` живёт в perCase → чтобы получить comparison-каскад, поле поднимается на уровень кейса: `caseSetCaseSchema.textAaBudget?: "live-text-v1"` (не в policy.perCase). Регресс-тест: манифест без новых полей → прежний `comparisonFingerprint`.
 
-**Риски:** включение edge-опции меняет состав метрик у **всех** новых диффов — метрики аддитивны (новые ключи), вердикт без textAaBudget не меняется (проверить тестом «старый манифест — тот же вердикт»); стоимость Sobel — замерить (в visual-runs уже живёт, ожидание <10% на дифф).
+**Драйвер (§1.5):** три копии + capabilities.
 
-**Done:** юнит-тесты воркера (matte over opaque/semi-transparent; идемпотентность); интеграционный тест «прозрачный кандидат + opaque эталон + matte → identical»; тест textAaBudget (глиф-AA проходит, перекраска блока — нет); recompute/re-diff тесты; существующие вердикты без новых полей неизменны.
+**Файлы:** `scripts/visual-diff-worker.mjs`, `server/acceptance/gates/visual.ts`, `server/acceptance/runner.ts`, `server/visual/causes.ts` (порог из пресета, если задан), `src/acceptance/caseSetSchema.ts`, `server/acceptance/ids.ts` (FIELD_LAYERS: `comparison`→comparison, `textAaBudget`→comparison+verdict), `server/acceptance/recompute.ts`, `server/contracts.ts`, `docs/server-api.md`.
+
+**Риски:** edge-опция добавляет ключи метрик всем новым диффам — вердикт без `textAaBudget` не меняется (тест); стоимость Sobel — замер (<10% ожидание).
+
+**Done:** юнит-тесты воркера (matte over opaque/semi-transparent, идемпотентность); интеграционный «прозрачный кандидат + opaque эталон + matte → pass»; тест пресета (глиф-AA проходит, перекраска блока — нет); re-diff-тест; существующие вердикты неизменны; драйвер принимает поля.
 
 ### W5. Overlay inset + scroll ownership (строка 10)
 
 **T5a. Контракт Overlay v2** (`src/catalog/hostPrimitives/overlay.definition.ts`, `Overlay.tsx`):
-- Все placement-ветки получают вертикальное ограничение: `maxHeight: calc(100% - <top inset> - <bottom inset>)` (для top/bottom — одиночный inset с соответствующей стороны + противоположный inset как отступ до края).
-- Новый prop `scroll: z.boolean().default(false)`: при true контентная обёртка получает `overflow-y: auto; overscroll-behavior: contain`. При false поведение при переполнении — clip (`overflow: hidden`) — **изменение против текущего «вытекания»**; зафиксировать в truth table.
-- Инвариант фидбэка «inset ограничивает hug content» выполняется для всех 7 placement.
+- Все placement-ветки получают `maxHeight: calc(100% - <вертикальные insets>)`.
+- Новый prop `scroll: z.boolean().default(false)`: true → контентная обёртка `overflow-y:auto; overscroll-behavior:contain`; false → `overflow:hidden` (clip; изменение против текущего вытекания — единственное живое употребление Overlay на проде — hug-sheet ниже вьюпорта, не затронут; аудит на прод-данных перед деплоем).
+- Truth table в `docs/prototype-format.md` дополняется высотным инвариантом.
 
-**T5b. Composition v3 layout-токены** (`src/prototype/compositionV3/layout.ts`): `sizing.maxHeight?: "viewport"` (компилируется в `maxHeight: 100%` от stage-контейнера — без window/DOM measurement, граница §19 сохранена: скролл-позицией композиция не владеет, CSS-overflow — владеет) и `scroll?: boolean` (overflow-y auto). Обновить `COMPOSITION_LAYOUT_PROPS`, `layoutSupportIssues`, контракты/доки.
+**T5b. Composition v3 layout-токены** (`src/prototype/compositionV3/layout.ts`): `sizing.maxHeight?: "viewport"` (компилируется в `maxHeight:100%` от stage-контейнера, без window/DOM measurement — граница §19 сохранена) и `scroll?: boolean`. Обновить `COMPOSITION_LAYOUT_PROPS`, `layoutSupportIssues`, контракты/доки.
 
-**T5c. Capture-поверхность для overlay/shell-кейсов.** Компонентный капчур сейчас (а) не монтирует `HostStageSurface` → Overlay = null, (б) surface всегда hug → viewport-aware max-height нечем мерить. Добавить в case-set `capture.surface?: "hug" | "viewport"`: при `"viewport"` `#eui-capture-surface` получает точные размеры `capture.viewport` (не inline-block), и `CaptureComponent` монтирует `HostStageSurface` со stage host = surface (паритет с CapturePrototype). Поле — frame-слой (conditional spread; отсутствие = hug, существующие хеши не сдвигаются, отдельного ALGO bump не нужно — едет вместе или после W2). Это даёт «все 4 Sheet/Popup shells, включая popup-hug, проходят geometry»: fixed-shell'ы меряются на viewport-поверхности, popup-hug — на hug как раньше.
+**T5c. Capture-поверхность `capture.surface:"viewport"` + контракт измерения overlay (триаж S2 blocker, S3, M9/F5).** Полный контракт, а не только монтаж:
 
-**Файлы:** `src/catalog/hostPrimitives/overlay.definition.ts|Overlay.tsx`, `src/prototype/compositionV3/layout.ts`, `src/capture/CaptureComponent.tsx`, `src/acceptance/caseSetSchema.ts` (`capture.surface`), `server/acceptance/gates/capture.ts` (проброс), `server/screenshot/service.ts` (bootstrap-поле), `src/capture/protocol.ts`, `scripts/screenshot-worker.mjs` (echo), `server/acceptance/ids.ts` (frame-слой), `docs/prototype-format.md` (truth table + Overlay contract), `docs/plans/2026-07-16-overlay-truth-table.md` не правим (исторический), e2e overlay-кейс.
+1. *Поверхность.* `capture.surface?: "hug" | "viewport"` в case-set (frame-слой, conditional spread — отсутствие = hug, хеши существующих кейсов не сдвигаются). При `"viewport"`: `#eui-capture-surface` — внутренний бокс **точного размера `capture.viewport`** (не inline-block), а паддинг-поле маргина добавляется **снаружи** него (общий кадр = viewport + 2×margin) — краска прижатого к краю шита не касается границы кадра и не даёт `paintClamped` (S3). `CaptureComponent` монтирует `HostStageSurface` со stage host = внутренний бокс (паритет со сценой: Overlay рендерится).
+2. *Измерение.* Контент Overlay портируется в stage host и лежит out-of-flow — текущий `detailOf` его не видит (S2). Контракт: контентная обёртка Overlay получает атрибут `data-eui-overlay-content`; при `surface:"viewport"` geometry-сбор для корневого маркера использует ветку «overlay-aware root»: если в поверхности ровно один `[data-eui-overlay-content]` — его бокс становится layout root (union его in-flow поддерева по обычным правилам + T2a/T2b), иначе — обычный корень. `expectedGeometry` кейса описывает бокс контента оверлея. Popup-hug остаётся на `surface:"hug"` без Overlay (компонент меряется как раньше).
+3. *Сравнение.* Канва сравнения при `surface:"viewport"` строится от того же layout root («layout + 2×margin», формула не меняется — root теперь корректный); кейсы с эталоном при неразрешимом root — честный `indeterminate reference_canvas_unresolved`, не `dimensions_irreconcilable` (тест — M9/F5).
+4. Проброс: `server/acceptance/gates/capture.ts` → `server/screenshot/service.ts` (bootstrap-поле) → `src/capture/protocol.ts` → `scripts/screenshot-worker.mjs` (echo) → `src/capture/CaptureComponent.tsx`.
 
-**Риски:** (1) смена поведения переполнения Overlay (вытекание → clip) может изменить вид существующих прототипов — единственное живое употребление Overlay в данных (`magnit-loyalty-july`) — hug-sheet ниже вьюпорта, не затронут; проверить на прод-данных при деплое; (2) `HostStageSurface` в компонентном капчуре легализует Overlay в случаях компонентов — обновить `hostPrimitivesAllowed`-логику осознанно (allowlist только при `surface:"viewport"`).
+**Драйвер (§1.5):** три копии + capabilities.
 
-**Done:** юнит/DOM-тесты Overlay (maxHeight при всех placement, scroll-контейнер); e2e компонентный кейс с `capture.surface:"viewport"` и переполняющим контентом: geometry pass с точным layout box; composition-токены компилируются и линтуются; verify зелёный.
+**Done:** DOM-тесты Overlay (maxHeight все 7 placement, scroll/clip); e2e 4 shells — fixed-sheet, fixed-popup, popup-hug (hug-поверхность), scroll-sheet (viewport-поверхность): ненулевой layoutBounds и geometry pass у каждого (переформулировка done по S2); тест «viewport-кейс + эталон → осмысленная канва»; тест отсутствия `paintClamped` на прижатом шите; composition-токены компилируются и линтуются; verify зелёный.
 
-### W6. Nested slotBindings (строки 1–2)
+### W6. Nested slotBindings (строка 1)
 
-**Контракт схемы** (`src/acceptance/caseSetSchema.ts`): `caseSetSlotChildSchema` получает рекурсивное опциональное поле `slotBindings` (тот же record-shape, `z.lazy`). Лимиты: глубина ≤ 3 (включая корень кейса), суммарно детей на кейс ≤ 12 (существующий `CASE_SET_MAX_SLOT_CHILDREN` становится total-cap по дереву), слотов на узел ≤ 8. Ключ `default` работает на любом уровне с той же exempt-семантикой.
+**Контракт схемы** (`src/acceptance/caseSetSchema.ts`): `caseSetSlotChildSchema` получает рекурсивное опциональное поле `slotBindings` (`z.lazy`). Лимиты (триаж B1/F7 — существующие смыслы не меняются): `CASE_SET_MAX_SLOT_CHILDREN = 12` **остаётся per-slot**; новые константы `CASE_SET_MAX_SLOT_DEPTH = 3` (уровней от корня кейса) и `CASE_SET_MAX_SLOT_NODES = 96` (тотал по дереву, ≥ текущего максимума 8×12 — ни один легальный сегодня манифест не становится нечитаемым). Ключ `default` работает на любом уровне с exempt-семантикой.
 
-**Валидация** (`server/acceptance/caseSets.ts`, grep только с `-a` — NUL-байт в `:259`): `validateSlotBindings` становится рекурсивным; для вложенных детей membership/namedSlots проверяются по `definitionMeta` **родителя-ребёнка** (`PublishedSlotPin.definitionMeta` уже читается — `publishedPinByNameAndVersion:162-163`); коды `slot_*` получают path до узла; `slot_self_reference` — проверка цикла по всему пути.
+**Валидация** (`server/acceptance/caseSets.ts`, grep только `-a` — NUL в `:259`): `validateSlotBindings` рекурсивен; membership/namedSlots вложенных детей — по `definitionMeta` их родителя (`PublishedSlotPin.definitionMeta` уже читается); коды `slot_*` получают path; `slot_self_reference` — цикл по всему пути; новые коды `slot_depth_exceeded`, `slot_nodes_exceeded`.
 
-**Хеши:** `slotsHashOf` и `FrameSlotBinding` расширяются полем `children?` через conditional spread (`definedOnly`): плоские (depth-1) наборы дают **байт-в-байт прежние** slots_hash и frame-хеши — golden `f29b0c49…` не сдвигается, ALGO не бампается. Дедуп-ключи (`dedupSlotsKeyOf`) учитывают дерево.
+**Хеши:** `slotsHashOf` и `FrameSlotBinding` — поле `children?` через conditional spread (`definedOnly`): depth-1 наборы дают байт-в-байт прежние slots_hash и frame-хеши; `GOLDEN_FRAME` в этой волне не трогается (если W6 едет после W2 — golden уже v2-семантики, тест «depth-1 хеши не сдвигаются волной W6» обязателен). ALGO не бампается.
 
-**Капчур:** `slotCaptureOf` (`server/screenshot/service.ts:866-891`) строит дерево: `tree[]` получает `children?: number[]` (индексы), `children: CapturePin[]` — дедуп бандлов по (componentId, version) по всему дереву; `draftComponentAllowedUrls` — URL бандлов/ассетов всех уровней. `CaptureComponent.captureRuntimeTree` (`src/capture/CaptureComponent.tsx:82-99`) строит вложенный runtimeSpec (рантайм уже умеет). Протокол (`src/capture/protocol.ts`, `scripts/screenshot-worker.mjs`) — аддитивные поля.
+**Капчур:** `slotCaptureOf` (`server/screenshot/service.ts:866-891`) — `tree[]` с `children?: number[]` (индексы), дедуп бандлов по (componentId, version) по всему дереву; `draftComponentAllowedUrls` — URL всех уровней; `captureRuntimeTree` (`src/capture/CaptureComponent.tsx:82-99`) строит вложенный runtimeSpec. Протокол/воркер — аддитивные поля.
 
-**Зеркала:** `server/driver-mjs.d.ts` при новых экспортах; `.claude/skills/author/driver.mjs` + `share/*/driver.mjs` — если case-set валидируется локально (`case-set validate` локально-первый — проверить, использует ли схему из `src/acceptance/caseSetSchema.ts`; если да — правка одна).
+**Драйвер (§1.5):** три копии (локальный валидатор — вложенность + новые лимиты), `caseSetMaxSlotDepth`/`caseSetMaxSlotNodes` в `/api/capabilities.limits`, `server/driver-mjs.d.ts` при новых экспортах.
 
-**Done:** e2e: кейс «parent candidate → published child → published кнопка во вложенном слоте» — кадр содержит контент кнопки (проверка по geometry/визуальному факту); юнит: depth-1 манифест даёт прежний slots_hash (golden); 422-коды на превышение глубины/лимитов/цикл; `docs/server-api.md` §slotBindings обновлён (снятие «Глубина 1», новая формулировка «дерево — композиция, место глубоких структур в прототипе» смягчается до лимита 3).
+**Done:** e2e «parent candidate → published child → published кнопка во вложенном слоте» — кадр содержит контент кнопки; юнит: depth-1 манифест — прежний slots_hash; **тест «манифест 8 слотов × 12 детей, записанный до волны, читается `manifestOfRow` без ошибки»** (B1); 422 на глубину/тотал/цикл; замер стоимости depth-3 (R4); `docs/server-api.md` §slotBindings обновлён.
 
 ### W7. Capabilities, changelog, финальная верификация
 
-- `server/routes/meta.ts` (`/api/capabilities`): `features.figmaMultiSource`, `features.geometryLayoutBoundsV2` (+`acceptance.caseFingerprintAlgo: 8`), `features.geometryCaseTolerances`, `features.comparisonMatte`, `features.textAaBudget`, `features.overlayScrollOwnership`, `features.captureViewportSurface`, `features.nestedSlotBindings` (+лимиты). Discovery — фаза гейта для координатора.
-- Короткий changelog в `docs/server-api.md` (раздел изменений) — по одному абзацу на capability, как требует фидбэк.
-- Финальный прогон: `npm run verify` + `npm run e2e` + runtime-прогон `/verify`; корпус детерминизма после W2; замер стоимости edge-сигнала (W4).
+- `/api/capabilities`: `features.figmaMultiSource`, `features.geometryContractV2` (+ `acceptance.geometryContractVersion: 2`), `features.geometryCaseTolerances`, `features.comparisonMatte`, `features.textAaPresets: ["live-text-v1"]`, `features.overlayScrollOwnership`, `features.captureViewportSurface`, `features.nestedSlotBindings`; `limits.caseSetMaxSlotDepth/…SlotNodes` и прочие новые лимиты.
+- Changelog в `docs/server-api.md`: абзац на capability + явный пункт об отказе по строке 2 (§1.1) с формулировкой обхода.
+- Прогон W2-audit на прод-данных, список семейств на перевыпуск.
+- Финальная верификация: `npm run verify` + `npm run e2e` + runtime-прогон `/verify`; корпус детерминизма; замер edge-стоимости; прогон одной прод-семьи до/после (F8).
 
-## 3. Инварианты (нарушать нельзя, проверяются на ревью каждой волны)
+## 3. Инварианты (проверяются на ревью каждой волны)
 
-1. Новые поля манифеста case-set — строго `.optional()` без `.default()` (контентная адресация `cset_`).
-2. frameFingerprint не версионируется; новые поля — только через conditional spread/`definedOnly`; slot-free и depth-1 кейсы дают прежние хеши (golden-тесты). Единственный сдвиг — осознанный ALGO 7→8 в W2.
-3. Recompute-каскад: каждое новое поле обязано попасть в правильный слой `FIELD_LAYERS` и в `recompute.ts`; NULL-слои ⇒ recapture (не молчаливый pass).
-4. `scripts/check-provenance-resolver.ts` — обновлять пины при любом касании `figma_json`.
-5. Капчур-фон остаётся прозрачным; matte — только на сравнении.
-6. Существующие манифесты/вердикты без новых полей не меняются (регресс-тесты в каждой волне).
-7. `server/acceptance/caseSets.ts` грепать только `grep -a` (NUL-байт в `:259`).
-8. Зеркала драйвера (`share/*`) и `server/driver-mjs.d.ts` синкать в той же волне, что и правку.
-9. Сборка на прод-сервере запрещена; деплой — по `/deploy` после явной команды пользователя.
+1. Новые поля манифеста — строго `.optional()` без `.default()` (контентная адресация `cset_`).
+2. Conditional spread/`definedOnly` для всех новых fingerprint-входов; slot-free и depth-1 кейсы дают прежние хеши. Единственный санкционированный сдвиг golden — W2 (`geometryContractVersion`), с дифференциальным тестом. `CASE_FINGERPRINT_ALGO_VERSION` остаётся 7.
+3. Слои каскада: per-case вердиктные ручки — через verdictPolicy-контур (5 точек, §W3); comparison-поля — re-diff; frame-поля — recapture. Для каждого нового поля — тест каскада.
+4. `scripts/check-provenance-resolver.ts` — пины при любом касании `figma_json`.
+5. Капчур-фон прозрачный; matte — только на сравнении.
+6. Существующие манифесты/вердикты без новых полей не меняются: в каждой волне регресс-тесты на `cset_` id, `comparisonFingerprint`, читаемость старых манифестов.
+7. `server/acceptance/caseSets.ts` — только `grep -a` (NUL в `:259`).
+8. Драйвер: три копии + `driver-mjs.d.ts` + capabilities.limits — в той же волне, что и правка схемы (§1.5).
+9. Сборка на прод-сервере запрещена; деплой — `/deploy` по явной команде пользователя; W2+W3 — один деплой.
 
-## 4. Риски и открытые вопросы
+## 4. Риски
 
-- **R1 (W2):** рост layoutBounds от текстовых узлов может поломать существующие прод-case-sets с точным `expectedGeometry` — смягчается W3 (`tolerancePx`), но порядок деплоя: W2+W3 вместе, иначе окно ложных fail.
-- **R2 (W4):** пороги `textAaBudget` — стартовые значения (insidePct 95, из калибровки T=95 R7a) могут требовать подстройки на реальном Timer; вынести оба в per-case поля (сделано) — тюнинг без релиза.
-- **R3 (W5):** clip при переполнении Overlay — поведенческое изменение; аудит употреблений на проде перед деплоем (сейчас одно, не затронуто).
-- **R4 (W6):** рост стоимости капчура с деревом детей — замер (2026-08-05: 12 и 24 ребёнка ≈3.7 с, кривая плоская) — повторить для depth-3.
-- **R5:** параллельность волн — W1/W5/W6 не пересекаются по файлам, кроме `caseSetSchema.ts` (W3/W4/W5/W6) и `ids.ts` (W2/W3/W4/W5) — эти два файла правит только одна волна за раз; оркестратор сериализует.
+- **R1 (W2/W3):** окно ложных fail закрыто инвариантом «один деплой» + W2-audit до деплоя.
+- **R2 (W4):** пороги `live-text-v1` фиксируются после прогона на реальном Timer-подобном кейсе; изменение — новым пресетом.
+- **R3 (W5):** clip при переполнении Overlay — поведенческое изменение; аудит употреблений на проде перед деплоем.
+- **R4 (W6):** стоимость depth-3 — замер (база 2026-08-05: 12 и 24 ребёнка ≈3.7 с, кривая плоская).
+- **R5:** `caseSetSchema.ts` (W3/W4/W5/W6) и `ids.ts` (W2/W3/W4/W5) — по одной волне за раз, оркестратор сериализует.
+- **R6 (W2):** T2-0 может показать иное место потери текста — стоп-точка с пересмотром T2a/инвалидации.
 
-## 5. Триаж адверсариального ревью
+## 5. Триаж адверсариального ревью (раунд 1: 3 линзы, 22 подтверждённые находки, 3 опровергнуты верификаторами)
 
-_(заполняется после Stage 2)_
+Принято (вошло в v2): **B1/F7** (лимиты слотов — отдельные константы, старые смыслы нетронуты, тест читаемости широких манифестов — §W6); **B2/M8/F2/F3** (per-case допуски — в `caseSetCasePolicySchema` через verdictPolicy-контур, 5 точек проброса, имя `sizeDeltaPx` — §W3); **M4** (нисходящий clip-стек вместо «той же логики clipChain» — §W2 T2b); **M6+F1** (инвалидация через `geometryContractVersion` как кадровый вход; golden сдвигается один раз осознанно; ALGO остаётся 7 — §1.3); **M7** (диагностика-сначала T2-0 — §W2); **M9/F5/S3/S2** (полный контракт viewport-поверхности: наружный маргин, overlay-aware root по `data-eui-overlay-content`, канва от корректного root, e2e на 4 shells — §W5 T5c); **S4** (строка 2 — осознанный отказ, зафиксирован в §0/§1.1/changelog); **S5** (textAaBudget — именованный пресет, свободные числа отклонены — §1.2); **S6/F6** (драйвер — под-задача каждой волны — §1.5); **S7/F8** (W2-audit + инвариант одного деплоя — §W2-audit, §3.9); **S8** (`sourceCount` в проекции — §W1); **F4** (textAaBudget/comparison-слой, т.к. fallback recompute→re-diff в каскаде отсутствует — §W4).
+
+Отклонено (с обоснованием верификаторов): **B3** (утверждение «HostStageSurface не монтирует ни один капчур» опровергнуто — CapturePrototype монтирует; W5 добавляет паритет компонентному пути); **M5** (пресет фиксируется в метриках гейта, контракт causes «только fail/indeterminate» не нарушается — уточнено в §W4); **S1** (утверждение «текст теряется в растре, а не в layoutBounds» не подтверждено кодом; вопрос закрывается T2-0 диагностикой).
+
+Открытых blocker-возражений не осталось: оба blocker'а (F1, S2) закрыты изменением механизма (§1.3, §W5 T5c) — это существенные правки, поэтому перед исполнением проводится **дельта-ревью** v2 (один верификационный ревьюер по дельте v1→v2).
