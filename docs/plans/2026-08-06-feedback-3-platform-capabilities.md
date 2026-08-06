@@ -1,7 +1,7 @@
-# Платформенные capabilities по фидбэку feedback-3 (v2)
+# Платформенные capabilities по фидбэку feedback-3 (v3)
 
 **Дата:** 2026-08-06 · **Источник:** `docs/feedback-3.md` (10 строк-требований от разработчиков renderer/acceptance/Composition v3/Overlay; ссылки 3.x/5.x/D.x — на внешний отчёт миграции, в репо его нет, таблица самодостаточна).
-**Статус:** v2 — после Stage 2 (раунд 1: 3 линзы + адверсариальная верификация, 22 подтверждённые находки; триаж — §5).
+**Статус:** v3 — после Stage 2 (раунд 1: 3 линзы + верификация, 22 находки; раунд 2: дельта-ревью v2, находки V1–V14; триаж — §5).
 
 Критерий из фидбэка: «для каждого platform fix достаточно новой capability/schema или renderer fingerprint и короткого changelog. Coordinator сам переиспользует сохранённые candidates/references и запускает только затронутые cases» — каждый фикс обязан быть (а) декларативным (schema/capability), (б) корректно инвалидировать только затронутый слой каскада (frame / comparison / verdict).
 
@@ -39,8 +39,8 @@
 
 Раунд 1 доказал (F1, blocker): `CASE_FINGERPRINT_ALGO_VERSION` **не входит** в frameFingerprint — его bump не инвалидирует кадры; после «ALGO 7→8» прод тихо перенёс бы вердикты со старой семантикой layoutBounds. Механизм v2:
 
-- В `FrameFingerprintInput` добавляется `geometryContractVersion` (константа `GEOMETRY_CONTRACT_VERSION = 2` рядом с семантикой `geometry.mjs`), через conditional spread `...(v > 1 ? {geometryContractVersion: v} : {})` — форма прообраза для гипотетического v1 не меняется, но фактически все новые fingerprints включают поле → все старые кадры честно инвалидируются (полная пересъёмка, это цель).
-- Golden `GOLDEN_FRAME` (`f29b0c49…`) при этом сдвигается — **единственный санкционированный сдвиг**, в паре с дифференциальным тестом «смена GEOMETRY_CONTRACT_VERSION ⇒ другой frame_fingerprint» (триаж M6 + F1). ALGO не бампается (он про состав/форму case_fingerprint, форма не меняется).
+- Константа `GEOMETRY_CONTRACT_VERSION = 2` (рядом с семантикой `geometry.mjs`) применяется **внутри `frameFingerprint`** (не на call-site — выбор зафиксирован по V8), через conditional spread `...(v > 1 ? {geometryContractVersion: v} : {})` — все новые fingerprints включают поле → все старые кадры честно инвалидируются (полная пересъёмка, это цель).
+- Golden `GOLDEN_FRAME` (`f29b0c49…`) при этом сдвигается — **единственный санкционированный сдвиг**, в паре с дифференциальным тестом «смена GEOMETRY_CONTRACT_VERSION ⇒ другой frame_fingerprint» (триаж M6 + F1). Обновляются оба затронутых места `server/acceptance/ids.test.ts` (golden-вызов и ручная сборка входа `:234-238`). ALGO не бампается (он про состав/форму case_fingerprint, форма не меняется).
 - Прод-последствие: полная пересъёмка затронутых наборов при первом ране (честная стоимость; RECOMPUTE-каскад не участвует — frame-слой).
 
 ### 1.4. Matte (строка 7): декларативный контракт сравнения, без изменения капчура
@@ -53,7 +53,7 @@
 
 ## 2. Пакеты работ
 
-Порядок: W1 ∥ W5 ∥ W6 (не пересекаются) → W2 → W3 → W4 → W7. **Жёсткий инвариант деплоя: W2 и W3 едут одним деплоем** (иначе окно ложных fail на кейсах с точным `expectedGeometry` — триаж F8/R1). Файлы `caseSetSchema.ts` и `ids.ts` правит только одна волна за раз; оркестратор сериализует.
+Порядок: W1 ∥ W6 (не пересекаются) → W2 → W3 → W4 → W5 → W7. **Жёсткий инвариант деплоя: W2 и W3 едут одним деплоем** (иначе окно ложных fail на кейсах с точным `expectedGeometry` — триаж F8/R1). Сериализация файлов (по одной волне за раз, в порядке исполнения волн): `caseSetSchema.ts` и `server/acceptance/caseSets.ts`/`cases.ts` — W6→W3→W4→W5; `ids.ts` — W6→W2→W3→W4→W5; `src/capture/geometry.mjs` — W2 (владелец семантики) → W5 (overlay-ветка; поэтому W5 строго после W2 — триаж V11).
 
 ### W1. Multi-source Figma provenance (строка 3)
 
@@ -85,7 +85,7 @@ sources: z.array(z.strictObject({
 
 **Инвалидация:** `GEOMETRY_CONTRACT_VERSION = 2` как кадровый вход (§1.3). Дифференциальный тест на frame_fingerprint; `GOLDEN_FRAME` обновляется одним осознанным коммитом с обоснованием; пин `CASE_FINGERPRINT_ALGO_VERSION` остаётся `7` (тест не трогается — триаж M6).
 
-**Файлы:** `src/capture/geometry.mjs` (один владелец), `server/acceptance/ids.ts` (`geometryContractVersion` в FrameFingerprintInput, conditional spread), тесты geometry + ids, фикстуры (display:contents-текст; клипнутая карусель), `docs/server-api.md`.
+**Файлы:** `src/capture/geometry.mjs` (один владелец), `server/acceptance/ids.ts` (константа внутри `frameFingerprint`, conditional spread), `server/acceptance/ids.test.ts` (golden + ручная сборка входа `:234-238` — оба обновляются осознанно), тесты geometry, фикстуры (display:contents-текст; клипнутая карусель), `docs/server-api.md`.
 
 **Риски:** whitespace-узлы — фильтр по trimmed-тексту; рост layoutBounds у кейсов с выступающим текстом — by design, в changelog; корпус детерминизма (12×20) после правки.
 
@@ -104,9 +104,7 @@ sources: z.array(z.strictObject({
 
 Оба — строго `.optional()` без `.default()`.
 
-**Проброс (все 5 точек, триаж M8/F3):** `VerdictPolicySnapshot.perCase` (`server/acceptance/ids.ts`, литеральный тип), `VerdictPolicyField` + `verdictPolicyDelta` + `GATES_BY_POLICY_FIELD` (`server/acceptance/recompute.ts:51-105`), построение `tolerances` в `recomputeGeometry`; `FIELD_LAYERS` не расширяется точечно — per-case поля идут через verdictPolicy-контур (в плане это явная замена формулировке v1 «добавить в FIELD_LAYERS»); `geometryTolerancesOf` (`server/acceptance/gates/geometry2.ts:46-56`) читает per-case поверх профиля.
-
-**Политика:** `src/capture/geometryPolicy.ts` — `sizeTolerancePx` берётся per-case при наличии; overflow сверяется с бюджетом по сторонам (вердикт-классы сохраняются в фактах).
+**Проброс (7 точек, триаж M8/F3 + V7):** (1) `VerdictPolicySnapshot.perCase` (`server/acceptance/ids.ts`, литеральный тип; узкие литеральные типы `casePolicy` в `cases.ts:101` и `ids.ts:302` расширяются — runtime-spread уже тотальный); (2) `VerdictPolicyField` + `verdictPolicyDelta` + `GATES_BY_POLICY_FIELD` (`server/acceptance/recompute.ts:51-105`); (3) построение `tolerances` в `recomputeGeometry`; (4) `geometryTolerancesOf` (`server/acceptance/gates/geometry2.ts:46-56`) — per-case поверх профиля; (5) `evaluateGeometryPolicy` (`src/capture/geometryPolicy.ts`) — `sizeTolerancePx` per-case при наличии, **вердикт-классы сохраняются в фактах** (бюджет не превращает overflow в `clean`); (6) `geometryVerdictBlocks` и `geometryCodes` расширяются величинами overflow по сторонам (сигнатура вида `blocks(verdict, overflow, tolerances)`) — иначе per-side бюджет невыразим; (7) **оба** call-site: `gates/geometry2.ts` и `recompute.ts:245-251`. `FIELD_LAYERS` не расширяется точечно — per-case поля идут через verdictPolicy-контур.
 
 **Драйвер (§1.5):** три копии + лимиты в capabilities.
 
@@ -120,11 +118,13 @@ sources: z.array(z.strictObject({
 1. Edge-сигнал в acceptance: `server/acceptance/gates/visual.ts` передаёт воркеру `edge: true` (опция, не env), кладёт `edgeResidual` в метрики гейта и в `causeInputOf` (`server/acceptance/runner.ts:261-303`) — классификатор `text-raster-residual` работает по маске.
 2. Поле `policy.perCase.textAaBudget?: "live-text-v1"` — именованный пресет (§1.2): сервер владеет порогами (`maxRawDiffPct` ≤ 0.75, `minEdgeResidualPct` 95 — стартовые из калибровки T=95 R7a; уточняются на реальном Timer до фиксации, изменение = новый пресет). Вердикт: `rawDiffPct ≤ пресет` **и** `edgeResidual.insidePct ≥ пресет` → visual pass, факт применения пресета — в метриках гейта (не в causes — их контракт «только fail/indeterminate» не трогаем).
 
-**Инвалидация (триаж F4):** оба поля — **comparison-слой** (`matte` меняет входы сравнения; `textAaBudget` требует `edgeResidual`, которого нет в старых метриках — recompute невозможен, а fallback recompute→re-diff в каскаде отсутствует; comparison честно даёт re-diff сохранённых paint.png, где edge считается заново). FIELD_LAYERS: новые top-level поля кейса `comparison`, `textAaBudget`… — `textAaBudget` живёт в perCase → чтобы получить comparison-каскад, поле поднимается на уровень кейса: `caseSetCaseSchema.textAaBudget?: "live-text-v1"` (не в policy.perCase). Регресс-тест: манифест без новых полей → прежний `comparisonFingerprint`.
+**Инвалидация (триаж F4 + V5 + V6):** оба поля — на уровне кейса (`caseSetCaseSchema.comparison`, `caseSetCaseSchema.textAaBudget` — не в policy.perCase), слой **comparison** (`matte` меняет входы сравнения; `textAaBudget` требует `edgeResidual`, которого нет в старых метриках, — comparison-каскад честно даёт re-diff сохранённых paint.png, где edge считается заново). Декларации FIELD_LAYERS **недостаточно** — полный проброс по 6 точкам: (1) `ComparisonFingerprintInput` (`ids.ts:229-243`); (2) `comparisonFingerprintOf` (`ids.ts:248-265`); (3) conditional spread в `caseFingerprintsOf` (`ids.ts:384-393`); (4) `CaseFingerprintCase` (`ids.ts:296-315`); (5) маппинг манифест→кейс `buildCasesFromManifest` (`caseSets.ts:818-830`) + тип `AcceptanceCase` (`cases.ts:76-145`); (6) FIELD_LAYERS (`comparison`→comparison, `textAaBudget`→comparison+verdict). Дифференциальный тест — на уровне `caseFingerprintsOf` (не FIELD_LAYERS): добавление поля к кейсу меняет `comparisonFingerprint` при неизменном frame.
+
+Кроме того (V6): `textAaBudget` входит в `VerdictPolicySnapshot` (+`VerdictPolicyField`, `verdictPolicyDelta`, `GATES_BY_POLICY_FIELD: ["visual"]`), а `recomputeVisual` (`recompute.ts:149-201`) учитывает пресет; если в сохранённых метриках нет `edgeResidual` — явный `refuse` (каскад уходит в re-diff), не тихий пересчёт без пресета.
 
 **Драйвер (§1.5):** три копии + capabilities.
 
-**Файлы:** `scripts/visual-diff-worker.mjs`, `server/acceptance/gates/visual.ts`, `server/acceptance/runner.ts`, `server/visual/causes.ts` (порог из пресета, если задан), `src/acceptance/caseSetSchema.ts`, `server/acceptance/ids.ts` (FIELD_LAYERS: `comparison`→comparison, `textAaBudget`→comparison+verdict), `server/acceptance/recompute.ts`, `server/contracts.ts`, `docs/server-api.md`.
+**Файлы:** `scripts/visual-diff-worker.mjs`, `server/visual/diff-runner.ts` (тип `NormalizedDiffJob.options.edge` + комментарий про `edgeResidual` — V12), `server/acceptance/gates/visual.ts`, `server/acceptance/runner.ts` (`causeInputOf`), `server/visual/causes.ts` (порог из пресета, если задан), `src/acceptance/caseSetSchema.ts`, `server/acceptance/ids.ts`, `server/acceptance/cases.ts`, `server/acceptance/caseSets.ts`, `server/acceptance/recompute.ts`, `server/contracts.ts`, `docs/server-api.md`.
 
 **Риски:** edge-опция добавляет ключи метрик всем новым диффам — вердикт без `textAaBudget` не меняется (тест); стоимость Sobel — замер (<10% ожидание).
 
@@ -139,20 +139,22 @@ sources: z.array(z.strictObject({
 
 **T5b. Composition v3 layout-токены** (`src/prototype/compositionV3/layout.ts`): `sizing.maxHeight?: "viewport"` (компилируется в `maxHeight:100%` от stage-контейнера, без window/DOM measurement — граница §19 сохранена) и `scroll?: boolean`. Обновить `COMPOSITION_LAYOUT_PROPS`, `layoutSupportIssues`, контракты/доки.
 
-**T5c. Capture-поверхность `capture.surface:"viewport"` + контракт измерения overlay (триаж S2 blocker, S3, M9/F5).** Полный контракт, а не только монтаж:
+**T5c. Capture-поверхность `capture.surface:"viewport"` + контракт измерения overlay (триаж S2 blocker, S3, M9/F5; переписан по V1–V4, V10, V14).**
 
-1. *Поверхность.* `capture.surface?: "hug" | "viewport"` в case-set (frame-слой, conditional spread — отсутствие = hug, хеши существующих кейсов не сдвигаются). При `"viewport"`: `#eui-capture-surface` — внутренний бокс **точного размера `capture.viewport`** (не inline-block), а паддинг-поле маргина добавляется **снаружи** него (общий кадр = viewport + 2×margin) — краска прижатого к краю шита не касается границы кадра и не даёт `paintClamped` (S3). `CaptureComponent` монтирует `HostStageSurface` со stage host = внутренний бокс (паритет со сценой: Overlay рендерится).
-2. *Измерение.* Контент Overlay портируется в stage host и лежит out-of-flow — текущий `detailOf` его не видит (S2). Контракт: контентная обёртка Overlay получает атрибут `data-eui-overlay-content`; при `surface:"viewport"` geometry-сбор для корневого маркера использует ветку «overlay-aware root»: если в поверхности ровно один `[data-eui-overlay-content]` — его бокс становится layout root (union его in-flow поддерева по обычным правилам + T2a/T2b), иначе — обычный корень. `expectedGeometry` кейса описывает бокс контента оверлея. Popup-hug остаётся на `surface:"hug"` без Overlay (компонент меряется как раньше).
-3. *Сравнение.* Канва сравнения при `surface:"viewport"` строится от того же layout root («layout + 2×margin», формула не меняется — root теперь корректный); кейсы с эталоном при неразрешимом root — честный `indeterminate reference_canvas_unresolved`, не `dimensions_irreconcilable` (тест — M9/F5).
-4. Проброс: `server/acceptance/gates/capture.ts` → `server/screenshot/service.ts` (bootstrap-поле) → `src/capture/protocol.ts` → `scripts/screenshot-worker.mjs` (echo) → `src/capture/CaptureComponent.tsx`.
+1. *Поверхность (V2).* `capture.surface?: "hug" | "viewport"` в case-set. `#eui-capture-surface` **остаётся внешним padded-элементом** (кадр — element-screenshot именно его; системы координат ink-bbox и layoutBounds завязаны на него — не переносить id). При `"viewport"` внутрь него добавляется **новый вложенный узел** точного размера `capture.viewport` (`position:relative`) — он же stage host для `HostStageSurface` (Overlay рендерится); паддинг-маргин остаётся на внешнем элементе → общий кадр = `(viewport + 2×margin)×dsf`, краска прижатого шита не касается границы кадра (S3). Тест: размер PNG viewport-кейса ровно `(viewport + 2×margin)×dsf`.
+2. *Кадровый хеш (V10).* Поле проводится в `CaseSurface` (`ids.ts:152-156`), `surfaceOfManifest` (`caseSets.ts:74-79`), `FIELD_LAYERS` (`surface.*`, иначе тест тотальности не соберётся) — conditional spread, отсутствие = hug, хеши существующих кейсов не сдвигаются.
+3. *Измерение (V3, V14).* Контентная обёртка Overlay **уже несёт** `data-eui-overlay-content` (`Overlay.tsx:31`) — атрибут объявляется стабильным контрактом и покрывается тестом. При `surface:"viewport"` geometry-сбор использует ветку «overlay-aware root» (едет по существующему пути опций `geometryDetailKeys`: `service.ts:1074` → `gates/capture.ts:151`): если в поверхности ровно один `[data-eui-overlay-content]` — он становится layout root, причём **его собственные `position:absolute`/`transform` корень не дисквалифицируют** (visit стартует с `inFlow=true` на корне; out-of-flow/transform фильтруются только у потомков; `effectSources` для корня пишутся как обычно) — иначе union даст null (V3). `expectedGeometry` кейса описывает бокс контента оверлея. Popup-hug остаётся на `surface:"hug"` без Overlay. Юнит-тесты: `placement:"center"` (transform) и `"bottom"` (absolute).
+4. *Scrim (V4).* Scrim рисует весь stage → ink-bbox покрывает viewport и геометрия честно даст paint-overflow. Geometry-кейсы шеллов снимаются со `scrim:false` (контракт измеряет контент-бокс); scrim-варианты — предмет visual-кейсов либо объявляют `allowPaintOverflow`/`overflowBudgetPx`. Это ограничение фиксируется в `docs/server-api.md`.
+5. *Сравнение (V1).* Для `surface:"viewport"` — **своя формула канвы**: `padTo = (viewport + 2×margin)×dsf`, `placement = margin×dsf + offset(layout root внутри viewport)`; `layoutRoot` остаётся входом только вердикта геометрии. Ветка `referenceCanvasOf` (`gates/visual.ts:99-134`) расширяется на viewport-поверхность **независимо от** `referenceSurface`; неразрешимый root → `indeterminate reference_canvas_unresolved` (тест — M9/F5), сводимость размеров гарантируется формулой (тест «viewport-кейс + эталон → осмысленная канва, не `dimensions_irreconcilable`»).
+6. *Проброс до браузера:* `server/acceptance/gates/capture.ts` → `server/screenshot/service.ts` (bootstrap-поле) → `src/capture/protocol.ts` → `scripts/screenshot-worker.mjs` + `screenshot-pool-worker.mjs` (echo) → `src/capture/CaptureComponent.tsx`; geometry-ветка — `src/capture/geometry.mjs` (после W2, см. сериализацию §2).
 
 **Драйвер (§1.5):** три копии + capabilities.
 
-**Done:** DOM-тесты Overlay (maxHeight все 7 placement, scroll/clip); e2e 4 shells — fixed-sheet, fixed-popup, popup-hug (hug-поверхность), scroll-sheet (viewport-поверхность): ненулевой layoutBounds и geometry pass у каждого (переформулировка done по S2); тест «viewport-кейс + эталон → осмысленная канва»; тест отсутствия `paintClamped` на прижатом шите; composition-токены компилируются и линтуются; verify зелёный.
+**Done:** DOM-тесты Overlay (maxHeight все 7 placement, scroll/clip, стабильность `data-eui-overlay-content`); e2e 4 shells — fixed-sheet, fixed-popup, popup-hug (hug-поверхность), scroll-sheet (viewport-поверхность), все со `scrim:false`: ненулевой layoutBounds и geometry pass у каждого; тест размера кадра `(viewport+2×margin)×dsf`; тест канвы сравнения; юнит-тесты overlay-root (center/bottom); composition-токены компилируются и линтуются; verify зелёный.
 
 ### W6. Nested slotBindings (строка 1)
 
-**Контракт схемы** (`src/acceptance/caseSetSchema.ts`): `caseSetSlotChildSchema` получает рекурсивное опциональное поле `slotBindings` (`z.lazy`). Лимиты (триаж B1/F7 — существующие смыслы не меняются): `CASE_SET_MAX_SLOT_CHILDREN = 12` **остаётся per-slot**; новые константы `CASE_SET_MAX_SLOT_DEPTH = 3` (уровней от корня кейса) и `CASE_SET_MAX_SLOT_NODES = 96` (тотал по дереву, ≥ текущего максимума 8×12 — ни один легальный сегодня манифест не становится нечитаемым). Ключ `default` работает на любом уровне с exempt-семантикой.
+**Контракт схемы** (`src/acceptance/caseSetSchema.ts`): `caseSetSlotChildSchema` получает рекурсивное опциональное поле `slotBindings` (`z.lazy`; рекурсивный тип аннотируется вручную — `z.strictObject`+`z.lazy` теряет инференс, экспортируемый `CaseSetSlotChild` объявляется явно; прецедент `z.lazy` с `z.ZodType` — `server/contracts.ts:1392-1393`, OpenAPI-генератор переживает цикл через `$defs`/`$ref` — V13). Лимиты (триаж B1/F7 — существующие смыслы не меняются): `CASE_SET_MAX_SLOT_CHILDREN = 12` **остаётся per-slot**; новые константы `CASE_SET_MAX_SLOT_DEPTH = 3` (уровней от корня кейса) и `CASE_SET_MAX_SLOT_NODES = 96` — тотал по дереву **равен** сегодняшнему максимуму 8×12, поэтому проверка строго `≤` (V13; иначе граничный широкий манифест перестанет читаться). Ключ `default` работает на любом уровне с exempt-семантикой.
 
 **Валидация** (`server/acceptance/caseSets.ts`, grep только `-a` — NUL в `:259`): `validateSlotBindings` рекурсивен; membership/namedSlots вложенных детей — по `definitionMeta` их родителя (`PublishedSlotPin.definitionMeta` уже читается); коды `slot_*` получают path; `slot_self_reference` — цикл по всему пути; новые коды `slot_depth_exceeded`, `slot_nodes_exceeded`.
 
@@ -160,7 +162,7 @@ sources: z.array(z.strictObject({
 
 **Капчур:** `slotCaptureOf` (`server/screenshot/service.ts:866-891`) — `tree[]` с `children?: number[]` (индексы), дедуп бандлов по (componentId, version) по всему дереву; `draftComponentAllowedUrls` — URL всех уровней; `captureRuntimeTree` (`src/capture/CaptureComponent.tsx:82-99`) строит вложенный runtimeSpec. Протокол/воркер — аддитивные поля.
 
-**Драйвер (§1.5):** три копии (локальный валидатор — вложенность + новые лимиты), `caseSetMaxSlotDepth`/`caseSetMaxSlotNodes` в `/api/capabilities.limits`, `server/driver-mjs.d.ts` при новых экспортах.
+**Драйвер (§1.5):** три копии (локальный валидатор `slotBindingIssues` — `.claude/skills/author/driver.mjs:2737-2775` и зеркала — вложенность + новые лимиты), `caseSetMaxSlotDepth`/`caseSetMaxSlotNodes` в `/api/capabilities.limits`, `server/driver-mjs.d.ts` при новых экспортах.
 
 **Done:** e2e «parent candidate → published child → published кнопка во вложенном слоте» — кадр содержит контент кнопки; юнит: depth-1 манифест — прежний slots_hash; **тест «манифест 8 слотов × 12 детей, записанный до волны, читается `manifestOfRow` без ошибки»** (B1); 422 на глубину/тотал/цикл; замер стоимости depth-3 (R4); `docs/server-api.md` §slotBindings обновлён.
 
@@ -198,4 +200,6 @@ sources: z.array(z.strictObject({
 
 Отклонено (с обоснованием верификаторов): **B3** (утверждение «HostStageSurface не монтирует ни один капчур» опровергнуто — CapturePrototype монтирует; W5 добавляет паритет компонентному пути); **M5** (пресет фиксируется в метриках гейта, контракт causes «только fail/indeterminate» не нарушается — уточнено в §W4); **S1** (утверждение «текст теряется в растре, а не в layoutBounds» не подтверждено кодом; вопрос закрывается T2-0 диагностикой).
 
-Открытых blocker-возражений не осталось: оба blocker'а (F1, S2) закрыты изменением механизма (§1.3, §W5 T5c) — это существенные правки, поэтому перед исполнением проводится **дельта-ревью** v2 (один верификационный ревьюер по дельте v1→v2).
+**Раунд 2 (дельта-ревью v2, находки V1–V14) — все приняты в v3:** **V1** (своя формула канвы для viewport-поверхности + расширение ветки `referenceCanvasOf` независимо от referenceSurface — §W5 T5c.5); **V2** (`#eui-capture-surface` остаётся внешним padded-элементом, внутренний бокс — новый узел — §W5 T5c.1); **V3** (собственные position/transform overlay-root не дисквалифицируют корень — §W5 T5c.3); **V4** (geometry-кейсы шеллов со `scrim:false`, scrim — visual/бюджет — §W5 T5c.4); **V5** (инвалидация W4 — 6 точек до `comparisonFingerprint`, дифференциальный тест на `caseFingerprintsOf` — §W4); **V6** (`textAaBudget` в `VerdictPolicySnapshot` + `recomputeVisual` с явным refuse без `edgeResidual` — §W4); **V7** (7 точек W3, `geometryVerdictBlocks`/`geometryCodes` с величинами overflow — §W3); **V8** (константа внутри `frameFingerprint`, golden двигается, `ids.test.ts:234-238` — §1.3/§W2); **V9** (подтверждение выбора отдельного кадрового поля); **V10** (`capture.surface` → CaseSurface/surfaceOfManifest/FIELD_LAYERS; geometry.mjs в файлах W5 — §W5 T5c.2/6); **V11** (сериализация geometry.mjs/caseSets.ts/cases.ts, W5 после W2 — §2); **V12** (`diff-runner.ts` в файлах W4); **V13** (лимит 96 строго `≤`, ручная аннотация рекурсивного типа, `slotBindingIssues` драйвера — §W6); **V14** (`data-eui-overlay-content` уже существует — контракт стабильности вместо «выдачи» — §W5 T5c.3).
+
+После v3 blocking-возражений не осталось (вердикт раунда 2 закрыт правками §W5 T5c и §W4). Раунд 3 — точечная верификация переписанных §W5 T5c/§W4 перед стартом их волн (не блокирует W1/W6/W2/W3).
